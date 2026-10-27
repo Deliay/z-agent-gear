@@ -78,6 +78,27 @@ npm run preview  # Preview production build
 - **工作负载设置区**：云电脑配置页「工作负载」页签列出标准负载（预制/已安装徽标、参数表单 TEXT/SELECT/MULTI_SELECT/BOOLEAN 默认值），按 `workloadKind` 分组（standard 组标题「运行环境 / 工具」，harness 组「云电脑」，空组不渲染），每项展示依赖名称（依赖 ID 映射同列表名称，缺失回退 ID）；仅 RUNNING 可安装，已安装项禁用且**无卸载入口**；安装复用同一进度对话框（单步）。
 - **测试入口**：`components/__tests__/Sidebar.test.tsx`、`pages/__tests__/ControllerConfigPage.test.tsx`、`components/cloud-host/__tests__/*`（含 `GithubProjectSetupDialog` / `GithubSetupProgressDialog` / `CloudHostWorkloadsSection`）、`components/session/NewSessionDialog.test.tsx`、`components/session/__tests__/SessionView.cloudHost.test.tsx`、`graphql/__tests__/home.test.ts`（覆盖 T-AW1..15 与 T-AW-G1..G14 关键项）。
 
+## Commit 设置区块（设置页）
+
+- 挂载：`pages/SettingsPage.tsx` 的 `#github-section` 内，紧接 `<GithubBindingSection />` 下方
+  渲染 `<CommitSettingsSection />`；标题「Commit 设置」+ 常驻提示「设置只对云容器环境生效」。
+- 数据：`GET_COMMIT_SETTINGS` / `UPDATE_COMMIT_SETTINGS` + `GET_GITHUB_ACCOUNTS`
+  （帐号下拉；`GitHubAccount` 即 OAuth 用户身份，org 不会出现），类型手写于 `graphql/types.ts`。
+- 交互：提交人模式（仅Agent / Co-Author / 仅人类 / 未设置）与提交人（Github帐号 / 自定义 / 未设置）
+  两个单选组；`GITHUB_ACCOUNT` 条件渲染帐号下拉，`CUSTOM` 渲染用户名 + 邮箱输入；
+  无绑定帐号提示「请先绑定 Github 帐号」并禁用保存；已选帐号被解绑提示重新选择。
+- 校验：Co-Author / 仅人类 + 提交人未设置 → 「请先设置提交人」并禁用保存；自定义校验与服务端同源
+  （trim 非空、≤100/≤254、禁换行/NUL、邮箱正则）；前端拦截不替代服务端权威校验。
+- 错误映射（逐字）：`committer is required for the selected mode` →「请先设置提交人」；
+  `invalid github account` →「Github 帐号无效，请重新选择」；
+  `invalid custom committer` →「提交人用户名或邮箱格式不正确」。
+- 保存成功 toast「对云容器环境生效，已运行的云电脑稍后自动更新」；加载分支用 `loading && !data`，
+  后台刷新不覆盖用户编辑（dirty 保护）。
+- 缓存：`GET_COMMIT_SETTINGS` 用 `fetchPolicy: 'cache-and-network'`，保存 mutation 带
+  `refetchQueries: [GET_COMMIT_SETTINGS]`（`CommitSettings` 无 `id`，Apollo 无法归一化 mutation 结果），
+  保证保存后离开设置页再返回不回显旧值；回归见 `CommitSettingsSection.cache.test.tsx`。
+- 测试：`components/settings/__tests__/CommitSettingsSection.test.tsx`。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
