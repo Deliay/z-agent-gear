@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import { createFrontUser } from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -20,27 +21,13 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
   });
 }
 
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
-
 let authToken: string;
 let userId: string;
 
 beforeAll(async () => {
-  const username = `mcp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  const signupRes = await gqlRequest(SIGNUP, { username, password: 'password123' });
-  const signupData = await signupRes.json() as any;
-  authToken = signupData.data?.signup?.token;
-  userId = signupData.data?.signup?.user?.id;
-  if (!authToken || !userId) {
-    console.error('Failed to get auth token or userId:', signupData);
-  }
+  const frontUser = await createFrontUser();
+  authToken = frontUser.token;
+  userId = frontUser.userId;
 });
 
 describe('MCP Proxy Key API (controller-api)', () => {

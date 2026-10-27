@@ -1,5 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import mongoose from 'mongoose';
+import { createFrontUser } from '../support/front-users.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const API_BASE = API_URL.replace(/\/graphql\/?$/, '');
@@ -18,15 +19,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify({ query, variables }),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id }
-    }
-  }
-`;
 
 const GITHUB_APP_URL = `
   query GetGithubAppUrl {
@@ -73,13 +65,11 @@ const UPDATE_COMMIT_SETTINGS = `
 describe('GitHub Binding API', () => {
   let token = '';
   let userId = '';
-  const testUsername = `gt_${Date.now()}`;
 
   beforeAll(async () => {
-    const res = await gqlRequest(SIGNUP, { username: testUsername, password: 'password123' });
-    const body = await res.json();
-    token = body.data.signup.token;
-    userId = String(body.data.signup.user.id);
+    const frontUser = await createFrontUser();
+    token = frontUser.token;
+    userId = frontUser.userId;
   });
 
   async function mongoDb(): Promise<mongoose.mongo.Db | null> {

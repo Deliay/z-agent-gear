@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
+import { createFrontUser } from '../support/front-users.js';
 
 /**
  * 云电脑 GitHub Issues 联动配置 —— 黑盒用例 T-GHIL1 ~ T-GHIL6。
@@ -23,12 +24,6 @@ async function gql<T = Record<string, any>>(
   if (body.errors) throw new Error(JSON.stringify(body.errors));
   return body.data as T;
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token }
-  }
-`;
 
 const LIST_LINKAGES = `
   query ListLinkages($controllerId: ID!) {
@@ -69,12 +64,7 @@ const TEST_REPO = process.env.GITHUB_TEST_REPO ?? '';
 const hasConfigEnv = Boolean(CONTROLLER_ID && WORKFLOW_ID);
 
 beforeAll(async () => {
-  const username = `ghil-${Date.now()}`;
-  const data = await gql<{ signup: { token: string } }>(SIGNUP, {
-    username,
-    password: 'Passw0rd!',
-  }, '');
-  token = data.signup.token;
+  token = (await createFrontUser(undefined, 'Passw0rd!')).token;
 });
 
 describe('T-GHIL 云电脑 Issues 联动配置', () => {

@@ -5,6 +5,7 @@ import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import http, { type Server } from 'node:http';
+import { createFrontUser } from '../support/front-users.js';
 
 // End-to-end MCP passthrough verification against REAL services:
 //   1. The MCP endpoint handed to the agent via ACP conforms to the new
@@ -79,13 +80,9 @@ async function waitForOutput(proc: ChildProcess, pattern: RegExp, timeoutMs: num
 // a fake controller to capture acp:start, and a session created with the MCP
 // server selected.
 async function setupChain(): Promise<ChainContext> {
-  const signupRes = await gqlRequest(
-    `mutation Signup($username: String!, $password: String!) { signup(username: $username, password: $password) { token user { id } } }`,
-    { username: `mcppt${Date.now().toString(36)}`, password: 'testpass123' },
-  );
-  const signup = await signupRes.json();
-  const token = signup.data.signup.token as string;
-  const userId = signup.data.signup.user.id as string;
+  const frontUser = await createFrontUser();
+  const token = frontUser.token;
+  const userId = frontUser.userId;
 
   const keyRes = await fetch(`${CONTROLLER_API_URL}/api/mcp-proxy-keys`, {
     method: 'POST',

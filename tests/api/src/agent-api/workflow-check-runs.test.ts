@@ -3,6 +3,7 @@ import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-cli
 import mongoose from 'mongoose';
 import Redis from 'ioredis';
 import { startMockGitHubServer, type MockGitHubServer } from '../mock-github-server.js';
+import { createFrontUser } from '../support/front-users.js';
 
 /**
  * 工作流节点状态 → GitHub Check Runs 同步 —— API 用例 T-CR02 ~ T-CR12。
@@ -42,14 +43,6 @@ async function gql<T = Record<string, any>>(
   if (body.errors) throw new Error(JSON.stringify(body.errors));
   return body.data as T;
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token }
-  }
-`;
-
-const ME = `query Me { me { id username } }`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -129,13 +122,8 @@ async function waitFor<T>(
   throw new Error('timeout waiting condition');
 }
 
-async function signup(tag: string): Promise<{ token: string; userId: string }> {
-  const uid = `${tag}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-  const body = await res.json();
-  const token = body.data?.signup?.token ?? '';
-  const me = await gql<{ me: { id: string } }>(ME, undefined, token);
-  return { token, userId: me.me.id };
+async function newFrontUser(tag: string): Promise<{ token: string; userId: string; username: string }> {
+  return createFrontUser();
 }
 
 function createClient(): ClientSocket {
@@ -471,7 +459,7 @@ describe.skipIf(!hasEnv)('工作流节点状态 → Check Runs（T-CR02~T-CR12�
 
   beforeAll(async () => {
     mock = await startMockGitHubServer({ port: MOCK_PORT, headSha: `sha-${Date.now()}` });
-    const signed = await signup('wfcr');
+    const signed = await newFrontUser('wfcr');
     token = signed.token;
     userId = signed.userId;
     fake = await registerFakeController(token, 'cr');

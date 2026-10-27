@@ -110,6 +110,8 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
 
       const workloadId = await insertWorkload(db!);
       const hostId = new mongoose.Types.ObjectId().toString();
+      // 多租户一期：agent-api 下发 tenantId（personal 期与 userId 同值）
+      const userId = new mongoose.Types.ObjectId().toString();
       const secrets = {
         hostEndpoint: 'wss://controller-api.internal',
         hostKey: 'zag_k_1_test_secret',
@@ -128,7 +130,8 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
             purpose: 'harness',
             hostId,
             refId: new mongoose.Types.ObjectId().toString(),
-            userId: new mongoose.Types.ObjectId().toString(),
+            userId,
+            tenantId: userId,
             hostName: 'harness-it',
             harnessTypes: ['opencode'],
             containerApiKeyId: new mongoose.Types.ObjectId().toString(),
@@ -728,6 +731,61 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
           await req(`/internal/containers/${created.id}`, { method: 'DELETE' });
         }
       }
+    },
+  );
+
+  // 多租户一期（契约附录 A A.2.2 / 计划 §6.2 T-IC-HARNESS 扩展）：
+  // harness 创建落库 `cloudcontainers.tenantId`（与 userId 同值）；缺省回退 = userId。
+  it.skipIf(!HAS_MONGO)(
+    'T-IC-HARNESS3: harness 落库 tenantId（显式=userId；缺省回退 userId；非法空串 400）',
+    async () => {
+      const db = await mongoDb();
+      expect(db).not.toBeNull();
+
+      const userId = new mongoose.Types.ObjectId().toString();
+      const findContainer = (id: string) =>
+        db!.collection('cloudcontainers').findOne({
+          $or: [{ _id: new mongoose.Types.ObjectId(id) }, { id }],
+        });
+
+      // 1) 显式下发 tenantId（与 userId 同值）
+      const explicit = await req('/internal/containers', {
+        method: 'POST',
+        body: JSON.stringify({ ...harnessBody(['kimi_code']), userId, tenantId: userId }),
+      });
+      expect(explicit.status).toBe(201);
+      const explicitBody = (await explicit.json()) as { id: string };
+      try {
+        const doc = await findContainer(explicitBody.id);
+        expect(doc, 'cloudcontainers 文档应存在').toBeTruthy();
+        expect(String(doc!.tenantId)).toBe(userId);
+        expect(String(doc!.userId)).toBe(userId);
+      } finally {
+        await req(`/internal/containers/${explicitBody.id}`, { method: 'DELETE' });
+      }
+
+      // 2) 旧版调用方缺省 tenantId → 回退 tenantId = userId（warn 无法黑盒断言，只断言落库）
+      const fallback = await req('/internal/containers', {
+        method: 'POST',
+        body: JSON.stringify({ ...harnessBody(['opencode']), userId }),
+      });
+      expect(fallback.status).toBe(201);
+      const fallbackBody = (await fallback.json()) as { id: string };
+      try {
+        const doc = await findContainer(fallbackBody.id);
+        expect(doc, 'cloudcontainers 文档应存在').toBeTruthy();
+        expect(String(doc!.tenantId)).toBe(userId);
+      } finally {
+        await req(`/internal/containers/${fallbackBody.id}`, { method: 'DELETE' });
+      }
+
+      // 3) 显式下发但非法（空串）→ 400 INVALID_HARNESS（不静默写错误归属）
+      const invalid = await req('/internal/containers', {
+        method: 'POST',
+        body: JSON.stringify({ ...harnessBody(['kimi_code']), userId, tenantId: '' }),
+      });
+      expect(invalid.status).toBe(400);
+      await expect(invalid.json()).resolves.toMatchObject({ error: 'INVALID_HARNESS' });
     },
   );
 });

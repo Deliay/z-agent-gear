@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { createFrontUser } from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -18,15 +19,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify(body),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
 
 const GET_MCP_SERVERS = `
   query GetMcpServers {
@@ -91,14 +83,9 @@ let authToken: string;
 let userId: string;
 
 beforeAll(async () => {
-  const username = `mcp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  const signupRes = await gqlRequest(SIGNUP, { username, password: 'password123' });
-  const signupData = await signupRes.json() as any;
-  authToken = signupData.data?.signup?.token;
-  userId = signupData.data?.signup?.user?.id;
-  if (!authToken) {
-    console.error('Failed to get auth token:', signupData);
-  }
+  const frontUser = await createFrontUser();
+  authToken = frontUser.token;
+  userId = frontUser.userId;
 });
 
 describe('MCP Server API (agent-api)', () => {

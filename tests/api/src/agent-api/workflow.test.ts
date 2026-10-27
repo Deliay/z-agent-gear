@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import Redis from 'ioredis';
+import { createFrontUser } from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -28,15 +29,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify(body),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -237,11 +229,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function signup(tag: string): Promise<string> {
-  const uid = `${tag}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-  const body = await res.json();
-  return body.data?.signup?.token ?? '';
+async function newUserToken(tag: string): Promise<string> {
+  const { token } = await createFrontUser();
+  return token;
 }
 
 interface FakeController {
@@ -472,7 +462,7 @@ describe('Workflow Template API (A1-A4)', () => {
   let token = '';
 
   beforeAll(async () => {
-    token = await signup('wftpl');
+    token = await newUserToken('wftpl');
     expect(token).toBeTruthy();
   });
 
@@ -608,7 +598,7 @@ describe('Configured Workflow API (A5-A8)', () => {
   let fake: FakeController;
 
   beforeAll(async () => {
-    token = await signup('wfcfg');
+    token = await newUserToken('wfcfg');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'cfg');
     const available = await refreshCapabilities(token, fake.controllerId);
@@ -785,8 +775,8 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
   let artifactKey = '';
 
   beforeAll(async () => {
-    token = await signup('wfins');
-    otherToken = await signup('wfother');
+    token = await newUserToken('wfins');
+    otherToken = await newUserToken('wfother');
     expect(token).toBeTruthy();
     expect(otherToken).toBeTruthy();
 
@@ -1097,7 +1087,7 @@ describe('Workflow Acceptance Fixes (A19-A20)', () => {
   let workspaceId = '';
 
   beforeAll(async () => {
-    token = await signup('wfacc');
+    token = await newUserToken('wfacc');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'acc');
     const available = await refreshCapabilities(token, fake.controllerId);
@@ -1266,7 +1256,7 @@ describe('Workflow Node Failure (A22-A23)', () => {
   let workspaceId = '';
 
   beforeAll(async () => {
-    token = await signup('wffail');
+    token = await newUserToken('wffail');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'fail');
     const available = await refreshCapabilities(token, fake.controllerId);
@@ -1434,7 +1424,7 @@ describe('Workflow Rework Reject (A24)', () => {
   let workspaceId = '';
 
   beforeAll(async () => {
-    token = await signup('wfrwrj');
+    token = await newUserToken('wfrwrj');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'rwrj');
     const available = await refreshCapabilities(token, fake.controllerId);
@@ -1582,7 +1572,7 @@ describe('Workflow Chain Reject & Instance Delete (A25-A29)', () => {
   let workspaceId = '';
 
   beforeAll(async () => {
-    token = await signup('wfchain');
+    token = await newUserToken('wfchain');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'chain');
     const available = await refreshCapabilities(token, fake.controllerId);
@@ -2015,7 +2005,7 @@ describe('Workflow Phase-2 (A1-A6)', () => {
   let workspaceId = '';
 
   beforeAll(async () => {
-    token = await signup('wfp2');
+    token = await newUserToken('wfp2');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'phase2');
     const available = await refreshCapabilities(token, fake.controllerId);
@@ -2136,7 +2126,7 @@ describe('Workflow Session Initial Mode/Model (A30)', () => {
   let workspaceId = '';
 
   beforeAll(async () => {
-    token = await signup('wfinit');
+    token = await newUserToken('wfinit');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'init');
     const available = await refreshCapabilities(token, fake.controllerId);
@@ -2221,7 +2211,7 @@ describe('Workflow Human Acceptance (A31-A32)', () => {
   let workspaceId = '';
 
   beforeAll(async () => {
-    token = await signup('wfhacc');
+    token = await newUserToken('wfhacc');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'hacc');
     const available = await refreshCapabilities(token, fake.controllerId);
@@ -2417,7 +2407,7 @@ describe('Workflow Node Restart (A33)', () => {
   let workspaceId = '';
 
   beforeAll(async () => {
-    token = await signup('wfrst');
+    token = await newUserToken('wfrst');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'rst');
     const available = await refreshCapabilities(token, fake.controllerId);
@@ -2557,7 +2547,7 @@ describe('Workflow Optimization Features (A35-A44)', () => {
   let workspaceId = '';
 
   beforeAll(async () => {
-    token = await signup('wfopt');
+    token = await newUserToken('wfopt');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'opt');
     const available = await refreshCapabilities(token, fake.controllerId);

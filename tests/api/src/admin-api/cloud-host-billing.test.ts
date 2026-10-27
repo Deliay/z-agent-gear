@@ -56,7 +56,7 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Admin cloud host billing key', () => {
     const minted = await internal('/internal/billing/api-keys', {
       method: 'POST',
       body: JSON.stringify({
-        ownerType: 'front_user',
+        ownerType: 'tenant',
         ownerId: userId,
         name: 'cloud-key',
         scope: 'cloud_host',
@@ -101,7 +101,7 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Admin cloud host billing key', () => {
     const second = await internal('/internal/billing/api-keys', {
       method: 'POST',
       body: JSON.stringify({
-        ownerType: 'front_user',
+        ownerType: 'tenant',
         ownerId: userId,
         name: 'cloud-key-2',
         scope: 'cloud_host',
@@ -134,7 +134,7 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Admin cloud host billing key', () => {
     const missingHost = await internal('/internal/billing/api-keys', {
       method: 'POST',
       body: JSON.stringify({
-        ownerType: 'front_user',
+        ownerType: 'tenant',
         ownerId: new mongoose.Types.ObjectId().toString(),
         name: 'bad',
         scope: 'cloud_host',
@@ -146,7 +146,7 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Admin cloud host billing key', () => {
     const missingExpiry = await internal('/internal/billing/api-keys', {
       method: 'POST',
       body: JSON.stringify({
-        ownerType: 'front_user',
+        ownerType: 'tenant',
         ownerId: new mongoose.Types.ObjectId().toString(),
         name: 'bad',
         scope: 'cloud_host',

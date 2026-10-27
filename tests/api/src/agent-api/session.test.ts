@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import mongoose from 'mongoose';
+import { createFrontUser } from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -21,15 +22,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify(body),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -195,11 +187,9 @@ let authToken = '';
 let rawKey = '';
 let controllerId = '';
 
-async function signup(): Promise<string> {
-  const uid = `sess_${Date.now().toString(36)}`;
-  const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-  const body = await res.json();
-  return body.data?.signup?.token ?? '';
+async function newUserToken(): Promise<string> {
+  const { token } = await createFrontUser();
+  return token;
 }
 
 async function createKeyAndRegisterController(token: string): Promise<{ rawKey: string; controllerId: string }> {
@@ -240,7 +230,7 @@ async function clearWorkspaces(ctrlId: string): Promise<void> {
 
 describe('Session GraphQL API', () => {
   beforeAll(async () => {
-    authToken = await signup();
+    authToken = await newUserToken();
     expect(authToken).toBeTruthy();
 
     const ctrl = await createKeyAndRegisterController(authToken);
@@ -996,7 +986,7 @@ describe('Session GraphQL API', () => {
 describe('Session SSE API', () => {
   beforeAll(async () => {
     if (!authToken) {
-      authToken = await signup();
+      authToken = await newUserToken();
       const ctrl = await createKeyAndRegisterController(authToken);
       rawKey = ctrl.rawKey;
       controllerId = ctrl.controllerId;
@@ -1318,7 +1308,7 @@ describe('Session SSE API', () => {
   describe('Session WebSocket ACP Events', () => {
   beforeAll(async () => {
     if (!authToken) {
-      authToken = await signup();
+      authToken = await newUserToken();
       const ctrl = await createKeyAndRegisterController(authToken);
       rawKey = ctrl.rawKey;
       controllerId = ctrl.controllerId;
@@ -2195,15 +2185,8 @@ async function mongoDb(): Promise<mongoose.mongo.Db | null> {
   return mongoose.connection.db ?? null;
 }
 
-async function signupWithId(): Promise<{ token: string; userId: string }> {
-  // N-18：用户名上限 20（auth.ts），用 16 字符稳定唯一前缀
-  const uid = `mcp_${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 6)}`;
-  const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-  const body = await res.json();
-  return {
-    token: body.data.signup.token as string,
-    userId: body.data.signup.user.id as string,
-  };
+async function newFrontUser(): Promise<{ token: string; userId: string; username: string }> {
+  return createFrontUser();
 }
 
 async function registerFreshController(
@@ -2277,7 +2260,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
   });
 
   it('T-API-MCP1: 未传 mcpServerIds 时注入控制器默认（全部已启用）', async () => {
-    const { token } = await signupWithId();
+    const { token } = await newFrontUser();
     const { client, controllerId } = await registerFreshController(token, 'mcp-default-host');
     const workspaceId = await createWorkspaceFor(token, controllerId);
 
@@ -2301,7 +2284,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
   });
 
   it('T-API-MCP2: 显式空数组表示不注入任何 MCP', async () => {
-    const { token } = await signupWithId();
+    const { token } = await newFrontUser();
     const { client, controllerId } = await registerFreshController(token, 'mcp-empty-host');
     const workspaceId = await createWorkspaceFor(token, controllerId);
     await listMcpServers(token); // 确保存在可注入候选，验证「显式 []」优先于默认
@@ -2319,7 +2302,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
   });
 
   it('T-API-MCP3: 显式 ID 仅注入所选服务', async () => {
-    const { token } = await signupWithId();
+    const { token } = await newFrontUser();
     const { client, controllerId } = await registerFreshController(token, 'mcp-explicit-host');
     const workspaceId = await createWorkspaceFor(token, controllerId);
     const admin = (await listMcpServers(token)).find(
@@ -2340,7 +2323,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
   });
 
   it('T-API-MCP4: useAllEnabled=false 仅注入子集，停用服务被剔除', async () => {
-    const { token } = await signupWithId();
+    const { token } = await newFrontUser();
     const { client, controllerId } = await registerFreshController(token, 'mcp-subset-host');
     const workspaceId = await createWorkspaceFor(token, controllerId);
     const admin = (await listMcpServers(token)).find(
@@ -2386,7 +2369,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
   });
 
   it('T-API-MCP5: modeId/modelId 透传到 acp:start', async () => {
-    const { token } = await signupWithId();
+    const { token } = await newFrontUser();
     const { client, controllerId } = await registerFreshController(token, 'mcp-mode-host');
     const workspaceId = await createWorkspaceFor(token, controllerId);
 
@@ -2407,7 +2390,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
 
   it.skipIf(!HAS_MONGO)('T-API-MCP6: 云会话自动并入 agent-cloud-host-tools', async () => {
     const db = (await mongoDb())!;
-    const { token, userId } = await signupWithId();
+    const { token, userId } = await newFrontUser();
     const { client, controllerId } = await registerFreshController(token, 'mcp-cloud-host');
     const workspaceId = await createWorkspaceFor(token, controllerId);
 
@@ -2466,7 +2449,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
 
   it.skipIf(!HAS_MONGO)('T-DS-API4: A-11 仅选 deepseek 的云电脑可建 deepseek_harness 会话，kimi_code 被拒', async () => {
     const db = (await mongoDb())!;
-    const { token, userId } = await signupWithId();
+    const { token, userId } = await newFrontUser();
     const { client, controllerId } = await registerFreshController(token, 'deepseek-cloud-host');
     const workspaceId = await createWorkspaceFor(token, controllerId);
 

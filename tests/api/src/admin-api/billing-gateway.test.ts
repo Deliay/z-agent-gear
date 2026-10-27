@@ -228,7 +228,7 @@ describe('计费网关分支覆盖（直写模型，MONGODB_URI 缺失即失败�
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${internalToken}` },
         body: JSON.stringify({
-          ownerType: 'front_user',
+          ownerType: 'tenant',
           ownerId: userId,
           name: `gw-key-${stamp}`,
           scope: 'cloud_host',

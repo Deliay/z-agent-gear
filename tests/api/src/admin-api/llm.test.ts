@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import mongoose from 'mongoose';
 import { startMockServer, type MockServer } from '../mock-server.js';
+import { createFrontUser } from '../support/front-users.js';
 import { adminGql, ensureAdminLogin } from './helpers.js';
+
+const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 
 const PROVIDERS = `
   query AdminProviders {
@@ -844,18 +847,7 @@ describe('Admin Global LLM API', () => {
   });
 
   it('scope isolation: admin never sees user-scope providers/models (T-SC5 反向)', async () => {
-    const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
-    const username = `iso${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 5)}`;
-
-    const signup = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        query: 'mutation($u:String!,$p:String!){signup(username:$u,password:$p){token}}',
-        variables: { u: username, p: 'testpass123' },
-      }),
-    }).then((r) => r.json() as Promise<{ data?: { signup?: { token?: string } } }>);
-    const userToken = signup.data!.signup!.token!;
+    const userToken = (await createFrontUser()).token;
 
     const userProviderName = `user-iso-${Date.now()}`;
     const created = await fetch(API_URL, {

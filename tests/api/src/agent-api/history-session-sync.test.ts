@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import { createFrontUser } from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -19,15 +20,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify(body),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -167,10 +159,8 @@ function autoRespondToSyncEvents(socket: ClientSocket) {
 
 describe('History Session Sync API', () => {
   beforeAll(async () => {
-    const uid = `hsync_${Date.now().toString(36)}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data?.signup?.token ?? '';
+    const frontUser = await createFrontUser();
+    authToken = frontUser.token;
     expect(authToken).toBeTruthy();
   });
 

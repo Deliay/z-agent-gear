@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { fundFrontUser } from './funding.js';
+import { createFrontUser } from '../support/front-users.js';
 
 // 前台云电脑 API（需要 Aspire 全量服务 + HARNESS_ENABLED=true）。
 // `K8S_ENABLED=false` 下 create 只能停在 STARTING；在线/默认会话由单测与真实集群验收覆盖。
@@ -24,12 +25,6 @@ function gql(query: string, variables?: Record<string, unknown>, token?: string)
     body: JSON.stringify({ query, variables }),
   }).then((res) => res.json() as Promise<{ data?: any; errors?: Array<{ message: string }> }>);
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token user { id } }
-  }
-`;
 
 const CAPABILITIES = `query { cloudHostCapabilities { enabled supportedHarnesses } }`;
 
@@ -66,32 +61,25 @@ const INVOICES = `query { myBillingInvoices(page: 1, pageSize: 20) { id type amo
 const RECEIPTS = `query { myBillingReceipts(page: 1, pageSize: 20) { id receiptNo invoiceId amount } }`;
 const QUOTE = `query { cloudHostBillingQuote { createCredits perMinuteCredits availableBalance } }`;
 
-async function signup(): Promise<string> {
-  const username = `ch${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const result = await gql(SIGNUP, { username, password: 'password123' });
-  return result.data.signup.token as string;
+async function newUserToken(): Promise<string> {
+  const { token } = await createFrontUser();
+  return token;
 }
 
-async function signupWithId(): Promise<{ token: string; userId: string; username: string }> {
-  const username = `ch${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const result = await gql(SIGNUP, { username, password: 'password123' });
-  return {
-    token: result.data.signup.token as string,
-    userId: result.data.signup.user.id as string,
-    username,
-  };
+async function newFrontUser(): Promise<{ token: string; userId: string; username: string }> {
+  return createFrontUser();
 }
 
 /** 创建云电脑需先扣 5 credits：为独立用户准备余额后返回 token。 */
-async function signupFunded(cents = 10_000): Promise<string> {
-  const { token, userId, username } = await signupWithId();
+async function fundedUserToken(cents = 10_000): Promise<string> {
+  const { token, userId, username } = await newFrontUser();
   await fundFrontUser(userId, username, cents);
   return token;
 }
 
 describe.skipIf(HARNESS_ENABLED)('Cloud Host API (feature disabled)', () => {
   it('T-CH2: capabilities disabled and create rejected', async () => {
-    const token = await signup();
+    const token = await newUserToken();
     const capabilities = await gql(CAPABILITIES, undefined, token);
     expect(capabilities.errors).toBeUndefined();
     expect(capabilities.data.cloudHostCapabilities).toEqual({
@@ -110,7 +98,7 @@ describe.skipIf(HARNESS_ENABLED)('Cloud Host API (feature disabled)', () => {
 
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   it('T-CH1: capabilities exposes OPENCODE (and KIMI_CODE / DEEPSEEK_HARNESS once their presets exist)', async () => {
-    const token = await signup();
+    const token = await newUserToken();
     const result = await gql(CAPABILITIES, undefined, token);
     expect(result.errors).toBeUndefined();
     expect(result.data.cloudHostCapabilities.enabled).toBe(true);
@@ -131,7 +119,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   });
 
   it('T-CH3/T-CH4: validates name and harnessTypes', async () => {
-    const token = await signup();
+    const token = await newUserToken();
     const emptyName = await gql(CREATE, { input: { name: '   ', harnessTypes: ['OPENCODE'] } }, token);
     expect(emptyName.errors?.[0].message).toBe('name is required');
 
@@ -147,8 +135,8 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   });
 
   it('T-CH7/T-CH10/T-CH11: create/list/owner isolation/multi-host/stop/delete', async () => {
-    const token = await signupFunded();
-    const other = await signup();
+    const token = await fundedUserToken();
+    const other = await newUserToken();
 
     const created = await gql(
       CREATE,
@@ -251,7 +239,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   });
 
   it('T-CH-API-B1: 创建成功扣 5 credits 并生成账单/收据', async () => {
-    const token = await signupFunded();
+    const token = await fundedUserToken();
     const created = await gql(
       CREATE,
       { input: { name: `bill-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
@@ -276,7 +264,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   });
 
   it('T-CH-API-B2: 余额不足拒绝创建且无云电脑、无账单', async () => {
-    const token = await signup();
+    const token = await newUserToken();
     const created = await gql(
       CREATE,
       { input: { name: `poor-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
@@ -290,7 +278,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   });
 
   it('T-CH-API-B3/B4: 连续创建 2 台成功，报价与实际扣费一致', async () => {
-    const token = await signupFunded();
+    const token = await fundedUserToken();
     const quote = await gql(QUOTE, undefined, token);
     expect(quote.data.cloudHostBillingQuote).toMatchObject({
       createCredits: 5,
@@ -316,7 +304,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
 
   it('T-CH-DW1: 创建期不预置默认工作区（hasDefaultWorkspace=false、工作区列表为空、不自动建会话）', async () => {
     const createAndInspect = async (input: Record<string, unknown>) => {
-      const token = await signupFunded();
+      const token = await fundedUserToken();
       const created = await gql(
         CREATE,
         { input: { name: `dw-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], ...input } },
@@ -354,7 +342,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
 
   it.skipIf(!HAS_MONGO)('R2-11: soft delete keeps DB archive row (cloudhosts.deletedAt + controllers row)', async () => {
     const db = (await mongoDb())!;
-    const token = await signupFunded();
+    const token = await fundedUserToken();
     const created = await gql(
       CREATE,
       { input: { name: `del-db-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
@@ -384,7 +372,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   });
 
   it('T-CH17: refuses to delete a non-terminal cloud host', async () => {
-    const token = await signupFunded();
+    const token = await fundedUserToken();
     const created = await gql(
       CREATE,
       { input: { name: `del-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
@@ -402,7 +390,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     'T-CH13/T-CH14: stop with active sessions requires force and then ends them',
     async () => {
       const db = (await mongoDb())!;
-      const { token, userId } = await signupWithId();
+      const { token, userId } = await newFrontUser();
       const hostId = new mongoose.Types.ObjectId();
       const controllerId = new mongoose.Types.ObjectId();
       const now = new Date();
@@ -462,7 +450,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
 
   it.skipIf(!HAS_MONGO)('T-CH25: local controllers expose cloudHost=null', async () => {
     const db = (await mongoDb())!;
-    const { token, userId } = await signupWithId();
+    const { token, userId } = await newFrontUser();
     const controllerId = new mongoose.Types.ObjectId();
     const now = new Date();
     try {
@@ -503,7 +491,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
 
   describe('创建期 workloadIds（T-CH-API-W1..W4）', () => {
     it('T-CH-API-W3: 超过 5 个 ID 报 too many workloads', async () => {
-      const token = await signup();
+      const token = await newUserToken();
       const ids = Array.from(
         { length: 6 },
         () => new mongoose.Types.ObjectId().toString(),
@@ -517,7 +505,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     });
 
     it('T-CH-API-W4: 不存在 ID 报 invalid workload', async () => {
-      const token = await signup();
+      const token = await newUserToken();
       const missing = new mongoose.Types.ObjectId().toString();
       const result = await gql(
         CREATE,
@@ -538,7 +526,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       expect(standard).toBeTruthy();
       expect(harness).toBeTruthy();
 
-      const harnessToken = await signup();
+      const harnessToken = await newUserToken();
       const harnessResult = await gql(
         CREATE,
         {
@@ -554,7 +542,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
         `workload is not installable: ${String(harness!.name)}`,
       );
 
-      const token = await signupFunded();
+      const token = await fundedUserToken();
       const created = await gql(
         CREATE,
         {
@@ -581,7 +569,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
 // Kimi Code（Harness）：创建校验 + 逐容器 2.10.0 版本门禁（T-CH-API-K1）
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
   it('T-CH-API-K1: accepts KIMI_CODE (multi-select) and stores agentGearMinVersion=2.10.0', async () => {
-    const token = await signupFunded();
+    const token = await fundedUserToken();
     const created = await gql(
       CREATE,
       {
@@ -618,7 +606,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
 // DeepSeek Harness（Harness）：创建校验 + 逐容器 2.11.0 版本门禁（T-DS-API2/3）
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', () => {
   it('T-DS-API2/T-DS-API3: accepts DEEPSEEK_HARNESS (single & multi) and stores agentGearMinVersion=2.11.0', async () => {
-    const token = await signupFunded();
+    const token = await fundedUserToken();
     const created = await gql(
       CREATE,
       {
@@ -652,7 +640,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', ()
   });
 
   it('T-DS-API2b: unsupported harness type 文案不变', async () => {
-    const token = await signup();
+    const token = await newUserToken();
     const result = await gql(
       CREATE,
       { input: { name: `bad-${Date.now().toString(36)}`, harnessTypes: ['FOO'] } },
@@ -787,7 +775,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
 
   it('T-CH-API-CDS1: createDefaultSession=false 落库，缺省保持 true', async () => {
     const db = (await mongoDb())!;
-    const token = await signupFunded();
+    const token = await fundedUserToken();
     const created = await gql(
       CREATE,
       {
@@ -807,7 +795,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       });
       expect(doc?.createDefaultSession).toBe(false);
 
-      const legacyToken = await signupFunded();
+      const legacyToken = await fundedUserToken();
       const legacy = await gql(
         CREATE,
         {
@@ -834,8 +822,8 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
   });
 
   it('T-CH-API-CHID1: cloudHost(id) 返回本人云电脑，他人/非法 ID 返回 null', async () => {
-    const { token, userId } = await signupWithId();
-    const other = await signup();
+    const { token, userId } = await newFrontUser();
+    const other = await newUserToken();
     const seeded = await seedRunningHost(userId);
     try {
       const own = await gql(CLOUD_HOST, { id: seeded.hostId }, token);
@@ -867,7 +855,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
   // 本地 API 环境 runner 在 workload 步即失败、不可达；等价行为由单测 T-CHG9 覆盖，
   // 全流程工作区断言由单测 T-CHG9 + 验收环境 E2E-1 覆盖。
   it('T-CH-API-CS1: createSession=false 时 session 步骤初始化为 SKIPPED', async () => {
-    const { token, userId } = await signupWithId();
+    const { token, userId } = await newFrontUser();
     const seeded = await seedRunningHost(userId);
     const github = await seedGithubAccount(userId);
     try {
@@ -901,7 +889,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
   });
 
   it('T-CH-API-WS1: targetPath=~/workspace 服务端归一落库为绝对路径（createSession=false 仍 SKIPPED）', async () => {
-    const { token, userId } = await signupWithId();
+    const { token, userId } = await newFrontUser();
     const seeded = await seedRunningHost(userId);
     const github = await seedGithubAccount(userId);
     try {
@@ -950,7 +938,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
   });
 
   it('T-CH-API-CS2: 缺省 createSession 保持 PENDING（单 Harness 旧行为）', async () => {
-    const { token, userId } = await signupWithId();
+    const { token, userId } = await newFrontUser();
     const seeded = await seedRunningHost(userId);
     const github = await seedGithubAccount(userId);
     try {

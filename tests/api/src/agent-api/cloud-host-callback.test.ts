@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { fundFrontUser } from './funding.js';
+import { createFrontUser } from '../support/front-users.js';
 
 // 内部 ready/terminal 回调（cloud-controller → agent-api）。
 // 需要 Aspire 全量服务 + Mongo + INTERNAL_API_TOKEN；无需真实 worker。
@@ -22,12 +23,6 @@ function gql(query: string, variables?: Record<string, unknown>, token?: string)
     body: JSON.stringify({ query, variables }),
   }).then((res) => res.json() as Promise<{ data?: any; errors?: Array<{ message: string }> }>);
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token user { id } }
-  }
-`;
 
 async function mongoDb(): Promise<mongoose.mongo.Db | null> {
   const uri = process.env.MONGODB_URI;
@@ -123,7 +118,7 @@ async function chargeHost(
 ): Promise<{ accountId: string; cashBalance: number }> {
   await fundFrontUser(userId, userId);
   const account = await db.collection('billingaccounts').findOne({
-    ownerType: 'front_user',
+    ownerType: 'tenant',
     ownerId: userId,
   });
   const accountId = String(account!._id);
@@ -157,11 +152,8 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
 
   it('T-CH19: ready drives RUNNING and creates exactly one default session', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const userId = frontUser.userId;
     let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
     try {
       fixture = await seedHost(db, { userId, status: 'STARTING' });
@@ -193,11 +185,8 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
 
   it('T-CH21: multiple harness types do not create a default session', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const userId = frontUser.userId;
     let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
     try {
       fixture = await seedHost(db, {
@@ -230,11 +219,8 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
 
   it('T-CH21b: createDefaultSession=false 时单 harness 也不建默认会话', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const userId = frontUser.userId;
     let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
     try {
       fixture = await seedHost(db, {
@@ -262,11 +248,8 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
 
   it('T-CH22: terminal ends sessions and is idempotent', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const userId = frontUser.userId;
     let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
     try {
       fixture = await seedHost(db, { userId, status: 'RUNNING' });
@@ -304,11 +287,8 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
 
   it('T-CH22: terminal failed drives FAILED with reason', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const userId = frontUser.userId;
     let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
     try {
       fixture = await seedHost(db, { userId, status: 'RUNNING' });
@@ -334,11 +314,8 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
 
   it('T-CH-API-B5: 未 ready terminal 自动退款并留痕', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const userId = frontUser.userId;
     let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
     try {
       fixture = await seedHost(db, { userId, status: 'STARTING' });
@@ -369,11 +346,8 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
 
   it('T-CH-API-B6: ready 后 terminal 不退款', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `cb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const userId = frontUser.userId;
     let fixture: Awaited<ReturnType<typeof seedHost>> | undefined;
     try {
       fixture = await seedHost(db, { userId, status: 'RUNNING' });
