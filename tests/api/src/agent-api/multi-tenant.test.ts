@@ -5,6 +5,8 @@
  * - T-MT1 开户 → login → me：`name` = 用户名、`tenant` 同名 personal、`memberCount=1`；
  * - T-MT2 双用户隔离：A 创建的会话/控制器工作区/MCP server/待办/工作流模板，B 不可见、详情不可达；
  * - T-MT3 行为回归：A 自己的列表仍能看到 A 创建的数据（personal 期 tenantId==userId）；
+ * - 无公开 GraphQL 读接口的集合（cloud_host_* / workflowprhandlers / issue_workflow_triggers 等）
+ *   由 agent-api `src/models/tenant-isolation.test.ts` 的 T-ISO 矩阵（19 集合逐一验证查询注入）兜底；
  * - T-MT5 迁移/三件套核对（需 `MONGODB_URI`，缺省跳过）：users 三件套、sessions tenantId==userId、
  *   billingaccounts 前台 ownerType=tenant。
  *
@@ -36,6 +38,24 @@ function gql<T = any>(
     body: JSON.stringify(body),
   }).then((res) => res.json() as Promise<{ data?: T; errors?: Array<{ message: string }> }>);
 }
+
+const CONTROLLER_KEYS = `
+  query ControllerKeys {
+    controllerKeys { id name }
+  }
+`;
+
+const COMMIT_SETTINGS = `
+  query CommitSettings {
+    commitSettings { committerMode committerType customName customEmail }
+  }
+`;
+
+const UPDATE_COMMIT_SETTINGS = `
+  mutation UpdateCommitSettings($input: CommitSettingsInput!) {
+    updateCommitSettings(input: $input) { committerMode committerType customName customEmail }
+  }
+`;
 
 const LOGIN = `
   mutation Login($username: String!, $password: String!) {
@@ -443,6 +463,45 @@ describe('多租户一期：T-MT 系列', () => {
     // 未覆盖集合（cloudhosts / gateway / controller-key / workflow-instance 等）在各自套件已有
     // 单用户视角回归；本期 API 级隔离以「列表按 tenantId+userId 双条件」为准，逐集合单测见
     // servers/agent-api/src/services/*.test.ts 的 T-ISO-* 系列。
+  });
+
+  it('T-MT2g: controllerkeys 跨租户列表不可见', async () => {
+    const own = await gql<{ controllerKeys: Array<{ id: string }> }>(CONTROLLER_KEYS, undefined, userA.token);
+    expect(own.errors).toBeUndefined();
+    expect(own.data!.controllerKeys.length).toBeGreaterThan(0);
+
+    const other = await gql<{ controllerKeys: Array<{ id: string }> }>(CONTROLLER_KEYS, undefined, userB.token);
+    expect(other.errors).toBeUndefined();
+    expect(other.data!.controllerKeys).toHaveLength(0);
+  });
+
+  it('T-MT2h: user_commit_settings 按用户隔离（B 看不到 A 的提交人设置）', async () => {
+    const updated = await gql<{ updateCommitSettings: { committerMode: string; committerType: string; customName: string | null } }>(
+      UPDATE_COMMIT_SETTINGS,
+      {
+        input: {
+          committerMode: 'HUMAN_ONLY',
+          committerType: 'CUSTOM',
+          customName: 'MT User A',
+          customEmail: 'mt-a@example.com',
+        },
+      },
+      userA.token,
+    );
+    expect(updated.errors).toBeUndefined();
+    expect(updated.data!.updateCommitSettings).toMatchObject({
+      committerMode: 'HUMAN_ONLY',
+      committerType: 'CUSTOM',
+      customName: 'MT User A',
+    });
+
+    const other = await gql<{ commitSettings: { committerMode: string; committerType: string } }>(
+      COMMIT_SETTINGS,
+      undefined,
+      userB.token,
+    );
+    expect(other.errors).toBeUndefined();
+    expect(other.data!.commitSettings).toMatchObject({ committerMode: 'UNSET', committerType: 'UNSET' });
   });
 
   it('T-MT3: A 的列表仍能看到自己创建的数据（行为回归）', async () => {

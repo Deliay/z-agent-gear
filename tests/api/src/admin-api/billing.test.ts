@@ -266,7 +266,7 @@ describe('Admin Billing API', () => {
   });
 
   it.skipIf(!process.env.INTERNAL_API_TOKEN)(
-    'T-B34: front_user 读兼容（解析到 tenant 行）+ 写拒绝 INVALID_OWNER_TYPE',
+    'T-B34: front_user 读兼容（解析到 tenant 行）+ 写兼容归一为 tenant',
     async () => {
       expect(frontAccountId).toBeTruthy();
 
@@ -283,7 +283,7 @@ describe('Admin Billing API', () => {
       expect(account.ownerType).toBe('tenant');
       expect(account.ownerId).toBe(frontUser.tenantId);
 
-      // 写拒绝：已废弃枚举不得用于新写入
+      // 写兼容：发布窗口内旧 agent-api 仍传 front_user，服务端归一为 tenant（不产生 front_user 新行）
       const write = await fetch(`${ADMIN_HTTP}/internal/billing/api-keys`, {
         method: 'POST',
         headers: {
@@ -293,11 +293,13 @@ describe('Admin Billing API', () => {
         body: JSON.stringify({
           ownerType: 'front_user',
           ownerId: frontUser.tenantId,
-          name: 'deprecated-owner',
+          name: 'compat-owner',
         }),
       });
-      expect(write.status).toBe(400);
-      await expect(write.json()).resolves.toMatchObject({ error: 'INVALID_OWNER_TYPE' });
+      expect(write.status).toBe(201);
+      await expect(write.json()).resolves.toMatchObject({
+        apiKey: { ownerType: 'tenant', cloudHostId: null },
+      });
     },
   );
 

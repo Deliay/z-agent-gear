@@ -39,6 +39,7 @@ describe('migration 001-cloudcontainers-tenant-id-backfill', () => {
         $or: [{ tenantId: { $exists: false } }, { tenantId: null }],
       },
       [{ $set: { tenantId: '$userId' } }],
+      { updatePipeline: true },
     );
     // userId 只读、不删除：更新阶段仅 $set tenantId
     const update = (CloudContainer.updateMany as any).mock.calls[0][1];

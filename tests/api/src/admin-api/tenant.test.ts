@@ -191,20 +191,24 @@ describe('Admin Tenant API', () => {
     expect(secondPage.data!.adminTenants[0].id).not.toBe(firstPage.data!.adminTenants[0].id);
   });
 
-  it('T-AT-API6: 重名开户不产生第二个用户（幂等视图或 409 USERNAME_TAKEN）', async () => {
+  it('T-AT-API6: 同密码重放幂等 200；不同密码重名必须 409 USERNAME_TAKEN', async () => {
+    // 同密码重放：幂等返回既有三件套视图（计划 §3.2 裁决 6）
     const again = await adminGql<{ adminCreateFrontUser: { id: string; username: string } }>(
       CREATE_FRONT_USER,
       { username: usernameA, password },
       token,
     );
-    if (again.errors) {
-      // 冲突映射：契约错误体 USERNAME_TAKEN
-      expect(again.errors[0].message).toMatch(/USERNAME_TAKEN|already taken/i);
-    } else {
-      // 幂等：返回既有三件套视图（计划 §3.2 裁决 6）
-      expect(again.data!.adminCreateFrontUser.id).toBe(createdA.id);
-      expect(again.data!.adminCreateFrontUser.username).toBe(usernameA);
-    }
+    expect(again.errors).toBeUndefined();
+    expect(again.data!.adminCreateFrontUser.id).toBe(createdA.id);
+    expect(again.data!.adminCreateFrontUser.username).toBe(usernameA);
+
+    // 用户名被占用且密码不一致：必须明确失败，不能静默丢弃新密码
+    const conflict = await adminGql(
+      CREATE_FRONT_USER,
+      { username: usernameA, password: `${password}-different` },
+      token,
+    );
+    expect(conflict.errors?.[0]?.message).toMatch(/USERNAME_TAKEN|already taken/i);
 
     const list = await adminGql<{ adminTenants: Array<{ id: string; name: string }> }>(
       TENANTS,

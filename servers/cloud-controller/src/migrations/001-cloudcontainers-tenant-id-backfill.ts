@@ -26,6 +26,8 @@ export async function run(): Promise<void> {
       $or: [{ tenantId: { $exists: false } }, { tenantId: null }],
     },
     [{ $set: { tenantId: '$userId' } }],
+    // Mongoose v9：聚合管线更新必须显式声明 updatePipeline。
+    { updatePipeline: true },
   );
   console.log(
     `[Migration 001] backfilled cloudcontainers.tenantId: ${result.modifiedCount} document(s)`,
