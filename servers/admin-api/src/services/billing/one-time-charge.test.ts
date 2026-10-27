@@ -3,7 +3,7 @@ import { BillingAccount } from '../../models/billing-account.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import { BillingPayment } from '../../models/billing-payment.js';
-import { oneTimeChargeService, InsufficientBalanceError } from './one-time-charge.js';
+import { oneTimeChargeService, InsufficientBalanceError, AccountFrozenError } from './one-time-charge.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from './testing/mongo.js';
 
 describe('OneTimeChargeService（云电脑创建一次性扣费/退款）', () => {
@@ -62,6 +62,16 @@ describe('OneTimeChargeService（云电脑创建一次性扣费/退款）', () =
     expect(await BillingPayment.countDocuments()).toBe(0);
     expect(await BillingLedger.countDocuments()).toBe(0);
     expect((await BillingAccount.findById(accountId))?.cashBalance).toBe(100);
+  });
+
+  it('T-OTC4: 账户冻结拒绝且不产生账务记录', async () => {
+    const accountId = await account();
+    await BillingAccount.updateOne({ _id: accountId }, { $set: { status: 'frozen' } });
+    await expect(oneTimeChargeService.createOneTimeCharge(input(accountId))).rejects.toBeInstanceOf(
+      AccountFrozenError,
+    );
+    expect(await BillingInvoice.countDocuments()).toBe(0);
+    expect(await BillingLedger.countDocuments()).toBe(0);
   });
 
   it('T-OTC5/T-OTC6: 退款写 adjust 正向账单、余额回升且同 refundKey 幂等', async () => {

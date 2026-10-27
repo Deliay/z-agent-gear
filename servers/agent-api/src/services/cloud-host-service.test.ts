@@ -41,6 +41,10 @@ vi.mock('../models/controller-workspace.js', () => ({
   ControllerWorkspace: { deleteOne: vi.fn() },
 }));
 
+vi.mock('../models/github-account.js', () => ({
+  GitHubAccount: { findOne: vi.fn() },
+}));
+
 vi.mock('../models/session.js', () => ({
   Session: { countDocuments: vi.fn(), find: vi.fn() },
 }));
@@ -122,6 +126,7 @@ import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
+import { GitHubAccount } from '../models/github-account.js';
 import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
 
 const HOST_ID = '507f1f77bcf86cd799439011';
@@ -300,6 +305,43 @@ describe('CloudHostService', () => {
       await expect(
         service.create('user-1', { name: 'x', harnessTypes: ['UNKNOWN'] }),
       ).rejects.toThrow('unsupported harness type: UNKNOWN');
+    });
+
+    it('T-CH-GH1: 非法/非本人 githubAccountId 拒绝，合法则落库透传', async () => {
+      await expect(
+        service.create('user-1', {
+          name: 'x',
+          harnessTypes: ['OPENCODE'],
+          githubAccountId: 'not-an-object-id',
+        }),
+      ).rejects.toThrow('Github 账号不存在或不属于当前用户');
+
+      vi.mocked(GitHubAccount.findOne).mockReturnValue(chain(null) as never);
+      await expect(
+        service.create('user-1', {
+          name: 'x',
+          harnessTypes: ['OPENCODE'],
+          githubAccountId: '507f1f77bcf86cd799439099',
+        }),
+      ).rejects.toThrow('Github 账号不存在或不属于当前用户');
+      expect(CloudHost.create).not.toHaveBeenCalled();
+
+      setupCreateSuccess();
+      vi.mocked(GitHubAccount.findOne).mockReturnValue(
+        chain({ _id: '507f1f77bcf86cd799439099' }) as never,
+      );
+      await service.create('user-1', {
+        name: 'owned',
+        harnessTypes: ['OPENCODE'],
+        githubAccountId: '507f1f77bcf86cd799439099',
+      });
+      expect(GitHubAccount.findOne).toHaveBeenCalledWith({
+        _id: '507f1f77bcf86cd799439099',
+        userId: 'user-1',
+      });
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ githubAccountId: '507f1f77bcf86cd799439099' }),
+      );
     });
 
     it('T-CH-C7: allows consecutive creates without one-active-host limit', async () => {
@@ -1072,6 +1114,38 @@ describe('CloudHostService', () => {
       expect(CloudHost.findOneAndUpdate).not.toHaveBeenCalled();
       expect(sessionService.endByController).toHaveBeenCalledWith(CONTROLLER_ID, 'user-1');
       expect(billingClient.revokeApiKeysByHost).toHaveBeenCalledWith(HOST_ID);
+    });
+
+    it('T-CH-B4: 未 ready 退款、已 ready 不退、已终态早退分支补退', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'STARTING', readyAt: null })) as never,
+      );
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(hostDoc({ status: 'FAILED', readyAt: null })) as never,
+      );
+      await service.handleTerminal(HOST_ID, { status: 'failed', reason: 'start failed' });
+      expect(billingClient.refundCharge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          idempotentKey: `cloud_host.create:${HOST_ID}`,
+          refundKey: `cloud_host.create.refund:${HOST_ID}`,
+        }),
+      );
+
+      vi.mocked(billingClient.refundCharge).mockClear();
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'RUNNING', readyAt: new Date() })) as never,
+      );
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(hostDoc({ status: 'STOPPED', readyAt: new Date() })) as never,
+      );
+      await service.handleTerminal(HOST_ID, { status: 'stopped' });
+      expect(billingClient.refundCharge).not.toHaveBeenCalled();
+
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'FAILED', readyAt: null })) as never,
+      );
+      await service.handleTerminal(HOST_ID, { status: 'failed' });
+      expect(billingClient.refundCharge).toHaveBeenCalledTimes(1);
     });
   });
 

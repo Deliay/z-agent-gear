@@ -112,6 +112,7 @@ export default function NewCloudHostDialog({
     data: quoteData,
     loading: quoteLoading,
     error: quoteError,
+    refetch: refetchQuote,
   } = useQuery<CloudHostBillingQuoteQuery>(CLOUD_HOST_BILLING_QUOTE, {
     skip: !open,
     fetchPolicy: 'cache-and-network',
@@ -161,6 +162,13 @@ export default function NewCloudHostDialog({
     Boolean(nameError) ||
     Boolean(harnessError) ||
     projectIncomplete
+
+  const handleCreateError = (err: unknown) => {
+    setError(getErrorMessage(err));
+    if (err instanceof Error && err.message.includes('insufficient balance')) {
+      if (typeof refetchQuote === 'function') void refetchQuote();
+    }
+  };
 
   const toggleHarness = (harness: HarnessType, checked: boolean) => {
     setSelectedHarnesses((prev) =>
@@ -230,7 +238,7 @@ export default function NewCloudHostDialog({
           },
         })
       } catch (err) {
-        setError(getErrorMessage(err))
+        handleCreateError(err)
       } finally {
         setSubmitting(false)
       }
@@ -254,7 +262,7 @@ export default function NewCloudHostDialog({
       }
     } catch (err) {
       // 服务端错误文案原样展示（name is required / insufficient balance / ...）
-      setError(getErrorMessage(err))
+      handleCreateError(err)
     } finally {
       setSubmitting(false)
     }

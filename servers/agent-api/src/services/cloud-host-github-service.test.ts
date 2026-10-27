@@ -658,5 +658,55 @@ describe('CloudHostGithubService', () => {
       ).rejects.toThrow('github account is locked');
       expect(CloudHostSetupOperation.create).not.toHaveBeenCalled();
     });
+
+    it('T-CHG15: CAS 未命中时重读并按已锁定重判（并发首绑）', async () => {
+      vi.mocked(CloudHost.updateOne).mockResolvedValue({ matchedCount: 0 } as never);
+      vi.mocked(CloudHost.findById).mockReturnValue(
+        lean({ githubAccountId: ACCOUNT_ID }) as never,
+      );
+      const host = {
+        _id: HOST_ID,
+        controllerId: CONTROLLER_ID,
+        status: 'RUNNING',
+        containerId: CONTAINER_ID,
+      };
+      const { service } = makeService({
+        workloadService: { ...baseWorkload, requireCloudHost: vi.fn().mockResolvedValue(host) },
+      });
+      await service.createOperation({
+        userId: USER_ID,
+        controllerId: CONTROLLER_ID,
+        accountId: ACCOUNT_ID,
+        repoFullName: 'owner/repo',
+        targetPath: '/home/worker/workspace',
+      });
+      expect(CloudHost.findById).toHaveBeenCalledWith(HOST_ID);
+      expect(CloudHostSetupOperation.create).toHaveBeenCalled();
+    });
+
+    it('T-CHG16: 锁定帐号被删除时报归属错误且不解除锁定', async () => {
+      vi.mocked(GitHubAccount.findOne).mockReturnValue(lean(null) as never);
+      const host = {
+        _id: HOST_ID,
+        controllerId: CONTROLLER_ID,
+        status: 'RUNNING',
+        containerId: CONTAINER_ID,
+        githubAccountId: ACCOUNT_ID,
+      };
+      const { service } = makeService({
+        workloadService: { ...baseWorkload, requireCloudHost: vi.fn().mockResolvedValue(host) },
+      });
+      await expect(
+        service.createOperation({
+          userId: USER_ID,
+          controllerId: CONTROLLER_ID,
+          accountId: ACCOUNT_ID,
+          repoFullName: 'owner/repo',
+          targetPath: '/home/worker/workspace',
+        }),
+      ).rejects.toThrow('Github 账号不存在或不属于当前用户');
+      expect(CloudHost.updateOne).not.toHaveBeenCalled();
+      expect(CloudHostSetupOperation.create).not.toHaveBeenCalled();
+    });
   });
 });

@@ -117,7 +117,7 @@ export function createInternalBillingRouter(): Router {
       typeof accountId !== 'string' ||
       !mongoose.isValidObjectId(accountId) ||
       typeof productId !== 'string' ||
-      !productId ||
+      productId !== 'cloud_host.create' ||
       !Number.isInteger(quantity) ||
       quantity <= 0 ||
       typeof idempotentKey !== 'string' ||

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { createWorkspace, loginViaUI, registerUser } from './helpers';
+import { createWorkspace, loginViaUI, registerFundedUser } from './helpers';
 
 // 云电脑 E2E：K8S_ENABLED=false 下只能覆盖 STARTING → 停止 → 已销毁 → 删除。
 // 在线/默认会话/只读消息由 tests/api 回调用例与真实集群手工验收覆盖。
@@ -48,7 +48,7 @@ test.describe('Cloud Host E2E', () => {
   test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
 
   test('E2E-39/41: 收费详情展示且余额不足不前置禁用创建', async ({ page }) => {
-    const { username } = await registerUser(page);
+    const { username } = await registerFundedUser(page);
     await loginViaUI(page, username);
     await expect(page.locator(sidebar())).toBeVisible();
 
@@ -65,7 +65,7 @@ test.describe('Cloud Host E2E', () => {
   });
 
   test('T-AW2..T-AW9: create → starting → stop → stopped → delete', async ({ page }) => {
-    const { token, username } = await registerUser(page);
+    const { token, username } = await registerFundedUser(page);
     await loginViaUI(page, username);
     await expect(page.locator(sidebar())).toBeVisible();
 
@@ -180,7 +180,7 @@ test.describe('Cloud Host E2E', () => {
   });
 
   test('T-AW3/T-AW5: surfaces server validation errors', async ({ page }) => {
-    const { username } = await registerUser(page);
+    const { username } = await registerFundedUser(page);
     await loginViaUI(page, username);
 
     await page.getByRole('button', { name: '新建云电脑' }).click();
@@ -194,7 +194,7 @@ test.describe('Cloud Host E2E', () => {
   test('E2E-1: 普通创建不预置默认工作区、不自动建会话并展示无工作区提示', async ({ page }) => {
     // 缺参显式跳过，而不是在用例内部静默绕过核心断言
     test.skip(!process.env.INTERNAL_API_TOKEN, 'E2E-1 需要 INTERNAL_API_TOKEN 驱动 ready 回调');
-    const { token, username } = await registerUser(page);
+    const { token, username } = await registerFundedUser(page);
     await loginViaUI(page, username);
     await expect(page.locator(sidebar())).toBeVisible();
 
@@ -495,7 +495,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
   test('P10-CH1: 未选项目 → 不弹四阶段进度框，就绪后不预置工作区/不自动建会话（phase2 零回归）', async ({ page }) => {
     test.skip(!MONGO_URI || !INTERNAL_TOKEN, '需要 MONGODB_URI + INTERNAL_API_TOKEN');
     test.setTimeout(90_000);
-    const { token, username } = await registerUser(page);
+    const { token, username } = await registerFundedUser(page);
     const userId = await getMe(page, token);
     await loginViaUI(page, username);
     const name = `e2e-p10-legacy-${Date.now().toString(36)}`;
@@ -555,7 +555,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
   test('P10-CH2: 选项目 → 四阶段进度，成功后进入项目会话且无空默认会话', async ({ page }) => {
     test.skip(!MONGO_URI, '需要 MONGODB_URI');
     test.setTimeout(120_000);
-    const { token, username } = await registerUser(page);
+    const { token, username } = await registerFundedUser(page);
     const userId = await getMe(page, token);
     await seedGithub(page, userId);
     // 自检：seed 后 GraphQL 必须能读到账号与仓库（集合名/userId 类型问题在此暴露）
@@ -631,7 +631,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
   test('P10-CH3: 项目准备失败 → 进度框展示失败步骤并可重试', async ({ page }) => {
     test.skip(!MONGO_URI, '需要 MONGODB_URI');
     test.setTimeout(120_000);
-    const { token, username } = await registerUser(page);
+    const { token, username } = await registerFundedUser(page);
     const userId = await getMe(page, token);
     await seedGithub(page, userId);
     await loginViaUI(page, username);

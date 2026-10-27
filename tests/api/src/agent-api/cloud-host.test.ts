@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
+import { fundFrontUser } from './funding.js';
 
 // 前台云电脑 API（需要 Aspire 全量服务 + HARNESS_ENABLED=true）。
 // `K8S_ENABLED=false` 下 create 只能停在 STARTING；在线/默认会话由单测与真实集群验收覆盖。
@@ -61,19 +62,31 @@ const DELETE = `mutation Delete($id: ID!) { deleteCloudHost(id: $id) }`;
 
 const HOME = `query { homeOverview { controllers { id type name cloudHost { id status } } } }`;
 
+const INVOICES = `query { myBillingInvoices(page: 1, pageSize: 20) { id type amount refType refId description items { productId quantity unitPrice amount } receiptId } }`;
+const RECEIPTS = `query { myBillingReceipts(page: 1, pageSize: 20) { id receiptNo invoiceId amount } }`;
+const QUOTE = `query { cloudHostBillingQuote { createCredits perMinuteCredits availableBalance } }`;
+
 async function signup(): Promise<string> {
   const username = `ch${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   const result = await gql(SIGNUP, { username, password: 'password123' });
   return result.data.signup.token as string;
 }
 
-async function signupWithId(): Promise<{ token: string; userId: string }> {
+async function signupWithId(): Promise<{ token: string; userId: string; username: string }> {
   const username = `ch${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   const result = await gql(SIGNUP, { username, password: 'password123' });
   return {
     token: result.data.signup.token as string,
     userId: result.data.signup.user.id as string,
+    username,
   };
+}
+
+/** 创建云电脑需先扣 5 credits：为独立用户准备余额后返回 token。 */
+async function signupFunded(cents = 10_000): Promise<string> {
+  const { token, userId, username } = await signupWithId();
+  await fundFrontUser(userId, username, cents);
+  return token;
 }
 
 describe.skipIf(HARNESS_ENABLED)('Cloud Host API (feature disabled)', () => {
@@ -133,8 +146,8 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     expect(noHarness.errors?.[0].message).toBe('at least one harness type is required');
   });
 
-  it('T-CH7/T-CH10/T-CH11: create/list/owner isolation/1 instance/stop/delete', async () => {
-    const token = await signup();
+  it('T-CH7/T-CH10/T-CH11: create/list/owner isolation/multi-host/stop/delete', async () => {
+    const token = await signupFunded();
     const other = await signup();
 
     const created = await gql(
@@ -179,10 +192,13 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     );
 
     const second = await gql(CREATE, { input: { name: 'another', harnessTypes: ['OPENCODE'] } }, token);
-    expect(second.errors?.[0].message).toBe('too many cloud hosts');
+    expect(second.errors).toBeUndefined();
+    expect(second.data.createCloudHost.status).toBe('STARTING');
 
     const mine = await gql(MY_HOSTS, undefined, token);
-    expect(mine.data.myCloudHosts.map((item: { id: string }) => item.id)).toContain(host.id);
+    expect(mine.data.myCloudHosts.map((item: { id: string }) => item.id)).toEqual(
+      expect.arrayContaining([host.id, second.data.createCloudHost.id]),
+    );
 
     const theirs = await gql(MY_HOSTS, undefined, other);
     expect(theirs.data.myCloudHosts.map((item: { id: string }) => item.id)).not.toContain(host.id);
@@ -234,9 +250,73 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     expect(offlined).toBeUndefined();
   });
 
+  it('T-CH-API-B1: 创建成功扣 5 credits 并生成账单/收据', async () => {
+    const token = await signupFunded();
+    const created = await gql(
+      CREATE,
+      { input: { name: `bill-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+      token,
+    );
+    expect(created.errors).toBeUndefined();
+    const host = created.data.createCloudHost;
+
+    const invoices = await gql(INVOICES, undefined, token);
+    const charge = (invoices.data.myBillingInvoices as Array<Record<string, unknown>>).find(
+      (item) => item.refType === 'cloud_host' && item.refId === host.id,
+    );
+    expect(charge).toMatchObject({ type: 'charge', amount: -5 });
+    expect(charge?.receiptId).toBeTruthy();
+
+    const receipts = await gql(RECEIPTS, undefined, token);
+    expect(
+      (receipts.data.myBillingReceipts as Array<Record<string, unknown>>).some(
+        (item) => item.invoiceId === charge?.id && item.amount === 5,
+      ),
+    ).toBe(true);
+  });
+
+  it('T-CH-API-B2: 余额不足拒绝创建且无云电脑、无账单', async () => {
+    const token = await signup();
+    const created = await gql(
+      CREATE,
+      { input: { name: `poor-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+      token,
+    );
+    expect(created.errors?.[0].message).toBe('insufficient balance');
+    const hosts = await gql(MY_HOSTS, undefined, token);
+    expect(hosts.data.myCloudHosts).toEqual([]);
+    const invoices = await gql(INVOICES, undefined, token);
+    expect(invoices.data.myBillingInvoices).toEqual([]);
+  });
+
+  it('T-CH-API-B3/B4: 连续创建 2 台成功，报价与实际扣费一致', async () => {
+    const token = await signupFunded();
+    const quote = await gql(QUOTE, undefined, token);
+    expect(quote.data.cloudHostBillingQuote).toMatchObject({
+      createCredits: 5,
+      perMinuteCredits: 1,
+    });
+    for (const name of ['multi-a', 'multi-b']) {
+      const result = await gql(
+        CREATE,
+        { input: { name: `${name}-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+        token,
+      );
+      expect(result.errors).toBeUndefined();
+    }
+    const hosts = await gql(MY_HOSTS, undefined, token);
+    expect(hosts.data.myCloudHosts).toHaveLength(2);
+    const invoices = await gql(INVOICES, undefined, token);
+    const charges = (invoices.data.myBillingInvoices as Array<Record<string, unknown>>).filter(
+      (item) => item.refType === 'cloud_host',
+    );
+    expect(charges).toHaveLength(2);
+    expect(charges.every((item) => item.amount === -5)).toBe(true);
+  });
+
   it('T-CH-DW1: 创建期不预置默认工作区（hasDefaultWorkspace=false、工作区列表为空、不自动建会话）', async () => {
     const createAndInspect = async (input: Record<string, unknown>) => {
-      const token = await signup();
+      const token = await signupFunded();
       const created = await gql(
         CREATE,
         { input: { name: `dw-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], ...input } },
@@ -304,7 +384,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   });
 
   it('T-CH17: refuses to delete a non-terminal cloud host', async () => {
-    const token = await signup();
+    const token = await signupFunded();
     const created = await gql(
       CREATE,
       { input: { name: `del-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
@@ -474,7 +554,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
         `workload is not installable: ${String(harness!.name)}`,
       );
 
-      const token = await signup();
+      const token = await signupFunded();
       const created = await gql(
         CREATE,
         {
@@ -501,7 +581,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
 // Kimi Code（Harness）：创建校验 + 逐容器 2.10.0 版本门禁（T-CH-API-K1）
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
   it('T-CH-API-K1: accepts KIMI_CODE (multi-select) and stores agentGearMinVersion=2.10.0', async () => {
-    const token = await signup();
+    const token = await signupFunded();
     const created = await gql(
       CREATE,
       {
@@ -538,7 +618,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
 // DeepSeek Harness（Harness）：创建校验 + 逐容器 2.10.0 版本门禁（T-DS-API2/3）
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', () => {
   it('T-DS-API2/T-DS-API3: accepts DEEPSEEK_HARNESS (single & multi) and stores agentGearMinVersion=2.10.0', async () => {
-    const token = await signup();
+    const token = await signupFunded();
     const created = await gql(
       CREATE,
       {
@@ -704,7 +784,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
 
   it('T-CH-API-CDS1: createDefaultSession=false 落库，缺省保持 true', async () => {
     const db = (await mongoDb())!;
-    const token = await signup();
+    const token = await signupFunded();
     const created = await gql(
       CREATE,
       {

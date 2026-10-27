@@ -6,6 +6,7 @@ import type { CloudHostCapabilitiesData, HarnessType } from '../../../graphql/ty
 const mockCreateCloudHost = vi.fn();
 const mockSetupGithubProject = vi.fn();
 const mockUseQuery = vi.fn();
+const mockRefetchQuote = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useMutation: (doc: unknown) =>
@@ -91,6 +92,7 @@ describe('NewCloudHostDialog', () => {
         },
       },
       loading: false,
+      refetch: mockRefetchQuote,
     });
     mockCreateCloudHost.mockResolvedValue({
       data: {
@@ -201,6 +203,7 @@ describe('NewCloudHostDialog', () => {
     fireEvent.click(submitButton());
 
     expect(await screen.findByRole('alert')).toHaveTextContent('账户余额不足，请联系管理员充值后重试');
+    expect(mockRefetchQuote).toHaveBeenCalled();
   });
 
   it.each([
