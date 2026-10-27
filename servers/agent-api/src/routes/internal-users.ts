@@ -81,7 +81,13 @@ internalUsersRouter.post('/', async (req: Request, res: Response) => {
     if (account) {
       // 幂等重放与重名冲突的区分：仅当请求密码可验证既有账户时才视为幂等重放；
       // 用户名被占用（密码不匹配/无法验证）必须 409，不能静默丢弃新密码。
-      const matches = await verifyPassword(password, account.passwordHash);
+      let matches = false;
+      try {
+        matches = await verifyPassword(password, account.passwordHash);
+      } catch {
+        // passwordHash 缺失/损坏：按用户名被占用处理，避免落到 500。
+        matches = false;
+      }
       if (!matches) {
         res.status(409).json({ error: 'USERNAME_TAKEN' });
         return;
@@ -96,7 +102,13 @@ internalUsersRouter.post('/', async (req: Request, res: Response) => {
         // accounts.username 唯一索引冲突 → 复查后按幂等/重名口径处理（并发开户兜底）
         if ((err as { code?: number }).code === 11000) {
           account = await Account.findOne({ username });
-          if (!account || !(await verifyPassword(password, account.passwordHash))) {
+          let raceMatches = false;
+          try {
+            raceMatches = !!account && (await verifyPassword(password, account.passwordHash));
+          } catch {
+            raceMatches = false;
+          }
+          if (!account || !raceMatches) {
             res.status(409).json({ error: 'USERNAME_TAKEN' });
             return;
           }

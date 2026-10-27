@@ -18,6 +18,7 @@ import { IssueWorkflowTrigger } from './issue-workflow-trigger.js';
 import { TodoItem } from './todo-item.js';
 import { UserCommitSetting } from './user-commit-setting.js';
 import { GitHubAccount } from './github-account.js';
+import { TENANT_ID_COLLECTIONS } from '../migrations/013-tenant-id-backfill.js';
 
 const USER_ID = '507f1f77bcf86cd799439011';
 
@@ -76,6 +77,14 @@ describe('19 collections tenantId isolation (T-ISO)', () => {
       'user_commit_settings',
       'githubaccounts',
     ]);
+  });
+
+  it('TENANT_ID_COLLECTIONS 的集合名与 19 个模型 model.collection.name 逐一相等', () => {
+    const actualByModel = new Map(CASES.map(([, model]) => [model.modelName, model.collection.name]));
+    expect(TENANT_ID_COLLECTIONS).toHaveLength(19);
+    for (const target of TENANT_ID_COLLECTIONS) {
+      expect(actualByModel.get(target.model)).toBe(target.collection);
+    }
   });
 
   it.each(CASES)('%s declares userId + tenantId and queries tenantId+userId', async (_name, model, collection) => {

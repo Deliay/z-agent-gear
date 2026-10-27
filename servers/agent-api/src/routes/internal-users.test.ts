@@ -153,6 +153,15 @@ describe('POST /internal/users (front user provisioning)', () => {
     expect(h.billing.getAccount).not.toHaveBeenCalled();
   });
 
+  it('returns 409 when the stored passwordHash is corrupt (bcrypt rejects)', async () => {
+    h.account.findOne.mockResolvedValue({ _id: 'acc-1', username: 'alice', passwordHash: 'corrupt' });
+    h.verifyPassword.mockRejectedValue(new Error('invalid hash'));
+
+    const res = await post({ username: 'alice', password: 'secret1' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'USERNAME_TAKEN' });
+  });
+
   it('returns 409 USERNAME_TAKEN on unique conflict', async () => {
     h.account.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     h.account.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }));

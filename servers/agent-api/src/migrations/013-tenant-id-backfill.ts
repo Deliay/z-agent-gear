@@ -43,7 +43,7 @@ export const TENANT_ID_COLLECTIONS: readonly TenantIdCollection[] = [
   { collection: 'workflowinstances', model: 'WorkflowInstance' },
   { collection: 'workflowprhandlers', model: 'WorkflowPrHandler' },
   { collection: 'workflowtemplates', model: 'WorkflowTemplate' },
-  { collection: 'issueworkflowtriggers', model: 'IssueWorkflowTrigger' },
+  { collection: 'issue_workflow_triggers', model: 'IssueWorkflowTrigger' },
   { collection: 'todoitems', model: 'TodoItem' },
   {
     collection: 'user_commit_settings',
@@ -59,6 +59,11 @@ export const TENANT_ID_COLLECTIONS: readonly TenantIdCollection[] = [
 
 /**
  * 迁移 013：19 个带 `userId` 的集合复制新增 `tenantId`（= userId），并建租户维度索引。
+ *
+ * ⚠️ 集合名以模型 `model.collection.name` 为准（含显式 collection 声明的 `issue_workflow_triggers`），
+ * 由 `models/tenant-isolation.test.ts` 互校；若历史版本已在某环境误建空集合 `issueworkflowtriggers`，
+ * 该集合无业务数据，确认后可手工 `db.issueworkflowtriggers.drop()` 清理（真实集合 `issue_workflow_triggers`
+ * 已由本迁移正常回填）。
  *
  * - `userId` 字段与值全部保留（D6：本期查询为 tenantId + userId 双条件）；
  * - 只处理「userId 存在且 tenantId 缺失」的行，缺 userId 的行跳过；重跑零变更；

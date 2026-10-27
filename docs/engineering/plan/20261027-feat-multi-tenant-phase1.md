@@ -128,7 +128,7 @@ mongosh "<MONGODB_URI>" --eval '
 | F2 | §9.2：「admin-api 增加对 agent-api `/internal/users` 的调用地址配置，沿用既有 agent-api 内部地址配置项」 | admin-api `config/index.ts` **无 AGENT_API_URL 配置项**（grep 无结果；`AGENT_API_URL` 仅存在于 cloud-controller，AppHost.cs:214 注入） | admin-api `config/index.ts` **新增** `agentApiUrl`（env `AGENT_API_URL`，可空、不 fail-fast——与 `cloudControllerUrl` 同口径；未配置时 `adminCreateFrontUser` 返回明确错误 `AGENT_API_UNAVAILABLE`）；AppHost.cs adminApi 构建器追加 `.WithEnvironment("AGENT_API_URL", agentApi.GetEndpoint("http"))`；`aspire/manifest` 随 `aspire publish` 重新生成 |
 | F3 | §3.1 契约 1：`User` 移除登录字段暴露、新增 `name`/`tenant`——「原本也未暴露」 | 现行 `contracts/auth.graphql` **`User.username` 已暴露**，且 agent-web 消费：`stores/auth.ts` `User{ id, username }`、`Sidebar.tsx:44/520` username prop、`SettingsPage.tsx:144`、`LoginPage`/`RegisterPage` 响应映射 | 契约按提案执行（`User.username` 移除、`name`+`tenant` 新增）；agent-web **同步切换 username→name**（auth store User 类型、login 响应映射、Sidebar/SettingsPage 展示名语义）；`me` resolver 改为查库返回 `{id,name,tenant,createdAt}`（现状直接返回 `currentUser`，`createdAt` 缺失，顺带修正）；`login` 的 `AuthPayload.user` 同形态 |
 | F4 | §1.2/§3.1：契约删 signup | tests/api `src/admin-api/helpers.ts:122` **`signupUserToken()` 经 signup 造用户**；tests/e2e 多个 spec（auth/settings-controller/session 等）经 UI 或 API 注册造用户 | 测试引导切换：`tests/api/src/admin-api/helpers.ts` 新增 `createFrontUser(username,password)`——`POST {API_URL}/internal/users`（Bearer `INTERNAL_API_TOKEN`）创建 + `login` 取 token，**逐调用点替换 signup**；tests/e2e `helpers.ts` 同口径（经 admin-api `adminCreateFrontUser` + admin 登录，或 internal 端点）；agent-api auth 套件 signup 用例删除并新增「introspection 无 signup」断言；e2e `auth.spec.ts`「注册新用户」用例删除、新增「无注册入口」断言。**helper 切换与 Phase 3 删 signup 同提交** |
-| F5 | §3.1 契约 3：`BillingOwnerType` 增 `tenant` | admin-api `models/billing-account.ts:3` `BILLING_OWNER_TYPES=['front_user','admin_user']`，而 `models/billing-api-key.ts:14` **内联枚举未复用常量**；`routes/internal-billing.ts` 4 处 ownerType 白名单校验（:83/:306/:319/:430） | 枚举统一收口 `BILLING_OWNER_TYPES`（billing-api-key.ts 改为引用）并增 `'tenant'`；internal-billing 白名单 4 处扩展 `tenant`；**front_user 兼容解析归一到 route 层**：`ownerType==='front_user'` 的读请求按同 ownerId 的 `tenant` 行解析（迁移 014 保证 ownerId 不变），写请求（充值/扣费）不接受 `front_user`（400 `INVALID_OWNER_TYPE`） |
+| F5 | §3.1 契约 3：`BillingOwnerType` 增 `tenant` | admin-api `models/billing-account.ts:3` `BILLING_OWNER_TYPES=['front_user','admin_user']`，而 `models/billing-api-key.ts:14` **内联枚举未复用常量**；`routes/internal-billing.ts` 4 处 ownerType 白名单校验（:83/:306/:319/:430） | 枚举统一收口 `BILLING_OWNER_TYPES`（billing-api-key.ts 改为引用）并增 `'tenant'`；internal-billing 白名单 4 处扩展 `tenant`；**front_user 兼容解析归一到 route 层**：`ownerType==='front_user'` 的读请求按同 ownerId 的 `tenant` 行解析（迁移 014 保证 ownerId 不变）；**API Key 写路径（创建/撤销）与读路径同口径 `front_user→tenant` 兼容归一**（发布窗口放行、不产生 `front_user` 新行）；充值/扣费写路径本身不带 ownerType，不受影响 |
 | F6 | §4.1 表格备注：「唯一索引如 `mcp_servers.{userId,name}` 同步扩展为 `{tenantId,name}`」 | 与 v1.3 版本说明及决策 D6「唯一索引扩展**保留 userId 维度**（如 `{tenantId,userId,name}`）」**不一致**；全量核对后带 userId 的唯一索引共 3 个：`mcp_servers {userId,name}`、`githubaccounts {userId,githubUserId}`、`user_commit_settings {userId}`（field-level unique + 迁移命名索引 `uniq_user_commit_setting` 双声明） | 按 D6 与评审意见执行：唯一索引扩展为 `mcp_servers {tenantId,userId,name}`、`githubaccounts {tenantId,userId,githubUserId}`、`user_commit_settings {tenantId,userId}`；**013 只新增不删除**（既有索引零改动，personal 期 tenantId==userId 语义等价冗余，二期再收敛）；其余集合仅新增 `{tenantId:1}` 普通索引（不含 userId 的唯一索引不动：cloud_host_github_bindings.controllerId、cloud_host_issues_linkages、issue_workflow_triggers、workflow_pr_handlers 等）。§4.1 表格备注视为笔误，验收登记 |
 | F7 | §2.3：「中间件直读 `user.tenantId` 入 AuthContext」 | `middleware/auth.ts` `authenticateUser` `.select('username')`，返回 `{id,username}`；`AuthContext.currentUser{ id, username }`；grep 全仓 `currentUser.username` **无消费面**（`me` 直接透传 currentUser） | `authenticateUser` 改 `.select('tenantId name')`，`currentUser` 改 `{ id, tenantId, name }`；`AuthContext` 增 `tenantId: string \| null`（一级回退：`user.tenantId ?? userId`，personal 恒等）；新增 `requireTenantId(context)` helper（缺失抛 `Not authenticated` 同族错误）；40+ 处 `currentUser.id` 消费面零改动 |
 | F8 | §1.2/§1.3 contracts 范围：auth / admin-tenant / billing×2 / 内部 REST 说明 | `startHarness` 的 `POST /internal/containers` harness 参数面在 `contracts/cloud-controller-websocket.md` 附录 A——**提案 contracts 范围未列该文件**，但 cloudcontainers 写入口径（+tenantId）依赖它 | Phase 1 契约增补**包含 `contracts/cloud-controller-websocket.md`**：附录 A harness 参数表新增 `tenantId`（必填，与 userId 同值）与落库口径句；cloud-controller 兼容回退：harness 请求缺 `tenantId` 时回退 `=userId` 并 warn（一期恒等；发布顺序已保证新 agent-api 先上线，回退仅兜底） |
@@ -143,7 +143,7 @@ mongosh "<MONGODB_URI>" --eval '
 4. **013 清洗口径**：逐集合 `updateMany({ userId: { $exists: true }, tenantId: { $exists: false } }, { $set: { tenantId: '$userId' } })`——MongoDB 聚合管线更新或应用侧批处理（runner 环境用应用侧批量：`find` 分页 + `bulkWrite`，每批 500，进度日志）；userId 类型为 String 的集合直接同值复制，ObjectId 同理（personal 期值恒等）。
 5. **双条件化写法**：查询 filter 由 `{ userId: <原取值> }` 改 `{ tenantId: requireTenantId(context), userId: <原取值> }`——原 userId 取值逻辑一字不动，tenantId 叠加；写入同时落 `userId` 与 `tenantId`（同值复制）；跨租户访问统一抛 `Not found`（不泄露存在性）；`respondPermission`/`respondElicitation` 终态写入不变量（filter 含 userId + resolution）**叠加 tenantId**；`TodoService` 既有「缺 userId 拒绝写入」防御保留，补「缺 tenantId 拒绝写入」。
 6. **开户端点幂等**（按 username）：三件套已完整存在 → 200 返回既有视图；半完成按缺失步骤补齐（以 `accounts.username` / `users.accountId` / `tenants._id` 存在性判缺）；用户名唯一冲突 → 409 `USERNAME_TAKEN`；计费账户经 `/internal/billing/account` get-or-create（天然幂等）。错误体 `{ error: '<UPPER_CODE>' }`（与 `internal-cloud-host.ts` 口径一致）。
-7. **计费兼容解析窗口**：发布顺序 admin-api → agent-api → cloud-controller；窗口内旧 agent-api 仍传 `front_user` 读 → F5 兼容解析兜底；旧 agent-api 不传 tenantId 的写入不会发生（写入双条件化与 billing-client 切换同 Phase 4 一次发布）。
+7. **计费兼容解析窗口**：发布顺序 admin-api → agent-api → cloud-controller；窗口内旧 agent-api 仍传 `front_user` 读写 → F5 兼容归一兜底（读解析 + API Key 写归一）；旧 agent-api 不传 tenantId 的写入不会发生（写入双条件化与 billing-client 切换同 Phase 4 一次发布）。
 8. **agent-web 展示名**：`Sidebar`/`SettingsPage` 展示 `user.name`（迁移后=原 username，用户无感知）；`AuthPayload.user`/`me` 消费点（auth store、LoginPage）同步；`RegisterPage.tsx`、`/register` 路由、`LoginPage` 注册链接一并删除，全仓 grep `signup|RegisterPage|/register` 清零（测试/mock 同步）。
 9. **admin-web 费用中心**：保持计费账户视角——`BillingPage` 检索条件下拉扩展 `tenant`（`adminBillingAccounts(ownerType:)` 既有入参），充值 mutation 零改动；新增「按租户检索」入口：`adminTenants` 选租户 → 取其 tenant 计费账户 → 既有充值对话框。
 10. **AGENTS.md 同步面**（随各 Phase 同提交，不留过期口径）：`servers/agent-api/AGENTS.md`（三层模型/AuthContext/双条件口径/开户端点）、`servers/cloud-controller/AGENTS.md`（cloudcontainers tenantId 与迁移基建）、`apps/agent-web/AGENTS.md`（注册移除、展示名）、`apps/admin-web/AGENTS.md`（租户页与开户）、`tests/api/AGENTS.md` + `tests/e2e/AGENTS.md`（auth 套件清单更新）、`docs/engineering/AGENTS.md`（plan 索引，随本文件提交完成）。
@@ -170,7 +170,7 @@ mongosh "<MONGODB_URI>" --eval '
 | `contracts/auth.graphql` | 删 `Mutation.signup`；`User` 移除 `username`、新增 `name: String!` / `tenant: Tenant!`；新增 `Tenant { id, name, type: TenantType!, memberCount: Int! }` 与 `enum TenantType { personal team }` |
 | `contracts/admin-tenant.graphql` | **新增**（提案 §3.1 契约 2 逐字）：`AdminTenant`/`AdminTenantUser`/`AdminTenantDetail`、`adminTenants(keyword,page,pageSize)`、`adminTenant(id)`、`adminCreateFrontUser(username,password)`；头部注释写明后台不做多租户设计、模型口径（tenant→users / account→users 一对多）与 `POST /internal/users` 转发 |
 | `contracts/billing.graphql` | `BillingOwnerType` 增 `tenant`；注释标明 `front_user` 已废弃（存量行由迁移转 tenant，仅历史兼容） |
-| `contracts/admin-billing.graphql` | `BillingOwnerType` 增 `tenant`；`adminBillingAccounts(ownerType:)` 支持 `admin_user`/`tenant` 过滤；内部 REST 注释补 `GET /internal/billing/account` 的 `front_user` 兼容解析口径（读兼容、写拒绝） |
+| `contracts/admin-billing.graphql` | `BillingOwnerType` 增 `tenant`；`adminBillingAccounts(ownerType:)` 支持 `admin_user`/`tenant` 过滤；内部 REST 注释补 `front_user` 兼容口径（读解析 + API Key 写归一，均不产生 front_user 新行） |
 | `contracts/cloud-controller-websocket.md`（F8） | 附录 A `POST /internal/containers` harness 参数表新增 `tenantId`（必填，String，与 userId 同值）；落库口径句补 `cloudcontainers.tenantId`；兼容回退句（缺 tenantId 回退=userId + warn） |
 
 **完成判据**：契约 5 文件口径与提案 §3 一致、无残留歧义；单次提交 `docs(contracts): multi-tenant phase1 auth/admin-tenant/billing/cloud-controller 契约变更`。
@@ -239,11 +239,11 @@ mongosh "<MONGODB_URI>" --eval '
 | `servers/admin-api/src/models/billing-api-key.ts` | 内联枚举改引用 `BILLING_OWNER_TYPES`（F5） |
 | `servers/admin-api/src/migrations/014-billing-owner-tenant.ts` | **新增**：`billingaccounts.updateMany({ownerType:'front_user'},{$set:{ownerType:'tenant'}})` + `billingapikeys` 同口径；幂等；断言 `admin_user` 行数零变化、金额字段抽样不变 |
 | `servers/admin-api/src/migrations/014-billing-owner-tenant.test.ts` | **新增** T-MIG14a~c：仅 front_user 行改写、admin_user 行零改动（含余额/流水引用）、幂等重跑零变更 |
-| `servers/admin-api/src/routes/internal-billing.ts` | 4 处白名单扩展 `tenant`；route 层 `front_user` 读兼容解析（F5）；写路径拒绝 `front_user`（400 `INVALID_OWNER_TYPE`） |
+| `servers/admin-api/src/routes/internal-billing.ts` | 4 处白名单扩展 `tenant`；route 层 `front_user` 读兼容解析（F5）；API Key 写路径同样归一为 `tenant`（发布窗口放行） |
 | `servers/admin-api/src/services/billing/*.ts` | ownerType 类型联合同步；**admin_user 链路零改动**（查询/充值/扣费/对账回归测试兜底） |
 | `servers/admin-api/src/graphql/schemas/billing.ts` + `resolvers/billing.ts` | `BillingOwnerType` 枚举增 `tenant`；`adminBillingAccounts(ownerType:)` 过滤兼容并存 |
 
-**完成判据**：迁移单测全绿；存量 admin_user 计费账户查询/充值/扣费/对账行为与升级前一致（回归用例）；front_user 读请求兼容解析到 tenant 行；写请求拒绝 front_user。
+**完成判据**：迁移单测全绿；存量 admin_user 计费账户查询/充值/扣费/对账行为与升级前一致（回归用例）；front_user 读请求兼容解析到 tenant 行；API Key 写请求兼容归一为 tenant（不产生 front_user 新行）。
 
 ### Phase 7：admin-api 租户只读镜像与 admin-tenant resolvers（1d）
 
@@ -307,7 +307,7 @@ mongosh "<MONGODB_URI>" --eval '
 | `tests/api/src/agent-api/multi-tenant.test.ts` | **新增** T-MT 系列（核心验收）：T-MT1 升级登录无感知（fixtures 老用户 → login → me.tenant）；T-MT2 逐集合隔离（19 集合每集合至少一条：租户 A 写入 → 租户 B 列表/详情/修改/删除不可达，`Not found`）；T-MT3 行为回归（会话/工作流/云电脑/待办通知列表与上线前一致，仍按创建者 userId）；T-MT4 双用户同租户语义预留锚定（本期 personal 恒单成员，跳过）；T-MT5 迁移核对（MONGODB_URI 直读：三件套/余额/tenantId 回填抽样） |
 | `tests/api/src/agent-api/auth.test.ts` | Phase 3 已改：login/me/无 signup |
 | `tests/api/src/admin-api/tenant.test.ts` | **新增**：adminTenants/adminTenant/adminCreateFrontUser 黑盒（鉴权、检索、成员、开户 → 登录闭环、只读性 introspection 无 update/delete） |
-| `tests/api/src/admin-api/billing.test.ts` | 扩展 T-B 系列：tenant 计费账户检索/充值到账；**admin_user 双 owner 回归**（查询/充值/扣费/对账与升级前一致、互不影响）；front_user 读兼容/写拒绝 |
+| `tests/api/src/admin-api/billing.test.ts` | 扩展 T-B 系列：tenant 计费账户检索/充值到账；**admin_user 双 owner 回归**（查询/充值/扣费/对账与升级前一致、互不影响）；front_user 读兼容 + API Key 写兼容归一（不产生 front_user 新行） |
 | `tests/api/src/admin-api/helpers.ts` 等 | F4 helper 替换收尾（全仓 grep signup 清零） |
 | `tests/e2e/src/auth.spec.ts`、`admin-tenant.spec.ts`（新增） | E2E-MT1 无注册入口；E2E-MT2 后台开户 → 新账户登录 → 同名租户可见；E2E-MT3 后台按租户充值 → 前台「我的费用」余额可见；E2E-MT4 双用户隔离（A 建会话 B 不可见） |
 | `aspire/AgentGear.AppHost/AppHost.cs` | adminApi 注入 `AGENT_API_URL`（F2）；`aspire publish -o aspire/manifest` 重新生成 |
@@ -349,7 +349,7 @@ mongosh "<MONGODB_URI>" --eval '
 | T-MT3 行为回归 | 会话/工作流/云电脑/待办通知的列表与操作结果与上线前一致（仍跟创建者 userId） |
 | T-MT5 迁移核对 | `MONGODB_URI` 直读：三件套抽样、19 集合 tenantId 回填抽样、billing 余额抽样不变 |
 | T-AT-API* admin-tenant | 列表/检索/分页/详情成员/开户 → 登录闭环/未鉴权/introspection 只读 |
-| T-B 双 owner | tenant 账户检索/充值/账单/收据；admin_user 账户链路回归；front_user 读兼容/写拒绝 |
+| T-B 双 owner | tenant 账户检索/充值/账单/收据；admin_user 账户链路回归；front_user 读兼容 + API Key 写兼容归一（不产生 front_user 新行） |
 | T-IC-HARNESS 扩展 | harness 创建落库 tenantId（=userId）；缺 tenantId 回退 + warn |
 
 ### 6.3 E2E 测试（tests/e2e，Playwright，串行）
@@ -366,7 +366,7 @@ mongosh "<MONGODB_URI>" --eval '
 
 - 存量库（生产快照脱敏）冷启动：012/013/014/001 迁移耗时与结果、自检异步无阻塞、余额抽样核对分文不差。
 - 已签发 JWT（升级前登录态）升级后继续使用不失效；模型调用 API Key 按租户口径继续可用。
-- 发布窗口演练：admin-api 新版 + agent-api 旧版（front_user 读兼容）；agent-api 新版 + admin-api 新版（tenant 全链路）。
+- 发布窗口演练：admin-api 新版 + agent-api 旧版（front_user 读兼容 + API Key 写兼容归一）；agent-api 新版 + admin-api 新版（tenant 全链路）。
 - 欠费止损/冻结/额度检查在租户口径下行为与升级前一致。
 
 ## 7. 验收 checklist（分阶段）
@@ -390,7 +390,7 @@ mongosh "<MONGODB_URI>" --eval '
 
 **Phase 6/7/8**
 
-- [ ] 014 仅枚举改写、金额零改动；admin_user 链路回归一致；front_user 读兼容/写拒绝
+- [ ] 014 仅枚举改写、金额零改动；admin_user 链路回归一致；front_user 读兼容 + API Key 写兼容归一（不产生 front_user 新行）
 - [ ] adminTenants/adminTenant 只读可用、余额与费用中心一致；adminCreateFrontUser 转发正确
 - [ ] cloudcontainers 落库 tenantId；cloud-controller 迁移基建就位且 001 幂等
 
@@ -407,7 +407,7 @@ mongosh "<MONGODB_URI>" --eval '
 | 双条件化遗漏过滤点 | 越权或串租户（安全红线） | 逐集合 checklist（19 集合）+ 每集合至少一条隔离 API 用例（T-MT2）+ `grep -rn "userId"` 审计收口；评审 PR 逐文件核对 |
 | 迁移 012 半完成 | 用户无法登录/数据缺归属 | 逐 user 幂等判据（§3.2 裁决 3）可重跑补齐；自检异步告警；失败重跑直至校验三项计数=0 |
 | 余额迁移差错 | 资金事故 | 014 仅枚举改写（金额字段不动）+ T-MIG14b 断言 + 自检抽样核对 + 部署侧全量核对脚本；`admin_user` 行零改动 |
-| 发布窗口 ownerType 交错 | 计费读写 400 | 发布顺序 admin-api（兼容解析先行）→ agent-api → cloud-controller → 前端；front_user 读兼容写拒绝（F5） |
+| 发布窗口 ownerType 交错 | 计费读写 400 | 发布顺序 admin-api（兼容解析先行）→ agent-api → cloud-controller → 前端；front_user 读兼容 + API Key 写兼容归一（F5） |
 | 删 signup 破坏测试引导 | 测试大面积红 | helper 切换与 Phase 3 同提交（F4）；先改 helper 再删 resolver 的红-绿顺序 |
 | 已发 token 失效 | 用户被登出 | token 载荷不变（D2）；E2E-MT1 与手工验收覆盖 |
 | admin-api 镜像模型漂移 | 租户页数据失真 | schema 注释「与 agent-api 同步演进」+ PR review checklist；user/tenant 字段变更必须双服务同 PR |
@@ -471,7 +471,7 @@ servers/admin-api/src/
 ├── graphql/schemas/tenant.ts           # 新增
 ├── graphql/resolvers/tenant.ts         # 新增（adminTenants/adminTenant/adminCreateFrontUser）
 ├── graphql/{schemas,resolvers}/index.ts # 登记
-├── routes/internal-billing.ts          # 白名单 + tenant；front_user 读兼容/写拒绝
+├── routes/internal-billing.ts          # 白名单 + tenant；front_user 读兼容 + API Key 写兼容归一（不产生 front_user 新行）
 ├── migrations/014-billing-owner-tenant.ts(+test)     # 仅 front_user→tenant
 └── services/billing/*.ts               # ownerType 类型同步（admin_user 链路零改动）
 
