@@ -85,6 +85,10 @@ describe('19 collections tenantId isolation (T-ISO)', () => {
     for (const target of TENANT_ID_COLLECTIONS) {
       expect(actualByModel.get(target.model)).toBe(target.collection);
     }
+    // 反向覆盖：19 个模型逐一被常量覆盖，且无重复 model / 无遗漏
+    const constantModels = TENANT_ID_COLLECTIONS.map((target) => target.model);
+    expect(new Set(constantModels).size).toBe(19);
+    expect(new Set(constantModels)).toEqual(new Set(CASES.map(([, model]) => model.modelName)));
   });
 
   it.each(CASES)('%s declares userId + tenantId and queries tenantId+userId', async (_name, model, collection) => {

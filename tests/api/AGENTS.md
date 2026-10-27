@@ -689,7 +689,7 @@ npm test
 | T-B* | 账户/账单/收据/充值/ApiKey 全链路与鉴权、幂等、错误映射 |
 | T-B32 tenant owner | 开户即建零余额 tenant 账户；`adminBillingAccounts(ownerType: tenant)` 可检索；充值 10 credits 到账（invoice/receipt） |
 | T-B33 admin_user 回归 | admin_user 账户查询/充值照旧，与 tenant 账户余额互不影响（双 owner 并存） |
-| T-B34 front_user 兼容 | 读：`GET /internal/billing/account?ownerType=front_user` 解析到同 ownerId 的 tenant 行；写：`POST /internal/billing/api-keys` 携带 front_user → 400 `INVALID_OWNER_TYPE` |
+| T-B34 front_user 兼容 | 读：`GET /internal/billing/account?ownerType=front_user` 解析到同 ownerId 的 tenant 行；写：`POST /internal/billing/api-keys` 携带 front_user → 201 且落库 `ownerType=tenant`（兼容归一，不产生 front_user 新行） |
 
 ### 前台云电脑（harness）
 

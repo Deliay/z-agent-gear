@@ -14,8 +14,9 @@
 # 错误体统一 `{ error: '<UPPER_CODE>' }`，内部异常只记服务端日志）：
 #   GET  /account?ownerType&ownerId&ownerName       账户查询/创建
 #        ownerType 取值 admin_user | tenant；front_user 为已废弃枚举，
-#        兼容期读请求按同 ownerId 的 tenant 行解析（迁移 014 保证 ownerId 不变），
-#        写请求（充值/扣费）不接受 front_user（400 INVALID_OWNER_TYPE）。
+#        兼容期读请求按同 ownerId 的 tenant 行解析（迁移 014 保证 ownerId 不变）；
+#        API Key 写路径（创建/撤销）同样归一为 tenant（发布窗口放行，不产生 front_user 新行）；
+#        充值/扣费写路径以 accountId 为主体、不带 ownerType，不受影响。
 #   GET  /invoices|receipts|api-calls|rollups|api-keys   只读列表
 #   POST /api-keys | /api-keys/revoke-by-host | /api-keys/:id/revoke   云电脑/账号 Key 管理
 #   POST /charges   一次性扣费：body {accountId, productId, quantity, idempotentKey, refType, refId, description}
