@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import mongoose from 'mongoose';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import { fundFrontUser } from './funding.js';
 
 // Kimi Code（Harness）登录引导 API（T-HL-API1~10）。
 // 需要 agent-api + controller-api + Redis；`required/resolved` 由 fake controller 注入，
@@ -81,13 +82,23 @@ function waitForEvent<T = unknown>(socket: ClientSocket, event: string, timeoutM
   });
 }
 
-async function signup(): Promise<{ token: string; userId: string }> {
+async function signup(): Promise<{ token: string; userId: string; username: string }> {
   const username = `hl${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   const res = await gqlRequest(SIGNUP, { username, password: 'testpass123' });
   const body = await res.json();
   const payload = body.data?.signup;
   expect(payload?.token, JSON.stringify(body.errors)).toBeTruthy();
-  return { token: payload.token as string, userId: payload.user.id as string };
+  return {
+    token: payload.token as string,
+    userId: payload.user.id as string,
+    username,
+  };
+}
+
+async function signupFunded(): Promise<string> {
+  const { token, userId, username } = await signup();
+  await fundFrontUser(userId, username);
+  return token;
 }
 
 async function createFreshController(token: string): Promise<{ controllerId: string; client: ClientSocket }> {
@@ -283,8 +294,8 @@ describe('Harness Login API', () => {
         url: LOGIN_URL,
         userCode: LOGIN_CODE,
       });
-      // expiresAt ≈ 30 分钟后（与设备码有效期一致）
-      const remaining = new Date(todo.harnessLoginData.expiresAt).getTime() - Date.now();
+      // expiresAt ≈ 30 分钟后（与设备码有效期一致）；顶层 expiresAt 为同一值
+      const remaining = new Date(todo.expiresAt).getTime() - Date.now();
       expect(remaining).toBeGreaterThan(25 * 60_000);
       expect(remaining).toBeLessThanOrEqual(31 * 60_000);
     } finally {
@@ -497,7 +508,7 @@ describe.skipIf(!HARNESS_ENABLED)('Harness Login API: capabilities', () => {
 describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Harness Login API: version gate', () => {
   it('T-HL-API9: KIMI_CODE host persists agentGearMinVersion=2.10.0', async () => {
     const db = (await mongoDb())!;
-    const token = (await signup()).token;
+    const token = await signupFunded();
     const name = `hl-kimi-${Date.now().toString(36)}`;
     const created = await gqlRequest(
       CREATE_CLOUD_HOST,

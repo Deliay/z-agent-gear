@@ -354,7 +354,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
 
   it.skipIf(!HAS_MONGO)('R2-11: soft delete keeps DB archive row (cloudhosts.deletedAt + controllers row)', async () => {
     const db = (await mongoDb())!;
-    const token = await signup();
+    const token = await signupFunded();
     const created = await gql(
       CREATE,
       { input: { name: `del-db-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
@@ -658,7 +658,10 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', ()
       { input: { name: `bad-${Date.now().toString(36)}`, harnessTypes: ['FOO'] } },
       token,
     );
-    expect(result.errors?.[0].message).toBe('unsupported harness type: FOO');
+    // GraphQL 枚举校验会在 resolver 前拒绝非法 HarnessType（服务层文案仅在枚举外类型可达时出现）
+    expect(result.errors?.[0].message).toMatch(
+      /unsupported harness type: FOO|does not exist in "HarnessType" enum/,
+    );
   });
 });
 
@@ -804,7 +807,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       });
       expect(doc?.createDefaultSession).toBe(false);
 
-      const legacyToken = await signup();
+      const legacyToken = await signupFunded();
       const legacy = await gql(
         CREATE,
         {

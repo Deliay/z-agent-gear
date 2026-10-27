@@ -49,7 +49,14 @@ describe.skipIf(!ENABLED)('Internal Billing one-time charge API', () => {
   });
 
   it('T-B-CH1: 无 token 401；成功扣费 5 credits 并生成账单/收据', async () => {
-    expect((await internal('/internal/billing/charges', { method: 'POST' })).status).toBe(401);
+    expect(
+      (
+        await internal('/internal/billing/charges', {
+          method: 'POST',
+          headers: { Authorization: '' },
+        })
+      ).status,
+    ).toBe(401);
     const accountId = await seedAccount(1000);
     const res = await internal('/internal/billing/charges', {
       method: 'POST',

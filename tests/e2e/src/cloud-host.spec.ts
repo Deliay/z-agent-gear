@@ -260,10 +260,15 @@ test.describe('Cloud Host E2E', () => {
 
       // E2E-2：入口迁移——工作负载页签无入口，Github 页签可发起设置
       await page.goto(`/settings?controllerId=${host!.controllerId}`);
-      await page.getByRole('button', { name: '工作负载' }).click();
-      await expect(page.getByRole('button', { name: 'Github 项目设置' })).toHaveCount(0);
+      await expect(page.getByTestId('config-tab-github')).toBeVisible();
+      await page.getByTestId('config-tab-workspace').click();
+      await expect(
+        page.getByRole('main').getByRole('button', { name: 'Github 项目设置' }),
+      ).toHaveCount(0);
       await page.getByTestId('config-tab-github').click();
-      await expect(page.getByRole('button', { name: 'Github 项目设置' })).toBeVisible();
+      await expect(
+        page.getByRole('main').getByRole('button', { name: 'Github 项目设置' }),
+      ).toBeVisible();
       await page.goto('/');
       await expect(page.locator(sidebar())).toBeVisible();
 
