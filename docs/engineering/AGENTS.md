@@ -211,7 +211,7 @@ flowchart LR
 - [[proposals/20261027-feat-unlimited-cloud-hosts.md]] — 用户开放无限制云电脑支持（创建同步扣费 5 credits：`/internal/billing/charges` 一次性扣费 + 拉起失败退款、`cloudHostBillingQuote` 报价透出、移除每用户 1 实例门禁与 `uniq_active_cloud_host_per_user` 索引、`CloudHost.githubAccountId` 锁定：创建可选/首次设置 CAS 绑定/之后不可改）
 - [[proposals/20261027-feat-commit-author-settings.md]] — 云容器 Commit 提交人设置（user_commit_settings 用户级设置与 commitSettings/updateCommitSettings 契约、POST /internal/cloud-hosts/:id/commit-identity 身份下发端点与 agent_only 负载门控、agent-gear 容器内 include.path 托管 git 配置 + Co-Author prepare-commit-msg hook、未设置零残留）
 - [[proposals/20261027-feat-dsh-header-masq.md]] — DeepSeek Harness 会话标识请求头注入（dsh-header-masq 插件：预置脚本 V4 固定版本 0.1.2-alpha.2 → 0.2.1-rc.2 + `dsh plugin --profile acp add Deliay/dsh-header-masq`、agent-gear 2.11.0 dsh-config insert 形态第 5 受管条目、migration 013 存量刷新、deepseek_harness 版本门禁 2.9.0 → 2.11.0）
-- [[proposals/20261027-feat-multi-tenant-phase1.md]] — 多租户一期（tenants 模型与 Tenant._id=User._id 个人专属租户、AuthContext.tenantId 与查询口径 userId→tenantId 全量切换、迁移 012/013/014（建租户/清洗 tenantId/计费 ownerType front_user→tenant 余额零改动）、契约删 signup 前台硬关注册、agent-api `/internal/users` 开户内部端点保有 users 写权、admin-api 租户只读管理与后台开户、cloud-controller cloudcontainers 补 tenantId）
+- [[proposals/20261027-feat-multi-tenant-phase1.md]] — 多租户一期（三层帐号模型：新增 accounts 集合承载登录 account→user、users 瘦身身份主体、tenants.memberUserIds 一对多 tenant→user 且 personal 租户 _id 复用 userId 一期单成员；迁移 012 三件套拆分/013 清洗 tenantId/014 计费 ownerType front_user→tenant 余额零改动；契约删 signup 前台硬关注册；agent-api `/internal/users` 开户内部端点保有写权；admin-api 租户只读管理与后台开户；cloud-controller cloudcontainers 补 tenantId）
 
 ### 实现计划（`plan/`）
 
