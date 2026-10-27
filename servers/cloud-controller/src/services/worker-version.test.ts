@@ -21,12 +21,12 @@ describe('worker-version constants', () => {
     expect(SUPPORTED_MAJOR).toBe(2);
   });
 
-  it('T-V0b: 按类型常量保持 2.8.0 / 2.9.0（能力引入历史；落库下限恒为 2.10.0）', () => {
+  it('T-V0b: 按类型常量 2.8.0 / 2.11.0（deepseek 高于 2.10.0 基线后构成真实门禁）', () => {
     expect(MIN_KIMI_HARNESS_WORKER_VERSION).toBe('2.8.0');
-    expect(MIN_DEEPSEEK_HARNESS_WORKER_VERSION).toBe('2.9.0');
+    expect(MIN_DEEPSEEK_HARNESS_WORKER_VERSION).toBe('2.11.0');
     expect(MIN_HARNESS_VERSION_BY_TYPE).toEqual({
       kimi_code: '2.8.0',
-      deepseek_harness: '2.9.0',
+      deepseek_harness: '2.11.0',
     });
   });
 });
@@ -41,11 +41,11 @@ describe('harnessMinVersion', () => {
     expect(harnessMinVersion([])).toBe('2.10.0');
   });
 
-  it('T-V6b: 含 deepseek_harness 取 2.9.0（与其它 harness 混合仍取最大）', () => {
-    expect(harnessMinVersion(['deepseek_harness'])).toBe('2.10.0');
-    expect(harnessMinVersion(['opencode', 'deepseek_harness'])).toBe('2.10.0');
-    expect(harnessMinVersion(['kimi_code', 'deepseek_harness'])).toBe('2.10.0');
-    expect(harnessMinVersion(['opencode', 'kimi_code', 'deepseek_harness'])).toBe('2.10.0');
+  it('T-V6b: 含 deepseek_harness 取 2.11.0（与其它 harness 混合仍取最大）', () => {
+    expect(harnessMinVersion(['deepseek_harness'])).toBe('2.11.0');
+    expect(harnessMinVersion(['opencode', 'deepseek_harness'])).toBe('2.11.0');
+    expect(harnessMinVersion(['kimi_code', 'deepseek_harness'])).toBe('2.11.0');
+    expect(harnessMinVersion(['opencode', 'kimi_code', 'deepseek_harness'])).toBe('2.11.0');
   });
 });
 

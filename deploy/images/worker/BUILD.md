@@ -83,8 +83,8 @@ docker run --rm -it --entrypoint bash \
 - [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
-- [ ] **镜像唯一 npm 全局包**为 `agent-gear`（固定 `2.10.x`）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
-- [ ] `agent-gear --version` ≥ `2.10.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
+- [ ] **镜像唯一 npm 全局包**为 `agent-gear`（固定 `2.11.x`）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
+- [ ] `agent-gear --version` ≥ `2.11.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起，`cordis.patch.yml` 的 insert 受管条目 `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
 
 - [ ] `agent-gear harness --help` 可见 `prepare` 子命令
 - [ ] **未选择「Docker」工作负载时容器内不存在 docker 能力**：`command -v docker` 无输出、`command -v dockerd` 无输出、`pgrep -a dockerd` 无输出、`[ ! -e /usr/local/bin/docker ]`
@@ -132,7 +132,7 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `agent-gear --version` ≥ `2.10.0`（普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`；harness 容器门禁基线 `2.10.0`（任意 harness 组合恒为 `2.10.0`）；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`）
+- [ ] `agent-gear --version` ≥ `2.11.0`（普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`；harness 容器门禁基线 `2.10.0`，含 `deepseek_harness` 的运行 `2.11.0`（header-masq 配置注入），仅 opencode / 含 `kimi_code` 组合仍 `2.10.0`；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`）
 - [ ] `agent-gear harness --help` 输出包含 `prepare`
 - [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
 - [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）
@@ -208,15 +208,16 @@ test -d "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}" && echo workspace-ok
 ### DeepSeek Harness（Harness）工作负载自验
 
 镜像**不预装** `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-acp-app`；二者由「DeepSeek Harness（Harness）」工作负载
-（admin-api 迁移 010）在 `init` 阶段**双包同版本安装**：`@deepseek-ai/dsh` 提供 `dsh` bin，
-`@deepseek-ai/dsh-acp-app` 是 profile 组合包（无 bin）。随后执行 `dsh --version` 硬校验与按类型限定的
+（admin-api 迁移 013）在 `init` 阶段**双包同版本安装**：`@deepseek-ai/dsh` 提供 `dsh` bin，
+`@deepseek-ai/dsh-acp-app` 是 profile 组合包（无 bin）。随后执行 `dsh --version` 硬校验、会话标识插件安装
+（`dsh plugin --profile acp add Deliay/dsh-header-masq`；镜像未预装 pnpm，脚本内固定版本引导安装）与按类型限定的
 `ZAG_HARNESS_TYPES=deepseek_harness agent-gear harness prepare`（`ZAG_HARNESS_TYPES` 前缀限定本类型，
 多 harness 主机顺序安装 CLI 时裸调用会对尚未安装的类型硬校验而误失败）。任一失败以非零退出，
 `required=true` 会触发 cloud-controller 强制注销容器。
 
 `DSH_CLI_VERSION` / `DSH_ACP_APP_VERSION` 锁定口径：
 
-- 迁移 010 脚本内硬编码默认值（当前 `0.1.2-alpha.2`）；**验收以该固定版本为准**。
+- 迁移 013 脚本内硬编码默认值（当前 `0.2.1-rc.2`，dsh-header-masq 插件兼容下限 `>=0.2.1-rc.2 <0.3.0`）；**验收以该固定版本为准**。
 - 运行时可经同名 env 覆盖（仅排障/临时验证，不作为验收依据）。
 
 真实集群启动一个仅选 DeepSeek Harness 的云电脑后，在容器内自验：
@@ -225,25 +226,31 @@ test -d "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}" && echo workspace-ok
 # 1) dsh 由 harness 工作负载安装，且版本与 DSH_CLI_VERSION 一致（输出纯版本号）
 dsh --version
 
-# 2) 注入文件已写入、权限正确
+# 2) 会话标识插件已安装（pnpm 由脚本引导安装；重跑幂等、退出码 0）
+dsh plugin --profile acp why dsh-header-masq
+command -v pnpm && pnpm --version
+
+# 3) 注入文件已写入、权限正确
 agent-gear harness prepare                        # 幂等：按 id 替换 patch 条目
-cat ~/.dsh/profiles/acp/cordis.patch.yml          # llm-deepseek 禁用 + providers.zag + 默认路由
+cat ~/.dsh/profiles/acp/cordis.patch.yml          # llm-deepseek 禁用 + providers.zag + 默认路由 + insert header-masq
 stat -c '%a' ~/.dsh/profiles/acp                 # 期望 700
 stat -c '%a' ~/.dsh/.credentials.yaml            # 期望 600
-dsh --dump-config | head -n 40                   # patch 归属与 acp profile 组合树
+dsh --dump-config | grep -n 'header-masq'        # 插件条目与四键配置（source/targets/fallbackToSessionId/debug）
 
-# 3) 默认工作区已创建
+# 4) 默认工作区已创建
 test -d "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}" && echo workspace-ok
 
-# 4) 日志不含模型 Key（secret 脱敏为 ***）
+# 5) 日志不含模型 Key（secret 脱敏为 ***）
 ```
 
 逐项核对：
 
-- [ ] 镜像内 `command -v dsh` 无输出（未预装）；harness 初始化后 `dsh --version` 为固定值
+- [ ] 镜像内 `command -v dsh` 无输出（未预装）；harness 初始化后 `dsh --version` 为固定值 `0.2.1-rc.2`
+- [ ] `dsh-header-masq` 已安装到 acp profile；重跑 `dsh plugin --profile acp add Deliay/dsh-header-masq` 退出码 0 且不重复安装
 - [ ] `~/.dsh/profiles/acp/cordis.patch.yml` 含 `llm-deepseek.disabled=true`、`providers.zag`（`apiKeyEnv` 引用而非明文 Key）与 `agent-default-model`/`acp` 默认路由
+- [ ] `cordis.patch.yml` 含 insert 块 `header-masq`（`source=x-deepseek-harness-session-id`、`targets=[x-opencode-session]`、`fallbackToSessionId=true`、`debug=false`，不写 `hosts`）
 - [ ] `.credentials.yaml` 为 `version: 1` + `refs.ZAG_MODEL_API_KEY`，权限 `600`；patch 目录 `700`
-- [ ] 重复执行 `agent-gear harness prepare` 幂等（4 条目按 id 替换、非我方条目与注释保留）
+- [ ] 重复执行 `agent-gear harness prepare` 幂等（5 个受管条目按 id 替换、非我方条目与注释保留）
 - [ ] `dsh --profile acp` 可拉起会话，模型选择仅 `ZAG` 组、默认选中，无内建官方渠道分组、无登录引导
 - [ ] `ZAG_MODEL_API_KEY` 不出现在日志/错误/命令行；缺失 harness env 或 `dsh` 不可用时 init 失败 → 容器被强制注销
 
@@ -310,7 +317,7 @@ aspire --version
 
 ### 必须工作负载失败强制注销手工验收（真实集群）
 
-前置：cloud-controller 已部署工作负载三期（支持 `workloadPlan[].required` 与必须失败裁决），worker 镜像内 `agent-gear` ≥ `2.4.0`（当前镜像为 2.10.x）。
+前置：cloud-controller 已部署工作负载三期（支持 `workloadPlan[].required` 与必须失败裁决），worker 镜像内 `agent-gear` ≥ `2.4.0`（当前镜像为 2.11.x）。
 
 内网 K8s 受控验收步骤：
 
@@ -344,7 +351,7 @@ aspire --version
 
 受监督运行的行为（版本门禁与自恢复，见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
 
-- `cloud-controller` 要求普通 worker 版本 `>=2.2.0` 且 major 为 `2`、harness（云电脑）worker 版本 `>=2.10.0`；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
+- `cloud-controller` 要求普通 worker 版本 `>=2.2.0` 且 major 为 `2`、harness（云电脑）worker 版本 `>=2.10.0`（含 `deepseek_harness` 的运行 `>=2.11.0`，header-masq 会话标识配置注入）；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
 - 入口对 agent-gear 的 stderr 做流式扫描（实时透传、不落盘完整日志），仅在「非零退出 + 出现 `VERSION_MISMATCH` + 本轮未升级 + 未设置 `ZAG_SKIP_AGENT_GEAR_UPDATE=1`」时执行**一次** `npm install -g agent-gear --no-fund --no-audit`，升级成功后重启并重连。
 - 安装失败、升级后仍不匹配、第二次不匹配、普通非零退出、正常退出均不会形成升级/重连循环；失败时容器非零退出，管理员可用既有强制销毁回收。
 - 入口作为 PID 1 向 agent-gear / npm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
@@ -362,7 +369,7 @@ bash entrypoint.test.sh
 
 自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），因此不会启动真实 dockerd、不访问网络。
 
-> **镜像升级要求**：云电脑双连接 / `harness prepare` 依赖 `agent-gear` ≥ `2.10.0`（harness 容器门禁）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.10.0` 的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
+> **镜像升级要求**：云电脑双连接 / `harness prepare` 依赖 `agent-gear` ≥ `2.10.0`（harness 容器门禁），含 `deepseek_harness` 的运行需 ≥ `2.11.0`（`header-masq` 配置注入）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.10.0`（DeepSeek Harness 云电脑 ≥ `2.11.0`）的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
 内网 K8s 受控验收（发布顺序见技术提案 §9.1）：
 
@@ -406,7 +413,7 @@ docker rm -f worker-keepalive
 
 - [ ] `id worker` 的 uid/gid 为 `1000`，`ls -ld /home/worker/.nvm` 属主为 `worker`
 - [ ] root 侧 `command -v node` 无输出
-- [ ] `runuser -l worker -c 'node -v'` 有输出；`agent-gear --version` 为 `2.10.x`
+- [ ] `runuser -l worker -c 'node -v'` 有输出；`agent-gear --version` 为 `2.11.x`
 - [ ] `runuser -l worker -c 'sudo -n true'` 成功
 - [ ] `kill`/`pkill` agent-gear 后容器不销毁，日志出现自更新 + 重启（退出码非 42）
 - [ ] 服务端终止（`shutdown`/`unregistered`/`INVALID_TOKEN`）时 agent-gear 退出码 `42`，入口直接 0 退出、不重启

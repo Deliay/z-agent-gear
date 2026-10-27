@@ -14,13 +14,22 @@ export const DSH_ACP_PROFILE = 'acp';
 /** dsh ACP profile 组合包名（写入 patch 的 `acp` 条目）。 */
 export const DSH_ACP_APP_NAME = '@deepseek-ai/dsh-acp';
 
-/** 我方在 `cordis.patch.yml` 中维护的 4 个条目（按此顺序写入，按 id 替换）。 */
+/** 我方在 `cordis.patch.yml` 中维护的 4 个扁平条目（按此顺序写入，按 id 替换）。 */
 export const DSH_PATCH_ENTRY_IDS = [
   'llm-deepseek',
   'llm-pi-ai',
   'agent-default-model',
   'acp',
 ] as const;
+
+/**
+ * 我方在 `cordis.patch.yml` 中维护的 insert 形态条目 id（位于顶层 `- insert: [...]` 块内）。
+ * 与扁平条目合计 5 个受管条目（`entryCount`）。
+ */
+export const DSH_PATCH_INSERT_ENTRY_IDS = ['header-masq'] as const;
+
+/** `header-masq` insert 条目对应的插件包名。 */
+export const DSH_HEADER_MASQ_PLUGIN_NAME = 'dsh-header-masq';
 
 /** 写入 dsh 配置失败（消息只含路径/条目名，不含 API Key 等 secret）。 */
 export class DshConfigError extends Error {
@@ -53,7 +62,7 @@ export interface WriteDshConfigResult {
   credentialsCreated: boolean;
   /** 写入的模型数量。 */
   modelCount: number;
-  /** patch 中我方维护的条目数（固定 4）。 */
+  /** patch 中我方维护的条目数（4 扁平 + 1 insert，固定 5）。 */
   entryCount: number;
 }
 
@@ -113,6 +122,40 @@ function buildEntry(id: (typeof DSH_PATCH_ENTRY_IDS)[number], env: DshConfigEnv)
   }
 }
 
+/**
+ * 我方 insert 条目（`- insert: [{id, name, config}]` 的内层条目）。
+ *
+ * 需求给定四键：`source` / `targets` / `fallbackToSessionId` / `debug`；
+ * `hosts` 缺省不写（插件缺省 `[]` = 所有主机，D6）。
+ */
+function buildInsertEntry(
+  id: (typeof DSH_PATCH_INSERT_ENTRY_IDS)[number],
+): Record<string, unknown> {
+  switch (id) {
+    case 'header-masq':
+      return {
+        id,
+        name: DSH_HEADER_MASQ_PLUGIN_NAME,
+        config: {
+          source: 'x-deepseek-harness-session-id',
+          targets: ['x-opencode-session'],
+          fallbackToSessionId: true,
+          debug: false,
+        },
+      };
+    default:
+      throw new DshConfigError(`unsupported dsh patch insert entry: ${String(id)}`);
+  }
+}
+
+/** 顶层块是否为「内层条目 id 命中」的 insert 块。 */
+function isInsertBlockFor(item: unknown, id: string): boolean {
+  if (!isMap(item)) return false;
+  const insert = item.get('insert');
+  if (!isSeq(insert)) return false;
+  return insert.items.some((inner) => isMap(inner) && inner.get('id') === id);
+}
+
 function parsePatchDocument(text: string, path: string): Document {
   if (text.trim().length === 0) return new Document([]);
   const doc = parseDocument(text);
@@ -130,7 +173,9 @@ function parsePatchDocument(text: string, path: string): Document {
 /**
  * 合并 `cordis.patch.yml`：
  *
- * - 顶层条目数组，按 `id` 定位我方 4 个条目并**整体替换其 config**；
+ * - 顶层条目数组，按 `id` 定位我方 4 个扁平条目并**整体替换其 config**；
+ * - insert 形态条目：遍历顶层 `insert` 为 seq 的块，内层 `id` 命中即**整体替换该 insert 块**
+ *   （我方块恰一个内层条目）；未命中则在顶层数组**末尾追加**；
  * - 其余条目与注释逐字保留（新条目追加在末尾）；
  * - 解析失败抛错、不写文件（不静默丢数据）。
  */
@@ -155,9 +200,22 @@ function mergePatchDocument(doc: Document, env: DshConfigEnv): { content: string
     if (id === 'acp') doc.setIn([index, 'name'], DSH_ACP_APP_NAME);
   }
 
+  for (const id of DSH_PATCH_INSERT_ENTRY_IDS) {
+    const block = doc.createNode({ insert: [buildInsertEntry(id)] });
+    const index = seq.items.findIndex((item) => isInsertBlockFor(item, id));
+    if (index === -1) {
+      seq.add(block);
+      continue;
+    }
+    doc.setIn([index], block);
+  }
+
   let content = doc.toString();
   if (!content.endsWith('\n')) content += '\n';
-  return { content, entryCount: DSH_PATCH_ENTRY_IDS.length };
+  return {
+    content,
+    entryCount: DSH_PATCH_ENTRY_IDS.length + DSH_PATCH_INSERT_ENTRY_IDS.length,
+  };
 }
 
 /**

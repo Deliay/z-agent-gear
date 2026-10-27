@@ -111,7 +111,7 @@ RUN mkdir -p "$NVM_DIR" \
  && ln -sfn "$(dirname "$(dirname "$(nvm which default)")")" "$NVM_DIR/current" \
  && npm config set registry "$NPM_REGISTRY" \
  && npm install -g \
-      agent-gear@2.10.x \
+      agent-gear@2.11.x \
       @agentclientprotocol/claude-agent-acp \
       @agentclientprotocol/codex-acp \
  && npm cache clean --force \

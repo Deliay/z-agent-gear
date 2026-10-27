@@ -10,11 +10,16 @@ type: Permanent
 **需求总分支（feat-branch）**: `prd/dsh-header-masq`（基于 `origin/main` ce0b3494，需求总 PR #320）
 **计划提交分支**: `prd/dsh-header-masq`（本文件随需求总分支提交）
 **创建日期**: 2026-10-27
-**计划版本**: v1.0
+**计划版本**: v1.1
 
 **版本说明**：
 
 - v1.0（2026-10-27）首版。对应 PRD / 提案 v1.0（PR #320 评审 APPROVED 无修改意见）。
+- v1.1（2026-10-27）Phase 0 实机核对收口（dsh `0.2.1-rc.2` + `dsh-header-masq` 0.2.1 实测）：脚本 V4 补充
+  pnpm 引导与 profile `.npmrc`（`ignore-workspace-root-check=true`）——`dsh plugin` 把参数转发给 pnpm，
+  worker 镜像未预装 pnpm 且 profile 目录是 pnpm workspace root（否则 `ERR_PNPM_ADDING_TO_ROOT`）；
+  简写 `Deliay/dsh-header-masq` 可解析、重跑幂等且退出码 0；插件自带 patch 与用户 insert 并存无启动失败，
+  我方条目后挂载（配置以我方为准）。附录 B.2 核对结论同步。
 - 提案附录 A 插件调研基于官方 README；附录 B 实机核对清单在 Phase 0 收口（见 §3、附录 B）。
 - §3 计划期裁决以**当前需求总分支代码事实**为准（2026-10-27，9df819be）：重点校正 ① `MIN_HARNESS_WORKER_VERSION=2.10.0` 基线下 deepseek `2.9.0` 常量已被 max 收编、上调 `2.11.0` 后才真正构成门禁；② 预置脚本血缘常量名（`HARNESS_DEEPSEEK_SCRIPT_V3` = 内容 V4）与刷新矩阵精确清单；③ 预置脚本静态断言实际在 `tests/api`（非 tests/e2e）。
 
@@ -250,6 +255,11 @@ ZAG_HARNESS_TYPES=deepseek_harness agent-gear harness prepare
 
 **完成判据**：单测全绿；admin-api 启动日志出现 `[Migration 013] ... script refreshed`（或 created）；`cloudworkloads` 中 `harness-deepseek-harness` 的 `initScript` 含插件命令与 `0.2.1-rc.2`；定制脚本场景不被覆盖。
 
+> **Phase 0 实测补充（v1.1）**：`dsh plugin` 把参数转发给 pnpm——worker 镜像未预装 pnpm，脚本内固定版本引导安装
+> `pnpm@9.15.9`；acp profile 目录是 pnpm workspace root，需预写 `~/.dsh/profiles/acp/.npmrc`
+> （`ignore-workspace-root-check=true`），否则 `dsh plugin add` 以 `ERR_PNPM_ADDING_TO_ROOT` 失败。
+> 插件安装命令文本仍取需求原文（简写 `Deliay/dsh-header-masq` 实测可解析），步骤顺序（安装 → 硬校验 → 插件 → prepare）不变。
+
 ### Phase 4：版本门禁与映射（0.5d）
 
 | 文件 | 变更 |
@@ -450,11 +460,11 @@ docs/engineering/AGENTS.md                 # plan 索引追加
 
 | # | 核对项 | 状态 | 结论 |
 |---|--------|------|------|
-| 1 | dsh `0.2.1-rc.2`（对照 0.1.2-alpha.2）ACP 回归：`session/new.configOptions` ZAG 组通告与 `currentValue`、`set_config_option` 切换、`session/resume`、`--dump-config` 可用性 | 待实现期（Phase 0） | |
-| 2 | `dsh plugin --profile acp add Deliay/dsh-header-masq`：简写解析（是否等价 `github:` 前缀）、重跑幂等与退出码、acp profile 下插件加载 | 待实现期（Phase 0） | |
-| 3 | 插件自带 `cordis.patch.yml` 自动激活 与 用户 patch insert `header-masq` 并存的组合行为（`--dump-config` 确认唯一条目且配置为我方值；冲突时按 §3.2 裁决 2 回退口径收敛） | 待实现期（Phase 0） | |
-| 4 | 全局安装双包 `0.2.1-rc.2` 后 `dsh --profile acp` 的 bundle 解析（延续上期核对项） | 待实现期 | |
-| 5 | 端到端：真实会话模型调用抓包/网关日志确认 `x-opencode-session` 同会话固定、新会话变化、重启续聊不变 | 待实现期（Phase 6） | |
-| 6 | 容器到 github.com 出口可达性（插件安装）；必要时复用 Aspire 下载代理口径 | 待实现期 | |
+| 1 | dsh `0.2.1-rc.2`（对照 0.1.2-alpha.2）ACP 回归：`session/new.configOptions` ZAG 组通告与 `currentValue`、`set_config_option` 切换、`session/resume`、`--dump-config` 可用性 | ✅ 已核对（2026-10-27，开发机） | 双包 `0.2.1-rc.2` 全局安装后 `dsh --version` = `0.2.1-rc.2`；`initialize` → `session/new` 通过，`configOptions` 通告唯一模型 `ZAG/model-a`（`currentModelId=["zag","model-a"]`），`modes` 为空（与 0.1.2-alpha.2 口径一致）；能力快照 `session.resume`/`session.close`/`session.list` = supported、`session.load` unsupported；`--dump-config` 正常输出组合树 |
+| 2 | `dsh plugin --profile acp add Deliay/dsh-header-masq`：简写解析（是否等价 `github:` 前缀）、重跑幂等与退出码、acp profile 下插件加载 | ✅ 已核对 | 简写解析为 `github:Deliay/dsh-header-masq`（profile `package.json` 依赖即 `github:` 形态），安装 `dsh-header-masq@0.2.1` 成功；重跑输出 `Already up to date`、退出码 0、无重复条目。**前置**：`dsh plugin` 转发 pnpm——镜像未预装需引导安装（脚本固定 `pnpm@9.15.9`）；profile 目录为 pnpm workspace root，需 `ignore-workspace-root-check=true`（否则 `ERR_PNPM_ADDING_TO_ROOT`）。安装后插件进入 profile bundles，自带 `cordis.patch.yml` 自动激活 |
+| 3 | 插件自带 `cordis.patch.yml` 自动激活 与 用户 patch insert `header-masq` 并存的组合行为（`--dump-config` 确认唯一条目且配置为我方值；冲突时按 §3.2 裁决 2 回退口径收敛） | ✅ 已核对（并存可用，不回退） | 插件 bundle 层与我方用户 patch 层**各产生一个 `id: header-masq` 条目**（`--dump-config` 共 2 处），无重复 id 报错、`dsh --profile acp` 启动退出码 0 且无告警；两层配置逐字一致（插件缺省 = 需求四键），用户 patch 层后挂载 → 配置以我方为准。**未触发** §3.2 裁决 2 回退口径（显式 insert 保留，满足需求「显式写入 patch」）。风险登记：插件被挂载两次（同值幂等、无功能差异） |
+| 4 | 全局安装双包 `0.2.1-rc.2` 后 `dsh --profile acp` 的 bundle 解析（延续上期核对项） | ✅ 已核对 | `initialize` 返回 `agent=deepseek-harness-acp@0.0.1`，profile bundles = base + acp-app + dsh-header-masq 正常解析 |
+| 5 | 端到端：真实会话模型调用抓包/网关日志确认 `x-opencode-session` 同会话固定、新会话变化、重启续聊不变 | ⏳ 部署侧手工验收 | 本地无真实网关/模型调用，待真实集群云电脑按 §6.4 核对（PR 已列 checklist） |
+| 6 | 容器到 github.com 出口可达性（插件安装）；必要时复用 Aspire 下载代理口径 | ⚠️ 开发机可达，worker 出口待部署侧核对 | 开发机 `github.com` 可达、插件安装成功；worker 镜像内网口径声明 github.com 不可达（Dockerfile 头注释），**真实集群需按 §6.4 验证**；不可达时 init 硬失败并展示原因（`set -euo pipefail`），必要时评估 GitHub 代理口径 |
 
 > 若 2/3 结论与 §3.2 裁决冲突：先修订本计划（升版本号 + 记录变更原因），再进入实现。

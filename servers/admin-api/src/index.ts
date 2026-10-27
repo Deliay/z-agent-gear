@@ -49,6 +49,7 @@ import * as migration010PresetHarnessDeepseek from './migrations/010-preset-harn
 import * as migration012WorkerUserScripts from './migrations/012-worker-user-scripts.js';
 import * as migration010ClearCloudHostKeyExpiry from './migrations/010-clear-cloud-host-key-expiry.js';
 import * as migration011RefreshHarnessPrepareScope from './migrations/011-refresh-harness-prepare-scope.js';
+import * as migration013PresetHarnessDeepseekHeaderMasq from './migrations/013-preset-harness-deepseek-header-masq.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const app = express();
@@ -125,6 +126,8 @@ async function start() {
   // 010-clear-cloud-host-key-expiry——清空云电脑运行专用 Key 的固定有效期（改为随容器回收）
   // 011-refresh-harness-prepare-scope——把未定制过的 OpenCode/DeepSeek harness 预置脚本中裸
   //   `agent-gear harness prepare` 刷新为按类型限定（多 harness 主机顺序安装 CLI 时裸调用会误失败）
+  // 013-preset-harness-deepseek-header-masq——把未定制过的 DeepSeek harness 预置脚本刷新为 V4
+  //   （固定版本 0.2.1-rc.2 + `dsh plugin --profile acp add Deliay/dsh-header-masq` 会话标识插件）
   try {
     await runMigrations([
       migration001,
@@ -141,6 +144,7 @@ async function start() {
       migration012WorkerUserScripts,
       migration010ClearCloudHostKeyExpiry,
       migration011RefreshHarnessPrepareScope,
+      migration013PresetHarnessDeepseekHeaderMasq,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
