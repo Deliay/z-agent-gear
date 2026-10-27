@@ -699,7 +699,7 @@ describe('internal management API', () => {
     expect(((await bogus.json()) as { error: string }).error).toBe('INVALID_HARNESS');
   });
 
-  it('A7b: harnessTypes 含 deepseek_harness → 落库 2.10.0；混合取最大；白名单外 400', async () => {
+  it('A7b: harnessTypes 含 deepseek_harness → 落库 2.11.0；混合取最大；白名单外 400', async () => {
     const base = {
       purpose: 'harness',
       hostId: 'host-deepseek',
@@ -723,7 +723,7 @@ describe('internal management API', () => {
     expect(deepseek.status).toBe(201);
     const deepseekBody = (await deepseek.json()) as { id: string; harnessTypes: string[] };
     expect(deepseekBody.harnessTypes).toEqual(['deepseek_harness']);
-    expect((await repo.findById(deepseekBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(deepseekBody.id))?.agentGearMinVersion).toBe('2.11.0');
 
     const mixed = await createContainer({
       ...base,
@@ -732,7 +732,7 @@ describe('internal management API', () => {
     });
     expect(mixed.status).toBe(201);
     const mixedBody = (await mixed.json()) as { id: string };
-    expect((await repo.findById(mixedBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(mixedBody.id))?.agentGearMinVersion).toBe('2.11.0');
 
     const bogus = await createContainer({
       ...base,

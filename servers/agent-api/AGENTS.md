@@ -75,6 +75,7 @@ npm run start   # Start production server
 
 - 领域入口：`services/cloud-host-service.ts`；GraphQL：`graphql/schemas/cloud-host.ts` + `graphql/resolvers/cloud-host.ts`；契约 `contracts/cloud-host.graphql`。
 - 生命周期：创建即启动 → 停止即销毁（`STARTING/RUNNING/STOPPING/STOPPED/FAILED`，无 `startCloudHost`）。每用户同时最多 1 个 `STARTING/RUNNING/STOPPING` 实例（`KeyedMutex` 进程内串行，需单实例部署）。
+- 版本映射：`HARNESS_MIN_AGENT_GEAR_VERSION`（`OPENCODE: 2.6.0` / `KIMI_CODE: 2.8.0` / `DEEPSEEK_HARNESS: 2.11.0`——`cordis.patch.yml` 的 `header-masq` 会话标识配置注入自 agent-gear 2.11.0 起）与基线 `CLOUD_HOST_AGENT_GEAR_MIN_VERSION='2.10.0'` 取**最大值**后随 `startHarness` 下发 `agentGearMinVersion`；cloud-controller 注册门禁再按 `harnessTypes` 取最大（含 `deepseek_harness` → `2.11.0`）。
 - 创建编排：校验开关/名称/harnessTypes/配置 → 读取 `cloudworkloads` preset → 计费账户 → 预生成 cloudHostId/controllerId → `ControllerKey(type=cloud)` → 预创建 `Controller(type=cloud,registering,name=用户命名)` → 默认工作区（`/home/worker/workspace`）→ `CloudHost(STARTING)` → 铸造 `scope=cloud_host` 模型 Key（**无固定有效期，随容器回收**）→ `POST /internal/containers{purpose:harness}`。失败逆序回滚；cloud-controller 成功后不再回滚。
 - 只读模型：`models/cloud-container.ts`（cloudcontainers）、`models/cloud-workload.ts`（cloudworkloads）、admin-api 只读 `cloudhosts`；写方各自单一。
 - 内部回调：`routes/internal-cloud-host.ts`（Bearer `INTERNAL_API_TOKEN`）。ready → **单 harness 默认会话在 STARTING 窗口创建后与 RUNNING/readyAt 合并为一次 CAS 落库**（避免 `RUNNING+defaultSessionId=null` 竞态；失败只告警）；`CreateCloudHostInput.createDefaultSession=false` 时跳过默认会话（由 Git 项目 setup 的 session 步骤建项目会话）；terminal → STOPPED/FAILED + 批量 ENDED + 撤销模型 Key；均幂等。

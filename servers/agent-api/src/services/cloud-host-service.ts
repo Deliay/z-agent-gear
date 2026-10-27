@@ -41,7 +41,8 @@ const HARNESS_ACP_TYPES: Record<HarnessType, string> = {
 export const HARNESS_MIN_AGENT_GEAR_VERSION: Record<HarnessType, string> = {
   OPENCODE: '2.6.0',
   KIMI_CODE: '2.8.0',
-  DEEPSEEK_HARNESS: '2.9.0',
+  // 2.11.0：`cordis.patch.yml` insert `header-masq`（dsh-header-masq 会话标识请求头注入）
+  DEEPSEEK_HARNESS: '2.11.0',
 };
 
 /** 按 harnessTypes 计算 agentGearMinVersion：取各类型要求版本与基线 2.10.0 的最大值 */
