@@ -10,6 +10,10 @@ import {
   GithubCredentialManager,
   type GithubCredentialRefreshResult,
 } from '../github/credential-manager.js';
+import {
+  CommitIdentityManager,
+  type CommitIdentityRefreshResult,
+} from '../github/commit-identity-manager.js';
 import type { WorkloadRunPayload } from '../workload-executor.js';
 import {
   EXIT_SERVER_SHUTDOWN,
@@ -122,6 +126,13 @@ export interface CredentialManagerLike {
   refreshNow(): Promise<GithubCredentialRefreshResult>;
 }
 
+/** 提交身份管理器最小接口（与凭据管理器相互独立，便于测试注入）。 */
+export interface CommitIdentityManagerLike {
+  start(): void;
+  stop(): void;
+  refreshNow(): Promise<CommitIdentityRefreshResult>;
+}
+
 /** 依赖注入（测试锚定时序与副作用；生产使用默认实现）。 */
 export interface CloudHostSupervisorDeps {
   env?: NodeJS.ProcessEnv;
@@ -133,6 +144,8 @@ export interface CloudHostSupervisorDeps {
   installSignalHandlers?: boolean;
   /** 注入 Github 凭据管理器（测试用）；缺省按容器 env 创建。 */
   credentialManager?: CredentialManagerLike;
+  /** 注入提交身份管理器（测试用）；缺省按容器 env 创建，与凭据管理器完全独立。 */
+  commitIdentityManager?: CommitIdentityManagerLike;
 }
 
 export interface CloudHostSupervisorHandle {
@@ -187,6 +200,12 @@ export async function startCloudHostSupervisor(
     new GithubCredentialManager({ env: deps.env ?? process.env, log });
   credentialManager.start();
 
+  // 提交身份管理器：与凭据管理器完全独立（不依赖 gh 凭据 / Git 项目绑定存在）。
+  const commitIdentityManager =
+    deps.commitIdentityManager ??
+    new CommitIdentityManager({ env: deps.env ?? process.env, log });
+  commitIdentityManager.start();
+
   const beforeWorkloadBatch = async (payload: WorkloadRunPayload): Promise<void> => {
     if (payload.githubAuth !== true) return;
     const result = await credentialManager.refreshNow();
@@ -216,6 +235,7 @@ export async function startCloudHostSupervisor(
     const exitCode = code ?? resolveShutdownExitCode(reason);
     log(`[CloudHost] shutting down: ${reason} (exit ${exitCode})`);
     credentialManager.stop();
+    commitIdentityManager.stop();
     try {
       workerSocket.disconnect();
     } catch {

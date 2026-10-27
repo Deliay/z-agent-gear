@@ -139,9 +139,11 @@ flowchart LR
 - [[draft/20261025-github-issues-workflow.md]] — 云电脑 GitHub Issues 联动工作流（云电脑设置「Github」区块以列表维护多条联动配置：先选含人类节点的已配置工作流、默认标签 start-{工作流名字}可改、多选仓库并同步标签；带标签 Issue 自动完成工作区准备、实例化工作流、回评工作流地址、首个人类节点自动完成；销毁云电脑时经确认清理已同步标签）
 - [[draft/20261025-workflow-check-runs-sync.md]] — 工作流节点状态通过 GitHub Check Runs 同步（绑定 PR 的节点状态写入 PR 最新提交检查项、旧提交标记 stale、todo panel 同步为检查项子项）
 - [[draft/20261025-deepseek-harness.md]] — 增加工作负载「DeepSeek Harness」（Harness）（与 OpenCode / Kimi Code 同级的第三个 harness 工具、启动时默认注入平台渠道模型：开箱即用无需登录、模型选择仅平台渠道一组）
+- [[draft/20261026-issues-workflow-force-worktree.md]] — GitHub Issues 联动工作流强制 Worktree 隔离（联动触发的工作流强制启用独立 Worktree 副本执行、主分支零改动、多 Issue 并发互不干扰；工作区主分支信息缺失时自动识别回填——GitHub 项目经平台授权获取、其他按 main/master/release 顺序探测，完全无法识别才明确失败不降级到主分支）
 - [[draft/20261025-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（控制进程退出即自动拉起、仅「停止云电脑」等明确销毁指令可终止；容器内默认普通用户 worker、可安装 apt 包、无法终止系统级保活进程）
 - [[draft/20261026-default-workspace-optimization.md]] — 默认工作区优化（Git 项目设置不建会话时也初始化项目工作区、云电脑配置「Github 项目设置」入口迁移至 Github 页面、前缀地址默认 ~/workspace）
 - [[draft/20261027-unlimited-cloud-hosts.md]] — 用户开放无限制云电脑支持（创建收费 5 credits、创建对话框收费详情、放开每用户数量限制、Github 帐号跟随云电脑选定后不可修改）
+- [[draft/20261027-commit-author-settings.md]] — 云容器 Commit 提交人设置（设置页 GitHub 绑定下方新增「Commit 设置」：提交人模式「仅Agent/Co-Author/仅人类/未设置」× 提交人「Github帐号/自定义/未设置」，仅对云容器环境生效）
 
 ### 实现中文档（`shipping/`）
 

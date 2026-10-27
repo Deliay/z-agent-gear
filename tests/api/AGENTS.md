@@ -115,6 +115,23 @@ npm test
 
 > T-CR01（绑定即首同步）的出站断言由 `servers/agent-api/src/services/workflow/tool-handlers.test.ts` 与 `pr-check-run-sync.test.ts` 覆盖（本套件不重复建 PR 工具链）。
 
+### Commit 设置与提交身份 (`agent-api/github.test.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回双 UNSET |
+| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人全字段（trim 归一） |
+| T-CS-API3 | 白名单错误逐字：committer required / invalid github account / invalid custom committer |
+| T-CS-API4 | 归一落库：mode=UNSET 不清提交人、type=UNSET 清空冗余字段 |
+| T-CI-API1 | `POST /internal/cloud-hosts/:id/commit-identity` 无 / 非法凭据 401 |
+| T-CI-API2 | `co_author` 返回提交人 + bot 全字段（需 `GITHUB_API_BASE` 指向 mock-github-server） |
+| T-CI-API3 | 主机不存在 / 未保存设置均 200 `{mode:'unset'}`（永不 404） |
+| T-CI-API4 | 帐号解绑 / 越权降级 unset |
+| T-CI-API5 | unset 响应缺省字段（仅 mode） |
+
+> `tests/api/src/mock-github-server.ts` 提供 `GET /app`（slug）与 `GET /users/{slug}[bot]`（id）mock，
+> 并支持 `failNext` 注入失败（60s 失败 sentinel / 降级路径）。
+
 ### Auth API (`auth.test.ts`)
 
 | 测试 | 描述 |
