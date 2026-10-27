@@ -143,3 +143,7 @@ npm run test:coverage
 
 - Job pod 模板 `resources.limits` 增加 `ephemeral-storage`，默认 `10Gi`，可由 `JOB_EPHEMERAL_STORAGE` 覆盖（`JobManagerConfig.ephemeralStorage`）；**不设置 `requests`**（与既有 CPU/内存口径一致）；`K8sResourceList` 已扩展该可选字段。
 - 部署 env 同步：`deploy/k8s/cloud-controller.yaml`、`aspire/AgentGear.AppHost/AppHost.cs`、`aspire/manifest/docker-compose.yaml`。
+
+### 多租户一期补充（返工）
+- Mongoose v9 聚合管线更新必须显式 `{ updatePipeline: true }`（迁移 001 已在真库用例中验证）。
+- 迁移 001 具备 `mongodb-memory-server` 真库用例（回填/索引/幂等），与 mock 单测并行。
