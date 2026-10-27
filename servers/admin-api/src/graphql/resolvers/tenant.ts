@@ -46,7 +46,13 @@ function escapeRegex(value: string): string {
 }
 
 function toIso(value: unknown): string {
-  return value instanceof Date ? value.toISOString() : new Date(value as string).toISOString();
+  // 只读镜像行可能缺 createdAt（半迁移/外部直写）：返回 epoch 而不是抛 RangeError 导致 500。
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  return new Date(0).toISOString();
 }
 
 /** 租户列表的成员数聚合（tenant→users 一对多由 users.tenantId 承载）。 */

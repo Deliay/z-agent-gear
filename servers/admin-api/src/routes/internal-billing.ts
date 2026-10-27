@@ -54,20 +54,6 @@ function resolveReadOwnerType(value: unknown): BillingOwnerType | null {
   return null;
 }
 
-/**
- * 写请求 ownerType 白名单：**不接受已废弃的 `front_user`**（充值/扣费/账户创建等写路径），
- * 调用方需返回 400 `INVALID_OWNER_TYPE`；`tenant` / `admin_user` 原样通过。
- */
-function resolveWriteOwnerType(value: unknown): BillingOwnerType | null {
-  if (value === 'tenant' || value === 'admin_user') return value;
-  return null;
-}
-
-/** 写请求是否命中「已废弃 front_user」——用于区分 400 INVALID_OWNER_TYPE 与普通参数错误。 */
-function isDeprecatedOwnerType(value: unknown): boolean {
-  return value === 'front_user';
-}
-
 function toDate(value: unknown): Date | undefined {
   if (typeof value !== 'string' || !value) return undefined;
   const date = new Date(value);
@@ -334,12 +320,9 @@ export function createInternalBillingRouter(): Router {
 
   router.post('/api-keys', async (req: Request, res: Response) => {
     const { ownerType: rawOwnerType, ownerId, name, scope: rawScope, cloudHostId, expiresAt } = req.body ?? {};
-    if (isDeprecatedOwnerType(rawOwnerType)) {
-      // 写请求不再接受已废弃的 front_user（读兼容仅限 list/account）。
-      res.status(400).json({ error: 'INVALID_OWNER_TYPE' });
-      return;
-    }
-    const ownerType = resolveWriteOwnerType(rawOwnerType);
+    // 发布窗口兼容：旧版 agent-api 仍以 front_user 铸造 Key，写路径与读路径一样归一为 tenant
+    // （迁移 014 保证 ownerId 不变；仅归一 ownerType，不产生 front_user 新行）。
+    const ownerType = resolveReadOwnerType(rawOwnerType);
     if (
       !ownerType ||
       typeof ownerId !== 'string' ||
@@ -451,11 +434,8 @@ export function createInternalBillingRouter(): Router {
 
   router.delete('/api-keys/:id', async (req: Request, res: Response) => {
     const rawOwnerType = req.query.ownerType;
-    if (isDeprecatedOwnerType(rawOwnerType)) {
-      res.status(400).json({ error: 'INVALID_OWNER_TYPE' });
-      return;
-    }
-    const ownerType = resolveWriteOwnerType(rawOwnerType);
+    // 发布窗口兼容：front_user 写请求归一为 tenant（与读路径一致）。
+    const ownerType = resolveReadOwnerType(rawOwnerType);
     const ownerId = req.query.ownerId;
     if (!ownerType || typeof ownerId !== 'string') {
       res.status(400).json({ error: 'INVALID_OWNER' });

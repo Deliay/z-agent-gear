@@ -398,18 +398,22 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
     expect(((await adminRes.json()) as { ownerType: string }).ownerType).toBe('admin_user');
   });
 
-  it('T-B-OWNER2: 写请求（账户/Key 创建、撤销）拒绝已废弃 front_user → 400 INVALID_OWNER_TYPE', async () => {
+  it('T-B-OWNER2: 写请求（Key 创建/撤销）front_user 兼容归一为 tenant（发布窗口放行）', async () => {
     const body = { ...owner(), ownerType: 'front_user' };
     const created = await post('/api-keys', body);
-    expect(created.status).toBe(400);
-    expect((await created.json()) as { error: string }).toEqual({ error: 'INVALID_OWNER_TYPE' });
+    expect(created.status).toBe(201);
+    const payload = (await created.json()) as { apiKey: { id: string } };
+
+    // 仅归一 ownerType，不产生 front_user 新行
+    expect(await BillingApiKey.countDocuments({ ownerType: 'front_user' })).toBe(0);
+    expect(await BillingApiKey.countDocuments({ ownerType: 'tenant', ownerId: body.ownerId })).toBe(1);
 
     const deleted = await fetch(
-      `${baseUrl}/internal/billing/api-keys/${new mongoose.Types.ObjectId()}?ownerType=front_user&ownerId=x`,
+      `${baseUrl}/internal/billing/api-keys/${payload.apiKey.id}?ownerType=front_user&ownerId=${body.ownerId}`,
       { method: 'DELETE', headers: { Authorization: `Bearer ${TOKEN}` } },
     );
-    expect(deleted.status).toBe(400);
-    expect((await deleted.json()) as { error: string }).toEqual({ error: 'INVALID_OWNER_TYPE' });
+    expect(deleted.status).toBe(200);
+    expect((await deleted.json()) as { success: boolean }).toMatchObject({ success: true });
   });
 
   it('T-B-OWNER3: GET /api-keys 兼容 front_user（命中 tenant 归属的 Key）', async () => {
