@@ -17,7 +17,7 @@ export function cloudHostStatusLabel(status?: CloudHostStatus | null): string {
   return status ? (CLOUD_HOST_STATUS_LABELS[status] ?? status) : ''
 }
 
-/** 占用「每用户 1 实例」配额的状态（含 STOPPING，直到收敛） */
+/** 活跃状态（STARTING/RUNNING/STOPPING）；仅用于状态展示/只读判定，不再限制数量 */
 export function isActiveCloudHost(cloudHost?: CloudHostData | null): boolean {
   return Boolean(cloudHost && !cloudHost.deletedAt && CLOUD_HOST_ACTIVE_STATUSES.includes(cloudHost.status))
 }

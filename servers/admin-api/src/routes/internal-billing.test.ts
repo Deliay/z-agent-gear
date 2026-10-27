@@ -6,6 +6,7 @@ import mongoose from 'mongoose';
 import { createInternalBillingRouter } from './internal-billing.js';
 import { config } from '../config/index.js';
 import { BillingApiKey } from '../models/billing-api-key.js';
+import { BillingAccount } from '../models/billing-account.js';
 import { apiKeyService } from '../services/billing/api-key-service.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../services/billing/testing/mongo.js';
 
@@ -266,5 +267,96 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
     expect((await second.json()) as { revoked: number }).toMatchObject({ revoked: 0 });
 
     expect((await post('/api-keys/revoke-by-host', { cloudHostId: 'bad' })).status).toBe(400);
+  });
+
+  it('T-IB-CH1: /charges 扣费成功并返回账单与收据', async () => {
+    const account = await BillingAccount.create({
+      ownerType: 'front_user',
+      ownerId: new mongoose.Types.ObjectId().toString(),
+      ownerName: 'alice',
+      cashBalance: 1000,
+    });
+    const res = await post('/charges', {
+      accountId: String(account._id),
+      productId: 'cloud_host.create',
+      quantity: 1,
+      idempotentKey: 'cloud_host.create:h1',
+      refType: 'cloud_host',
+      refId: 'h1',
+      description: '创建云电脑 test',
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      charged: boolean;
+      invoice: { amount: number };
+      receipt: { id: string };
+    };
+    expect(body.charged).toBe(true);
+    expect(body.invoice.amount).toBe(-500);
+    expect(body.receipt.id).toBeTruthy();
+    expect((await BillingAccount.findById(account._id))?.cashBalance).toBe(500);
+  });
+
+  it('T-IB-CH2: 未授权 401；余额不足 409 INSUFFICIENT_BALANCE 带 available', async () => {
+    expect(
+      (await post('/charges', { accountId: new mongoose.Types.ObjectId().toString() }, null)).status,
+    ).toBe(401);
+    const account = await BillingAccount.create({
+      ownerType: 'front_user',
+      ownerId: new mongoose.Types.ObjectId().toString(),
+      ownerName: 'poor',
+      cashBalance: 100,
+    });
+    const res = await post('/charges', {
+      accountId: String(account._id),
+      productId: 'cloud_host.create',
+      quantity: 1,
+      idempotentKey: 'cloud_host.create:poor',
+      refType: 'cloud_host',
+      refId: 'poor',
+      description: '创建云电脑 poor',
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'INSUFFICIENT_BALANCE', available: 1 });
+    expect((await post('/charges', {})).status).toBe(400);
+  });
+
+  it('T-IB-RF1/T-IB-PQ1: /refunds 幂等；/price-quote 缺档回落', async () => {
+    const account = await BillingAccount.create({
+      ownerType: 'front_user',
+      ownerId: new mongoose.Types.ObjectId().toString(),
+      ownerName: 'bob',
+      cashBalance: 1000,
+    });
+    const chargeBody = {
+      accountId: String(account._id),
+      productId: 'cloud_host.create',
+      quantity: 1,
+      idempotentKey: 'cloud_host.create:h2',
+      refType: 'cloud_host',
+      refId: 'h2',
+      description: '创建云电脑 refund',
+    };
+    expect((await post('/charges', chargeBody)).status).toBe(200);
+    const refundBody = {
+      idempotentKey: 'cloud_host.create:h2',
+      refundKey: 'cloud_host.create.refund:h2',
+      reason: 'start failed',
+    };
+    const first = await post('/refunds', refundBody);
+    expect(first.status).toBe(200);
+    expect((await BillingAccount.findById(account._id))?.cashBalance).toBe(1000);
+    expect((await post('/refunds', refundBody)).status).toBe(200);
+    expect((await BillingAccount.findById(account._id))?.cashBalance).toBe(1000);
+
+    const quote = await fetch(
+      `${baseUrl}/internal/billing/price-quote?productIds=cloud_host.create,container.minute`,
+      { headers: { Authorization: `Bearer ${TOKEN}` } },
+    );
+    expect(quote.status).toBe(200);
+    expect(await quote.json()).toEqual([
+      { productId: 'cloud_host.create', unitPrice: 5, currency: 'credits' },
+      { productId: 'container.minute', unitPrice: 1, currency: 'credits' },
+    ]);
   });
 });

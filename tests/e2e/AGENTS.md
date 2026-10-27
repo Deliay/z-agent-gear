@@ -390,6 +390,9 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | P10-CH2 | 选 Github 项目 → 四阶段进度；成功后进入项目会话、回填 defaultSessionId、无空默认会话 |
 | T-AW6/T-AW7/T-AW9 | 配置页状态/工作区+Harness 两栏；无活动会话直接停止；已销毁无再次启动；终态可删除并移出列表 |
 | T-AW10 | 已销毁云电脑会话只读回看：无输入框/发送/继续，历史消息保留 |
+| E2E-39/E2E-41 | 新建对话框展示「收费详情」（创建花费 / 运行消费 / 欠费强制销毁提示）；余额不足提示但**不前置禁用**创建 |
+| E2E-40 | **未单独建用例**（需真实创建多台并各自启停）：数量放开语义由 `cloud-host-service.test.ts` T-CH-C7 与 `tests/api` 多台并行用例覆盖 |
+| E2E-42 | **未单独建用例**（需真实 Github App 与云电脑）：帐号跟随/置灰由 `useGithubProjectForm.test.tsx`、`GithubProjectSetupDialog` 单测与 `T-CHG12..14` 覆盖 |
 
 > RUNNING/默认会话/ACP 链路不在 E2E 断言（无真实 worker），由单测 + 真实集群手工验收覆盖。
 

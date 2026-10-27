@@ -6,6 +6,7 @@ import type { CloudHostCapabilitiesData, HarnessType } from '../../../graphql/ty
 const mockCreateCloudHost = vi.fn();
 const mockSetupGithubProject = vi.fn();
 const mockUseQuery = vi.fn();
+const mockRefetchQuote = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useMutation: (doc: unknown) =>
@@ -84,8 +85,14 @@ describe('NewCloudHostDialog', () => {
             installed: false,
           },
         ],
+        cloudHostBillingQuote: {
+          createCredits: 5,
+          perMinuteCredits: 1,
+          availableBalance: 20,
+        },
       },
       loading: false,
+      refetch: mockRefetchQuote,
     });
     mockCreateCloudHost.mockResolvedValue({
       data: {
@@ -186,8 +193,8 @@ describe('NewCloudHostDialog', () => {
     expect(submitButton()).toBeDisabled();
   });
 
-  it('T-AW5 服务端 too many cloud hosts 映射为中文 1 实例上限提示', async () => {
-    mockCreateCloudHost.mockRejectedValueOnce(new Error('too many cloud hosts'));
+  it('T-AW5 服务端 insufficient balance 映射为余额不足提示', async () => {
+    mockCreateCloudHost.mockRejectedValueOnce(new Error('insufficient balance'));
 
     render(<NewCloudHostDialog {...defaultProps} />);
 
@@ -195,8 +202,8 @@ describe('NewCloudHostDialog', () => {
     fireEvent.click(screen.getByLabelText('OpenCode'));
     fireEvent.click(submitButton());
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('每用户同时最多 1 个云电脑实例');
-    expect(screen.getByRole('alert')).not.toHaveTextContent('too many cloud hosts');
+    expect(await screen.findByRole('alert')).toHaveTextContent('账户余额不足，请联系管理员充值后重试');
+    expect(mockRefetchQuote).toHaveBeenCalled();
   });
 
   it.each([
@@ -217,11 +224,53 @@ describe('NewCloudHostDialog', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(message);
   });
 
-  it('实例上限时禁用提交并提示', () => {
-    render(<NewCloudHostDialog {...defaultProps} hasActiveCloudHost />);
+  it('T-AW16: 收费详情区块展示创建/运行/欠费提示', () => {
+    render(<NewCloudHostDialog {...defaultProps} />);
 
-    expect(screen.getByText('每用户同时最多 1 个云电脑实例')).toBeInTheDocument();
-    expect(submitButton()).toBeDisabled();
+    expect(screen.getByText('收费详情')).toBeInTheDocument();
+    expect(
+      screen.getByText('创建花费：5 credits（一次性，确认创建即扣费）'),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/运行消费：1 credit\/分钟/)).toBeInTheDocument();
+    expect(screen.getByText('余额不足持续 10 分钟云电脑将被强制销毁')).toBeInTheDocument();
+  });
+
+  it('T-AW17: 报价查询失败时降级提示且不阻断提交', () => {
+    mockUseQuery.mockReturnValue({
+      data: null,
+      loading: false,
+      error: new Error('quote down'),
+    });
+
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    expect(screen.getByText('创建与运行将产生费用，详见账单')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    expect(submitButton()).not.toBeDisabled();
+  });
+
+  it('T-AW18: 余额不足提示充值但不前置禁用提交', () => {
+    mockUseQuery.mockReturnValue({
+      data: {
+        cloudHostWorkloadCatalog: [],
+        cloudHostBillingQuote: {
+          createCredits: 5,
+          perMinuteCredits: 1,
+          availableBalance: 1,
+        },
+      },
+      loading: false,
+    });
+
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    expect(
+      screen.getByText('当前可用余额：1 credits，余额不足，请联系管理员充值'),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByLabelText('OpenCode'));
+    expect(submitButton()).not.toBeDisabled();
   });
 
   it('T-AW13 不出现存储/会话导入参数', () => {
@@ -423,6 +472,7 @@ describe('NewCloudHostDialog Github 项目编排', () => {
           input: {
             name: '云电脑 A',
             harnessTypes: ['OPENCODE'],
+            githubAccountId: 'acc-1',
             createDefaultSession: false,
           },
         },

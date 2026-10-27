@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
   loginViaUI,
-  registerUser,
+  registerFundedUser,
   createControllerKey,
   registerController,
   createWorkspace,
@@ -53,7 +53,7 @@ test.describe('Github workload E2E', () => {
   test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
 
   test('T-EG5: Git 设置/新增工作区后「+」重新打开即时可见（无需刷新页面）', async ({ page }) => {
-    const { token, username } = await registerUser(page);
+    const { token, username } = await registerFundedUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const controller = await registerController(rawKey);
     const firstPath = `/home/worker/workspace/phase10-first-${Date.now().toString(36)}`;
@@ -89,7 +89,7 @@ test.describe('Github workload E2E', () => {
 
   test('T-EG1/T-EG4: 云主机工作区 Github 图标 → 弹窗默认值与固定工作负载', async ({ page }) => {
     test.setTimeout(90_000);
-    const { token, username } = await registerUser(page);
+    const { token, username } = await registerFundedUser(page);
     await loginViaUI(page, username);
     const name = `e2e-gh-${Date.now().toString(36)}`;
     await createHost(page, token, name);

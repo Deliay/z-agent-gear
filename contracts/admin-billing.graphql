@@ -9,6 +9,17 @@
 # 计费管线：业务事件 → 计量 → 定价 → 账单 → 支付 → 收据。
 # 本契约仅暴露「账单 / 收据 / 汇总 / 预留 / 定价 / API Key / 对账」的读写边界；
 # 业务事件与计量事实不对后台直接开放写入（由业务侧 outbox / 消息驱动）。
+#
+# 内部 REST（`/internal/billing/*`，Bearer `INTERNAL_API_TOKEN`，仅供 agent-api 调用；
+# 错误体统一 `{ error: '<UPPER_CODE>' }`，内部异常只记服务端日志）：
+#   GET  /account?ownerType&ownerId&ownerName       账户查询/创建
+#   GET  /invoices|receipts|api-calls|rollups|api-keys   只读列表
+#   POST /api-keys | /api-keys/revoke-by-host | /api-keys/:id/revoke   云电脑/账号 Key 管理
+#   POST /charges   一次性扣费：body {accountId, productId, quantity, idempotentKey, refType, refId, description}
+#                   成功 {invoice, receipt, charged:true}；400 INVALID_BODY / 403 ACCOUNT_FROZEN /
+#                   404 ACCOUNT_NOT_FOUND / 409 {error:'INSUFFICIENT_BALANCE', available(credits)}
+#   POST /refunds   退款（幂等）：body {idempotentKey, refundKey, reason}；成功 {invoice, receipt}（原扣费不存在时均可空）
+#   GET  /price-quote?productIds=a,b  报价：[{productId, unitPrice(credits), currency:'credits'}]；缺档回落默认价目
 
 scalar JSON
 

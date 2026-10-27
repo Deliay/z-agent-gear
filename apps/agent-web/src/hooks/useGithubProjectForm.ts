@@ -47,6 +47,8 @@ export interface GithubProjectFormOptions {
    * 此时只收集账号/仓库/前缀，工作负载由服务端 setup 时自动补 Github 预制项。
    */
   includeWorkloads?: boolean
+  /** 云电脑已锁定的 Github 帐号；非空时表单固定为该帐号且不可修改 */
+  lockedAccountId?: string | null
 }
 
 export interface GithubProjectFormState {
@@ -68,6 +70,8 @@ export interface GithubProjectFormState {
   normalizedPrefix: string | null
   finalClonePath: string | null
   hasAccounts: boolean
+  /** 已锁定帐号不在当前账号列表中（授权失效）；仍保持置灰、不允许换绑 */
+  lockedAccountMissing: boolean
   /** 账号 + 仓库 + 合法前缀（云电脑侧另需 host RUNNING） */
   isValid: boolean
 }
@@ -82,6 +86,7 @@ export function useGithubProjectForm({
   defaultWorkspace,
   hasDefaultWorkspace,
   includeWorkloads = true,
+  lockedAccountId = null,
 }: GithubProjectFormOptions): GithubProjectFormState {
   const [accountId, setAccountIdState] = useState('')
   const [repoFullName, setRepoFullNameState] = useState('')
@@ -138,18 +143,24 @@ export function useGithubProjectForm({
     })
   }, [open, includeWorkloads, githubPresetId])
 
-  // 默认选中第一个已绑定账号
+  // 锁定帐号优先固定；未锁定时默认选中第一个已绑定账号
   useEffect(() => {
     if (!open) return
+    if (lockedAccountId) {
+      if (accountId !== lockedAccountId) setAccountIdState(lockedAccountId)
+      return
+    }
     if (accounts.length === 0) return
     if (accounts.some((account) => account.id === accountId)) return
     setAccountIdState(accounts[0].id)
-  }, [open, accounts, accountId])
+  }, [open, accounts, accountId, lockedAccountId])
 
-  const selectedAccount = accounts.find((account) => account.id === accountId)
+  const effectiveAccountId = lockedAccountId || accountId
+  const selectedAccount = accounts.find((account) => account.id === effectiveAccountId)
   const repos = useMemo(() => mergeGithubRepos(selectedAccount?.installations), [selectedAccount])
 
   const setAccountId = (nextAccountId: string) => {
+    if (lockedAccountId) return
     setAccountIdState(nextAccountId)
     setRepoFullNameState('')
   }
@@ -166,9 +177,13 @@ export function useGithubProjectForm({
   const normalizedPrefix = normalizeWorkspacePrefixForPreview(targetPath)
   const finalClonePath = previewClonePath(targetPath, repoFullName)
   const hasAccounts = accounts.length > 0
+  const lockedAccountMissing =
+    Boolean(lockedAccountId) &&
+    !accountsLoading &&
+    !accounts.some((account) => account.id === lockedAccountId)
   const isValid =
     hasAccounts &&
-    Boolean(accountId) &&
+    Boolean(effectiveAccountId) &&
     Boolean(repoFullName) &&
     prefixError === null &&
     normalizedPrefix !== null
@@ -178,7 +193,7 @@ export function useGithubProjectForm({
     accountsLoading,
     workloads,
     workloadsLoading,
-    accountId,
+    accountId: effectiveAccountId,
     setAccountId,
     repoFullName,
     setRepoFullName: setRepoFullNameState,
@@ -192,6 +207,7 @@ export function useGithubProjectForm({
     normalizedPrefix,
     finalClonePath,
     hasAccounts,
+    lockedAccountMissing,
     isValid,
   }
 }

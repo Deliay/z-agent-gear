@@ -3,7 +3,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   config: {
     harnessEnabled: true,
-    cloudHostMaxPerUser: 1,
     harnessContainerTtlSeconds: 86400,
     cloudControllerUrl: 'http://cc:10004',
     internalApiToken: 'internal-token',
@@ -42,14 +41,21 @@ vi.mock('../models/controller-workspace.js', () => ({
   ControllerWorkspace: { deleteOne: vi.fn() },
 }));
 
+vi.mock('../models/github-account.js', () => ({
+  GitHubAccount: { findOne: vi.fn() },
+}));
+
 vi.mock('../models/session.js', () => ({
   Session: { countDocuments: vi.fn(), find: vi.fn() },
 }));
 
 vi.mock('./billing-client.js', () => ({
   BillingServiceUnavailableError: class BillingServiceUnavailableError extends Error {},
+  InsufficientBalanceError: class InsufficientBalanceError extends Error {},
   billingClient: {
     getAccount: vi.fn(),
+    createCharge: vi.fn(),
+    refundCharge: vi.fn(),
     createCloudHostApiKey: vi.fn(),
     revokeApiKeysByHost: vi.fn(),
   },
@@ -111,7 +117,7 @@ import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { Session } from '../models/session.js';
-import { billingClient, BillingServiceUnavailableError } from './billing-client.js';
+import { billingClient, BillingServiceUnavailableError, InsufficientBalanceError } from './billing-client.js';
 import { cloudControllerClient } from './cloud-controller-client.js';
 import { cloudWorkloadReader } from './cloud-workload-reader.js';
 import { evictKeyById } from './key-cache.js';
@@ -120,6 +126,7 @@ import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
+import { GitHubAccount } from '../models/github-account.js';
 import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
 
 const HOST_ID = '507f1f77bcf86cd799439011';
@@ -158,6 +165,11 @@ function hostDoc(overrides: Record<string, unknown> = {}) {
 function setupCreateSuccess() {
   vi.mocked(CloudHost.countDocuments).mockResolvedValue(0 as never);
   vi.mocked(billingClient.getAccount).mockResolvedValue({ id: 'account-1' } as never);
+  vi.mocked(billingClient.createCharge).mockResolvedValue({
+    charged: true,
+    invoice: {},
+    receipt: {},
+  } as never);
   vi.mocked(controllerKeyService.createForCloudHost).mockResolvedValue({
     key: { id: 'key-1' },
     rawKey: 'zag_k_1_raw',
@@ -203,6 +215,15 @@ beforeEach(() => {
   vi.mocked(CloudHost.findOneAndUpdate).mockReset();
   vi.mocked(CloudHost.findById).mockReset();
   vi.mocked(billingClient.revokeApiKeysByHost).mockResolvedValue(undefined as never);
+  vi.mocked(billingClient.createCharge).mockResolvedValue({
+    charged: true,
+    invoice: {},
+    receipt: {},
+  } as never);
+  vi.mocked(billingClient.refundCharge).mockResolvedValue({
+    invoice: null,
+    receipt: null,
+  } as never);
   vi.mocked(evictKeyById).mockResolvedValue(undefined as never);
   vi.mocked(ControllerWorkspace.deleteOne).mockResolvedValue(undefined as never);
   vi.mocked(Controller.deleteOne).mockResolvedValue(undefined as never);
@@ -286,13 +307,54 @@ describe('CloudHostService', () => {
       ).rejects.toThrow('unsupported harness type: UNKNOWN');
     });
 
-    it('enforces one active host per user', async () => {
-      vi.mocked(CloudHost.countDocuments).mockResolvedValue(1 as never);
+    it('T-CH-GH1: 非法/非本人 githubAccountId 拒绝，合法则落库透传', async () => {
+      await expect(
+        service.create('user-1', {
+          name: 'x',
+          harnessTypes: ['OPENCODE'],
+          githubAccountId: 'not-an-object-id',
+        }),
+      ).rejects.toThrow('Github 账号不存在或不属于当前用户');
+
+      vi.mocked(GitHubAccount.findOne).mockReturnValue(chain(null) as never);
+      await expect(
+        service.create('user-1', {
+          name: 'x',
+          harnessTypes: ['OPENCODE'],
+          githubAccountId: '507f1f77bcf86cd799439099',
+        }),
+      ).rejects.toThrow('Github 账号不存在或不属于当前用户');
+      expect(CloudHost.create).not.toHaveBeenCalled();
+
+      setupCreateSuccess();
+      vi.mocked(GitHubAccount.findOne).mockReturnValue(
+        chain({ _id: '507f1f77bcf86cd799439099' }) as never,
+      );
+      await service.create('user-1', {
+        name: 'owned',
+        harnessTypes: ['OPENCODE'],
+        githubAccountId: '507f1f77bcf86cd799439099',
+      });
+      expect(GitHubAccount.findOne).toHaveBeenCalledWith({
+        _id: '507f1f77bcf86cd799439099',
+        userId: 'user-1',
+      });
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ githubAccountId: '507f1f77bcf86cd799439099' }),
+      );
+    });
+
+    it('T-CH-C7: allows consecutive creates without one-active-host limit', async () => {
+      setupCreateSuccess();
       vi.mocked(cloudWorkloadReader.findHarnessPreset).mockResolvedValue({} as never);
       await expect(
-        service.create('user-1', { name: 'x', harnessTypes: ['OPENCODE'] }),
-      ).rejects.toThrow('too many cloud hosts');
-      expect(CloudHost.create).not.toHaveBeenCalled();
+        service.create('user-1', { name: 'first', harnessTypes: ['OPENCODE'] }),
+      ).resolves.toMatchObject({ name: 'my-cloud' });
+      await expect(
+        service.create('user-1', { name: 'second', harnessTypes: ['OPENCODE'] }),
+      ).resolves.toMatchObject({ name: 'my-cloud' });
+      expect(CloudHost.create).toHaveBeenCalledTimes(2);
+      expect(CloudHost.countDocuments).not.toHaveBeenCalled();
     });
   });
 
@@ -349,6 +411,58 @@ describe('CloudHostService', () => {
         modelContextLengths: '{"model-a":128000}',
         defaultWorkspace: '/home/worker/workspace',
       });
+    });
+
+    it('T-CH-B1: 扣费发生在落库/拉起之前且键位正确', async () => {
+      setupCreateSuccess();
+      const result = await service.create('user-1', {
+        name: 'my-cloud',
+        harnessTypes: ['OPENCODE'],
+      });
+      const hostId = String(result.id);
+      const charge = vi.mocked(billingClient.createCharge).mock.calls[0][0];
+      expect(charge).toMatchObject({
+        accountId: 'account-1',
+        productId: 'cloud_host.create',
+        quantity: 1,
+        refType: 'cloud_host',
+        description: '创建云电脑 my-cloud',
+      });
+      expect(charge.idempotentKey).toMatch(/^cloud_host\.create:[0-9a-f]{24}$/);
+      expect(charge.refId).toBe(charge.idempotentKey.split(':')[1]);
+      expect(hostId).toBeTruthy();
+      const chargeOrder = vi.mocked(billingClient.createCharge).mock.invocationCallOrder[0];
+      const createOrder = vi.mocked(CloudHost.create).mock.invocationCallOrder[0];
+      const startOrder = vi.mocked(cloudControllerClient.startHarness).mock.invocationCallOrder[0];
+      expect(chargeOrder).toBeLessThan(createOrder);
+      expect(chargeOrder).toBeLessThan(startOrder);
+    });
+
+    it('T-CH-B2: 余额不足拒绝创建且不落库/不退款', async () => {
+      setupCreateSuccess();
+      const err = Object.create(InsufficientBalanceError.prototype);
+      err.message = 'insufficient balance';
+      vi.mocked(billingClient.createCharge).mockRejectedValue(err as never);
+      await expect(
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+      ).rejects.toThrow('insufficient balance');
+      expect(CloudHost.create).not.toHaveBeenCalled();
+      expect(controllerKeyService.createForCloudHost).not.toHaveBeenCalled();
+      expect(billingClient.refundCharge).not.toHaveBeenCalled();
+    });
+
+    it('T-CH-B3: 拉起失败先退款再回滚并映射控制面不可用', async () => {
+      setupCreateSuccess();
+      vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
+      await expect(
+        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+      ).rejects.toThrow('control plane unavailable');
+      expect(billingClient.refundCharge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          refundKey: expect.stringMatching(/^cloud_host\.create\.refund:/),
+        }),
+      );
+      expect(CloudHost.deleteOne).toHaveBeenCalled();
     });
 
     it('T-HL-API9: 仅 KIMI_CODE 时 agentGearMinVersion=2.10.0', async () => {
@@ -481,7 +595,7 @@ describe('CloudHostService', () => {
       expect(result.containerId).toBeNull();
     });
 
-    it('R2-18 maps only cloud-host active unique-index conflicts to too many cloud hosts', async () => {
+    it('不再将唯一索引冲突映射为 too many cloud hosts', async () => {
       setupCreateSuccess();
       vi.mocked(CloudHost.create).mockRejectedValue(
         Object.assign(new Error('E11000 duplicate key error ... uniq_active_cloud_host_per_user'), {
@@ -490,7 +604,8 @@ describe('CloudHostService', () => {
       );
       await expect(
         service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
-      ).rejects.toThrow('too many cloud hosts');
+      ).rejects.toThrow('uniq_active_cloud_host_per_user');
+      expect(billingClient.refundCharge).toHaveBeenCalled();
     });
 
     it('R2-18 rethrows unrelated unique-key conflicts', async () => {
@@ -505,21 +620,16 @@ describe('CloudHostService', () => {
       ).rejects.toThrow('controllerkeys.keyHash_1');
     });
 
-    it('serializes concurrent creates so only one host can start', async () => {
+    it('serializes concurrent creates so both hosts can start', async () => {
       setupCreateSuccess();
-      vi.mocked(CloudHost.countDocuments)
-        .mockResolvedValueOnce(0 as never)
-        .mockResolvedValue(1 as never);
 
       const results = await Promise.allSettled([
         service.create('user-1', { name: 'first', harnessTypes: ['OPENCODE'] }),
         service.create('user-1', { name: 'second', harnessTypes: ['OPENCODE'] }),
       ]);
 
-      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-      const rejected = results.find((result) => result.status === 'rejected') as PromiseRejectedResult;
-      expect(String(rejected.reason)).toContain('too many cloud hosts');
-      expect(cloudControllerClient.startHarness).toHaveBeenCalledTimes(1);
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
+      expect(cloudControllerClient.startHarness).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -1005,12 +1115,47 @@ describe('CloudHostService', () => {
       expect(sessionService.endByController).toHaveBeenCalledWith(CONTROLLER_ID, 'user-1');
       expect(billingClient.revokeApiKeysByHost).toHaveBeenCalledWith(HOST_ID);
     });
+
+    it('T-CH-B4: 未 ready 退款、已 ready 不退、已终态早退分支补退', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'STARTING', readyAt: null })) as never,
+      );
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(hostDoc({ status: 'FAILED', readyAt: null })) as never,
+      );
+      await service.handleTerminal(HOST_ID, { status: 'failed', reason: 'start failed' });
+      expect(billingClient.refundCharge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          idempotentKey: `cloud_host.create:${HOST_ID}`,
+          refundKey: `cloud_host.create.refund:${HOST_ID}`,
+        }),
+      );
+
+      vi.mocked(billingClient.refundCharge).mockClear();
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'RUNNING', readyAt: new Date() })) as never,
+      );
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(hostDoc({ status: 'STOPPED', readyAt: new Date() })) as never,
+      );
+      await service.handleTerminal(HOST_ID, { status: 'stopped' });
+      expect(billingClient.refundCharge).not.toHaveBeenCalled();
+
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'FAILED', readyAt: null })) as never,
+      );
+      await service.handleTerminal(HOST_ID, { status: 'failed' });
+      expect(billingClient.refundCharge).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('graphql error mapping', () => {
     it('A-6 passes whitelisted contract messages through', () => {
-      expect(() => toCloudHostGraphQLError(new Error('too many cloud hosts'))).toThrow(
-        'too many cloud hosts',
+      expect(() => toCloudHostGraphQLError(new Error('insufficient balance'))).toThrow(
+        'insufficient balance',
+      );
+      expect(() => toCloudHostGraphQLError(new Error('github account is locked'))).toThrow(
+        'github account is locked',
       );
       expect(() =>
         toCloudHostGraphQLError(new Error('unsupported harness type: CODEX')),

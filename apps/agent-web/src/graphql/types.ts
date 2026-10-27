@@ -42,6 +42,19 @@ export interface CloudHostData {
   hasDefaultWorkspace?: boolean
   /** 当前正在 runtime 安装的工作负载名；null 表示空闲 */
   workloadInstalling?: string | null
+  /** 云电脑锁定的 Github 帐号；null=未选定（首次 Git 项目设置可选定一次，之后不可改） */
+  githubAccountId?: string | null
+}
+
+/** 云电脑创建/运行报价（金额单位 credits） */
+export interface CloudHostBillingQuoteData {
+  createCredits: number
+  perMinuteCredits: number
+  availableBalance: number | null
+}
+
+export interface CloudHostBillingQuoteQuery {
+  cloudHostBillingQuote: CloudHostBillingQuoteData
 }
 
 export type CloudHostSetupKind = 'INSTALL_WORKLOAD' | 'GITHUB_SETUP'

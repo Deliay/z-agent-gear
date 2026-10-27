@@ -15,6 +15,7 @@ import {
   toCloudHostSetupGraphQLError,
 } from '../../services/cloud-host-workload-service.js';
 import { cloudHostGithubService } from '../../services/cloud-host-github-service.js';
+import { billingClient } from '../../services/billing-client.js';
 import {
   cloudHostIssuesLinkageService,
   type CloudHostIssuesLinkageInput,
@@ -22,6 +23,10 @@ import {
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
+
+/** 报价降级默认值（价目档以 admin-api pricing.ts 为准）。 */
+const FALLBACK_CREATE_CREDITS = 5;
+const FALLBACK_PER_MINUTE_CREDITS = 1;
 
 function requireUser(context: AuthContext): string {
   if (!context.currentUser) {
@@ -39,6 +44,30 @@ export const cloudHostResolvers = {
     myCloudHosts: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       const userId = requireUser(context);
       return cloudHostService.list(userId);
+    },
+    cloudHostBillingQuote: async (_parent: unknown, _args: unknown, context: AuthContext) => {
+      const userId = requireUser(context);
+      let createCredits = FALLBACK_CREATE_CREDITS;
+      let perMinuteCredits = FALLBACK_PER_MINUTE_CREDITS;
+      let availableBalance: number | null = null;
+      const [prices, account] = await Promise.allSettled([
+        billingClient.getPriceQuote(['cloud_host.create', 'container.minute']),
+        billingClient.getAccount('front_user', userId),
+      ]);
+      if (prices.status === 'fulfilled') {
+        for (const item of prices.value) {
+          if (item.productId === 'cloud_host.create') createCredits = item.unitPrice;
+          if (item.productId === 'container.minute') perMinuteCredits = item.unitPrice;
+        }
+      } else {
+        console.warn('[cloud-host] billing quote price fallback:', prices.reason);
+      }
+      if (account.status === 'fulfilled') {
+        availableBalance = account.value.availableBalance;
+      } else {
+        console.warn('[cloud-host] billing quote balance unavailable:', account.reason);
+      }
+      return { createCredits, perMinuteCredits, availableBalance };
     },
     cloudHost: async (
       _parent: unknown,
@@ -134,7 +163,7 @@ export const cloudHostResolvers = {
   Mutation: {
     createCloudHost: async (
       _parent: unknown,
-      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[]; createDefaultSession?: boolean | null } },
+      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[]; createDefaultSession?: boolean | null; githubAccountId?: string | null } },
       context: AuthContext,
     ) => {
       const userId = requireUser(context);
@@ -143,6 +172,7 @@ export const cloudHostResolvers = {
           name: args.input.name,
           harnessTypes: args.input.harnessTypes,
           workloadIds: args.input.workloadIds,
+          githubAccountId: args.input.githubAccountId,
           ...(args.input.createDefaultSession === undefined || args.input.createDefaultSession === null
             ? {}
             : { createDefaultSession: args.input.createDefaultSession }),

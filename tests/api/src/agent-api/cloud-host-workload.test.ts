@@ -139,6 +139,53 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     };
   }
 
+  async function seedGithubAccount(userId: string) {
+    const db = await mongoDb();
+    if (!db) throw new Error('MONGODB_URI missing');
+    const accountId = new mongoose.Types.ObjectId();
+    const installationId = Math.floor(Date.now() % 1_000_000_000) + Math.floor(Math.random() * 1000);
+    await db.collection('githubaccounts').insertOne({
+      _id: accountId,
+      userId,
+      githubUserId: installationId,
+      githubLogin: `gh-${accountId.toString()}`,
+      accessToken: 'encrypted',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await db.collection('githubinstallations').insertOne({
+      accountId,
+      installationId,
+      accountLogin: `gh-${accountId.toString()}`,
+      accountType: 'User',
+      repos: [
+        {
+          repoId: 1,
+          repoName: 'repo',
+          fullName: 'owner/repo',
+          private: false,
+          permissions: { read: true, write: true },
+        },
+        {
+          repoId: 2,
+          repoName: 'repo2',
+          fullName: 'owner/repo2',
+          private: false,
+          permissions: { read: true, write: true },
+        },
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    return {
+      accountId: accountId.toString(),
+      cleanup: async () => {
+        await db.collection('githubinstallations').deleteMany({ accountId });
+        await db.collection('githubaccounts').deleteOne({ _id: accountId });
+      },
+    };
+  }
+
   it('T-CHW-API1: 列表返回 Github 预制项并校验主机归属', async () => {
     const owner = await signup();
     const other = await signup();
@@ -270,6 +317,65 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
         '前缀地址不能包含 ..',
       );
     } finally {
+      await seeded.cleanup();
+    }
+  });
+
+  it('T-GH-API-L1/L2/L3: 首绑落库、异帐号拒绝、同帐号换仓库放行', async () => {
+    const { token, userId } = await signup();
+    const seeded = await seedHost(userId);
+    const account1 = await seedGithubAccount(userId);
+    const account2 = await seedGithubAccount(userId);
+    const db = (await mongoDb())!;
+    try {
+      const first = await gql(
+        SETUP,
+        {
+          input: {
+            controllerId: seeded.controllerId,
+            accountId: account1.accountId,
+            repoFullName: 'owner/repo',
+            targetPath: '/home/worker/workspace',
+          },
+        },
+        token,
+      );
+      expect(first.errors).toBeUndefined();
+      const host = await db.collection('cloudhosts').findOne({
+        _id: new mongoose.Types.ObjectId(seeded.hostId),
+      });
+      expect(String(host?.githubAccountId)).toBe(account1.accountId);
+
+      const foreign = await gql(
+        SETUP,
+        {
+          input: {
+            controllerId: seeded.controllerId,
+            accountId: account2.accountId,
+            repoFullName: 'owner/repo',
+            targetPath: '/home/worker/workspace',
+          },
+        },
+        token,
+      );
+      expect(foreign.errors?.[0]?.message).toBe('github account is locked');
+
+      const sameAccount = await gql(
+        SETUP,
+        {
+          input: {
+            controllerId: seeded.controllerId,
+            accountId: account1.accountId,
+            repoFullName: 'owner/repo2',
+            targetPath: '/home/worker/workspace',
+          },
+        },
+        token,
+      );
+      expect(sameAccount.errors?.[0]?.message).not.toBe('github account is locked');
+    } finally {
+      await account1.cleanup();
+      await account2.cleanup();
       await seeded.cleanup();
     }
   });

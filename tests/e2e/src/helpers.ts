@@ -122,7 +122,7 @@ export async function gqlRequest(page: import('@playwright/test').Page, query: s
   return page.request.post(API_URL, { headers, data: body });
 }
 
-export async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
+export async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string; userId: string }> {
   const username = `eu${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
   const res = await gqlRequest(page, `
     mutation Signup($username: String!, $password: String!) {
@@ -130,7 +130,44 @@ export async function registerUser(page: import('@playwright/test').Page): Promi
     }
   `, { username, password: 'testpass123' });
   const body = await res.json();
-  return { token: body.data.signup.token, username };
+  return { token: body.data.signup.token, username, userId: body.data.signup.user.id };
+}
+
+/** 创建云电脑需先扣 5 credits：直接为前台测试用户准备余额（需 MONGODB_URI）。 */
+export async function fundFrontUser(userId: string, username: string, credits = 100): Promise<boolean> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return false;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+  const db = mongoose.connection.db;
+  if (!db) return false;
+  const now = new Date();
+  await db.collection('billingaccounts').updateOne(
+    { ownerType: 'front_user', ownerId: userId },
+    {
+      $set: {
+        ownerType: 'front_user',
+        ownerId: userId,
+        ownerName: username,
+        cashBalance: credits * 100,
+        giftBalance: 0,
+        creditLimit: 0,
+        frozenAmount: 0,
+        status: 'active',
+        insufficientSince: null,
+        updatedAt: now,
+      },
+      $setOnInsert: { invoiceSeq: 0, createdAt: now },
+    },
+    { upsert: true },
+  );
+  return true;
+}
+
+/** 注册并充值；无 MONGODB_URI 时保持原行为（创建步骤可能因余额不足失败）。 */
+export async function registerFundedUser(page: import('@playwright/test').Page) {
+  const user = await registerUser(page);
+  await fundFrontUser(user.userId, user.username);
+  return user;
 }
 
 export async function createControllerKey(page: import('@playwright/test').Page, token: string): Promise<{ rawKey: string }> {
