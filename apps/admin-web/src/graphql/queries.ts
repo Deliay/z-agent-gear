@@ -359,3 +359,35 @@ export const ADMIN_BILLING_API_CALLS = gql`
     }
   }
 `
+
+// ---------- 租户管理（contracts/admin-tenant.graphql，只读视图 + 开户） ----------
+
+export const ADMIN_TENANTS = gql`
+  query AdminTenants($keyword: String, $page: Int, $pageSize: Int) {
+    adminTenants(keyword: $keyword, page: $page, pageSize: $pageSize) {
+      id
+      name
+      type
+      memberCount
+      balance
+      createdAt
+    }
+  }
+`
+
+export const ADMIN_TENANT = gql`
+  query AdminTenant($id: ID!) {
+    adminTenant(id: $id) {
+      id
+      name
+      type
+      createdAt
+      users {
+        id
+        name
+        username
+        createdAt
+      }
+    }
+  }
+`

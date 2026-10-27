@@ -32,4 +32,17 @@ describe('LoginPage', () => {
     expect(screen.getByLabelText('用户名')).toBeDefined();
     expect(screen.getByLabelText('密码')).toBeDefined();
   });
+
+  it('should not expose any registration entry (注册已硬关闭)', () => {
+    render(
+      <MemoryRouter>
+        <AuthProvider>
+          <LoginPage />
+        </AuthProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText(/注册/)).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.queryByText(/没有账号/)).toBeNull();
+  });
 });

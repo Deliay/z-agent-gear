@@ -34,6 +34,7 @@ describe('AdminLayout', () => {
     expect(screen.getByRole('link', { name: '模型配置' })).toBeDefined();
     expect(screen.getByRole('link', { name: '基础镜像' })).toBeDefined();
     expect(screen.getByRole('link', { name: '工作负载' })).toBeDefined();
+    expect(screen.getByRole('link', { name: '租户管理' })).toBeDefined();
     expect(screen.getByText('models content')).toBeDefined();
   });
 

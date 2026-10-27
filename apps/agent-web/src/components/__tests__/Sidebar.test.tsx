@@ -228,7 +228,7 @@ describe('Sidebar 集成测试', () => {
     mockHome({
       workspaces: [makeWorkspace()],
     });
-    render(<Sidebar username="testuser" />);
+    render(<Sidebar name="testuser" />);
 
     const newSessionButtons = screen.getAllByLabelText('新建会话');
     fireEvent.click(newSessionButtons[0]);
@@ -265,7 +265,7 @@ describe('Sidebar 集成测试', () => {
 
   describe('① 四个平级分组渲染', () => {
     it('展开控制器后渲染统一网关、工作流、会话、工作区四个分组', () => {
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getByText('统一网关')).toBeInTheDocument();
       expect(screen.getByText('工作流')).toBeInTheDocument();
@@ -276,7 +276,7 @@ describe('Sidebar 集成测试', () => {
 
   describe('② 网关 Plus 打开 GatewayDialog', () => {
     it('无网关时点击 Plus 按钮打开 GatewayDialog 且弹窗不在 hidden 容器内', () => {
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       fireEvent.click(screen.getByTitle('新增网关'));
 
@@ -298,7 +298,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getByText('my-api')).toBeInTheDocument();
     });
@@ -314,7 +314,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getByText('深层会话')).toBeInTheDocument();
       expect(screen.getByText('project-sub')).toBeInTheDocument();
@@ -326,7 +326,7 @@ describe('Sidebar 集成测试', () => {
         workspaces: [makeWorkspace({ id: 'ws-1', name: 'project', path: '/home/user' })],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getByText('孤立会话')).toBeInTheDocument();
       expect(screen.getByText('未知工作区')).toBeInTheDocument();
@@ -335,7 +335,7 @@ describe('Sidebar 集成测试', () => {
 
   describe('④ 工作流集中列表', () => {
     it('无工作流实例时显示空态', () => {
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
       expect(screen.getByText('无工作流实例')).toBeInTheDocument();
     });
 
@@ -348,7 +348,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.queryByText('无工作流实例')).not.toBeInTheDocument();
       expect(screen.getByText('实例一')).toBeInTheDocument();
@@ -361,11 +361,11 @@ describe('Sidebar 集成测试', () => {
     });
 
     it('实例上报后从空态切换为列表', () => {
-      const { rerender } = render(<Sidebar username="testuser" />);
+      const { rerender } = render(<Sidebar name="testuser" />);
       expect(screen.getByText('无工作流实例')).toBeInTheDocument();
 
       mockHome({ workflowInstances: [makeInstance()] });
-      rerender(<Sidebar username="testuser" />);
+      rerender(<Sidebar name="testuser" />);
 
       expect(screen.queryByText('无工作流实例')).not.toBeInTheDocument();
       expect(screen.getByText('需求A开发')).toBeInTheDocument();
@@ -375,7 +375,7 @@ describe('Sidebar 集成测试', () => {
   describe('⑤ 无限渲染循环回归', () => {
     it('render 后正常完成，无 React 报错', () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
       expect(consoleSpy).not.toHaveBeenCalled();
       consoleSpy.mockRestore();
     });
@@ -383,12 +383,12 @@ describe('Sidebar 集成测试', () => {
 
   describe('⑥ 无会话/无工作区时显示空态文案', () => {
     it('无会话时显示「无会话」', () => {
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
       expect(screen.getByText('无会话')).toBeInTheDocument();
     });
 
     it('无工作区时显示「无工作区」', () => {
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
       expect(screen.getByText('无工作区')).toBeInTheDocument();
     });
   });
@@ -400,7 +400,7 @@ describe('Sidebar 集成测试', () => {
         archivedWorkflowInstances: [makeInstance({ id: 'inst-archived', name: '已归档实例', archived: true })],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.queryByText('已归档实例')).not.toBeInTheDocument();
       expect(screen.getByText('活跃实例')).toBeInTheDocument();
@@ -423,7 +423,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getAllByTestId('cloud-host-icon')).toHaveLength(1);
     });
@@ -441,7 +441,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getByTestId('cloud-host-status')).toHaveTextContent(label);
       fireEvent.click(screen.getByTitle('控制器配置'));
@@ -459,20 +459,20 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getByTestId('cloud-host-status')).toHaveTextContent('失败 · container exited');
     });
 
     it('T-AW2 capabilities.enabled=false 时隐藏新建云电脑入口', () => {
       mockCapabilities(false, []);
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.queryByLabelText('新建云电脑')).not.toBeInTheDocument();
     });
 
     it('T-AW2 无活跃云电脑时显示新建入口并可打开对话框', () => {
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       const entry = screen.getByLabelText('新建云电脑');
       expect(entry).not.toBeDisabled();
@@ -488,7 +488,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       const entry = screen.getByLabelText('新建云电脑');
       expect(entry).not.toBeDisabled();
@@ -504,13 +504,13 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getByLabelText('新建云电脑')).not.toBeDisabled();
     });
 
     it('T-AW4 新建成功后 refetch HOME_OVERVIEW 并进入主机配置页', () => {
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       fireEvent.click(screen.getByLabelText('新建云电脑'));
       fireEvent.click(screen.getByText('提交云电脑'));
@@ -521,7 +521,7 @@ describe('Sidebar 集成测试', () => {
     });
 
     it('T-AW14 mobile Sidebar 同样可达新建云电脑入口', () => {
-      render(<Sidebar username="testuser" mobile />);
+      render(<Sidebar name="testuser" mobile />);
 
       expect(screen.getByLabelText('新建云电脑')).toBeInTheDocument();
     });
@@ -533,7 +533,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       const row = screen.getByTestId('cloud-host-status').closest('button');
       expect(row).toHaveClass('opacity-50');
@@ -551,7 +551,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getByTestId('cloud-host-default-session-hint')).toHaveTextContent(
         '默认会话创建失败，可手动创建会话',
@@ -559,7 +559,7 @@ describe('Sidebar 集成测试', () => {
     });
 
     it('D-2 默认会话已创建或多 Harness 时不展示失败提示', () => {
-      const { rerender } = render(<Sidebar username="testuser" />);
+      const { rerender } = render(<Sidebar name="testuser" />);
       mockHome({
         controllers: [
           makeController({
@@ -569,7 +569,7 @@ describe('Sidebar 集成测试', () => {
           }),
         ],
       });
-      rerender(<Sidebar username="testuser" />);
+      rerender(<Sidebar name="testuser" />);
       expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
 
       mockHome({
@@ -585,7 +585,7 @@ describe('Sidebar 集成测试', () => {
           }),
         ],
       });
-      rerender(<Sidebar username="testuser" />);
+      rerender(<Sidebar name="testuser" />);
       expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
     });
 
@@ -604,7 +604,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getByTestId('cloud-host-no-workspace-hint')).toHaveTextContent(
         '未创建默认工作区，请先创建或绑定工作区',
@@ -630,7 +630,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.queryByTestId('cloud-host-no-workspace-hint')).not.toBeInTheDocument();
       expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
@@ -647,7 +647,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      const { rerender } = render(<Sidebar username="testuser" />);
+      const { rerender } = render(<Sidebar name="testuser" />);
 
       expect(screen.getByLabelText('Github 项目设置')).toBeInTheDocument();
       fireEvent.click(screen.getByLabelText('新建工作区'));
@@ -663,7 +663,7 @@ describe('Sidebar 集成测试', () => {
           }),
         ],
       });
-      rerender(<Sidebar username="testuser" />);
+      rerender(<Sidebar name="testuser" />);
       expect(screen.queryByLabelText('新建工作区')).not.toBeInTheDocument();
     });
 
@@ -682,7 +682,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.queryByTestId('cloud-host-no-workspace-hint')).not.toBeInTheDocument();
       expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
@@ -695,7 +695,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       const buttons = screen.getAllByLabelText('新建会话');
       const sectionButton = buttons.find((button) => button.getAttribute('title') === '云电脑未运行，无法创建会话');
@@ -720,7 +720,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       expect(screen.getAllByLabelText('Github 项目设置')).toHaveLength(1);
     });
@@ -736,7 +736,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" />);
+      render(<Sidebar name="testuser" />);
 
       fireEvent.click(screen.getByLabelText('Github 项目设置'));
 
@@ -752,7 +752,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar username="testuser" mobile />);
+      render(<Sidebar name="testuser" mobile />);
 
       expect(screen.getByLabelText('Github 项目设置')).toBeInTheDocument();
     });

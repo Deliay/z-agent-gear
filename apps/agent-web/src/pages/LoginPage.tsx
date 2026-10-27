@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { gql } from '@apollo/client';
 import { useMutation } from '@apollo/client/react';
-import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '@/stores/auth';
+import { useNavigate } from 'react-router-dom';
+import { useAuth, type User } from '@/stores/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,10 +17,23 @@ const LOGIN_MUTATION = gql`
   mutation Login($username: String!, $password: String!) {
     login(username: $username, password: $password) {
       token
-      user { id username }
+      user {
+        id
+        name
+        tenant {
+          id
+          name
+          type
+          memberCount
+        }
+      }
     }
   }
 `;
+
+interface LoginResult {
+  login: { token: string; user: User };
+}
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -31,7 +44,8 @@ export default function LoginPage() {
 
   const [doLogin, { loading }] = useMutation(LOGIN_MUTATION, {
     onCompleted: (data: unknown) => {
-      const result = data as { login: { token: string; user: { id: string; username: string } } };
+      // 三层帐号体系：登录响应只暴露展示名 name 与归属租户 tenant
+      const result = data as LoginResult;
       login(result.login.token, result.login.user);
       navigate('/', { replace: true });
     },
@@ -88,12 +102,6 @@ export default function LoginPage() {
               {loading ? '登录中…' : '登录'}
             </Button>
           </form>
-          <p className="mt-4 text-center text-sm text-muted-foreground">
-            没有账号？{' '}
-            <Link to="/register" className="text-primary underline-offset-4 hover:underline">
-              去注册
-            </Link>
-          </p>
         </CardContent>
       </Card>
     </div>
