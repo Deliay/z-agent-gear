@@ -142,6 +142,7 @@ flowchart LR
 - [[draft/20261026-issues-workflow-force-worktree.md]] — GitHub Issues 联动工作流强制 Worktree 隔离（联动触发的工作流强制启用独立 Worktree 副本执行、主分支零改动、多 Issue 并发互不干扰；工作区主分支信息缺失时自动识别回填——GitHub 项目经平台授权获取、其他按 main/master/release 顺序探测，完全无法识别才明确失败不降级到主分支）
 - [[draft/20261025-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（控制进程退出即自动拉起、仅「停止云电脑」等明确销毁指令可终止；容器内默认普通用户 worker、可安装 apt 包、无法终止系统级保活进程）
 - [[draft/20261026-default-workspace-optimization.md]] — 默认工作区优化（Git 项目设置不建会话时也初始化项目工作区、云电脑配置「Github 项目设置」入口迁移至 Github 页面、前缀地址默认 ~/workspace）
+- [[draft/20261027-commit-author-settings.md]] — 云容器 Commit 提交人设置（设置页 GitHub 绑定下方新增「Commit 设置」：提交人模式「仅Agent/Co-Author/仅人类/未设置」× 提交人「Github帐号/自定义/未设置」，仅对云容器环境生效）
 
 ### 实现中文档（`shipping/`）
 

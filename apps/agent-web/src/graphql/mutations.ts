@@ -371,6 +371,18 @@ export const UNBIND_GITHUB_ACCOUNT = gql`
   }
 `
 
+export const UPDATE_COMMIT_SETTINGS = gql`
+  mutation UpdateCommitSettings($input: CommitSettingsInput!) {
+    updateCommitSettings(input: $input) {
+      committerMode
+      committerType
+      githubAccountId
+      customName
+      customEmail
+    }
+  }
+`
+
 export const REFRESH_GITHUB_INSTALLATIONS = gql`
   mutation RefreshGitHubInstallations($accountId: ID!) {
     refreshGitHubInstallations(accountId: $accountId) {

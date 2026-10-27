@@ -64,6 +64,8 @@ function json(res: ServerResponse, status: number, body: unknown): void {
 export async function startMockGitHubServer(options?: {
   port?: number;
   headSha?: string;
+  /** Commit 提交身份测试：`GET /users/{slug}[bot]` 返回的 bot 用户 id。 */
+  botUserId?: number;
 }): Promise<MockGitHubServer> {
   const calls: MockGitHubCall[] = [];
   const checkRuns: MockCheckRun[] = [];
@@ -89,6 +91,18 @@ export async function startMockGitHubServer(options?: {
 
     if (failures.length > 0) {
       json(res, failures.shift() as number, { message: 'injected failure' });
+      return;
+    }
+
+    // App bot identity（Commit 提交身份：GET /app → slug，GET /users/{slug}[bot] → id）
+    if (method === 'GET' && url === '/app') {
+      json(res, 200, { slug: 'zag-test-bot' });
+      return;
+    }
+    const decodedUrl = decodeURIComponent(url);
+    const botMatch = /^\/users\/([^/]+)\[bot\]$/.exec(decodedUrl);
+    if (method === 'GET' && botMatch) {
+      json(res, 200, { id: options?.botUserId ?? 424242, login: botMatch[1] });
       return;
     }
 

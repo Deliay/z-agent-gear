@@ -5,6 +5,14 @@ vi.mock('jsonwebtoken', () => ({
   sign: vi.fn().mockReturnValue('fake-jwt'),
 }));
 
+const { redisMock } = vi.hoisted(() => ({
+  redisMock: { get: vi.fn(), set: vi.fn() },
+}));
+
+vi.mock('../middleware/redis.js', () => ({
+  getRedisClient: () => redisMock,
+}));
+
 vi.mock('../models/github-account.js', () => ({
   GitHubAccount: {
     find: vi.fn(),
@@ -34,7 +42,11 @@ vi.mock('../config/index.js', () => ({
   },
 }));
 
-import { githubService, resetRepoTokenCache } from './github.js';
+import {
+  githubService,
+  resetRepoTokenCache,
+  resetAppBotIdentityCache,
+} from './github.js';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
 
@@ -382,6 +394,98 @@ describe('GitHubService', () => {
       await expect(githubService.resolveRepoAccount('user-1', 'c/d')).rejects.toThrow(
         'repo not authorized: c/d',
       );
+    });
+  });
+
+  describe('resolveAppBotIdentity (Commit 提交身份)', () => {
+    const appPayload = { slug: 'zag-bot' };
+    const botPayload = { id: 123456 };
+
+    beforeEach(() => {
+      resetAppBotIdentityCache();
+      redisMock.get.mockReset().mockResolvedValue(null);
+      redisMock.set.mockReset().mockResolvedValue('OK');
+    });
+
+    it('T-GB1: 解析成功并写入 24h 缓存；二次调用不再打 GitHub（内存命中）', async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => appPayload })
+        .mockResolvedValueOnce({ ok: true, status: 200, json: async () => botPayload });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const first = await githubService.resolveAppBotIdentity();
+      expect(first).toEqual({
+        slug: 'zag-bot',
+        botUserId: 123456,
+        name: 'zag-bot[bot]',
+        email: '123456+zag-bot[bot]@users.noreply.github.com',
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(String(fetchMock.mock.calls[0]![0])).toBe('https://api.github.com/app');
+      expect(String(fetchMock.mock.calls[1]![0])).toBe(
+        'https://api.github.com/users/zag-bot%5Bbot%5D',
+      );
+      expect(redisMock.set).toHaveBeenCalledWith(
+        'github:app-bot-identity',
+        JSON.stringify(first),
+        'EX',
+        24 * 60 * 60,
+      );
+
+      const second = await githubService.resolveAppBotIdentity();
+      expect(second).toEqual(first);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      vi.unstubAllGlobals();
+    });
+
+    it('T-GB1: Redis 命中成功缓存时不发起外部请求', async () => {
+      const cached = {
+        slug: 'zag-bot',
+        botUserId: 123456,
+        name: 'zag-bot[bot]',
+        email: '123456+zag-bot[bot]@users.noreply.github.com',
+      };
+      redisMock.get.mockResolvedValue(JSON.stringify(cached));
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(githubService.resolveAppBotIdentity()).resolves.toEqual(cached);
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it('T-GB2: 失败写 60s sentinel，窗口内不重试外部调用', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+      vi.stubGlobal('fetch', fetchMock);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await expect(githubService.resolveAppBotIdentity()).resolves.toBeNull();
+      expect(redisMock.set).toHaveBeenCalledWith(
+        'github:app-bot-identity',
+        '__fail__',
+        'EX',
+        60,
+      );
+
+      await expect(githubService.resolveAppBotIdentity()).resolves.toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+      vi.unstubAllGlobals();
+    });
+
+    it('T-GB3: 失败告警不含 JWT', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
+      vi.stubGlobal('fetch', fetchMock);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await githubService.resolveAppBotIdentity();
+
+      const logged = warn.mock.calls.flat().join(' ');
+      expect(logged).not.toContain('fake-jwt');
+      expect(logged).toContain('GET /app failed: 500');
+      warn.mockRestore();
+      vi.unstubAllGlobals();
     });
   });
 

@@ -8,6 +8,7 @@ import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
 import { cloudHostService } from '../services/cloud-host-service.js';
 import { githubService } from '../services/github.js';
+import { commitSettingsService } from '../services/commit-settings-service.js';
 import { lookupKey } from '../services/key-cache.js';
 
 function authorized(req: Request): boolean {
@@ -133,6 +134,35 @@ internalCloudHostRouter.post(
       res.json({ token, expiresAt: expiresAt.toISOString() });
     } catch {
       res.status(502).json({ error: 'GITHUB_UNAVAILABLE' });
+    }
+  },
+);
+
+/**
+ * 容器提交身份下发（commit-identity-manager 每 50 分钟拉取）。
+ *
+ * - 双鉴权与 `github-credential` 完全一致（`INTERNAL_API_TOKEN` 或本机 Controller key）；
+ * - **永不 404**：任何无法下发有效身份的场景一律 `200 {"mode":"unset"}`（鉴权失败仍 401/403）；
+ * - 响应按裁决 4 缺省字段：`unset` 仅返回 mode，`co_author` 才含 coAuthor*。
+ */
+internalCloudHostRouter.post(
+  '/:controllerId/commit-identity',
+  async (req: Request, res: Response) => {
+    try {
+      const controllerId = String(req.params.controllerId);
+      const auth = await authenticateCredentialRequest(req, controllerId);
+      // 服务间调用（INTERNAL_API_TOKEN）但主机不存在时鉴权函数返回 404；
+      // 本端点语义为「永不 404」，继续走 resolve 得到 unset 兜底。
+      if (!auth.ok && auth.status !== 404) {
+        res.status(auth.status ?? 401).json({ error: auth.error ?? 'UNAUTHORIZED' });
+        return;
+      }
+
+      const identity = await commitSettingsService.resolveCommitIdentity(controllerId);
+      res.json(identity);
+    } catch {
+      // 任何解析异常按「未设置」兜底，不阻塞容器启动 / 周期同步。
+      res.json({ mode: 'unset' });
     }
   },
 );

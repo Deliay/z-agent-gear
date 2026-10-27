@@ -23,6 +23,7 @@ import ControllerListSection from '@/components/settings/ControllerListSection';
 import McpProxyKeySection from '@/components/settings/McpProxyKeySection';
 import McpRegistrySection from '@/components/settings/McpRegistrySection';
 import GithubBindingSection from '@/components/settings/GithubBindingSection';
+import CommitSettingsSection from '@/components/settings/CommitSettingsSection';
 import WorkflowSection from '@/components/settings/WorkflowSection';
 import ControllerConfigPage from './ControllerConfigPage';
 import {
@@ -163,6 +164,7 @@ export default function SettingsPage() {
 
           <section id="github-section" className="mb-8 md:mb-10">
             <GithubBindingSection />
+            <CommitSettingsSection />
           </section>
 
           <section id="provider-section" className="mb-8 md:mb-10">

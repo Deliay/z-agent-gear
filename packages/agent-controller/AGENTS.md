@@ -22,6 +22,8 @@ src/
 │   └── supervisor.ts     # 云电脑双连接（/worker → controller-api）与 init 等待编排
 ├── github/
 │   ├── credential-manager.ts # 云主机 Github 凭据申请 + 50 分钟续期（唯一凭据写入口）
+│   ├── commit-identity.ts    # 托管 git 身份（include.path + Co-Author prepare-commit-msg hook）
+│   ├── commit-identity-manager.ts # 提交身份启动拉取 + 50 分钟周期同步（内部端点）
 │   └── gh-config.ts      # `gh auth login --with-token` + `gh auth setup-git`（token 仅经 stdin）
 ├── harness/
 │   ├── env.ts            # harness env 校验（ZAG_MODEL_* / ZAG_DEFAULT_WORKSPACE）
@@ -55,7 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.10.1`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.11.0`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
   OpenCode v2 配置形态 `providers.zag`（`package`/`settings`，替代废弃的 `provider`/`npm`/`options`）；Github 凭据管理器 /
   `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.10.0`——
@@ -121,6 +123,25 @@ process.env  →  容器 env（批次内所有 item）  →  WORKLOAD_PARAMS / W
 hook 抛错时本批每个 item 直接回报 `failed` + `Github 凭据申请失败：<可读原因>`，且不启动任何脚本；
 缺省/false 与旧版行为完全一致。supervisor 将 `githubAuth` 批次接到 `refreshNow()`，`no-binding` 时
 抛出「未设置 Github 项目」。
+
+## 提交身份托管（2.11.0）
+
+云容器内的 Commit 提交身份由 `src/github/commit-identity.ts` 以 git 原生 `include.path` 托管，
+不直接改写 `~/.gitconfig` 的 `[user]`；`commit-identity-manager.ts` 与凭据管理器相互独立
+（不依赖 gh 凭据 / Git 项目绑定）。
+
+- 同步：`start()` 立即 `POST /internal/cloud-hosts/:controllerId/commit-identity`（Bearer `ZAG_HOST_KEY`），
+  之后每 50 分钟一次（定时器 `unref()`）；并发合并单请求；401/403 按 1/2/4 分钟退避 ≤3 次；
+  网络 / JSON / 应用失败保留现状待下周期，不崩溃。env 三件套缺失仅 warn 不阻塞云主机。
+- 应用（`agent_only` / `human_only` / `co_author`）：写 `~/.zag/commit-identity.gitconfig`（0600，
+  `[user] name/email`）+ `git config --global include.path`；`co_author` 额外写
+  `~/.zag/git-hooks/prepare-commit-msg`（0755、`# zag-managed`、exact-trailer `grep -qF` 幂等）并设置
+  `core.hooksPath`；非 `co_author` 模式移除托管 hook。
+- 移除（`mode=unset`）：仅当全局 `include.path` / `core.hooksPath` **当前值恰为托管路径**才 unset
+  （include.path 支持多值、逐值 exact-match；`--fixed-value`），再删除托管文件 / 标记 hook。
+  用户其他 git 配置零触碰，严格满足「未设置 = 上线前行为」。
+- 旧 worker 无此模块即未设置行为；服务端不设版本门禁（`MIN_HARNESS_WORKER_VERSION` 不变）。
+- 测试：`commit-identity.test.ts`（T-CI1~5）、`commit-identity-manager.test.ts`（T-CIM1~8）。
 
 ## 云电脑模式（cloud-host supervisor）
 
