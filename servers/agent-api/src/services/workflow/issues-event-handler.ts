@@ -13,6 +13,7 @@ import { controllerWorkspaceService } from '../controller-workspace.js';
 import { githubService } from '../github.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { normalizeWorkspacePrefix, resolveClonePath } from '../workspace-path.js';
+import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
 import type { IssuesEventPayload } from './github-issues-webhook-payload.js';
 import { workflowInstanceService, type InstantiateNodeInput } from './instance.js';
 import {
@@ -342,6 +343,20 @@ export class IssuesTriggerRunner {
         return;
       }
       const nodes = mapConfiguredNodes(workflow.nodes as never);
+      // 联动实例化前强制解析默认分支：失败即 FAILED，绝不降级到主分支（PRD 4.2 硬约束）
+      const defaultBranch = await resolveWorkspaceDefaultBranch({
+        userId,
+        controllerId,
+        workspaceId,
+        repoFullName: String(trigger.repoFullName ?? ''),
+      });
+      if (!defaultBranch) {
+        await this.fail(
+          trigger._id,
+          'cannot resolve workspace default branch (not a git repository?)',
+        );
+        return;
+      }
       await this.createInstance(trigger, { userId, controllerId, workspaceId, configuredWorkflowId, nodes });
     } catch (err) {
       await this.fail(trigger._id, (err as Error).message);
@@ -363,6 +378,7 @@ export class IssuesTriggerRunner {
         String(trigger.issueTitle ?? ''),
       ),
       nodes: ctx.nodes,
+      createWorkflowWorktree: true,
     });
     const instanceId = String(instance._id);
     const humanNodeId = resolveFirstHumanNode(instance.nodes as never);

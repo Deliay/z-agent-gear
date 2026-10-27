@@ -489,6 +489,73 @@ describe('GitHubService', () => {
     });
   });
 
+  describe('getRepoDefaultBranch', () => {
+    beforeEach(() => {
+      vi.spyOn(githubService, 'resolveRepoAccount').mockResolvedValue('acc-1');
+      vi.spyOn(githubService, 'createRepoScopedToken').mockResolvedValue({
+        token: 'token-scoped',
+        expiresAt: new Date(),
+      });
+    });
+
+    it('T-GH10a: 2xx 返回 default_branch，请求带 repo-scoped token', async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ default_branch: 'trunk' }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(
+        githubService.getRepoDefaultBranch('user-1', 'owner/repo'),
+      ).resolves.toBe('trunk');
+
+      expect(String(fetchMock.mock.calls[0][0])).toBe('https://api.github.com/repos/owner/repo');
+      expect(fetchMock.mock.calls[0][1]?.headers).toMatchObject({
+        Authorization: 'Bearer token-scoped',
+      });
+      vi.unstubAllGlobals();
+    });
+
+    it('T-GH10b: 非 2xx 返回 null 且不抛出', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) }),
+      );
+
+      await expect(
+        githubService.getRepoDefaultBranch('user-1', 'owner/repo'),
+      ).resolves.toBeNull();
+      vi.unstubAllGlobals();
+    });
+
+    it('T-GH10c: repoToken 失败返回 null 且不发起 fetch', async () => {
+      vi.mocked(githubService.resolveRepoAccount).mockRejectedValueOnce(
+        new Error('repo not authorized: owner/repo'),
+      );
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(
+        githubService.getRepoDefaultBranch('user-1', 'owner/repo'),
+      ).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it('T-GH10d: 响应缺 default_branch 返回 null', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) }),
+      );
+
+      await expect(
+        githubService.getRepoDefaultBranch('user-1', 'owner/repo'),
+      ).resolves.toBeNull();
+      vi.unstubAllGlobals();
+    });
+  });
+
   describe('labels / comments', () => {
     beforeEach(() => {
       vi.spyOn(githubService, 'createRepoScopedToken').mockResolvedValue({

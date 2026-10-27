@@ -332,6 +332,23 @@ export class GitHubService {
     return issued;
   }
 
+  /** 读取仓库默认分支（GitHub API）；任何失败（未授权/404/网络）返回 null，由候选探测兜底。 */
+  async getRepoDefaultBranch(userId: string, repoFullName: string): Promise<string | null> {
+    try {
+      const token = await this.repoToken(userId, repoFullName);
+      const response = await fetch(`${GITHUB_API}/repos/${repoFullName}`, {
+        headers: this.githubHeaders(token),
+      });
+      if (!response.ok) return null;
+      const data = (await response.json()) as { default_branch?: unknown };
+      return typeof data.default_branch === 'string' && data.default_branch
+        ? data.default_branch
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
   /** 确保仓库存在同名标签（存在即返回；并发创建 422 视为幂等成功）。 */
   async ensureIssueLabel(userId: string, repoFullName: string, name: string): Promise<void> {
     const token = await this.repoToken(userId, repoFullName);
