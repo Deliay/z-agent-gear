@@ -144,6 +144,7 @@ flowchart LR
 - [[draft/20261026-default-workspace-optimization.md]] — 默认工作区优化（Git 项目设置不建会话时也初始化项目工作区、云电脑配置「Github 项目设置」入口迁移至 Github 页面、前缀地址默认 ~/workspace）
 - [[draft/20261027-unlimited-cloud-hosts.md]] — 用户开放无限制云电脑支持（创建收费 5 credits、创建对话框收费详情、放开每用户数量限制、Github 帐号跟随云电脑选定后不可修改）
 - [[draft/20261027-commit-author-settings.md]] — 云容器 Commit 提交人设置（设置页 GitHub 绑定下方新增「Commit 设置」：提交人模式「仅Agent/Co-Author/仅人类/未设置」× 提交人「Github帐号/自定义/未设置」，仅对云容器环境生效）
+- [[draft/20261027-dsh-header-masq.md]] — DeepSeek Harness 会话标识请求头注入（预置工作负载自动安装 dsh-header-masq 插件并按平台口径配置：模型调用自动携带会话标识请求头，同会话固定、新会话变化、重启续聊不变）
 
 ### 实现中文档（`shipping/`）
 

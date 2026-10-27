@@ -699,15 +699,15 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
   });
 
   it.skipIf(!HAS_MONGO)(
-    'T-IC-HARNESS2: per-type version gate (all harness combos converge to 2.10.0)',
+    'T-IC-HARNESS2: per-type version gate (deepseek_harness → 2.11.0, others 2.10.0)',
     async () => {
       const db = await mongoDb();
       expect(db).not.toBeNull();
 
       const cases: Array<{ types: string[]; expected: string }> = [
         { types: ['kimi_code'], expected: '2.10.0' },
-        { types: ['deepseek_harness'], expected: '2.10.0' },
-        { types: ['kimi_code', 'deepseek_harness'], expected: '2.10.0' },
+        { types: ['deepseek_harness'], expected: '2.11.0' },
+        { types: ['kimi_code', 'deepseek_harness'], expected: '2.11.0' },
         { types: ['opencode', 'kimi_code'], expected: '2.10.0' },
         { types: ['opencode'], expected: '2.10.0' },
       ];

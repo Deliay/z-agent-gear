@@ -48,4 +48,21 @@ describe('T-DSH7 dsh config atomic write failure cleanup', () => {
       { force: true },
     );
   });
+
+  it('T-MASQ9: insert 条目与扁平条目在同一次原子写中落盘', async () => {
+    fs.rename.mockResolvedValue(undefined);
+
+    await writeDshConfig({ env: ENV, dshHome: '/tmp/opencode-dsh-atomic' });
+
+    const patchWrite = fs.writeFile.mock.calls.find(
+      ([path]) => typeof path === 'string' && /\.cordis\.patch\..*\.tmp$/.test(path),
+    );
+    expect(patchWrite).toBeDefined();
+    const content = String(patchWrite![1]);
+    expect(content).toContain('- insert:');
+    expect(content).toContain('id: header-masq');
+    expect(content).toContain('name: dsh-header-masq');
+    expect(content).toContain('x-opencode-session');
+    expect(content).not.toContain('hosts:');
+  });
 });

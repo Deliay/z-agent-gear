@@ -14,6 +14,18 @@ const ENV = {
   modelContextLengths: { 'model-a': 128000 },
 };
 
+/** 需求给定四键（`hosts` 缺省不写）。 */
+const HEADER_MASQ_ENTRY = {
+  id: 'header-masq',
+  name: 'dsh-header-masq',
+  config: {
+    source: 'x-deepseek-harness-session-id',
+    targets: ['x-opencode-session'],
+    fallbackToSessionId: true,
+    debug: false,
+  },
+};
+
 async function makeHome(): Promise<string> {
   await mkdir(TMP_BASE, { recursive: true });
   return mkdtemp(join(TMP_BASE, 'dsh-'));
@@ -35,7 +47,7 @@ describe('writeDshConfig (T-DSH*)', () => {
     expect(defaultDshHome({})).toMatch(/\/\.dsh$/);
   });
 
-  it('T-DSH1: 新建 patch 写入 4 个条目与 ZAG provider，并新建 credentials', async () => {
+  it('T-DSH1: 新建 patch 写入 4 个扁平条目 + insert header-masq 与 ZAG provider，并新建 credentials', async () => {
     const home = await makeHome();
     dirs.push(home);
 
@@ -45,7 +57,7 @@ describe('writeDshConfig (T-DSH*)', () => {
       patchCreated: true,
       credentialsCreated: true,
       modelCount: 2,
-      entryCount: 4,
+      entryCount: 5,
     });
     expect(result.patchPath).toBe(join(home, 'profiles', 'acp', 'cordis.patch.yml'));
     expect(result.credentialsPath).toBe(join(home, '.credentials.yaml'));
@@ -56,6 +68,7 @@ describe('writeDshConfig (T-DSH*)', () => {
       'llm-pi-ai',
       'agent-default-model',
       'acp',
+      undefined,
     ]);
     expect(patch[0]).toEqual({ id: 'llm-deepseek', disabled: true });
     expect(patch[1].config.providers.zag).toMatchObject({
@@ -77,6 +90,7 @@ describe('writeDshConfig (T-DSH*)', () => {
       name: '@deepseek-ai/dsh-acp',
       config: { provider: 'zag', model: 'model-a' },
     });
+    expect(patch[4]).toEqual({ insert: [HEADER_MASQ_ENTRY] });
 
     const credentials = (await readYaml(result.credentialsPath)) as Record<string, any>;
     expect(credentials).toEqual({ version: 1, refs: { ZAG_MODEL_API_KEY: API_KEY } });
@@ -248,7 +262,9 @@ describe('writeDshConfig (T-DSH*)', () => {
     expect(await readFile(second.patchPath, 'utf-8')).toBe(firstPatch);
     expect(await readFile(second.credentialsPath, 'utf-8')).toBe(firstCredentials);
     const patch = parse(firstPatch) as Array<Record<string, any>>;
-    expect(patch).toHaveLength(4);
+    expect(patch).toHaveLength(5);
+    expect(patch.filter((entry) => entry.id === 'header-masq')).toHaveLength(0);
+    expect(patch.filter((entry) => entry.insert !== undefined)).toHaveLength(1);
     expect((await stat(second.patchPath)).mode & 0o777).toBe(0o600);
     expect((await stat(join(home, 'profiles', 'acp'))).mode & 0o777).toBe(0o700);
   });
@@ -271,5 +287,160 @@ describe('writeDshConfig (T-DSH*)', () => {
     } catch (error) {
       expect(JSON.stringify((error as Error).message)).not.toContain(API_KEY);
     }
+  });
+});
+
+describe('writeDshConfig insert 受管条目（T-MASQ*）', () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  async function writePatch(home: string, text: string): Promise<string> {
+    const profilesDir = join(home, 'profiles', 'acp');
+    await mkdir(profilesDir, { recursive: true });
+    const patchPath = join(profilesDir, 'cordis.patch.yml');
+    await writeFile(patchPath, text, 'utf-8');
+    return patchPath;
+  }
+
+  it('T-MASQ1: 无 patch / 无 insert 块时在末尾追加单条目 insert 块（四键、hosts 不写）', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+
+    const result = await writeDshConfig({ env: ENV, dshHome: home });
+
+    const text = await readFile(result.patchPath, 'utf-8');
+    const patch = parse(text) as Array<Record<string, any>>;
+    expect(patch).toHaveLength(5);
+    expect(patch[4]).toEqual({ insert: [HEADER_MASQ_ENTRY] });
+    expect(patch[4].insert[0].config).not.toHaveProperty('hosts');
+    expect(text).toContain('- insert:\n    - id: header-masq\n      name: dsh-header-masq\n');
+  });
+
+  it('T-MASQ2: 既有 insert 块含 header-masq 时整体替换为我方单条目块（config 全量覆盖）', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+    const patchPath = await writePatch(
+      home,
+      [
+        '# top comment',
+        '- id: other',
+        '  value: 1',
+        '- insert:',
+        '    - id: header-masq',
+        '      name: dsh-header-masq',
+        '      config:',
+        '        source: stale-source',
+        '        targets:',
+        '          - x-stale',
+        '        debug: true',
+        '- insert:',
+        '    - id: unrelated-plugin',
+        '      name: unrelated',
+        '',
+      ].join('\n'),
+    );
+
+    await writeDshConfig({ env: ENV, dshHome: home });
+
+    const text = await readFile(patchPath, 'utf-8');
+    const patch = parse(text) as Array<Record<string, any>>;
+    const headerBlocks = patch.filter(
+      (entry) =>
+        Array.isArray(entry.insert) &&
+        entry.insert.some((inner: { id?: string }) => inner?.id === 'header-masq'),
+    );
+    expect(headerBlocks).toHaveLength(1);
+    expect(headerBlocks[0]).toEqual({ insert: [HEADER_MASQ_ENTRY] });
+    expect(text).not.toContain('stale-source');
+    expect(text).not.toContain('x-stale');
+    // 他插件 insert 块原样保留
+    expect(patch).toContainEqual({ insert: [{ id: 'unrelated-plugin', name: 'unrelated' }] });
+  });
+
+  it('T-MASQ3: 连续两次写入逐字一致，不产生重复 insert 块', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+
+    const first = await writeDshConfig({ env: ENV, dshHome: home });
+    const firstText = await readFile(first.patchPath, 'utf-8');
+    await writeDshConfig({ env: ENV, dshHome: home });
+    const secondText = await readFile(first.patchPath, 'utf-8');
+
+    expect(secondText).toBe(firstText);
+    const patch = parse(secondText) as Array<Record<string, any>>;
+    expect(patch).toHaveLength(5);
+    expect(secondText.match(/id: header-masq/g)).toHaveLength(1);
+  });
+
+  it('T-MASQ4: insert 合并保留他条目、他插件条目与注释', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+    const patchPath = await writePatch(
+      home,
+      [
+        '# top comment',
+        '- id: other',
+        '  value: 1 # keep inline',
+        '- id: acp',
+        '  name: "@deepseek-ai/dsh-acp"',
+        '  config: { provider: old }',
+        '- insert:',
+        '    - id: unrelated-plugin',
+        '      name: unrelated',
+        '',
+      ].join('\n'),
+    );
+
+    await writeDshConfig({ env: ENV, dshHome: home });
+
+    const text = await readFile(patchPath, 'utf-8');
+    expect(text).toContain('# top comment');
+    expect(text).toContain('value: 1 # keep inline');
+    const patch = parse(text) as Array<Record<string, any>>;
+    expect(patch[0]).toEqual({ id: 'other', value: 1 });
+    expect(patch.filter((entry) => entry.id === 'acp')).toHaveLength(1);
+    expect(patch).toContainEqual({ insert: [{ id: 'unrelated-plugin', name: 'unrelated' }] });
+    expect(patch).toContainEqual({ insert: [HEADER_MASQ_ENTRY] });
+  });
+
+  it('T-MASQ6: insert 块含多个内层条目时整体替换（共块他条目被丢弃，已登记风险）', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+    const patchPath = await writePatch(
+      home,
+      [
+        '- insert:',
+        '    - id: shared-plugin',
+        '      name: shared',
+        '    - id: header-masq',
+        '      name: dsh-header-masq',
+        '      config: { source: stale }',
+        '',
+      ].join('\n'),
+    );
+
+    await writeDshConfig({ env: ENV, dshHome: home });
+
+    const patch = (await readYaml(patchPath)) as Array<Record<string, any>>;
+    const headerBlock = patch.find(
+      (entry) =>
+        Array.isArray(entry.insert) &&
+        entry.insert.some((inner: { id?: string }) => inner?.id === 'header-masq'),
+    )!;
+    expect(headerBlock.insert).toEqual([HEADER_MASQ_ENTRY]);
+    expect(JSON.stringify(patch)).not.toContain('shared-plugin');
+  });
+
+  it('T-MASQ8: insert 路径下非法 YAML 抛错且不覆盖既有文件', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+    const broken = '- insert: [\n';
+    const patchPath = await writePatch(home, broken);
+
+    await expect(writeDshConfig({ env: ENV, dshHome: home })).rejects.toBeInstanceOf(DshConfigError);
+    expect(await readFile(patchPath, 'utf-8')).toBe(broken);
   });
 });
