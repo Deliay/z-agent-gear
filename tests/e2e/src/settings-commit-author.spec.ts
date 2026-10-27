@@ -106,23 +106,26 @@ test.describe('Settings Commit Author E2E', () => {
   test('E2E-1: 展示 Commit 设置区块与常驻提示，四种模式 / 三种提交人可切换并保存', async ({
     page,
   }) => {
-    await openSettings(page);
     await mockCommitGraphQL(page);
+    await openSettings(page);
 
     const commit = section(page).getByTestId('commit-settings-section');
+    const modeGroup = commit.getByRole('radiogroup', { name: '提交人模式' });
+    const typeGroup = commit.getByRole('radiogroup', { name: '提交人' });
     await expect(commit.getByRole('heading', { name: 'Commit 设置' })).toBeVisible();
     await expect(commit.getByText('设置只对云容器环境生效')).toBeVisible();
-    await expect(commit.getByRole('radio', { name: '未设置' })).toBeChecked();
+    await expect(modeGroup.getByRole('radio', { name: '未设置' })).toBeChecked();
 
     for (const label of ['仅Agent', 'Co-Author', '仅人类', '未设置']) {
-      await expect(commit.getByRole('radio', { name: label })).toBeVisible();
+      await expect(modeGroup.getByRole('radio', { name: label })).toBeVisible();
     }
     for (const label of ['Github帐号', '自定义', '未设置']) {
-      await expect(commit.getByRole('radio', { name: label })).toBeVisible();
+      await expect(typeGroup.getByRole('radio', { name: label })).toBeVisible();
     }
 
-    await commit.getByRole('radio', { name: 'Co-Author' }).check();
-    await commit.getByRole('radio', { name: 'Github帐号' }).check();
+    await modeGroup.getByRole('radio', { name: 'Co-Author' }).check();
+    await typeGroup.getByRole('radio', { name: 'Github帐号' }).check();
+    await commit.getByLabel('Github 帐号').selectOption(ACCOUNT.id);
     await expect(commit.getByLabel('Github 帐号')).toHaveValue(ACCOUNT.id);
     await commit.getByRole('button', { name: '保存 Commit 设置' }).click();
     await expect(
@@ -133,8 +136,8 @@ test.describe('Settings Commit Author E2E', () => {
   test('E2E-2: 联动拦截 —— Co-Author / 仅人类 + 提交人未设置禁用保存并提示', async ({
     page,
   }) => {
-    await openSettings(page);
     await mockCommitGraphQL(page);
+    await openSettings(page);
     const commit = section(page).getByTestId('commit-settings-section');
 
     await commit.getByRole('radio', { name: 'Co-Author' }).check();
@@ -152,8 +155,8 @@ test.describe('Settings Commit Author E2E', () => {
   });
 
   test('E2E-3: 提交人条件渲染（帐号下拉 / 自定义输入 / 未绑定引导）', async ({ page }) => {
-    await openSettings(page);
     await mockCommitGraphQL(page);
+    await openSettings(page);
     const commit = section(page).getByTestId('commit-settings-section');
 
     await commit.getByRole('radio', { name: 'Github帐号' }).check();
@@ -177,8 +180,8 @@ test.describe('Settings Commit Author E2E', () => {
   });
 
   test('E2E-4: 双未设置保存 / 刷新回显一致（未设置零回归）', async ({ page }) => {
-    await openSettings(page);
     const mocked = await mockCommitGraphQL(page);
+    await openSettings(page);
     const commit = section(page).getByTestId('commit-settings-section');
 
     await expect(commit.getByRole('radio', { name: '未设置' }).first()).toBeChecked();
