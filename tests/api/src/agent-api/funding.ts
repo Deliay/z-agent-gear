@@ -44,24 +44,28 @@ async function fundViaMongo(userId: string, username: string, cents: number): Pr
 /** 内部 REST 建账户 + 后台 GraphQL 充值（真实链路）。 */
 async function fundViaAdmin(userId: string, username: string, cents: number): Promise<boolean> {
   if (!TOKEN) return false;
-  const accountRes = await fetch(
-    `${ADMIN_BASE}/internal/billing/account?ownerType=front_user&ownerId=${encodeURIComponent(
-      userId,
-    )}&ownerName=${encodeURIComponent(username)}`,
-    { headers: { Authorization: `Bearer ${TOKEN}` } },
-  );
-  if (!accountRes.ok) return false;
-  const account = (await accountRes.json()) as { id?: string };
-  if (!account.id) return false;
-  const adminToken = await ensureAdminLogin();
-  const result = await adminGql<{ rechargeBillingAccount: { id: string } }>(
-    `mutation Recharge($id: ID!, $amount: Float!, $key: String!) {
+  try {
+    const accountRes = await fetch(
+      `${ADMIN_BASE}/internal/billing/account?ownerType=front_user&ownerId=${encodeURIComponent(
+        userId,
+      )}&ownerName=${encodeURIComponent(username)}`,
+      { headers: { Authorization: `Bearer ${TOKEN}` } },
+    );
+    if (!accountRes.ok) return false;
+    const account = (await accountRes.json()) as { id?: string };
+    if (!account.id) return false;
+    const adminToken = await ensureAdminLogin();
+    const result = await adminGql<{ rechargeBillingAccount: { id: string } }>(
+      `mutation Recharge($id: ID!, $amount: Float!, $key: String!) {
       rechargeBillingAccount(accountId: $id, amount: $amount, note: "api-test", idempotencyKey: $key) { id }
     }`,
-    { id: account.id, amount: cents / 100, key: `api-test-fund:${userId}` },
-    adminToken,
-  );
-  return Boolean(result.data?.rechargeBillingAccount);
+      { id: account.id, amount: cents / 100, key: `api-test-fund:${userId}` },
+      adminToken,
+    );
+    return Boolean(result.data?.rechargeBillingAccount);
+  } catch {
+    return false;
+  }
 }
 
 /** 为前台测试用户准备余额（默认 100 credits；优先真实充值链路，缺 token 时直写 Mongo）。 */
