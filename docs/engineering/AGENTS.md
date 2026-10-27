@@ -210,6 +210,7 @@ flowchart LR
 - [[proposals/20261026-fix-default-workspace-optimization.md]] — 默认工作区优化（Git 项目设置 clone 成功后无条件 ensureWorkspace 并 CAS 回写 workspaceId、Github 项目设置入口迁至云电脑配置 Github 页签、前缀地址默认 ~/workspace 并支持 ~ 展开为容器主目录）
 - [[proposals/20261027-feat-unlimited-cloud-hosts.md]] — 用户开放无限制云电脑支持（创建同步扣费 5 credits：`/internal/billing/charges` 一次性扣费 + 拉起失败退款、`cloudHostBillingQuote` 报价透出、移除每用户 1 实例门禁与 `uniq_active_cloud_host_per_user` 索引、`CloudHost.githubAccountId` 锁定：创建可选/首次设置 CAS 绑定/之后不可改）
 - [[proposals/20261027-feat-commit-author-settings.md]] — 云容器 Commit 提交人设置（user_commit_settings 用户级设置与 commitSettings/updateCommitSettings 契约、POST /internal/cloud-hosts/:id/commit-identity 身份下发端点与 agent_only 负载门控、agent-gear 容器内 include.path 托管 git 配置 + Co-Author prepare-commit-msg hook、未设置零残留）
+- [[proposals/20261027-feat-dsh-header-masq.md]] — DeepSeek Harness 会话标识请求头注入（dsh-header-masq 插件：预置脚本 V4 固定版本 0.1.2-alpha.2 → 0.2.1-rc.2 + `dsh plugin --profile acp add Deliay/dsh-header-masq`、agent-gear 2.11.0 dsh-config insert 形态第 5 受管条目、migration 013 存量刷新、deepseek_harness 版本门禁 2.9.0 → 2.11.0）
 
 ### 实现计划（`plan/`）
 
@@ -274,3 +275,4 @@ flowchart LR
 - [[plan/20261026-fix-default-workspace-optimization.md]] — 默认工作区优化（Git 项目设置 clone 成功后无条件 `ensureWorkspace` 并 CAS 回写 workspaceId（多 Harness 不建会话场景修复）、Github 项目设置入口迁移至云电脑配置 Github 页签、前缀地址默认 `~/workspace` 并双端支持 `~` 展开为 `/home/worker`、契约注释修订与 API/E2E 测试）实现计划
 - [[plan/20261027-feat-unlimited-cloud-hosts.md]] — 用户开放无限制云电脑支持实现计划（admin-api `/internal/billing/charges|refunds|price-quote` 一次性扣费 5 credits + 拉起失败 adjust 退款、agent-api 创建编排接入扣费退款并移除每用户 1 实例门禁与迁移 011 下线 `uniq_active_cloud_host_per_user`、`CloudHost.githubAccountId` 帐号锁定 CAS 首绑/异帐号拒绝、agent-web 收费详情区块与 Github 帐号置灰跟随、API/E2E 测试）
 - [[plan/20261027-feat-commit-author-settings.md]] — 云容器 Commit 提交人设置（user_commit_settings 模型/迁移 011 与 commitSettings/updateCommitSettings 契约、commit-settings-service 校验白名单 + resolveCommitIdentity 五步门控与 bot 身份 Redis 缓存、POST /internal/cloud-hosts/:id/commit-identity 永不 404、agent-gear include.path 托管 git 配置 + Co-Author prepare-commit-msg hook 幂等应用/移除零残留、agent-web CommitSettingsSection、T-CI*/T-CIM*/API/E2E 测试）实现计划
+- [[plan/20261027-feat-dsh-header-masq.md]] — DeepSeek Harness 会话标识请求头注入实现计划（migration 013 预置脚本 V4：固定版本 `0.1.2-alpha.2 → 0.2.1-rc.2` + `dsh plugin --profile acp add Deliay/dsh-header-masq` 硬校验、存量 V1/V2/V3 精确匹配刷新；agent-gear 2.11.0 `dsh-config.ts` insert 形态第 5 受管条目 `header-masq` 四键注入；`deepseek_harness` 版本门禁 `2.9.0 → 2.11.0` 与契约 5 处口径增补、worker 镜像 `agent-gear@2.11.x`）

@@ -717,8 +717,15 @@ describe('Admin Cloud Workload API', () => {
     expect(deepseek.initScript).toContain(
       'npm install -g "@deepseek-ai/dsh@${DSH_CLI_VERSION}" "@deepseek-ai/dsh-acp-app@${DSH_ACP_APP_VERSION}"',
     );
+    expect(deepseek.initScript).toContain('export DSH_CLI_VERSION="${DSH_CLI_VERSION:-0.2.1-rc.2}"');
+    expect(deepseek.initScript).toContain(
+      'export DSH_ACP_APP_VERSION="${DSH_ACP_APP_VERSION:-0.2.1-rc.2}"',
+    );
     expect(deepseek.initScript).toContain('dsh --version');
+    expect(deepseek.initScript).toContain('dsh plugin --profile acp add Deliay/dsh-header-masq');
     expect(deepseek.initScript).toContain('agent-gear harness prepare');
+    expect(deepseek.initScript).toContain('ZAG_HARNESS_TYPES=deepseek_harness');
+    expect(deepseek.initScript).not.toContain('0.1.2-alpha.2');
     expect(deepseek.dependsOnWorkloadIds).toEqual([]);
     for (const workload of all) {
       expect(['STANDARD', 'HARNESS']).toContain(workload.workloadKind);

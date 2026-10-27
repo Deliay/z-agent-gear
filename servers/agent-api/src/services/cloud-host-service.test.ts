@@ -482,20 +482,20 @@ describe('CloudHostService', () => {
       expect(payload.agentGearMinVersion).toBe('2.10.0');
     });
 
-    it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.10.0，混合取最大', async () => {
+    it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.11.0，混合取最大', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'deepseek-cloud', harnessTypes: ['DEEPSEEK_HARNESS'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.harnessTypes).toEqual(['deepseek_harness']);
-      expect(payload.agentGearMinVersion).toBe('2.10.0');
+      expect(payload.agentGearMinVersion).toBe('2.11.0');
 
       await service.create('user-1', {
         name: 'deepseek-mixed',
         harnessTypes: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'],
       });
       const mixedPayload = vi.mocked(cloudControllerClient.startHarness).mock.calls[1][0];
-      expect(mixedPayload.agentGearMinVersion).toBe('2.10.0');
+      expect(mixedPayload.agentGearMinVersion).toBe('2.11.0');
     });
 
     it('T-CW1: never creates a default workspace at create time', async () => {
