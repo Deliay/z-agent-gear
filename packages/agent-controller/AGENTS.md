@@ -55,20 +55,29 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.10.1`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
-  `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
+- 版本：包版本 `2.11.0`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+  `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
+  `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
+  注册门禁同步为 `2.11.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
   OpenCode v2 配置形态 `providers.zag`（`package`/`settings`，替代废弃的 `provider`/`npm`/`options`）；Github 凭据管理器 /
   `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.10.0`——
   上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
   `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
   仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。
 
-## DeepSeek Harness 注入（2.9.0）
+## DeepSeek Harness 注入（2.9.0；insert 受管条目 2.11.0）
 
 - `harness prepare` 读取 `ZAG_HARNESS_TYPES`（逗号分隔 harness slug，缺省/空/全非法回退 `opencode`），
   逐类型执行 CLI 硬校验与写入：`opencode` → `opencode.jsonc`；`deepseek_harness` → `dsh --version` +
   `~/.dsh/profiles/acp/cordis.patch.yml`（`llm-deepseek` 禁用、`providers.zag`、默认路由覆写）与
   `~/.dsh/.credentials.yaml`（`version: 1` + `refs.ZAG_MODEL_API_KEY`，0600；目录 0700）。
+- `cordis.patch.yml` 受管条目共 5 个（`entryCount=5`）：4 个扁平条目按 `id` 整体替换 `config`；
+  第 5 个为 insert 形态 `- insert: [{id: header-masq, name: dsh-header-masq, config: {source, targets,
+  fallbackToSessionId, debug}}]`（`hosts` 缺省不写），按内层 `id` 定位 insert 块并**整体替换该块**，
+  未命中则在顶层数组末尾追加；重复执行逐字一致（幂等），他条目/他 insert 块与注释逐字保留。
+- 会话标识：`dsh-header-masq` 插件（预置脚本由 `dsh plugin --profile acp add` 安装，自带 patch 自动激活）
+  把 `GenerateOptions.sessionId` 写入 `x-opencode-session`，网关透传给上游；同会话固定、新会话变化、
+  重启续聊不变。
 - ACP：`src/acp/detector.ts` 以 `dsh --version` 探测 `deepseek_harness`（预发布段保留），spawner 为
   `dsh --profile acp`；bridge/prober 通用逻辑零改动。
 
