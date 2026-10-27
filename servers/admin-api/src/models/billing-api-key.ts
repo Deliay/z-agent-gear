@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { BILLING_OWNER_TYPES } from './billing-account.js';
 
 /**
  * API Key：完整明文仅生成时返回一次，库内仅存前缀 + bcrypt 哈希。
@@ -11,7 +12,8 @@ import mongoose from 'mongoose';
 const billingApiKeySchema = new mongoose.Schema(
   {
     accountId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
-    ownerType: { type: String, enum: ['front_user', 'admin_user'], required: true },
+    // 枚举统一收口 `BILLING_OWNER_TYPES`（F5：此前内联枚举未复用常量）
+    ownerType: { type: String, enum: BILLING_OWNER_TYPES, required: true },
     ownerId: { type: String, required: true, index: true },
     name: { type: String, required: true },
     keyPrefix: { type: String, required: true, index: true },

@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { BillingApiKey } from '../../models/billing-api-key.js';
+import type { BillingOwnerType } from '../../models/billing-account.js';
 import { documentId } from './id.js';
 import { cloudHostKeyMutex } from './keyed-mutex.js';
 
@@ -26,7 +27,7 @@ export interface BillingApiKeyDTO {
 export interface VerifiedApiKey {
   id: string;
   accountId: string;
-  ownerType: 'front_user' | 'admin_user';
+  ownerType: BillingOwnerType;
   ownerId: string;
   name: string;
   scope: BillingApiKeyScope;
@@ -74,7 +75,7 @@ function normalizeScope(scope: unknown): BillingApiKeyScope {
 export class ApiKeyService {
   async create(input: {
     accountId: string;
-    ownerType: 'front_user' | 'admin_user';
+    ownerType: BillingOwnerType;
     ownerId: string;
     name: string;
     scope?: BillingApiKeyScope;
@@ -121,7 +122,7 @@ export class ApiKeyService {
    */
   async createCloudHostScopedKey(input: {
     accountId: string;
-    ownerType: 'front_user' | 'admin_user';
+    ownerType: BillingOwnerType;
     ownerId: string;
     name: string;
     cloudHostId: string;
@@ -162,7 +163,7 @@ export class ApiKeyService {
       return {
         id: documentId(candidate),
         accountId: String(candidate.accountId),
-        ownerType: candidate.ownerType as 'front_user' | 'admin_user',
+        ownerType: candidate.ownerType as BillingOwnerType,
         ownerId: candidate.ownerId,
         name: candidate.name,
         scope: normalizeScope((candidate as unknown as { scope?: string }).scope),
@@ -175,14 +176,14 @@ export class ApiKeyService {
     return null;
   }
 
-  async list(ownerType: 'front_user' | 'admin_user', ownerId: string): Promise<BillingApiKeyDTO[]> {
+  async list(ownerType: BillingOwnerType, ownerId: string): Promise<BillingApiKeyDTO[]> {
     const docs = await BillingApiKey.find({ ownerType, ownerId }).sort({ createdAt: -1 });
     return docs.map((doc) => toDTO(doc));
   }
 
   async revoke(
     id: string,
-    owner: { ownerType: 'front_user' | 'admin_user'; ownerId: string },
+    owner: { ownerType: BillingOwnerType; ownerId: string },
   ): Promise<BillingApiKeyDTO> {
     // A12：非法 ObjectId 直接按「不存在」处理，避免 CastError 500。
     if (!mongoose.isValidObjectId(id)) throw new ApiKeyNotFoundError();

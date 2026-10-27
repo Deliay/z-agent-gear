@@ -1,6 +1,6 @@
 import { GraphQLError } from 'graphql';
 import mongoose from 'mongoose';
-import { BillingAccount } from '../../models/billing-account.js';
+import { BillingAccount, type BillingOwnerType } from '../../models/billing-account.js';
 import { BillingApiCall } from '../../models/billing-api-call.js';
 import { BillingDeadLetter } from '../../models/billing-dead-letter.js';
 import { BillingInvoice } from '../../models/billing-invoice.js';
@@ -130,7 +130,7 @@ const rawBillingResolvers = {
       _parent: unknown,
       args: {
         keyword?: string;
-        ownerType?: 'front_user' | 'admin_user';
+        ownerType?: BillingOwnerType;
         page?: number;
         pageSize?: number;
       },

@@ -8,6 +8,7 @@ import { BillingReceipt } from '../models/billing-receipt.js';
 import { BillingApiCall } from '../models/billing-api-call.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { accountService } from '../services/billing/account-service.js';
+import { type BillingOwnerType } from '../models/billing-account.js';
 import { apiKeyService, ApiKeyNotFoundError } from '../services/billing/api-key-service.js';
 import {
   toBillingAccountWire,
@@ -40,6 +41,31 @@ function parsePage(value: unknown, fallback: number, max: number): number {
   const n = typeof value === 'string' ? Number(value) : typeof value === 'number' ? value : NaN;
   if (!Number.isInteger(n)) return fallback;
   return Math.min(max, Math.max(1, n));
+}
+
+/**
+ * 读请求 ownerType 归一（F5 兼容解析）：
+ * - `front_user` 为已废弃枚举，按同 ownerId 的 `tenant` 行解析（迁移 014 保证 ownerId 不变）；
+ * - `tenant` / `admin_user` 原样通过；其余返回 null（调用方回 400）。
+ */
+function resolveReadOwnerType(value: unknown): BillingOwnerType | null {
+  if (value === 'front_user') return 'tenant';
+  if (value === 'tenant' || value === 'admin_user') return value;
+  return null;
+}
+
+/**
+ * 写请求 ownerType 白名单：**不接受已废弃的 `front_user`**（充值/扣费/账户创建等写路径），
+ * 调用方需返回 400 `INVALID_OWNER_TYPE`；`tenant` / `admin_user` 原样通过。
+ */
+function resolveWriteOwnerType(value: unknown): BillingOwnerType | null {
+  if (value === 'tenant' || value === 'admin_user') return value;
+  return null;
+}
+
+/** 写请求是否命中「已废弃 front_user」——用于区分 400 INVALID_OWNER_TYPE 与普通参数错误。 */
+function isDeprecatedOwnerType(value: unknown): boolean {
+  return value === 'front_user';
 }
 
 function toDate(value: unknown): Date | undefined {
@@ -77,13 +103,9 @@ export function createInternalBillingRouter(): Router {
   });
 
   router.get('/account', async (req: Request, res: Response) => {
-    const ownerType = req.query.ownerType;
+    const ownerType = resolveReadOwnerType(req.query.ownerType);
     const ownerId = req.query.ownerId;
-    if (
-      (ownerType !== 'front_user' && ownerType !== 'admin_user') ||
-      typeof ownerId !== 'string' ||
-      !ownerId
-    ) {
+    if (!ownerType || typeof ownerId !== 'string' || !ownerId) {
       res.status(400).json({ error: 'INVALID_OWNER' });
       return;
     }
@@ -300,12 +322,9 @@ export function createInternalBillingRouter(): Router {
   });
 
   router.get('/api-keys', async (req: Request, res: Response) => {
-    const ownerType = req.query.ownerType;
+    const ownerType = resolveReadOwnerType(req.query.ownerType);
     const ownerId = req.query.ownerId;
-    if (
-      (ownerType !== 'front_user' && ownerType !== 'admin_user') ||
-      typeof ownerId !== 'string'
-    ) {
+    if (!ownerType || typeof ownerId !== 'string') {
       res.status(400).json({ error: 'INVALID_OWNER' });
       return;
     }
@@ -314,9 +333,15 @@ export function createInternalBillingRouter(): Router {
   });
 
   router.post('/api-keys', async (req: Request, res: Response) => {
-    const { ownerType, ownerId, name, scope: rawScope, cloudHostId, expiresAt } = req.body ?? {};
+    const { ownerType: rawOwnerType, ownerId, name, scope: rawScope, cloudHostId, expiresAt } = req.body ?? {};
+    if (isDeprecatedOwnerType(rawOwnerType)) {
+      // 写请求不再接受已废弃的 front_user（读兼容仅限 list/account）。
+      res.status(400).json({ error: 'INVALID_OWNER_TYPE' });
+      return;
+    }
+    const ownerType = resolveWriteOwnerType(rawOwnerType);
     if (
-      (ownerType !== 'front_user' && ownerType !== 'admin_user') ||
+      !ownerType ||
       typeof ownerId !== 'string' ||
       typeof name !== 'string' ||
       !name.trim()
@@ -345,9 +370,10 @@ export function createInternalBillingRouter(): Router {
       hostId = cloudHostId;
     }
     try {
-      // B-5/R2-14：front_user 的 cloud_host Key 必须绑定本人且未软删除的云电脑，避免越权；
+      // B-5/R2-14：非 admin_user 的 cloud_host Key 必须绑定本人且未软删除的云电脑，避免越权；
       // admin_user 与网关鉴权口径一致保留管理豁免（可代任意宿主铸造）。
-      if (hostId && ownerType === 'front_user') {
+      // 注意：tenant 的 ownerId 即 tenantId（一期 personal 恒等于 userId），与宿主 userId 同口径比较。
+      if (hostId && ownerType !== 'admin_user') {
         const host = await CloudHost.findById(hostId)
           .select({ userId: 1, deletedAt: 1 })
           .lean<{ userId?: unknown; deletedAt?: Date | null } | null>();
@@ -424,12 +450,14 @@ export function createInternalBillingRouter(): Router {
   });
 
   router.delete('/api-keys/:id', async (req: Request, res: Response) => {
-    const ownerType = req.query.ownerType;
+    const rawOwnerType = req.query.ownerType;
+    if (isDeprecatedOwnerType(rawOwnerType)) {
+      res.status(400).json({ error: 'INVALID_OWNER_TYPE' });
+      return;
+    }
+    const ownerType = resolveWriteOwnerType(rawOwnerType);
     const ownerId = req.query.ownerId;
-    if (
-      (ownerType !== 'front_user' && ownerType !== 'admin_user') ||
-      typeof ownerId !== 'string'
-    ) {
+    if (!ownerType || typeof ownerId !== 'string') {
       res.status(400).json({ error: 'INVALID_OWNER' });
       return;
     }
