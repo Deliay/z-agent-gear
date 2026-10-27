@@ -63,10 +63,17 @@ function mapCommitSettingsError(error: unknown): string {
 export default function CommitSettingsSection() {
   const { data: settingsData, loading: settingsLoading } = useQuery<GetCommitSettingsQuery>(
     GET_COMMIT_SETTINGS,
+    // CommitSettings 无 id 字段、Apollo 无法归一化 mutation 结果：必须显式回写 / 重拉缓存。
+    // cache-and-network 保证卸载重挂载时不会用陈旧缓存初始化表单（先例 McpDefaultSection）。
+    { fetchPolicy: 'cache-and-network' },
   )
   const { data: accountsData } = useQuery<GetGithubAccountsQuery>(GET_GITHUB_ACCOUNTS)
   const [saveCommitSettings, { loading: saving }] =
-    useMutation<UpdateCommitSettingsMutation>(UPDATE_COMMIT_SETTINGS)
+    useMutation<UpdateCommitSettingsMutation>(UPDATE_COMMIT_SETTINGS, {
+      // mutation 返回的 CommitSettings 无 id，Apollo 无法自动合并到 ROOT_QUERY.commitSettings；
+      // 显式重拉以更新缓存，避免离开设置页再返回时回显旧值（先例 GithubBindingSection）。
+      refetchQueries: [GET_COMMIT_SETTINGS],
+    })
 
   const [committerMode, setCommitterMode] = useState<CommitterModeValue>('UNSET')
   const [committerType, setCommitterType] = useState<CommitterTypeValue>('UNSET')
@@ -77,16 +84,15 @@ export default function CommitSettingsSection() {
 
   // 用户已编辑/已保存后，后台刷新不得覆盖表单（frontend-rules）
   const dirtyRef = useRef(false)
-  const initializedRef = useRef(false)
 
   const commitSettings = settingsData?.commitSettings
   const accounts = accountsData?.githubAccounts ?? []
   const accountsReady = accountsData != null
 
+  // 未编辑时允许随缓存/网络结果刷新（cache-and-network 会先给缓存再给网络值，
+  // 卸载重挂载后必须能被最新结果覆盖）；一旦用户编辑则不再自动覆盖。
   useEffect(() => {
-    if (!commitSettings || initializedRef.current) return
-    initializedRef.current = true
-    if (dirtyRef.current) return
+    if (!commitSettings || dirtyRef.current) return
     setCommitterMode(commitSettings.committerMode)
     setCommitterType(commitSettings.committerType)
     setGithubAccountId(commitSettings.githubAccountId ?? '')

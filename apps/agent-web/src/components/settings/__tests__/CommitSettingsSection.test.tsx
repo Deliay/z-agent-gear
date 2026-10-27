@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import CommitSettingsSection from '../CommitSettingsSection';
+import { GET_COMMIT_SETTINGS } from '@/graphql/queries';
 import type {
   CommitSettingsData,
   GitHubAccountData,
@@ -225,6 +226,58 @@ describe('CommitSettingsSection', () => {
 
     expect(screen.queryByText('提交人用户名或邮箱格式不正确')).not.toBeInTheDocument();
     expect(saveButton()).toBeEnabled();
+  });
+
+  it('保存成功后重拉 GetCommitSettings 且查询使用 cache-and-network（避免陈旧缓存回显）', () => {
+    render(<CommitSettingsSection />);
+
+    expect(mockUseQuery).toHaveBeenCalledWith(
+      GET_COMMIT_SETTINGS,
+      expect.objectContaining({ fetchPolicy: 'cache-and-network' }),
+    );
+    expect(mockUseMutation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ refetchQueries: [GET_COMMIT_SETTINGS] }),
+    );
+  });
+
+  it('未编辑时随新查询结果刷新表单（cache-and-network 缓存后到网络值）', () => {
+    const { rerender } = render(<CommitSettingsSection />);
+    expect(modeGroup().getByRole('radio', { name: '未设置' })).toBeChecked();
+
+    mockQueries({
+      settings: {
+        ...UNSET_SETTINGS,
+        committerMode: 'HUMAN_ONLY',
+        committerType: 'CUSTOM',
+        customName: 'Zhang San',
+        customEmail: 'zhangsan@example.com',
+      },
+    });
+    rerender(<CommitSettingsSection />);
+
+    expect(modeGroup().getByRole('radio', { name: '仅人类' })).toBeChecked();
+    expect(typeGroup().getByRole('radio', { name: '自定义' })).toBeChecked();
+    expect((screen.getByLabelText('用户名') as HTMLInputElement).value).toBe('Zhang San');
+  });
+
+  it('用户已编辑后新查询结果不覆盖表单（dirty 保护）', () => {
+    const { rerender } = render(<CommitSettingsSection />);
+    fireEvent.click(modeGroup().getByRole('radio', { name: '仅Agent' }));
+
+    mockQueries({
+      settings: {
+        ...UNSET_SETTINGS,
+        committerMode: 'HUMAN_ONLY',
+        committerType: 'CUSTOM',
+        customName: 'Zhang San',
+        customEmail: 'zhangsan@example.com',
+      },
+    });
+    rerender(<CommitSettingsSection />);
+
+    expect(modeGroup().getByRole('radio', { name: '仅Agent' })).toBeChecked();
+    expect(typeGroup().getByRole('radio', { name: '未设置' })).toBeChecked();
   });
 
   it('保存成功调用 mutation、提示云容器生效并回显服务端返回值', async () => {

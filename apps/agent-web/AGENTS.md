@@ -94,6 +94,9 @@ npm run preview  # Preview production build
   `invalid custom committer` →「提交人用户名或邮箱格式不正确」。
 - 保存成功 toast「对云容器环境生效，已运行的云电脑稍后自动更新」；加载分支用 `loading && !data`，
   后台刷新不覆盖用户编辑（dirty 保护）。
+- 缓存：`GET_COMMIT_SETTINGS` 用 `fetchPolicy: 'cache-and-network'`，保存 mutation 带
+  `refetchQueries: [GET_COMMIT_SETTINGS]`（`CommitSettings` 无 `id`，Apollo 无法归一化 mutation 结果），
+  保证保存后离开设置页再返回不回显旧值；回归见 `CommitSettingsSection.cache.test.tsx`。
 - 测试：`components/settings/__tests__/CommitSettingsSection.test.tsx`。
 
 ## Related Rules
