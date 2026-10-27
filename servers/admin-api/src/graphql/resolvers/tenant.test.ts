@@ -281,6 +281,19 @@ describe('admin-tenant resolvers（T-AT1~8）', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('T-AT9: 镜像行缺失 createdAt 时返回 epoch 而非 500', async () => {
+    const tenantId = new mongoose.Types.ObjectId();
+    // 绕过 timestamps 直写镜像集合，模拟半迁移/外部直写行
+    await mongoose.connection.collection('tenants').insertOne({
+      _id: tenantId,
+      name: 'no-created-at',
+      type: 'personal',
+    });
+
+    const detail = await Query.adminTenant({}, { id: String(tenantId) }, adminContext());
+    expect(detail.createdAt).toBe(new Date(0).toISOString());
+  });
+
   it('T-AT8: 只读性——租户无 update/delete mutation，仅开户一个写操作', () => {
     const schema = makeExecutableSchema({ typeDefs, resolvers });
     const mutationFields = Object.keys(schema.getMutationType()!.getFields());
