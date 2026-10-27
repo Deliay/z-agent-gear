@@ -5,7 +5,7 @@ import { config } from '../config/index.js';
 import { Account } from '../models/account.js';
 import { Tenant } from '../models/tenant.js';
 import { User } from '../models/user.js';
-import { assertUsernamePasswordRules, hashPassword } from '../services/auth.js';
+import { assertUsernamePasswordRules, hashPassword, verifyPassword } from '../services/auth.js';
 import { billingClient } from '../services/billing-client.js';
 
 function authorized(req: Request): boolean {
@@ -78,17 +78,25 @@ internalUsersRouter.post('/', async (req: Request, res: Response) => {
     let account = await Account.findOne({ username });
     let created = false;
 
-    if (!account) {
+    if (account) {
+      // 幂等重放与重名冲突的区分：仅当请求密码可验证既有账户时才视为幂等重放；
+      // 用户名被占用（密码不匹配/无法验证）必须 409，不能静默丢弃新密码。
+      const matches = await verifyPassword(password, account.passwordHash);
+      if (!matches) {
+        res.status(409).json({ error: 'USERNAME_TAKEN' });
+        return;
+      }
+    } else {
       try {
         const passwordHash = await hashPassword(password);
         account = await Account.create({ username, passwordHash });
         createdAccountIds.push(account._id);
         created = true;
       } catch (err) {
-        // accounts.username 唯一索引冲突 → 409（并发开户兜底）
+        // accounts.username 唯一索引冲突 → 复查后按幂等/重名口径处理（并发开户兜底）
         if ((err as { code?: number }).code === 11000) {
           account = await Account.findOne({ username });
-          if (!account) {
+          if (!account || !(await verifyPassword(password, account.passwordHash))) {
             res.status(409).json({ error: 'USERNAME_TAKEN' });
             return;
           }

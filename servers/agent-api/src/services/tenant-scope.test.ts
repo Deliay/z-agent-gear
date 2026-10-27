@@ -27,6 +27,27 @@ describe('tenant scope plugin', () => {
     expect(query.state.filter).toEqual({ userId: 'u1', tenantId: 't9' });
   });
 
+  it('injects tenantId inside $or branches (workflow template builtin case)', () => {
+    const query = fakeQuery({ $or: [{ userId: 'u1' }, { isBuiltin: true }] });
+    injectFilter(query);
+    expect(query.state.filter).toEqual({
+      $or: [{ userId: 'u1', tenantId: 'u1' }, { isBuiltin: true }],
+    });
+  });
+
+  it('injects tenantId inside $and / nested $or branches', () => {
+    const query = fakeQuery({
+      $and: [{ $or: [{ userId: 'u1' }, { userId: 'u2' }] }, { status: 'active' }],
+    });
+    injectFilter(query);
+    expect(query.state.filter).toEqual({
+      $and: [
+        { $or: [{ userId: 'u1', tenantId: 'u1' }, { userId: 'u2', tenantId: 'u2' }] },
+        { status: 'active' },
+      ],
+    });
+  });
+
   it('ignores filters without userId (e.g. _id-only lookups)', () => {
     const query = fakeQuery({ _id: 'x' });
     injectFilter(query);

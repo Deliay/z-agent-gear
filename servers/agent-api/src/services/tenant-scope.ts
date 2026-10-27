@@ -40,13 +40,52 @@ const QUERY_HOOKS = [
 
 const WRITE_UPDATE_HOOKS = ['findOneAndUpdate', 'replaceOne', 'updateOne', 'updateMany'] as const;
 
-/** 查询过滤条件补齐 tenantId=userId（显式 tenantId 优先）。 */
+/**
+ * 递归补齐 `tenantId=userId`：同时处理 `$or` / `$and` / `$nor` 内的 userId 分支
+ * （如工作流模板 `$or: [{ userId }, { isBuiltin: true }]`），避免二期放开 userId
+ * 维度后出现静默漏点；显式 tenantId 优先，不覆盖。
+ */
+function isOperatorValue(value: unknown): boolean {
+  // `{ userId: { $in: [...] } }` 等操作符对象不能直接复制为 tenantId（值语义不同）。
+  // ObjectId 等带 equals 的对象视为标量。
+  if (!value || typeof value !== 'object' || typeof (value as { equals?: unknown }).equals === 'function') {
+    return false;
+  }
+  return Object.keys(value as Record<string, unknown>).some((key) => key.startsWith('$'));
+}
+
+function injectFilterObject(filter: Record<string, unknown>): Record<string, unknown> {
+  if (!filter || typeof filter !== 'object') return filter;
+  let next = filter;
+  if (
+    filter.userId !== undefined &&
+    filter.userId !== null &&
+    !isOperatorValue(filter.userId) &&
+    filter.tenantId === undefined
+  ) {
+    next = { ...filter, tenantId: filter.userId };
+  }
+  for (const operator of ['$or', '$and', '$nor'] as const) {
+    const branches = next[operator];
+    if (!Array.isArray(branches)) continue;
+    next = {
+      ...next,
+      [operator]: branches.map((branch) =>
+        branch && typeof branch === 'object'
+          ? injectFilterObject(branch as Record<string, unknown>)
+          : branch,
+      ),
+    };
+  }
+  return next;
+}
+
+/** 查询过滤条件补齐 tenantId=userId（显式 tenantId 优先；递归处理逻辑组合子）。 */
 export function injectFilter(query: AnyQuery): void {
   const filter = query.getFilter?.() ?? {};
   if (!filter || typeof filter !== 'object') return;
-  if (filter.userId === undefined || filter.userId === null) return;
-  if (filter.tenantId !== undefined) return;
-  query.setQuery({ ...filter, tenantId: filter.userId });
+  const next = injectFilterObject(filter as Record<string, unknown>);
+  if (next !== filter) query.setQuery(next);
 }
 
 /** 更新文档补齐 tenantId（$set.userId 存在且 $set.tenantId 缺失时）。 */
@@ -65,15 +104,15 @@ export function injectUpdate(query: AnyQuery): void {
 export function applyTenantScope(schema: any): void {
   if (!schema.path('userId') || !schema.path('tenantId')) return;
 
-  schema.pre(QUERY_HOOKS, function tenantScopeFilter(this: unknown, next: () => void) {
+  // Mongoose v9 的 query 中间件也是同步钩子（无 next 参数）；写成 promise/next 形式会抛
+  // `next is not a function`（T-ISO 真执行用例覆盖）。
+  schema.pre(QUERY_HOOKS, function tenantScopeFilter(this: unknown) {
     injectFilter(this as AnyQuery);
-    next();
   });
 
-  schema.pre(WRITE_UPDATE_HOOKS, function tenantScopeUpdate(this: unknown, next: () => void) {
+  schema.pre(WRITE_UPDATE_HOOKS, function tenantScopeUpdate(this: unknown) {
     injectFilter(this as AnyQuery);
     injectUpdate(this as AnyQuery);
-    next();
   });
 
   // Mongoose v9 文档中间件为同步钩子（无 next 参数）。

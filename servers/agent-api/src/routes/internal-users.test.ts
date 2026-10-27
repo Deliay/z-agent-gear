@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   tenant: { findById: vi.fn(), create: vi.fn(), deleteOne: vi.fn() },
   billing: { getAccount: vi.fn() },
   hashPassword: vi.fn(),
+  verifyPassword: vi.fn(),
 }));
 
 vi.mock('../config/index.js', () => ({ config: h.config }));
@@ -31,6 +32,7 @@ vi.mock('../services/auth.js', () => ({
     }
   },
   hashPassword: h.hashPassword,
+  verifyPassword: h.verifyPassword,
 }));
 
 import { internalUsersRouter } from './internal-users.js';
@@ -44,6 +46,7 @@ describe('POST /internal/users (front user provisioning)', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     h.hashPassword.mockResolvedValue('hash');
+    h.verifyPassword.mockResolvedValue(true);
     h.billing.getAccount.mockResolvedValue({ id: 'billing-1' });
     h.account.deleteOne.mockResolvedValue({});
     h.user.deleteOne.mockResolvedValue({});
@@ -132,10 +135,22 @@ describe('POST /internal/users (front user provisioning)', () => {
 
     const res = await post({ username: 'alice', password: 'secret1' });
     expect(res.status).toBe(200);
+    expect(h.verifyPassword).toHaveBeenCalledWith('secret1', 'hash');
     expect(h.account.create).not.toHaveBeenCalled();
     expect(h.user.create).not.toHaveBeenCalled();
     expect(h.tenant.create).not.toHaveBeenCalled();
     expect(h.billing.getAccount).toHaveBeenCalled();
+  });
+
+  it('returns 409 when the username is taken with a different password', async () => {
+    h.account.findOne.mockResolvedValue({ _id: 'acc-1', username: 'alice', passwordHash: 'other-hash' });
+    h.verifyPassword.mockResolvedValue(false);
+
+    const res = await post({ username: 'alice', password: 'new-secret' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'USERNAME_TAKEN' });
+    expect(h.user.create).not.toHaveBeenCalled();
+    expect(h.billing.getAccount).not.toHaveBeenCalled();
   });
 
   it('returns 409 USERNAME_TAKEN on unique conflict', async () => {

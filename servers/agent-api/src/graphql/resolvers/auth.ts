@@ -78,11 +78,13 @@ export const authResolvers = {
   },
   User: {
     // 字段级 resolver：必须登记在 graphql/resolvers/index.ts 的 User 键（否则线上不生效）。
-    tenant: async (parent: { id: string; name?: string }) => {
-      const tenant = await Tenant.findById(parent.id);
+    tenant: async (parent: { id: string; tenantId?: string; name?: string }) => {
+      // 以 users.tenantId 为准（team 租户下不再等价于 userId）；半迁移行回退 userId。
+      const tenantId = parent.tenantId ?? parent.id;
+      const tenant = await Tenant.findById(tenantId);
       if (!tenant) {
         // 半迁移/历史行兜底：personal 租户 _id 复用 userId，缺失文档时返回等价视图。
-        return { id: parent.id, name: parent.name ?? '', type: 'personal', memberCount: 1 };
+        return { id: tenantId, name: parent.name ?? '', type: 'personal', memberCount: 1 };
       }
       const memberCount = await User.countDocuments({ tenantId: tenant._id });
       return {
