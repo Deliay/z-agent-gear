@@ -10,13 +10,14 @@ type: Permanent
 **需求总分支（feat-branch）**: `feat/commit-author-settings`（需求总 PR #321）
 **实现分支**: `feat/commit-author-settings-impl`（基于需求总分支）
 **创建日期**: 2026-10-27
-**计划版本**: v1.0
+**计划版本**: v1.1
 
 **上游评审结论（PR #321）**：Deliay 于 2026-10-26T22:03:52Z APPROVED 产品文档与技术提案，评审无正文、无 inline comment、无修改要求，按原计划推进本实现计划。若后续复审提出修改，在对应 Phase 中落实并回评。
 
 **版本说明**：
 
 - v1.0 首版：与 PRD v1.0 / 提案 v1.0 对齐，把提案 §5.2 的 5 个实现点拆成 8 个 Phase；给出「上游文档 × 代码现状差异」5 条与「计划期裁决」9 条，收敛提案留白但会阻塞实现的口径（`committerMode=UNSET` 与已设提交人的归一关系、自定义邮箱校验规则逐字、错误文案双端映射逐字、内部端点 `unset` 响应字段缺省形态、bot 解析失败短缓存口径）。
+- v1.1 计划复核：按需求总分支代码现状修正两处文件落点——agent-api 无集中式 `models/models.ts`，`UserCommitSetting` 由引用方按文件直接导入（对齐 `user.ts` / `github-account.ts` 现状）；内部端点测试与路由同目录，落点为 `routes/internal-cloud-host.test.ts`。其余 Phase、裁决与验收口径不变。
 - 不改变 PRD 产品口径；契约新增字段以提案 §3.1 为准，不删不改既有字段。本特性为纯增量：不触碰本地控制器链路，既有用例必须零失败（无基线更新清单）。
 
 ## 实现顺序
@@ -126,8 +127,7 @@ cd servers/agent-api && npm run build   # schema 校验随 Phase 2 引入，本�
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/agent-api/src/models/user-commit-setting.ts` | 新增 | `UserCommitSetting` schema：`userId: String`（对齐 `GitHubAccount.userId` 口径）、`committerMode: enum('agent_only','co_author','human_only','unset')` default `unset`、`committerType: enum('github_account','custom','unset')` default `unset`、`githubAccountId: ObjectId?` ref `GitHubAccount`、`customName: String?`（≤100）、`customEmail: String?`（≤254）、timestamps；导出归一常量（枚举值数组）供 service 复用 |
-| `servers/agent-api/src/models/models.ts` | 修改 | 注册 `UserCommitSetting`（对齐既有 model 注册口径） |
+| `servers/agent-api/src/models/user-commit-setting.ts` | 新增 | `UserCommitSetting` schema：`userId: String`（对齐 `GitHubAccount.userId` 口径）、`committerMode: enum('agent_only','co_author','human_only','unset')` default `unset`、`committerType: enum('github_account','custom','unset')` default `unset`、`githubAccountId: ObjectId?` ref `GitHubAccount`、`customName: String?`（≤100）、`customEmail: String?`（≤254）、timestamps；导出归一常量（枚举值数组）供 service 复用；模型由引用方按文件直接导入（agent-api 无集中式 models 注册文件） |
 | `servers/agent-api/src/migrations/011-user-commit-settings-index.ts` | 新增 | `user_commit_settings.userId` 唯一索引显式创建（沿用 006 先例结构与幂等口径） |
 | `servers/agent-api/src/migrations/011-user-commit-settings-index.test.ts` | 新增 | 迁移幂等执行两次不报错、索引存在且 unique、重复 userId 写入被拒 |
 
@@ -182,7 +182,7 @@ cd servers/agent-api && npm run build && npm test -- commit-settings github
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `servers/agent-api/src/routes/internal-cloud-host.ts` | 修改 | 新增 `POST /:controllerId/commit-identity`，与 `github-credential` 并列：复用同一双鉴权中间件；调用 `commitSettingsService.resolveCommitIdentity(controllerId)`；响应形态按裁决 4；永不 404（`unset` 兑底）；鉴权失败 401/403 不变 |
-| `servers/agent-api/src/services/internal-cloud-host.test.ts` | 修改 | `T-IC1` 双鉴权：无凭据 401、错误 Controller key 403、`INTERNAL_API_TOKEN` 放行；`T-IC2` 正常返回 `co_author` 全字段；`T-IC3` 任意无效场景（主机不存在 / 未保存 / 解绑）均 200 `{"mode":"unset"}`；`T-IC4` 响应不含 null 字段（裁决 4） |
+| `servers/agent-api/src/routes/internal-cloud-host.test.ts` | 修改 | `T-IC1` 双鉴权：无凭据 401、错误 Controller key 403、`INTERNAL_API_TOKEN` 放行；`T-IC2` 正常返回 `co_author` 全字段；`T-IC3` 任意无效场景（主机不存在 / 未保存 / 解绑）均 200 `{"mode":"unset"}`；`T-IC4` 响应不含 null 字段（裁决 4） |
 
 验收：与 `github-credential` 鉴权行为逐条对齐；`unset` 兑底路径全覆盖；无任何 404 分支。
 
