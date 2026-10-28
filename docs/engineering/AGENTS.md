@@ -213,6 +213,7 @@ flowchart LR
 - [[proposals/20261027-feat-dsh-header-masq.md]] — DeepSeek Harness 会话标识请求头注入（dsh-header-masq 插件：预置脚本 V4 固定版本 0.1.2-alpha.2 → 0.2.1-rc.2 + `dsh plugin --profile acp add Deliay/dsh-header-masq`、agent-gear 2.11.0 dsh-config insert 形态第 5 受管条目、migration 013 存量刷新、deepseek_harness 版本门禁 2.9.0 → 2.11.0）
 - [[proposals/20261027-feat-multi-tenant-phase1.md]] — 多租户一期（三层帐号模型：accounts 独立承载登录不 ref User、users+tenantId/accountId 承载 tenant→users 与 account→users 一对多且暂保留原登录字段、tenants 无成员列表且 personal 租户 _id 复用 userId 一期单成员；迁移 012 三件套拆分只复制不删除/013 复制清洗 tenantId（保留 userId 筛选、查询 tenantId+userId 双条件、上线前行为不变）/014 计费 ownerType front_user→tenant 余额零改动且兼容 admin_user 双 owner；后台不做多租户设计；契约删 signup 前台硬关注册；agent-api `/internal/users` 开户内部端点保有写权；admin-api 租户只读管理与后台开户；cloud-controller cloudcontainers 补 tenantId；启动自检轻量异步）
 - [[proposals/20261028-refactor-conversation-rendering.md]] — 重构对话渲染（纯前端渲染层重构：tool-call-state 多消息三态合并修复完成后退化 Tool Call: other、CodeBlock 工具栏复制/换行/语言标签、MermaidBlock 动态导入懒加载渲染与失败回退、jsdiff 真实差异 + 行号 + Prism 逐行高亮、ansi-to-html 终端颜色渲染、ToolCall 图标体系与 rawInput 折叠 + ContentBlock 全类型、消息复制与对话导出 Markdown、IntersectionObserver 滚动跟随暂停/恢复与回到底部、PlanCard 删除线与计数口径）
+- [[proposals/20261028-feat-mongodb-workload.md]] — 增加工作负载「MongoDB」（admin-api 迁移 015 预置标准工作负载 presetKey=mongodb、init 脚本 012 sudo 正典形态原生 apt 经内网 Nexus 代理安装 mongodb-org 8.0 并拉起 mongod 硬校验（幂等）、全链路数据驱动零协议改动、预制项测试断言 8→9）
 
 ### 实现计划（`plan/`）
 
