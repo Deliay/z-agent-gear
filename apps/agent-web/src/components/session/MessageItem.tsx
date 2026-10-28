@@ -1,5 +1,7 @@
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import MarkdownContent from './MarkdownContent';
+import MessageActions from './MessageActions';
+import { markdownToPlainText } from '../../lib/markdown-plain-text';
 
 interface AcpMessage {
   id: string;
@@ -95,10 +97,22 @@ export default function MessageItem({ message }: MessageItemProps) {
   const typeLabel = getTypeLabel(displayType);
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`group flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[70%] rounded-lg px-4 py-2 overflow-hidden ${getMessageStyle(displayType)}`}>
-        {typeLabel && (
-          <div className="mb-1 text-xs font-medium opacity-75">{typeLabel}</div>
+        {(typeLabel || (!isUser && displayType === 'text')) && (
+          <div className="mb-1 flex items-center gap-2">
+            {typeLabel && (
+              <div className="text-xs font-medium opacity-75">{typeLabel}</div>
+            )}
+            {!isUser && displayType === 'text' && (
+              <div className="ml-auto">
+                <MessageActions
+                  content={displayContent}
+                  getPlainText={() => markdownToPlainText(displayContent)}
+                />
+              </div>
+            )}
+          </div>
         )}
         <div className="prose prose-sm max-w-none break-words">
           {displayType === 'image' ? (

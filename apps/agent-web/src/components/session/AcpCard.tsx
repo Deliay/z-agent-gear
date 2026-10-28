@@ -6,11 +6,14 @@ interface AcpCardProps {
   summary: string;
   defaultCollapsed?: boolean;
   // purple/yellow/gray/blue 为历史配色（仅 purple 高亮）；
-  // active/completed/failed 为工具调用恒高亮配色：info 同色系按状态区分强度。
-  color?: 'purple' | 'yellow' | 'gray' | 'blue' | 'active' | 'completed' | 'failed';
+  // active/completed/failed 为工具调用恒高亮配色：info 同色系按状态区分强度；
+  // pending 为等待态弱化样式（虚线弱化，不脉冲）。
+  color?: 'purple' | 'yellow' | 'gray' | 'blue' | 'active' | 'completed' | 'failed' | 'pending';
   children: React.ReactNode;
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
+  /** 标题前置图标（工具类型图标） */
+  icon?: React.ReactNode;
 }
 
 const colorClasses = {
@@ -57,6 +60,13 @@ const colorClasses = {
     summary: 'text-destructive',
     chevron: 'text-info/70 hover:opacity-70',
   },
+  // 等待确认/待执行：弱化描边，不脉冲
+  pending: {
+    container: 'bg-muted/50 border border-dashed border-border',
+    header: 'text-muted-foreground',
+    summary: 'text-muted-foreground',
+    chevron: 'text-muted-foreground hover:text-foreground',
+  },
 };
 
 export default function AcpCard({
@@ -67,6 +77,7 @@ export default function AcpCard({
   children,
   expanded,
   onExpandedChange,
+  icon,
 }: AcpCardProps) {
   const isControlled = expanded !== undefined;
   const [internalCollapsed, setInternalCollapsed] = useState(defaultCollapsed);
@@ -93,6 +104,7 @@ export default function AcpCard({
         ) : (
           <ChevronDown className={`h-4 w-4 shrink-0 ${colors.chevron}`} />
         )}
+        {icon && <span className={`shrink-0 ${colors.chevron}`} data-testid="acp-card-icon">{icon}</span>}
         <span className="min-w-0 truncate font-medium text-sm">{title}</span>
         {collapsed && (
           <span className={`ml-auto min-w-0 truncate text-xs ${colors.summary}`}>{summary}</span>

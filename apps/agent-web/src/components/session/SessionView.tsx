@@ -38,6 +38,8 @@ import { PendingElicitationBanner } from './PendingElicitationBanner';
 import { isReadOnlyCloudHost } from '../cloud-host/cloud-host-status';
 import { useCommandState } from '../../hooks/useCommandState';
 import { useAgentCapabilities } from '../../hooks/useAgentCapabilities';
+import { threadToMarkdown, downloadThreadMarkdown } from '../../lib/export-thread';
+import { collectFullHistory } from '../../lib/session-messages';
 
 interface AcpMessage {
   id: string;
@@ -500,6 +502,43 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     );
   }
 
+  const handleExportThread = async () => {
+    try {
+      // R-1：导出前按 before 游标拉全历史，避免只导出 SSE 首帧已加载的窗口
+      const { messages: fullMessages } = await collectFullHistory<AcpMessage>({
+        loaded: messages,
+        hasMore,
+        fetchPage: async (before, limit) => {
+          const { data } = await client.query<GetSessionMessagesQuery>({
+            query: GET_SESSION_MESSAGES,
+            variables: { sessionId: id, before, limit },
+            fetchPolicy: 'network-only',
+          });
+          return (data?.sessionMessages ?? []) as AcpMessage[];
+        },
+      });
+
+      if (fullMessages !== messages) {
+        setMessages((prev) => (fullMessages.length > prev.length ? fullMessages : prev));
+        setHasMore(false);
+      }
+
+      const markdown = threadToMarkdown(
+        fullMessages.map((message) => ({
+          direction: message.direction,
+          content: message.content,
+          createdAt: message.createdAt,
+        })),
+      );
+      const date = new Date().toISOString().slice(0, 10);
+      downloadThreadMarkdown(`session-${id}-${date}.md`, markdown);
+      toast.success(`已导出对话（共 ${fullMessages.length} 条消息）`);
+    } catch (error) {
+      console.error('Failed to export thread:', error);
+      toast.error('导出失败：无法加载完整历史，请重试');
+    }
+  };
+
   return (
     <div className="flex h-full flex-col">
       {protocolMismatch && (
@@ -533,6 +572,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         capabilities={capabilities}
         capabilitySession={sessionData?.session ?? null}
         readOnly={readOnlyCloudHost}
+        onExport={handleExportThread}
       />
       <PendingElicitationBanner sessionId={id} />
       {readOnlyCloudHost && (
