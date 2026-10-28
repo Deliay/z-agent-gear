@@ -16,6 +16,7 @@ type: Permanent
 
 - v1.0（2026-10-28）首版。对应 PRD / 提案 v1.1（PR #333 评审 APPROVED；评审提出的「工具调用完成后退化 Tool Call: other」缺陷已在 v1.1 修订中纳入根因与合并方案，无遗留修改项）。
 - v1.1（2026-10-28）需求总分支同步 `origin/main`（3aa74370，含多租户一期）并收口 `docs/product/AGENTS.md`、`docs/engineering/AGENTS.md` 索引冲突。已复核「12a18fd5 → 3aa74370」期间 `apps/agent-web/src/components/session/`、`apps/agent-web/src/lib/`、`vitest.setup.ts`、`package.json`、`tests/e2e/src/session-chat.spec.ts` **零变更**（多租户改动仅涉及登录/侧栏/鉴权等文件），§3 代码事实与 §5 文件清单不受影响；实现分支自本分支切出即可直接开工。
+- v1.1 同时按 `tests/e2e/AGENTS.md` 既有清单校正 E2E 编号：会话渲染套件用例由 `E2E-CR1~8` 改为 **`E2E-CREN1~8`**，避免与既有 Check Runs 同步用例 `E2E-CR1~3`（`workflow.spec.ts`）重名；`tests/e2e/src/session-rendering.spec.ts` 与 `tests/e2e/AGENTS.md` 清单同步使用新编号。
 - §3 计划期裁决以**当前需求总分支代码事实**为准（2026-10-28，74c85d36，同步 main 后复核无漂移）：重点校正 ① Markdown 语言识别实际在 `components.code` 覆写且无语言围栏块当前无工具栏；② `cleanOutput` 第一正则剥离的正是 SGR 颜色序列；③ jsdom 无 IntersectionObserver 需测试基建 stub；④ 四卡片 props 签名的切换口径。
 
 ## 1. 实现顺序
@@ -246,7 +247,7 @@ npx playwright test --workers=1
 
 | 文件 | 变更 |
 |------|------|
-| `tests/e2e/src/session-rendering.spec.ts` | **新增**：E2E-CR1~CR8（§6.3），fake controller 注入机制（裁决 9） |
+| `tests/e2e/src/session-rendering.spec.ts` | **新增**：E2E-CREN1~CREN8（§6.3），fake controller 注入机制（裁决 9） |
 | `tests/e2e/AGENTS.md` | 测试清单追加 session-rendering 套件说明 |
 | `apps/agent-web/AGENTS.md` | 会话渲染层新模块口径登记（tool-call-state 合并、markdown 管线、滚动跟随策略） |
 | 全量回归 | `apps/agent-web` 单测 + `tests/e2e` 串行全绿；PRD 八功能点验收标准逐项核对并登记验收报告 |
@@ -297,14 +298,14 @@ npx playwright test --workers=1
 
 | 用例 | 断言要点 |
 |------|---------|
-| E2E-CR1 代码块工具栏 | 注入含围栏代码块的 agent 消息 → 复制按钮出现且点击后剪贴板授权下可用；换行切换生效 |
-| E2E-CR2 Mermaid 渲染 | 注入 ```mermaid 块 → 渲染出 SVG；注入语法错误块 → 回退代码块且页面其余内容正常 |
-| E2E-CR3 差异渲染 | 注入含 diff content 的 tool_call → 行号列与 +/− 行可见、插入对齐不错位 |
-| E2E-CR4 终端 ANSI | 注入含 ANSI 颜色码的输出 → 颜色 span 出现，非统一绿色 |
-| E2E-CR5 工具生命周期一致 | 注入「创建（execute+title+rawInput）→ 稀疏完成更新」→ 完成后卡片标题仍为创建时命令名，**不出现「Tool Call: other」**；展开可见原始输入 |
-| E2E-CR6 滚动导航 | 长列表上翻后注入新消息 → 视口保持原位 + 「回到底部」出现；点击回底后新消息恢复跟随 |
-| E2E-CR7 窄视口溢出 | 375px 视口 + 超长无空格内容/代码块/差异 → `scrollWidth - clientWidth ≤ 1` |
-| E2E-CR8 导出 | 点击导出 → download 事件触发且文件名 `session-*.md` |
+| E2E-CREN1 代码块工具栏 | 注入含围栏代码块的 agent 消息 → 复制按钮出现且点击后剪贴板授权下可用；换行切换生效 |
+| E2E-CREN2 Mermaid 渲染 | 注入 ```mermaid 块 → 渲染出 SVG；注入语法错误块 → 回退代码块且页面其余内容正常 |
+| E2E-CREN3 差异渲染 | 注入含 diff content 的 tool_call → 行号列与 +/− 行可见、插入对齐不错位 |
+| E2E-CREN4 终端 ANSI | 注入含 ANSI 颜色码的输出 → 颜色 span 出现，非统一绿色 |
+| E2E-CREN5 工具生命周期一致 | 注入「创建（execute+title+rawInput）→ 稀疏完成更新」→ 完成后卡片标题仍为创建时命令名，**不出现「Tool Call: other」**；展开可见原始输入 |
+| E2E-CREN6 滚动导航 | 长列表上翻后注入新消息 → 视口保持原位 + 「回到底部」出现；点击回底后新消息恢复跟随 |
+| E2E-CREN7 窄视口溢出 | 375px 视口 + 超长无空格内容/代码块/差异 → `scrollWidth - clientWidth ≤ 1` |
+| E2E-CREN8 导出 | 点击导出 → download 事件触发且文件名 `session-*.md` |
 
 既有套件回归：`session-chat.spec.ts` / `session-message.spec.ts` / `session-scroll-loading.spec.ts` / `session-mobile.spec.ts` 等串行通过。
 
@@ -331,7 +332,7 @@ npx playwright test --workers=1
 
 **Phase 9**
 
-- [ ] E2E-CR1~CR8 全绿；既有 session 套件零回归
+- [ ] E2E-CREN1~CREN8 全绿；既有 session 套件零回归
 - [ ] PRD 八功能点验收标准逐项核对通过；窄视口无横向溢出
 - [ ] `npm run build` 通过且 mermaid 不入首屏 chunk；lint 无新增告警
 
@@ -342,7 +343,7 @@ npx playwright test --workers=1
 | mermaid 包体积（gzip ~500KB+） | 首屏变慢 | 动态导入隔离 + 构建产物核对（Phase 0/9 判据）；加载态骨架兜底 |
 | ansi-to-html 维护停滞 | 依赖风险 | 应用广泛且输出稳定；备选自研 SGR 子集解析（提案 §6.1 决策口径），封装在 `lib/ansi.ts` 单点可替换 |
 | 合并语义与真实 Agent 行为偏差（显式 null 清除极少见） | 字段误清除 | T-MERGE3/4/5 锚定三态；存量会话数据回归（Phase 9 用真实历史会话人工核对一轮） |
-| 四卡片 props 切换漏改调用点 | 编译/运行错误 | TS strict 编译即暴露；`MessageList` 四分支为唯一调用面；E2E-CR5 兜底 |
+| 四卡片 props 切换漏改调用点 | 编译/运行错误 | TS strict 编译即暴露；`MessageList` 四分支为唯一调用面；E2E-CREN5 兜底 |
 | IntersectionObserver 兼容 | 旧浏览器失效 | 现代浏览器全覆盖；stub 驱动单测，真实行为 E2E 覆盖 |
 | DiffView/TerminalOutput/MessageList 重构破坏既有行为 | 回归 | 既有测试迁移先行（红）+ 既有 E2E 套件回归；文件头徽标/maxHeight/初始滚底/prepend 恢复列入 checklist 逐项核对 |
 | react-markdown `pre`/`code` 覆写分工误判行内/块级 | 行内代码误带工具栏 | F1 口径 + MarkdownContent 测试锚定（行内代码无工具栏、无语言围栏块有工具栏） |
@@ -400,7 +401,7 @@ apps/agent-web/
     └── pages/SessionPage.tsx              # 零改动（F6）
 
 tests/e2e/
-├── src/session-rendering.spec.ts          # 新增 E2E-CR1~CR8
+├── src/session-rendering.spec.ts          # 新增 E2E-CREN1~CREN8
 └── AGENTS.md                              # 测试清单追加
 
 docs/engineering/AGENTS.md                 # plan 索引追加本文件
