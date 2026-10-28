@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #337）——对话渲染重构（Issue #332，PRD v1.1）集成验收首轮：对 git diff origin/release...integration（11 提交 / 59 文件 / +5316 −294）做集成级 AI 代码评审 + 本机独立验证（tsc/lint/单测 848/e2e typecheck/9 组实机探针），发现 2×🔴 + 16×🟠 + 15×🟡——🔴 R-1 导出对话静默截断历史（只导出已加载 25 条窗口却提示「已导出对话」，功能点 6「整段对话导出」主场景失效）；🔴 R-2 交付的 E2E-CREN2 确定性红（3 条无 messageId chunk 被相邻合并 + join('') 粘连围栏成单个非法 mermaid 块，remark-parse AST 实证，mermaid-block 定位器永不命中）；🟠 含工具生命周期退化残留（创建事件缺失时标题退化「Tool Call: Tool Call」+ 原始输入入口整体消失、失败态输出不渲染）、group-messages 未防护 JSON.parse 整页崩溃、diff 尾行无换行误报且测试固化错误对齐、Mermaid 错误图残留 document.body、ansi 剥离器三类边界（未终结 DCS 吞全部后续输出/截断序列乱码/冒号真彩乱码）、导出三缺陷（流式分片不合并/content 结果摘要丢失/纯文本混入 UI chrome）、滚动跟随双竞态、E2E-CREN5 负向断言恒真、TerminalOutput 测试未按计划交付、功能点 7 验收无断言、resource_link 无协议白名单；首轮打回（REJECT）
+description: integration→release 集成验收报告（PR #337）——对话渲染重构（Issue #332，PRD v1.1）集成验收首轮：对 git diff origin/release...integration（11 提交 / 59 文件 / +5316 −294）做集成级 AI 代码评审 + 本机独立验证（tsc/lint/单测 848/e2e typecheck/9 组实机探针），发现 2×🔴 + 16×🟠 + 15×🟡——🔴 R-1 导出对话静默截断历史（只导出已加载 25 条窗口却提示「已导出对话」，功能点 6「整段对话导出」主场景失效）；🔴 R-2 交付的 E2E-CREN2 确定性红（3 条无 messageId chunk 被相邻合并 + join('') 粘连围栏成单个非法 mermaid 块，remark-parse AST 实证，mermaid-block 定位器永不命中）；🟠 含工具生命周期退化残留（创建事件缺失时标题退化「Tool Call: Tool Call」+ 原始输入入口整体消失、失败态输出不渲染）、group-messages 未防护 JSON.parse 整页崩溃、diff 尾行无换行误报且测试固化错误对齐、Mermaid 错误图残留 document.body、ansi 剥离器三类边界（未终结 DCS 吞全部后续输出/截断序列乱码/冒号真彩乱码）、导出三缺陷（流式分片不合并/content 结果摘要丢失/纯文本混入 UI chrome）、滚动跟随双竞态、E2E-CREN5 负向断言恒真、TerminalOutput 测试未按计划交付、功能点 7 验收无断言、resource_link 无协议白名单；首轮打回（REJECT）。第二轮复核（返工 `eba92a8d`~`34fcf81a`）：18+15 项修复逐项确认落地（tsc 0 / vitest 913 全绿 / lint 零新增 / 12 组探针复测 / 3 组区分力抽查 RED-AS-EXPECTED），定位并绕过 E2E 环境阻断（docker shim 将 `--name` 值误当镜像归一）后 CREN1~9 实跑 6 过 3 挂——N-1（🟠）E2E-CREN2 断言 `mermaid-block svg` 严格模式歧义确定性红（工具栏图标 SVG 同为后代）、N-2（🟡）CREN8/9 下载断言环境依赖（导出内容已落盘实证正确，CREN9 恰好 30 条各一次）、N-3（🟡）报告 R-17/R-18 行文错位（已更正）；第二轮打回（REJECT）
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-28，AI Review）
 
-> **状态**: ✅ **返工完成（待复核）**。首轮 2 × 🔴 + 16 × 🟠 已全部修复，15 × 🟡 随修复收口；`agent-web` tsc 0 error、vitest 全绿、`tests/e2e` typecheck 0 error，关键修复均完成「回退实现→断言转红」区分力自证。E2E 实跑受本机 Docker 容器命名缺陷阻断（mongodb/redis/rabbitmq FailedToStart），需复核环境或人类书面豁免，详见第八节。
+> **状态**: ❌ **第二轮复核未通过（已打回）**。返工 2 × 🔴 + 16 × 🟠 + 15 × 🟡 经独立复核确认真实落地（tsc 0 / vitest 913 全绿 / lint 零新增 / 12 组探针复测全过 / 3 组区分力抽查 RED-AS-EXPECTED / 导出内容落盘实证）；复核期间**定位并绕过 E2E 环境阻断**（`/usr/local/bin/docker` shim 将 `--name` 的值误当镜像归一 → 容器名含 `/`，修复版 shim 经 PATH 前置后 Aspire 全栈 Healthy），CREN1~9 实跑 **6 过 3 挂**。发现 1 项交付缺陷 + 2 项 🟡：N-1（🟠 必须修复）E2E-CREN2 断言严格模式歧义确定性红（`mermaid-block` 内 `svg` 命中 3 个工具栏图标 SVG）；N-2/N-3（🟡）CREN8/9 下载断言环境依赖（headless-shell 不落盘 artifacts，纯 vanilla 复现，非产品缺陷）、报告 R-17/R-18 验证结果行错位。详见第九节。
 
 ## 关联文档
 
@@ -222,14 +222,14 @@ type: Permanent
 - **问题描述**：AGENTS.md 写 E2E-CREN6「上翻后注入新消息 → **视口保持** +「回到底部」出现；点击后按钮消失并**恢复跟随**」（`tests/e2e/AGENTS.md:251`），PRD 验收要求「上翻后新消息到达视图保持原位」「点击按钮平滑滚动到底并恢复自动跟随」。spec 实际只断言按钮出现/消失（`spec:183-194`），「视口保持」「滚动到底」「恢复跟随」三个行为零断言；按钮消失断言由状态切换驱动（`ScrollToBottomButton.tsx:60` `return null`），与真实滚动位置无关。
 - **根因分析**：验收标准→断言的映射缺失，文档描述超出实际断言范围。
 - **修复方案**：注入新消息后断言 `container.scrollTop` 保持原值；点击后断言 `scrollTop + clientHeight ≈ scrollHeight`，再注入一条消息断言视口跟随；同步修正 AGENTS.md 描述。
-- **验证结果**：✅ 已修复（提交 `eba92a8d`；回归用例与「回退→转红」自证见 8.3）。
+- **验证结果**：✅ 已修复（`671b5368` 增强 E2E-CREN6 的视口保持/真实滚底/恢复跟随断言，并同步 `tests/e2e/AGENTS.md`；`MessageList.test` 单测覆盖同一状态机）。E2E-CREN6 已于第二轮复核实跑通过（见 9.3）。
 
 ### R-18（🟠）`resource_link` 无协议白名单：`javascript:`/`data:` 伪协议可执行
 
 - **问题描述**：`ContentBlockRenderer.tsx:64-67` `<a href={block.uri} target="_blank" rel="noreferrer">` 直接透传 Agent 可控 URI。`javascript:`/`data:` 伪协议点击即执行（`rel="noreferrer"` 不拦截伪协议），绕过 Markdown 链接已有的 `urlTransform` 清洗防线，违反 4.2「不执行原始 HTML 与脚本」的安全意图。
 - **根因分析**：资源链接与 Markdown 链接未走同一防线条。
 - **修复方案**：仅放行 `http(s):`/`file:` 等白名单协议，其余降级为纯文本展示；补伪协议负路径用例。
-- **验证结果**：✅ 已修复（`671b5368` 增强 E2E-CREN6 的视口保持/真实滚底/恢复跟随断言，并同步 `tests/e2e/AGENTS.md`；`MessageList.test` 单测覆盖同一状态机）。E2E 实跑受环境阻断，见 8.4。
+- **验证结果**：✅ 已修复（`ContentBlockRenderer.tsx` 协议白名单 `SAFE_RESOURCE_PROTOCOLS` + `isSafeResourceUri`，非法协议降级 `resource-link-blocked` 纯文本区块；`__tests__/ContentBlockRenderer.test.tsx` 覆盖 `javascript:`/`data:` 拦截与 `file:` 放行）。注：首轮报告此行误填 R-17 的修复描述（两行内容错位），第二轮复核时更正。
 
 ### 🟡 建议（随修复一并收口，15 项）
 
@@ -363,3 +363,88 @@ type: Permanent
 - `aspire logs mongodb` 根因：Docker daemon 29.9.2 将 registry 前缀当作容器名——`invalid container name (core.harbor.internal.fffdan.com/docker-hub-proxy/mongodb-<id>): only [a-zA-Z0-9][a-zA-Z0-9_.-] are allowed`；镜像 `mongo:7` 已成功拉取，失败发生在 create container。
 - 该问题位于执行环境 Docker 配置，与本轮 diff 无关；因此 `session-rendering.spec.ts`（CREN1~9）未能在本机实跑。已在 `tests/e2e` 完成 `tsc --noEmit` 0 error，并在单测层覆盖 CREN2/5/6/9 的同源语义。
 - **复核要求**：请在具备正常 Docker/Aspire 的机器执行 `npx playwright test src/session-rendering.spec.ts`；若环境短期不可用，可对人类书面豁免该项门禁。
+
+## 九、AI Review 复核记录（第二轮，2026-10-28）
+
+> 复核对象：返工提交 `eba92a8d` / `671b5368` / `66aa4c65` / `b7d86a3a` / `34fcf81a`（`git diff 0f187815..34fcf81a`，41 文件 +1807 −310）。
+> 复核方式：逐文件回读 diff 与变更后全文、对照 18 × 🔴🟠 + 15 × 🟡 逐项核对、独立复跑验证（不采信自报）、探针复测、区分力抽查、**E2E 实跑**（环境阻断已修复，见 9.3）。
+
+### 9.1 独立验证（本机复跑，不采信自报）
+
+| 项目 | 复跑结果 | 与自报一致 |
+|---|---|---|
+| `apps/agent-web` `tsc -b` | ✅ 0 error | ✅ |
+| `apps/agent-web` `vitest run` | ✅ **913 passed / 94 files / 0 failed** | ✅ |
+| `apps/agent-web` eslint 全仓 | ⚠️ 2 error + 5 warning，**全部存量**（2 error 均在 `cloud-host/IssuesLinkageDialog.tsx`，该文件与 release 逐字一致、不在本 diff） | ✅ |
+| `tests/e2e` typecheck | ✅ 0 error | ✅ |
+| P1~P9 + 分页 + 去标记探针（12 组，独立编写） | ✅ **12/12 通过**：P1 尾行无换行不再伪造修改对、P2/P3/P4 换行归一、P5 未终结 DCS 不吞输出、P6/P7 截断序列不泄漏参数、P8 冒号 SGR 归一、P9 正文不被占位符伪造、`collectFullHistory` 60 条三页拉全（升序无重复）+ maxPages 显式抛错、`markdownToPlainText` 去语言标签留代码正文 | — |
+| 契约核对（R-1 游标） | ✅ `agent-api sessionService.getMessages` = `.sort({_id:-1}).limit(n).reverse()` 升序返回，`collectFullHistory` 的 `page[0]` 游标推进无重叠无丢消息 | — |
+| 区分力抽查（回退→转红→恢复） | ✅ **3/3 RED-AS-EXPECTED**：R-1（`collectFullHistory` 退化直接返回窗口→2 failed）、R-5（裸 `JSON.parse`→13 failed）、R-18（关闭协议白名单→1 failed） | — |
+
+### 9.2 逐项复核结论
+
+| # | 复核结论 | 关键证据 |
+|---|---|---|
+| R-1 🔴 | ✅ 修复属实 | `lib/session-messages.ts` `collectFullHistory` before 游标分页 + maxPages 显式失败；`SessionView.tsx` 导出接线 + 条数回执 toast；探针 + **CREN9 导出落盘实证 30/30 条恰好各一次**（见 9.3） |
+| R-2 🔴 | ⚠️ 部分修复：合并语义已修、**断言仍确定性红（N-1）** | 三条注入 distinct messageId 后浏览器实测**三条独立消息渲染成功**（mermaid 成功块 + 非法块回退 + 纯文本，快照佐证）；但 `spec` 定位器 `mermaid-block .locator('svg')` 命中 3 个工具栏 lucide 图标 SVG → 严格模式必炸 |
+| R-3~R-5 🟠 | ✅ 修复属实 | `toolCallHeaderTitle` 标题回退链 title→name→kindLabel→Tool Call 且不重复前缀；`ToolCallRawSection` 「输入不可得」占位；`renderBody` 终态/失败态全覆盖；`readRawInputObject` 统一防护（区分力抽查转红） |
+| R-6/R-7 🟠 | ✅ 修复属实 | `diff.ts` 换行归一 + `diffArrays` 纯行文本；P1~P4 探针复测通过，被固化的错误期望已改 `removed[2]/added[5]` |
+| R-8 🟠 | ✅ 修复属实 | `suppressErrorRendering: true` + `cleanupTempElements` 兜底（成功/失败双路径） |
+| R-9 🟠 | ✅ 修复属实 | 未终结 DCS/APC/PM 与 OSC/CSI 裁到行尾、冒号 SGR 归一、nonce 占位符、C1/C0 剥离、`\r` 覆盖语义；P5~P9 探针复测通过 |
+| R-10/R-11 🟠 | ✅ 修复属实 | `export-thread.ts` 按 messageId（无则相邻同类）合并分片、`toolContentSection` 序列化 content 通道、思考块单层 `<thinking>` + 闭合转义 |
+| R-12/R-14 🟠 | ✅ 修复属实 | 同步几何为主 + IO 为辅、流式 `auto` 贴底、suppress 窗口区分程序化/用户滚动、prepend 单一所有权；**E2E-CREN6 实跑通过**（视口保持/真实滚底/恢复跟随三断言均绿） |
+| R-13 🟠 | ✅ 修复属实 | `markdownToPlainText` 源文本去标记 + 代码块占位保护、非文本消息不挂操作条、空内容不误报成功 |
+| R-15 🟠 | ✅ 修复属实 | `/Tool Call: (Command|Tool Call)/` + exact `Tool Call` 可红断言；**E2E-CREN5 实跑通过**（含负向断言，无恒真） |
+| R-16 🟠 | ✅ 修复属实 | `TerminalOutput.test.tsx` T-TO1~6（颜色/粗体/控制序列/XSS/maxHeight/空行/空输出） |
+| R-17 🟠 | ✅ 修复属实 | E2E-CREN6 三断言 + `message-scroll-container` testid + AGENTS.md 同步；实跑通过 |
+| R-18 🟠 | ✅ 修复属实 | `SAFE_RESOURCE_PROTOCOLS` 白名单 + 降级纯文本（区分力抽查转红） |
+| M-1~M-15 🟡 | ✅ 全部收口属实 | nonce 占位符/C1/`\r`/语言正则与别名/DiffView filePath+对称高亮+宽行号+输入上限+400 行降级/Mermaid 源码复制/raw 单行上限+折叠短路/导出排序传递性+结构转义+延迟 revoke/非文本复制/prepend 残留/测试区分力/文档口径（`.tsx`、`&nbsp;`、主题 key、断链均已改） |
+
+### 9.3 E2E 实跑（环境阻断已修复，CREN1~9 全量执行）
+
+**环境阻断根因（复核期间独立定位并绕过）**：`/usr/local/bin/docker` 是 harbor 代理镜像改写 shim，对 `pull|run|create` 归一「第一个非 `-` 开头参数」——而 DCP 调 `docker create --name <name> <image>` 时该参数是 `--name` 的**值**，被改写成 `core.harbor.internal.fffdan.com/docker-hub-proxy/<name>` → 容器名含 `/` → `invalid container name`（本机最小复现证实）。**与本轮 diff 无关**。绕过方式：PATH 前置修复版 shim（跳过带值 flag 的值、本地已有镜像不改名），随后 `aspire start` 全栈（mongodb/redis/rabbitmq + admin-api/agent-api/admin-web/cloud-controller/controller-api/agent-web）全部 **Running/Healthy**；浏览器经 `PLAYWRIGHT_DOWNLOAD_HOST=https://registry.npmmirror.com/-/binary/playwright npx playwright install chromium` + `apt` 依赖补齐。
+
+| 用例 | 结果 | 说明 |
+|---|---|---|
+| E2E-CREN1 代码块工具栏 | ✅ 通过 | 语言标签/复制 toast/换行切换 |
+| E2E-CREN2 Mermaid | ❌ **失败（N-1，交付缺陷）** | 断言 `getByTestId('mermaid-block').first().locator('svg')` 严格模式歧义（命中 3 个工具栏图标 SVG）；**渲染本身正确**：三条独立消息、合法块渲染、非法块回退代码块、纯文本正常（页面快照佐证） |
+| E2E-CREN3 差异渲染 | ✅ 通过 | 双行号 + 增删对齐 |
+| E2E-CREN4 终端 ANSI | ✅ 通过 | 颜色 span + 文本可读 |
+| E2E-CREN5 工具生命周期 | ✅ 通过 | 标题不退化 + 可红负向断言 + 原始输入可展开 |
+| E2E-CREN6 滚动导航 | ✅ 通过 | 视口保持 + 真实滚底 + 恢复跟随（R-17 三断言全绿） |
+| E2E-CREN7 窄视口 | ✅ 通过 | 无横向溢出 |
+| E2E-CREN8 导出 | ⚠️ 断言读文件失败（N-2，环境） | `download.path()` 落盘位置缺失（headless-shell 把下载写到 CWD）；**下载内容实证正确**（含 `export-me`，文件名 `session-*.md` 断言已过） |
+| E2E-CREN9 长会话导出拉全历史 | ⚠️ 同上（N-2，环境） | **下载内容实证正确：恰好 30 条、`export-history-0~29` 各出现一次**——R-1「导出拉全历史、不重复不截断」端到端成立（CREN9 前置断言 `export-history-0` 未加载也已验证窗口截断场景真实） |
+
+> N-2 定性依据：纯 `Blob + a[download] + revokeObjectURL` vanilla 探针（含「从不 revoke」对照）在本环境同样 `ENOENT`，`download.failure()` 为 `null`、`saveAs()` 亦失败——chrome-headless-shell 151 + Playwright 1.62 的下载工件处理问题，**非产品缺陷**；产品导出内容经落盘文件逐条核对正确。
+
+### 9.4 复核发现的新问题
+
+#### N-1（🟠 必须修复）E2E-CREN2 断言严格模式歧义，确定性红
+
+- **问题描述**：`tests/e2e/src/session-rendering.spec.ts:79` `expect(page.getByTestId('mermaid-block').first().locator('svg')).toBeVisible()` —— `mermaid-block` 内除图表 SVG 外还有工具栏 3 个 lucide 图标 SVG（缩小/放大/查看源码，`MermaidBlock.tsx:106-141`），`locator('svg')` 恒命中 ≥3 个元素，`toBeVisible()` 严格模式立即抛 `strict mode violation`（实跑日志证实）；图表渲染成功后为 4 个，仍歧义。**该断言任何情况下都无法通过**——PRD 功能点 2 的唯一 E2E 验收载体不可用，与首轮 R-2/R-15 同类（断言可红性/交付前实跑缺失）。R-2 修复仅解决了 chunk 合并粘连，未解决定位器歧义，8.3 注「E2E 断言已按可红口径改写」与事实不符。
+- **根因分析**：断言作用域未收窄到图表容器；工具栏图标与图表同为 `svg` 后代；返工期间 E2E 无法实跑，「可红」验证只覆盖单测层。
+- **修复方案**：① 为 mermaid 图表注入容器（`MermaidBlock.tsx:172` `dangerouslySetInnerHTML` 所在 div）增加 `data-testid="mermaid-diagram"`，断言改为 `getByTestId('mermaid-diagram').locator('svg')`（或 `getByTestId('mermaid-block').first().locator('.overflow-auto svg')`）；② 按 9.3 的环境修复配方**实跑全 spec** 并附结果；③ 非法块回退断言 `getByTestId('code-block').first()` 同样收窄作用域核对一次。
+- **验证结果**：待返工回填。
+
+#### N-2（🟡）CREN8/CREN9 下载内容断言环境依赖
+
+- **问题描述**：`spec:276/:304` 用 `download.path()` + `readFile` 读取导出内容，该路径（`test-results/.playwright-artifacts-N/…`）在 chrome-headless-shell 环境从不生成（文件实际落在 CWD），导致两条用例在部分环境必然红。已实证产品导出内容正确（见 9.3），但验收载体应可在任何环境红/绿。
+- **修复方案（建议）**：改为页面侧拦截导出内容（如 `page.addInitScript` 覆写 `URL.createObjectURL` 捕获 Blob 文本，或对 `a[download]` 点击做内容捕获）后再断言；或以 `download.createReadStream()` 并对 `failure()` 做显式判定。若判定该问题属环境限制不修，需人类书面豁免并以 9.3 落盘实证存档。
+- **验证结果**：待返工回填。
+
+#### N-3（🟡）报告 R-17/R-18「验证结果」行内容错位（已更正）
+
+- **问题描述**：首轮回填时 R-18 的验证结果行误填 R-17 的修复描述（`671b5368` E2E-CREN6 断言），R-17 行则泛填 `eba92a8d`；与 8.1 逐项表不一致，验收报告是闭环唯一事实来源，口径必须逐项准确。
+- **修复方案**：已于本节复核时更正两行（见 R-17/R-18 节）；返工回填时按 8.1 口径逐项核对。
+- **验证结果**：✅ 已更正（随本节提交）。
+
+### 9.5 判定与返工要求
+
+**判定：打回（REJECT）**。返工对 18 × 🔴🟠 + 15 × 🟡 的修复经复核**全部属实**、单测/类型/lint/探针/区分力全绿，且 R-1/R-12/R-14/R-15/R-17 的端到端行为已实跑或落盘实证；但交付物中的 E2E-CREN2 断言确定性红（N-1），违反「交付前实跑全 spec」的首轮返工要求 ③ 与「断言可红」要求 ②，须打回修复。
+
+【返工要求】
+1. **修复 N-1**（🟠 必须）：收窄 CREN2 断言作用域至图表容器，附 `npx playwright test src/session-rendering.spec.ts` 全量实跑结果（9/9 或逐条豁免说明）。环境修复配方见 9.3（docker shim 绕过 + playwright 镜像源），本机已验证可行。
+2. **收口 N-2**（🟡）：CREN8/9 内容断言改环境无关写法，或人类书面豁免 + 9.3 落盘实证存档。
+3. **核对 N-3**（🟡）：回填时逐项核对报告行文与 8.1 一致（错位已更正，勿回退）。
+4. 自报数值继续与独立复跑逐项一致；E2E 结果必须附运行输出摘要。
