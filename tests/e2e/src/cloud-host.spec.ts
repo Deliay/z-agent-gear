@@ -349,6 +349,7 @@ async function seedGithub(page: import('@playwright/test').Page, userId: string)
   await db.collection('githubaccounts').insertOne({
     _id: accountId,
     userId,
+    tenantId: userId, // 多租户一期：githubaccounts.tenantId 对齐 userId 的 String 类型
     // GraphQL Int 为 32 位；Date.now() 会溢出导致 githubAccounts 查询整体报错
     githubUserId: 20261024,
     githubLogin: 'phase10-owner',
@@ -413,6 +414,7 @@ async function seedProjectSession(
   await db.collection('sessions').insertOne({
     _id: sessionId,
     userId: new mongoose.Types.ObjectId(userId),
+    tenantId: new mongoose.Types.ObjectId(userId),
     controllerId: new mongoose.Types.ObjectId(controllerId),
     controllerName,
     acpServerType: 'opencode',

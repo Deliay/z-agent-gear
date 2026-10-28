@@ -213,6 +213,8 @@ interface ParsedHarnessRequest {
   hostId: string;
   refId: string;
   userId: string;
+  /** 租户归属（多租户一期）：与 `userId` 同值；旧版调用方缺省时回退 `userId`。 */
+  tenantId: string;
   hostName: string;
   harnessTypes: string[];
   controllerKeyId: string | null;
@@ -249,6 +251,23 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
     : nonEmptyString(body.containerApiKeyId);
   const agentGearMinVersion = nonEmptyString(body.agentGearMinVersion);
   if (!hostId || !refId || !userId || !hostName) return null;
+
+  // 多租户一期（契约 A.2.2 / F8）：`tenantId` 与 `userId` 同值（个人专属租户 _id 复用 userId）。
+  // 滚动升级兼容：旧版 agent-api 未下发 tenantId 时回退 `tenantId = userId` 并 warn
+  //（发布顺序已保证新版 agent-api 先上线，回退仅兜底）；显式下发但非法（空串/非字符串）
+  // 仍按 `400 INVALID_HARNESS` 处理，避免静默写入错误归属。
+  const rawTenantId = body.tenantId;
+  let tenantId: string;
+  if (rawTenantId === undefined || rawTenantId === null) {
+    tenantId = userId;
+    console.warn(
+      `[internal-api] harness 请求缺少 tenantId（userId=${userId}），已回退 tenantId=userId（一期恒等）`,
+    );
+  } else {
+    const parsedTenantId = nonEmptyString(rawTenantId);
+    if (!parsedTenantId) return null;
+    tenantId = parsedTenantId;
+  }
   if (!agentGearMinVersion || !/^\d+\.\d+\.\d+$/.test(agentGearMinVersion)) {
     return null;
   }
@@ -302,6 +321,7 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
     hostId,
     refId,
     userId,
+    tenantId,
     hostName,
     harnessTypes: [...new Set(harnessTypes as string[])],
     controllerKeyId,
@@ -457,6 +477,7 @@ export function createInternalRouter(
           containerApiKeyId: harness.containerApiKeyId,
           agentGearMinVersion: harness.agentGearMinVersion,
           userId: harness.userId,
+          tenantId: harness.tenantId,
           expiresAt: harness.expiresAt,
           controllerId: harness.controllerId,
           secrets: harness.secrets,

@@ -61,6 +61,19 @@ describe('费用中心组件', () => {
     expect(onRecharge).toHaveBeenCalledWith(accounts[0]);
   });
 
+  it('T-MT-ADMIN: 账户类型兼容 tenant 文案', () => {
+    render(
+      <AccountTable
+        accounts={[{ ...accounts[0], id: 'a3', ownerType: 'tenant', ownerName: 'tenant-a' }]}
+        selectedId={null}
+        onSelect={vi.fn()}
+        onRecharge={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('tenant-a')).toBeDefined();
+    expect(screen.getByText('租户')).toBeDefined();
+  });
+
   it('T-AW4: 汇总图按桶渲染消费与充值', () => {
     render(
       <RollupChart

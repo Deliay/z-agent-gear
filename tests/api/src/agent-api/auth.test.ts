@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
+import { createFrontUser, uniqueFrontUsername } from '../support/front-users.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 
@@ -14,108 +15,131 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
   });
 }
 
-describe('Auth API', () => {
-  let testToken = '';
-  let testUserId = '';
+interface LoginPayload {
+  token: string;
+  user: {
+    id: string;
+    name: string;
+    createdAt: string;
+    tenant: { id: string; name: string; type: string; memberCount: number };
+  };
+}
 
-  describe('signup', () => {
-    const SIGNUP = `
-      mutation Signup($username: String!, $password: String!) {
-        signup(username: $username, password: $password) {
-          token
-          user { id username createdAt }
-        }
+const LOGIN = `
+  mutation Login($username: String!, $password: String!) {
+    login(username: $username, password: $password) {
+      token
+      user {
+        id
+        name
+        createdAt
+        tenant { id name type memberCount }
       }
-    `;
+    }
+  }
+`;
 
-    it('should create a new user and return token', async () => {
-      const res = await gqlRequest(SIGNUP, { username: `test_${Date.now()}`, password: 'password123' });
-      const body = await res.json();
+const ME = `
+  query Me {
+    me {
+      id
+      name
+      createdAt
+      tenant { id name type memberCount }
+    }
+  }
+`;
+
+async function login(username: string, password: string) {
+  const res = await gqlRequest(LOGIN, { username, password });
+  return (await res.json()) as {
+    data?: { login?: LoginPayload };
+    errors?: Array<{ message: string }>;
+  };
+}
+
+describe('Auth API', () => {
+  // 多租户一期：前台注册已硬关闭，测试用户统一经 agent-api `POST /internal/users` 开户。
+  const password = 'password123';
+  let username = '';
+  let userId = '';
+  let tenantId = '';
+
+  beforeAll(async () => {
+    const user = await createFrontUser(uniqueFrontUsername('auth'), password);
+    username = user.username;
+    userId = user.userId;
+    tenantId = user.tenantId;
+  });
+
+  describe('contract: 前台无自助注册', () => {
+    it('introspection 中不存在 signup/register mutation，仅保留 login', async () => {
+      const res = await gqlRequest(`
+        query Introspect {
+          __schema { mutationType { fields { name } } }
+        }
+      `);
+      const body = (await res.json()) as {
+        data?: { __schema: { mutationType: { fields: Array<{ name: string }> } } };
+        errors?: Array<{ message: string }>;
+      };
       expect(body.errors).toBeUndefined();
-      expect(body.data.signup.token).toBeDefined();
-      expect(body.data.signup.user.username).toContain('test_');
-      expect(body.data.signup.user.id).toBeDefined();
-      testToken = body.data.signup.token;
-      testUserId = body.data.signup.user.id;
+      const names = body.data!.__schema.mutationType.fields.map((f) => f.name.toLowerCase());
+      expect(names.some((n) => n.includes('signup') || n.includes('register'))).toBe(false);
+      expect(names).toContain('login');
     });
 
-    it('should reject duplicate username', async () => {
-      const username = `dup_${Date.now()}`;
-      await gqlRequest(SIGNUP, { username, password: 'password123' });
-      const res = await gqlRequest(SIGNUP, { username, password: 'password123' });
-      const body = await res.json();
-      expect(body.errors).toBeDefined();
-      expect(body.errors[0].message).toBe('Username already taken');
-    });
-
-    it('should reject short username (under 2 chars)', async () => {
-      const res = await gqlRequest(SIGNUP, { username: 'a', password: 'password123' });
-      const body = await res.json();
-      expect(body.errors).toBeDefined();
-      expect(body.errors[0].message.toLowerCase()).toContain('username');
-    });
-
-    it('should reject short password (under 6 chars)', async () => {
-      const res = await gqlRequest(SIGNUP, { username: `valid_${Date.now()}`, password: '12345' });
-      const body = await res.json();
-      expect(body.errors).toBeDefined();
-      expect(body.errors[0].message.toLowerCase()).toContain('password');
+    it('User 契约暴露 name + tenant，不再暴露登录字段 username', async () => {
+      const res = await gqlRequest(`
+        query UserFields {
+          __type(name: "User") { fields { name } }
+        }
+      `);
+      const body = (await res.json()) as {
+        data?: { __type: { fields: Array<{ name: string }> } };
+        errors?: Array<{ message: string }>;
+      };
+      expect(body.errors).toBeUndefined();
+      const fields = body.data!.__type.fields.map((f) => f.name);
+      expect(fields).toContain('name');
+      expect(fields).toContain('tenant');
+      expect(fields).not.toContain('username');
     });
   });
 
   describe('login', () => {
-    const LOGIN_USERNAME = `login_${Date.now()}`;
-    const LOGIN_PASSWORD = 'password123';
-
-    const SIGNUP = `
-      mutation Signup($username: String!, $password: String!) {
-        signup(username: $username, password: $password) {
-          token
-          user { id username }
-        }
-      }
-    `;
-    const LOGIN = `
-      mutation Login($username: String!, $password: String!) {
-        login(username: $username, password: $password) {
-          token
-          user { id username }
-        }
-      }
-    `;
-
-    it('should login with correct credentials', async () => {
-      await gqlRequest(SIGNUP, { username: LOGIN_USERNAME, password: LOGIN_PASSWORD });
-      const res = await gqlRequest(LOGIN, { username: LOGIN_USERNAME, password: LOGIN_PASSWORD });
-      const body = await res.json();
+    it('should login with correct credentials and expose name + personal tenant', async () => {
+      const body = await login(username, password);
       expect(body.errors).toBeUndefined();
-      expect(body.data.login.token).toBeDefined();
-      expect(body.data.login.user.username).toBe(LOGIN_USERNAME);
+      const payload = body.data!.login!;
+      expect(payload.token).toBeDefined();
+      expect(payload.user.id).toBe(userId);
+      expect(payload.user.name).toBe(username);
+      expect(payload.user.createdAt).toBeTruthy();
+      expect(payload.user.tenant).toMatchObject({
+        name: username,
+        type: 'personal',
+        memberCount: 1,
+      });
+      // personal 期：租户 _id 复用 userId
+      expect(payload.user.tenant.id).toBe(tenantId);
+      expect(payload.user.tenant.id).toBe(payload.user.id);
     });
 
     it('should reject wrong password', async () => {
-      const res = await gqlRequest(LOGIN, { username: LOGIN_USERNAME, password: 'wrongpass' });
-      const body = await res.json();
+      const body = await login(username, 'wrongpass');
       expect(body.errors).toBeDefined();
-      expect(body.errors[0].message).toBe('Invalid username or password');
+      expect(body.errors![0].message).toBe('Invalid username or password');
     });
 
     it('should reject non-existent username', async () => {
-      const res = await gqlRequest(LOGIN, { username: 'nonexistent_user', password: 'password123' });
-      const body = await res.json();
+      const body = await login('nonexistent_user', 'password123');
       expect(body.errors).toBeDefined();
-      expect(body.errors[0].message).toBe('Invalid username or password');
+      expect(body.errors![0].message).toBe('Invalid username or password');
     });
   });
 
   describe('me', () => {
-    const ME_USERNAME = `me_${Date.now()}`;
-    const ME = `
-      query Me {
-        me { id username }
-      }
-    `;
-
     it('should return null when not authenticated', async () => {
       const res = await gqlRequest(ME);
       const body = await res.json();
@@ -123,17 +147,18 @@ describe('Auth API', () => {
       expect(body.data.me).toBeNull();
     });
 
-    it('should return current user when authenticated', async () => {
-      const signupRes = await gqlRequest(
-        `mutation { signup(username: "${ME_USERNAME}", password: "password123") { token user { id username } } }`,
-      );
-      const signupBody = await signupRes.json();
-      const token = signupBody.data.signup.token;
+    it('should return current user (name + tenant) when authenticated', async () => {
+      const { token } = await login(username, password).then((body) => body.data!.login!);
 
       const res = await gqlRequest(ME, undefined, token);
       const body = await res.json();
       expect(body.errors).toBeUndefined();
-      expect(body.data.me.username).toBe(ME_USERNAME);
+      expect(body.data.me).toMatchObject({
+        id: userId,
+        name: username,
+        tenant: { id: tenantId, name: username, type: 'personal', memberCount: 1 },
+      });
+      expect(body.data.me.createdAt).toBeTruthy();
     });
   });
 });

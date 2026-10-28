@@ -1,6 +1,13 @@
 import mongoose from 'mongoose';
 
-export const BILLING_OWNER_TYPES = ['front_user', 'admin_user'] as const;
+/**
+ * 计费账户归属类型：
+ * - `front_user` **已废弃**：存量前台行由迁移 014 转为 `tenant`（ownerId 不变），仅作历史兼容保留；
+ *   运行时读请求在 route 层归一解析为同 ownerId 的 `tenant` 行，写请求不再接受该值。
+ * - `admin_user`：后台账户计费，保持原样，与 `tenant` 并存（后台链路零改动）。
+ * - `tenant`：前台租户计费账户（ownerId=tenantId，一期 personal 恒等于 userId）。
+ */
+export const BILLING_OWNER_TYPES = ['front_user', 'admin_user', 'tenant'] as const;
 export type BillingOwnerType = (typeof BILLING_OWNER_TYPES)[number];
 
 export const BILLING_ACCOUNT_STATUSES = ['active', 'frozen'] as const;

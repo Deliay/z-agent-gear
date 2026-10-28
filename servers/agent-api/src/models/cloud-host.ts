@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 export const CLOUD_HOST_STATUSES = [
   'STARTING',
@@ -24,6 +25,7 @@ export type HarnessType = (typeof HARNESS_TYPES)[number];
 const cloudHostSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     name: { type: String, required: true, trim: true },
     harnessTypes: {
       type: [String],
@@ -68,6 +70,8 @@ cloudHostSchema.index({ userId: 1, status: 1 });
 cloudHostSchema.index({ controllerId: 1 });
 // A-5（PRD v1.0）：数量无限制；活跃唯一索引 uniq_active_cloud_host_per_user
 // 已由迁移 011 下线（迁移 005 只读不回改），此处不得再声明。
+
+applyTenantScope(cloudHostSchema);
 
 export const CloudHost = mongoose.model('CloudHost', cloudHostSchema);
 export type ICloudHost = mongoose.InferSchemaType<typeof cloudHostSchema>;

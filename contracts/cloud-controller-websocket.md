@@ -401,6 +401,7 @@ Content-Type: application/json
   "hostId": "<cloudHostId>",
   "refId": "<controllerKeyId>",
   "userId": "<前台用户 ID>",
+  "tenantId": "<前台用户所属租户 ID，与 userId 同值>",
   "hostName": "<用户命名>",
   "harnessTypes": ["opencode", "deepseek_harness"],
   "containerApiKeyId": "<运行专用模型 Key ID>",
@@ -420,6 +421,7 @@ Content-Type: application/json
 ```
 
 - `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`agentGearMinVersion`/`secrets`/`workloadPlan` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
+- `tenantId` **可选**（滚动升级兼容）：与 `userId` 同值（个人专属租户 `_id` 复用 userId），落库到 `cloudcontainers.tenantId`；旧版 agent-api 未下发时回退为 `tenantId = userId` 并记录 warn（一期恒等，发布顺序已保证新版 agent-api 先上线，回退仅兜底）。显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
 - `harnessTypes` 仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 下限恒为 `2.10.0`（以 2.10.0 为底取 max），含 `deepseek_harness` 时为 `2.11.0`（见 §3.4）。
 - `expiresAt` 仅落库留存（容器 TTL 留档，不再关联模型 Key 有效期；模型 Key 改为随容器回收）；Job **不再设置 `activeDeadlineSeconds`**，工作容器最长运行时间无限制，不会因到期被 K8s 强制销毁。
 - `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。

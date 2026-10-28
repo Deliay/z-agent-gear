@@ -95,6 +95,9 @@ const cloudContainerSchema = new mongoose.Schema(
     purpose: { type: String, enum: CONTAINER_PURPOSES, required: true },
     refId: { type: String, default: null },
     userId: { type: String, default: null },
+    // 租户归属（多租户一期）：复制新增字段，personal 期恒等于 userId（迁移 001 回填存量行）；
+    // default null 兼容历史行与未携带归属的 idle 容器（仅 harness 写入）。
+    tenantId: { type: String, default: null, index: true },
     // 云电脑（purpose=harness）关联字段；历史记录缺失时读取层容忍为 null/[]
     hostId: { type: String, default: null, index: true },
     hostName: { type: String, default: null },

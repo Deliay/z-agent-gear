@@ -1,28 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { createFrontUser } from './helpers';
 
-const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const TEST_PASS = 'testpass123';
-
-async function gqlRequest(
-  page: import('@playwright/test').Page,
-  query: string,
-  variables?: Record<string, unknown>,
-) {
-  return page.request.post(API_URL, {
-    headers: { 'Content-Type': 'application/json' },
-    data: { query, variables },
-  });
-}
-
-async function registerUser(page: import('@playwright/test').Page): Promise<string> {
-  const username = `fb${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  await gqlRequest(
-    page,
-    `mutation Signup($u: String!, $p: String!) { signup(username: $u, password: $p) { token } }`,
-    { u: username, p: TEST_PASS },
-  );
-  return username;
-}
 
 async function loginViaUI(page: import('@playwright/test').Page, username: string) {
   await page.goto('/login');
@@ -38,7 +17,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
  */
 test.describe('Frontend Billing E2E', () => {
   test('我的费用页可见账户与 API Key，且不存在自助充值入口', async ({ page }) => {
-    const username = await registerUser(page);
+    const { username } = await createFrontUser(page, { prefix: 'fb' });
     await loginViaUI(page, username);
     await page.goto('/billing');
 

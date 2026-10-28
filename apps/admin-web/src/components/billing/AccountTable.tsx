@@ -10,6 +10,12 @@ interface Props {
   onRecharge: (account: BillingAccountData) => void
 }
 
+const OWNER_TYPE_LABELS: Record<string, string> = {
+  admin_user: '后台',
+  tenant: '租户',
+  front_user: '前台',
+}
+
 export default function AccountTable({ accounts, selectedId, onSelect, onRecharge }: Props) {
   if (accounts.length === 0) {
     return <p className="text-sm text-muted-foreground">暂无账户</p>
@@ -46,7 +52,7 @@ export default function AccountTable({ accounts, selectedId, onSelect, onRecharg
                   <div className="font-medium">{account.ownerName}</div>
                   <div className="text-xs text-muted-foreground">{account.ownerId}</div>
                 </td>
-                <td className="py-2 pr-3">{account.ownerType === 'admin_user' ? '后台' : '前台'}</td>
+                <td className="py-2 pr-3">{OWNER_TYPE_LABELS[account.ownerType] ?? account.ownerType}</td>
                 <td className={`py-2 pr-3 text-right ${negative ? 'text-destructive' : ''}`}>
                   {account.availableBalance.toFixed(2)}
                 </td>

@@ -26,6 +26,10 @@ aspire describe agent-api
 
 ### 3. 填入环境变量并执行测试
 
+> **多租户一期（F4）**：前台注册已硬关闭，测试用户统一由 `src/support/front-users.ts` 的
+> `createFrontUser()` 经 agent-api `POST /internal/users` 开户（Bearer `INTERNAL_API_TOKEN`）后登录。
+> 因此 `INTERNAL_API_TOKEN` 是所有需要造用户套件的前置条件；缺失时用例显式报错。
+
 ```bash
 # 查看各服务 endpoint
 aspire describe agent-api
@@ -55,7 +59,7 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（37 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm test` | 运行全部常规测试文件（45 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -67,11 +71,12 @@ npm test
 |------|------|--------|
 | `API_URL` | agent-api GraphQL 完整地址 | `http://localhost:10001/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 完整地址 | `http://localhost:10003/graphql` |
+| `AGENT_API_URL` | admin-api → agent-api 内部地址（`adminCreateFrontUser` 转发 `POST /internal/users`；由 AppHost 注入 admin-api 侧，测试侧无需直连，仅当 admin-api 未注入时用于排查 `AGENT_API_UNAVAILABLE`） | -（admin-api 侧配置） |
 | `MONGODB_URI` | 共享 MongoDB 连接串（T-A7 强制改密守卫、scope 隔离、**T-AC5 模型来源分组**等 DB 断言用）。Aspire 默认 `tls=true`，自签 dev cert 需追加 `tlsAllowInvalidCertificates=true`（或在 shell 中用单引号包裹避免 `&` 被截断）。**T-AC5 为模型来源分组唯一验收，缺参时用例显式失败（不再静默 skip）**；billing-events T-CC-B11、billing-gateway T-B24/T-B27/T-B28 同样缺参即失败；**T-PR16（READY 打回）需直写实例快照，缺参时该用例跳过**；其余历史用例缺省时仍跳过 | -（可 `aspire describe mongodb` 获取） |
 | `CLOUD_CONTROLLER_INTERNAL_TOKEN` | cloud-controller 内部 API Bearer token。**无默认值**（问题 47）：须与 Aspire 注入的 `internal-api-token` 一致；**billing-events 全部用例缺参即失败（不再整套 skip）**，其余内部 API 套件未提供时跳过 | - |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）：Aspire 每次启动随机生成（admin-api 首次种子时一次性打印到启动日志），或经 `Parameters__admin-initial-password` 注入；测试须注入与服务一致的值 | - |
 | `CONTROLLER_API_URL` | controller-api **基础地址**（Socket.IO 直连，**不要**带 `/graphql`；带路径会导致注册超时级联） | `http://localhost:35273` |
-| `INTERNAL_API_TOKEN` | agent-api 内部 API Bearer token（云电脑 ready/terminal、cloud-host-callback 等内部套件；缺失时相关用例跳过） | - |
+| `INTERNAL_API_TOKEN` | agent-api 内部 API Bearer token。**多租户一期起为测试用户开户的唯一引导**：`src/support/front-users.ts` 的 `createFrontUser()` 调 `POST /internal/users`（Bearer 本 token）再 `login` 取 token；缺失时所有需要造用户的套件显式报错（不再静默跳过）。云电脑 ready/terminal、cloud-host-callback、billing 内部 REST 同用 | - |
 | `HARNESS_ENABLED` | 置 `true` 时运行云电脑 harness 套件；缺省/false 时走 feature-disabled 分支（会误跳过 T-CH2 等用例） | `false` |
 | `REDIS_URL` | workflow 套件直连 Redis（断言 channel/缓存）；需与 agent-api `REDIS_URI` 同一实例 | `redis://localhost:6379` |
 | `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* / T-CR* 用例；缺失时整套跳过） | - |
@@ -134,17 +139,35 @@ npm test
 
 ### Auth API (`auth.test.ts`)
 
+> 前台注册已硬关闭（多租户一期）：契约层无 `signup`，测试用户统一经 `src/support/front-users.ts` 的
+> `createFrontUser()`（`POST /internal/users` 开户 + `login`）引导。
+
 | 测试 | 描述 |
 |------|------|
-| signup - 创建用户 | 应返回 token 和用户信息 |
-| signup - 重复用户名 | 应返回错误「Username already taken」 |
-| signup - 用户名过短 | 应返回用户名校验错误 |
-| signup - 密码过短 | 应返回密码校验错误 |
-| login - 正确凭证 | 应返回 token 和用户信息 |
+| 契约 - 无自助注册 | introspection 的 mutation 无 signup/register，仅保留 login |
+| 契约 - User 字段 | `User` 暴露 `name` + `tenant`，不再暴露登录字段 `username` |
+| login - 正确凭证 | 应返回 token 和用户信息；`user.name`=用户名、`tenant` 同名 personal、memberCount=1、tenant.id=user.id |
 | login - 错误密码 | 应返回「Invalid username or password」 |
 | login - 不存在的用户 | 应返回「Invalid username or password」 |
 | me - 未认证 | 应返回 null |
-| me - 已认证 | 应返回当前用户信息 |
+| me - 已认证 | 应返回当前用户信息（id/name/createdAt + personal tenant） |
+
+### 多租户一期验收 (`agent-api/multi-tenant.test.ts` T-MT*)
+
+> 需要 agent-api + controller-api 就绪，且注入 `INTERNAL_API_TOKEN`（开户）；fake controller 走真实
+> Socket.IO 握手（自动应答 `acp:check` / `acp:start`）。T-MT5 直读共享 Mongo，需要 `MONGODB_URI`（缺省跳过）。
+
+| 测试 | 描述 |
+|------|------|
+| T-MT1 开户 → login → me | `me.name`=用户名、`me.tenant` 同名 personal、`memberCount=1`、tenant.id=user.id（personal 期 tenantId==userId） |
+| T-MT2a 会话隔离 | B 查 A 的 `session(id)` 返回 null；B 的 `sessions` 列表不含 A 会话 |
+| T-MT2b 工作区隔离 | B `controllerWorkspaces(A.controllerId)` 报 Not found（不泄露存在性）；B 的列表不含 A 工作区；B `deleteWorkspace(A)` 不生效 |
+| T-MT2c MCP server 隔离 | B 查 A 的 `mcpServer(id)` 返回 null；B `setMcpServerEnabled` 拒绝；B 列表不含 |
+| T-MT2d 待办隔离 | B 的 `getTodoList` 不含 A 的 todo；B `markTodoRead(A)` 返回 false |
+| T-MT2e 工作流模板隔离 | B 列表不含 A 模板；B update 报「不存在或无权限」；B delete 不生效 |
+| T-MT2f 列表抽查 | controllers / configuredWorkflows 跨租户列表不含 A 数据（其余集合由各 service 的 T-ISO-* 单测覆盖） |
+| T-MT3 行为回归 | A 的会话/控制器/工作区/模板/MCP/待办列表仍能看到自己创建的数据 |
+| T-MT5 迁移核对（需 `MONGODB_URI`） | users 三件套（name/tenantId/accountId、tenantId==userId）、accounts/tenants 关联、sessions tenantId==userId、billingaccounts 前台 ownerType=tenant 且无遗留 front_user 行、controllers/controllerworkspaces tenantId 回填 |
 
 ### LLM Provider & Model API (`llm.test.ts`)
 
@@ -492,6 +515,22 @@ npm test
 | 无注册 mutation | introspection 无 signup/register，含 adminlogin |
 | 业务 mutation 无 token | 「Not authenticated」 |
 
+### Admin 租户与开户 API (`admin-api/tenant.test.ts` T-AT-API*)
+
+> `contracts/admin-tenant.graphql`：租户/用户为只读镜像，`adminCreateFrontUser` 为唯一写操作
+> （admin-api 转发 agent-api `POST /internal/users`）。需要 admin-api + agent-api 就绪、
+> `INTERNAL_API_TOKEN`（上游开户 Bearer）与 `AGENT_API_URL`。
+
+| 测试 | 描述 |
+|------|------|
+| T-AT-API1 未鉴权 | adminTenants / adminTenant / adminCreateFrontUser 均「Not authenticated」 |
+| T-AT-API2 只读性 | introspection：租户相关写操作仅 adminCreateFrontUser，无 update/delete/disable mutation |
+| T-AT-API3 开户闭环 | 开户 → `adminTenants(keyword)` 命中同名 personal（memberCount=1、balance=0）→ 新账户 `login` 的 tenant 与之一致 |
+| T-AT-API4 详情成员 | `adminTenant(id)` 的 users 关联 `username`（取自其 account）与 name |
+| T-AT-API5 检索分页 | `keyword` 过滤 + `page/pageSize` 生效（两页各 1 条且不重复） |
+| T-AT-API6 重名 | 幂等返回既有三件套视图（或 409 `USERNAME_TAKEN`）；同名租户仅 1 条 |
+| T-AT-API7 非法参数/未知 id | 用户名 2-20、密码 ≥6 逐字错误；未知/非法 id 的 `adminTenant` 返回 null |
+
 ### Admin Global LLM API (`admin-api/llm.test.ts`)
 
 | 测试 | 描述 |
@@ -563,6 +602,7 @@ npm test
 | T-ICC7 required 归一与校验 | `required` 缺省/`null` → `false`、`true` 保留并回读；非布尔 → 400 `INVALID_WORKLOAD` |
 | T-ICC8 兜底 required=false | 仅 `workloadIds` 兜底展开的 plan 条目 `required` 一律 `false` |
 | T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（全局基线 2.10.0；kimi/deepseek/opencode 组合均为 2.10.0，需 `MONGODB_URI`） |
+| T-IC-HARNESS3 tenantId | harness 创建落库 `cloudcontainers.tenantId`：显式下发=userId；缺省回退=userId（旧版调用方兼容）；显式空串 → 400 `INVALID_HARNESS`（需 `MONGODB_URI`） |
 | T-IC6 日志 params | 直写 `cloudworkloadlogs.params`/`required` 后按记录返回参数快照与必须标记；历史无 `params` 归一为 `{}`、无 `required` 归一为 `false` |
 
 ### Admin Cloud Workload API (`admin-api/cloud-workload.test.ts` T-IA*)
@@ -647,6 +687,9 @@ npm test
 | 测试 | 描述 |
 |------|------|
 | T-B* | 账户/账单/收据/充值/ApiKey 全链路与鉴权、幂等、错误映射 |
+| T-B32 tenant owner | 开户即建零余额 tenant 账户；`adminBillingAccounts(ownerType: tenant)` 可检索；充值 10 credits 到账（invoice/receipt） |
+| T-B33 admin_user 回归 | admin_user 账户查询/充值照旧，与 tenant 账户余额互不影响（双 owner 并存） |
+| T-B34 front_user 兼容 | 读：`GET /internal/billing/account?ownerType=front_user` 解析到同 ownerId 的 tenant 行；写：`POST /internal/billing/api-keys` 携带 front_user → 201 且落库 `ownerType=tenant`（兼容归一，不产生 front_user 新行） |
 
 ### 前台云电脑（harness）
 

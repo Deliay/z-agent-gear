@@ -14,7 +14,7 @@ import { CREATE_MY_BILLING_API_KEY, REVOKE_MY_BILLING_API_KEY } from '@/graphql/
 const account = {
   __typename: 'BillingAccount',
   id: 'a1',
-  ownerType: 'front_user',
+  ownerType: 'tenant',
   ownerId: 'u1',
   ownerName: 'alice',
   cashBalance: -3,

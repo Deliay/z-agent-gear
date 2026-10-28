@@ -375,3 +375,16 @@ export const REVOKE_BILLING_API_KEY = gql`
     }
   }
 `
+
+// ---------- 租户开户（contracts/admin-tenant.graphql） ----------
+
+export const ADMIN_CREATE_FRONT_USER = gql`
+  mutation AdminCreateFrontUser($username: String!, $password: String!) {
+    adminCreateFrontUser(username: $username, password: $password) {
+      id
+      name
+      username
+      createdAt
+    }
+  }
+`

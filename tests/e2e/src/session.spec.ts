@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient } from 'socket.io-client';
 import mongoose from 'mongoose';
+import { registerUser } from './helpers';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
@@ -15,20 +16,6 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
     body.variables = variables;
   }
   return page.request.post(API_URL, { headers, data: body });
-}
-
-async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string; userId: string }> {
-  const username = `es${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const res = await gqlRequest(page, `
-    mutation Signup($username: String!, $password: String!) {
-      signup(username: $username, password: $password) {
-        token
-        user { id username }
-      }
-    }
-  `, { username, password: 'testpass123' });
-  const body = await res.json();
-  return { token: body.data.signup.token, username, userId: body.data.signup.user.id };
 }
 
 async function createControllerKey(page: import('@playwright/test').Page, token: string): Promise<{ rawKey: string; keyId: string }> {
@@ -452,6 +439,7 @@ test.describe('Session E2E', () => {
       _id: extraId,
       // McpServer.userId 在 schema 中是 String，直写字符串与 GraphQL 查询一致
       userId,
+      tenantId: userId, // 多租户一期：McpServer.tenantId 对齐 userId 的 String 类型
       name: 'e2e-extra-mcp',
       transport: 'registered_proxy',
       source: 'manual',

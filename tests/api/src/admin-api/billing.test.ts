@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import mongoose from 'mongoose';
 import { adminGql, ensureAdminLogin } from './helpers.js';
+import { createFrontUser, type FrontUser } from '../support/front-users.js';
 
 const ADMIN_HTTP = (process.env.ADMIN_API_URL || 'http://localhost:10003/graphql').replace(
   /\/graphql$/,
@@ -27,6 +28,20 @@ const ACCOUNTS = `
     adminBillingAccounts(keyword: $keyword) {
       id ownerType ownerName cashBalance creditLimit frozenAmount availableBalance status
     }
+  }
+`;
+
+const ACCOUNTS_BY_OWNER = `
+  query AccountsByOwner($keyword: String, $ownerType: BillingOwnerType) {
+    adminBillingAccounts(keyword: $keyword, ownerType: $ownerType) {
+      id ownerType ownerId ownerName availableBalance cashBalance
+    }
+  }
+`;
+
+const ACCOUNT_BY_ID = `
+  query Account($id: ID!) {
+    adminBillingAccount(id: $id) { id ownerType availableBalance }
   }
 `;
 
@@ -84,6 +99,9 @@ const RECONCILE = `
 
 describe('Admin Billing API', () => {
   let token = '';
+  // 双 owner 回归共享状态（T-B32 建 tenant 账户 → T-B33 断言互不影响 → T-B34 读兼容）
+  let frontUser: FrontUser;
+  let frontAccountId = '';
 
   beforeAll(async () => {
     token = await ensureAdminLogin();
@@ -171,6 +189,120 @@ describe('Admin Billing API', () => {
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe('invalid_api_key');
   });
+
+  it('T-B32: tenant 计费账户可检索且充值到账（tenant 为新前台 owner）', async () => {
+    frontUser = await createFrontUser();
+    // 开户已 get-or-create 零余额 tenant 计费账户
+    const accounts = await adminGql<{
+      adminBillingAccounts: Array<{
+        id: string;
+        ownerType: string;
+        ownerId: string;
+        ownerName: string;
+        availableBalance: number;
+      }>;
+    }>(ACCOUNTS_BY_OWNER, { keyword: frontUser.username, ownerType: 'tenant' }, token);
+    expect(accounts.errors).toBeUndefined();
+    const tenantAccount = accounts.data!.adminBillingAccounts.find(
+      (a) => a.ownerId === frontUser.tenantId,
+    );
+    expect(tenantAccount, 'tenant 计费账户应可由 ownerType=tenant 检索').toBeDefined();
+    expect(tenantAccount!.ownerType).toBe('tenant');
+    expect(tenantAccount!.ownerName).toBe(frontUser.username);
+    expect(tenantAccount!.availableBalance).toBe(0);
+    frontAccountId = tenantAccount!.id;
+
+    const recharge = await adminGql<{
+      rechargeBillingAccount: { seq: number; amount: number; balanceAfter: number; type: string };
+    }>(RECHARGE, { id: frontAccountId, amount: 10, note: 'tenant api test' }, token);
+    expect(recharge.errors).toBeUndefined();
+    expect(recharge.data!.rechargeBillingAccount).toMatchObject({
+      type: 'recharge',
+      amount: 10,
+      balanceAfter: 10,
+    });
+
+    const after = await adminGql<{ adminBillingAccount: { availableBalance: number; ownerType: string } }>(
+      ACCOUNT_BY_ID,
+      { id: frontAccountId },
+      token,
+    );
+    expect(after.errors).toBeUndefined();
+    expect(after.data!.adminBillingAccount.ownerType).toBe('tenant');
+    expect(after.data!.adminBillingAccount.availableBalance).toBe(10);
+
+    const invoices = await adminGql<{ adminBillingInvoices: Array<{ type: string; amount: number }> }>(
+      INVOICES,
+      { id: frontAccountId },
+      token,
+    );
+    expect(invoices.data!.adminBillingInvoices.some((i) => i.type === 'recharge' && i.amount === 10)).toBe(true);
+  });
+
+  it('T-B33: admin_user 双 owner 回归（充值/查询互不影响）', async () => {
+    expect(frontAccountId).toBeTruthy();
+    const adminAccounts = await adminGql<{
+      adminBillingAccounts: Array<{ id: string; ownerType: string; availableBalance: number; cashBalance: number }>;
+    }>(ACCOUNTS_BY_OWNER, { ownerType: 'admin_user', keyword: 'admin' }, token);
+    expect(adminAccounts.errors).toBeUndefined();
+    const adminAccount = adminAccounts.data!.adminBillingAccounts[0];
+    expect(adminAccount).toBeDefined();
+    expect(adminAccount.ownerType).toBe('admin_user');
+    // balanceAfter 为现金余额口径（cashBalance），与 availableBalance（含 creditLimit/gift/frozen）不同
+    const beforeCash = adminAccount.cashBalance;
+
+    const recharge = await adminGql<{
+      rechargeBillingAccount: { amount: number; balanceAfter: number };
+    }>(RECHARGE, { id: adminAccount.id, amount: 5, note: 'admin_user regression' }, token);
+    expect(recharge.errors).toBeUndefined();
+    expect(recharge.data!.rechargeBillingAccount.balanceAfter).toBe(beforeCash + 5);
+
+    // tenant 账户余额不受 admin_user 充值影响
+    const tenantAfter = await adminGql<{ adminBillingAccount: { availableBalance: number } }>(
+      ACCOUNT_BY_ID,
+      { id: frontAccountId },
+      token,
+    );
+    expect(tenantAfter.data!.adminBillingAccount.availableBalance).toBe(10);
+  });
+
+  it.skipIf(!process.env.INTERNAL_API_TOKEN)(
+    'T-B34: front_user 读兼容（解析到 tenant 行）+ 写兼容归一为 tenant',
+    async () => {
+      expect(frontAccountId).toBeTruthy();
+
+      // 读兼容：ownerType=front_user 按同 ownerId 的 tenant 行解析（迁移 014 保证 ownerId 不变）
+      const res = await fetch(
+        `${ADMIN_HTTP}/internal/billing/account?ownerType=front_user&ownerId=${encodeURIComponent(
+          frontUser.tenantId,
+        )}&ownerName=${encodeURIComponent(frontUser.username)}`,
+        { headers: { Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` } },
+      );
+      expect(res.status).toBe(200);
+      const account = (await res.json()) as { id: string; ownerType: string; ownerId: string };
+      expect(account.id).toBe(frontAccountId);
+      expect(account.ownerType).toBe('tenant');
+      expect(account.ownerId).toBe(frontUser.tenantId);
+
+      // 写兼容：发布窗口内旧 agent-api 仍传 front_user，服务端归一为 tenant（不产生 front_user 新行）
+      const write = await fetch(`${ADMIN_HTTP}/internal/billing/api-keys`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}`,
+        },
+        body: JSON.stringify({
+          ownerType: 'front_user',
+          ownerId: frontUser.tenantId,
+          name: 'compat-owner',
+        }),
+      });
+      expect(write.status).toBe(201);
+      await expect(write.json()).resolves.toMatchObject({
+        apiKey: { ownerType: 'tenant', cloudHostId: null },
+      });
+    },
+  );
 
   it.skipIf(!process.env.INTERNAL_API_TOKEN)(
     'T-B25: internal /receipts 非法 invoiceId 不 500（按无匹配收据处理）',

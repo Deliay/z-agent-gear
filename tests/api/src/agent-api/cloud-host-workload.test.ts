@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
+import { createFrontUser } from '../support/front-users.js';
 
 // 云主机工作负载/ Github 设置 API（需要 Aspire 全量服务 + MONGODB_URI + HARNESS_ENABLED=true）。
 // 不调用真实 GitHub：成功签发 token 由 services/github.test.ts 覆盖。
@@ -23,12 +24,6 @@ function gql(query: string, variables?: Record<string, unknown>, token?: string)
     body: JSON.stringify({ query, variables }),
   }).then((res) => res.json() as Promise<{ data?: any; errors?: Array<{ message: string }> }>);
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token user { id } }
-  }
-`;
 
 const WORKLOADS = `
   query Workloads($controllerId: ID!) {
@@ -66,13 +61,8 @@ const RETRY = `
   }
 `;
 
-async function signup(): Promise<{ token: string; userId: string }> {
-  const username = `gw${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const result = await gql(SIGNUP, { username, password: 'password123' });
-  return {
-    token: result.data.signup.token as string,
-    userId: result.data.signup.user.id as string,
-  };
+async function newFrontUser(): Promise<{ token: string; userId: string; username: string }> {
+  return createFrontUser();
 }
 
 describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github API', () => {
@@ -86,6 +76,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     await db.collection('controllers').insertOne({
       _id: controllerId,
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       name: 'e2e-cloud',
       hostname: 'e2e-cloud',
       type: 'cloud',
@@ -98,6 +89,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     await db.collection('controllerworkspaces').insertOne({
       _id: workspaceId,
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       controllerId,
       name: 'workspace',
       path: '/home/worker/workspace',
@@ -108,6 +100,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     await db.collection('cloudhosts').insertOne({
       _id: hostId,
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       name: 'e2e-cloud',
       harnessTypes: ['OPENCODE'],
       status: 'RUNNING',
@@ -147,6 +140,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     await db.collection('githubaccounts').insertOne({
       _id: accountId,
       userId,
+      tenantId: userId,
       githubUserId: installationId,
       githubLogin: `gh-${accountId.toString()}`,
       accessToken: 'encrypted',
@@ -187,8 +181,8 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
   }
 
   it('T-CHW-API1: 列表返回 Github 预制项并校验主机归属', async () => {
-    const owner = await signup();
-    const other = await signup();
+    const owner = await newFrontUser();
+    const other = await newFrontUser();
     const seeded = await seedHost(owner.userId);
     try {
       const own = await gql(WORKLOADS, { controllerId: seeded.controllerId }, owner.token);
@@ -203,7 +197,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
   });
 
   it('T-CHG-API1: 相对路径/未授权仓库校验与 operation 归属', async () => {
-    const { token, userId } = await signup();
+    const { token, userId } = await newFrontUser();
     const seeded = await seedHost(userId);
     try {
       const relative = await gql(
@@ -260,7 +254,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
   });
 
   it('T-GH-API-P3: 合法前缀通过校验后在授权处返回原错误', async () => {
-    const { token, userId } = await signup();
+    const { token, userId } = await newFrontUser();
     const seeded = await seedHost(userId);
     try {
       const unauthorized = await gql(
@@ -282,7 +276,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
   });
 
   it('T-GH-API-P4: ~ 前缀矩阵（合法形态归一后进入授权校验，非法形态拒绝）', async () => {
-    const { token, userId } = await signup();
+    const { token, userId } = await newFrontUser();
     const seeded = await seedHost(userId);
     try {
       const setup = (targetPath: string) =>
@@ -322,7 +316,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
   });
 
   it('T-GH-API-L1/L2/L3: 首绑落库、异帐号拒绝、同帐号换仓库放行', async () => {
-    const { token, userId } = await signup();
+    const { token, userId } = await newFrontUser();
     const seeded = await seedHost(userId);
     const account1 = await seedGithubAccount(userId);
     const account2 = await seedGithubAccount(userId);
@@ -384,7 +378,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     const anonymous = await gql(CATALOG);
     expect(anonymous.errors?.[0]?.message).toBe('Not authenticated');
 
-    const { token } = await signup();
+    const { token } = await newFrontUser();
     const result = await gql(CATALOG, {}, token);
     expect(result.errors).toBeUndefined();
     const items = result.data.cloudHostWorkloadCatalog as Array<Record<string, unknown>>;

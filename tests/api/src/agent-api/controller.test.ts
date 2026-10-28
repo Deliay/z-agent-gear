@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import { createFrontUser } from '../support/front-users.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -17,15 +18,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
 }
 
 let authToken = '';
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
 
 const CONTROLLER_KEYS_QUERY = `
   query ControllerKeys {
@@ -111,10 +103,8 @@ function waitForEvent<T = unknown>(socket: ClientSocket, event: string, timeoutM
 
 describe('Controller Key API', () => {
   beforeAll(async () => {
-    const uid = `ctrl_${Date.now()}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data?.signup?.token ?? '';
+    const frontUser = await createFrontUser();
+    authToken = frontUser.token;
     expect(authToken).toBeDefined();
   });
 
@@ -261,10 +251,8 @@ describe('Controller Key API', () => {
 describe('Controller Management API', () => {
   beforeAll(async () => {
     if (!authToken) {
-      const uid = `ctrl_mgmt_${Date.now()}`;
-      const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-      const body = await res.json();
-      authToken = body.data?.signup?.token ?? '';
+      const frontUser = await createFrontUser();
+      authToken = frontUser.token;
       expect(authToken).toBeTruthy();
     }
   });
@@ -333,10 +321,8 @@ describe('Controller Online Status', () => {
 
   beforeAll(async () => {
     if (!authToken) {
-      const uid = `ctrl_online_${Date.now()}`;
-      const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-      const body = await res.json();
-      authToken = body.data?.signup?.token ?? '';
+      const frontUser = await createFrontUser();
+      authToken = frontUser.token;
       expect(authToken).toBeTruthy();
     }
 
@@ -708,11 +694,9 @@ describe('Controller default MCP API (Phase 9)', () => {
   let testControllerId = '';
 
   beforeAll(async () => {
-    // N-18：用户名上限 20（auth.ts）
-    const uid = `dmcp_${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 6)}`;
-    const signupRes = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const signupBody = await signupRes.json();
-    token = signupBody.data.signup.token;
+    // 用户名/密码规则由 accounts（开户端点）承载；测试用户统一经内部开户引导
+    const frontUser = await createFrontUser();
+    token = frontUser.token;
 
     const keyRes = await gqlRequest(
       CREATE_KEY,

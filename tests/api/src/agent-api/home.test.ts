@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket } from 'socket.io-client';
+import { createFrontUser } from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -11,12 +12,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
   if (variables) body.variables = variables;
   return fetch(AGENT_API_URL, { method: 'POST', headers, body: JSON.stringify(body) });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token user { id username } }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -162,12 +157,9 @@ function registerFakeController(rawKey: string, hostname: string): Promise<FakeC
 // 数据准备 helpers
 // ---------------------------------------------------------------------------
 
-async function signup(tag: string): Promise<string> {
-  const username = `h${tag}${Date.now().toString(36).slice(-4)}${Math.random().toString(36).slice(2, 5)}`.slice(0, 20);
-  const res = await gqlRequest(SIGNUP, { username, password: 'testpass123' });
-  const body = await res.json();
-  if (body.errors) throw new Error(JSON.stringify(body.errors));
-  return body.data.signup.token;
+async function newUserToken(tag: string): Promise<string> {
+  const { token } = await createFrontUser();
+  return token;
 }
 
 async function createKey(token: string, name: string): Promise<string> {
@@ -268,13 +260,13 @@ describe('首页聚合与按控制器索引 API', () => {
   let instanceId = '';
 
   beforeAll(async () => {
-    token = await signup('main');
+    token = await newUserToken('main');
     const rawKey = await createKey(token, 'home-main');
     controller = await registerFakeController(rawKey, 'home-main-host');
     controllerId = controller.controllerId;
     workspaceId = await createWorkspace(token, controllerId, '/tmp/home-main-ws');
 
-    otherToken = await signup('other');
+    otherToken = await newUserToken('other');
     const otherRawKey = await createKey(otherToken, 'home-other');
     otherController = await registerFakeController(otherRawKey, 'home-other-host');
     otherControllerId = otherController.controllerId;

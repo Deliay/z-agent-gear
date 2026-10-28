@@ -52,7 +52,7 @@ export const cloudHostResolvers = {
       let availableBalance: number | null = null;
       const [prices, account] = await Promise.allSettled([
         billingClient.getPriceQuote(['cloud_host.create', 'container.minute']),
-        billingClient.getAccount('front_user', userId),
+        billingClient.getAccount('tenant', userId),
       ]);
       if (prices.status === 'fulfilled') {
         for (const item of prices.value) {

@@ -3,6 +3,7 @@ export const billingTypeDefs = `#graphql
   enum BillingOwnerType {
     front_user
     admin_user
+    tenant
   }
 
   enum BillingLedgerType {
