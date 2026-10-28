@@ -58,15 +58,12 @@ export function mergeToolCallMessages(messages: ToolCallMessageLike[]): MergedTo
     toolCallId: '',
     status: 'in_progress',
   };
-  let hasToolCall = false;
 
   for (const message of messages) {
     const parsed = parseSessionUpdate(message.content) as unknown as Record<string, unknown> | null;
     if (!parsed) continue;
     const updateType = parsed.sessionUpdate;
     if (updateType !== 'tool_call' && updateType !== 'tool_call_update') continue;
-
-    hasToolCall = true;
 
     if (!merged.toolCallId && typeof parsed.toolCallId === 'string') {
       merged.toolCallId = parsed.toolCallId;
@@ -87,9 +84,6 @@ export function mergeToolCallMessages(messages: ToolCallMessageLike[]): MergedTo
   const result = merged as unknown as MergedToolCall;
   if (!result.status) {
     result.status = 'in_progress';
-  }
-  if (hasToolCall && !result.toolCallId) {
-    result.toolCallId = '';
   }
   return result;
 }

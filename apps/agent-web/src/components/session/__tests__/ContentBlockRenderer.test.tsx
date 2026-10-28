@@ -19,6 +19,19 @@ describe('ContentBlockRenderer', () => {
     expect(img.src).toBe('data:image/png;base64,YWJj');
   });
 
+  it('T-CBR2b should use http(s) image URLs directly', () => {
+    const { unmount } = renderContent([
+      { type: 'content', content: { type: 'image', data: 'https://cdn.example.com/a.png', mimeType: 'image/png' } },
+    ]);
+    expect((screen.getByAltText('工具产出图片') as HTMLImageElement).src).toBe('https://cdn.example.com/a.png');
+    unmount();
+
+    renderContent([
+      { type: 'content', content: { type: 'image', data: 'data:image/jpeg;base64,QUJD', mimeType: 'image/jpeg' } },
+    ]);
+    expect((screen.getByAltText('工具产出图片') as HTMLImageElement).src).toBe('data:image/jpeg;base64,QUJD');
+  });
+
   it('T-CBR3 should render audio with controls', () => {
     const { container } = renderContent([
       { type: 'content', content: { type: 'audio', data: 'YWJj', mimeType: 'audio/mpeg' } },

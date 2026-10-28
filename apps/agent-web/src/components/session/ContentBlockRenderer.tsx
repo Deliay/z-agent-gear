@@ -6,7 +6,10 @@ import TerminalOutput from './TerminalOutput';
 
 function ImageBlock({ data, mimeType }: { data: string; mimeType?: string }) {
   const [failed, setFailed] = useState(false);
-  const src = data.startsWith('data:') ? data : `data:${mimeType || 'image/png'};base64,${data}`;
+  // 与 MessageItem 图片特例同口径：data:/http(s): 直接作为 src，其余按 base64 拼接
+  const src = data.startsWith('data:') || data.startsWith('http://') || data.startsWith('https://')
+    ? data
+    : `data:${mimeType || 'image/png'};base64,${data}`;
 
   if (failed) {
     return (

@@ -123,13 +123,16 @@ test.describe('Session Rendering', () => {
       status: 'completed',
       title: 'Run build',
       rawInput: { command: 'npm run build' },
-      rawOutput: { output: '\u001b[31merror:\u001b[0m failed\n\u001b[32mok\u001b[0m done' },
+      rawOutput: { output: '\u001b[31merror:\u001b[0m failed\n\u001b[32mok\u001b[0m done\u001b[?25l\u001b[?2004h' },
     });
 
     const terminal = page.getByTestId('terminal-output');
     await expect(terminal).toBeVisible({ timeout: 10000 });
     await expect(terminal.locator('span[style*="color"]')).not.toHaveCount(0);
     await expect(terminal).toContainText('error:');
+    // 私有模式序列不得残留为可见乱码
+    await expect(terminal).not.toContainText('?25');
+    await expect(terminal).not.toContainText('?2004');
 
     session.disconnect();
   });
