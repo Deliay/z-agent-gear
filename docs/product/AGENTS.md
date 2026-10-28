@@ -147,7 +147,7 @@ flowchart LR
 - [[draft/20261027-dsh-header-masq.md]] — DeepSeek Harness 会话标识请求头注入（预置工作负载自动安装 dsh-header-masq 插件并按平台口径配置：模型调用自动携带会话标识请求头，同会话固定、新会话变化、重启续聊不变）
 - [[draft/20261027-multi-tenant-phase1.md]] — 多租户一期（三层帐号体系：租户 tenant→用户 user 一对多、账户 account→用户 user 承载登录；每用户同名个人专属租户不可删除/一期单成员；余额迁移租户并按租户口径计费、计费系统兼容后台账户与租户双 owner；数据按租户归属与隔离、租户内仍跟创建者本人（口径与上线前一致）；前台关闭注册改后台开户；后台不做多租户设计、仅租户与账户只读查看）
 - [[draft/20261028-conversation-rendering.md]] — 重构对话渲染（参考 zed ACP 数据处理与渲染：代码块工具栏、Mermaid 图形、真实差异渲染、终端 ANSI 颜色、工具调用图标与原始数据查看、消息复制与对话导出、滚动导航、计划展示增强）
-- [[draft/20261028-mongodb-workload.md]] — 增加工作负载「MongoDB」（原生 apt 经内网源安装 MongoDB 8.0：工作负载目录新增预制标准工作负载、安装即拉起可用、幂等可重复、失败可恢复）
+- [[draft/20261028-mongodb-workload.md]] — 增加工作负载「MongoDB」（原生 apt 经内网源安装 MongoDB 8.0：工作负载目录新增预制标准工作负载、安装成功以 mongod --version 硬校验且不拉起实例、幂等可重复、失败可恢复）
 
 ### 实现中文档（`shipping/`）
 
