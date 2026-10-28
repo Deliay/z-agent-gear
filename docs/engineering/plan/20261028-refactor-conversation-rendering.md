@@ -104,9 +104,9 @@ npx playwright test --workers=1
 | F4 | §5.2 实现点 5/6：「四个工具类卡片统一消费合并结果」「卡片输入由 MergedToolCall 提供」 | 四卡片 props 均为 `messages: Array<{content, createdAt}>` 且各自只解析**最后一条**（`ToolCallCard.tsx:85`、`ReadCard.tsx:21`，FetchCard/SubAgentCard 同构）；`group-messages.ts` 按 `toolCallId` 全列表聚合，稀疏 update（无 kind）命中既有组且不降级组类型（升级逻辑单向） | 卡片 props 切换为 `{ toolCall: MergedToolCall, expanded?, onExpandedChange? }`；`MessageList` 渲染分支调用 `mergeToolCallMessages(group.messages)` 产出视图模型；**group-messages.ts 分组逻辑零改动**（提案口径经代码核实成立）；四卡片既有测试按新 props 重写（先红后绿） |
 | F5 | §5.2 实现点 8：IntersectionObserver 观测底部锚点 | jsdom **不提供** IntersectionObserver；仓库现状无任何 IntersectionObserver 使用与 mock | Phase 0 在 `apps/agent-web/vitest.setup.ts` 增加全局 IntersectionObserver stub（可控触发 `isIntersecting`）；MessageList 跟随暂停/恢复的组件测试基于该 stub；真实浏览器行为由 E2E 覆盖 |
 | F6 | §5.2 实现点 7 / §7：「`SessionHeader` 或消息列表工具区新增导出入口」「`pages/SessionPage.tsx` 增强：导出入口挂载」 | `SessionPage.tsx` 仅路由壳；会话主体为 `SessionView.tsx`（持有 `messages` 状态 line 84，挂载 `SessionHeader` line 510 与 `MessageList` line 543）；`SessionHeader` 已有操作区（继续/关闭/删除/能力清单） | 导出入口固定在 **SessionHeader 操作区**新增「导出」按钮；`SessionView` 经回调 prop 将 `messages` 提供給导出逻辑（`lib/export-thread.ts` 纯函数转换 + Blob 下载）；`SessionPage.tsx` 零改动 |
-| F7 | 提案头：`feat-branch` 行引用 `[[../git.md]]` | `docs/engineering/` 下**无 git.md**（断裂链接） | 分支惯例以 z-git skill 与仓库现存 `prd/<slug>` + `feat/<slug>-impl` 分支事实为准（§1.1）；不回改提案，验收报告登记 |
+| F7 | 提案头：`feat-branch` 行引用 `[[../git.md]]` | `docs/engineering/` 下**无 git.md**（断裂链接） | 已改为引用 z-git skill；分支惯例以仓库现存 `prd/<slug>` + `feat/<slug>-impl` 为准（§1.1） |
 | F8 | §6.2：新增 `diff`、`ansi-to-html`、`mermaid` 三依赖 | `apps/agent-web/package.json` 当前**均无**；`lucide-react`、`sonner`、`react-syntax-highlighter` 已存在 | Phase 0 安装 `diff` / `ansi-to-html` / `mermaid`（dependencies）；类型包以安装时核对为准（自带类型则不加 `@types/*`，否则补 `@types/diff` / `@types/ansi-to-html` 为 devDependencies）；mermaid 仅经 `import('mermaid')` 引用，确认 Vite 产物中其 chunk 与首屏分离 |
-| F9 | §5.2 实现点 7：「复制 Markdown 得到原始 text」 | `MessageList.tsx:18-51` `mergeMessageChunks` 已将 agent/user 组多 chunk 合成为单条 JSON content（text 拼接）；`MessageItem` 解析后渲染 | 「复制 Markdown」取与展示**同源**的合成 text（非逐 chunk 原始 content），保证复制结果与所见一致；「复制纯文本」取渲染 DOM 的 `innerText`（提案口径不变） |
+| F9 | §5.2 实现点 7：「复制 Markdown 得到原始 text」 | `MessageList.tsx:18-51` `mergeMessageChunks` 已将 agent/user 组多 chunk 合成为单条 JSON content（text 拼接）；`MessageItem` 解析后渲染 | 「复制 Markdown」取与展示**同源**的合成 text（非逐 chunk 原始 content），保证复制结果与所见一致；「复制纯文本」从源 Markdown 经 `markdownToPlainText` 去标记派生（不含 UI chrome） |
 | F10 | §5.2 实现点 9：摘要口径「全部完成 / x/y / N 项任务」 | `PlanCard.tsx:57` 现状摘要为英文 `` `${completed}/${total} completed` ``；`PlanFloatingCard` 另有摘要展示 | 摘要口径按提案逐字落地为中文三态；`PlanCard` 与 `PlanFloatingCard` 同步；既有测试断言同步改写 |
 | F11 | §5.2 实现点 6：状态体系「保留 AcpCard 的 active/completed/failed 语义色」 | `AcpCard.tsx` 已有语义键 `active/completed/failed`（恒高亮 info 系），legacy 键 `purple/yellow/gray/blue` 保留；`PlanCard` 用 `color="yellow"` | 新增 `pending` 弱化样式与「等待确认」提示位映射；legacy 键**逐字保留**（配色语义化规范要求保留旧键）；PlanCard 配色本期不动 |
 
@@ -116,7 +116,7 @@ npx playwright test --workers=1
 2. **合并函数输入**：`mergeToolCallMessages(messages: AcpMessage[])` 内部逐条 `parseSessionUpdate`，只消费 `sessionUpdate === 'tool_call' | 'tool_call_update'` 的消息（其余忽略）；三态语义：**字段未携带（`undefined`）保留原值、显式 `null` 清除、有值替换**；`status`/`content`/`rawOutput` 取最后一条携带该字段的值；`toolCallId` 取首条携带者。
 3. **卡片 label 重建口径**：标题 = 合并后 `title ?? kindLabel(合并后 kind ?? 'other')`，执行中与完成后同一计算路径，消除「执行中有命令名、完成后变 other」；`kindLabel` 从 `ToolCallCard.tsx` 提升至 `tool-call-state.ts` 共享。
 4. **CodeBlock 高亮下沉**：`SyntaxHighlighter` 渲染移入 `CodeBlock` 内部；`pre` 覆写不再直接渲染 `<pre>` 包裹高亮（避免嵌套滚动容器）；无语言块用纯文本渲染（不走 Prism）+ 工具栏。
-5. **MermaidBlock 失败回退**：`mermaid.render` reject/parse 错误时回退渲染 `CodeBlock`（含工具栏与源码），不向列表抛错；主题切换以 `key` 含主题强制重渲染（提案口径）。
+5. **MermaidBlock 失败回退**：`mermaid.render` reject/parse 错误时回退渲染 `CodeBlock`（含工具栏与源码），不向列表抛错；主题切换由 `setTheme` 触发 effect 重渲染。
 6. **rawInput/rawOutput 折叠区**：复用 `CodeBlock`（language=json，`JSON.stringify(value, null, 2)`）；美化后超 500 行截断并提示（提案风险点口径）；默认折叠，折叠状态不持久化。
 7. **导出数据口径**：遍历 `SessionView` 持有的 `messages`（原始 `AcpMessage[]`，非分组产物），按 zed `to_markdown` 参考格式分节；tool_call 分组内经 `mergeToolCallMessages` 取合并后标题/状态/输入输出摘要，保证导出与展示一致。
 8. **滚动跟随判定**：`IntersectionObserver`（threshold 0.9）观测 `messagesEndRef`；初始加载滚到底与 prepend 历史位置恢复（`scrollStateRef` 机制）**逐字保留**；仅「append 且不在底部」从强制 scrollToBottom 改为「保持视口 + 显示回到底底按钮（带新消息圆点）」。
@@ -130,7 +130,7 @@ npx playwright test --workers=1
 - **XSS 面**：mermaid `securityLevel: 'strict'`；ansi-to-html `escapeXML: true`；react-markdown 默认不执行原始 HTML（维持）；外链 `target="_blank" rel="noreferrer"`（现有口径）；`dangerouslySetInnerHTML` 仅限 ansi-to-html 已转义输出与 mermaid SVG 两处。
 - **包体积**：mermaid 必须动态导入（`import('mermaid')`），`npm run build` 产物核对 mermaid chunk 独立于首屏；Prism 维持现有全量引入（本期不做包体积治理）。
 - **布局三件套**（frontend-rules）：新组件窄面板不横向溢出——工具栏 `shrink-0`、内容 `min-w-0`、长内容 `break-all`/`wrap-anywhere`；E2E 断言 `scrollWidth - clientWidth ≤ 1`。
-- **既有行为保留**：DiffView「新建文件」徽标、TerminalOutput `maxHeight` 滚动与空行 `&nbsp;`、MessageList 初始滚底与 prepend 位置恢复、PlanFloatingCard 浮卡、卡片展开/折叠受控逻辑（`expandedOverrides`）。
+- **既有行为保留**：DiffView「新建文件」徽标、TerminalOutput `maxHeight` 滚动与空行 `whitespace-pre-wrap`、MessageList 初始滚底与 prepend 位置恢复、PlanFloatingCard 浮卡、卡片展开/折叠受控逻辑（`expandedOverrides`）。
 - **z-git**：禁止 rebase/squash；实现 PR（`feat/conversation-rendering-impl` → `prd/conversation-rendering`）评审通过后合并；合并后删除实现分支（远端与本地），不删目标分支。
 - **测试编排**：测试服务只用 Aspire；E2E `workers: 1` 串行。
 
@@ -142,7 +142,7 @@ npx playwright test --workers=1
 |------|------|
 | `apps/agent-web/package.json` | dependencies 新增 `diff` / `ansi-to-html` / `mermaid`；类型包按 §3.1 F8 核对结果补 devDependencies |
 | `apps/agent-web/vitest.setup.ts` | 新增 IntersectionObserver 全局 stub（可控触发，F5） |
-| 工程核对 | `npm run build` 确认 mermaid 动态导入分包（首屏 chunk 不含 mermaid）；`ansi-to-html` 实例 API（`new AnsiToHtml({ escapeXML: true }).toHtml()`）与 `diffLines` 输出形态冒烟核对 |
+| 工程核对 | `npm run build` 确认 mermaid 动态导入分包（首屏 chunk 不含 mermaid）；`ansi-to-html` 实例 API（`new AnsiToHtml({ escapeXML: true }).toHtml()`）与 `diffArrays` 输出形态冒烟核对 |
 
 **完成判据**：`npm ci && npm test && npm run build` 全绿；构建产物中 mermaid 为独立异步 chunk；IntersectionObserver stub 在组件测试中可用。
 
@@ -166,7 +166,7 @@ npx playwright test --workers=1
 | 文件 | 变更 |
 |------|------|
 | `apps/agent-web/src/components/session/markdown/CodeBlock.tsx` | **新增**：语言标签（无语言显示 `text`）+ hover「复制」「换行」按钮 + 默认横向滚动/换行态 `whitespace-pre-wrap break-all`；复制经 `navigator.clipboard.writeText`，成功/失败 toast（sonner） |
-| `apps/agent-web/src/components/session/markdown/MermaidBlock.tsx` | **新增**：`import('mermaid')` 懒加载 + `securityLevel:'strict'` + 主题跟随（dark 判定与 ThemeToggle 一致，key 含主题）；缩放（0.5–3，步进 0.25）/重置/「查看源码」切换；失败回退 CodeBlock |
+| `apps/agent-web/src/components/session/markdown/MermaidBlock.tsx` | **新增**：`import('mermaid')` 懒加载 + `securityLevel:'strict'` + 主题跟随（dark 判定与 ThemeToggle 一致，theme 依赖触发重渲染）；缩放（0.5–3，步进 0.25）/重置/「查看源码」切换；失败回退 CodeBlock |
 | `apps/agent-web/src/components/session/MarkdownContent.tsx` | 重构（F1）：`pre` 覆写承接围栏块分流（mermaid→MermaidBlock、其余→CodeBlock），`code` 覆写仅行内代码；行内代码保持现有样式（提案 §1.3「行内代码跨度样式」口径：仅样式识别，不绑点击跳转）；表格/链接/列表等既有覆写逐字保留 |
 | `apps/agent-web/src/components/session/markdown/__tests__/CodeBlock.test.tsx` / `MermaidBlock.test.tsx` | **新增**：T-CB1~6 / T-MM1~6（§6.2） |
 | `apps/agent-web/src/components/session/MarkdownContent.test.tsx` | 更新：围栏块分流断言（含无语言块有工具栏、行内代码无工具栏） |
@@ -177,10 +177,10 @@ npx playwright test --workers=1
 
 | 文件 | 变更 |
 |------|------|
-| `apps/agent-web/src/lib/diff.ts` | **新增**：`computeDiff(oldText, newText): DiffLine[]`（jsdiff `diffLines` 展开 + 新旧行号计数）；超 2000 行截断标记 |
+| `apps/agent-web/src/lib/diff.ts` | **新增**：`computeDiff(oldText, newText): DiffLine[]`（换行归一 + jsdiff `diffArrays` + 新旧行号计数）；超 2000 行截断标记 |
 | `apps/agent-web/src/lib/language-from-path.ts` | **新增**：扩展名 → Prism 语言映射（ts/tsx/js/jsx/py/rs/go/java/css/json/md/yaml 等，未知回退纯文本） |
 | `apps/agent-web/src/lib/__tests__/diff.test.ts` / `language-from-path.test.ts` | **新增**：T-DIFF1~8 / T-LANG1~3（§6.1），分支覆盖 100% |
-| `apps/agent-web/src/components/session/DiffView.tsx` | 重构：双行号列 + `−`/`+` 标记 + 语义色（added=success、removed=destructive，适配双主题）+ added/same 行 Prism tokenize 高亮（removed 行纯文本）；文件头与「新建文件」徽标、最大高度滚动逐字保留；diff/tokenize 结果 `useMemo` |
+| `apps/agent-web/src/components/session/DiffView.tsx` | 重构：双行号列 + `−`/`+` 标记 + 语义色（added=success、removed=destructive，适配双主题）+ 全部行 Prism tokenize 高亮（changed 行叠加语义色）；文件头与「新建文件」徽标、最大高度滚动逐字保留；diff/tokenize 结果 `useMemo` |
 | `apps/agent-web/src/components/session/__tests__/DiffView.test.tsx` | 既有 5 用例迁移（F2）+ 新增行号/对齐/截断断言（先红后绿） |
 
 **完成判据**：插入多行/删除多行/连续修改场景对齐正确（与 jsdiff 口径一致）；每行行号正确；PRD 功能点 3 验收标准逐项过。
@@ -191,7 +191,7 @@ npx playwright test --workers=1
 |------|------|
 | `apps/agent-web/src/lib/ansi.ts` | **新增**：`ansiToHtml(raw)`——预处理（F3：`\r\n`→`\n`、OSC/光标序列剥离、SGR 保留）+ ansi-to-html（`escapeXML: true`） |
 | `apps/agent-web/src/lib/__tests__/ansi.test.ts` | **新增**：T-ANSI1~6（§6.1），分支覆盖 100% |
-| `apps/agent-web/src/components/session/TerminalOutput.tsx` | 重构：`dangerouslySetInnerHTML` 注入已转义 HTML；容器深色底与 `maxHeight` 滚动、空行 `&nbsp;` 逐字保留 |
+| `apps/agent-web/src/components/session/TerminalOutput.tsx` | 重构：`dangerouslySetInnerHTML` 注入已转义 HTML；容器深色底与 `maxHeight` 滚动、空行由 `whitespace-pre-wrap` 保留 |
 | `apps/agent-web/src/components/session/__tests__/TerminalOutput.test.tsx` | **新增**：颜色 span/粗体/控制序列不产生乱码/XSS 转义断言 |
 
 **完成判据**：PRD 功能点 4 验收标准逐项过；无颜色输出可读性不回归。
@@ -200,7 +200,7 @@ npx playwright test --workers=1
 
 | 文件 | 变更 |
 |------|------|
-| `apps/agent-web/src/components/session/tool-call-icons.ts` | **新增**：ToolKind → lucide 图标映射（read=FileSearch、edit=FilePen、delete=Trash2、move=ArrowRightLeft、search=Search、execute=TerminalSquare、think=Brain、fetch=Globe、switch_mode=ArrowRightLeft、other=Hammer） |
+| `apps/agent-web/src/components/session/tool-call-icons.tsx` | **新增**：ToolKind → lucide 图标映射（read=FileSearch、edit=FilePen、delete=Trash2、move=ArrowRightLeft、search=Search、execute=TerminalSquare、think=Brain、fetch=Globe、switch_mode=ArrowRightLeft、other=Hammer） |
 | `apps/agent-web/src/components/session/AcpCard.tsx` | 新增 `pending` 弱化样式键（legacy 键逐字保留，F11） |
 | `apps/agent-web/src/components/session/ContentBlockRenderer.tsx` | **新增**：ToolCallContent/ContentBlock 全类型——text（MarkdownContent）/image（`<img>` 限高 + 加载失败占位）/audio（`<audio controls>`）/resource_link（新窗口 + noreferrer）/resource（text→markdown，blob→uri 占位）；diff→新 DiffView；terminal→新 TerminalOutput |
 | `apps/agent-web/src/components/session/ToolCallCard.tsx` | 标题前置类型图标；状态覆盖 pending/active/completed/failed + 等待确认提示位；底部「查看原始输入/输出」折叠区（CodeBlock language=json，超 500 行截断，裁决 6）；content 全类型走 ContentBlockRenderer；kind 特化渲染（edit/execute/delete/move/search/think）保留 |
@@ -213,7 +213,7 @@ npx playwright test --workers=1
 
 | 文件 | 变更 |
 |------|------|
-| `apps/agent-web/src/components/session/MessageActions.tsx` | **新增**：agent 消息 hover 操作条——「复制 Markdown」（合成 text，F9）/「复制纯文本」（渲染 DOM innerText）；剪贴板不可用/reject 时 toast 失败提示 |
+| `apps/agent-web/src/components/session/MessageActions.tsx` | **新增**：agent 消息 hover 操作条——「复制 Markdown」（合成 text，F9）/「复制纯文本」（源 Markdown 去标记 `markdownToPlainText`）；剪贴板不可用/reject 时 toast 失败提示 |
 | `apps/agent-web/src/components/session/MessageItem.tsx` | 接入 MessageActions（agent 消息；用户消息维持现状） |
 | `apps/agent-web/src/lib/export-thread.ts` | **新增**：`threadToMarkdown(messages)`（`## User` / `## Assistant` / 思考 `<thinking>` 注释块 / `### Tool: {title}` + 状态 + 代码块化输入输出，tool 分组经 mergeToolCallMessages 取合并口径，裁决 7；图片导出为占位说明）+ `downloadThreadMarkdown(filename, markdown)`（Blob 下载） |
 | `apps/agent-web/src/lib/__tests__/export-thread.test.ts` | **新增**：T-EXP1~6，分支覆盖 100% |
@@ -280,13 +280,13 @@ npx playwright test --workers=1
 | 用例 | 断言要点 |
 |------|---------|
 | T-CB1~6 CodeBlock | 语言标签（无语言 `text`）；复制成功/失败 toast；换行切换 class 变化且实例级独立；hover 显示按钮；窄容器 class 三件套 |
-| T-MM1~6 MermaidBlock | 合法块渲染 SVG（mock mermaid）；语法错误回退 CodeBlock 不抛错；缩放步进与重置；查看源码切换；主题 key 重渲染；懒加载中骨架 |
+| T-MM1~8 MermaidBlock | 合法块渲染 SVG（mock mermaid）；语法错误回退 CodeBlock 不抛错且不残留错误图；缩放步进与重置；查看源码切换与复制源码；主题切换重渲染；懒加载中骨架 |
 | T-DV* DiffView | 既有 5 用例迁移 + 行号列数值、插入/删除对齐、语义色 class、截断提示 |
-| T-TO* TerminalOutput | 颜色/粗体渲染、控制序列无乱码、maxHeight、空行占位 |
+| T-TO1~6 TerminalOutput | 颜色/粗体渲染、控制序列无乱码、XSS 转义、maxHeight、空行保留、空输出 |
 | T-TC1~8 ToolCallCard | 类型图标前置；pending/completed/failed 视觉；**完成态标题与创建时一致（不再退化 other）**；rawInput/rawOutput 折叠展开与 500 行截断；content 全类型分派 ContentBlockRenderer；未识别 kind 降级标题+状态+原始数据 |
 | T-RC/FC/SA | ReadCard 完成后文件列表保留；FetchCard URL 保留；SubAgentCard prompt/description 保留 |
 | T-CBR1~6 ContentBlockRenderer | text/image/audio/resource_link/resource 五类型 + 未知类型降级 |
-| T-MA1~4 MessageActions | 复制 Markdown 文本一致；复制纯文本 innerText 口径；剪贴板失败提示；hover 可见性 |
+| T-MA1~4 MessageActions | 复制 Markdown 文本一致；复制纯文本源 Markdown 去标记口径（不含 chrome）；剪贴板失败提示；hover 可见性 |
 | T-ML* MessageList | 在底部时 append 跟随滚底；不在底部时 append 视口不动 + 按钮出现；点击按钮恢复跟随；初始滚底与 prepend 恢复不回归（IntersectionObserver stub 驱动） |
 | T-SB1~3 ScrollToBottomButton | 仅在不在底部时出现；新消息圆点；点击平滑滚动 |
 | T-PC* PlanCard | 完成条目删除线 class；摘要三态（全部完成/x-y/N 项任务）；PlanFloatingCard 同步 |
@@ -375,7 +375,7 @@ apps/agent-web/
     │   └── __tests__/                     # diff/ansi/language-from-path/export-thread（100% 分支）
     ├── components/session/
     │   ├── tool-call-state.ts             # 新增 MergedToolCall/mergeToolCallMessages（+kindLabel 迁入）
-    │   ├── tool-call-icons.ts             # 新增 ToolKind→lucide 映射
+    │   ├── tool-call-icons.tsx             # 新增 ToolKind→lucide 映射
     │   ├── ContentBlockRenderer.tsx       # 新增 ContentBlock 全类型渲染
     │   ├── MessageActions.tsx             # 新增 复制 Markdown/纯文本
     │   ├── ScrollToBottomButton.tsx       # 新增 回到底部按钮
@@ -423,4 +423,4 @@ apps/agent-web/AGENTS.md                   # 会话渲染层口径登记（Phase
 | B-9 | `package.json` | 无 diff/ansi-to-html/mermaid；lucide-react ^1.16.0、sonner、react-syntax-highlighter ^16 已在 | F8 依赖清单 |
 | B-10 | `PlanCard.tsx` / `AcpCard.tsx` | 摘要英文 `${completed}/${total} completed`、`color="yellow"`；AcpCard 语义键 active/completed/failed 已存在 | F10/F11 口径 |
 | B-11 | E2E 机制 | `session-chat.spec.ts`：`registerController` + `socket.emit('acp:message')` 注入 SessionUpdate | 裁决 9 驱动机制 |
-| B-12 | `docs/engineering/git.md` | 不存在（提案断裂链接） | F7 登记，不回改提案 |
+| B-12 | 提案分支链接 | 原 `[[../git.md]]` 断链已修正为 z-git skill 引用 | F7 收口 |
