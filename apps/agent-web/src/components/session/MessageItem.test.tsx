@@ -81,4 +81,14 @@ describe('MessageItem', () => {
     render(<MessageItem message={userMessage} />);
     expect(screen.getByText(/\d{1,2}:\d{2}/)).toBeDefined();
   });
+
+  it('should show copy actions for agent messages only', () => {
+    const agent = render(<MessageItem message={agentMessage} />);
+    expect(screen.getByRole('button', { name: '复制 Markdown' })).toBeDefined();
+    expect(screen.getByRole('button', { name: '复制纯文本' })).toBeDefined();
+    agent.unmount();
+
+    render(<MessageItem message={userMessage} />);
+    expect(screen.queryByRole('button', { name: '复制 Markdown' })).toBeNull();
+  });
 });

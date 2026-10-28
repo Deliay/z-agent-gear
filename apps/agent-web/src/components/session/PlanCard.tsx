@@ -1,6 +1,7 @@
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { CheckCircle2, Circle, Loader2 } from 'lucide-react';
 import AcpCard from './AcpCard';
+import { planSummaryLabel } from './plan-summary';
 
 interface PlanCardProps {
   messages: Array<{ content: string | Record<string, unknown>; createdAt: string }>;
@@ -54,7 +55,7 @@ export default function PlanCard({ messages }: PlanCardProps) {
 
   const completed = entries.filter(e => e.status === 'completed').length;
   const total = entries.length;
-  const summary = `${completed}/${total} completed`;
+  const summary = planSummaryLabel(completed, total);
 
   return (
     <AcpCard
@@ -72,7 +73,7 @@ export default function PlanCard({ messages }: PlanCardProps) {
             <div key={i} className="flex items-start gap-2">
               <Icon className={`h-4 w-4 mt-0.5 shrink-0 ${entry.status === 'in_progress' ? 'animate-spin' : ''} ${colorClass}`} />
               <div className="flex-1 min-w-0">
-                <div className="text-sm text-foreground whitespace-pre-wrap break-words">
+                <div className={`text-sm whitespace-pre-wrap break-words ${entry.status === 'completed' ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
                   {entry.content}
                 </div>
                 <div className={`text-xs mt-0.5 ${colorClass}`}>{label}</div>
