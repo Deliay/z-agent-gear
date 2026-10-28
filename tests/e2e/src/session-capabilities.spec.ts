@@ -3,6 +3,7 @@ import { io as SocketIOClient, type Socket } from 'socket.io-client';
 import mongoose from 'mongoose';
 // FeatureId 唯一事实源：直接引用 agent-controller 的能力清单，禁止测试手抄复制
 import { FEATURE_IDS } from '../../../packages/agent-controller/src/acp/capabilities.js';
+import { registerUser } from './helpers';
 
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
@@ -34,17 +35,6 @@ async function gqlRequest(page: import('@playwright/test').Page, query: string, 
   const body: Record<string, unknown> = { query };
   if (variables) body.variables = variables;
   return page.request.post(API_URL, { headers, data: body });
-}
-
-async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string }> {
-  const username = `cap${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const res = await gqlRequest(page, `
-    mutation Signup($username: String!, $password: String!) {
-      signup(username: $username, password: $password) { token user { id username } }
-    }
-  `, { username, password: 'testpass123' });
-  const body = await res.json();
-  return { token: body.data.signup.token, username };
 }
 
 async function createControllerKey(page: import('@playwright/test').Page, token: string): Promise<string> {

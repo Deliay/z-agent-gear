@@ -47,6 +47,9 @@ export const resolvers = {
     ...billingResolvers.Mutation,
     ...cloudHostResolvers.Mutation,
   },
+  User: {
+    ...authResolvers.User,
+  },
   Provider: {
     ...providerResolvers.Provider,
   },

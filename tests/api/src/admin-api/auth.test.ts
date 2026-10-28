@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { createFrontUser } from '../support/front-users.js';
 import {
   adminGql,
   adminGqlRequest,
   ADMIN_TEST_PASSWORD,
   ensureAdminLogin,
   setAdminMustChangePassword,
-  signupUserToken,
+  createFrontUserToken,
 } from './helpers.js';
 
 const ADMIN_ME = `
@@ -65,7 +66,7 @@ describe('Admin Auth API', () => {
   });
 
   it('T-A6: rejects a real user-side JWT and reports UNAUTHENTICATED (separate secret)', async () => {
-    const userToken = await signupUserToken();
+    const userToken = await createFrontUserToken();
 
     const me = await adminGql<{ adminMe: unknown }>(ADMIN_ME, undefined, userToken);
     expect(me.data?.adminMe ?? null).toBeNull();

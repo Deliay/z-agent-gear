@@ -41,11 +41,12 @@ import { CLOUD_HOST_CAPABILITIES } from '../graphql/queries';
 import { useHomeOverview } from '../stores/homeOverview';
 
 interface SidebarProps {
-  username: string;
+  /** 当前用户展示名（登录响应 User.name，迁移后=原用户名） */
+  name: string;
   mobile?: boolean;
 }
 
-export default function Sidebar({ username, mobile }: SidebarProps) {
+export default function Sidebar({ name, mobile }: SidebarProps) {
   const navigate = useNavigate();
   // 改为追踪「已折叠」集合，默认全部展开
   const [collapsedControllers, setCollapsedControllers] = useState<Set<string>>(new Set());
@@ -517,7 +518,7 @@ export default function Sidebar({ username, mobile }: SidebarProps) {
 
       <div className="sticky bottom-0 border-t border-sidebar-border p-4">
         <div className="flex min-w-0 items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium">{username}</span>
+          <span className="truncate text-sm font-medium">{name}</span>
           <div className="flex items-center gap-1">
             <TodoListPanel />
             <ThemeToggle />

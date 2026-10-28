@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY } from './workflow-template.js';
 
 // 注意：agentConfig 使用独立子 Schema 声明，避免内联嵌套对象被 Mongoose 物化为 {}
@@ -37,6 +38,7 @@ const configuredNodeSchema = new mongoose.Schema(
 const configuredWorkflowSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true },
     name: { type: String, required: true },
     // 复制来源（仅展示用，无强关联；模板后续更新不影响本副本）
@@ -51,6 +53,8 @@ const configuredWorkflowSchema = new mongoose.Schema(
 );
 
 configuredWorkflowSchema.index({ userId: 1, controllerId: 1 });
+
+applyTenantScope(configuredWorkflowSchema);
 
 export const ConfiguredWorkflow = mongoose.model('ConfiguredWorkflow', configuredWorkflowSchema);
 export type IConfiguredWorkflow = mongoose.InferSchemaType<typeof configuredWorkflowSchema>;

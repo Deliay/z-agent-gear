@@ -122,18 +122,137 @@ export async function gqlRequest(page: import('@playwright/test').Page, query: s
   return page.request.post(API_URL, { headers, data: body });
 }
 
-export async function registerUser(page: import('@playwright/test').Page): Promise<{ token: string; username: string; userId: string }> {
-  const username = `eu${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const res = await gqlRequest(page, `
-    mutation Signup($username: String!, $password: String!) {
-      signup(username: $username, password: $password) { token user { id username } }
-    }
-  `, { username, password: 'testpass123' });
-  const body = await res.json();
-  return { token: body.data.signup.token, username, userId: body.data.signup.user.id };
+/** 前台账号统一初始密码（开户 / 登录 / UI 登录共用）。 */
+export const FRONT_USER_PASSWORD = 'testpass123';
+
+const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || '';
+/** agent-api REST 根地址：由 GraphQL 地址去掉 `/graphql` 推导（`POST /internal/users` 开户）。 */
+const AGENT_API_BASE = API_URL.replace(/\/graphql\/?$/, '');
+
+export interface FrontUser {
+  token: string;
+  username: string;
+  userId: string;
 }
 
-/** 创建云电脑需先扣 5 credits：直接为前台测试用户准备余额（需 MONGODB_URI）。 */
+/**
+ * 开户走「后台开户」口径（前台注册已硬关闭，无 signup 契约）：
+ * 1. 优先 agent-api `POST /internal/users`（Bearer INTERNAL_API_TOKEN，需注入该变量）；
+ * 2. 否则经 admin-api GraphQL `adminCreateFrontUser`（需 admin 口令归一化，通常需要 MONGODB_URI）。
+ * 创建后用 `login` 换取前台 token。
+ */
+async function createFrontUserViaInternal(
+  page: import('@playwright/test').Page,
+  username: string,
+  password: string,
+): Promise<void> {
+  if (!INTERNAL_API_TOKEN) throw new Error('INTERNAL_API_TOKEN not configured');
+  const res = await page.request.post(`${AGENT_API_BASE}/internal/users`, {
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_API_TOKEN}` },
+    data: { username, password },
+  });
+  if (!res.ok()) {
+    throw new Error(`POST /internal/users failed (${res.status()}): ${await res.text()}`);
+  }
+}
+
+const adminTokenCache = new WeakMap<object, Promise<string>>();
+
+/** 同一 page 复用 admin token（开户需高频调用，避免反复登录）。 */
+async function ensureAdminToken(page: import('@playwright/test').Page): Promise<string> {
+  const cached = adminTokenCache.get(page);
+  if (cached) {
+    try {
+      return await cached;
+    } catch {
+      adminTokenCache.delete(page);
+    }
+  }
+  const pending = adminLoginApi(page);
+  adminTokenCache.set(page, pending);
+  return pending;
+}
+
+async function createFrontUserViaAdmin(
+  page: import('@playwright/test').Page,
+  username: string,
+  password: string,
+): Promise<void> {
+  const token = await ensureAdminToken(page);
+  const res = await adminGqlRequest(page, `
+    mutation AdminCreateFrontUser($username: String!, $password: String!) {
+      adminCreateFrontUser(username: $username, password: $password) { id name username }
+    }
+  `, { username, password }, token);
+  const body = await res.json();
+  if (body.errors?.length || !body.data?.adminCreateFrontUser) {
+    throw new Error(`adminCreateFrontUser failed: ${JSON.stringify(body.errors ?? body)}`);
+  }
+}
+
+/** 后台开户（不登录）：internal 端点优先，未配置 token 时回落 admin-api GraphQL。 */
+export async function provisionFrontUser(
+  page: import('@playwright/test').Page,
+  options: { username?: string; password?: string; prefix?: string } = {},
+): Promise<{ username: string; password: string }> {
+  const username = options.username
+    ?? `${options.prefix ?? 'eu'}${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
+  const password = options.password ?? FRONT_USER_PASSWORD;
+  const errors: string[] = [];
+  if (INTERNAL_API_TOKEN) {
+    try {
+      await createFrontUserViaInternal(page, username, password);
+      return { username, password };
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  try {
+    await createFrontUserViaAdmin(page, username, password);
+    return { username, password };
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : String(error));
+  }
+  throw new Error(
+    `create front user failed: ${errors.join(' | ')}. `
+    + '前台已无 signup：请注入 INTERNAL_API_TOKEN（首选，走 POST /internal/users）'
+    + '或 MONGODB_URI（回落 admin-api adminCreateFrontUser）以完成开户。',
+  );
+}
+
+/** 前台登录（GraphQL login，载荷 user { id name tenant }）换取 token。 */
+export async function loginFrontUser(
+  page: import('@playwright/test').Page,
+  username: string,
+  password: string = FRONT_USER_PASSWORD,
+): Promise<FrontUser> {
+  const res = await gqlRequest(page, `
+    mutation Login($username: String!, $password: String!) {
+      login(username: $username, password: $password) {
+        token
+        user { id name tenant { id name type memberCount } }
+      }
+    }
+  `, { username, password });
+  const body = await res.json();
+  const payload = body.data?.login;
+  if (!payload) throw new Error(`login failed: ${JSON.stringify(body.errors ?? body)}`);
+  return { token: payload.token, username, userId: payload.user.id };
+}
+
+/** 后台开户 + 前台登录（注册已关闭，测试造用户唯一入口）。 */
+export async function createFrontUser(
+  page: import('@playwright/test').Page,
+  options: { username?: string; password?: string; prefix?: string } = {},
+): Promise<FrontUser> {
+  const { username, password } = await provisionFrontUser(page, options);
+  return loginFrontUser(page, username, password);
+}
+
+/** 兼容别名：语义已切换为「后台开户 + 登录」，签名不变。 */
+export const registerUser = createFrontUser;
+
+/** 创建云电脑需先扣 5 credits：直接为前台测试租户准备余额（需 MONGODB_URI）。 */
 export async function fundFrontUser(userId: string, username: string, credits = 100): Promise<boolean> {
   const uri = process.env.MONGODB_URI;
   if (!uri) return false;
@@ -141,11 +260,12 @@ export async function fundFrontUser(userId: string, username: string, credits = 
   const db = mongoose.connection.db;
   if (!db) return false;
   const now = new Date();
+  // 一期 personal 租户 `_id` 复用 userId，计费账户 ownerType=tenant、ownerId=tenantId==userId。
   await db.collection('billingaccounts').updateOne(
-    { ownerType: 'front_user', ownerId: userId },
+    { ownerType: 'tenant', ownerId: userId },
     {
       $set: {
-        ownerType: 'front_user',
+        ownerType: 'tenant',
         ownerId: userId,
         ownerName: username,
         cashBalance: credits * 100,
@@ -163,9 +283,9 @@ export async function fundFrontUser(userId: string, username: string, credits = 
   return true;
 }
 
-/** 注册并充值；无 MONGODB_URI 时保持原行为（创建步骤可能因余额不足失败）。 */
+/** 开户并充值；无 MONGODB_URI 时保持原行为（创建步骤可能因余额不足失败）。 */
 export async function registerFundedUser(page: import('@playwright/test').Page) {
-  const user = await registerUser(page);
+  const user = await createFrontUser(page);
   await fundFrontUser(user.userId, user.username);
   return user;
 }

@@ -400,7 +400,7 @@ describe('WorkflowInstanceService.instantiate', () => {
     expect(WorkflowInstance.create).not.toHaveBeenCalled();
   });
 
-  it('I9b: createWorkflowWorktree 且解析失败 → 显式报错而非静默跳过', async () => {
+  it('I9b: createWorkflowWorktree 且非 Git 工作区 → 不创建 Worktree（A49 语义：不阻断实例化）', async () => {
     const nodes = makeNodes();
     nodes[1].requiresWorktree = false;
     nodes[1].agentConfig = { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: false };
@@ -411,8 +411,10 @@ describe('WorkflowInstanceService.instantiate', () => {
         'user-1',
         instantiateInput({ nodes, createWorkflowWorktree: true }) as never,
       ),
-    ).rejects.toThrow(/无法创建独立 Worktree/);
-    expect(WorkflowInstance.create).not.toHaveBeenCalled();
+    ).resolves.toBeDefined();
+    expect(WorkflowInstance.create).toHaveBeenCalledTimes(1);
+    const doc = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as Record<string, unknown>;
+    expect(doc.workflowWorktreePath).toBeUndefined();
   });
 
   it('I10: 实例创建失败 → 回滚 Worktree 并继续抛错', async () => {

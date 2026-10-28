@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
+import { createFrontUser } from '../support/front-users.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 
@@ -15,12 +16,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
 
 // 前台费用转发依赖 admin-api（ADMIN_API_URL + INTERNAL_API_TOKEN）；未配置时跳过（保持 CI 绿灯）
 const hasBillingBackend = !!process.env.ADMIN_API_URL;
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token user { id username } }
-  }
-`;
 
 const MY_ACCOUNT = `
   query {
@@ -58,15 +53,12 @@ const REVOKE_KEY = `
 
 (hasBillingBackend ? describe : describe.skip)('Agent Billing API', () => {
   it('T-A1/A3/A4/A5: 前台账户 get-or-create、Key 一次性 secret、无自助充值', async () => {
-    const signup = await gqlRequest(SIGNUP, {
-      username: `b${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    }).then((res) => res.json() as Promise<{ data: { signup: { token: string } } }>);
-    const token = signup.data.signup.token;
+    const frontUser = await createFrontUser();
+    const token = frontUser.token;
 
     const account = await gqlRequest(MY_ACCOUNT, undefined, token).then((res) => res.json());
     expect(account.errors).toBeUndefined();
-    expect(account.data.myBillingAccount.ownerType).toBe('front_user');
+    expect(account.data.myBillingAccount.ownerType).toBe('tenant');
     expect(typeof account.data.myBillingAccount.availableBalance).toBe('number');
 
     // 注入一张收据（若可直连 Mongo），用于验证空串 invoiceId 不会退化为「返回该账户最新收据」

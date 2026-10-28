@@ -28,6 +28,8 @@ import {
 import { BillingOutbox } from './models/billing-outbox.js';
 import { internalAuth } from './middleware/internal-auth.js';
 import { createInternalRouter } from './routes/internal-api.js';
+import { runMigrations } from './migrations/runner.js';
+import * as migration001CloudcontainersTenantId from './migrations/001-cloudcontainers-tenant-id-backfill.js';
 
 export interface CloudControllerApp {
   app: express.Express;
@@ -303,6 +305,14 @@ export function createCloudControllerApp(): CloudControllerApp {
     if (started) return;
     started = true;
     await mongoose.connect(config.mongodbUri);
+    // 数据库迁移（独立账本 cloud_controller_migrations）：在 listen 之前完成。
+    // 失败只记录日志、不阻断启动（runner 逐迁移吞错，下次启动按未完成重试）——
+    // 与 agent-api / admin-api 既有启动口径一致。
+    try {
+      await runMigrations([migration001CloudcontainersTenantId]);
+    } catch (err) {
+      logger.warn?.(`[Migration] runMigrations failed (non-fatal): ${(err as Error).message}`);
+    }
     // 计费集合索引（eventId 唯一 / {producer,published,createdAt}）随启动建立。
     // D3：enqueue 去重完全依赖 eventId 唯一索引，索引缺失会导致重复事件——必须 fail-fast。
     try {

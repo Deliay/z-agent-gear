@@ -159,6 +159,7 @@ services:
       CORS_ORIGIN: "${CORS_ORIGIN}"
       CLOUD_CONTROLLER_URL: "http://cloud-controller:8003"
       INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
+      AGENT_API_URL: "http://agent-api:8000"
       RABBITMQ_URL: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
       ConnectionStrings__rabbitmq: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"

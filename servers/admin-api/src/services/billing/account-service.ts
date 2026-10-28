@@ -47,7 +47,7 @@ export function toAccountDTO(doc: IBillingAccount & { _id: unknown }): BillingAc
   };
 }
 
-/** 解析账户显示名：后台用户取用户名，前台用户取 users 集合用户名/邮箱，缺失回落 ownerId。 */
+/** 解析账户显示名：后台用户取用户名，租户取 tenants 名称，前台用户取 users 集合用户名/邮箱，缺失回落 ownerId。 */
 async function resolveOwnerName(ownerType: BillingOwnerType, ownerId: string): Promise<string> {
   if (ownerType === 'admin_user') {
     if (mongoose.isValidObjectId(ownerId)) {
@@ -55,6 +55,21 @@ async function resolveOwnerName(ownerType: BillingOwnerType, ownerId: string): P
       if (admin?.username) return admin.username;
     }
     return ownerId;
+  }
+  // 前台租户集合由 agent-api 持有（tenants）；此处只读查询，不做 schema 耦合。
+  if (ownerType === 'tenant') {
+    const db = mongoose.connection.db;
+    if (db && mongoose.isValidObjectId(ownerId)) {
+      try {
+        const tenant = (await db.collection('tenants').findOne(
+          { _id: new mongoose.Types.ObjectId(ownerId) },
+          { projection: { name: 1 } },
+        )) as { name?: string } | null;
+        if (tenant?.name) return tenant.name;
+      } catch {
+        // 集合不存在/类型不匹配时回落 users 查询
+      }
+    }
   }
   // 前台用户集合由 agent-api 持有（users）；此处只读查询，不做 schema 耦合。
   const db = mongoose.connection.db;

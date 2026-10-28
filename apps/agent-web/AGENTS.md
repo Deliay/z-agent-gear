@@ -100,6 +100,13 @@ npm run preview  # Preview production build
   保证保存后离开设置页再返回不回显旧值；回归见 `CommitSettingsSection.cache.test.tsx`。
 - 测试：`components/settings/__tests__/CommitSettingsSection.test.tsx`。
 
+## 多租户一期（注册硬关闭与展示名）
+
+- **前台注册已硬关闭**：注册页与注册路由、注册 mutation 均已在页面/路由/契约三层移除；开户仅由后台经 agent-api `POST /internal/users` 发起。登录页不提供任何注册入口。
+- **登录响应形态**（`contracts/auth.graphql`）：`AuthPayload.user = User{ id, name, tenant }`，`Tenant{ id, name, type, memberCount }`。`stores/auth.ts` 的 `User` 类型以 `name` 作为展示名（`tenant` 可选，兼容升级前 localStorage 旧登录态）。
+- **展示名消费点**：`Sidebar` 的 prop 为 `name`（`MainLayout` 传 `user?.name`）、`SettingsPage` 个人资料展示 `user?.name`；不再读写 `user.username`。登录表单的 `username` 输入只是登录凭据字段，与展示名无关。
+- **计费**：`MyBillingAccountData.ownerType` 联合类型包含 `tenant`（`front_user` 仅历史兼容，`admin_user` 保持不变）；前端不展示 ownerType 文案，数值口径零改动。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 export const WORKFLOW_NODE_TYPES = ['HUMAN', 'AI', 'FLAG'] as const;
 export type WorkflowNodeType = (typeof WORKFLOW_NODE_TYPES)[number];
@@ -31,6 +32,8 @@ const workflowTemplateSchema = new mongoose.Schema(
   {
     // 可空：null 表示内置模板（isBuiltin=true）
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', index: true },
+    // 系统内置模板 userId 为空（无归属），tenantId 跟随可选（迁移 013 只清洗带 userId 行）。
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', default: null, index: true },
     name: { type: String, required: true },
     description: { type: String },
     version: { type: Number, default: 1 },
@@ -44,6 +47,8 @@ const workflowTemplateSchema = new mongoose.Schema(
 );
 
 workflowTemplateSchema.index({ userId: 1, createdAt: -1 });
+
+applyTenantScope(workflowTemplateSchema);
 
 export const WorkflowTemplate = mongoose.model('WorkflowTemplate', workflowTemplateSchema);
 export type IWorkflowTemplate = mongoose.InferSchemaType<typeof workflowTemplateSchema>;

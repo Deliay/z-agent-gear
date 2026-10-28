@@ -1,6 +1,30 @@
+# 前台认证契约（三层帐号体系）
+#
+# 前台注册已硬关闭：契约层不再提供 signup，开户仅由后台经 agent-api
+# `POST /internal/users` 发起（见 contracts/admin-tenant.graphql）。
+#
+# 模型口径：
+# - 账户（accounts）承载登录凭据（username/passwordHash），不引用用户；
+# - 用户（users）为身份主体，经 accountId 关联账户（account→users 一对多）、
+#   经 tenantId 关联租户（tenant→users 一对多）；
+# - 租户（tenants）本期仅 personal（个人专属，单成员、不可删除、不可加成员）。
+
+enum TenantType {
+  personal
+  team
+}
+
+type Tenant {
+  id: ID!
+  name: String!
+  type: TenantType! # personal | team（一期仅 personal）
+  memberCount: Int! # 租户成员数（tenant→users 一对多；一期 personal 恒为 1）
+}
+
 type User {
   id: ID!
-  username: String!
+  name: String! # 展示名（迁移后=原用户名）
+  tenant: Tenant! # 当前用户归属租户（一期恒为个人专属租户）
   createdAt: String!
 }
 
@@ -14,6 +38,5 @@ type Query {
 }
 
 type Mutation {
-  signup(username: String!, password: String!): AuthPayload!
   login(username: String!, password: String!): AuthPayload!
 }

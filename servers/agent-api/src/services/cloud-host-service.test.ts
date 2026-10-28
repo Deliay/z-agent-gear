@@ -385,6 +385,8 @@ describe('CloudHostService', () => {
         containerApiKeyId: 'model-key-1',
         hostName: 'my-cloud',
         harnessTypes: ['opencode'],
+        userId: 'user-1',
+        tenantId: 'user-1',
         billingAccountId: 'account-1',
         agentGearMinVersion: '2.10.0',
         // 容器 TTL 仍作为留档下发；模型 Key 不再与其绑定有效期。
@@ -392,7 +394,7 @@ describe('CloudHostService', () => {
       });
       expect(billingClient.createCloudHostApiKey).toHaveBeenCalledWith({
         accountId: 'account-1',
-        ownerType: 'front_user',
+        ownerType: 'tenant',
         ownerId: 'user-1',
         name: 'cloud-host:my-cloud',
         cloudHostId: expect.any(String),

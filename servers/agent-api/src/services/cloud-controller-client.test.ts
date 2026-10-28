@@ -27,6 +27,7 @@ describe('CloudControllerClient', () => {
       controllerKeyId: 'key-1',
       containerApiKeyId: 'model-key-1',
       userId: 'user-1',
+      tenantId: 'user-1',
       hostName: 'my-cloud',
       harnessTypes: ['opencode'],
       expiresAt: new Date('2026-10-22T00:00:00.000Z'),

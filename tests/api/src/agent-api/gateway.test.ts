@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import { createFrontUser } from '../support/front-users.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const API_BASE = process.env.API_URL ? process.env.API_URL.replace('/graphql', '') : 'http://localhost:10001';
@@ -36,15 +37,6 @@ function waitForEvent<T = unknown>(socket: ClientSocket, event: string, timeoutM
 }
 
 let authToken = '';
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -121,10 +113,8 @@ async function registerController(nameSuffix: string): Promise<{ client: ClientS
 
 describe('Gateway API', () => {
   beforeAll(async () => {
-    const uid = `gw_${Date.now()}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data?.signup?.token ?? '';
+    const frontUser = await createFrontUser();
+    authToken = frontUser.token;
     expect(authToken).toBeTruthy();
   });
 

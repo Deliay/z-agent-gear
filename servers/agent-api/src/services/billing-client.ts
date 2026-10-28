@@ -1,9 +1,17 @@
 import { config } from '../config/index.js';
 
+/**
+ * 计费账户 owner 类型（admin-api `BILLING_OWNER_TYPES` 的前台子集）：
+ * - `tenant`：多租户一期前台计费口径（ownerId=tenantId，personal 期与 userId 同值）；
+ * - `front_user`：已废弃枚举，仅兼容期旧 agent-api 读请求（发布窗口兜底）；
+ * - `admin_user`：后台账户计费，前台不产生该 owner 的读写。
+ */
+export type BillingOwnerType = 'front_user' | 'admin_user' | 'tenant';
+
 /** 计费 wire DTO（金额已由 admin-api 换算为 credits）。 */
 export interface BillingAccountWire {
   id: string;
-  ownerType: 'front_user' | 'admin_user';
+  ownerType: BillingOwnerType;
   ownerId: string;
   ownerName: string;
   cashBalance: number;
@@ -185,13 +193,26 @@ export class BillingClient {
   }
 
   async getAccount(
-    ownerType: 'front_user' | 'admin_user',
+    ownerType: BillingOwnerType,
     ownerId: string,
     ownerName?: string,
   ): Promise<BillingAccountWire> {
     const params = new URLSearchParams({ ownerType, ownerId });
     if (ownerName) params.set('ownerName', ownerName);
     return this.request<BillingAccountWire>(`/internal/billing/account?${params.toString()}`);
+  }
+
+  /**
+   * 计费账户 get-or-create（`GET /internal/billing/account` 天然幂等）。
+   * 开户（`/internal/users`）与租户口径读写均经此入口，语义与 `getAccount` 一致，
+   * 命名显式表达「不存在则创建零余额账户」。
+   */
+  async getOrCreateAccount(
+    ownerType: BillingOwnerType,
+    ownerId: string,
+    ownerName?: string,
+  ): Promise<BillingAccountWire> {
+    return this.getAccount(ownerType, ownerId, ownerName);
   }
 
   async listInvoices(
@@ -246,7 +267,7 @@ export class BillingClient {
   }
 
   async listApiKeys(
-    ownerType: 'front_user' | 'admin_user',
+    ownerType: BillingOwnerType,
     ownerId: string,
   ): Promise<BillingApiKeyWire[]> {
     return this.request<BillingApiKeyWire[]>(
@@ -255,7 +276,7 @@ export class BillingClient {
   }
 
   async createApiKey(
-    ownerType: 'front_user' | 'admin_user',
+    ownerType: BillingOwnerType,
     ownerId: string,
     name: string,
   ): Promise<BillingApiKeyPayloadWire> {
@@ -267,7 +288,7 @@ export class BillingClient {
 
   async revokeApiKey(
     id: string,
-    ownerType: 'front_user' | 'admin_user',
+    ownerType: BillingOwnerType,
     ownerId: string,
   ): Promise<{ success: boolean; apiKey: BillingApiKeyWire }> {
     return this.request<{ success: boolean; apiKey: BillingApiKeyWire }>(
@@ -279,7 +300,7 @@ export class BillingClient {
   /** 云电脑运行专用 Key：`scope=cloud_host`，绑定 hostId；无固定有效期，随容器回收。 */
   async createCloudHostApiKey(input: {
     accountId: string;
-    ownerType: 'front_user' | 'admin_user';
+    ownerType: BillingOwnerType;
     ownerId: string;
     name: string;
     cloudHostId: string;

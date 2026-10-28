@@ -4,7 +4,12 @@ import { AuthContext, type User } from './auth';
 function restoreUser(): User | null {
   const raw = localStorage.getItem('auth_user');
   if (!raw) return null;
-  try { return JSON.parse(raw) as User; } catch { return null; }
+  try {
+    const parsed = JSON.parse(raw) as User & { username?: string };
+    // 升级前持久化的登录态只有 username：按迁移后语义（name=原 username）回填展示名
+    if (!parsed.name && parsed.username) parsed.name = parsed.username;
+    return parsed;
+  } catch { return null; }
 }
 
 const COOKIE_OPTIONS = 'path=/; max-age=86400; SameSite=Lax';

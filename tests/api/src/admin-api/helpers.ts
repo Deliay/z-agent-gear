@@ -10,9 +10,9 @@
 // 返回的 token 对应 mustChangePassword=false 的管理员，可直接调用业务 mutation。
 
 import mongoose from 'mongoose';
+import { createFrontUser } from '../support/front-users.js';
 
 const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:10003/graphql';
-const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 
 export const ADMIN_TEST_PASSWORD = 'AdminTestPass123';
 // 管理员初始密码不再硬编码（问题 4 / 问题 47）：只能来自部署注入的 ADMIN_INITIAL_PASSWORD。
@@ -118,21 +118,13 @@ export async function ensureAdminLogin(): Promise<string> {
 
 /**
  * 真实用户侧 JWT（agent-api 签发，JWT_SECRET）——用于验证 admin/user token 互不认（T-A6）。
+ *
+ * 前台注册已硬关闭（多租户一期 F4）：此处经 agent-api `POST /internal/users` 开户
+ * （Bearer `INTERNAL_API_TOKEN`）后 `login` 取 token。
  */
-export async function signupUserToken(): Promise<string> {
-  const username = `as${Date.now().toString(36).slice(-8)}${Math.random().toString(36).slice(2, 5)}`;
-  const res = await fetch(AGENT_API_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      query: 'mutation($u:String!,$p:String!){signup(username:$u,password:$p){token}}',
-      variables: { u: username, p: 'testpass123' },
-    }),
-  });
-  const body = (await res.json()) as { data?: { signup?: { token?: string } } };
-  const token = body.data?.signup?.token;
-  if (!token) throw new Error('failed to signup a user for token isolation test');
-  return token;
+export async function createFrontUserToken(): Promise<string> {
+  const user = await createFrontUser();
+  return user.token;
 }
 
 /**

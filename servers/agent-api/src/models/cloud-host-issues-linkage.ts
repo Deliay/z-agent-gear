@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 /**
  * 云电脑 GitHub Issues 联动配置（集合 `cloud_host_issues_linkages`）。
@@ -9,6 +10,7 @@ import mongoose from 'mongoose';
 const cloudHostIssuesLinkageSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true },
     configuredWorkflowId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -67,10 +69,9 @@ export function dedupeRepoNames(repos: readonly unknown[]): string[] {
   return result;
 }
 
-export const CloudHostIssuesLinkage = mongoose.model(
-  'CloudHostIssuesLinkage',
-  cloudHostIssuesLinkageSchema,
-);
+applyTenantScope(cloudHostIssuesLinkageSchema);
+
+export const CloudHostIssuesLinkage = mongoose.model('CloudHostIssuesLinkage', cloudHostIssuesLinkageSchema);
 export type ICloudHostIssuesLinkage = mongoose.InferSchemaType<
   typeof cloudHostIssuesLinkageSchema
 >;

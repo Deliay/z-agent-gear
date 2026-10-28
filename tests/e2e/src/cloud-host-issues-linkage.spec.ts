@@ -42,6 +42,7 @@ async function setupFixture(
   const workflowDocs = options.workflows.map((workflow) => ({
     _id: new mongoose.Types.ObjectId(),
     userId,
+    tenantId: userId, // 多租户一期：personal 期 tenantId == userId
     controllerId,
     name: workflow.name,
     nodes: [
@@ -63,6 +64,7 @@ async function setupFixture(
   await db.collection('controllers').insertOne({
     _id: controllerId,
     userId,
+    tenantId: userId,
     name: `issues-${controllerId.toString()}`,
     hostname: `issues-${controllerId.toString()}`,
     type: 'cloud',
@@ -75,6 +77,7 @@ async function setupFixture(
   await db.collection('cloudhosts').insertOne({
     _id: hostId,
     userId,
+    tenantId: userId,
     controllerId,
     name: `issues-host-${controllerId.toString()}`,
     status: options.hostStatus ?? 'RUNNING',
@@ -98,6 +101,7 @@ async function setupFixture(
     await db.collection('cloud_host_issues_linkages').insertMany(
       options.linkages.map((linkage, index) => ({
         userId,
+        tenantId: userId,
         controllerId,
         configuredWorkflowId: workflowDocs[index]?._id ?? workflowDocs[0]?._id,
         configuredWorkflowName: workflowDocs[index]?.name ?? workflowDocs[0]?.name,

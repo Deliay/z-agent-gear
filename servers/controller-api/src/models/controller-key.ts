@@ -1,7 +1,9 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 const controllerKeySchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
   name: { type: String, required: true },
   type: { type: String, enum: ['local', 'cloud', 'github'], required: true },
   keyHash: { type: String, required: true, unique: true },
@@ -12,6 +14,8 @@ const controllerKeySchema = new mongoose.Schema({
 }, { timestamps: true });
 
 controllerKeySchema.index({ userId: 1, status: 1 });
+
+applyTenantScope(controllerKeySchema);
 
 export const ControllerKey = mongoose.model('ControllerKey', controllerKeySchema);
 export type IControllerKey = mongoose.InferSchemaType<typeof controllerKeySchema>;
