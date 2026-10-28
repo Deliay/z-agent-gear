@@ -62,6 +62,44 @@ describe('ansiToHtml', () => {
     expect(html).not.toContain('\x1b');
   });
 
+  it('should strip bracketed paste markers 200~/201~', () => {
+    const html = ansiToHtml('\x1b[200~pasted\x1b[201~');
+    expect(html).toContain('pasted');
+    expect(html).not.toContain('~');
+    expect(html).not.toContain('\x1b');
+  });
+
+  it('should strip CSI sequences with non-letter final bytes @ ` ~', () => {
+    expect(ansiToHtml('ICH\x1b[2@ after')).toBe('ICH after');
+    expect(ansiToHtml('HPA\x1b[10` after')).not.toContain('`');
+    expect(ansiToHtml('Fkey\x1b[15~ after')).not.toContain('~');
+  });
+
+  it('should strip private prefix CSI with trailing m (modifyOtherKeys) instead of treating it as SGR', () => {
+    const html = ansiToHtml('\x1b[>4;2mtext');
+    expect(html).toContain('text');
+    expect(html).not.toContain('>4;2m');
+    expect(html).not.toContain('\x1b');
+  });
+
+  it('should strip DCS / APC / PM string sequences', () => {
+    const html = ansiToHtml('\x1bPtmux;abc\x1b\\visible\x1b_Gi=1\x1b\\\x1b^meta\x07end');
+    expect(html).toContain('visible');
+    expect(html).toContain('end');
+    expect(html).not.toContain('tmux');
+    expect(html).not.toContain('Gi=1');
+    expect(html).not.toContain('meta');
+    expect(html).not.toContain('\x1b');
+  });
+
+  it('should keep 256-color, truecolor and empty SGR sequences', () => {
+    const html = ansiToHtml('\x1b[38;5;200mV1\x1b[0m \x1b[38;2;10;20;30mV2\x1b[0m \x1b[mV3');
+    expect(html).toContain('V1');
+    expect(html).toContain('V2');
+    expect(html).toContain('V3');
+    expect(html).toMatch(/color:\s*#/);
+  });
+
   it('should escape HTML special characters (XSS)', () => {
     const html = ansiToHtml('<script>alert("x")</script> & done');
     expect(html).not.toContain('<script>');

@@ -123,16 +123,20 @@ test.describe('Session Rendering', () => {
       status: 'completed',
       title: 'Run build',
       rawInput: { command: 'npm run build' },
-      rawOutput: { output: '\u001b[31merror:\u001b[0m failed\n\u001b[32mok\u001b[0m done\u001b[?25l\u001b[?2004h' },
+      rawOutput: { output: '\u001b[31merror:\u001b[0m failed\n\u001b[32mok\u001b[0m done\u001b[?25l\u001b[?2004h\u001b[200~pasted\u001b[201~\u001b[2@\u001b[10`\u001b[>4;2m\u001b[15~\u001bPtmux;xx\u001b\\' },
     });
 
     const terminal = page.getByTestId('terminal-output');
     await expect(terminal).toBeVisible({ timeout: 10000 });
     await expect(terminal.locator('span[style*="color"]')).not.toHaveCount(0);
     await expect(terminal).toContainText('error:');
-    // 私有模式序列不得残留为可见乱码
+    await expect(terminal).toContainText('pasted');
+    // 私有模式/CSI 标记/DCS 不得残留为可见乱码
     await expect(terminal).not.toContainText('?25');
     await expect(terminal).not.toContainText('?2004');
+    await expect(terminal).not.toContainText('~');
+    await expect(terminal).not.toContainText('>4;2m');
+    await expect(terminal).not.toContainText('tmux');
 
     session.disconnect();
   });
