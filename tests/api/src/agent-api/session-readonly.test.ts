@@ -57,6 +57,7 @@ async function seedCloudController(
   await db.collection('controllers').insertOne({
     _id: controllerId,
     userId: new mongoose.Types.ObjectId(userId),
+    tenantId: new mongoose.Types.ObjectId(userId),
     name: `ro-${controllerId.toString()}`,
     hostname: `ro-${controllerId.toString()}`,
     type: 'cloud',
@@ -69,6 +70,7 @@ async function seedCloudController(
   await db.collection('controllerworkspaces').insertOne({
     _id: workspaceId,
     userId: new mongoose.Types.ObjectId(userId),
+    tenantId: new mongoose.Types.ObjectId(userId),
     controllerId,
     name: 'workspace',
     path: '/home/worker/workspace',
@@ -79,6 +81,7 @@ async function seedCloudController(
   await db.collection('cloudhosts').insertOne({
     _id: hostId,
     userId: new mongoose.Types.ObjectId(userId),
+    tenantId: new mongoose.Types.ObjectId(userId),
     name: `ro-${hostId.toString()}`,
     harnessTypes: ['OPENCODE'],
     status,
@@ -120,6 +123,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       const now = new Date();
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         controllerId,
         controllerName: 'cloud',
         acpServerType: 'opencode',
@@ -153,6 +157,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       await db.collection('controllers').insertOne({
         _id: controllerId,
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         name: 'local',
         hostname: 'local',
         type: 'local',
@@ -164,6 +169,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       });
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         controllerId,
         controllerName: 'local',
         acpServerType: 'opencode',
@@ -196,6 +202,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       const now = new Date();
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         controllerId,
         controllerName: 'cloud',
         acpServerType: 'opencode',
@@ -255,6 +262,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
     try {
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         controllerId,
         controllerName: 'cloud',
         acpServerType: 'opencode',

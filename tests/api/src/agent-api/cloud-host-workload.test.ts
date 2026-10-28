@@ -76,6 +76,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     await db.collection('controllers').insertOne({
       _id: controllerId,
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       name: 'e2e-cloud',
       hostname: 'e2e-cloud',
       type: 'cloud',
@@ -88,6 +89,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     await db.collection('controllerworkspaces').insertOne({
       _id: workspaceId,
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       controllerId,
       name: 'workspace',
       path: '/home/worker/workspace',
@@ -98,6 +100,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     await db.collection('cloudhosts').insertOne({
       _id: hostId,
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       name: 'e2e-cloud',
       harnessTypes: ['OPENCODE'],
       status: 'RUNNING',
@@ -137,6 +140,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     await db.collection('githubaccounts').insertOne({
       _id: accountId,
       userId,
+      tenantId: userId,
       githubUserId: installationId,
       githubLogin: `gh-${accountId.toString()}`,
       accessToken: 'encrypted',

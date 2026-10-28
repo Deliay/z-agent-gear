@@ -41,6 +41,7 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Admin cloud host billing key', () => {
     await db.collection('cloudhosts').insertOne({
       _id: new mongoose.Types.ObjectId(cloudHostId),
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       name: 'billing-test',
       harnessTypes: ['OPENCODE'],
       status: 'STARTING',
@@ -67,11 +68,12 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Admin cloud host billing key', () => {
     expect(minted.status).toBe(201);
     const payload = (await minted.json()) as {
       secret: string;
-      apiKey: { id: string; scope: string; cloudHostId: string; expiresAt: string };
+      apiKey: { id: string; scope: string; cloudHostId: string; expiresAt: string | null };
     };
     expect(payload.secret).toMatch(/^zag_sk_[0-9a-f]+$/);
     expect(payload.apiKey).toMatchObject({ scope: 'cloud_host', cloudHostId });
-    expect(payload.apiKey.expiresAt).toBe(expiresAt);
+    // 契约：新 cloud_host Key 无固定有效期（expiresAt 恒 null），失效由容器状态决定
+    expect(payload.apiKey.expiresAt).toBeNull();
 
     // STARTING 窗口内模型网关必须拒绝（初始化不调用模型）
     expect((await models(payload.secret)).status).toBe(401);
@@ -130,29 +132,72 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Admin cloud host billing key', () => {
     await db.collection('cloudhosts').deleteOne({ _id: new mongoose.Types.ObjectId(cloudHostId) });
   });
 
-  it('rejects cloud_host key mint without host/expiry', async () => {
+  it('cloud_host key: missing host 400, no expiry allowed, invalid/foreign host 404', async () => {
+    const db = (await mongoDb())!;
+    const userId = new mongoose.Types.ObjectId().toString();
+
+    // 缺 cloudHostId → 400
     const missingHost = await internal('/internal/billing/api-keys', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ownerType: 'tenant',
-        ownerId: new mongoose.Types.ObjectId().toString(),
+        ownerId: userId,
         name: 'bad',
         scope: 'cloud_host',
-        expiresAt: new Date().toISOString(),
       }),
     });
     expect(missingHost.status).toBe(400);
 
-    const missingExpiry = await internal('/internal/billing/api-keys', {
-      method: 'POST',
-      body: JSON.stringify({
-        ownerType: 'tenant',
-        ownerId: new mongoose.Types.ObjectId().toString(),
-        name: 'bad',
-        scope: 'cloud_host',
-        cloudHostId: new mongoose.Types.ObjectId().toString(),
-      }),
+    // 合法 host + 不带 expiresAt → 201 且 expiresAt 恒 null（契约）
+    const hostId = new mongoose.Types.ObjectId().toString();
+    const now = new Date();
+    await db.collection('cloudhosts').insertOne({
+      _id: new mongoose.Types.ObjectId(hostId),
+      userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
+      name: 'billing-no-expiry',
+      harnessTypes: ['OPENCODE'],
+      status: 'STARTING',
+      controllerId: new mongoose.Types.ObjectId(),
+      keyId: new mongoose.Types.ObjectId(),
+      workspaceId: new mongoose.Types.ObjectId(),
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
     });
-    expect(missingExpiry.status).toBe(400);
-  });
+    try {
+      const ok = await internal('/internal/billing/api-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ownerType: 'tenant',
+          ownerId: userId,
+          name: 'no-expiry',
+          scope: 'cloud_host',
+          cloudHostId: hostId,
+        }),
+      });
+      expect(ok.status).toBe(201);
+      const okPayload = (await ok.json()) as { apiKey: { expiresAt: string | null } };
+      expect(okPayload.apiKey.expiresAt).toBeNull();
+
+      // 不存在/越权 host → 404（不泄露存在性）
+      const foreign = await internal('/internal/billing/api-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ownerType: 'tenant',
+          ownerId: userId,
+          name: 'foreign',
+          scope: 'cloud_host',
+          cloudHostId: new mongoose.Types.ObjectId().toString(),
+        }),
+      });
+      expect(foreign.status).toBe(404);
+    } finally {
+      await db.collection('billingapikeys').deleteMany({ cloudHostId: new mongoose.Types.ObjectId(hostId) });
+      await db.collection('cloudhosts').deleteOne({ _id: new mongoose.Types.ObjectId(hostId) });
+    }
+  });;
 });

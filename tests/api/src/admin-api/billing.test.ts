@@ -34,7 +34,7 @@ const ACCOUNTS = `
 const ACCOUNTS_BY_OWNER = `
   query AccountsByOwner($keyword: String, $ownerType: BillingOwnerType) {
     adminBillingAccounts(keyword: $keyword, ownerType: $ownerType) {
-      id ownerType ownerId ownerName availableBalance
+      id ownerType ownerId ownerName availableBalance cashBalance
     }
   }
 `;
@@ -242,19 +242,20 @@ describe('Admin Billing API', () => {
   it('T-B33: admin_user 双 owner 回归（充值/查询互不影响）', async () => {
     expect(frontAccountId).toBeTruthy();
     const adminAccounts = await adminGql<{
-      adminBillingAccounts: Array<{ id: string; ownerType: string; availableBalance: number }>;
+      adminBillingAccounts: Array<{ id: string; ownerType: string; availableBalance: number; cashBalance: number }>;
     }>(ACCOUNTS_BY_OWNER, { ownerType: 'admin_user', keyword: 'admin' }, token);
     expect(adminAccounts.errors).toBeUndefined();
     const adminAccount = adminAccounts.data!.adminBillingAccounts[0];
     expect(adminAccount).toBeDefined();
     expect(adminAccount.ownerType).toBe('admin_user');
-    const before = adminAccount.availableBalance;
+    // balanceAfter 为现金余额口径（cashBalance），与 availableBalance（含 creditLimit/gift/frozen）不同
+    const beforeCash = adminAccount.cashBalance;
 
     const recharge = await adminGql<{
       rechargeBillingAccount: { amount: number; balanceAfter: number };
     }>(RECHARGE, { id: adminAccount.id, amount: 5, note: 'admin_user regression' }, token);
     expect(recharge.errors).toBeUndefined();
-    expect(recharge.data!.rechargeBillingAccount.balanceAfter).toBe(before + 5);
+    expect(recharge.data!.rechargeBillingAccount.balanceAfter).toBe(beforeCash + 5);
 
     // tenant 账户余额不受 admin_user 充值影响
     const tenantAfter = await adminGql<{ adminBillingAccount: { availableBalance: number } }>(

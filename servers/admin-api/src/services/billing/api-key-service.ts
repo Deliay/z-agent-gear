@@ -14,6 +14,7 @@ export type BillingApiKeyScope = 'account' | 'cloud_host';
 
 export interface BillingApiKeyDTO {
   id: string;
+  ownerType: BillingOwnerType;
   name: string;
   keyPrefix: string;
   status: string;
@@ -45,6 +46,7 @@ export class ApiKeyNotFoundError extends Error {
 
 function toDTO(doc: unknown): BillingApiKeyDTO {
   const d = doc as {
+    ownerType?: BillingOwnerType;
     name: string;
     keyPrefix: string;
     status: string;
@@ -56,6 +58,7 @@ function toDTO(doc: unknown): BillingApiKeyDTO {
   };
   return {
     id: documentId(doc),
+    ownerType: d.ownerType ?? 'tenant',
     name: d.name,
     keyPrefix: d.keyPrefix,
     status: d.status,

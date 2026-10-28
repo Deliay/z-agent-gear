@@ -62,6 +62,7 @@ function toDate(value: unknown): Date | undefined {
 
 /** API Key DTO → 内部 REST wire（时间 ISO；含 scope/cloudHostId/expiresAt；expiresAt 仅历史数据可能非空）。 */
 function apiKeyToWire(key: {
+  ownerType: string;
   scope: string;
   cloudHostId: string | null;
   expiresAt: Date | null;

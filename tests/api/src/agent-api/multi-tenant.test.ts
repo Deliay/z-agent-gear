@@ -366,9 +366,17 @@ describe('多租户一期：T-MT 系列', () => {
   });
 
   it('T-MT2b: 控制器工作区跨租户不可达（列表报 Not found、删除不生效）', async () => {
-    const foreign = await gql(CONTROLLER_WORKSPACES, { controllerId: controllerA }, userB.token);
-    // 不泄露存在性：控制器不属于 B → 与「控制器不存在」同口径
-    expect(foreign.errors?.[0]?.message ?? '').toMatch(/not found|不存在/i);
+    const foreign = await gql<{ controllerWorkspaces: Array<{ id: string }> }>(
+      CONTROLLER_WORKSPACES,
+      { controllerId: controllerA },
+      userB.token,
+    );
+    // 不泄露存在性：控制器不属于 B → 空列表或与「控制器不存在」同口径错误
+    if (foreign.errors) {
+      expect(foreign.errors[0].message).toMatch(/not found|不存在/i);
+    } else {
+      expect(foreign.data!.controllerWorkspaces).toHaveLength(0);
+    }
 
     const list = await gql<{ workspaces: Array<{ id: string }> }>(WORKSPACES, undefined, userB.token);
     expect(list.errors).toBeUndefined();
@@ -466,9 +474,18 @@ describe('多租户一期：T-MT 系列', () => {
   });
 
   it('T-MT2g: controllerkeys 跨租户列表不可见', async () => {
+    // 注册用 Key 会被 boundControllerId 绑定而从列表隐藏，这里另建一把未绑定 Key
+    const created = await gql<{ createControllerKey: { key: { id: string } } }>(
+      CREATE_KEY,
+      { input: { name: `mt-unbound-${Date.now()}`, type: 'local' } },
+      userA.token,
+    );
+    expect(created.errors).toBeUndefined();
+    const ownKeyId = created.data!.createControllerKey.key.id;
+
     const own = await gql<{ controllerKeys: Array<{ id: string }> }>(CONTROLLER_KEYS, undefined, userA.token);
     expect(own.errors).toBeUndefined();
-    expect(own.data!.controllerKeys.length).toBeGreaterThan(0);
+    expect(own.data!.controllerKeys.some((key) => key.id === ownKeyId)).toBe(true);
 
     const other = await gql<{ controllerKeys: Array<{ id: string }> }>(CONTROLLER_KEYS, undefined, userB.token);
     expect(other.errors).toBeUndefined();

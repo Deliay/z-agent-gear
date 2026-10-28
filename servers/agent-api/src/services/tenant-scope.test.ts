@@ -60,6 +60,26 @@ describe('tenant scope plugin', () => {
     expect(query.state.update).toEqual({ $set: { userId: 'u1', title: 'x', tenantId: 'u1' } });
   });
 
+  it('injects tenantId for top-level userId updates (controller upsert shape)', () => {
+    const query = fakeQuery({}, { userId: 'u1', hostname: 'h', $setOnInsert: { name: 'n' } });
+    injectUpdate(query);
+    expect(query.state.update).toEqual({
+      userId: 'u1',
+      hostname: 'h',
+      tenantId: 'u1',
+      $setOnInsert: { name: 'n' },
+    });
+  });
+
+  it('injects tenantId into $setOnInsert when it carries userId', () => {
+    const query = fakeQuery({}, { $set: { status: 'online' }, $setOnInsert: { userId: 'u1' } });
+    injectUpdate(query);
+    expect(query.state.update).toEqual({
+      $set: { status: 'online' },
+      $setOnInsert: { userId: 'u1', tenantId: 'u1' },
+    });
+  });
+
   it('fills tenantId from userId on document validate', async () => {
     const schema = new mongoose.Schema({
       userId: { type: String, required: true },

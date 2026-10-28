@@ -707,7 +707,8 @@ describe('Admin Cloud Workload API', () => {
     expect(kimi.workloadKind).toBe('HARNESS');
     expect(kimi.harnessType).toBe('kimi_code');
     expect(kimi.paramSchema).toEqual([]);
-    expect(kimi.initScript).toContain('@moonshot-ai/kimi-code@2.3.2');
+    expect(kimi.initScript).toContain('KIMI_CODE_CLI_VERSION:-2.3.2');
+    expect(kimi.initScript).toContain('@moonshot-ai/kimi-code@${KIMI_CODE_CLI_VERSION}');
     expect(kimi.initScript).toContain('kimi --version');
     expect(kimi.initScript).not.toContain('agent-gear harness prepare');
     const deepseek = byName.get('DeepSeek Harness（Harness）')!;

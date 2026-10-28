@@ -212,6 +212,7 @@ describe('计费网关分支覆盖（直写模型，MONGODB_URI 缺失即失败�
     await db.collection('cloudhosts').insertOne({
       _id: new mongoose.Types.ObjectId(cloudHostId),
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       name: `gw-host-${stamp}`,
       harnessTypes: ['OPENCODE'],
       status: 'RUNNING',

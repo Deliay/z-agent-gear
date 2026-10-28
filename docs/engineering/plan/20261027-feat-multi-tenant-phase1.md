@@ -67,8 +67,8 @@ flowchart TD
 - 全部 Phase 采用 TDD（红-绿-重构）：先写测试（RED）→ 最小实现（GREEN）→ 重构。
 - 编码前加载：`docs/engineering/common-rules.md`、`docs/engineering/backend-rules.md`（后端 Phase）、`docs/engineering/frontend-rules.md`（Phase 9/10）。
 - 目录级 `AGENTS.md`：`servers/agent-api/AGENTS.md`、`servers/cloud-controller/AGENTS.md`、`apps/agent-web/AGENTS.md`、`apps/admin-web/AGENTS.md`、`tests/api/AGENTS.md`、`tests/e2e/AGENTS.md`、`docs/engineering/plan/AGENTS.md`。
-- `servers/admin-api` 无独立 `AGENTS.md`，沿用根 `AGENTS.md` 与 engineering 规范；`packages/agent-controller`、`servers/controller-api`、`aspire/AgentGear.AppHost`（除 Phase 11 环境注入外）本期零改动。
-- **写方单一纪律**：`accounts`/`users`/`tenants` 写方仅 agent-api（含 `/internal/users`）；`cloudcontainers` 写方仅 cloud-controller；`billing*` 写方仅 admin-api；admin-api / agent-api 的只读镜像模型 schema 注释标注「与写方同步演进」（沿用 `cloud-host.ts` 镜像惯例）。
+- `servers/admin-api` 无独立 `AGENTS.md`，沿用根 `AGENTS.md` 与 engineering 规范；`packages/agent-controller`、`aspire/AgentGear.AppHost`（除 Phase 11 环境注入外）本期零改动。**`servers/controller-api` 不是零改动**（返工勘误）：它是 `controllers`/`sessions`/`controllerkeys`/`mcpservers`/`mcpsessionendpoints` 的共写方，必须同步 tenantId 双写与双条件查询（见 Phase 4b）。
+- **写方纪律**：`accounts`/`users`/`tenants` 写方仅 agent-api（含 `/internal/users`）；`cloudcontainers` 写方仅 cloud-controller；`billing*` 写方仅 admin-api；**`controllers`/`sessions`/`controllerkeys`/`mcpservers`/`mcpsessionendpoints` 由 agent-api 与 controller-api 共写**，两侧均须 `userId + tenantId` 双写、查询双条件（返工勘误，原先「单一写方」假设不成立）；admin-api / agent-api 的只读镜像模型 schema 注释标注「与写方同步演进」（沿用 `cloud-host.ts` 镜像惯例）。
 
 ## 2. 命令参考
 
@@ -137,6 +137,8 @@ mongosh "<MONGODB_URI>" --eval '
 
 
 > **勘误（集合名）**：提案 §4.1 / §9.2 清单中的 `issueworkflowtriggers` 为笔误，真实集合名为 **`issue_workflow_triggers`**（`models/issue-workflow-trigger.ts` 自创建即显式声明、迁移 010 同口径）；实现与迁移 013 一律以 `model.collection.name` 为准，并由 T-ISO 互校 + 013 真库用例兜底。
+
+> **F11（返工勘误）**：早期计划「`servers/controller-api` 本期零改动 / 写方单一」与代码事实不符——controller-api 与 agent-api **共写** `controllers`/`sessions`/`controllerkeys`/`mcpservers`/`mcpsessionendpoints`。controller-api 必须同步 `tenantId` 双写与双条件查询，并由 agent-api 迁移 `014-tenant-id-rebackfill` 补齐历史行。
 
 ### 3.2 设计裁决（提案留白/含混处）
 
@@ -223,6 +225,18 @@ mongosh "<MONGODB_URI>" --eval '
 | 各 `.test.ts` | 双条件化后行为回归：personal 期（tenantId==userId）结果集与改造前一致；跨租户访问 `Not found`；隔离单测逐集合至少一条（单元级 mock 断言 filter 含 tenantId+userId） |
 
 **完成判据**：`grep -rn "userId" servers/agent-api/src/{services,graphql}` 过滤点逐一登记 checklist 并全部双条件化；既有单测零回归（行为不变即最强回归）；新增隔离单测全绿；单测覆盖率 ≥80%。
+
+### Phase 4b（返工补充）：controller-api 共写集合 tenantId
+
+| 文件 | 变更 |
+|------|------|
+| `servers/controller-api/src/services/tenant-scope.ts` | **新增**：移植 agent-api 同名插件（v9 同步钩子、`$or`/`$and`/`$nor` 递归、写入双落）。 |
+| `servers/controller-api/src/models/{controller,controller-key,session,mcp-server,mcp-session-endpoint}.ts` | 新增 `tenantId`（与 userId 同类型、required、索引）+ `applyTenantScope`；唯一索引保留 userId 维度。 |
+| `servers/controller-api/src/services/{socketio,mcp-proxy-registry,acp-session-manager,...}.ts` | 注册 upsert / 创建 / 更新经插件自动双写；带 userId 查询自动双条件（无需逐点改写）。 |
+| `servers/agent-api/src/migrations/014-tenant-id-rebackfill.ts(+test)` | **新增**：复用 013 幂等回填，补齐 controller-api 修复前写入的历史行（013 已在旧环境执行过）。 |
+| `tests/api` fixtures | 直写 19 集合造数必须带 `tenantId=userId`（否则被双条件查询过滤）。 |
+
+**完成判据**：controller-api `npm run build`/`npm test` 全绿；启动后 controller-api 注册行落 `tenantId=userId`；agent-api 查询可见；`014` 幂等回填历史行。
 
 ### Phase 5：agent-api `POST /internal/users` 开户端点（0.5d）
 

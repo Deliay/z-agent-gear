@@ -31,6 +31,7 @@ import * as migration011CloudHostActiveUniqueIndexDrop from './migrations/011-dr
 import * as migration011UserCommitSettingsIndex from './migrations/011-user-commit-settings-index.js';
 import * as migration012AccountUserTenant from './migrations/012-account-user-tenant.js';
 import * as migration013TenantIdBackfill from './migrations/013-tenant-id-backfill.js';
+import * as migration014TenantIdRebackfill from './migrations/014-tenant-id-rebackfill.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { scheduleTenantSelfCheck } from './services/tenant-self-check.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
@@ -115,6 +116,7 @@ async function start() {
       migration011UserCommitSettingsIndex,
       migration012AccountUserTenant,
       migration013TenantIdBackfill,
+      migration014TenantIdRebackfill,
     ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);

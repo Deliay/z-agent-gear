@@ -2404,6 +2404,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
       await db.collection('cloudhosts').insertOne({
         _id: hostId,
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         name: `mcp-cloud-${hostId.toString()}`,
         harnessTypes: ['OPENCODE'],
         status: 'RUNNING',
@@ -2463,6 +2464,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
       await db.collection('cloudhosts').insertOne({
         _id: hostId,
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         name: `deepseek-cloud-${hostId.toString()}`,
         harnessTypes: ['DEEPSEEK_HARNESS'],
         status: 'RUNNING',

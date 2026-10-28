@@ -88,16 +88,37 @@ export function injectFilter(query: AnyQuery): void {
   if (next !== filter) query.setQuery(next);
 }
 
-/** 更新文档补齐 tenantId（$set.userId 存在且 $set.tenantId 缺失时）。 */
+/**
+ * 更新文档补齐 tenantId：
+ * - `$set.userId` / `$setOnInsert.userId` 存在且对应 tenantId 缺失；
+ * - 顶层 `userId`（Mongoose 会把顶层字段归一为 $set，但 pre hook 里仍可能是原形态）。
+ */
 export function injectUpdate(query: AnyQuery): void {
   const update = query.getUpdate?.();
   if (!update || typeof update !== 'object') return;
-  const set = (update as Record<string, unknown>).$set;
-  if (!set || typeof set !== 'object') return;
-  const setObj = set as Record<string, unknown>;
-  if (setObj.userId === undefined || setObj.tenantId !== undefined) return;
-  (update as Record<string, unknown>).$set = { ...setObj, tenantId: setObj.userId };
+  const doc = update as Record<string, unknown>;
+
+  const set = doc.$set;
+  const setObj = set && typeof set === 'object' ? (set as Record<string, unknown>) : undefined;
+  // Mongoose 可能同时保留顶层 userId 与 $set（timestamps）；两者都要识别。
+  const userId = setObj?.userId !== undefined ? setObj.userId : doc.userId;
+  if (userId !== undefined && userId !== null) {
+    if (setObj) {
+      if (setObj.tenantId === undefined) doc.$set = { ...setObj, tenantId: userId };
+    } else if (doc.tenantId === undefined) {
+      doc.tenantId = userId;
+    }
+  }
+
+  const setOnInsert = doc.$setOnInsert;
+  if (setOnInsert && typeof setOnInsert === 'object') {
+    const insertObj = setOnInsert as Record<string, unknown>;
+    if (insertObj.userId !== undefined && insertObj.tenantId === undefined) {
+      doc.$setOnInsert = { ...insertObj, tenantId: insertObj.userId };
+    }
+  }
 }
+
 
 // Mongoose v9 的 pre() 重载对「钩子数组」类型推断不友好，这里以结构化 any 调用。
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

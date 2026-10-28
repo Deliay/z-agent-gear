@@ -56,7 +56,7 @@ type BillingInvoice {
   type: BillingLedgerType!
   category: BillingCategory!
   amount: Float!
-  balanceAfter: Float!
+  balanceAfter: Float! # 本次记账后的现金余额（cashBalance；不含 gift/creditLimit/frozen）
   refType: String
   refId: String
   description: String!

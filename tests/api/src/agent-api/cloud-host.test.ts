@@ -398,6 +398,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
         await db.collection('cloudhosts').insertOne({
           _id: hostId,
           userId: new mongoose.Types.ObjectId(userId),
+          tenantId: new mongoose.Types.ObjectId(userId),
           name: `active-${hostId.toString()}`,
           harnessTypes: ['OPENCODE'],
           status: 'RUNNING',
@@ -416,6 +417,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
         });
         await db.collection('sessions').insertOne({
           userId: new mongoose.Types.ObjectId(userId),
+          tenantId: new mongoose.Types.ObjectId(userId),
           controllerId,
           controllerName: 'cloud',
           acpServerType: 'opencode',
@@ -457,6 +459,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       await db.collection('controllers').insertOne({
         _id: controllerId,
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         name: 'local-host',
         hostname: 'local-host',
         type: 'local',
@@ -681,6 +684,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
     await db.collection('controllers').insertOne({
       _id: controllerId,
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       name: `phase9-${hostId.toString()}`,
       hostname: `phase9-${hostId.toString()}`,
       type: 'cloud',
@@ -693,6 +697,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
     await db.collection('controllerworkspaces').insertOne({
       _id: workspaceId,
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       controllerId,
       name: 'workspace',
       path: '/home/worker/workspace',
@@ -703,6 +708,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
     await db.collection('cloudhosts').insertOne({
       _id: hostId,
       userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
       name: `phase9-${hostId.toString()}`,
       harnessTypes: ['OPENCODE'],
       status: 'RUNNING',
@@ -740,6 +746,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
     await db.collection('githubaccounts').insertOne({
       _id: accountId,
       userId,
+      tenantId: userId,
       githubUserId: Date.now(),
       githubLogin: 'phase9-owner',
       accessToken: 'encrypted-token',

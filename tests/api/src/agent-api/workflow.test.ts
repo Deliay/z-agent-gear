@@ -259,6 +259,10 @@ async function registerFakeController(
   client.on('acp:check', (data: { requestId: string }) => {
     client.emit('acp:check:result', { requestId: data.requestId, servers });
   });
+  // 非 Git 工作区探测：立即返回 isGitRepo=false，避免默认分支探测等待 30s
+  client.on('git:check', (data: { requestId: string }) => {
+    client.emit('git:check:result', { requestId: data.requestId, isGitRepo: false });
+  });
   // 生命周期命令（start/stop/resume）串行处理：acp:stop 未 ack 会阻塞后续 resume，
   // fake controller 须像真实 controller 一样 ack
   client.on('acp:stop', (data: { sessionId: string }) => {

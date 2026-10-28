@@ -19,6 +19,7 @@
 #        充值/扣费写路径以 accountId 为主体、不带 ownerType，不受影响。
 #   GET  /invoices|receipts|api-calls|rollups|api-keys   只读列表
 #   POST /api-keys | /api-keys/revoke-by-host | /api-keys/:id/revoke   云电脑/账号 Key 管理
+#        写路径 front_user 归一为 tenant；响应 apiKey 含 ownerType（归一后实际归属）
 #   POST /charges   一次性扣费：body {accountId, productId, quantity, idempotentKey, refType, refId, description}
 #                   成功 {invoice, receipt, charged:true}；400 INVALID_BODY / 403 ACCOUNT_FROZEN /
 #                   404 ACCOUNT_NOT_FOUND / 409 {error:'INSUFFICIENT_BALANCE', available(credits)}
@@ -83,7 +84,7 @@ type BillingInvoice {
   type: BillingLedgerType!
   category: BillingCategory!
   amount: Float! # 充值为正、消费为负
-  balanceAfter: Float!
+  balanceAfter: Float! # 本次记账后的现金余额（cashBalance；不含 gift/creditLimit/frozen）
   refType: String # container | model_call | recharge | reservation
   refId: String
   description: String!

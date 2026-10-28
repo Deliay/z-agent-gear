@@ -56,6 +56,7 @@ async function seedHost(db: mongoose.mongo.Db, options: {
   await db.collection('controllers').insertOne({
     _id: controllerId,
     userId: new mongoose.Types.ObjectId(options.userId),
+    tenantId: new mongoose.Types.ObjectId(options.userId),
     name: `cb-${hostId.toString()}`,
     hostname: `cb-${hostId.toString()}`,
     type: 'cloud',
@@ -68,6 +69,7 @@ async function seedHost(db: mongoose.mongo.Db, options: {
   await db.collection('controllerworkspaces').insertOne({
     _id: workspaceId,
     userId: new mongoose.Types.ObjectId(options.userId),
+    tenantId: new mongoose.Types.ObjectId(options.userId),
     controllerId,
     name: 'workspace',
     path: '/home/worker/workspace',
@@ -78,6 +80,7 @@ async function seedHost(db: mongoose.mongo.Db, options: {
   await db.collection('cloudhosts').insertOne({
     _id: hostId,
     userId: new mongoose.Types.ObjectId(options.userId),
+    tenantId: new mongoose.Types.ObjectId(options.userId),
     name: `cb-${hostId.toString()}`,
     harnessTypes: options.harnessTypes ?? ['OPENCODE'],
     status: options.status,
@@ -257,6 +260,7 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Cloud Host callbacks', () => {
       const now = new Date();
       await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         controllerId: new mongoose.Types.ObjectId(controllerId),
         controllerName: 'cloud',
         acpServerType: 'opencode',

@@ -98,3 +98,10 @@ npm run test    # Run tests
 - 修改协议时，两端测试必须使用同一份 fixture 数据（避免 controller-api 用格式 A 测试，agent-controller 用格式 B 发送）
 - `handleTunnelData` 的测试数据应直接来源于 agent-controller 的输出格式定义，而不是凭空构造
 - 跨服务的数据格式变更需要两端的 AGENTS.md 同步更新协议说明
+
+## 多租户一期（共写集合 tenantId）
+
+- `controllers`/`sessions`/`controllerkeys`/`mcpservers`/`mcpsessionendpoints` 由本服务与 agent-api **共写**：两侧都必须 `userId + tenantId` 双写、查询 `tenantId + userId` 双条件（personal 期 tenantId==userId）。
+- 复用/移植 agent-api `services/tenant-scope.ts` 插件（Mongoose v9 同步钩子；查询/更新/upsert/insertMany 自动补齐）；新增带 userId 的模型必须声明 `tenantId` 并 `applyTenantScope(schema)`。
+- 注册 upsert 是「顶层 userId + $set（timestamps）」形态，插件需同时识别顶层与 `$set`/`$setOnInsert` 的 userId。
+- 历史行由 agent-api 迁移 `014-tenant-id-rebackfill` 补齐（013 已在旧环境执行过，不会重跑）。

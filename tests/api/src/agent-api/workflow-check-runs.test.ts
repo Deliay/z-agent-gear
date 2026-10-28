@@ -416,7 +416,8 @@ async function seedGithubAccount(userId: string) {
   const accountId = new mongoose.Types.ObjectId();
   await db.collection('githubaccounts').insertOne({
     _id: accountId,
-    userId: new mongoose.Types.ObjectId(userId),
+    userId: String(userId),
+    tenantId: String(userId),
     githubUserId: Date.now(),
     githubLogin: 'check-run-owner',
     accessToken: 'encrypted-token',
