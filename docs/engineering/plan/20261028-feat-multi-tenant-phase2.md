@@ -1,5 +1,5 @@
 ---
-description: 多租户二期实现计划 v1.1（评审返工：增加租户成员管理与角色体系）：契约先行（workspace 新增含 TenantRole/租户成员管理、admin-tenant team 开通与成员管理含角色、llm/github/cloud-host/workflow 补工作区维度、cloud-controller-websocket 附录 A +workspaceId）；agent-api tenantmembers（含 role）/workspaces/workspacemembers 三集合与迁移 015（全局工作区→成员回填 personal 恒 admin→11 集合 backfill→providers/models 按租户复制（计数门禁）→user_commit_settings 键改与索引切换）；x-workspace-id 工作区上下文（AsyncLocalStorage + 角色感知 workspace-scope 插件，global+developer 写拦截）与工作区 CRUD/成员管理（仅 admin）+ 租户成员管理（searchAccounts/增删/角色变更，last-admin 保护）；11 集合可见性切工作区+角色判定（共享型资源读=本工作区∪全局、Commit 设置三段继承）；计费 owner=workspace.tenantId；/internal/tenants 内部端点；admin-api 只读镜像与转发；cloud-controller cloudcontainers +workspaceId 迁移 002；agent-web 工作区切换器/管理页/租户成员管理页/来源徽标；admin-web team 租户管理；T-WS 角色两档隔离矩阵与回归收口
+description: 多租户二期实现计划 v1.2（v1.1 评审返工：增加租户成员管理与角色体系）：契约先行（workspace 新增含 TenantRole/租户成员管理、admin-tenant team 开通与成员管理含角色、llm/github/cloud-host/workflow 补工作区维度、cloud-controller-websocket 附录 A +workspaceId）；agent-api tenantmembers（含 role）/workspaces/workspacemembers 三集合与迁移 015（全局工作区→成员回填 personal 恒 admin→11 集合 backfill→providers/models 按租户复制（计数门禁）→user_commit_settings 键改与索引切换）；x-workspace-id 工作区上下文（AsyncLocalStorage + 角色感知 workspace-scope 插件，global+developer 写拦截）与工作区 CRUD/成员管理（仅 admin）+ 租户成员管理（searchAccounts/增删/角色变更，last-admin 保护）；11 集合可见性切工作区+角色判定（共享型资源读=本工作区∪全局、Commit 设置三段继承）；计费 owner=workspace.tenantId；/internal/tenants 内部端点；admin-api 只读镜像与转发；cloud-controller cloudcontainers +workspaceId 迁移 002；agent-web 工作区切换器/管理页/租户成员管理页/来源徽标；admin-web team 租户管理；T-WS 角色两档隔离矩阵与回归收口；v1.2 计划期补强：新开户租户运行时初始化（`/internal/users` 补全局工作区 + admin 成员行）、providers/models 无 `scope` 存量行同口径复制、成员/角色变更审计留痕、失效当前工作区前端回退
 type: Permanent
 ---
 
@@ -10,10 +10,11 @@ type: Permanent
 **需求总分支（feat-branch）**: `feat/multi-tenant-phase2`（基于 `origin/main`，需求总 PR #339）
 **计划提交分支**: `feat/multi-tenant-phase2`（本文件随需求总分支提交）
 **创建日期**: 2026-10-28
-**计划版本**: v1.1
+**计划版本**: v1.2
 
 **版本说明**：
 
+- v1.2（2026-10-28，计划期补强；PRD/提案仍为 v1.1，不改变需求与架构口径）补齐实现落点：① 新增 `POST /internal/users` 新开户运行时初始化——补「全局工作区 + `tenantmembers{role:'admin'}`」，保证「每个新建租户创建时自动拥有全局工作区」（PRD 功能点 3）；② providers/models 复制范围与 `USER_SCOPE_FILTER` / `AVAILABLE_MODELS_FILTER` 对齐——**`scope` 缺失的存量行视同 user 域参与复制**，避免迁移后孤儿行；③ 成员/角色变更补结构化审计留痕（PRD §4.2）；④ agent-web 当前工作区失效（被移出团队/工作区已删除）自动回退个人全局并清理持久化；⑤ 同步 T-PROV 测试矩阵、验收 checklist、风险与附录（v1.1 及以前内容除上述补强外不变）。
 - v1.1（2026-10-28，评审返工）按 PR #339 评审意见「增加租户成员管理和角色」（管理员/开发）随 PRD/提案 v1.1 重排：① `tenantmembers` 增 `role`（admin/developer，personal 恒 admin）与 **last-admin 保护**；② 新增租户成员管理契约与服务（`searchAccounts`/`addTenantMember`/`removeTenantMember`/`changeTenantMemberRole`/`myTenants` + `tenant-member-service`，仅 admin）；③ 权限模型由 v1.0 的「工作区成员平权 + 0 成员认领」改为**角色判定**——admin 管理租户全部资源、全部工作区可见可管、可建工作区、可变更成员角色，developer 仅读写删除所在普通工作区资源、对全局工作区只读（`context.workspaceAccess.readOnly` 一次判定 + workspace-scope 插件统一写拦截 `global workspace is read-only`），**移除 v1.0 的 0 成员认领机制**（0 成员工作区由 admin 直管，提案决策 D7）；④ 契约（错误口径白名单 7→15 条）/迁移 015（personal 回填 role=admin）/内部端点（role 入参、`LAST_ADMIN` 409）/admin-api 转发/前端（租户成员管理页、切换器按角色过滤、全局上下文只读收敛）/测试矩阵（T-WS 扩角色两档、新增 T-TM 系列）全链路补角色口径；⑤ §3.1 事实校正 F1-F11 与附录 B 核对记录沿用 v1.0（与角色体系无冲突，B.13 补记）。
 - v1.0（2026-10-28）首版。对应 PRD v1.0 / 提案 v1.0（审核通过、无附加修改意见）。§3 计划期裁决以**当前需求总分支代码事实**为准（2026-10-28，88d104f1）：重点校正 ① `workflowinstances.workspaceId`（=ControllerWorkspace 项目工作区）与提案新增租户工作区维度 `workspaceId` 直接冲突（F1，工作流域改用 `resourceWorkspaceId`）；② 提案 §1.3 contracts 范围漏列 `contracts/cloud-controller-websocket.md` 附录 A（F2，与一期 F8 同型）；③ providers/models 现状**无 userId/tenantId**（仅 `scope` 区分）且 `providers.{scope,name}` 唯一索引与「先建后删」复制顺序冲突（F3）；④ `user_commit_settings` 存在**三处唯一索引声明**，键改 workspaceId 的切换口径（F4）；⑤ 计费调用面现状不一致（`cloud-host-service` 传 `userId`、`resolvers/billing.ts` 传 `user.tenantId`，F5）；⑥ tenantmembers/workspaces/workspacemembers **不可挂** tenant-scope/workspace-scope 插件（F6）；⑦ workspace-scope 插件需请求级上下文载体 AsyncLocalStorage（F7）；⑧ githubaccounts/user_commit_settings 为 String 口径（F8）；⑨ workflowtemplates 内置行可见性特例（F9）；⑩ admin-api 只读镜像同步声明 `providers.{scope,name}` 唯一索引，须与 agent-api 索引切换同发布（F10）；⑪ MCP 工具与 homeOverview 的工作区口径落点（F11）。
 
@@ -27,7 +28,7 @@ flowchart TD
     P2 --> P4
     P3["Phase 3 agent-api 工作区上下文与工作区服务<br/>x-workspace-id 解析（角色/只读判定，AsyncLocalStorage）<br/>workspace-scope 插件 + workspace-service（仅 admin 写）<br/>workspace GraphQL（CRUD/成员管理）+ tenant-member-service<br/>（searchAccounts/租户成员增删/角色变更，last-admin 保护）"] --> P4
     P4["Phase 4 agent-api 11 集合工作区化与共享/继承口径<br/>可见性切工作区成员判定（T-WS 矩阵）<br/>providers/models/githubaccounts 共享读<br/>Commit 三段继承 + 计费 owner 切换<br/>controller/session workspaceId 继承链"] --> P5
-    P5["Phase 5 agent-api 内部端点与聚合口径<br/>POST /internal/tenants + members<br/>homeOverview 工作区过滤<br/>MCP 工具（sessionId→会话工作区）"] --> P7
+    P5["Phase 5 agent-api 内部端点与聚合口径<br/>POST /internal/tenants + members<br/>/internal/users 开户补全局工作区+admin 成员<br/>homeOverview 工作区过滤<br/>MCP 工具（sessionId→会话工作区）"] --> P7
     P1 --> P6
     P5 --> P6
     P6["Phase 6 admin-api 只读镜像与 team 转发<br/>tenantmembers（含 role）/workspaces/workspacemembers 镜像<br/>adminCreateTeamTenant/adminAdd|RemoveTenantMember（含角色）<br/>adminTenantDetail 经 tenantmembers + 工作区只读视图"] --> P10
@@ -46,7 +47,7 @@ flowchart TD
 
 - **Phase 1 契约**是全部实现的唯一裁决面，独立提交（`docs(contracts): ...`）；契约未合入前不开始实现 Phase。
 - **Phase 2（模型与迁移 015）**只依赖契约，是数据层地基；**Phase 3（上下文与工作区服务）**依赖 Phase 2 的三集合模型与全局工作区数据；**Phase 4（11 集合工作区化）**依赖 Phase 3 的 workspace-scope 插件与 `AuthContext.workspace`，工作量最大，可按集合族拆并行子分支。
-- **Phase 5（内部端点/聚合/工具口径）**依赖 Phase 4（会话/工作流的工作区字段就位）与 Phase 3；**Phase 6（admin-api）**与 Phase 4/5 并行（不同服务），联调依赖 Phase 5 的 `/internal/tenants*`。
+- **Phase 5（内部端点/新开户初始化/聚合/工具口径）**依赖 Phase 4（会话/工作流的工作区字段就位）与 Phase 3（`ensureGlobalWorkspace`）；**Phase 6（admin-api）**与 Phase 4/5 并行（不同服务），联调依赖 Phase 5 的 `/internal/tenants*`。
 - **Phase 7（cloud-controller）**依赖 Phase 1（附录 A）与 Phase 4 的 `startHarness` 下发对齐；与 Phase 5/6 并行。
 - **Phase 8（agent-web）**依赖 Phase 1 契约与 Phase 3（`myWorkspaces`/切换器）+ Phase 4（资源随工作区过滤）；**Phase 9（admin-web）**依赖 Phase 6。
 - **Phase 10** 在各实现合并回主实现分支后收口；迁移 015/002 的 `.test.ts` 随 Phase 2/7 同提交（TDD 红-绿-重构），不推迟到收口。
@@ -70,7 +71,7 @@ flowchart TD
 - 编码前加载：`docs/engineering/common-rules.md`、`docs/engineering/backend-rules.md`（后端 Phase）、`docs/engineering/frontend-rules.md`（Phase 8/9）。
 - 目录级 `AGENTS.md`：`servers/agent-api/AGENTS.md`、`servers/cloud-controller/AGENTS.md`、`apps/agent-web/AGENTS.md`、`apps/admin-web/AGENTS.md`、`tests/api/AGENTS.md`、`tests/e2e/AGENTS.md`、`docs/engineering/plan/AGENTS.md`。
 - `servers/admin-api` 无独立 `AGENTS.md`，沿用根 `AGENTS.md` 与 engineering 规范；`servers/controller-api` 本期**零改动**（工作区边界在 agent-api 查询层承担，`controllers/sessions/controllerkeys` 的工作区归属由 agent-api 写方推导落库，controller-api 共写路径不新增字段——见 §3.2 裁决 10）；`packages/agent-controller`、`aspire/AgentGear.AppHost` 本期零改动（无新增环境变量，`INTERNAL_API_TOKEN`/`AGENT_API_URL` 复用一期配置）。
-- **写方纪律**：`tenantmembers`（含 `role`）/`workspaces`/`workspacemembers` 写方仅 agent-api（含 `/internal/tenants*`；租户成员与角色的唯一写方为 `tenant-member-service`，裁决 12），admin-api 只读镜像；`cloudcontainers.workspaceId` 写方仅 cloud-controller（经 `startHarness` 下发）；`providers`/`models` 写方仅 agent-api（admin-api 镜像只读 + 管理后台既有全局域写操作不变）。
+- **写方纪律**：`tenantmembers`（含 `role`）/`workspaces`/`workspacemembers` 写方仅 agent-api（含 `/internal/tenants*` 与 `/internal/users` 开户；租户成员与角色的唯一写方为 `tenant-member-service`，裁决 12；全局工作区创建的唯一语义入口为 `workspace-service.ensureGlobalWorkspace`，开户/team 开通均调用，迁移 015 走等价原子操作，裁决 16），admin-api 只读镜像；`cloudcontainers.workspaceId` 写方仅 cloud-controller（经 `startHarness` 下发）；`providers`/`models` 写方仅 agent-api（admin-api 镜像只读 + 管理后台既有全局域写操作不变）。
 - **字段级 resolver 纪律**（backend-rules 陷阱）：`Workspace.tenant/memberCount/myRole/readOnly` 等新增字段级 resolver **必须登记** `graphql/resolvers/index.ts`。
 
 ## 2. 命令参考
@@ -123,7 +124,7 @@ mongosh "<MONGODB_URI>" --eval '
 
 ## 3. 计划期裁决（提案与代码事实偏差的落地口径）
 
-> 以下裁决以**当前需求总分支代码事实**为准（§3.1/裁决 1-11 基于 88d104f1，v1.1 增补裁决 12/13/15 基于 6d5860cd；角色体系为新增集合字段与新增服务，无既有代码冲突，见附录 B.13）。提案中与之不一致或含混的描述在实现期按本节执行，**不回改提案**；验收报告逐条登记。
+> 以下裁决以**当前需求总分支代码事实**为准（§3.1/裁决 1-11 基于 88d104f1，v1.1 增补裁决 12/13/15 基于 6d5860cd，v1.2 增补裁决 16/17 基于 3ff0ffa8；角色体系为新增集合字段与新增服务，无既有代码冲突，见附录 B.13-B.15）。提案中与之不一致或含混的描述在实现期按本节执行，**不回改提案**；验收报告逐条登记。
 
 ### 3.1 事实校正（提案描述与代码事实的偏差）
 
@@ -131,7 +132,7 @@ mongosh "<MONGODB_URI>" --eval '
 |---|---------|----------|-----------|
 | F1 | §3.1 契约 6 / §4.1：`workflowinstances` 等「复制新增 `workspaceId`」，`WorkflowInstance` 新增 `workspaceId: ID!` | `workflowinstances` **已有 `workspaceId`**（`models/workflow-instance.ts:77` `ref: 'ControllerWorkspace'`，required；索引 `{userId,workspaceId,createdAt:-1}`），且契约/前端/工具面已按「项目工作区」语义消费：`contracts/workflow.graphql:194`（`WorkflowInstance.workspaceId`）、`:287`（`InstantiateWorkflowInput.workspaceId`）、`:320`（`workflowInstances(workspaceId:…)` 入参）、`services/workflow/admin-tools.ts:135/150/165`（MCP 实例化入参 `workspaceId`）、`apps/agent-web/src/graphql/workflow.ts:315-340`、`home.ts:13`；`CreateSessionInput.workspaceId`、`controller-workspace.graphql` 一批入参亦为项目工作区语义 | **工作流域（`workflowtemplates`/`configuredworkflows`/`workflowinstances` 三集合与 `contracts/workflow.graphql` 三类型）的租户工作区维度统一命名 `resourceWorkspaceId`**，`workspaceId` 保留「项目工作区（ControllerWorkspace）」语义零改动；其余 8 集合（cloudhosts/sessions/controllers/controllerkeys/providers/models/githubaccounts/user_commit_settings）沿用提案 `workspaceId`。`applyWorkspaceScope(schema, { workspaceField })` 支持按集合指定字段名（默认 `workspaceId`）。**备选（重命名旧字段为 `controllerWorkspaceId`）弃用**：MCP 工具入参/存量工作流节点提示词与前端强消费，违反「零破坏/零感知」口径；跨域命名统一留待后续期次（登记验收报告） |
 | F2 | §1.3 contracts 范围（workspace / admin-tenant / llm / github / cloud-host / workflow 六文件） | `startHarness` 的 harness 参数面在 `contracts/cloud-controller-websocket.md` 附录 A（一期 F8 同型遗漏）；`cloudcontainers` 写入口径 +workspaceId 依赖它 | Phase 1 契约增补**包含 `contracts/cloud-controller-websocket.md`**：附录 A harness 参数表新增 `workspaceId`（可选，String；缺失回退按 `tenantId` 查 `workspaces{type:'global'}` 解析、解析不到置 null + warn）与落库口径句 |
-| F3 | §4.1：「providers/models 仅 `scope='user'` 行加 `tenantId+workspaceId`；唯一索引 `providers.{scope,name}` → user 域改为 `{tenantId,workspaceId,name}`」 | providers/models **现无 userId/tenantId**（仅 `scope: 'user'\|'global'`，`services/provider.ts:8-10` 按 `$or:[{scope:'user'},{scope:{$exists:false}}]` 过滤全体前台共享行）；`providers` 存在唯一索引 `{scope,name}`（`models/provider.ts:21`，迁移 004 命名 `scope_1_name_1`）；`models` 唯一索引 `{providerId,name}` + admin-api 迁移 005 `scope_global_name_unique`（partial `{scope:'global'}`） | 索引与复制的**执行顺序**固定为：① 建新索引（user 域 `{tenantId,workspaceId,name}` 唯一 + global 域 `{name}` partial `{scope:'global'}` 唯一）→ ② 删旧 `scope_1_name_1` → ③ 按租户复制 → ④ 计数核对 → ⑤ 删原共享行（复制行同名跨租户并存会撞旧唯一索引，旧索引必须先删）；`models.{providerId,name}` 不变（provider 已带工作区维度）；复制行显式 `scope:'user'` |
+| F3 | §4.1：「providers/models 仅 `scope='user'` 行加 `tenantId+workspaceId`；唯一索引 `providers.{scope,name}` → user 域改为 `{tenantId,workspaceId,name}`」 | providers/models **现无 userId/tenantId**（仅 `scope: 'user'\|'global'`，`services/provider.ts:8-10` 按 `$or:[{scope:'user'},{scope:{$exists:false}}]` 过滤全体前台共享行）；`providers` 存在唯一索引 `{scope,name}`（`models/provider.ts:21`，迁移 004 命名 `scope_1_name_1`）；`models` 唯一索引 `{providerId,name}` + admin-api 迁移 005 `scope_global_name_unique`（partial `{scope:'global'}`） | 索引与复制的**执行顺序**固定为：① 建新索引（user 域 `{tenantId,workspaceId,name}` 唯一 + global 域 `{name}` partial `{scope:'global'}` 唯一）→ ② 删旧 `scope_1_name_1` → ③ 按租户复制 → ④ 计数核对 → ⑤ 删原共享行（复制行同名跨租户并存会撞旧唯一索引，旧索引必须先删）；`models.{providerId,name}` 不变（provider 已带工作区维度）；复制行显式 `scope:'user'`；**复制范围与 `services/provider.ts` 的 `USER_SCOPE_FILTER`、`services/model.ts` 的 `AVAILABLE_MODELS_FILTER` 完全同口径——`scope:'user'` 与 `scope` 缺失的存量行均视同 user 域参与复制**（否则无 scope 行迁移后成为无 workspaceId 孤儿，新查询口径下不可见）；计数门禁的基线同口径 |
 | F4 | §4.1：`user_commit_settings`「唯一索引 `{tenantId,userId}` → `{workspaceId}` 唯一」 | 该集合存在**三处唯一声明**：字段级 `userId: {unique:true}`（`models/user-commit-setting.ts:20`，autoIndex 生成 `userId_1`）、schema `index({tenantId,userId},{unique:true})`（:44）、迁移 011 命名 `uniq_user_commit_setting`（`{userId:1}` 唯一，防 autoIndex 关闭） | 键改切换口径：建 `{workspaceId:1}` 唯一（命名 `uniq_workspace_commit_setting`）→ 验证 → 删 `uniq_user_commit_setting`、`userId_1` 唯一、`{tenantId,userId}` 唯一；`userId` 降级为普通索引（最近编辑者审计，保留字段）；`tenantId` 保留。存量 personal 租户恒单行（一期单成员），键改无同 workspaceId 冲突（§3.2 裁决 5） |
 | F5 | §5.2 实现点 3：「billing-client 签名由隐式 tenantId 改为显式 ownerTenantId 入参」 | 调用面现状不一致：`services/cloud-host-service.ts:255` `getAccount('tenant', userId)`（ownerId 传 **userId**，一期 tenantId==userId 恒等）、`:338-341` `createCloudHostApiKey({ownerType:'tenant', ownerId: userId})`；`graphql/resolvers/billing.ts:45/101/122/131` 传 `user.tenantId` | 全部收敛为**工作区所属租户**（`context.workspaceAccess.tenantId`；服务内部链路经「host → workspaceId → Workspace.tenantId」解析）；`billing-client` 各方法保持 `(ownerType, ownerId)` 形参名，语义注释标注 `ownerId=ownerTenantId`；「我的费用」随当前工作区所属租户口径（PRD 功能点 8） |
 | F6 | §4.1：三集合建模与 11 集合统一「复制新增 workspaceId」 | `tenantmembers`/`workspacemembers` 自身带 `userId`+`tenantId` 字段，若挂 `applyTenantScope`（`services/tenant-scope.ts:126` guard：userId 与 tenantId 同在即生效）会在 `find({userId})` 类查询注入 `tenantId=userId`——与「用户可属个人租户+多团队」语义直接冲突 | **三集合一律不挂 `applyTenantScope`/`applyWorkspaceScope`**（§3.2 裁决 2）；成员关系/工作区自身查询一律显式条件（`accessibleWorkspaces` 等跨租户查询不受插件干扰） |
@@ -157,7 +158,10 @@ mongosh "<MONGODB_URI>" --eval '
 12. **租户成员管理与 last-admin 保护**（提案 §5.2 实现点 5/决策 D11/D13，v1.1 新增）：`tenant-member-service` 是租户成员与角色唯一写方——`searchAccounts`（按 username 模糊搜索 `accounts`，鉴权=在任一 team 租户为 admin，结果仅 `username/name/userId` 最小集）；`addTenantMember(tenantId, username, role)`（`Account.findOne({username})`→`User.findOne({accountId})`→upsert，role 缺省 developer）；`removeTenantMember`/`changeTenantMemberRole` 前置 `countDocuments({tenantId, role:'admin'})>1`，否则抛 `last admin cannot be removed`/`last admin cannot be demoted`；personal 租户一切写操作抛 `personal tenant is immutable`（唯一成员恒 admin、无角色变更入口）；资源读写拦截以 workspace-scope 插件（D12）+ service 入口 role 判定双层为准，前端仅展示收敛。last-admin 并发兜底：`findOneAndUpdate` 条件预查 + 变更后复检（若导致 adminCount=0 则回滚并抛错），接受极端并发下的最终一致（提案实现点 5）。
 13. **工作区切换器数据源**（v1.1 按角色过滤）：`myWorkspaces` 由 tenantmembers ⨝ workspaces ⨝ workspacemembers 按角色展开（admin=个人全局+各团队**全部**工作区；developer=个人全局+各团队全局+已加入的 normal）；`myTenants` 透出各租户 `role`（切换器/权限渲染数据源）；选择持久化 `localStorage['zag:current-workspace']`（按 userId 隔离存取），刷新/重登恢复；未加入任何团队的用户隐藏切换器（PRD 功能点 6 退化形态）。
 14. **admin-api 镜像同步面**：`tenantmembers`（含 `role`）/`workspaces`/`workspacemembers`/provider/model 镜像 schema 注释「与 agent-api 同步演进」（沿用 `cloud-host.ts` 镜像惯例）；F10 索引声明同发布。
-15. **AGENTS.md 同步面**（随各 Phase 同提交）：`servers/agent-api/AGENTS.md`（三集合/角色与只读口径/工作区上下文/workspace-scope/T-WS 口径）、`servers/cloud-controller/AGENTS.md`（cloudcontainers workspaceId 与迁移 002）、`apps/agent-web/AGENTS.md`（切换器/工作区管理页/租户成员管理页/来源徽标与只读收敛）、`apps/admin-web/AGENTS.md`（team 租户管理含角色）、`tests/api/AGENTS.md` + `tests/e2e/AGENTS.md`（新套件清单）、`docs/engineering/AGENTS.md`（plan 索引，随本文件提交完成）。
+15. **AGENTS.md 同步面**（随各 Phase 同提交）：`servers/agent-api/AGENTS.md`（三集合/角色与只读口径/工作区上下文/workspace-scope/T-WS 口径、**新开户运行时初始化与 last-admin 保护**）、`servers/cloud-controller/AGENTS.md`（cloudcontainers workspaceId 与迁移 002）、`apps/agent-web/AGENTS.md`（切换器/工作区管理页/租户成员管理页/来源徽标与只读收敛、**失效工作区回退**）、`apps/admin-web/AGENTS.md`（team 租户管理含角色）、`tests/api/AGENTS.md` + `tests/e2e/AGENTS.md`（新套件清单）、`docs/engineering/AGENTS.md`（plan 索引，随本文件提交完成）。
+16. **新开户租户运行时初始化**（v1.2 补强，PRD 功能点 3「每个新建租户（personal/team）创建时自动拥有全局工作区」）：`POST /internal/users` 在既有「accounts → users → tenants → 计费账户 get-or-create」之后新增**确保全局工作区 + `tenantmembers{tenantId,userId,role:'admin'}`**一步（置于计费 get-or-create 成功之后，避免额外回滚面）：`workspace-service.ensureGlobalWorkspace(tenantId, { adminUserId })` 幂等 upsert——`workspaces.findOneAndUpdate({tenantId,type:'global'}, {$setOnInsert:{name:'全局工作区',type:'global',createdBy:null}}, {upsert:true,new:true})` + `tenantmembers.updateOne({tenantId,userId}, {$setOnInsert:{role:'admin',createdBy:'provision'}}, {upsert:true})`；半完成开户（已有 account/user/tenant 但缺工作区/成员行）逐项补齐；并发由 `{tenantId,name}`、`{tenantId}` partial、`{tenantId,userId}` 唯一索引兜底（E11000 视为已就绪）。`/internal/tenants`（team 开通）复用同一 helper 创建 global 行，迁移 015 以等价原子操作保证同一语义（迁移不依赖 Phase 3 服务层）。**缺此步新开户用户将无全局工作区，缺头回退与切换器均失效**，列入 Phase 5、T-PROV 与兼容回归必测。
+17. **成员/角色操作留痕**（v1.2 补强，PRD §4.2「角色变更、成员增删保留操作记录，可追溯操作人与时间」）：`tenant-member-service` 的 add/remove/changeRole 与 `workspace-service` 的成员增删/工作区 CRUD 统一写结构化审计日志（`[audit] action=tenant.member.add|tenant.member.remove|tenant.member.role_change|workspace.member.add|workspace.member.remove operator=<id> tenant=<id> target=<id|name> role=<admin|developer|->`，不含凭据等敏感信息）；`tenantmembers.createdBy` 记录首次操作来源（admin 用户 id / 租户管理员 userId / `migration` / `provision`）、`updatedAt` 记录最后变更时间。后台链路在内部请求体透传可选 `operatorId`（admin 用户 id，仅审计、不参与业务校验；缺省 `admin_api`），前台链路取 `context.currentUser.id`；本期不新增审计集合（最小实现，持久化审计表留待后续期次）。
+
 
 ## 4. 关键约束（提案 §1.3/§5/§6 + PRD §5，实现期不得回退）
 
@@ -198,12 +202,12 @@ mongosh "<MONGODB_URI>" --eval '
 | `servers/agent-api/src/models/workspace.ts` | **新增** `workspaces`：`tenantId`（index）/`name`（global 恒「全局工作区」）/`type`（`global\|normal`）/`createdBy`（ObjectId ref User，global 为 null）；索引 `{tenantId,name}` 唯一 + **`{tenantId:1}` 部分唯一（`partialFilterExpression:{type:'global'}`，命名 `uniq_global_workspace_per_tenant`）**；不挂插件 |
 | `servers/agent-api/src/models/workspace-member.ts` | **新增** `workspacemembers`：`workspaceId`（index）/`tenantId`（冗余，index）/`userId`（index）；唯一索引 `{workspaceId,userId}`；**global 工作区恒无成员行**（语义=租户全员）；不挂插件 |
 | `servers/agent-api/src/models/*.ts`（11 集合） | 复制新增工作区维度（required after migration，`userId` 保留）：cloudhosts/sessions/controllers/controllerkeys/githubaccounts/user_commit_settings/workflowinstances/configuredworkflows 为 `workspaceId`（workflow 三集合为 `resourceWorkspaceId`，F1）；providers/models/workflowtemplates 可空（global/builtin 行 null）；类型按 F8；新增 `{tenantId,workspaceId}`（workflow 域 `{tenantId,resourceWorkspaceId}`）复合索引；**本 Phase 只落字段与索引声明，插件挂载与过滤口径在 Phase 4** |
-| `servers/agent-api/src/migrations/015-team-workspaces.ts` | **新增**步骤链（每步以目标状态存在性为幂等判据，批处理 500 + 进度日志，可重跑）：① 每租户建全局工作区（含存量 personal 与半完成补齐）→ ② `tenantmembers` 回填（逐 `users` 行 upsert `{tenantId:users.tenantId,userId:_id,role:…}`——**personal 租户行恒 `role:'admin'`**，`createdBy:'migration'`）→ ③ 11 集合 backfill 工作区维度 = 本租户全局工作区（缺字段行；workflow 域写 `resourceWorkspaceId`）→ ④ 索引切换（F3/F4/F8 顺序：providers 建新删旧、user_commit_settings 建 `{workspaceId}` 删三处旧唯一、githubaccounts 建 `{tenantId,workspaceId,githubUserId}` 删 `{tenantId,userId,githubUserId}`）→ ⑤ providers/models 按租户复制（含 `providerId` 重映射）+ 每租户计数核对 → 一致才删原共享行，不等即中止不删 → ⑥ 完成校验（缺工作区维度行数=0、每租户 global 数=1、tenantmembers 覆盖全部 user 且缺 role 行数=0、每租户 admin 数≥1）。导出 `WORKSPACE_ID_COLLECTIONS`（`{collection, model, field, uniqueIndex?}`）供测试与自检互校（对照 013 `TENANT_ID_COLLECTIONS` 模式） |
-| `servers/agent-api/src/migrations/015-team-workspaces.test.ts` | **新增** T-MIG15a~h：三集合建模与索引、tenantmembers 回填（personal 恒 1 行且 role=admin、缺 role=0）、11 集合 backfill 无遗漏（workflow 域字段名正确）、索引切换清单断言（含旧索引已删）、providers/models 复制计数门禁（不等不删/一致删除/幂等重跑零变更）、user_commit_settings 键改后查询等价、半完成补齐、批处理多页 |
-| `servers/agent-api/src/services/tenant-self-check.ts`（扩展） | 启动后轻量异步自检补工作区维度（沿用一期口径）：带索引 count（缺工作区维度行数=0、每租户 global 工作区数=1、tenantmembers 缺 role 行数=0）+ `limit(100)` 抽样；异常仅 warn 不阻塞 |
+| `servers/agent-api/src/migrations/015-team-workspaces.ts` | **新增**步骤链（每步以目标状态存在性为幂等判据，批处理 500 + 进度日志，可重跑）：① 每租户建全局工作区（含存量 personal 与半完成补齐）→ ② `tenantmembers` 回填（逐 `users` 行 upsert `{tenantId:users.tenantId,userId:_id,role:…}`——**personal 租户行恒 `role:'admin'`**，`createdBy:'migration'`）→ ③ 11 集合 backfill 工作区维度 = 本租户全局工作区（缺字段行；workflow 域写 `resourceWorkspaceId`）→ ④ 索引切换（F3/F4/F8 顺序：providers 建新删旧、user_commit_settings 建 `{workspaceId}` 删三处旧唯一、githubaccounts 建 `{tenantId,workspaceId,githubUserId}` 删 `{tenantId,userId,githubUserId}`）→ ⑤ providers/models 按租户复制（含 `providerId` 重映射；**复制范围=`scope:'user'` ∪ `scope` 缺失行**，见 F3）+ 每租户计数核对 → 一致才删原共享行，不等即中止不删 → ⑥ 完成校验（缺工作区维度行数=0、每租户 global 数=1、tenantmembers 覆盖全部 user 且缺 role 行数=0、每租户 admin 数≥1）。导出 `WORKSPACE_ID_COLLECTIONS`（`{collection, model, field, uniqueIndex?}`）供测试与自检互校（对照 013 `TENANT_ID_COLLECTIONS` 模式） |
+| `servers/agent-api/src/migrations/015-team-workspaces.test.ts` | **新增** T-MIG15a~h：三集合建模与索引、tenantmembers 回填（personal 恒 1 行且 role=admin、缺 role=0）、11 集合 backfill 无遗漏（workflow 域字段名正确）、索引切换清单断言（含旧索引已删）、providers/models 复制计数门禁（不等不删/一致删除/幂等重跑零变更；**`scope` 缺失行同口径复制、复制后无孤儿**）、user_commit_settings 键改后查询等价、半完成补齐、批处理多页 |
+| `servers/agent-api/src/services/tenant-self-check.ts`（扩展） | 启动后轻量异步自检补工作区维度（沿用一期口径）：带索引 count（缺工作区维度行数=0、每租户 global 工作区数=1、tenantmembers 缺 role 行数=0、**users 所属租户无 global 工作区数=0**）+ `limit(100)` 抽样；异常仅 warn 不阻塞 |
 | `servers/agent-api/src/index.ts` | 迁移数组登记 015（014 之后） |
 
-**完成判据**：单测全绿；Aspire 冷启动（含存量数据夹具）后每租户恰一个「全局工作区」、11 集合工作区维度回填齐全、tenantmembers 回填齐全且 personal 行恒 `role=admin`、providers/models 复制计数一致且原件已删、`user_commit_settings` `{workspaceId}` 唯一生效且旧唯一已删；自检无计数异常。
+**完成判据**：单测全绿；Aspire 冷启动（含存量数据夹具）后每租户恰一个「全局工作区」、11 集合工作区维度回填齐全、tenantmembers 回填齐全且 personal 行恒 `role=admin`、providers/models 复制计数一致且原件已删（**含 `scope` 缺失行、无 workspaceId 孤儿**）、`user_commit_settings` `{workspaceId}` 唯一生效且旧唯一已删；自检无计数异常。
 
 ### Phase 3：agent-api 工作区上下文与工作区服务（1.5d，核心）
 
@@ -212,8 +216,8 @@ mongosh "<MONGODB_URI>" --eval '
 | `servers/agent-api/src/services/workspace-context.ts` | **新增**（F7/裁决 1）：`AsyncLocalStorage<WorkspaceContext>`（`{id, tenantId, type, role, readOnly, visibleIds, accessibleIds?}`）+ `runWithWorkspace`/`getWorkspaceContext`；`readOnly = type==='global' && role==='developer'`；`visibleIds` 共享型= `[当前,本租户全局]`，独占型= `[当前]` |
 | `servers/agent-api/src/middleware/auth.ts` | 解析 `x-workspace-id`（F7）：`Workspace.findById` → 取 `tenantmembers.role` → 可访问性校验（**admin 直通全部工作区**；global 需 `tenantmembers` 含 `{userId,tenantId}`；normal 需 `workspacemembers` 含 `{userId,workspaceId}`）→ `AuthContext.workspaceAccess={id,tenantId,type,role,readOnly}` 并 `als.run` 包裹；缺省/缺头回退「个人租户全局工作区」（`users.tenantId → workspaces{type:'global'}` 一次查询，**role=admin、readOnly=false**，与一期等价）；非法/不可达 id 一律 `workspace not found`（不泄露存在性） |
 | `servers/agent-api/src/services/workspace-scope.ts` | **新增** Mongoose 插件 `applyWorkspaceScope(schema, { workspaceField='workspaceId', shared=false, builtinVisible=false })`（对照 `tenant-scope.ts` 同步钩子写法，Mongoose v9 同步无 next）：读注入 `workspaceField ∈ visibleIds`（shared 型 `[当前,全局]`；`builtinVisible` 合并 `$or:[…,{isBuiltin:true}]`）；写（save/insertMany/`$set.workspaceField`）强制存在且 ∈ 当前工作区，**`readOnly===true` 时一律拒绝 `global workspace is read-only`**（D12 统一写拦截）；无 ALS store 不注入/不校验（引擎与内部链路显式传值）；与 `applyTenantScope` 共存（tenantId 注入保留） |
-| `servers/agent-api/src/services/workspace-service.ts` | **新增**：`accessibleWorkspaces(userId)`（tenantmembers ⨝ workspaces ⨝ workspacemembers 按角色展开，请求级缓存）；`createWorkspace`（**仅 admin**（`not a tenant admin`）+ team 租户限定 + 创建者不占用成员行 + `{tenantId,name}` 唯一冲突 `workspace name already exists`）；`renameWorkspace`/`deleteWorkspace`（**仅 admin** + global 硬约束 + 11 集合计数删除保护 + personal 拒绝）；`addWorkspaceMember`/`removeWorkspaceMember`（**仅 admin**（裁决 12）；成员须为本租户成员 `user is not a tenant member`；global 拒绝；**无认领逻辑**）；错误文案白名单逐字（裁决 11） |
-| `servers/agent-api/src/services/tenant-member-service.ts` | **新增**（裁决 12）：`searchAccounts(keyword)`（按登录名模糊搜索 `accounts`，限任一 team 租户 admin，结果仅 `username/name/userId` 最小集，D13）；`addTenantMember(tenantId, username, role)`（账户不存在 `account not found`、重复 `already a member`、role 缺省 developer）；`removeTenantMember`/`changeTenantMemberRole`（**last-admin 保护**：admin 计数≤1 时 `last admin cannot be removed`/`last admin cannot be demoted`；变更后复检回滚兜底）；personal 租户一切写操作 `personal tenant is immutable`；移除成员级联清理其本租户全部 `workspacemembers` 行（资源保留原工作区） |
+| `servers/agent-api/src/services/workspace-service.ts` | **新增**：`ensureGlobalWorkspace(tenantId, {adminUserId?})`（**幂等 upsert**：global 行 + `tenantmembers{role:'admin'}`；开户/team 开通/半完成补齐共用，裁决 16）；`accessibleWorkspaces(userId)`（tenantmembers ⨝ workspaces ⨝ workspacemembers 按角色展开，请求级缓存）；`createWorkspace`（**仅 admin**（`not a tenant admin`）+ team 租户限定 + 创建者不占用成员行 + `{tenantId,name}` 唯一冲突 `workspace name already exists`）；`renameWorkspace`/`deleteWorkspace`（**仅 admin** + global 硬约束 + 11 集合计数删除保护 + personal 拒绝）；`addWorkspaceMember`/`removeWorkspaceMember`（**仅 admin**（裁决 12）；成员须为本租户成员 `user is not a tenant member`；global 拒绝；**无认领逻辑**）；工作区/成员变更写结构化审计日志（裁决 17）；错误文案白名单逐字（裁决 11） |
+| `servers/agent-api/src/services/tenant-member-service.ts` | **新增**（裁决 12）：`searchAccounts(keyword)`（按登录名模糊搜索 `accounts`，限任一 team 租户 admin，结果仅 `username/name/userId` 最小集，D13）；`addTenantMember(tenantId, username, role)`（账户不存在 `account not found`、重复 `already a member`、role 缺省 developer）；`removeTenantMember`/`changeTenantMemberRole`（**last-admin 保护**：admin 计数≤1 时 `last admin cannot be removed`/`last admin cannot be demoted`；变更后复检回滚兜底）；personal 租户一切写操作 `personal tenant is immutable`；移除成员级联清理其本租户全部 `workspacemembers` 行（资源保留原工作区）；**add/remove/changeRole 写结构化审计日志**（`operator`=前台 `context.currentUser.id` / 后台透传 `operatorId`，裁决 17） |
 | `servers/agent-api/src/graphql/schemas/workspace.ts` | **新增**（同步 Phase 1 契约 1：含 `TenantRole`/`TenantMembership`/`AccountSummary` 与租户成员管理三 mutation） |
 | `servers/agent-api/src/graphql/resolvers/workspace.ts` + `resolvers/index.ts` | **新增** resolvers（工作区 CRUD/成员管理 + 租户成员管理/searchAccounts）；**`Workspace.tenant/memberCount/myRole/readOnly`、`WorkspaceMember.username` 等字段级 resolver 登记 `resolvers/index.ts`**（backend-rules 陷阱）；`workspaceMembers(global)` 恒返回 `[]` |
 | `servers/agent-api/src/graphql/resolvers/auth.ts` | 新增 `requireWorkspace(context)` 与 `requireTenantAdmin(context)`（对齐 `requireTenantId` 模式）；`Tenant.memberCount` 口径切 `tenantmembers` 计数（一期 `User.countDocuments({tenantId})` 等价，统一走单一事实源） |
@@ -237,17 +241,19 @@ mongosh "<MONGODB_URI>" --eval '
 
 **完成判据**：`grep -rn "userId" servers/agent-api/src/{services,graphql}` 过滤点逐一登记 checklist 并全部切换（userId 仅剩创建者写入/审计）；T-WS 角色两档全绿；既有单测零回归；Commit 三段矩阵通过；team 工作区扣 team 租户、个人余额不变（单测 + Phase 10 API 双覆盖）。
 
-### Phase 5：agent-api 内部端点与聚合/工具口径（1d）
+### Phase 5：agent-api 内部端点、新开户初始化与聚合/工具口径（1.5d）
 
 | 文件 | 变更 |
 |------|------|
-| `servers/agent-api/src/routes/internal-tenants.ts` | **新增**（错误体 `{ error: '<UPPER_CODE>' }` 沿用 `internal-users.ts` 口径）：`POST /internal/tenants`（创建 team 租户 + 全局工作区 + 零余额计费账户 get-or-create，失败向前回滚，按 name 幂等 200/201，409 `TENANT_NAME_TAKEN`）；`POST /internal/tenants/:tenantId/members`（`{username, role}`，role 缺省 `developer`；`Account.findOne({username})` → `User.findOne({accountId})` → `tenantmembers` upsert；400 `PERSONAL_TENANT_IMMUTABLE`/`INVALID_ROLE`、404 `ACCOUNT_NOT_FOUND`/`TENANT_NOT_FOUND`、幂等 200 不覆盖既有角色）；`DELETE /internal/tenants/:tenantId/members/:userId`（删 tenantmembers 行 + 该用户本租户全部 workspacemembers 行；资源保留原工作区；404 `NOT_MEMBER`、**409 `LAST_ADMIN`（last-admin 保护，前后台通道同口径）**）；全部 Bearer `INTERNAL_API_TOKEN` |
+| `servers/agent-api/src/routes/internal-tenants.ts` | **新增**（错误体 `{ error: '<UPPER_CODE>' }` 沿用 `internal-users.ts` 口径）：`POST /internal/tenants`（创建 team 租户 + 全局工作区 + 零余额计费账户 get-or-create，失败向前回滚，按 name 幂等 200/201，409 `TENANT_NAME_TAKEN`）；`POST /internal/tenants/:tenantId/members`（`{username, role, operatorId?}`，role 缺省 `developer`、`operatorId` 仅审计（裁决 17）；`Account.findOne({username})` → `User.findOne({accountId})` → `tenantmembers` upsert；400 `PERSONAL_TENANT_IMMUTABLE`/`INVALID_ROLE`、404 `ACCOUNT_NOT_FOUND`/`TENANT_NOT_FOUND`、幂等 200 不覆盖既有角色）；`DELETE /internal/tenants/:tenantId/members/:userId`（删 tenantmembers 行 + 该用户本租户全部 workspacemembers 行；资源保留原工作区；404 `NOT_MEMBER`、**409 `LAST_ADMIN`（last-admin 保护，前后台通道同口径）**；`operatorId?` 经查询参数透传、仅审计）；全部 Bearer `INTERNAL_API_TOKEN` |
+| `servers/agent-api/src/routes/internal-users.ts` | **变更**（裁决 16）：现有「accounts → users → tenants → 计费账户 get-or-create」成功后，调用 `workspace-service.ensureGlobalWorkspace(tenantId,{adminUserId:userId})` 确保**全局工作区 + `tenantmembers{role:'admin'}`**；按 username 幂等与半完成态逐项补齐（已有 user/tenant 但缺工作区/成员行同样修复）；响应体追加 `globalWorkspace:{id,name}`（向后兼容，旧调用方忽略即可）；E11000 并发冲突视为已就绪 |
 | `servers/agent-api/src/index.ts` | 挂载 `app.use('/internal/tenants', internalTenantsRouter)`（与 `/internal/users` 同位置） |
 | `servers/agent-api/src/graphql/resolvers/home.ts` | `homeOverview` 各聚合分支随 `context.workspace` 过滤（F11；仍薄 `Promise.all` 聚合、降级 helper 不动） |
 | `servers/agent-api/src/services/mcp-dispatch.ts` + `services/workflow/admin-tools.ts` + `tool-handlers.ts` | MCP 口径（F11/裁决）：admin-tools 过滤 = `sessionId → Session.workspaceId`（模板/已配置/实例/控制器列表同步收敛，内置模板例外）；node tools 归属校验 `instance.resourceWorkspaceId === 会话工作区`；工具 schema 注释补「工作区上下文=会话所属工作区」 |
-| `servers/agent-api/src/routes/internal-tenants.test.ts` | **新增** T-IT1~8：创建成功/重名 409/幂等、加成员（不存在账户 404、重复幂等不覆盖角色、role 缺省 developer/非法 `INVALID_ROLE`、personal 400）、移成员（立即失去访问、资源保留、重新加入不自动恢复工作区成员、**last-admin 409 `LAST_ADMIN`**）、鉴权 401 |
+| `servers/agent-api/src/routes/internal-tenants.test.ts` | **新增** T-IT1~8：创建成功/重名 409/幂等、加成员（不存在账户 404、重复幂等不覆盖角色、role 缺省 developer/非法 `INVALID_ROLE`、personal 400）、移成员（立即失去访问、资源保留、重新加入不自动恢复工作区成员、**last-admin 409 `LAST_ADMIN`**）、鉴权 401、审计日志携带 operatorId（裁决 17） |
+| `servers/agent-api/src/routes/internal-users.test.ts`（扩展） | **新增 T-PROV1~4**：新开户（201）后恰有 1 个 global 工作区 + 1 行 `tenantmembers{role:'admin'}`；重复开户（200）幂等零新增；半完成态（已有 account/user/tenant 缺工作区/成员行）逐项补齐；计费不可达 503 时不残留工作区（初始化置于计费成功之后）；并发开户 E11000 视为已就绪 |
 
-**完成判据**：单测全绿；tests/api 黑盒「后台转发口径」闭环在 Phase 6 联调验证；MCP 工具在普通工作区会话下只见本工作区 + 内置模板。
+**完成判据**：单测全绿（T-IT*/T-PROV*）；**新开户用户立即可用（全局工作区 + admin 成员关系齐备，缺头回退/切换器正常）**；审计日志可追溯操作人/时间；tests/api 黑盒「后台转发口径」闭环在 Phase 6 联调验证；MCP 工具在普通工作区会话下只见本工作区 + 内置模板。
 
 ### Phase 6：admin-api 只读镜像与 team 转发（1d）
 
@@ -256,7 +262,7 @@ mongosh "<MONGODB_URI>" --eval '
 | `servers/admin-api/src/models/{tenant-member,workspace,workspace-member}.ts` | **新增**只读镜像（schema 注释「与 agent-api 同步演进」，沿用 `cloud-host.ts` 镜像惯例） |
 | `servers/admin-api/src/models/{provider,model}.ts` | 镜像补 `workspaceId/tenantId` 可选字段；**索引声明同步 agent-api 切换后形态**（F10：user 域 `{tenantId,workspaceId,name}` + global 域 partial，删 `{scope,name}`） |
 | `servers/admin-api/src/graphql/schemas/tenant.ts` | 同步 Phase 1 契约：`AdminWorkspace`、`AdminTenantUser.role`、`adminCreateTeamTenant/adminAddTenantMember(tenantId, username, role)/adminRemoveTenantMember`、`AdminTenantDetail.workspaces` |
-| `servers/admin-api/src/graphql/resolvers/tenant.ts` | 新增三个 mutation 转发 `POST /internal/tenants`、`POST/DELETE /internal/tenants/:id/members[/:userId]`（`adminAddTenantMember` 透传 role，缺省 developer；沿用 `forwardCreateFrontUser` 的 fetch/超时/错误映射模式，409→CONFLICT（含 `LAST_ADMIN`/`TENANT_NAME_TAKEN`）、400→INVALID_ARGUMENT（含 `INVALID_ROLE`）、404→NOT_FOUND、`AGENT_API_UNAVAILABLE`）；`adminTenant` 成员列表改经 `tenantmembers` 展开（+ accounts 登录名 + **role**）；`workspaces` 只读视图（memberCount 经 workspacemembers 计数、global 取租户成员数）；既有 `adminTenants` 列表补类型列数据（`type` 已有） |
+| `servers/admin-api/src/graphql/resolvers/tenant.ts` | 新增三个 mutation 转发 `POST /internal/tenants`、`POST/DELETE /internal/tenants/:id/members[/:userId]`（`adminAddTenantMember` 透传 role，缺省 developer；**`operatorId` 透传当前 admin 用户 id 供审计**（裁决 17）；沿用 `forwardCreateFrontUser` 的 fetch/超时/错误映射模式，409→CONFLICT（含 `LAST_ADMIN`/`TENANT_NAME_TAKEN`）、400→INVALID_ARGUMENT（含 `INVALID_ROLE`）、404→NOT_FOUND、`AGENT_API_UNAVAILABLE`）；`adminTenant` 成员列表改经 `tenantmembers` 展开（+ accounts 登录名 + **role**）；`workspaces` 只读视图（memberCount 经 workspacemembers 计数、global 取租户成员数）；既有 `adminTenants` 列表补类型列数据（`type` 已有） |
 | `servers/admin-api/src/graphql/resolvers/tenant.test.ts` | 扩展 T-TT1~8：创建 team（重名/非法/鉴权）、按登录名加成员指定角色（不存在账户/重复幂等不覆盖角色/role 缺省 developer）、移成员（**last-admin 409**）、personal 全部拒绝、详情成员经 tenantmembers 含 role、工作区只读（introspection 无编辑入口） |
 
 **完成判据**：单测全绿；tests/api `admin-api/tenant-team.test.ts` 黑盒通过（含「adminCreateTeamTenant → 成员登录前台即见团队空间」闭环）；admin_user/既有租户只读链路零回归。
@@ -278,16 +284,16 @@ mongosh "<MONGODB_URI>" --eval '
 
 | 文件 | 变更 |
 |------|------|
-| `apps/agent-web/src/stores/workspace.ts` | **新增**：当前工作区状态 + `myWorkspaces`/`myTenants`（含 role）缓存；`localStorage['zag:current-workspace']` 按 userId 隔离持久化（裁决 13）；缺省=个人租户全局工作区；单工作区（未加入团队）隐藏切换器 |
+| `apps/agent-web/src/stores/workspace.ts` | **新增**：当前工作区状态 + `myWorkspaces`/`myTenants`（含 role）缓存；`localStorage['zag:current-workspace']` 按 userId 隔离持久化（裁决 13）；缺省=个人租户全局工作区；单工作区（未加入团队）隐藏切换器；**`myWorkspaces` 刷新后若当前/持久化工作区不在可见集（被移出团队、工作区已删除），自动回退个人全局并清理 `zag:current-workspace`**（避免请求持续 `workspace not found`） |
 | `apps/agent-web/src/lib/apollo.ts` | Apollo Link 注入 `x-workspace-id`（当前工作区 id；无选择时不发头→服务端回退） |
 | `apps/agent-web/src/components/Sidebar.tsx` / `pages/MainLayout.tsx` | 工作区切换器（**按租户分组 + 按角色过滤**：admin=个人全局+各团队全部工作区；developer=个人全局+各团队全局+已加入的 normal；当前项标识）；切换后 `HOME_OVERVIEW` 等 refetch（沿用单一 HOME_OVERVIEW 纪律，不新增组件级 info 查询） |
 | `apps/agent-web/src/pages/WorkspacePage.tsx`（新增）+ `App.tsx` | 工作区管理页（**仅 admin 可操作，developer 只读/无入口**；列表：名称/类型/成员数、创建、改名、删除（非空拦截提示）、成员管理添加/移除；**无认领入口**（v1.1 移除，0 成员工作区 admin 直管））；路由 `/workspaces` |
 | `apps/agent-web/src/pages/TenantMembersPage.tsx`（新增）+ `App.tsx` | **租户成员管理页（仅 admin 可见）**：成员列表（用户名/展示名/角色/加入时间）、`searchAccounts` 按帐号名搜索添加成员并指定角色、变更角色、移除成员；last-admin 保护提示（`last admin cannot be removed/demoted`）；personal 租户无入口；路由 `/tenants/:id/members`（或团队设置内嵌入口） |
 | `apps/agent-web/src/pages/SettingsPage.tsx` + `components/settings/*` | 供应商/模型/Github 绑定/Commit 设置随当前工作区；共享资源来源徽标（本工作区 / 全局工作区）；全局资源在普通上下文只读（编辑/删除入口隐藏）；**全局工作区上下文对 developer 整体只读（按 `readOnly` 收敛编辑入口）**；`CommitSettingsSection` 展示 `source`（本工作区 / 继承自全局工作区 / 未设置） |
 | `apps/agent-web/src/graphql/{queries,mutations,types,workflow}.ts` | `myWorkspaces/myTenants/workspaceMembers/tenantMembers/searchAccounts` 与工作区 CRUD/租户成员管理文档；`Workspace.myRole/readOnly`、`TenantRole`、`Provider/Model/GitHubAccount/CloudHost.workspaceId`、`WorkflowInstance/ConfiguredWorkflow/WorkflowTemplate.resourceWorkspaceId`、`CommitSettings.source/readOnly` 类型同步；工作流模块注释澄清 `workspaceId`=项目工作区（零改动） |
-| `apps/agent-web/src/**/__tests__` | 切换器（按角色过滤）/管理页（仅 admin）/租户成员管理页/来源徽标/继承展示/只读收敛断言；developer 无管理入口断言；个人用户单工作区无切换器断言 |
+| `apps/agent-web/src/**/__tests__` | 切换器（按角色过滤）/管理页（仅 admin）/租户成员管理页/来源徽标/继承展示/只读收敛断言；developer 无管理入口断言；个人用户单工作区无切换器断言；**失效当前工作区（不在可见集）自动回退并清理持久化** |
 
-**完成判据**：`npm run build` 通过；单测全绿；E2E-WS 套件通过；切换器按角色过滤正确（admin 全景/developer 仅加入）、全局上下文对 developer 只读收敛；刷新/重登当前工作区恢复；个人用户体验与升级前一致。
+**完成判据**：`npm run build` 通过；单测全绿；E2E-WS 套件通过；切换器按角色过滤正确（admin 全景/developer 仅加入）、全局上下文对 developer 只读收敛；刷新/重登当前工作区恢复；**被移出团队/工作区已删时当前工作区自动回退个人全局**；个人用户体验与升级前一致。
 
 ### Phase 9：admin-web team 租户管理（0.5d）
 
@@ -324,17 +330,18 @@ mongosh "<MONGODB_URI>" --eval '
 | T-MIG15a 三集合与索引 | `015-team-workspaces.test.ts` | 全局工作区每租户恰一个（部分唯一索引生效）、tenantmembers personal 恒 1 行且 **role=admin**、workspacemembers 空 |
 | T-MIG15b 11 集合 backfill | 同上 | 工作区维度=本租户全局工作区；workflow 域字段名 `resourceWorkspaceId`；`userId` 保留 |
 | T-MIG15c 索引切换 | 同上 | providers/user_commit_settings/githubaccounts 新索引就位、旧唯一索引已删（F3/F4） |
-| T-MIG15d 复制计数门禁 | 同上 | 每租户复制数核对；不等中止不删原件；一致删除；`providerId` 重映射正确 |
+| T-MIG15d 复制计数门禁 | 同上 | 每租户复制数核对（**含 `scope` 缺失行**）；不等中止不删原件；一致删除；`providerId` 重映射正确；复制后无 workspaceId 孤儿 |
 | T-MIG15e 键改等价 | 同上 | user_commit_settings 查询等价（源字段保留）；`{workspaceId}` 唯一 |
 | T-MIG15f 幂等/半完成 | 同上 | 二次 run 零变更；缺步骤各自补齐 |
 | T-MIG002a~c | `002-cloudcontainers-workspace-id.test.ts` | 回填解析/幂等/解析不到跳过 + 索引 |
 | T-CTX1~5 | `middleware/auth` 相关测试 | 头解析/角色与只读判定（admin 直通、global 需租户成员、normal 需工作区成员、`readOnly=global&&developer`）/缺省回退个人全局（role=admin）/非法与不可达 `workspace not found`/请求级缓存一次 |
 | T-SCOPE1~6 | `services/workspace-scope.test.ts` | 读注入独占/共享两口径、写强制归属、**readOnly 写拦截 `global workspace is read-only`**、builtinVisible 例外、无 ALS 不注入、与 tenant-scope 共存、跨工作区 `Not found` |
-| T-WSP1~8 | `services/workspace-service.test.ts` | global 硬约束（改名/删除/成员）、**一切变更仅 admin（developer `not a tenant admin`）**、personal 拒绝创建、重名、成员须租户成员、删除保护 11 集合计数、移出租户级联删 workspacemembers（**无认领路径**） |
+| T-WSP1~9 | `services/workspace-service.test.ts` | global 硬约束（改名/删除/成员）、**一切变更仅 admin（developer `not a tenant admin`）**、personal 拒绝创建、重名、成员须租户成员、删除保护 11 集合计数、移出租户级联删 workspacemembers（**无认领路径**）、**`ensureGlobalWorkspace` 幂等/半完成补齐/并发唯一索引兜底** |
 | T-TM1~8 | `services/tenant-member-service.test.ts` | searchAccounts 鉴权（非 admin 拒绝）与结果最小集；add（账户不存在/重复幂等不覆盖角色/role 缺省 developer）；**last-admin 移除/降级拒绝**（变更后复检回滚）；personal 一切写拒绝；移除级联清理 workspacemembers、资源保留 |
 | T-CSI2 三段矩阵 | `services/commit-settings-service.test.ts` | 本设/全局设/均未设 ×（云电脑归属 normal/global）；`source` 透出；GitHubAccount 共享读校验；五步门控零回归 |
 | T-BILL2 | `services/billing-client.test.ts` + `cloud-host-service.test.ts` | owner=workspace.tenantId（创建扣费/退款/Key 铸造/报价）；缺省上下文=个人租户 |
-| T-IT1~8 | `routes/internal-tenants.test.ts` | 见 Phase 5（含 role 入参与 `LAST_ADMIN` 409） |
+| T-IT1~8 | `routes/internal-tenants.test.ts` | 见 Phase 5（含 role 入参、`LAST_ADMIN` 409、审计 operatorId） |
+| T-PROV1~4 | `routes/internal-users.test.ts` | 新开户生成全局工作区 + `tenantmembers{role:'admin'}`；重复开户幂等；半完成补齐；计费失败不残留工作区 |
 | T-AT-TT1~8 | admin-api `resolvers/tenant.test.ts` | 见 Phase 6（含角色透出与 last-admin 409） |
 | T-WS（互校） | `models/workspace-isolation.test.ts` | CASES 与 `WORKSPACE_ID_COLLECTIONS` 逐一相等（对照 T-ISO 模式），**× admin/developer 角色两档** |
 
@@ -343,6 +350,7 @@ mongosh "<MONGODB_URI>" --eval '
 | 用例 | 断言要点 |
 |------|---------|
 | T-WS-API 上下文 | `x-workspace-id` 解析/切换/回退；**缺头全链路与一期一致**（兼容回归，必过） |
+| T-PROV-API 新开户 | `/internal/users` 开户后立即登录即用：个人全局工作区唯一、admin 成员关系、切换器隐藏、既有能力零差异；重复开户幂等 |
 | T-WS-API 逐集合隔离 | 11 集合每集合至少一条：非成员开发列表/详情/修改/删除统一 `Not found`；成员开发可达（含他人创建资源）；**admin 任意工作区可达**；global 租户全员可达（developer 只读） |
 | T-WS-API 共享与继承 | 普通上下文模型/供应商/绑定 = 本 ∪ 全局（来源可区分）；写全局被拒（普通上下文 `Not found`、全局上下文 developer `global workspace is read-only`）；全局删除后入口随即不可用；Commit 三段矩阵 + `source` |
 | T-WS-API 工作区管理 | 创建/重名/改名/删除保护/成员管理（**仅 admin，developer 拒绝 `not a tenant admin`**）/personal 拒绝/global 拒绝（**无认领用例**） |
@@ -389,6 +397,7 @@ mongosh "<MONGODB_URI>" --eval '
 - [ ] 角色权限通过：developer 无法创建工作区/成员管理/角色变更/搜索账户；admin 全部可行；last-admin 保护生效；全局工作区对 developer 只读
 - [ ] 共享读口径（本 ∪ 全局）与 Commit 三段继承按矩阵通过
 - [ ] 计费 owner=workspace.tenantId 全链路；`/internal/tenants*` 全绿；MCP 工具与 homeOverview 口径切换
+- [ ] **新开户（`/internal/users`）自动创建全局工作区与 `tenantmembers{role:'admin'}`，重复/半完成开户幂等补齐；成员/角色变更审计可追溯**
 
 **Phase 6/7/8/9**
 
@@ -416,6 +425,8 @@ mongosh "<MONGODB_URI>" --eval '
 | 缺省上下文破坏兼容 | 旧客户端/内部调用大面积红 | 缺头回退个人全局（与一期等价）+ 兼容回归用例必过 + 发布顺序约束 |
 | 迁移窗口期写入 | 半完成数据 | 各步幂等判据可重跑补齐 + 启动自检异步告警（缺工作区维度计数）+ 迁移在 listen 前执行 |
 | workspace-scope 无上下文误注入 | 引擎/内部链路查询被错误过滤 | 无 ALS store 不注入/不校验；引擎显式传值（裁决 10）；引擎建会话用例覆盖 |
+| 新开户缺全局工作区/成员行 | 新用户登录后缺头回退失败、切换器为空、资源无法创建 | `/internal/users` 运行时 ensureGlobalWorkspace（裁决 16）+ 启动自检补「users 无 global 工作区」计数 + T-PROV 单测/API 用例 + 开户幂等半完成补齐 |
+| 成员/角色变更无留痕 | 审计追溯缺失（PRD §4.2） | 统一结构化审计日志（action/operator/tenant/target/role）+ `createdBy`/`updatedAt`；后台透传 admin 用户 id（裁决 17） |
 | admin-api 镜像漂移 | 后台数据失真/索引打架 | schema 注释「同步演进」+ F10 索引声明同 PR + PR review checklist |
 
 **回滚策略**：
@@ -470,8 +481,9 @@ servers/agent-api/src/
 ├── services/mcp-dispatch.ts / workflow/{admin-tools,tool-handlers}.ts  # 会话工作区口径（F11）
 ├── graphql/{schemas,resolvers}/workspace.ts  # 新增（工作区+租户成员管理；字段级 resolver 登记 index.ts）
 ├── graphql/resolvers/{auth,home,billing,cloud-host,...}.ts  # 上下文过滤与 owner 切换
-├── routes/internal-tenants.ts          # 新增（+index.ts 挂载）
-├── migrations/015-team-workspaces.ts(+test)  # 工作区化迁移（含索引切换与复制门禁）
+├── routes/internal-tenants.ts          # 新增（+index.ts 挂载；含 role/operatorId 审计）
+├── routes/internal-users.ts            # 变更：新开户补全局工作区 + tenantmembers(role=admin)（裁决 16）
+├── migrations/015-team-workspaces.ts(+test)  # 工作区化迁移（含索引切换与复制门禁、scope 缺失行同口径复制）
 ├── services/tenant-self-check.ts       # 自检扩展工作区维度
 └── AGENTS.md                           # 工作区模型与隔离口径段
 
@@ -519,7 +531,7 @@ docs/engineering/AGENTS.md              # plan 索引追加（随本文件提交
 
 ## 附录 B：计划期核对记录
 
-### B.1 代码事实核对（2026-10-28，需求总分支 88d104f1）
+### B.1 代码事实核对（2026-10-28；B-1~B-12 基于需求总分支 88d104f1，B-13 基于 6d5860cd，B-14/B-15 基于 3ff0ffa8）
 
 | # | 核对点 | 观测 | 结论 |
 |---|--------|------|------|
@@ -536,3 +548,5 @@ docs/engineering/AGENTS.md              # plan 索引追加（随本文件提交
 | B-11 | cloudcontainers | `cloud-container.ts:97/100` userId/tenantId 均 String default null；`internal-api.ts:242-264` parseHarnessRequest tenantId 回退=userId 先例 | Phase 7 回退解析同款口径 |
 | B-12 | 三集合计数语义 | 现 `Tenant.memberCount`=`User.countDocuments({tenantId})`（`resolvers/auth.ts:89`） | 统一走 tenantmembers 单一事实源（等价） |
 | B-13 | 角色体系增补（v1.1） | `tenantmembers` 为本期新增集合（role 字段随建模落地）；`searchAccounts` 依赖 `accounts.username`（一期迁移 012 后登录名在 accounts）；`tenant-member-service` 无既有同名服务 | 无新增事实校正，按提案 v1.1 §2.3/§3.1/决策 D11-D13 落地 |
+| B-14 | 新开户链路（v1.2） | `routes/internal-users.ts:120-168` 创建 accounts/users/tenants + 计费账户，**无工作区/成员行写入**；`Tenant.create` 仅此一处与迁移 012 出现 | 补 `ensureGlobalWorkspace`（裁决 16），否则二期上线后新开户用户无全局工作区 |
+| B-15 | providers/models scope 缺失（v1.2） | `services/provider.ts:8-10` `USER_SCOPE_FILTER` 与 `services/model.ts:8-11` `AVAILABLE_MODELS_FILTER` 均以 `$exists:false` 兼容无 scope 存量行 | 迁移 015 复制范围同口径（F3），避免孤儿行 |
