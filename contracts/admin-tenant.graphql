@@ -1,0 +1,48 @@
+# 后台租户与账户管理（前台租户的只读视图 + 开户）
+#
+# 后台不做多租户设计：admin_users 不建租户、管理面无租户隔离；本契约仅提供对前台租户/账户的只读盘点与开户转发。
+# 鉴权：全部需要 admin JWT；租户与用户为只读视图，开户为唯一写操作。
+# 模型口径：tenant→users 一对多（users.tenantId 承载）；account→users 一对多（users.accountId 承载登录关联）。
+#
+# 写权：accounts/users/tenants 写方仅 agent-api；admin-api 一律只读镜像，
+# 开户经 `POST {AGENT_API_URL}/internal/users`（Bearer INTERNAL_API_TOKEN）转发，
+# 由 agent-api 创建「账户+用户+同名个人专属租户+零余额租户计费账户」。
+
+enum TenantType {
+  personal
+  team
+}
+
+type AdminTenant {
+  id: ID!
+  name: String!
+  type: TenantType! # personal | team（一期仅 personal）
+  memberCount: Int!
+  balance: Float # 租户计费账户可用余额（credits），无账户为 null
+  createdAt: String!
+}
+
+type AdminTenantUser {
+  id: ID! # 用户 id
+  name: String! # 用户展示名
+  username: String! # 登录账户名（取自其 account）
+  createdAt: String!
+}
+
+type AdminTenantDetail {
+  id: ID!
+  name: String!
+  type: TenantType!
+  users: [AdminTenantUser!]! # 只读列表（按 users.tenantId 查询，tenant→users 1..n）
+  createdAt: String!
+}
+
+type Query {
+  adminTenants(keyword: String, page: Int, pageSize: Int): [AdminTenant!]!
+  adminTenant(id: ID!): AdminTenantDetail
+}
+
+type Mutation {
+  # 后台开户：创建登录账户+用户+同名个人专属租户+零余额租户费用账户
+  adminCreateFrontUser(username: String!, password: String!): AdminTenantUser!
+}

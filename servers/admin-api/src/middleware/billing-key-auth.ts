@@ -71,7 +71,8 @@ async function isCloudHostKeyUsable(verified: VerifiedApiKey): Promise<boolean> 
     .lean<{ status?: string; deletedAt?: Date | null; userId?: unknown } | null>();
   if (!host || host.deletedAt || host.status !== 'RUNNING') return false;
   // 纵深防御：运行 Key 的属主必须与云电脑属主一致（防止跨用户 Key 复用）。
-  if (verified.ownerType === 'front_user') {
+  // 一期前台归属统一为 tenant（ownerId==tenantId==userId）；admin_user 保留管理豁免。
+  if (verified.ownerType !== 'admin_user') {
     return !!host.userId && String(host.userId) === verified.ownerId;
   }
   return true;

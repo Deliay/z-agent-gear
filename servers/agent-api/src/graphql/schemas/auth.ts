@@ -1,7 +1,20 @@
 export const authTypeDefs = `#graphql
+  enum TenantType {
+    personal
+    team
+  }
+
+  type Tenant {
+    id: ID!
+    name: String!
+    type: TenantType!
+    memberCount: Int!
+  }
+
   type User {
     id: ID!
-    username: String!
+    name: String!
+    tenant: Tenant!
     createdAt: String!
   }
 
@@ -15,7 +28,6 @@ export const authTypeDefs = `#graphql
   }
 
   extend type Mutation {
-    signup(username: String!, password: String!): AuthPayload!
     login(username: String!, password: String!): AuthPayload!
   }
 `;

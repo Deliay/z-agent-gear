@@ -40,7 +40,11 @@ src/
 │   └── socketio-gateway.ts     # /worker namespace 接入与鉴权（含注册版本门禁、workload:run/result）
 ├── middleware/internal-auth.ts # Bearer INTERNAL_API_TOKEN
 ├── routes/internal-api.ts      # /internal/containers*（启动接收/校验 workloadPlan、含 workload-logs）
-└── index.ts                    # createCloudControllerApp + 入口
+├── migrations/
+│   ├── runner.ts               # 迁移 runner（独立账本 cloud_controller_migrations、锁归属 + 5 分钟 TTL、逐迁移吞错）
+│   ├── models.ts               # 迁移账本模型（name/executedAt/_lock/owner/acquired/expiresAt）
+│   └── 001-cloudcontainers-tenant-id-backfill.ts # 存量容器 tenantId 回填 + {tenantId:1} 索引（幂等）
+└── index.ts                    # createCloudControllerApp + 入口（DB 连接后 await runMigrations 再 listen）
 ```
 
 ## 关键约束
@@ -58,7 +62,7 @@ src/
 - **runtimeClass + hostUsers**：配置了 `RUNTIME_CLASS_NAME`（默认 `sysbox-runc`）时，同时下发 `hostUsers: false`——sysbox 要求 Pod 停用宿主 user namespace，否则 sandbox 创建失败（写 `net.ipv4.ip_unprivileged_port_start` 被拒）；未配置 runtimeClass 时不设置该字段。
 - **env 通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker`（**不含 token**）与 `ZAG_CONTROLLER_KEY=<token>`（agent-gear 连接时经握手 `auth.token` 携带）。
 - **K8s 客户端可注入**：`K8S_ENABLED=false` 时使用 `InMemoryK8sClient`（本地/测试/E2E 全 mock，不依赖真实集群）。
-- **用途白名单**：`POST /internal/containers` 仅接受 `idle|harness`；其余用途返回 400「该任务类型暂未开放」。`purpose=harness` 必填 `hostId/refId(controllerKeyId)/userId/hostName/harnessTypes(非空、白名单)/expiresAt/agentGearMinVersion(三段版本)/secrets/workloadPlan`，且 **workloadPlan 必须显式下发**（不允许仅 workloadIds 兜底展开）；缺失或非法返回 `400 INVALID_HARNESS` 且不创建 Job；`GET /containers?hostId=&userId=` 可选过滤（无参数保持全量）。
+- **用途白名单**：`POST /internal/containers` 仅接受 `idle|harness`；其余用途返回 400「该任务类型暂未开放」。`purpose=harness` 必填 `hostId/refId(controllerKeyId)/userId/tenantId/hostName/harnessTypes(非空、白名单)/expiresAt/agentGearMinVersion(三段版本)/secrets/workloadPlan`，且 **workloadPlan 必须显式下发**（不允许仅 workloadIds 兜底展开）；缺失或非法返回 `400 INVALID_HARNESS` 且不创建 Job；`GET /containers?hostId=&userId=` 可选过滤（无参数保持全量）。`tenantId` 与 `userId` 同值（个人专属租户 `_id` 复用 userId）并落库到 `cloudcontainers.tenantId`；滚动升级兜底：旧版 agent-api 未下发 `tenantId` 时回退 `tenantId = userId` 并 `console.warn`（显式下发但空串/非字符串仍 400）。
 - **云电脑 secret 与 TTL**：`secrets{hostEndpoint,hostKey,modelApiKey,modelBaseUrl,modelIds,defaultWorkspace}` 仅存入 `SecretStore`（进程内 Map，不落库、不返回、不打印），容器终态时删除；可选 `secrets.modelContextLengths`（模型 ID → 最长上下文 JSON object 字符串，不参与必填校验），携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传；`expiresAt` 仅落库留存（容器 TTL 留档，**不再关联模型 Key 有效期**——模型 Key 随容器回收：宿主非 `RUNNING`/删除/缺失由网关拒绝并对账撤销），**不再换算 Job 硬截止**（Job 不设 `activeDeadlineSeconds`，最长运行时间无限制）。
 - **云电脑 env**：Job env 仅追加 `ZAG_HOST_ENDPOINT/ZAG_HOST_KEY/ZAG_HOST_NAME/ZAG_HARNESS_TYPES/ZAG_DEFAULT_WORKSPACE/ZAG_USER_TYPE/ZAG_USER_ID`（`ZAG_CONTROLLER_KEY` 仍为 `/worker` 一次性 token）；模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发（仅 harness，idle 不携带 `env`）。harness secret/模型配置缺失时 dispatcher 判 init 失败、容器不 online。
 - **云电脑生命周期回调**：`onReady` 对 harness（首次 online）与计费事件共用时机，调用 agent-api `POST /internal/cloud-hosts/:hostId/ready`；`onDestroyed` 对 harness 终态调用 `/terminal`（exited→stopped、failed→failed）并按 hostId 调 admin-api `revoke-by-host`。回调均 Bearer `INTERNAL_API_TOKEN`，单次回调内置 4 次退避重试（0/250ms/1s/3s），外层容器钩子再重试 3 次；最终失败记录 error 日志（降级：agent-api 可用过期/对账与容器状态兜底，不阻断容器回收）。`AGENT_API_URL`/`ADMIN_API_URL` 未配置时启动即告警，回调 no-op。**SecretStore 为进程内存**：cloud-controller 重启会丢失在途 harness 的 secrets（该容器初始化将失败/不 online），需通过巡检/重建云电脑恢复；本期不引入持久化 secret。
@@ -127,7 +131,19 @@ npm run test:coverage
 - [Backend Rules](../../docs/engineering/backend-rules.md)
 - [WS 契约](../../contracts/cloud-controller-websocket.md)
 
+## 多租户一期（cloudcontainers tenantId 与迁移基建）
+
+- **数据口径**：`cloudcontainers.tenantId`（String，`default: null`、`index: true`）为**复制新增**字段，与 `userId` 同类型；personal 期恒等于 `userId`，原 `userId` 字段与筛选维度全保留（不 rename）。写入口径：仅 `purpose=harness` 写入（来自 harness 请求 `tenantId`），`idle` 等未接入租户的容器保持 `null`；读取层对历史行容忍 `null`。
+- **写入校验（F8）**：`parseHarnessRequest` 校验 `tenantId` 为非空字符串并透传 `ContainerService.start → repo.create`；旧版 agent-api 缺省时回退 `tenantId = userId` 并 `console.warn`（发布顺序已保证新 agent-api 先上线，回退仅兜底）；显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
+- **迁移基建（F1）**：`src/migrations/` 按 admin-api 改进版复刻——独立账本集合 `cloud_controller_migrations`（不与 agent-api `migrations`、admin-api `admin_migrations` 混用）、锁 `_lock=migration_lock` 带 `owner` 归属（只释放自己的锁）、5 分钟锁 TTL（过期锁启动时清理后可接管）、**逐迁移吞错**（失败仅 `console.error`、不写账本、继续后续迁移，下次启动重试）。`index.ts` 在 `mongoose.connect` 之后、`httpServer.listen` 之前 `await runMigrations([...])`；runner 整体异常只 warn，不阻断启动（与既有服务一致）。
+- **迁移 001**：`001-cloudcontainers-tenant-id-backfill` 以聚合管线 `updateMany({userId 存在且非空, tenantId 缺失/null}, [{$set:{tenantId:'$userId'}}])` 回填存量行（单次库内更新，无需拉回应用侧），随后显式 `createIndex({tenantId:1})`；已回填行不再命中，幂等可重跑。`userId` 缺失的行跳过、不改动。
+- **只读镜像**：`servers/agent-api/src/models/cloud-container.ts` 同步 `tenantId` 字段（schema 注释标注与 cloud-controller 同步演进），写方仍仅本服务。
+
 ## 云容器优化二期（ephemeral-storage）
 
 - Job pod 模板 `resources.limits` 增加 `ephemeral-storage`，默认 `10Gi`，可由 `JOB_EPHEMERAL_STORAGE` 覆盖（`JobManagerConfig.ephemeralStorage`）；**不设置 `requests`**（与既有 CPU/内存口径一致）；`K8sResourceList` 已扩展该可选字段。
 - 部署 env 同步：`deploy/k8s/cloud-controller.yaml`、`aspire/AgentGear.AppHost/AppHost.cs`、`aspire/manifest/docker-compose.yaml`。
+
+### 多租户一期补充（返工）
+- Mongoose v9 聚合管线更新必须显式 `{ updatePipeline: true }`（迁移 001 已在真库用例中验证）。
+- 迁移 001 具备 `mongodb-memory-server` 真库用例（回填/索引/幂等），与 mock 单测并行。

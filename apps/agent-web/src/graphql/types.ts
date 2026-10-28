@@ -878,7 +878,7 @@ export type BillingRollupGranularity = 'minute' | 'hour' | 'day'
 
 export interface MyBillingAccountData {
   id: string
-  ownerType: 'front_user' | 'admin_user'
+  ownerType: 'front_user' | 'admin_user' | 'tenant'
   ownerId: string
   ownerName: string
   cashBalance: number

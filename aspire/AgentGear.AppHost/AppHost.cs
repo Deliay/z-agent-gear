@@ -189,6 +189,8 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
     .WithEnvironment("CLOUD_CONTROLLER_URL", cloudController.GetEndpoint("http"))
     .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
+    // 后台开户转发目标（agent-api `POST /internal/users`）；缺失时开户返回 AGENT_API_UNAVAILABLE
+    .WithEnvironment("AGENT_API_URL", agentApi.GetEndpoint("http"))
     // 销毁容器超时（工作负载清理脚本批次需 > post 预算 90s + 宽限 10s + 删 Job 重试）
     .WithEnvironment("CLOUD_CONTROLLER_DESTROY_TIMEOUT_MS", "180000")
     .WithReference(mongodb)

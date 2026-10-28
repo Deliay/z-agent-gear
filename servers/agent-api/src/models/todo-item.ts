@@ -1,9 +1,11 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 const { Schema } = mongoose;
 
 const todoItemSchema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  tenantId: { type: Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
   type: { type: String, enum: ['permission_request', 'elicitation_request', 'harness_login_request', 'workflow_intervention'], required: true },
   priority: { type: String, enum: ['immediate', 'urgent', 'medium', 'low'], required: true },
   title: { type: String, required: true },
@@ -60,6 +62,8 @@ todoItemSchema.index({ 'elicitationData.requestId': 1 });
 // harness 登录引导终态收敛/幂等 upsert 按 requestId 定位（迁移 009 显式创建）
 todoItemSchema.index({ 'harnessLoginData.requestId': 1 });
 todoItemSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+applyTenantScope(todoItemSchema);
 
 export const TodoItem = mongoose.model('TodoItem', todoItemSchema);
 export type ITodoItem = mongoose.InferSchemaType<typeof todoItemSchema>;

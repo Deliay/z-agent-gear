@@ -117,7 +117,7 @@ export default function MainLayout() {
   if (!isMobile) {
     layout = (
       <div className="grid h-screen grid-cols-[280px_1fr]">
-        <Sidebar username={user?.username ?? ''} />
+        <Sidebar name={user?.name ?? ''} />
         <main className="overflow-auto">
           <Outlet />
         </main>
@@ -139,7 +139,7 @@ export default function MainLayout() {
     } else {
       layout = (
         <div className="h-screen">
-          <Sidebar username={user?.username ?? ''} mobile />
+          <Sidebar name={user?.name ?? ''} mobile />
         </div>
       );
     }

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import { createFrontUser } from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -12,7 +13,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
   return fetch(AGENT_API_URL, { method: 'POST', headers, body: JSON.stringify(body) });
 }
 
-const SIGNUP = `mutation Signup($username: String!, $password: String!) { signup(username: $username, password: $password) { token user { id username } } }`;
 const CREATE_KEY = `mutation CreateControllerKey($input: CreateKeyInput!) { createControllerKey(input: $input) { key { id name } rawKey } }`;
 const CREATE_WORKSPACE = `mutation CreateWorkspace($input: CreateWorkspaceInput!) { createWorkspace(input: $input) { id controllerId path } }`;
 const CREATE_SESSION = `mutation CreateSession($input: CreateSessionInput!) { createSession(input: $input) { session { id status acpServerType worktreePath worktreeBranch } } }`;
@@ -46,14 +46,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function signup(tag: string): Promise<string> {
-  const uid = `${tag}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-  const body = await res.json();
-  if (!body.data?.signup?.token) {
-    console.error('signup failed:', JSON.stringify(body));
-  }
-  return body.data?.signup?.token ?? '';
+async function newUserToken(tag: string): Promise<string> {
+  const { token } = await createFrontUser();
+  return token;
 }
 
 interface FakeController {
@@ -271,7 +266,7 @@ describe('Worktree API Tests', () => {
   let workspaceName: string;
 
   beforeAll(async () => {
-    token = await signup('wt-api');
+    token = await newUserToken('wt-api');
     ctrl = await registerFakeController(token, 'wt-api');
     await refreshCapabilities(token, ctrl.controllerId);
     const ws = await createWorkspace(token, ctrl.controllerId);
@@ -314,7 +309,7 @@ describe('Worktree API Tests', () => {
   describe('A2: workspaceWorktrees controller offline degradation', () => {
     it('should degrade to session-only grouping when controller offline', async () => {
       // Create workspace pointing to a different (offline) controller
-      const offlineToken = await signup('wtoff');
+      const offlineToken = await newUserToken('wtoff');
       const offlineCtrl = await registerFakeController(offlineToken, 'wtoff-off');
       const offWs = await createWorkspace(offlineToken, offlineCtrl.controllerId);
       offlineCtrl.client.disconnect();

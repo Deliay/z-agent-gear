@@ -565,7 +565,7 @@ test.describe('Admin Cloud Workload E2E', () => {
     }
   });
 
-  test('T-E16: lists the seven preset workloads with the preset badge', async ({ page }) => {
+  test('T-E16: lists the eight preset workloads with the preset badge', async ({ page }) => {
     const token = await adminLoginApi(page);
     await adminLoginViaUI(page);
     await page.getByRole('link', { name: /工作负载/ }).click();
@@ -573,11 +573,11 @@ test.describe('Admin Cloud Workload E2E', () => {
     await expect(page.getByRole('heading', { name: '工作负载' })).toBeVisible();
 
     // 迁移已执行：七个预制项均出现（含 Github / Kimi Code）
-    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'Github']) {
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'DeepSeek Harness（Harness）', 'Github']) {
       await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
     }
     // 「预制」徽章恰好 7 个
-    await expect(page.getByText('预制', { exact: true })).toHaveCount(7);
+    await expect(page.getByText('预制', { exact: true })).toHaveCount(8);
 
     // Aspire 行展示依赖 Docker / .NET
     const aspireRow = page.locator('tr', { has: page.getByText('Aspire', { exact: true }) });
@@ -593,6 +593,7 @@ test.describe('Admin Cloud Workload E2E', () => {
     expect(presets.map((w) => w.name).sort()).toEqual([
       '.NET',
       'Aspire',
+      'DeepSeek Harness（Harness）',
       'Docker',
       'Github',
       'Kimi Code（Harness）',

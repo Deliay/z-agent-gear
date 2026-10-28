@@ -1,11 +1,15 @@
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import mongoose from 'mongoose';
+import { createFrontUser } from '../support/front-users.js';
+import { startMockGitHubServer, type MockGitHubServer } from '../mock-github-server.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const API_BASE = API_URL.replace(/\/graphql\/?$/, '');
 const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN;
 const MONGODB_URI = process.env.MONGODB_URI;
 const HAS_MONGO = Boolean(MONGODB_URI);
+const GITHUB_API_BASE = process.env.GITHUB_API_BASE ?? '';
+let githubMock: MockGitHubServer | null = null;
 
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -18,15 +22,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify({ query, variables }),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id }
-    }
-  }
-`;
 
 const GITHUB_APP_URL = `
   query GetGithubAppUrl {
@@ -73,13 +68,21 @@ const UPDATE_COMMIT_SETTINGS = `
 describe('GitHub Binding API', () => {
   let token = '';
   let userId = '';
-  const testUsername = `gt_${Date.now()}`;
 
   beforeAll(async () => {
-    const res = await gqlRequest(SIGNUP, { username: testUsername, password: 'password123' });
-    const body = await res.json();
-    token = body.data.signup.token;
-    userId = String(body.data.signup.user.id);
+    // 服务端 GITHUB_API_BASE 指向本机固定端口：测试内自起 mock，避免依赖外部进程
+    if (GITHUB_API_BASE) {
+      const port = Number(new URL(GITHUB_API_BASE).port || 80);
+      try {
+        githubMock = await startMockGitHubServer({ port });
+      } catch {
+        // 端口已被外部 mock 占用时复用外部服务
+        githubMock = null;
+      }
+    }
+    const frontUser = await createFrontUser();
+    token = frontUser.token;
+    userId = frontUser.userId;
   });
 
   async function mongoDb(): Promise<mongoose.mongo.Db | null> {
@@ -93,7 +96,7 @@ describe('GitHub Binding API', () => {
     if (!db) return;
     const objectId = new mongoose.Types.ObjectId(userId);
     await db.collection('user_commit_settings').deleteMany({ userId });
-    await db.collection('github_accounts').deleteMany({ userId });
+    await db.collection('githubaccounts').deleteMany({ userId });
     await db.collection('cloud_host_github_bindings').deleteMany({ userId: objectId });
   });
 
@@ -259,6 +262,7 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
     await mongo.collection('controllers').insertOne({
       _id: new mongoose.Types.ObjectId(CONTROLLER_ID),
       userId: HOST_USER_ID,
+      tenantId: HOST_USER_ID,
       name: 'commit-identity-test',
       hostname: 'commit-identity-test',
       type: 'cloud',
@@ -271,6 +275,7 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
     await mongo.collection('cloudhosts').insertOne({
       _id: HOST_ID,
       userId: HOST_USER_ID,
+      tenantId: HOST_USER_ID,
       name: 'commit-identity-test',
       harnessTypes: ['OPENCODE'],
       status: 'RUNNING',
@@ -297,6 +302,7 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
       {
         $set: {
           userId: HOST_USER_ID.toString(),
+          tenantId: HOST_USER_ID.toString(),
           githubAccountId: null,
           customName: null,
           customEmail: null,
@@ -309,7 +315,7 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
     );
   }
 
-  async function identity(token = INTERNAL_TOKEN) {
+  async function identity(token: string | null = INTERNAL_TOKEN) {
     return fetch(
       `${API_BASE}/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`,
       {
@@ -329,13 +335,13 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
     await mongo
       .collection('user_commit_settings')
       .deleteMany({ userId: HOST_USER_ID.toString() });
-    await mongo.collection('github_accounts').deleteMany({
+    await mongo.collection('githubaccounts').deleteMany({
       _id: ACCOUNT_ID,
     });
   });
 
   it('T-CI-API1: 无凭据 / 非法凭据 401（永不 404 仅针对已鉴权请求）', async () => {
-    expect((await identity(undefined)).status).toBe(401);
+    expect((await identity(null)).status).toBe(401);
     expect((await identity('wrong-token')).status).toBe(401);
   });
 
@@ -390,9 +396,10 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
     'T-CI-API2: co_author 返回提交人 + bot 全字段（GitHub mock）',
     async () => {
       const mongo = await db();
-      await mongo.collection('github_accounts').insertOne({
+      await mongo.collection('githubaccounts').insertOne({
         _id: ACCOUNT_ID,
         userId: HOST_USER_ID.toString(),
+        tenantId: HOST_USER_ID.toString(),
         githubUserId: 777,
         githubLogin: 'octocat',
         githubAvatarUrl: null,
@@ -403,6 +410,7 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
       });
       await mongo.collection('cloud_host_github_bindings').insertOne({
         userId: HOST_USER_ID,
+        tenantId: HOST_USER_ID,
         controllerId: new mongoose.Types.ObjectId(CONTROLLER_ID),
         accountId: ACCOUNT_ID,
         repoFullName: 'octocat/hello',
@@ -431,4 +439,9 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
         .deleteMany({ controllerId: new mongoose.Types.ObjectId(CONTROLLER_ID) });
     },
   );
+
+  afterAll(async () => {
+    await githubMock?.close();
+    githubMock = null;
+  });
 });

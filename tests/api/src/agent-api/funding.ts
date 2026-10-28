@@ -14,16 +14,16 @@ async function mongoDb(): Promise<mongoose.mongo.Db | null> {
   return mongoose.connection.db ?? null;
 }
 
-/** 直写 billingaccounts（无内部 token 时的兜底）。 */
+/** 直写 billingaccounts（无内部 token 时的兜底；多租户一期前台 owner 为 tenant）。 */
 async function fundViaMongo(userId: string, username: string, cents: number): Promise<boolean> {
   const db = await mongoDb();
   if (!db) return false;
   const now = new Date();
   await db.collection('billingaccounts').updateOne(
-    { ownerType: 'front_user', ownerId: userId },
+    { ownerType: 'tenant', ownerId: userId },
     {
       $set: {
-        ownerType: 'front_user',
+        ownerType: 'tenant',
         ownerId: userId,
         ownerName: username,
         cashBalance: cents,
@@ -46,7 +46,7 @@ async function fundViaAdmin(userId: string, username: string, cents: number): Pr
   if (!TOKEN) return false;
   try {
     const accountRes = await fetch(
-      `${ADMIN_BASE}/internal/billing/account?ownerType=front_user&ownerId=${encodeURIComponent(
+      `${ADMIN_BASE}/internal/billing/account?ownerType=tenant&ownerId=${encodeURIComponent(
         userId,
       )}&ownerName=${encodeURIComponent(username)}`,
       { headers: { Authorization: `Bearer ${TOKEN}` } },
@@ -68,7 +68,11 @@ async function fundViaAdmin(userId: string, username: string, cents: number): Pr
   }
 }
 
-/** 为前台测试用户准备余额（默认 100 credits；优先真实充值链路，缺 token 时直写 Mongo）。 */
+/**
+ * 为前台测试用户准备余额（默认 100 credits；优先真实充值链路，缺 token 时直写 Mongo）。
+ *
+ * 多租户一期：前台计费 owner 为 `tenant`，`ownerId` 传 userId（personal 期 tenantId == userId）。
+ */
 export async function fundFrontUser(userId: string, username: string, cents = 10_000): Promise<void> {
   if (await fundViaAdmin(userId, username, cents)) return;
   if (await fundViaMongo(userId, username, cents)) return;

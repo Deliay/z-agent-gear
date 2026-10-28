@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
+import { createFrontUser } from '../support/front-users.js';
 
 // 会话只读：云电脑终态后 resume 被拒绝；非 RUNNING 云电脑不允许 createSession。
 // 普通 ended 会话仍可 resume（回归）。
@@ -15,12 +16,6 @@ function gql(query: string, variables?: Record<string, unknown>, token?: string)
     body: JSON.stringify({ query, variables }),
   }).then((res) => res.json() as Promise<{ data?: any; errors?: Array<{ message: string }> }>);
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token user { id } }
-  }
-`;
 
 const RESUME = `mutation Resume($id: ID!) { resumeSession(id: $id) { success status error } }`;
 
@@ -62,6 +57,7 @@ async function seedCloudController(
   await db.collection('controllers').insertOne({
     _id: controllerId,
     userId: new mongoose.Types.ObjectId(userId),
+    tenantId: new mongoose.Types.ObjectId(userId),
     name: `ro-${controllerId.toString()}`,
     hostname: `ro-${controllerId.toString()}`,
     type: 'cloud',
@@ -74,6 +70,7 @@ async function seedCloudController(
   await db.collection('controllerworkspaces').insertOne({
     _id: workspaceId,
     userId: new mongoose.Types.ObjectId(userId),
+    tenantId: new mongoose.Types.ObjectId(userId),
     controllerId,
     name: 'workspace',
     path: '/home/worker/workspace',
@@ -84,6 +81,7 @@ async function seedCloudController(
   await db.collection('cloudhosts').insertOne({
     _id: hostId,
     userId: new mongoose.Types.ObjectId(userId),
+    tenantId: new mongoose.Types.ObjectId(userId),
     name: `ro-${hostId.toString()}`,
     harnessTypes: ['OPENCODE'],
     status,
@@ -117,17 +115,15 @@ async function cleanupCloudFixture(
 describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
   it('rejects resume for sessions on stopped cloud hosts', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `ro${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const token = signup.data.signup.token as string;
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const token = frontUser.token;
+    const userId = frontUser.userId;
     const { controllerId } = await seedCloudController(db, userId, 'STOPPED');
     try {
       const now = new Date();
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         controllerId,
         controllerName: 'cloud',
         acpServerType: 'opencode',
@@ -152,18 +148,16 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
 
   it('keeps normal ended sessions resumable', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `ro${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const token = signup.data.signup.token as string;
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const token = frontUser.token;
+    const userId = frontUser.userId;
     const now = new Date();
     const controllerId = new mongoose.Types.ObjectId();
     try {
       await db.collection('controllers').insertOne({
         _id: controllerId,
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         name: 'local',
         hostname: 'local',
         type: 'local',
@@ -175,6 +169,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       });
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         controllerId,
         controllerName: 'local',
         acpServerType: 'opencode',
@@ -196,12 +191,9 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
 
   it('rejects resume while cloud host is STOPPING', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `ro${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const token = signup.data.signup.token as string;
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const token = frontUser.token;
+    const userId = frontUser.userId;
     const { controllerId } = await seedCloudController(db, userId, 'STOPPED');
     try {
       await db
@@ -210,6 +202,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       const now = new Date();
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         controllerId,
         controllerName: 'cloud',
         acpServerType: 'opencode',
@@ -233,12 +226,9 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
 
   it('rejects createSession while cloud host is not RUNNING', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `ro${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const token = signup.data.signup.token as string;
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const token = frontUser.token;
+    const userId = frontUser.userId;
     const { controllerId, workspaceId } = await seedCloudController(db, userId, 'STARTING');
 
     try {
@@ -261,12 +251,9 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
 
   it('R2-1: soft-deleted cloud host session returns controllerType/cloudHost via real GET_SESSION', async () => {
     const db = (await mongoDb())!;
-    const signup = await gql(SIGNUP, {
-      username: `ro${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`,
-      password: 'password123',
-    });
-    const token = signup.data.signup.token as string;
-    const userId = signup.data.signup.user.id as string;
+    const frontUser = await createFrontUser();
+    const token = frontUser.token;
+    const userId = frontUser.userId;
     const { controllerId, hostId } = await seedCloudController(db, userId, 'STOPPED');
     const now = new Date();
     await db
@@ -275,6 +262,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
     try {
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
         controllerId,
         controllerName: 'cloud',
         acpServerType: 'opencode',

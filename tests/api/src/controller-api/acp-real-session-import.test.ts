@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { writeFileSync, mkdirSync, existsSync, unlinkSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
+import { createFrontUser } from '../support/front-users.js';
 
 const AGENT_API_URL = (process.env.API_URL || 'http://localhost:36447') + '/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:40821';
@@ -31,7 +32,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
   });
 }
 
-const SIGNUP = `mutation Signup($username: String!, $password: String!) { signup(username: $username, password: $password) { token user { id username } } }`;
 const CREATE_KEY = `mutation CreateControllerKey($input: CreateKeyInput!) { createControllerKey(input: $input) { rawKey } }`;
 const CREATE_WORKSPACE = `mutation CreateWorkspace($input: CreateWorkspaceInput!) { createWorkspace(input: $input) { id controllerId path } }`;
 const LIST_HISTORY = `query ListHistorySessions($controllerId: ID!, $workspaceId: ID!) { listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId) { sessionId title cwd updatedAt } }`;
@@ -111,10 +111,8 @@ describe('ACP Real Session Import with minefield-online', () => {
     cleanupPidFile();
     configBackup = backupConfig();
 
-    const uid = `rimp_${Date.now().toString(36)}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data.signup.token;
+    const frontUser = await createFrontUser();
+    authToken = frontUser.token;
     expect(authToken).toBeTruthy();
 
     const keyRes = await gqlRequest(CREATE_KEY, { input: { name: `rimp-${Date.now()}`, type: 'local' } }, authToken);

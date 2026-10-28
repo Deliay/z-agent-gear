@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 const configOptionSchema = new mongoose.Schema({
   id: String,
@@ -12,6 +13,7 @@ const configOptionSchema = new mongoose.Schema({
 
 const sessionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
   controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true, index: true },
   controllerName: { type: String, required: true },
   acpServerType: { type: String, enum: ['opencode', 'github_copilot', 'claude_code', 'gemini_cli', 'codex', 'mimo_code', 'kimi_code', 'deepseek_harness'], required: true },
@@ -43,6 +45,8 @@ const sessionSchema = new mongoose.Schema({
 
 sessionSchema.index({ userId: 1, createdAt: -1 });
 sessionSchema.index({ controllerId: 1, status: 1 });
+
+applyTenantScope(sessionSchema);
 
 export const Session = mongoose.model('Session', sessionSchema);
 export type ISession = mongoose.InferSchemaType<typeof sessionSchema>;

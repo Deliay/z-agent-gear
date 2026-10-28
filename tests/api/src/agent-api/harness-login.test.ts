@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import mongoose from 'mongoose';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import { fundFrontUser } from './funding.js';
+import { createFrontUser } from '../support/front-users.js';
 
 // Kimi Code（Harness）登录引导 API（T-HL-API1~10）。
 // 需要 agent-api + controller-api + Redis；`required/resolved` 由 fake controller 注入，
@@ -28,12 +29,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify(body),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token user { id username } }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -82,21 +77,12 @@ function waitForEvent<T = unknown>(socket: ClientSocket, event: string, timeoutM
   });
 }
 
-async function signup(): Promise<{ token: string; userId: string; username: string }> {
-  const username = `hl${Date.now().toString(36).slice(-6)}${Math.random().toString(36).slice(2, 4)}`;
-  const res = await gqlRequest(SIGNUP, { username, password: 'testpass123' });
-  const body = await res.json();
-  const payload = body.data?.signup;
-  expect(payload?.token, JSON.stringify(body.errors)).toBeTruthy();
-  return {
-    token: payload.token as string,
-    userId: payload.user.id as string,
-    username,
-  };
+async function newFrontUser(): Promise<{ token: string; userId: string; username: string }> {
+  return createFrontUser();
 }
 
-async function signupFunded(): Promise<string> {
-  const { token, userId, username } = await signup();
+async function fundedUserToken(): Promise<string> {
+  const { token, userId, username } = await newFrontUser();
   await fundFrontUser(userId, username);
   return token;
 }
@@ -262,7 +248,7 @@ async function openUserStream(token: string): Promise<UserStream> {
 }
 
 beforeAll(async () => {
-  authToken = (await signup()).token;
+  authToken = (await newFrontUser()).token;
 });
 
 describe('Harness Login API', () => {
@@ -403,7 +389,7 @@ describe('Harness Login API', () => {
 
   it('T-HL-API6: another user cannot cancel; the owner can', async () => {
     const { client } = await createFreshController(authToken);
-    const other = await signup();
+    const other = await newFrontUser();
     const requestId = `hl_owner_${Date.now()}`;
     try {
       emitRequired(client, requestId);
@@ -489,7 +475,7 @@ async function mongoDb(): Promise<mongoose.mongo.Db | null> {
 
 describe.skipIf(!HARNESS_ENABLED)('Harness Login API: capabilities', () => {
   it('T-HL-API10: supportedHarnesses lists KIMI_CODE when its preset exists', async () => {
-    const token = (await signup()).token;
+    const token = (await newFrontUser()).token;
     const result = await gqlRequest(CAPABILITIES, undefined, token);
     const body = await result.json();
     expect(body.errors).toBeUndefined();
@@ -508,7 +494,7 @@ describe.skipIf(!HARNESS_ENABLED)('Harness Login API: capabilities', () => {
 describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Harness Login API: version gate', () => {
   it('T-HL-API9: KIMI_CODE host persists agentGearMinVersion=2.10.0', async () => {
     const db = (await mongoDb())!;
-    const token = await signupFunded();
+    const token = await fundedUserToken();
     const name = `hl-kimi-${Date.now().toString(36)}`;
     const created = await gqlRequest(
       CREATE_CLOUD_HOST,

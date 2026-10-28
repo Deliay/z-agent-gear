@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import mongoose from 'mongoose';
 import { startMockServer, type MockServer } from '../mock-server.js';
 import { adminGql, ensureAdminLogin } from '../admin-api/helpers.js';
+import { createFrontUser } from '../support/front-users.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const ADMIN_API_URL = process.env.ADMIN_API_URL || 'http://localhost:10003/graphql';
@@ -21,15 +22,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
 
 let authToken = '';
 let providerId = '';
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
 
 const PROVIDERS_QUERY = `
   query Providers {
@@ -142,10 +134,8 @@ describe('LLM Provider & Model API', () => {
   beforeAll(async () => {
     mock = await startMockServer();
 
-    const uid = `llm_${Date.now()}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data?.signup?.token ?? '';
+    const frontUser = await createFrontUser();
+    authToken = frontUser.token;
     expect(authToken).toBeDefined();
 
     // 保证后续 providers/models 列表非空：先创建一个用户侧供应商（mock 会同步出模型）。
@@ -598,10 +588,8 @@ describe('Agent API scope regression (global config from admin backend)', () => 
   beforeAll(async () => {
     mock = await startMockServer();
 
-    const uid = `scope_${Date.now()}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data?.signup?.token ?? '';
+    const frontUser = await createFrontUser();
+    authToken = frontUser.token;
     expect(authToken).toBeTruthy();
 
     adminToken = await ensureAdminLogin();
@@ -837,10 +825,8 @@ describe('LLM resync & dangling provider regressions', () => {
 
   beforeAll(async () => {
     mock = await startMockServer();
-    const uid = `llmreg_${Date.now()}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    token = body.data?.signup?.token ?? '';
+    const frontUser = await createFrontUser();
+    token = frontUser.token;
     expect(token).toBeTruthy();
   });
 
@@ -961,10 +947,8 @@ describe('LLM create dedupe regression (issue 54)', () => {
   let token = '';
 
   beforeAll(async () => {
-    const uid = `ld_${Date.now().toString(36)}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    token = body.data?.signup?.token ?? '';
+    const frontUser = await createFrontUser();
+    token = frontUser.token;
     expect(token).toBeTruthy();
   });
 

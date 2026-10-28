@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import mongoose from 'mongoose';
 import { createHmac } from 'node:crypto';
+import { createFrontUser } from '../support/front-users.js';
 
 /**
  * 工作流 GitHub Pull Request 联动 —— 黑盒用例 T-PR1 ~ T-PR18。
@@ -34,12 +35,6 @@ async function gql<T = Record<string, any>>(
   if (body.errors) throw new Error(JSON.stringify(body.errors));
   return body.data as T;
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -162,11 +157,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function signup(tag: string): Promise<string> {
-  const uid = `${tag}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-  const body = await res.json();
-  return body.data?.signup?.token ?? '';
+async function newUserToken(tag: string): Promise<string> {
+  const { token } = await createFrontUser();
+  return token;
 }
 
 function createClient(): ClientSocket {
@@ -654,7 +647,7 @@ describe.skipIf(!EVENT_TOKEN)('工作流 PR 联动（T-PR4~T-PR18）', () => {
     createCtx(token, fake, nodes, tag, workspaceId);
 
   beforeAll(async () => {
-    token = await signup('wfpr');
+    token = await newUserToken('wfpr');
     expect(token).toBeTruthy();
     fake = await registerFakeController(token, 'pr');
     await refreshCapabilities(token, fake.controllerId);

@@ -144,6 +144,8 @@ export interface StartHarnessOptions {
   agentGearMinVersion?: string | null;
   /** 关联前台用户 ID。 */
   userId?: string | null;
+  /** 租户归属（多租户一期）：personal 期与 `userId` 同值；缺省为 null。 */
+  tenantId?: string | null;
   /** 容器 TTL 到期时间（harness；仅落库留存，Job 不再设置最长运行时间）。 */
   expiresAt?: Date | null;
   /** 云电脑运行期 secret（仅内存，不落库）。 */
@@ -325,6 +327,7 @@ export class ContainerService {
       image: this.cfg.image,
       refId: refId ?? null,
       userId: options.userId ?? null,
+      tenantId: options.tenantId ?? null,
       hostId: options.hostId ?? null,
       hostName: options.hostName ?? null,
       harnessTypes: options.harnessTypes ?? [],
