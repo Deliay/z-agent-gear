@@ -211,6 +211,7 @@ flowchart LR
 - [[proposals/20261027-feat-unlimited-cloud-hosts.md]] — 用户开放无限制云电脑支持（创建同步扣费 5 credits：`/internal/billing/charges` 一次性扣费 + 拉起失败退款、`cloudHostBillingQuote` 报价透出、移除每用户 1 实例门禁与 `uniq_active_cloud_host_per_user` 索引、`CloudHost.githubAccountId` 锁定：创建可选/首次设置 CAS 绑定/之后不可改）
 - [[proposals/20261027-feat-commit-author-settings.md]] — 云容器 Commit 提交人设置（user_commit_settings 用户级设置与 commitSettings/updateCommitSettings 契约、POST /internal/cloud-hosts/:id/commit-identity 身份下发端点与 agent_only 负载门控、agent-gear 容器内 include.path 托管 git 配置 + Co-Author prepare-commit-msg hook、未设置零残留）
 - [[proposals/20261027-feat-dsh-header-masq.md]] — DeepSeek Harness 会话标识请求头注入（dsh-header-masq 插件：预置脚本 V4 固定版本 0.1.2-alpha.2 → 0.2.1-rc.2 + `dsh plugin --profile acp add Deliay/dsh-header-masq`、agent-gear 2.11.0 dsh-config insert 形态第 5 受管条目、migration 013 存量刷新、deepseek_harness 版本门禁 2.9.0 → 2.11.0）
+- [[proposals/20261028-refactor-conversation-rendering.md]] — 重构对话渲染（纯前端渲染层重构：CodeBlock 工具栏复制/换行/语言标签、MermaidBlock 动态导入懒加载渲染与失败回退、jsdiff 真实差异 + 行号 + Prism 逐行高亮、ansi-to-html 终端颜色渲染、ToolCall 图标体系与 rawInput 折叠 + ContentBlock 全类型、消息复制与对话导出 Markdown、IntersectionObserver 滚动跟随暂停/恢复与回到底部、PlanCard 删除线与计数口径）
 
 ### 实现计划（`plan/`）
 
