@@ -3,7 +3,7 @@ import { getStatusBadgeClass, STATUS_LABELS } from './status-colors';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import MobileBackButton from '../MobileBackButton';
 import { Button } from '../ui/button';
-import { GitFork, Info, Loader2 } from 'lucide-react';
+import { GitFork, Info, Loader2, Download } from 'lucide-react';
 import { AgentCapabilityPanel } from './AgentCapabilityPanel';
 import type { AgentCapabilitiesController } from '../../hooks/useAgentCapabilities';
 import type { SessionData } from '../../graphql/types';
@@ -46,9 +46,11 @@ interface SessionHeaderProps {
   capabilitySession?: SessionData | null;
   /** 云电脑终态只读：隐藏「继续」/恢复入口 */
   readOnly?: boolean;
+  /** 导出对话为 Markdown */
+  onExport?: () => void;
 }
 
-export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline, capabilities, capabilitySession, readOnly }: SessionHeaderProps) {
+export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline, capabilities, capabilitySession, readOnly, onExport }: SessionHeaderProps) {
   const isMobile = useIsMobile();
   const [capabilityOpen, setCapabilityOpen] = useState(false);
   const acpServerTypeLabels: Record<string, string> = {
@@ -108,6 +110,17 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
         >
           <Info className="size-4" />
         </Button>
+        {onExport && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="导出对话"
+            title="导出对话"
+            onClick={onExport}
+          >
+            <Download className="size-4" />
+          </Button>
+        )}
         {status !== 'ended' && status !== 'creating' && status !== 'disconnected' && !resuming && (
           <Button
             variant="destructive"

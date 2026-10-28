@@ -1,10 +1,16 @@
+import type { ReactElement, ReactNode } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import CodeBlock from './markdown/CodeBlock';
+import MermaidBlock from './markdown/MermaidBlock';
 
 interface MarkdownContentProps {
   content: string;
+}
+
+interface CodeElementProps {
+  className?: string;
+  children?: ReactNode;
 }
 
 export default function MarkdownContent({ content }: MarkdownContentProps) {
@@ -12,26 +18,27 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
     <Markdown
       remarkPlugins={[remarkGfm]}
       components={{
-        code(props) {
-          const { children, className, ...rest } = props;
-          const match = /language-(\w+)/.exec(className || '');
-          const codeString = String(children).replace(/\n$/, '');
-          if (match) {
-            return (
-              <SyntaxHighlighter
-                style={oneDark}
-                language={match[1]}
-                PreTag="div"
-                className="rounded-md !my-2 overflow-x-auto"
-              >
-                {codeString}
-              </SyntaxHighlighter>
-            );
+        // 围栏代码块统一由 pre 覆写承接：mermaid 分流到 MermaidBlock，其余（含无语言）走 CodeBlock。
+        // 这样避免 code 覆写里再嵌套 pre/高亮容器导致双层横向滚动。
+        pre({ children }) {
+          const child = Array.isArray(children) ? children[0] : children;
+          const codeElement = child as ReactElement<CodeElementProps> | undefined;
+          if (!codeElement || typeof codeElement !== 'object' || !codeElement.props) {
+            return <pre className="!my-0 overflow-x-auto">{children}</pre>;
           }
+          const className = codeElement.props.className ?? '';
+          const language = /language-([\w-]+)/.exec(className)?.[1];
+          const code = String(codeElement.props.children ?? '').replace(/\n$/, '');
+          if (language === 'mermaid') {
+            return <MermaidBlock code={code} />;
+          }
+          return <CodeBlock code={code} language={language} />;
+        },
+        code({ children, className }) {
+          // 保留 language-* class 供 pre 覆写识别；块级代码最终由 pre 覆写消费
           return (
             <code
-              className="rounded bg-muted px-1.5 py-0.5 text-sm font-mono break-all"
-              {...rest}
+              className={`${className ? `${className} ` : ''}rounded bg-muted px-1.5 py-0.5 text-sm font-mono break-all`}
             >
               {children}
             </code>
@@ -50,9 +57,6 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
         },
         li(props) {
           return <li className="!my-0.5" {...props} />;
-        },
-        pre(props) {
-          return <pre className="!my-0 overflow-x-auto" {...props} />;
         },
         // GFM 表格/长链接无排版兜底（未装 @tailwindcss/typography，prose 类无效），
         // 必须自行约束：表格包横向滚动容器、单元格/链接断词，否则撑破窄面板。

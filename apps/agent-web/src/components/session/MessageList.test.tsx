@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
+import type { Mock } from 'vitest';
 import MessageList from './MessageList';
 import { groupMessages } from './group-messages';
 
@@ -112,5 +113,96 @@ describe('MessageList', () => {
     render(<MessageList messages={messages} hasMore={true} onLoadMore={vi.fn()} loadingMore={true} />);
     expect(screen.getByText(/Loading earlier messages/)).toBeDefined();
     expect(screen.queryByText('Load earlier messages')).toBeNull();
+  });
+});
+
+describe('MessageList scroll following', () => {
+  const triggerIntersection = (isIntersecting: boolean) => {
+    (globalThis as unknown as { __triggerIntersection: (v: boolean) => void }).__triggerIntersection(isIntersecting);
+  };
+
+  const baseMessages = [
+    {
+      id: '1',
+      sessionId: 'sess-1',
+      direction: 'input',
+      type: 'text',
+      content: 'Hello',
+      metadata: null,
+      createdAt: '2026-05-19T10:00:00.000Z',
+    },
+    {
+      id: '2',
+      sessionId: 'sess-1',
+      direction: 'output',
+      type: 'text',
+      content: 'Hi there',
+      metadata: null,
+      createdAt: '2026-05-19T10:00:01.000Z',
+    },
+  ];
+
+  const appended = {
+    id: '3',
+    sessionId: 'sess-1',
+    direction: 'output',
+    type: 'text',
+    content: 'New message',
+    metadata: null,
+    createdAt: '2026-05-19T10:00:02.000Z',
+  };
+
+  function messagesWithNew(count = 1) {
+    return [
+      ...baseMessages,
+      ...Array.from({ length: count }, (_, i) => ({
+        ...appended,
+        id: `new-${i}`,
+        content: `New message ${i}`,
+      })),
+    ];
+  }
+
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    (globalThis as unknown as { __resetIntersectionObservers: () => void }).__resetIntersectionObservers();
+  });
+
+  it('should keep following and scroll when the viewport is at the bottom', () => {
+    const scrollSpy = Element.prototype.scrollIntoView as Mock;
+    const { rerender } = render(<MessageList messages={baseMessages} />);
+    scrollSpy.mockClear();
+
+    act(() => triggerIntersection(true));
+    rerender(<MessageList messages={messagesWithNew()} />);
+
+    expect(scrollSpy).toHaveBeenCalled();
+    expect(screen.queryByTestId('scroll-to-bottom')).toBeNull();
+  });
+
+  it('should pause following and show the button + dot when scrolled up', () => {
+    const scrollSpy = Element.prototype.scrollIntoView as Mock;
+    const { rerender } = render(<MessageList messages={baseMessages} />);
+    scrollSpy.mockClear();
+
+    act(() => triggerIntersection(false));
+    rerender(<MessageList messages={messagesWithNew()} />);
+
+    expect(scrollSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId('scroll-to-bottom')).toBeDefined();
+    expect(screen.getByTestId('scroll-to-bottom-dot')).toBeDefined();
+  });
+
+  it('should restore following when the button is clicked', () => {
+    const scrollSpy = Element.prototype.scrollIntoView as Mock;
+    const { rerender } = render(<MessageList messages={baseMessages} />);
+    scrollSpy.mockClear();
+
+    act(() => triggerIntersection(false));
+    rerender(<MessageList messages={messagesWithNew()} />);
+    fireEvent.click(screen.getByRole('button', { name: '回到底部' }));
+
+    expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth' });
+    expect(screen.queryByTestId('scroll-to-bottom')).toBeNull();
   });
 });

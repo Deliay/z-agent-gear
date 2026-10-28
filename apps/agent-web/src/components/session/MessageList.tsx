@@ -13,6 +13,8 @@ import SubAgentCard from './SubAgentCard';
 import ReadCard from './ReadCard';
 import FetchCard from './FetchCard';
 import PlanFloatingCard from './PlanFloatingCard';
+import ScrollToBottomButton from './ScrollToBottomButton';
+import { mergeToolCallMessages, type MergedToolCall } from './tool-call-state';
 
 
 function mergeMessageChunks(messages: AcpMessage[]): string {
@@ -69,6 +71,37 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
+  // 跟随判定：IntersectionObserver 观测底部锚点（threshold 0.9）
+  const [isAtBottom, setIsAtBottom] = useState(true);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
+  const isAtBottomRef = useRef(true);
+  const hasMessages = messages.length > 0;
+
+  useEffect(() => {
+    if (!hasMessages) return;
+    const anchor = messagesEndRef.current;
+    if (!anchor || typeof IntersectionObserver === 'undefined') return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[entries.length - 1];
+        if (!entry) return;
+        isAtBottomRef.current = entry.isIntersecting;
+        setIsAtBottom(entry.isIntersecting);
+        if (entry.isIntersecting) setHasNewMessages(false);
+      },
+      { threshold: 0.9 },
+    );
+    observer.observe(anchor);
+    return () => observer.disconnect();
+  }, [hasMessages]);
+
+  const handleScrollToBottom = useCallback(() => {
+    isAtBottomRef.current = true;
+    setIsAtBottom(true);
+    setHasNewMessages(false);
+    scrollToBottom();
+  }, [scrollToBottom]);
+
   // Scroll to bottom when messages change (only for new messages, not initial load)
   const prevCountRef = useRef(messages.length);
   const prevFirstIdRef = useRef<string | null>(null);
@@ -96,8 +129,12 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
           });
         }
       } else {
-        // Append: scroll to bottom for new messages
-        scrollToBottom();
+        // Append: 仅在底部时跟随滚底；已上翻则保持视口并提示新消息
+        if (isAtBottomRef.current) {
+          scrollToBottom();
+        } else {
+          setHasNewMessages(true);
+        }
       }
     }
     prevCountRef.current = messages.length;
@@ -128,6 +165,18 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
   }, [hasMore, loadingMore, onLoadMore]);
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
+
+  // 工具调用视图模型合并：同一 toolCallId 的全部消息合并后统一传给四个卡片
+  const mergedToolCalls = useMemo(() => {
+    const map = new Map<string, MergedToolCall>();
+    for (const group of groups) {
+      if (group.type === 'tool_call' || group.type === 'read' || group.type === 'fetch' || group.type === 'sub_agent') {
+        const key = group.messages[0]?.id || 'unknown';
+        map.set(key, mergeToolCallMessages(group.messages));
+      }
+    }
+    return map;
+  }, [groups]);
 
   // Extract the last plan group for floating display
   const lastPlanMessages = useMemo(() => {
@@ -170,11 +219,12 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
   };
 
   return (
-    <div
-      ref={listRef}
-      onScroll={handleScroll}
-      className="flex-1 overflow-y-auto bg-background p-4"
-    >
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={listRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto bg-background p-4"
+      >
       {messages.length === 0 ? (
         sseLoading ? (
           <div className="flex h-full items-center justify-center">
@@ -275,7 +325,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                 return (
                   <ToolCallCard
                     key={groupKey}
-                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    toolCall={mergedToolCalls.get(groupKey)!}
                     expanded={expanded}
                     onExpandedChange={handleExpandedChange}
                   />
@@ -295,7 +345,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                 return (
                   <SubAgentCard
                     key={groupKey}
-                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    toolCall={mergedToolCalls.get(groupKey)!}
                     expanded={expanded}
                     onExpandedChange={handleExpandedChange}
                   />
@@ -304,7 +354,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                 return (
                   <ReadCard
                     key={groupKey}
-                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    toolCall={mergedToolCalls.get(groupKey)!}
                     expanded={expanded}
                     onExpandedChange={handleExpandedChange}
                   />
@@ -313,7 +363,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                 return (
                   <FetchCard
                     key={groupKey}
-                    messages={group.messages.map((m) => ({ content: m.content, createdAt: m.createdAt }))}
+                    toolCall={mergedToolCalls.get(groupKey)!}
                     expanded={expanded}
                     onExpandedChange={handleExpandedChange}
                   />
@@ -328,6 +378,12 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
           <div ref={messagesEndRef} />
         </div>
       )}
+      </div>
+      <ScrollToBottomButton
+        visible={!isAtBottom}
+        hasNewMessages={hasNewMessages}
+        onClick={handleScrollToBottom}
+      />
     </div>
   );
 }

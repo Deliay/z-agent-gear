@@ -38,6 +38,7 @@ import { PendingElicitationBanner } from './PendingElicitationBanner';
 import { isReadOnlyCloudHost } from '../cloud-host/cloud-host-status';
 import { useCommandState } from '../../hooks/useCommandState';
 import { useAgentCapabilities } from '../../hooks/useAgentCapabilities';
+import { threadToMarkdown, downloadThreadMarkdown } from '../../lib/export-thread';
 
 interface AcpMessage {
   id: string;
@@ -500,6 +501,23 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     );
   }
 
+  const handleExportThread = () => {
+    try {
+      const markdown = threadToMarkdown(
+        messages.map((message) => ({
+          direction: message.direction,
+          content: message.content,
+          createdAt: message.createdAt,
+        })),
+      );
+      const date = new Date().toISOString().slice(0, 10);
+      downloadThreadMarkdown(`session-${id}-${date}.md`, markdown);
+      toast.success('已导出对话');
+    } catch {
+      toast.error('导出失败');
+    }
+  };
+
   return (
     <div className="flex h-full flex-col">
       {protocolMismatch && (
@@ -533,6 +551,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         capabilities={capabilities}
         capabilitySession={sessionData?.session ?? null}
         readOnly={readOnlyCloudHost}
+        onExport={handleExportThread}
       />
       <PendingElicitationBanner sessionId={id} />
       {readOnlyCloudHost && (

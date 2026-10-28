@@ -122,4 +122,27 @@ describe('AcpCard', () => {
     expect(screen.getByText(longTitle).className).toContain('truncate');
     expect(screen.getByText(longSummary).className).toContain('truncate');
   });
+
+  it('should render an icon before the title', () => {
+    render(
+      <AcpCard title="Tool Call" summary="..." icon={<span>icon</span>}>
+        <div>content</div>
+      </AcpCard>,
+    );
+    expect(screen.getByTestId('acp-card-icon')).toBeDefined();
+  });
+
+  it('should apply weakened dashed style for pending color', () => {
+    const { container } = render(
+      <AcpCard title="Tool Call" summary="..." color="pending">
+        <div>content</div>
+      </AcpCard>,
+    );
+    const card = container.firstElementChild as HTMLElement;
+    expect(card.className).toContain('border-dashed');
+    expect(card.className).toContain('bg-muted/50');
+    expect(card.className).not.toContain('animate-pulse');
+    const header = screen.getByText('Tool Call').closest('button') as HTMLElement;
+    expect(header.className).toContain('text-muted-foreground');
+  });
 });
