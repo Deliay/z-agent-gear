@@ -23,7 +23,7 @@ describe('MermaidBlock', () => {
     const { container } = render(<MermaidBlock code="graph TD; A-->B;" />);
 
     await waitFor(() => {
-      expect(container.querySelector('svg')).toBeTruthy();
+      expect(container.querySelector('[data-testid="mermaid-diagram"] svg')).toBeTruthy();
     });
     expect(initializeMock).toHaveBeenCalledWith(
       expect.objectContaining({

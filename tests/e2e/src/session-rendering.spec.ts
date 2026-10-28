@@ -1,9 +1,39 @@
 import { test, expect, type Page } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
 import type { Socket } from 'socket.io-client';
 import { registerUser, createControllerKey, registerController, loginViaUI, createSession, createWorkspace } from './helpers';
 
 const statusBadge = () => '.px-2.py-1.text-xs.font-medium.rounded-full';
+
+interface ExportCaptureWindow {
+  __exportedMarkdown: string | null;
+}
+
+/**
+ * 页面侧拦截 URL.createObjectURL(Blob) 并记录 Blob 文本。
+ * 避免依赖 chrome-headless-shell 的 download artifacts 落盘路径（N-2）。
+ */
+async function captureExportedMarkdown(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const target = window as unknown as ExportCaptureWindow;
+    target.__exportedMarkdown = null;
+    const original = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (obj: Blob | MediaSource) => {
+      if (typeof Blob !== 'undefined' && obj instanceof Blob) {
+        void obj.text().then((text) => {
+          target.__exportedMarkdown = text;
+        });
+      }
+      return original(obj);
+    };
+  });
+}
+
+async function waitForExportedMarkdown(page: Page): Promise<string> {
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as ExportCaptureWindow).__exportedMarkdown), { timeout: 10000 })
+    .not.toBeNull();
+  return (await page.evaluate(() => (window as unknown as ExportCaptureWindow).__exportedMarkdown)) ?? '';
+}
 
 interface SessionContext {
   sessionId: string;
@@ -80,8 +110,10 @@ test.describe('Session Rendering', () => {
       content: { type: 'text', text: 'after-mermaid-marker' },
     });
 
-    await expect(page.getByTestId('mermaid-block').first().locator('svg')).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId('code-block').first()).toContainText('this is definitely not a diagram');
+    await expect(page.getByTestId('mermaid-diagram').locator('svg')).toBeVisible({ timeout: 15000 });
+    const invalidBlock = page.getByTestId('code-block').filter({ hasText: 'this is definitely not a diagram' });
+    await expect(invalidBlock).toBeVisible({ timeout: 5000 });
+    await expect(invalidBlock).toContainText('this is definitely not a diagram');
     await expect(page.getByText('after-mermaid-marker')).toBeVisible({ timeout: 5000 });
 
     session.disconnect();
@@ -267,13 +299,13 @@ test.describe('Session Rendering', () => {
     });
     await expect(page.getByText('export-me')).toBeVisible({ timeout: 10000 });
 
+    await captureExportedMarkdown(page);
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: '导出对话' }).click();
     const download = await downloadPromise;
 
     expect(download.suggestedFilename()).toMatch(/^session-.*\.md$/);
-    const path = await download.path();
-    const content = await readFile(path!, 'utf-8');
+    const content = await waitForExportedMarkdown(page);
     expect(content).toContain('export-me');
 
     session.disconnect();
@@ -289,19 +321,20 @@ test.describe('Session Rendering', () => {
         content: { type: 'text', text: `export-history-${i}` },
       });
     }
-    await expect(page.getByText('export-history-29')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('export-history-29', { exact: true })).toBeVisible({ timeout: 10000 });
     // 等待消息落库后重载：SSE 首帧只回 25 条，hasMore=true
     await page.waitForTimeout(500);
     await page.reload();
     await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
-    await expect(page.getByText('export-history-29')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('export-history-29', { exact: true })).toBeVisible({ timeout: 10000 });
     // 更早消息未加载（只导出窗口外的历史必须由导出链路补齐）
-    await expect(page.getByText('export-history-0')).toHaveCount(0);
+    await expect(page.getByText('export-history-0', { exact: true })).toHaveCount(0);
 
+    await captureExportedMarkdown(page);
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: '导出对话' }).click();
-    const download = await downloadPromise;
-    const content = await readFile((await download.path())!, 'utf-8');
+    await downloadPromise;
+    const content = await waitForExportedMarkdown(page);
 
     for (let i = 0; i < 30; i++) {
       expect(content).toContain(`export-history-${i}`);

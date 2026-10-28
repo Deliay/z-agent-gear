@@ -174,6 +174,7 @@ export default function MermaidBlock({ code }: MermaidBlockProps) {
           <div
             className="origin-top-left [&_svg]:max-w-full"
             style={{ transform: `scale(${zoom})`, transformOrigin: 'top left' }}
+            data-testid="mermaid-diagram"
             // mermaid securityLevel=strict 输出，无脚本
             dangerouslySetInnerHTML={{ __html: svg }}
           />
