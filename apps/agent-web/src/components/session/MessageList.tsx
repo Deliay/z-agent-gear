@@ -61,21 +61,59 @@ interface MessageListProps {
   sseError?: boolean;
 }
 
+const BOTTOM_THRESHOLD = 24;
+
+function distanceToBottom(element: HTMLElement): number {
+  return element.scrollHeight - element.scrollTop - element.clientHeight;
+}
+
 export default function MessageList({ messages, hasMore, onLoadMore, loadingMore, sseLoading, sseError }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const isPrependRef = useRef(false);
   const scrollStateRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  /** 最近一次滚动事件记录的离底距离（同步值，避免 IO 异步回调滞后，R-12） */
+  const distanceRef = useRef(0);
+  /** 程序化滚动/初始加载期间抑制自动 load-more（R-14） */
+  const suppressLoadMoreRef = useRef(true);
+  /** 平滑滚动动画期间抑制跟随状态误判（R-12） */
+  const suppressFollowStateRef = useRef(false);
 
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
-
-  // 跟随判定：IntersectionObserver 观测底部锚点（threshold 0.9）
+  // 跟随判定：同步几何（滚动事件）为主、IntersectionObserver 为辅
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const isAtBottomRef = useRef(true);
   const hasMessages = messages.length > 0;
+
+  const programmaticScroll = useCallback((behavior: ScrollBehavior) => {
+    suppressLoadMoreRef.current = true;
+    isAtBottomRef.current = true;
+    distanceRef.current = 0;
+    setIsAtBottom(true);
+    setHasNewMessages(false);
+    messagesEndRef.current?.scrollIntoView({ behavior });
+    const release = () => {
+      suppressLoadMoreRef.current = false;
+      suppressFollowStateRef.current = false;
+    };
+    suppressFollowStateRef.current = behavior === 'smooth';
+    if (behavior === 'smooth') {
+      // 平滑动画期间持续抑制状态误判；用户一旦滚轮/触摸/按键即由手势 handler 提前接管
+      setTimeout(release, 400);
+    } else if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(release);
+    } else {
+      setTimeout(release, 0);
+    }
+  }, []);
+
+  /** append 是否应跟随滚底：离底距离同步判定，避免「上翻被拉底」/「动画误判丢跟随」 */
+  const shouldFollow = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return isAtBottomRef.current;
+    // 无溢出（含 jsdom 零几何）时以 IO 状态为准
+    if (list.scrollHeight <= list.clientHeight) return isAtBottomRef.current;
+    return distanceRef.current <= BOTTOM_THRESHOLD;
+  }, []);
 
   useEffect(() => {
     if (!hasMessages) return;
@@ -85,9 +123,15 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
       (entries) => {
         const entry = entries[entries.length - 1];
         if (!entry) return;
-        isAtBottomRef.current = entry.isIntersecting;
-        setIsAtBottom(entry.isIntersecting);
-        if (entry.isIntersecting) setHasNewMessages(false);
+        const list = listRef.current;
+        const geometryTrusted = Boolean(list && list.scrollHeight > list.clientHeight);
+        // 内容增长/平滑动画期间 IO 可能瞬时报告离底；几何仍贴底时保持跟随
+        const next = geometryTrusted
+          ? entry.isIntersecting || distanceRef.current <= BOTTOM_THRESHOLD
+          : entry.isIntersecting;
+        isAtBottomRef.current = next;
+        setIsAtBottom(next);
+        if (next) setHasNewMessages(false);
       },
       { threshold: 0.9 },
     );
@@ -96,73 +140,100 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
   }, [hasMessages]);
 
   const handleScrollToBottom = useCallback(() => {
-    isAtBottomRef.current = true;
-    setIsAtBottom(true);
-    setHasNewMessages(false);
-    scrollToBottom();
-  }, [scrollToBottom]);
+    programmaticScroll('smooth');
+  }, [programmaticScroll]);
 
   // Scroll to bottom when messages change (only for new messages, not initial load)
   const prevCountRef = useRef(messages.length);
-  const prevFirstIdRef = useRef<string | null>(null);
+  const prevFirstIdRef = useRef<string | null>(messages[0]?.id ?? null);
   useEffect(() => {
-    const currentFirstId = messages[0]?.id || null;
-    
-    // Detect prepend: first message ID changed means history was prepended
-    if (prevFirstIdRef.current !== null && currentFirstId !== prevFirstIdRef.current) {
-      isPrependRef.current = true;
-    }
+    const currentFirstId = messages[0]?.id ?? null;
+    const prevFirstId = prevFirstIdRef.current;
+    // 首条仍在列表中 → 真正的历史 prepend；整组替换（SSE 重放）不是 prepend
+    const prepended = prevFirstId !== null
+      && currentFirstId !== prevFirstId
+      && messages.some((message) => message.id === prevFirstId);
     prevFirstIdRef.current = currentFirstId;
 
     if (messages.length > prevCountRef.current) {
-      if (isPrependRef.current) {
+      if (prepended) {
         // Prepend: restore scroll position
-        isPrependRef.current = false;
         const list = listRef.current;
         const savedState = scrollStateRef.current;
         if (list && savedState) {
-          // Use requestAnimationFrame to ensure DOM has updated
           requestAnimationFrame(() => {
             const newScrollHeight = list.scrollHeight;
             list.scrollTop = newScrollHeight - savedState.scrollHeight + savedState.scrollTop;
+            distanceRef.current = distanceToBottom(list);
             scrollStateRef.current = null;
           });
         }
+      } else if (shouldFollow()) {
+        // Append: 仅在底部时跟随滚底；auto 避免逐 chunk smooth 抖动
+        programmaticScroll('auto');
       } else {
-        // Append: 仅在底部时跟随滚底；已上翻则保持视口并提示新消息
-        if (isAtBottomRef.current) {
-          scrollToBottom();
-        } else {
-          setHasNewMessages(true);
-        }
+        setHasNewMessages(true);
+        isAtBottomRef.current = false;
+        setIsAtBottom(false);
       }
+    } else if (messages.length === prevCountRef.current && currentFirstId !== prevFirstId) {
+      // SSE 整组替换：清理可能残留的 prepend 恢复状态（M-13）
+      scrollStateRef.current = null;
+      if (listRef.current) distanceRef.current = distanceToBottom(listRef.current);
     }
     prevCountRef.current = messages.length;
-  }, [messages, scrollToBottom]);
+  }, [messages, programmaticScroll, shouldFollow]);
 
-  // Scroll to bottom on initial load
+  // Scroll to bottom on initial load (auto：平滑动画会沿途触发 load-more，R-14)
   const initialLoadDone = useRef(false);
   useEffect(() => {
     if (!initialLoadDone.current && messages.length > 0) {
-      scrollToBottom();
       initialLoadDone.current = true;
+      programmaticScroll('auto');
     }
-  }, [messages.length, scrollToBottom]);
+  }, [messages.length, programmaticScroll]);
 
-  const handleScroll = useCallback(() => {
+  const loadEarlier = useCallback(() => {
     const list = listRef.current;
-    if (!list || !hasMore || loadingMore || !onLoadMore) return;
-
-    // Load more when scrolled near the top
-    if (list.scrollTop < 100) {
-      // Save scroll state before loading
+    if (list) {
       scrollStateRef.current = {
         scrollHeight: list.scrollHeight,
         scrollTop: list.scrollTop,
       };
-      onLoadMore();
     }
-  }, [hasMore, loadingMore, onLoadMore]);
+    onLoadMore?.();
+  }, [onLoadMore]);
+
+  const handleScroll = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+
+    distanceRef.current = distanceToBottom(list);
+    // 平滑动画期间不更新跟随状态
+    if (suppressFollowStateRef.current) return;
+
+    const near = list.scrollHeight <= list.clientHeight || distanceRef.current <= BOTTOM_THRESHOLD;
+    if (near) setHasNewMessages(false);
+    if (near !== isAtBottomRef.current) {
+      isAtBottomRef.current = near;
+      setIsAtBottom(near);
+    }
+
+    // 初始加载/程序化滚动期间不触发自动 load-more
+    if (suppressLoadMoreRef.current) return;
+    if (!hasMore || loadingMore || !onLoadMore) return;
+
+    // Load more when scrolled near the top
+    if (list.scrollTop < 100) {
+      loadEarlier();
+    }
+  }, [hasMore, loadingMore, onLoadMore, loadEarlier]);
+
+  /** 用户手势立即接管跟随状态，避免平滑动画的抑制窗口吞掉主动上翻 */
+  const handleUserScrollIntent = useCallback(() => {
+    suppressLoadMoreRef.current = false;
+    suppressFollowStateRef.current = false;
+  }, []);
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
@@ -223,6 +294,10 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
       <div
         ref={listRef}
         onScroll={handleScroll}
+        onWheel={handleUserScrollIntent}
+        onTouchMove={handleUserScrollIntent}
+        onKeyDown={handleUserScrollIntent}
+        data-testid="message-scroll-container"
         className="flex-1 overflow-y-auto bg-background p-4"
       >
       {messages.length === 0 ? (
@@ -257,7 +332,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
               ) : (
                 <button
                   type="button"
-                  onClick={onLoadMore}
+                  onClick={loadEarlier}
                   className="text-sm text-primary hover:text-primary/80"
                 >
                   Load earlier messages

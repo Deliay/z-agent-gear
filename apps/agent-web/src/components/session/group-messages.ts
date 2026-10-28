@@ -29,6 +29,25 @@ export function parseSessionUpdate(content: string | Record<string, unknown>): S
   return content as unknown as SessionUpdate;
 }
 
+/**
+ * 安全读取 rawInput 对象：Agent 端产出的 rawInput 属不可信输入，
+ * 畸形 JSON / `'null'` / 标量不得让消息列表渲染崩溃（R-5）。
+ */
+function readRawInputObject(rawInput: unknown): Record<string, unknown> | null {
+  if (typeof rawInput === 'string') {
+    try {
+      const parsed = JSON.parse(rawInput) as unknown;
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    } catch {
+      return null;
+    }
+  }
+  if (rawInput && typeof rawInput === 'object') {
+    return rawInput as Record<string, unknown>;
+  }
+  return null;
+}
+
 export function groupMessages(messages: AcpMessage[]): MessageGroup[] {
   const groups: MessageGroup[] = [];
   const toolCallGroupMap = new Map<string, number>(); // toolCallId -> group index
@@ -59,8 +78,8 @@ export function groupMessages(messages: AcpMessage[]): MessageGroup[] {
       } else if (kind === 'fetch') {
         groupType = 'fetch';
       } else if (kind === 'other' && rawInput) {
-        const rawInputObj = typeof rawInput === 'string' ? JSON.parse(rawInput) : rawInput;
-        if ((rawInputObj as Record<string, unknown>).subagent_type) {
+        const rawInputObj = readRawInputObject(rawInput);
+        if (rawInputObj?.subagent_type) {
           groupType = 'sub_agent';
         } else {
           groupType = 'tool_call';
@@ -88,7 +107,7 @@ export function groupMessages(messages: AcpMessage[]): MessageGroup[] {
           groupType = 'read';
         } else if (kind === 'fetch') {
           groupType = 'fetch';
-        } else if (kind === 'other' && rawInput && typeof rawInput === 'object' && (rawInput as Record<string, unknown>).subagent_type) {
+        } else if (kind === 'other' && readRawInputObject(rawInput)?.subagent_type) {
           groupType = 'sub_agent';
         } else {
           groupType = 'unknown';

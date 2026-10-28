@@ -122,6 +122,61 @@ describe('ToolCallCard kinds', () => {
     expect(screen.getByTestId('terminal-output')).toBeDefined();
     expect(screen.getByTestId('terminal-output').textContent).toContain('failed');
   });
+
+  it('should render output for a failed execute call instead of hiding it (R-4)', () => {
+    renderToolCall({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-failed',
+      kind: 'execute',
+      status: 'failed',
+      title: 'Run tests',
+      rawInput: { command: 'npm test' },
+      rawOutput: { output: 'stderr: boom' },
+    });
+
+    expect(screen.getByTestId('terminal-output').textContent).toContain('stderr: boom');
+    expect(screen.getByText(/npm test/)).toBeDefined();
+  });
+
+  it('should keep the command when a failed execute call has no output (R-4)', () => {
+    renderToolCall({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-failed-empty',
+      kind: 'execute',
+      status: 'failed',
+      title: 'Run tests',
+      rawInput: { command: 'npm test' },
+    });
+
+    expect(screen.getByText(/npm test/)).toBeDefined();
+    expect(screen.getByText(/Command — failed/)).toBeDefined();
+  });
+
+  it('should keep file path and input diff for a failed edit (R-4)', () => {
+    renderToolCall({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-edit-failed',
+      kind: 'edit',
+      status: 'failed',
+      title: 'Edit file',
+      rawInput: { filePath: 'src/a.ts', oldString: 'old', newString: 'new' },
+    });
+
+    expect(screen.getByText(/Editing: src\/a\.ts/)).toBeDefined();
+    expect(screen.getByTestId('diff-view')).toBeDefined();
+  });
+
+  it('should show an input-unavailable placeholder when the creation event is missing (R-3)', () => {
+    renderToolCall({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-missing',
+      status: 'completed',
+    });
+
+    expect(screen.getByText('Tool Call')).toBeDefined();
+    expect(screen.queryByText('Tool Call: Tool Call')).toBeNull();
+    expect(screen.getByTestId('raw-section-输入').textContent).toContain('输入不可得');
+  });
 });
 
 describe('ToolCallCard statuses', () => {

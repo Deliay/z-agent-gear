@@ -88,13 +88,13 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
                 className={`flex ${lineClass(d.type)} ${d.type !== 'same' ? 'font-medium' : ''}`}
               >
                 <span
-                  className="w-10 shrink-0 select-none pr-1 text-right text-muted-foreground"
+                  className="min-w-10 shrink-0 select-none pr-1 text-right text-muted-foreground"
                   data-testid="diff-old-line-number"
                 >
                   {d.oldLineNumber ?? ''}
                 </span>
                 <span
-                  className="w-10 shrink-0 select-none pr-1 text-right text-muted-foreground"
+                  className="min-w-10 shrink-0 select-none pr-1 text-right text-muted-foreground"
                   data-testid="diff-new-line-number"
                 >
                   {d.newLineNumber ?? ''}
@@ -103,7 +103,7 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
                   {prefix(d.type)}
                 </span>
                 <span className="min-w-0 flex-1 whitespace-pre-wrap break-all px-1">
-                  {d.type === 'removed' ? (d.text || ' ') : <HighlightedLine text={d.text} language={language} />}
+                  <HighlightedLine text={d.text || ' '} language={language} />
                 </span>
               </div>
             );

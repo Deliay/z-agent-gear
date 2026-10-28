@@ -1,7 +1,7 @@
-import { useRef } from 'react';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import MarkdownContent from './MarkdownContent';
 import MessageActions from './MessageActions';
+import { markdownToPlainText } from '../../lib/markdown-plain-text';
 
 interface AcpMessage {
   id: string;
@@ -19,7 +19,6 @@ interface MessageItemProps {
 
 export default function MessageItem({ message }: MessageItemProps) {
   const isUser = message.direction === 'input';
-  const contentRef = useRef<HTMLDivElement>(null);
 
   const acpUpdate = (() => {
     if (typeof message.content === 'object') return message.content as unknown as SessionUpdate;
@@ -100,22 +99,22 @@ export default function MessageItem({ message }: MessageItemProps) {
   return (
     <div className={`group flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[70%] rounded-lg px-4 py-2 overflow-hidden ${getMessageStyle(displayType)}`}>
-        {(typeLabel || !isUser) && (
+        {(typeLabel || (!isUser && displayType === 'text')) && (
           <div className="mb-1 flex items-center gap-2">
             {typeLabel && (
               <div className="text-xs font-medium opacity-75">{typeLabel}</div>
             )}
-            {!isUser && (
+            {!isUser && displayType === 'text' && (
               <div className="ml-auto">
                 <MessageActions
                   content={displayContent}
-                  getPlainText={() => contentRef.current?.innerText || contentRef.current?.textContent || ''}
+                  getPlainText={() => markdownToPlainText(displayContent)}
                 />
               </div>
             )}
           </div>
         )}
-        <div ref={contentRef} className="prose prose-sm max-w-none break-words">
+        <div className="prose prose-sm max-w-none break-words">
           {displayType === 'image' ? (
             <img
               src={displayContent.startsWith('data:') || displayContent.startsWith('http') ? displayContent : `data:image/png;base64,${displayContent}`}

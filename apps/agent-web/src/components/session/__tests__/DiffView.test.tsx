@@ -79,4 +79,19 @@ describe('DiffView', () => {
 
     expect(screen.getByTestId('diff-truncated-notice')).toBeDefined();
   });
+
+  it('should not render a false removed/added pair for an unchanged trailing line (R-6)', () => {
+    render(<DiffView oldText={'1\n2\n3\n4'} newText={'1\n3\n4\n5'} filePath="src/a.ts" />);
+
+    expect(screen.getAllByText('−')).toHaveLength(1);
+    expect(screen.getAllByText('+')).toHaveLength(1);
+  });
+
+  it('should not render CRLF differences as a full rewrite (R-7)', () => {
+    render(<DiffView oldText={'a\r\nb\r\n'} newText={'a\nb\n'} />);
+
+    expect(screen.queryByText('−')).toBeNull();
+    expect(screen.queryByText('+')).toBeNull();
+    expect(screen.getByTestId('diff-view').textContent).not.toContain('\r');
+  });
 });

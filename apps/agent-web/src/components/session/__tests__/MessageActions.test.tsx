@@ -60,4 +60,15 @@ describe('MessageActions', () => {
     expect(bar.className).toContain('sm:group-hover:opacity-100');
     expect(bar.className).toContain('sm:group-focus-within:opacity-100');
   });
+
+  it('T-MA5 should not report success when there is nothing to copy (M-12)', async () => {
+    render(<MessageActions content="   " />);
+
+    fireEvent.click(screen.getByRole('button', { name: '复制 Markdown' }));
+
+    await waitFor(() => {
+      expect(navigator.clipboard.writeText).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalledWith('没有可复制的内容');
+    });
+  });
 });

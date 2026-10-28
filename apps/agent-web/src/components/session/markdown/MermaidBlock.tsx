@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react';
-import { Code2, Minus, Plus, RotateCcw } from 'lucide-react';
+import { Code2, Copy, Minus, Plus, RotateCcw } from 'lucide-react';
+import { toast } from 'sonner';
 import CodeBlock from './CodeBlock';
 
 interface MermaidBlockProps {
@@ -27,7 +28,7 @@ export default function MermaidBlock({ code }: MermaidBlockProps) {
   const rawId = useId();
   const renderId = useMemo(() => `mermaid-${rawId.replace(/[^a-zA-Z0-9]/g, '')}`, [rawId]);
 
-  // 主题跟随：documentElement 的 dark class 变化时重渲染（key 含主题）
+  // 主题跟随：documentElement 的 dark class 变化时更新 theme，effect 依赖 theme 触发重渲染
   useEffect(() => {
     if (typeof MutationObserver === 'undefined') return;
     const observer = new MutationObserver(() => setTheme(detectTheme()));
@@ -41,6 +42,16 @@ export default function MermaidBlock({ code }: MermaidBlockProps) {
     setError(false);
     setSvg('');
 
+    // mermaid 在渲染失败时可能把错误图临时挂到 document.body（先 throw 后清理），
+    // 这里兜底移除，避免每个坏块在页面底部残留「Syntax error」（R-8）
+    const cleanupTempElements = () => {
+      if (typeof document === 'undefined') return;
+      for (const id of [`d${renderId}`, renderId]) {
+        const element = document.getElementById(id);
+        if (element?.parentElement === document.body) element.remove();
+      }
+    };
+
     (async () => {
       try {
         const mod = await import('mermaid');
@@ -49,13 +60,16 @@ export default function MermaidBlock({ code }: MermaidBlockProps) {
           startOnLoad: false,
           securityLevel: 'strict',
           theme,
+          suppressErrorRendering: true,
         });
         const result = await mermaid.render(renderId, code);
         if (!cancelled) {
           setSvg(result.svg);
           setLoading(false);
         }
+        cleanupTempElements();
       } catch {
+        cleanupTempElements();
         if (!cancelled) {
           setError(true);
           setLoading(false);
@@ -131,7 +145,26 @@ export default function MermaidBlock({ code }: MermaidBlockProps) {
       </div>
 
       {showSource ? (
-        <pre className="m-0 overflow-x-auto p-3 font-mono text-xs whitespace-pre">{code}</pre>
+        <div className="relative">
+          <button
+            type="button"
+            aria-label="复制源码"
+            title="复制源码"
+            onClick={async () => {
+              try {
+                if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
+                await navigator.clipboard.writeText(code);
+                toast.success('已复制');
+              } catch {
+                toast.error('复制失败');
+              }
+            }}
+            className="absolute right-2 top-2 rounded bg-muted/80 p-1 text-muted-foreground hover:text-foreground"
+          >
+            <Copy className="size-3.5" />
+          </button>
+          <pre className="m-0 overflow-x-auto p-3 font-mono text-xs whitespace-pre">{code}</pre>
+        </div>
       ) : loading ? (
         <div className="animate-pulse p-6" data-testid="mermaid-skeleton">
           <div className="mx-auto h-24 w-3/4 rounded bg-muted" />

@@ -4,6 +4,17 @@ import MarkdownContent from './MarkdownContent';
 import DiffView from './DiffView';
 import TerminalOutput from './TerminalOutput';
 
+/** resource_link 只放行显式白名单协议，阻断 javascript:/data: 伪协议（R-18） */
+const SAFE_RESOURCE_PROTOCOLS = new Set(['http:', 'https:', 'file:']);
+
+function isSafeResourceUri(uri: string): boolean {
+  try {
+    return SAFE_RESOURCE_PROTOCOLS.has(new URL(uri).protocol);
+  } catch {
+    return false;
+  }
+}
+
 function ImageBlock({ data, mimeType }: { data: string; mimeType?: string }) {
   const [failed, setFailed] = useState(false);
   // 与 MessageItem 图片特例同口径：data:/http(s): 直接作为 src，其余按 base64 拼接
@@ -59,7 +70,19 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
       return <ImageBlock data={block.data} mimeType={block.mimeType} />;
     case 'audio':
       return <AudioBlock data={block.data} mimeType={block.mimeType} />;
-    case 'resource_link':
+    case 'resource_link': {
+      const label = block.title || block.name || block.uri;
+      if (!isSafeResourceUri(block.uri)) {
+        return (
+          <div
+            className="flex min-w-0 items-center gap-2 rounded border border-border bg-muted px-3 py-2 text-sm text-muted-foreground"
+            data-testid="resource-link-blocked"
+            title="已拦截不安全的资源链接协议"
+          >
+            <span className="min-w-0 break-all">{label}</span>
+          </div>
+        );
+      }
       return (
         <a
           href={block.uri}
@@ -67,9 +90,10 @@ export function ContentBlockView({ block }: { block: ContentBlock }) {
           rel="noreferrer"
           className="flex min-w-0 items-center gap-2 rounded border border-border bg-background px-3 py-2 text-sm text-primary underline hover:text-primary/80"
         >
-          <span className="min-w-0 break-all">{block.title || block.name || block.uri}</span>
+          <span className="min-w-0 break-all">{label}</span>
         </a>
       );
+    }
     case 'resource':
       return <ResourceBlock block={block} />;
     default: {

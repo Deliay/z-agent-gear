@@ -10,6 +10,10 @@ interface MessageActionsProps {
 
 export default function MessageActions({ content, getPlainText }: MessageActionsProps) {
   const copy = async (text: string) => {
+    if (!text || !text.trim()) {
+      toast.error('没有可复制的内容');
+      return;
+    }
     try {
       if (!navigator.clipboard?.writeText) {
         throw new Error('clipboard unavailable');

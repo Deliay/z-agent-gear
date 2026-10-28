@@ -64,8 +64,23 @@ describe('MarkdownContent 窄面板溢出防护', () => {
     render(<MarkdownContent content={'```mermaid\ngraph TD; A-->B;\n```'} />);
 
     await waitFor(() => {
+      expect(screen.getByTestId('mermaid-block').querySelector('svg')).toBeTruthy();
+    });
+    expect(screen.queryByTestId('code-block')).toBeNull();
+  });
+
+  it('mermaid 语言名大小写不敏感 (M-4)', async () => {
+    render(<MarkdownContent content={'```Mermaid\ngraph TD; A-->B;\n```'} />);
+
+    await waitFor(() => {
       expect(screen.getByTestId('mermaid-block')).toBeDefined();
     });
     expect(screen.queryByTestId('code-block')).toBeNull();
+  });
+
+  it('c++ 语言名不被正则截断 (M-4)', () => {
+    render(<MarkdownContent content={'```c++\nint main();\n```'} />);
+
+    expect(screen.getByTestId('code-block-language').textContent).toBe('c++');
   });
 });

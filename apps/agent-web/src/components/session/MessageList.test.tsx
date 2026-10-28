@@ -57,6 +57,51 @@ describe('groupMessages', () => {
     expect(groups[0].messages).toHaveLength(2);
     expect(groups[0].messageId).toBeNull();
   });
+
+  it('should not merge CREN2-style mermaid chunks that carry distinct messageIds (R-2)', () => {
+    const chunks = [
+      chunk('1', '```mermaid\ngraph TD;\n  A-->B;\n```', 'cren2-valid'),
+      chunk('2', '```mermaid\nthis is definitely not a diagram\n```', 'cren2-invalid'),
+      chunk('3', 'after-mermaid-marker', 'cren2-plain'),
+    ];
+
+    const groups = groupMessages(chunks);
+
+    expect(groups).toHaveLength(3);
+    expect(groups.map((g) => g.messageId)).toEqual(['cren2-valid', 'cren2-invalid', 'cren2-plain']);
+    expect(groups.map((g) => g.messages)).toHaveLength(3);
+  });
+
+  it('should not throw on malformed rawInput JSON (R-5)', () => {
+    const malformed = {
+      id: '1',
+      sessionId: 'sess-1',
+      direction: 'output',
+      type: 'text',
+      content: JSON.stringify({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-1',
+        kind: 'other',
+        rawInput: '{not valid json',
+      }),
+      metadata: null,
+      createdAt: '2026-05-19T10:00:01.000Z',
+    };
+    const nullLiteral = {
+      ...malformed,
+      id: '2',
+      content: JSON.stringify({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-2',
+        kind: 'other',
+        rawInput: 'null',
+      }),
+    };
+
+    expect(() => groupMessages([malformed, nullLiteral])).not.toThrow();
+    const groups = groupMessages([malformed, nullLiteral]);
+    expect(groups.map((g) => g.type)).toEqual(['tool_call', 'tool_call']);
+  });
 });
 
 describe('MessageList', () => {
@@ -204,5 +249,97 @@ describe('MessageList scroll following', () => {
 
     expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth' });
     expect(screen.queryByTestId('scroll-to-bottom')).toBeNull();
+  });
+
+  function setGeometry(container: HTMLElement, { scrollHeight, clientHeight, scrollTop }: {
+    scrollHeight: number;
+    clientHeight: number;
+    scrollTop: number;
+  }) {
+    Object.defineProperty(container, 'scrollHeight', { configurable: true, value: scrollHeight });
+    Object.defineProperty(container, 'clientHeight', { configurable: true, value: clientHeight });
+    container.scrollTop = scrollTop;
+  }
+
+  it('should not pull the user back down when an IO callback lags behind the scroll event (R-12)', () => {
+    const scrollSpy = Element.prototype.scrollIntoView as Mock;
+    const { rerender } = render(<MessageList messages={baseMessages} />);
+    scrollSpy.mockClear();
+
+    const container = screen.getByTestId('message-scroll-container');
+    setGeometry(container, { scrollHeight: 2000, clientHeight: 500, scrollTop: 100 });
+    fireEvent.scroll(container);
+
+    rerender(<MessageList messages={messagesWithNew()} />);
+
+    expect(scrollSpy).not.toHaveBeenCalled();
+    expect(screen.getByTestId('scroll-to-bottom')).toBeDefined();
+  });
+
+  it('should keep following when IO reports away from bottom during content growth (R-12)', () => {
+    const scrollSpy = Element.prototype.scrollIntoView as Mock;
+    const { rerender } = render(<MessageList messages={baseMessages} />);
+    scrollSpy.mockClear();
+
+    const container = screen.getByTestId('message-scroll-container');
+    setGeometry(container, { scrollHeight: 2000, clientHeight: 500, scrollTop: 1490 });
+    fireEvent.scroll(container);
+
+    act(() => triggerIntersection(false));
+    rerender(<MessageList messages={messagesWithNew()} />);
+
+    expect(scrollSpy).toHaveBeenCalled();
+    expect(screen.queryByTestId('scroll-to-bottom')).toBeNull();
+  });
+
+  it('should not auto-load earlier history during the initial programmatic scroll (R-14)', () => {
+    const onLoadMore = vi.fn();
+    render(<MessageList messages={baseMessages} hasMore={true} onLoadMore={onLoadMore} />);
+
+    const container = screen.getByTestId('message-scroll-container');
+    setGeometry(container, { scrollHeight: 2000, clientHeight: 500, scrollTop: 0 });
+    fireEvent.scroll(container);
+
+    expect(onLoadMore).not.toHaveBeenCalled();
+  });
+
+  it('should restore the scroll position after prepending earlier history', async () => {
+    const { rerender } = render(<MessageList messages={baseMessages} hasMore={true} onLoadMore={vi.fn()} />);
+    const container = screen.getByTestId('message-scroll-container');
+    setGeometry(container, { scrollHeight: 2000, clientHeight: 500, scrollTop: 100 });
+
+    fireEvent.click(screen.getByText('Load earlier messages'));
+    setGeometry(container, { scrollHeight: 3000, clientHeight: 500, scrollTop: 100 });
+
+    const older = {
+      id: '0',
+      sessionId: 'sess-1',
+      direction: 'input',
+      type: 'text',
+      content: 'Even older',
+      metadata: null,
+      createdAt: '2026-05-19T09:59:59.000Z',
+    };
+    rerender(<MessageList messages={[older, ...baseMessages]} hasMore={true} onLoadMore={vi.fn()} />);
+
+    await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+    expect(container.scrollTop).toBe(1100);
+  });
+
+  it('should not swallow the next append after an SSE group replacement (M-13)', () => {
+    const scrollSpy = Element.prototype.scrollIntoView as Mock;
+    const { rerender } = render(<MessageList messages={baseMessages} />);
+
+    const replaced = [
+      { ...baseMessages[0], id: '10' },
+      { ...baseMessages[1], id: '11' },
+    ];
+    rerender(<MessageList messages={replaced} />);
+    scrollSpy.mockClear();
+
+    rerender(<MessageList messages={[...replaced, { ...appended, id: '12' }]} />);
+
+    expect(scrollSpy).toHaveBeenCalled();
   });
 });
