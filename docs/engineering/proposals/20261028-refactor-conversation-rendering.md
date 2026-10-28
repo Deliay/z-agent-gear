@@ -7,10 +7,12 @@ type: Permanent
 
 **功能名称**: 对话渲染能力重构
 **关联 PRD**: [docs/product/draft/20261028-conversation-rendering.md](../../product/draft/20261028-conversation-rendering.md)
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-28
 **作者**: z-agent-gear 工作流
 **feat-branch**: `prd/conversation-rendering`（需求总分支；实现分支 `feat/conversation-rendering-impl`，参考 [[../git.md]] 与仓库 `prd/<slug>` + `feat/<slug>-impl` 惯例）
+
+> v1.1 变更：根据 PR #333 评审意见，补充「工具调用完成后退化为 Tool Call: other」缺陷的根因调研（ACP `tool_call_update` 稀疏更新被渲染层当作全量数据），新增实现点 5「工具调用视图模型合并」，并同步 zed `apply_patch` 三态合并调研结论与测试用例。
 
 ## 1. 概述
 
@@ -19,6 +21,7 @@ type: Permanent
 GitHub Issue [Deliay/z-agent-gear#332](https://github.com/Deliay/z-agent-gear/issues/332) 要求参考 [zed](https://github.com/zed-industries/zed) 补齐对话渲染能力缺失。经对 zed 仓库 `crates/acp_thread`（ACP 数据处理）与 `crates/agent_ui/src/conversation_view`（渲染层）的调研，zed 的关键做法：
 
 - **统一条目模型**：`AgentThreadEntry` 将用户消息、助手消息（消息/思考 chunk 按 messageId 合并）、工具调用、计划等统一为条目流。
+- **工具调用状态合并**（`ToolCall.apply_patch`）：`tool_call_update` 是稀疏更新，zed 以 `MaybeUndefined` 三态语义逐字段合并——Undefined（未携带）保留原值、Null（显式清除）清空、Value 替换；`title`/`kind`/`locations`/`rawInput` 等创建时字段在后续更新中不被丢失，label 基于合并后的有效标题重建。
 - **Markdown 渲染**（`render_agent_markdown`）：代码块带语言标识 + 悬停复制按钮 + 悬停换行按钮 + 横向滚动；```mermaid 块渲染为可缩放图形（可切回源码）；行内代码跨度（如 `src/main.rs:42`）解析为可点击文件链接；链接点击统一处理。
 - **工具调用渲染**：按 `ToolKind` 映射图标（read/edit/delete/move/search/execute/think/fetch/switch_mode）；状态体系覆盖 pending/waiting_for_confirmation/in_progress/completed/failed/rejected/canceled；`rawInput` 以 markdown 形式可折叠查看（"View Raw Input"）；`ToolCallContent` 按 content/diff/terminal 分类型渲染；diff 按文件 + hunk 分组并带语法高亮。
 - **终端渲染**：真实终端视图，保留 ANSI 颜色。
@@ -34,7 +37,7 @@ GitHub Issue [Deliay/z-agent-gear#332](https://github.com/Deliay/z-agent-gear/is
 | Mermaid | 普通代码块 | 不渲染图形 |
 | 差异 | `DiffView` 逐行对比（非 diff 算法，插入/删除即错位） | 无真实 diff、无行号、无语法高亮 |
 | 终端 | `TerminalOutput` 剥离 ANSI 后统一绿色 | 颜色/粗体丢失 |
-| 工具调用 | 文字 label，仅部分 kind 有专门渲染，无 rawInput 查看 | 无图标体系、状态不全、原始数据不可见 |
+| 工具调用 | 文字 label，仅部分 kind 有专门渲染，无 rawInput 查看；**卡片只解析分组内最后一条消息** | 无图标体系、状态不全、原始数据不可见；**稀疏的 `tool_call_update` 到达后 title/kind/rawInput/locations 丢失，完成后退化为「Tool Call: other」+「other — completed」（PR #333 评审确认的缺陷）** |
 | ContentBlock | 仅 text（image 走 MessageItem 特例） | image/audio/resource_link/resource 未覆盖 |
 | 消息操作 | 无 | 无复制/导出 |
 | 滚动 | 新消息强制 scrollToBottom | 上翻阅读被打断，无回到底部按钮 |
@@ -42,7 +45,7 @@ GitHub Issue [Deliay/z-agent-gear#332](https://github.com/Deliay/z-agent-gear/is
 
 ### 1.2 目标
 
-1. 渲染层能力对齐 zed ACP 渲染：Markdown 增强（代码块工具栏、Mermaid）、真实差异渲染、ANSI 终端渲染、工具调用图标与状态体系、ContentBlock 全类型、消息复制与导出、滚动导航、计划展示增强。
+1. 渲染层能力对齐 zed ACP 渲染：工具调用视图模型合并（修复完成后退化 other）、Markdown 增强（代码块工具栏、Mermaid）、真实差异渲染、ANSI 终端渲染、工具调用图标与状态体系、ContentBlock 全类型、消息复制与导出、滚动导航、计划展示增强。
 2. 纯前端重构，不改动 ACP 协议交互、消息存储结构与后端契约。
 3. 全部新能力有单元测试覆盖，关键路径有 E2E 覆盖。
 
@@ -53,6 +56,7 @@ GitHub Issue [Deliay/z-agent-gear#332](https://github.com/Deliay/z-agent-gear/is
 - Markdown 渲染管线重构（代码块工具栏、Mermaid 懒加载渲染、行内代码跨度样式）
 - `DiffView` 重构为真实 diff 渲染
 - `TerminalOutput` 重构为 ANSI 颜色渲染
+- 工具调用视图模型合并（修复稀疏更新导致的标题/类型/参数丢失）
 - `ToolCallCard` 与工具调用体系增强（图标、状态、rawInput/rawOutput 折叠、ContentBlock 全类型）
 - `MessageItem` 消息操作（复制 Markdown / 复制纯文本）
 - 对话导出为 Markdown 文件
@@ -132,6 +136,7 @@ graph LR
 | `lib/ansi.ts` | ANSI → 安全 HTML | ansi-to-html（escapeXML），过滤光标控制序列 |
 | `components/session/TerminalOutput.tsx` | 终端输出渲染 | dangerouslySetInnerHTML + 已转义 HTML |
 | `components/session/tool-call-icons.ts` | ToolKind → lucide 图标映射 | 语义化 |
+| `components/session/tool-call-state.ts` | 同一 toolCallId 多消息合并为 MergedToolCall | 三态合并（未携带保留/null 清除/有值替换），对齐 zed apply_patch |
 | `components/session/ContentBlockRenderer.tsx` | ToolCallContent/ContentBlock 全类型渲染 | text/image/audio/resource_link/resource |
 | `components/session/MessageActions.tsx` | 消息悬停操作 | 复制 Markdown / 复制纯文本 |
 | `lib/export-thread.ts` | 对话导出 Markdown | 纯前端生成 Blob 下载 |
@@ -243,7 +248,34 @@ sequenceDiagram
   - 保持 `maxHeight` 滚动与空行 `&nbsp;` 行为。
 - **风险点**: ansi-to-html 多年未大版本更新但稳定（广泛应用）；若评估后不引入依赖，备选为自研 SGR 颜色子集解析（约 100 行）——决策见 §6.1。
 
-#### 实现点 5: 工具调用卡片体系增强
+#### 实现点 5: 工具调用视图模型合并（修复完成后退化为「Tool Call: other」）
+
+- **背景与根因**（PR #333 评审确认的缺陷调研结论）:
+  - ACP 协议中 `tool_call_update` 为**稀疏更新**：`ToolCallUpdate` 的全部字段（`kind`/`status`/`title`/`name`/`content`/`locations`/`rawInput`/`rawOutput`）均可选，Agent 仅携带发生变化的字段。典型的完成通知只带 `status: 'completed'` + `content`/`rawOutput`，不带 `title`/`kind`。
+  - 当前 `ToolCallCard`/`ReadCard`/`FetchCard`/`SubAgentCard` 均只解析分组内**最后一条**消息（`messages[messages.length - 1]`）：执行中最后一条是创建消息 `tool_call`（携带 `title`/`kind`/`rawInput`/`locations`）所以显示正常；完成后最后一条变为稀疏的 `tool_call_update`，`kind` 缺省回退为 `'other'`、`title` 缺省回退为 `kindLabel('other')`，于是标题退化「Tool Call: other」、正文走默认分支「other — completed」；`ReadCard` 丢失文件列表、`FetchCard` 丢失 URL、`SubAgentCard` 丢失 prompt/description，属同一根因。
+- **描述**: 新增 `components/session/tool-call-state.ts`，将同一 `toolCallId` 分组内的全部消息按到达顺序合并为单一视图模型 `MergedToolCall`，所有工具类卡片统一消费合并结果而非单条消息：
+  ```ts
+  export interface MergedToolCall {
+    toolCallId: string;
+    title?: string;          // 创建消息为基线，update 携带时覆盖
+    kind?: ToolKind;         // 同上；无值时渲染层回退 'other'
+    status: ToolCallStatus;  // 取最新一条携带 status 的值
+    name?: string;
+    locations?: ToolCallLocation[];
+    rawInput?: unknown;
+    rawOutput?: unknown;
+    content?: ToolCallContent[];
+  }
+  export function mergeToolCallMessages(messages: AcpMessage[]): MergedToolCall;
+  ```
+- **技术细节**:
+  - 合并语义对齐 zed `ToolCall.apply_patch` 的 `MaybeUndefined` 三态：字段**未携带**（`undefined`）保留原值；**显式 `null`** 清除；**有值**替换。`status`/`content`/`rawOutput` 取最后一条携带该字段的消息。
+  - 实现位置在数据层（group-messages 产出分组后立即合并），不在各卡片内各自合并——保证四个卡片行为一致、单测只需覆盖一处。
+  - `group-messages.ts` 分组逻辑不变（仍按 `toolCallId` 聚合），仅在 `MessageList` 渲染分支传入合并结果。
+  - 完成后 label 重建口径与执行中一致：标题 = 合并后 `title` ?? kindLabel（合并后 `kind`），消除「执行中有命令名、完成后变 other」。
+- **风险点**: 历史会话消息同样经过合并路径，需用存量会话数据回归验证；显式 `null` 清除字段的 Agent 行为极少见，但合并函数必须正确处理（TDD 用例覆盖 undefined/null/值三种形态）。
+
+#### 实现点 6: 工具调用卡片体系增强
 
 - **描述**:
   - 图标体系：`tool-call-icons.ts` 映射 `ToolKind` → lucide 图标（read=FileSearch、edit=FilePen、delete=Trash2、move=ArrowRightLeft、search=Search、execute=TerminalSquare、think=Brain、fetch=Globe、switch_mode=ArrowRightLeft、other=Hammer），卡片标题前置图标。
@@ -252,10 +284,10 @@ sequenceDiagram
   - ContentBlock 全类型：`ContentBlockRenderer` 处理 `content` 项——text（MarkdownContent）、image（`<img>` 限高）、audio（`<audio controls>`）、resource_link（链接卡片，点击新窗口打开）、resource（嵌入资源：text 资源渲染 markdown，blob 资源展示 uri 占位）；`diff` 项走新 DiffView；`terminal` 项走 TerminalOutput。
 - **技术细节**:
   - 现有 kind 特化渲染（edit/execute/delete/move/search/think/read/fetch/sub_agent）保留，仅补齐：title 前图标、rawInput 折叠区、content 全类型。
-  - `group-messages.ts` 分组逻辑不变。
+  - 所有卡片输入由实现点 5 的 `MergedToolCall` 提供，不再各自解析单条消息；`group-messages.ts` 分组逻辑不变。
 - **风险点**: rawInput 可能很大——JSON 美化后超 500 行截断并提示。
 
-#### 实现点 6: 消息操作与对话导出
+#### 实现点 7: 消息操作与对话导出
 
 - **描述**: `MessageItem`（agent 消息）hover 显示操作条：「复制 Markdown」（原始 text）、「复制纯文本」（渲染后 innerText 口径）；`SessionHeader` 或消息列表工具区新增「导出对话为 Markdown」：遍历消息生成结构化 Markdown（用户/助手/思考/工具调用/计划分节，附时间戳），Blob 下载为 `session-{id}-{date}.md`。
 - **技术细节**:
@@ -264,7 +296,7 @@ sequenceDiagram
   - 导出在客户端完成，无后端交互；失败 toast。
 - **风险点**: 长对话导出字符串构建为 O(n)，千级消息无压力；图片消息导出为占位说明（不内嵌 base64）。
 
-#### 实现点 7: 滚动导航（MessageList 改造 + ScrollToBottomButton）
+#### 实现点 8: 滚动导航（MessageList 改造 + ScrollToBottomButton）
 
 - **描述**: 跟随策略由「消息数变化即 scrollToBottom」改为「仅当视口位于底部锚点附近时跟随」；上翻超过阈值暂停跟随并显示右下角浮动按钮（带「新消息」圆点提示）；点击平滑回底并恢复跟随。
 - **技术细节**:
@@ -274,7 +306,7 @@ sequenceDiagram
   - 移动端同交互。
 - **风险点**: 现有 `MessageList.test.tsx` 覆盖自动滚动断言——按 TDD 先更新测试。
 
-#### 实现点 8: PlanCard 展示增强
+#### 实现点 9: PlanCard 展示增强
 
 - **描述**: 完成条目内容加删除线（`line-through text-muted-foreground`）；摘要口径对齐 zed `plan_summary_label`：全部完成显示「全部完成」，部分完成显示「x/y」，未开始显示「N 项任务」。
 - **技术细节**: 纯展示层改动，`PlanCard` 内部调整；`PlanFloatingCard` 同步摘要口径。
@@ -319,6 +351,7 @@ apps/agent-web/src/
 │   ├── TerminalOutput.tsx           # 重构：ANSI 颜色渲染
 │   ├── ToolCallCard.tsx             # 增强：图标 + rawInput/rawOutput 折叠 + content 全类型
 │   ├── tool-call-icons.ts           # 新增：ToolKind → 图标映射
+│   ├── tool-call-state.ts           # 新增：toolCallId 多消息合并（MergedToolCall）
 │   ├── ContentBlockRenderer.tsx     # 新增：ContentBlock 全类型渲染
 │   ├── MessageItem.tsx              # 增强：hover 操作条
 │   ├── MessageActions.tsx           # 新增：复制 Markdown/纯文本
@@ -339,7 +372,7 @@ apps/agent-web/src/
 
 ### 8.1 测试覆盖要求
 
-- 新增 lib 纯函数（diff/ansi/export-thread/language-from-path）单元测试覆盖率 100%（分支全覆盖）。
+- 新增 lib 纯函数（diff/ansi/export-thread/language-from-path）与 `tool-call-state.ts` 合并函数单元测试覆盖率 100%（分支全覆盖）。
 - 新增组件（CodeBlock/MermaidBlock/ContentBlockRenderer/MessageActions/ScrollToBottomButton）RTL 渲染与交互测试。
 - 重构组件（DiffView/TerminalOutput/MessageList/MessageItem/ToolCallCard/PlanCard）先红后绿：更新既有测试至新行为，再实现。
 
@@ -347,9 +380,9 @@ apps/agent-web/src/
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | Vitest | lib 纯函数：diff 对齐（插入/删除/修改/空输入/大文件截断）、ANSI 转 HTML（颜色/粗体/控制序列过滤/XSS 转义）、导出 markdown 结构、扩展名映射 |
-| 组件测试 | Vitest + RTL | CodeBlock 复制/换行/语言标签；MermaidBlock 渲染/失败回退/主题；ToolCallCard 图标/rawInput 折叠/content 类型；MessageActions 复制交互；MessageList 跟随暂停/恢复与回底按钮；PlanCard 删除线与摘要 |
-| E2E | tests/e2e（z-test） | 会话页端到端：代码块复制按钮出现且可点、mermaid 块渲染出 SVG、diff 展示行号、上翻后新消息不打断、回到底部按钮出现/消失、窄视口无横向溢出 |
+| 单元测试 | Vitest | lib 纯函数：diff 对齐（插入/删除/修改/空输入/大文件截断）、ANSI 转 HTML（颜色/粗体/控制序列过滤/XSS 转义）、导出 markdown 结构、扩展名映射；`mergeToolCallMessages`：创建+稀疏更新合并后 title/kind/rawInput/locations 保留、status/content 取最新、字段未携带（undefined）保留/显式 null 清除/有值替换三态、仅 update 无创建消息的兜底 |
+| 组件测试 | Vitest + RTL | CodeBlock 复制/换行/语言标签；MermaidBlock 渲染/失败回退/主题；ToolCallCard 图标/rawInput 折叠/content 类型/**完成态标题与创建时一致（不再退化 other）**；ReadCard/FetchCard/SubAgentCard 完成后参数保留；MessageActions 复制交互；MessageList 跟随暂停/恢复与回底按钮；PlanCard 删除线与摘要 |
+| E2E | tests/e2e（z-test） | 会话页端到端：代码块复制按钮出现且可点、mermaid 块渲染出 SVG、diff 展示行号、**工具执行完成后卡片标题不丢失**、上翻后新消息不打断、回到底部按钮出现/消失、窄视口无横向溢出 |
 
 ## 9. 部署方案
 
@@ -368,7 +401,7 @@ apps/agent-web/src/
 
 - [ ] 技术方案评审通过
 - [ ] 契约评审确认无变更（纯前端）
-- [ ] 代码实现完成（8 个实现点）
+- [ ] 代码实现完成（9 个实现点）
 - [ ] lib 纯函数单元测试覆盖达标
 - [ ] 组件测试通过（含重构组件先红后绿记录）
 - [ ] E2E 测试通过
