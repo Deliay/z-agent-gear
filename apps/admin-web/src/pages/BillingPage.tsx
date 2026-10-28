@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
+import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   ADMIN_BILLING_ACCOUNTS,
@@ -18,6 +19,7 @@ import type {
   BillingCategory,
   BillingInvoiceData,
   BillingLedgerType,
+  BillingOwnerType,
   BillingRollupGranularity,
   GetAdminBillingAccountsQuery,
   GetAdminBillingApiCallsQuery,
@@ -45,8 +47,18 @@ function defaultRange(): { from: string; to: string } {
   return { from: from.toISOString(), to: to.toISOString() }
 }
 
+function parseOwnerType(value: string | null): BillingOwnerType | '' {
+  return value === 'admin_user' || value === 'tenant' || value === 'front_user' ? value : ''
+}
+
 export default function BillingPage() {
-  const [keyword, setKeyword] = useState('')
+  // 租户详情页「充值」入口带 `ownerType=tenant&keyword=<tenantId>` 跳转：
+  // 保持计费账户视角，仅预置检索条件并在账户加载后自动选中该租户计费账户。
+  const [searchParams] = useSearchParams()
+  const initialKeyword = searchParams.get('keyword') ?? ''
+  const initialOwnerType = parseOwnerType(searchParams.get('ownerType'))
+  const [keyword, setKeyword] = useState(initialKeyword)
+  const [ownerType, setOwnerType] = useState<BillingOwnerType | ''>(initialOwnerType)
   // D-2：只保存 id，`selected` 由账户列表派生；mutation 后 refetch 即自动刷新，
   // 不会出现「点击时刻陈旧快照」导致连续冻结/恢复方向翻转。
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -67,7 +79,7 @@ export default function BillingPage() {
   const pageSize = 20
 
   const accountsQuery = useQuery<GetAdminBillingAccountsQuery>(ADMIN_BILLING_ACCOUNTS, {
-    variables: { keyword: keyword || null, page, pageSize },
+    variables: { keyword: keyword || null, ownerType: ownerType || null, page, pageSize },
   })
   const invoicesQuery = useQuery<GetAdminBillingInvoicesQuery>(ADMIN_BILLING_INVOICES, {
     variables: {
@@ -132,6 +144,18 @@ export default function BillingPage() {
     setInvoicePage(1)
     setCallPage(1)
   }
+
+  // 从租户详情页跳转而来时（带 keyword 且尚无选中账户），自动选中该租户计费账户
+  // （keyword 为 tenantId，服务端按 ownerId 命中，ownerId 与 tenantId 同值）。
+  useEffect(() => {
+    if (!initialKeyword || selectedId) return
+    const target = accounts.find((account) => account.ownerId === initialKeyword)
+    if (!target) return
+    setSelectedId(target.id)
+    setCreditLimit(String(target.creditLimit))
+    setInvoicePage(1)
+    setCallPage(1)
+  }, [initialKeyword, selectedId, accounts])
 
   const applyCreditLimit = async () => {
     setConfirmAction(null)
@@ -212,16 +236,31 @@ export default function BillingPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-3">
           <CardTitle>账户</CardTitle>
-          <Input
-            className="max-w-xs"
-            value={keyword}
-            onChange={(event) => {
-              setKeyword(event.target.value)
-              // 建议 19：搜索条件变化时重置页码，避免停留在旧范围的空页。
-              setPage(1)
-            }}
-            placeholder="按用户名 / 账户 ID 检索"
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="账户类型"
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              value={ownerType}
+              onChange={(event) => {
+                setOwnerType(event.target.value as BillingOwnerType | '')
+                setPage(1)
+              }}
+            >
+              <option value="">全部类型</option>
+              <option value="tenant">租户（tenant）</option>
+              <option value="admin_user">后台（admin_user）</option>
+            </select>
+            <Input
+              className="max-w-xs"
+              value={keyword}
+              onChange={(event) => {
+                setKeyword(event.target.value)
+                // 建议 19：搜索条件变化时重置页码，避免停留在旧范围的空页。
+                setPage(1)
+              }}
+              placeholder="按账户名 / 账户 ID 检索"
+            />
+          </div>
         </CardHeader>
         <CardContent>
           {accountsQuery.loading && !accountsQuery.data ? (

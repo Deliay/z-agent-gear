@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { writeFileSync, mkdirSync, existsSync, unlinkSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
+import { createFrontUser } from '../support/front-users.js';
 
 // Real end-to-end investigation for the downstream rejection:
 //   普通会话勾选「agent-workflow-admin-tools」后，agent 实际会话中没有该工具集的工具。
@@ -42,15 +43,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify({ query, variables }),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -245,10 +237,8 @@ describe('ACP Real: 普通会话装配 agent-workflow-admin-tools（下游打回
     cleanupPidFile();
     configBackup = backupConfig();
 
-    const uid = `acp_admin_${Date.now().toString(36)}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data?.signup?.token;
+    const frontUser = await createFrontUser();
+    authToken = frontUser.token;
     expect(authToken).toBeTruthy();
 
     const keyRes = await gqlRequest(CREATE_KEY, { input: { name: `admin-real-${Date.now()}`, type: 'local' } }, authToken);

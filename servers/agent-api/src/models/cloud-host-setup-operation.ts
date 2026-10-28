@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 export const CLOUD_HOST_SETUP_KINDS = ['installWorkload', 'githubSetup'] as const;
 export type CloudHostSetupKind = (typeof CLOUD_HOST_SETUP_KINDS)[number];
@@ -34,6 +35,7 @@ const setupStepSchema = new mongoose.Schema(
 const cloudHostSetupOperationSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true, index: true },
     hostId: { type: mongoose.Schema.Types.ObjectId, ref: 'CloudHost', required: true, index: true },
     kind: { type: String, enum: CLOUD_HOST_SETUP_KINDS, required: true },
@@ -59,10 +61,9 @@ const cloudHostSetupOperationSchema = new mongoose.Schema(
 cloudHostSetupOperationSchema.index({ userId: 1, createdAt: -1 });
 cloudHostSetupOperationSchema.index({ controllerId: 1, status: 1 });
 
-export const CloudHostSetupOperation = mongoose.model(
-  'CloudHostSetupOperation',
-  cloudHostSetupOperationSchema,
-);
+applyTenantScope(cloudHostSetupOperationSchema);
+
+export const CloudHostSetupOperation = mongoose.model('CloudHostSetupOperation', cloudHostSetupOperationSchema);
 export type ICloudHostSetupOperation = mongoose.InferSchemaType<
   typeof cloudHostSetupOperationSchema
 >;

@@ -8,6 +8,8 @@ export interface StartHarnessInput {
   controllerKeyId: string;
   containerApiKeyId: string;
   userId: string;
+  /** 前台租户 ID（一期 personal 期与 userId 同值）。 */
+  tenantId: string;
   hostName: string;
   harnessTypes: string[];
   expiresAt: Date;
@@ -134,6 +136,7 @@ export class CloudControllerClient {
       controllerId: input.controllerId ?? undefined,
       refId: input.controllerKeyId,
       userId: input.userId,
+      tenantId: input.tenantId,
       hostName: input.hostName,
       harnessTypes: input.harnessTypes,
       expiresAt: input.expiresAt.toISOString(),

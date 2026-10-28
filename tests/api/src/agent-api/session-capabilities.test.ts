@@ -3,6 +3,7 @@ import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-cli
 import mongoose from 'mongoose';
 // FeatureId 唯一事实源：直接引用 agent-controller 的能力清单，禁止测试手抄复制
 import { FEATURE_IDS } from '../../../../packages/agent-controller/src/acp/capabilities.js';
+import { createFrontUser } from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const SSE_BASE_URL = (process.env.API_URL || 'http://localhost:10001').replace(/\/graphql\/?$/, '');
@@ -17,11 +18,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
   return fetch(AGENT_API_URL, { method: 'POST', headers, body: JSON.stringify(body) });
 }
 
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token user { id username } }
-  }
-`;
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
     createControllerKey(input: $input) { rawKey key { id } }
@@ -200,10 +196,8 @@ async function findTodo(requestId: string): Promise<any> {
 
 describe('ACP 会话能力快照 API', () => {
   beforeAll(async () => {
-    const uid = `cap_${Date.now().toString(36)}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data?.signup?.token ?? '';
+    const frontUser = await createFrontUser();
+    authToken = frontUser.token;
     expect(authToken).toBeTruthy();
   });
 

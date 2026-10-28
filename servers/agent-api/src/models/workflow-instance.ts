@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY } from './workflow-template.js';
 
 export const WORKFLOW_NODE_STATUSES = ['INITIALIZING', 'READY', 'RUNNING', 'DONE', 'REJECT', 'REWORK', 'FAILED'] as const;
@@ -71,6 +72,7 @@ const instanceNodeSchema = new mongoose.Schema(
 const workflowInstanceSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true },
     workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerWorkspace', required: true },
     configuredWorkflowId: { type: mongoose.Schema.Types.ObjectId, ref: 'ConfiguredWorkflow', default: null },
@@ -111,6 +113,8 @@ workflowInstanceSchema.index({ configuredWorkflowId: 1 });
 workflowInstanceSchema.index({ userId: 1, archivedAt: 1, createdAt: -1 });
 // 按控制器过滤（controllerId 当前未单独建索引）
 workflowInstanceSchema.index({ userId: 1, controllerId: 1, archivedAt: 1, createdAt: -1 });
+
+applyTenantScope(workflowInstanceSchema);
 
 export const WorkflowInstance = mongoose.model('WorkflowInstance', workflowInstanceSchema);
 export type IWorkflowInstance = mongoose.InferSchemaType<typeof workflowInstanceSchema>;

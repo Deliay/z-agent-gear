@@ -111,7 +111,7 @@ test.describe('Settings Commit Author E2E', () => {
 
     const commit = section(page).getByTestId('commit-settings-section');
     const modeGroup = commit.getByRole('radiogroup', { name: '提交人模式' });
-    const typeGroup = commit.getByRole('radiogroup', { name: '提交人' });
+    const typeGroup = commit.getByRole('radiogroup', { name: '提交人', exact: true });
     await expect(commit.getByRole('heading', { name: 'Commit 设置' })).toBeVisible();
     await expect(commit.getByText('设置只对云容器环境生效')).toBeVisible();
     await expect(modeGroup.getByRole('radio', { name: '未设置' })).toBeChecked();

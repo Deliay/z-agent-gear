@@ -45,7 +45,7 @@ vi.mock('react-router-dom', () => ({
 }));
 
 vi.mock('../../stores/auth', () => ({
-  useAuth: () => ({ user: { username: 'tester' }, loading: false }),
+  useAuth: () => ({ user: { name: 'tester' }, loading: false }),
 }));
 
 vi.mock('../../hooks/useIsMobile', () => ({

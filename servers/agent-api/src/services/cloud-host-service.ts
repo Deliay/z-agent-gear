@@ -252,7 +252,7 @@ export class CloudHostService {
     return this.userMutex.runExclusive(`user:${userId}`, async () => {
       let account: { id: string };
       try {
-        account = await billingClient.getAccount('front_user', userId);
+        account = await billingClient.getAccount('tenant', userId);
       } catch {
         throw new Error('billing service unavailable');
       }
@@ -337,7 +337,7 @@ export class CloudHostService {
 
         const modelKey = await billingClient.createCloudHostApiKey({
           accountId: account.id,
-          ownerType: 'front_user',
+          ownerType: 'tenant',
           ownerId: userId,
           name: `cloud-host:${name}`.slice(0, 64),
           cloudHostId,
@@ -351,6 +351,7 @@ export class CloudHostService {
             controllerKeyId: keyId,
             containerApiKeyId: modelKeyId,
             userId,
+            tenantId: userId,
             hostName: name,
             harnessTypes: harnessTypes.map((type) => harnessSlug(type)),
             expiresAt,

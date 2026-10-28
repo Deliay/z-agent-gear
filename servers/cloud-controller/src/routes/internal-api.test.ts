@@ -615,6 +615,98 @@ describe('internal management API', () => {
     expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
   });
 
+  it('T-IC-HARNESS: harness 落库 tenantId 与 userId 同值（tenantId 不改动 userId 维度）', async () => {
+    const res = await createContainer({
+      purpose: 'harness',
+      hostId: 'host-tenant-1',
+      refId: 'ck-tenant-1',
+      userId: 'user-tenant-1',
+      tenantId: 'user-tenant-1',
+      hostName: 'pc-tenant-1',
+      harnessTypes: ['opencode'],
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      agentGearMinVersion: '2.10.0',
+      secrets: {
+        hostEndpoint: 'wss://controller.example.com',
+        hostKey: 'zag_k_1_tenant',
+        modelApiKey: 'zag_sk_tenant',
+        modelBaseUrl: 'http://admin-api:8002/v1',
+        modelIds: '["a"]',
+        defaultWorkspace: '/home/worker/workspace',
+      },
+      workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false, required: true }],
+    });
+
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string };
+    const stored = await repo.findById(body.id);
+    expect(stored?.userId).toBe('user-tenant-1');
+    expect(stored?.tenantId).toBe('user-tenant-1');
+  });
+
+  it('T-IC-HARNESS: 缺 tenantId 时回退 tenantId=userId 并 warn（滚动升级兜底）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await createContainer({
+        purpose: 'harness',
+        hostId: 'host-tenant-2',
+        refId: 'ck-tenant-2',
+        userId: 'user-tenant-2',
+        hostName: 'pc-tenant-2',
+        harnessTypes: ['opencode'],
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        agentGearMinVersion: '2.10.0',
+        secrets: {
+          hostEndpoint: 'wss://controller.example.com',
+          hostKey: 'zag_k_1_tenant_legacy',
+          modelApiKey: 'zag_sk_tenant_legacy',
+          modelBaseUrl: 'http://admin-api:8002/v1',
+          modelIds: '["a"]',
+          defaultWorkspace: '/home/worker/workspace',
+        },
+        workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false, required: true }],
+      });
+
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { id: string };
+      const stored = await repo.findById(body.id);
+      expect(stored?.tenantId).toBe('user-tenant-2');
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('缺少 tenantId'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('T-IC-HARNESS: tenantId 显式非法（空串/非字符串）→ 400 INVALID_HARNESS', async () => {
+    const base = {
+      purpose: 'harness',
+      hostId: 'host-tenant-invalid',
+      refId: 'ck-tenant-invalid',
+      userId: 'user-tenant-invalid',
+      hostName: 'pc-tenant-invalid',
+      harnessTypes: ['opencode'],
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      agentGearMinVersion: '2.10.0',
+      secrets: {
+        hostEndpoint: 'wss://controller.example.com',
+        hostKey: 'zag_k_1_tenant_invalid',
+        modelApiKey: 'zag_sk_tenant_invalid',
+        modelBaseUrl: 'http://admin-api:8002/v1',
+        modelIds: '["a"]',
+        defaultWorkspace: '/home/worker/workspace',
+      },
+      workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false, required: true }],
+    };
+
+    for (const tenantId of ['', '   ', 123]) {
+      const res = await createContainer({ ...base, tenantId });
+      expect(res.status, String(tenantId)).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('INVALID_HARNESS');
+    }
+  });
+
   it('C-4: agentGearMinVersion 落库为 max(服务端常量, 请求值)', async () => {
     const base = {
       purpose: 'harness',

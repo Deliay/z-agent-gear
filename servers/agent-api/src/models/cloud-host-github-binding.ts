@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 /**
  * 云主机 Github 项目绑定（集合 `cloud_host_github_bindings`）。
@@ -7,6 +8,7 @@ import mongoose from 'mongoose';
 const cloudHostGithubBindingSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     controllerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Controller',
@@ -20,10 +22,9 @@ const cloudHostGithubBindingSchema = new mongoose.Schema(
   { collection: 'cloud_host_github_bindings', timestamps: true },
 );
 
-export const CloudHostGithubBinding = mongoose.model(
-  'CloudHostGithubBinding',
-  cloudHostGithubBindingSchema,
-);
+applyTenantScope(cloudHostGithubBindingSchema);
+
+export const CloudHostGithubBinding = mongoose.model('CloudHostGithubBinding', cloudHostGithubBindingSchema);
 export type ICloudHostGithubBinding = mongoose.InferSchemaType<
   typeof cloudHostGithubBindingSchema
 >;

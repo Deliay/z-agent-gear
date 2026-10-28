@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { writeFileSync, mkdirSync, existsSync, unlinkSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
+import { createFrontUser } from '../support/front-users.js';
 
 /**
  * 真实 OpenCode 能力快照回归（test:real 套件）。
@@ -34,12 +35,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify({ query, variables }),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) { token user { id username } }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -166,10 +161,8 @@ describe('ACP Real OpenCode Capability Snapshot', () => {
     if (existsSync(PID_FILE)) unlinkSync(PID_FILE);
     configBackup = backupConfig();
 
-    const uid = `acp_cap_${Date.now().toString(36)}`;
-    const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-    const body = await res.json();
-    authToken = body.data?.signup?.token;
+    const frontUser = await createFrontUser();
+    authToken = frontUser.token;
     expect(authToken).toBeTruthy();
 
     const keyRes = await gqlRequest(

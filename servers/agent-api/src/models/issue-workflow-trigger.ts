@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { applyTenantScope } from '../services/tenant-scope.js';
 
 /** 触发记录状态机：工作区准备 → 实例化 → 等待并完成首个人类节点 → 完成/失败。 */
 export const ISSUE_TRIGGER_STATUSES = [
@@ -20,6 +21,7 @@ export type IssueTriggerStatus = (typeof ISSUE_TRIGGER_STATUSES)[number];
 const issueWorkflowTriggerSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true },
     /** 命中配置引用（配置删除后留档） */
     linkageId: { type: mongoose.Schema.Types.ObjectId, default: null },
@@ -69,8 +71,7 @@ issueWorkflowTriggerSchema.index(
 issueWorkflowTriggerSchema.index({ controllerId: 1, status: 1 });
 issueWorkflowTriggerSchema.index({ status: 1, updatedAt: -1 });
 
-export const IssueWorkflowTrigger = mongoose.model(
-  'IssueWorkflowTrigger',
-  issueWorkflowTriggerSchema,
-);
+applyTenantScope(issueWorkflowTriggerSchema);
+
+export const IssueWorkflowTrigger = mongoose.model('IssueWorkflowTrigger', issueWorkflowTriggerSchema);
 export type IIssueWorkflowTrigger = mongoose.InferSchemaType<typeof issueWorkflowTriggerSchema>;

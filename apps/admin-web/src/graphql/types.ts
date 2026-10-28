@@ -351,7 +351,7 @@ export interface AdminDestroyCloudContainerMutation {
 
 // ---------- 费用中心（contracts/admin-billing.graphql） ----------
 
-export type BillingOwnerType = 'front_user' | 'admin_user';
+export type BillingOwnerType = 'front_user' | 'admin_user' | 'tenant';
 export type BillingLedgerType = 'charge' | 'recharge' | 'adjust';
 export type BillingCategory = 'container' | 'model' | 'manual';
 export type BillingRollupGranularity = 'minute' | 'hour' | 'day';
@@ -504,4 +504,44 @@ export interface BillingApiCallData {
 
 export interface GetAdminBillingApiCallsQuery {
   adminBillingApiCalls: BillingApiCallData[];
+}
+
+// ---------- 租户管理（contracts/admin-tenant.graphql） ----------
+
+export type TenantType = 'personal' | 'team';
+
+export interface AdminTenantData {
+  id: string;
+  name: string;
+  type: TenantType;
+  memberCount: number;
+  balance: number | null;
+  createdAt: string;
+}
+
+export interface AdminTenantUserData {
+  id: string;
+  name: string;
+  username: string;
+  createdAt: string;
+}
+
+export interface AdminTenantDetailData {
+  id: string;
+  name: string;
+  type: TenantType;
+  users: AdminTenantUserData[];
+  createdAt: string;
+}
+
+export interface GetAdminTenantsQuery {
+  adminTenants: AdminTenantData[];
+}
+
+export interface GetAdminTenantQuery {
+  adminTenant: AdminTenantDetailData | null;
+}
+
+export interface AdminCreateFrontUserMutation {
+  adminCreateFrontUser: AdminTenantUserData;
 }

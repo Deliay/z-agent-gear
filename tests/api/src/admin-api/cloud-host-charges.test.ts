@@ -27,7 +27,7 @@ async function seedAccount(cashBalance: number): Promise<string> {
   const now = new Date();
   await mongoose.connection.db!.collection('billingaccounts').insertOne({
     _id,
-    ownerType: 'front_user',
+    ownerType: 'tenant',
     ownerId: new mongoose.Types.ObjectId().toString(),
     ownerName: 'api-test',
     cashBalance,

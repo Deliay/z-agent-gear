@@ -23,6 +23,9 @@ export const config = {
   // cloud-controller 内部管理 API（单一事实源在 cloud-controller，admin-api 仅经此代理，见裁决 12）。
   // 缺失时不在启动期 fail-fast；调用写操作会因不可达返回明确错误（CONTROL_PLANE_UNAVAILABLE）。
   cloudControllerUrl: process.env.CLOUD_CONTROLLER_URL || '',
+  // agent-api 内部 API（F2）：后台开户经 `POST {AGENT_API_URL}/internal/users` 转发（写权在 agent-api）。
+  // 缺失时不 fail-fast（与 cloudControllerUrl 同口径）；开户返回明确错误 AGENT_API_UNAVAILABLE。
+  agentApiUrl: (process.env.AGENT_API_URL || '').replace(/\/+$/, ''),
   internalApiToken: process.env.INTERNAL_API_TOKEN || '',
   // 强制销毁专用超时（裁决 9）：需大于 cloud-controller 的 post 预算（默认 90s）+ shutdown 宽限（10s）+ 删 Job 重试，
   // 默认 180000（180s）。非法/缺省回落默认值，避免 NaN 让 AbortController 立即中断。

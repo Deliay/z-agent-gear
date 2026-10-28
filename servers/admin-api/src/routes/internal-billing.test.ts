@@ -41,9 +41,16 @@ async function post(
   });
 }
 
+async function get(path: string, token: string | null = TOKEN): Promise<Response> {
+  return fetch(`${baseUrl}/internal/billing${path}`, {
+    method: 'GET',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+}
+
 function owner() {
   return {
-    ownerType: 'front_user',
+    ownerType: 'tenant',
     ownerId: new mongoose.Types.ObjectId().toString(),
     name: 'key',
   };
@@ -358,5 +365,66 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
       { productId: 'cloud_host.create', unitPrice: 5, currency: 'credits' },
       { productId: 'container.minute', unitPrice: 1, currency: 'credits' },
     ]);
+  });
+
+  it('T-B-OWNER1: 读请求 front_user 兼容解析到同 ownerId 的 tenant 行', async () => {
+    const ownerId = new mongoose.Types.ObjectId().toString();
+    // 迁移后存量行已是 tenant；旧 agent-api 仍可能传 front_user 读取。
+    const created = await BillingAccount.create({
+      ownerType: 'tenant',
+      ownerId,
+      ownerName: '租户 A',
+      cashBalance: 500,
+    });
+
+    const res = await get(`/account?ownerType=front_user&ownerId=${ownerId}`);
+    expect(res.status).toBe(200);
+    const account = (await res.json()) as { id: string; ownerType: string; ownerId: string; cashBalance: number };
+    expect(account).toMatchObject({
+      id: String(created._id),
+      ownerType: 'tenant',
+      ownerId,
+      cashBalance: 5,
+    });
+    // 不新增 front_user 行
+    expect(await BillingAccount.countDocuments({ ownerType: 'front_user' })).toBe(0);
+
+    // tenant 与 admin_user 读口径原样可用
+    expect((await get(`/account?ownerType=tenant&ownerId=${ownerId}`)).status).toBe(200);
+    const adminRes = await get(
+      `/account?ownerType=admin_user&ownerId=${new mongoose.Types.ObjectId().toString()}`,
+    );
+    expect(adminRes.status).toBe(200);
+    expect(((await adminRes.json()) as { ownerType: string }).ownerType).toBe('admin_user');
+  });
+
+  it('T-B-OWNER2: 写请求（Key 创建/撤销）front_user 兼容归一为 tenant（发布窗口放行）', async () => {
+    const body = { ...owner(), ownerType: 'front_user' };
+    const created = await post('/api-keys', body);
+    expect(created.status).toBe(201);
+    const payload = (await created.json()) as { apiKey: { id: string } };
+
+    // 仅归一 ownerType，不产生 front_user 新行
+    expect(await BillingApiKey.countDocuments({ ownerType: 'front_user' })).toBe(0);
+    expect(await BillingApiKey.countDocuments({ ownerType: 'tenant', ownerId: body.ownerId })).toBe(1);
+
+    const deleted = await fetch(
+      `${baseUrl}/internal/billing/api-keys/${payload.apiKey.id}?ownerType=front_user&ownerId=${body.ownerId}`,
+      { method: 'DELETE', headers: { Authorization: `Bearer ${TOKEN}` } },
+    );
+    expect(deleted.status).toBe(200);
+    expect((await deleted.json()) as { success: boolean }).toMatchObject({ success: true });
+  });
+
+  it('T-B-OWNER3: GET /api-keys 兼容 front_user（命中 tenant 归属的 Key）', async () => {
+    const base = owner();
+    expect((await post('/api-keys', base)).status).toBe(201);
+
+    const res = await get(`/api-keys?ownerType=front_user&ownerId=${base.ownerId}`);
+    expect(res.status).toBe(200);
+    const keys = (await res.json()) as Array<{ name: string }>;
+    expect(keys).toHaveLength(1);
+    expect(keys[0].name).toBe('key');
+    expect(await BillingApiKey.countDocuments({ ownerType: 'tenant', ownerId: base.ownerId })).toBe(1);
   });
 });

@@ -143,23 +143,15 @@ class WorkflowInstanceService {
         throw new Error(
           '该工作流包含需要 Worktree 隔离的节点，但工作区不是 Git 仓库（未设置默认分支），无法实例化',
         );
-      } else {
-        throw new Error(
-          '无法创建独立 Worktree：未能识别工作区默认分支（非 Git 仓库或候选分支均不存在）',
-        );
       }
+      // 仅 createWorkflowWorktree=true 但非 Git 工作区：忽略 Worktree（不阻断实例化，字段保持 null）。
     }
 
     // 5. 创建工作流 Worktree（如果启用）
     let workflowWorktreePath: string | undefined;
     let workflowWorktreeBranch: string | undefined;
-    if (input.createWorkflowWorktree) {
+    if (input.createWorkflowWorktree && workspace.defaultBranch) {
       const defaultBranch = workspace.defaultBranch;
-      if (!defaultBranch) {
-        throw new Error(
-          '无法创建独立 Worktree：未能识别工作区默认分支（非 Git 仓库或候选分支均不存在）',
-        );
-      }
       const result = await this.createWorkflowWorktree(
         input.controllerId,
         {

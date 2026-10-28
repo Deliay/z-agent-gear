@@ -7,15 +7,16 @@ type: Permanent
 
 **关联 Proposal**: `docs/engineering/proposals/20261028-refactor-conversation-rendering.md`（v1.1）
 **关联 PRD**: `docs/product/draft/20261028-conversation-rendering.md`（v1.1）
-**需求总分支（feat-branch）**: `prd/conversation-rendering`（基于 `origin/main` 12a18fd5，需求总 PR [#333](https://github.com/Deliay/z-agent-gear/pull/333)，评审 APPROVED）
+**需求总分支（feat-branch）**: `prd/conversation-rendering`（基于 `origin/main` 3aa74370，需求总 PR [#333](https://github.com/Deliay/z-agent-gear/pull/333)，评审 APPROVED）
 **计划提交分支**: `prd/conversation-rendering`（本文件随需求总分支提交）
 **创建日期**: 2026-10-28
-**计划版本**: v1.0
+**计划版本**: v1.1
 
 **版本说明**：
 
 - v1.0（2026-10-28）首版。对应 PRD / 提案 v1.1（PR #333 评审 APPROVED；评审提出的「工具调用完成后退化 Tool Call: other」缺陷已在 v1.1 修订中纳入根因与合并方案，无遗留修改项）。
-- §3 计划期裁决以**当前需求总分支代码事实**为准（2026-10-28，74c85d36）：重点校正 ① Markdown 语言识别实际在 `components.code` 覆写且无语言围栏块当前无工具栏；② `cleanOutput` 第一正则剥离的正是 SGR 颜色序列；③ jsdom 无 IntersectionObserver 需测试基建 stub；④ 四卡片 props 签名的切换口径。
+- v1.1（2026-10-28）需求总分支同步 `origin/main`（3aa74370，含多租户一期）并收口 `docs/product/AGENTS.md`、`docs/engineering/AGENTS.md` 索引冲突。已复核「12a18fd5 → 3aa74370」期间 `apps/agent-web/src/components/session/`、`apps/agent-web/src/lib/`、`vitest.setup.ts`、`package.json`、`tests/e2e/src/session-chat.spec.ts` **零变更**（多租户改动仅涉及登录/侧栏/鉴权等文件），§3 代码事实与 §5 文件清单不受影响；实现分支自本分支切出即可直接开工。
+- §3 计划期裁决以**当前需求总分支代码事实**为准（2026-10-28，74c85d36，同步 main 后复核无漂移）：重点校正 ① Markdown 语言识别实际在 `components.code` 覆写且无语言围栏块当前无工具栏；② `cleanOutput` 第一正则剥离的正是 SGR 颜色序列；③ jsdom 无 IntersectionObserver 需测试基建 stub；④ 四卡片 props 签名的切换口径。
 
 ## 1. 实现顺序
 
@@ -165,7 +166,7 @@ npx playwright test --workers=1
 |------|------|
 | `apps/agent-web/src/components/session/markdown/CodeBlock.tsx` | **新增**：语言标签（无语言显示 `text`）+ hover「复制」「换行」按钮 + 默认横向滚动/换行态 `whitespace-pre-wrap break-all`；复制经 `navigator.clipboard.writeText`，成功/失败 toast（sonner） |
 | `apps/agent-web/src/components/session/markdown/MermaidBlock.tsx` | **新增**：`import('mermaid')` 懒加载 + `securityLevel:'strict'` + 主题跟随（dark 判定与 ThemeToggle 一致，key 含主题）；缩放（0.5–3，步进 0.25）/重置/「查看源码」切换；失败回退 CodeBlock |
-| `apps/agent-web/src/components/session/MarkdownContent.tsx` | 重构（F1）：`pre` 覆写承接围栏块分流（mermaid→MermaidBlock、其余→CodeBlock），`code` 覆写仅行内代码；表格/链接/列表等既有覆写逐字保留 |
+| `apps/agent-web/src/components/session/MarkdownContent.tsx` | 重构（F1）：`pre` 覆写承接围栏块分流（mermaid→MermaidBlock、其余→CodeBlock），`code` 覆写仅行内代码；行内代码保持现有样式（提案 §1.3「行内代码跨度样式」口径：仅样式识别，不绑点击跳转）；表格/链接/列表等既有覆写逐字保留 |
 | `apps/agent-web/src/components/session/markdown/__tests__/CodeBlock.test.tsx` / `MermaidBlock.test.tsx` | **新增**：T-CB1~6 / T-MM1~6（§6.2） |
 | `apps/agent-web/src/components/session/MarkdownContent.test.tsx` | 更新：围栏块分流断言（含无语言块有工具栏、行内代码无工具栏） |
 
@@ -406,7 +407,7 @@ docs/engineering/AGENTS.md                 # plan 索引追加本文件
 apps/agent-web/AGENTS.md                   # 会话渲染层口径登记（Phase 9）
 ```
 
-## 附录 B：计划期代码事实核对记录（2026-10-28，需求总分支 74c85d36）
+## 附录 B：计划期代码事实核对记录（2026-10-28，需求总分支 74c85d36；同步 main 3aa74370 后复核渲染相关文件零漂移）
 
 | # | 核对点 | 观测 | 结论 |
 |---|--------|------|------|

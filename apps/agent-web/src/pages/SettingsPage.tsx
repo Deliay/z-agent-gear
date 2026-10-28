@@ -141,7 +141,7 @@ export default function SettingsPage() {
               <CardContent className="space-y-4">
                 <div>
                   <span className="block text-sm font-medium text-muted-foreground">用户名</span>
-                  <p className="mt-1 text-foreground">{user?.username ?? ''}</p>
+                  <p className="mt-1 text-foreground">{user?.name ?? ''}</p>
                 </div>
                 <Dialog>
                   <DialogTrigger render={<Button variant="destructive">退出登录</Button>} />

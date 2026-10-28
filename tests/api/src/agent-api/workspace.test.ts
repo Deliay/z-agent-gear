@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import { createFrontUser } from '../support/front-users.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -19,15 +20,6 @@ function gqlRequest(query: string, variables?: Record<string, unknown>, token?: 
     body: JSON.stringify(body),
   });
 }
-
-const SIGNUP = `
-  mutation Signup($username: String!, $password: String!) {
-    signup(username: $username, password: $password) {
-      token
-      user { id username }
-    }
-  }
-`;
 
 const CREATE_KEY = `
   mutation CreateControllerKey($input: CreateKeyInput!) {
@@ -154,11 +146,9 @@ let authToken = '';
 let rawKey = '';
 let controllerId = '';
 
-async function signup(): Promise<string> {
-  const uid = `ws_${Date.now().toString(36)}`;
-  const res = await gqlRequest(SIGNUP, { username: uid, password: 'testpass123' });
-  const body = await res.json();
-  return body.data?.signup?.token ?? '';
+async function newUserToken(): Promise<string> {
+  const { token } = await createFrontUser();
+  return token;
 }
 
 async function createKeyAndRegisterController(token: string): Promise<{ rawKey: string; controllerId: string }> {
@@ -181,7 +171,7 @@ async function createKeyAndRegisterController(token: string): Promise<{ rawKey: 
 
 describe('Controller Workspace API', () => {
   beforeAll(async () => {
-    authToken = await signup();
+    authToken = await newUserToken();
     expect(authToken).toBeTruthy();
 
     const ctrl = await createKeyAndRegisterController(authToken);
@@ -422,7 +412,7 @@ describe('Controller Workspace API', () => {
 describe('Folder Browser API', () => {
   beforeAll(async () => {
     if (!authToken) {
-      authToken = await signup();
+      authToken = await newUserToken();
       const ctrl = await createKeyAndRegisterController(authToken);
       rawKey = ctrl.rawKey;
       controllerId = ctrl.controllerId;
@@ -680,7 +670,7 @@ describe('Folder Browser API', () => {
 describe('Workspace Git Support', () => {
   beforeAll(async () => {
     if (!authToken) {
-      authToken = await signup();
+      authToken = await newUserToken();
     }
   });
 
@@ -1057,7 +1047,7 @@ describe('Session Creation with WorkspaceId', () => {
 
   beforeAll(async () => {
     if (!authToken) {
-      authToken = await signup();
+      authToken = await newUserToken();
       const ctrl = await createKeyAndRegisterController(authToken);
       rawKey = ctrl.rawKey;
       controllerId = ctrl.controllerId;
@@ -1121,7 +1111,7 @@ describe('createFolder mutation', () => {
 
   beforeAll(async () => {
     if (!authToken) {
-      authToken = await signup();
+      authToken = await newUserToken();
       const ctrl = await createKeyAndRegisterController(authToken);
       rawKey = ctrl.rawKey;
       controllerId = ctrl.controllerId;
