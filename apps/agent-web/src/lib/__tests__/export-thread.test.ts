@@ -91,6 +91,41 @@ describe('threadToMarkdown', () => {
     expect(markdown).toContain('# 会话记录');
     expect(markdown).toContain('空会话');
   });
+
+  it('should export tool messages without toolCallId individually', () => {
+    const markdown = threadToMarkdown([
+      {
+        direction: 'output',
+        content: { sessionUpdate: 'tool_call', title: 'Anonymous tool', status: 'completed' } as unknown as Record<string, unknown>,
+      },
+      {
+        direction: 'output',
+        content: { sessionUpdate: 'tool_call', title: 'Second tool', status: 'failed' } as unknown as Record<string, unknown>,
+      },
+    ]);
+
+    expect(markdown.match(/### Tool:/g)).toHaveLength(2);
+    expect(markdown).toContain('Anonymous tool');
+    expect(markdown).toContain('Second tool');
+  });
+
+  it('should degrade unserializable raw values to text fences', () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const markdown = threadToMarkdown([
+      {
+        direction: 'output',
+        content: {
+          sessionUpdate: 'tool_call',
+          toolCallId: 'tc-circular',
+          title: 'Circular',
+          rawInput: circular,
+        } as unknown as Record<string, unknown>,
+      },
+    ]);
+
+    expect(markdown).toContain('```text');
+  });
 });
 
 describe('downloadThreadMarkdown', () => {

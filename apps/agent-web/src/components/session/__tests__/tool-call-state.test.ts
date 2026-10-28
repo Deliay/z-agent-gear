@@ -178,6 +178,23 @@ describe('mergeToolCallMessages', () => {
     expect(toolCallTitle(created)).toBe('npm test');
     expect(toolCallTitle(completed)).toBe('npm test');
   });
+
+  it('should fall back to in_progress when status is explicitly cleared', () => {
+    const merged = mergeToolCallMessages([
+      message({ sessionUpdate: 'tool_call', toolCallId: 'tc-1', status: 'pending' }),
+      message({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-1', status: null }),
+    ]);
+
+    expect(merged.status).toBe('in_progress');
+  });
+
+  it('should keep an empty toolCallId when no message carries one', () => {
+    const merged = mergeToolCallMessages([
+      message({ sessionUpdate: 'tool_call', title: 'No id' }),
+    ]);
+
+    expect(merged.toolCallId).toBe('');
+  });
 });
 
 describe('kindLabel / toolCallColor', () => {

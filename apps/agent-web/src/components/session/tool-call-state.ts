@@ -1,4 +1,4 @@
-import type { ToolCallContent, ToolCallLocation, ToolCallStatus } from '@agentclientprotocol/sdk';
+import type { ToolCallContent, ToolCallLocation } from '@agentclientprotocol/sdk';
 import { parseSessionUpdate } from './group-messages';
 
 /** 合并函数只依赖消息的 content 字段，便于导出等场景复用 */
@@ -97,10 +97,6 @@ export function mergeToolCallMessages(messages: ToolCallMessageLike[]): MergedTo
 /** 标题口径：创建时与完成后同一条计算路径，避免「完成后退化为 Tool Call: other」 */
 export function toolCallTitle(toolCall: MergedToolCall): string {
   return toolCall.title || kindLabel(toolCall.kind ?? 'other');
-}
-
-export function toolCallStatus(toolCall: MergedToolCall): ToolCallStatus | string {
-  return toolCall.status || 'in_progress';
 }
 
 /** 状态 → AcpCard 语义色（pending 为等待态弱化样式） */
