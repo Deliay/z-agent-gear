@@ -5,7 +5,7 @@ type: Permanent
 
 # integration→release 集成验收报告（2026-10-28，AI Review）
 
-> **状态**: ❌ **第二轮复核未通过（已打回）**。返工 2 × 🔴 + 16 × 🟠 + 15 × 🟡 经独立复核确认真实落地（tsc 0 / vitest 913 全绿 / lint 零新增 / 12 组探针复测全过 / 3 组区分力抽查 RED-AS-EXPECTED / 导出内容落盘实证）；复核期间**定位并绕过 E2E 环境阻断**（`/usr/local/bin/docker` shim 将 `--name` 的值误当镜像归一 → 容器名含 `/`，修复版 shim 经 PATH 前置后 Aspire 全栈 Healthy），CREN1~9 实跑 **6 过 3 挂**。发现 1 项交付缺陷 + 2 项 🟡：N-1（🟠 必须修复）E2E-CREN2 断言严格模式歧义确定性红（`mermaid-block` 内 `svg` 命中 3 个工具栏图标 SVG）；N-2/N-3（🟡）CREN8/9 下载断言环境依赖（headless-shell 不落盘 artifacts，纯 vanilla 复现，非产品缺陷）、报告 R-17/R-18 验证结果行错位。详见第九节。
+> **状态**: ✅ **第二轮返工完成（待复核）**。N-1（CREN2 断言严格模式歧义）已通过 `data-testid="mermaid-diagram"` 收窄作用域修复；N-2（CREN8/9 下载内容读取环境依赖）已改为页面侧拦截 `URL.createObjectURL` 捕获 Blob 文本；N-3 复核更正保留不回退。**E2E 全量实跑 9/9 通过（24.5s）**：`npx playwright test src/session-rendering.spec.ts`。修复提交 `70d1e926`，详见 9.6。
 
 ## 关联文档
 
@@ -386,7 +386,7 @@ type: Permanent
 | # | 复核结论 | 关键证据 |
 |---|---|---|
 | R-1 🔴 | ✅ 修复属实 | `lib/session-messages.ts` `collectFullHistory` before 游标分页 + maxPages 显式失败；`SessionView.tsx` 导出接线 + 条数回执 toast；探针 + **CREN9 导出落盘实证 30/30 条恰好各一次**（见 9.3） |
-| R-2 🔴 | ⚠️ 部分修复：合并语义已修、**断言仍确定性红（N-1）** | 三条注入 distinct messageId 后浏览器实测**三条独立消息渲染成功**（mermaid 成功块 + 非法块回退 + 纯文本，快照佐证）；但 `spec` 定位器 `mermaid-block .locator('svg')` 命中 3 个工具栏 lucide 图标 SVG → 严格模式必炸 |
+| R-2 🔴 | ✅ 修复完成（N-1 收窄作用域后实跑通过） | 三条 distinct messageId 独立渲染成功；CREN2 断言改为 `mermaid-diagram svg`，非法块按文本 filter 定位；9/9 E2E 实跑通过 |
 | R-3~R-5 🟠 | ✅ 修复属实 | `toolCallHeaderTitle` 标题回退链 title→name→kindLabel→Tool Call 且不重复前缀；`ToolCallRawSection` 「输入不可得」占位；`renderBody` 终态/失败态全覆盖；`readRawInputObject` 统一防护（区分力抽查转红） |
 | R-6/R-7 🟠 | ✅ 修复属实 | `diff.ts` 换行归一 + `diffArrays` 纯行文本；P1~P4 探针复测通过，被固化的错误期望已改 `removed[2]/added[5]` |
 | R-8 🟠 | ✅ 修复属实 | `suppressErrorRendering: true` + `cleanupTempElements` 兜底（成功/失败双路径） |
@@ -407,14 +407,14 @@ type: Permanent
 | 用例 | 结果 | 说明 |
 |---|---|---|
 | E2E-CREN1 代码块工具栏 | ✅ 通过 | 语言标签/复制 toast/换行切换 |
-| E2E-CREN2 Mermaid | ❌ **失败（N-1，交付缺陷）** | 断言 `getByTestId('mermaid-block').first().locator('svg')` 严格模式歧义（命中 3 个工具栏图标 SVG）；**渲染本身正确**：三条独立消息、合法块渲染、非法块回退代码块、纯文本正常（页面快照佐证） |
+| E2E-CREN2 Mermaid | ✅ 通过（N-1 修复后） | 断言收窄为 `getByTestId('mermaid-diagram').locator('svg')`；非法块按文本 filter 定位 `code-block`；合法渲染/回退/纯文本三断言均绿 |
 | E2E-CREN3 差异渲染 | ✅ 通过 | 双行号 + 增删对齐 |
 | E2E-CREN4 终端 ANSI | ✅ 通过 | 颜色 span + 文本可读 |
 | E2E-CREN5 工具生命周期 | ✅ 通过 | 标题不退化 + 可红负向断言 + 原始输入可展开 |
 | E2E-CREN6 滚动导航 | ✅ 通过 | 视口保持 + 真实滚底 + 恢复跟随（R-17 三断言全绿） |
 | E2E-CREN7 窄视口 | ✅ 通过 | 无横向溢出 |
-| E2E-CREN8 导出 | ⚠️ 断言读文件失败（N-2，环境） | `download.path()` 落盘位置缺失（headless-shell 把下载写到 CWD）；**下载内容实证正确**（含 `export-me`，文件名 `session-*.md` 断言已过） |
-| E2E-CREN9 长会话导出拉全历史 | ⚠️ 同上（N-2，环境） | **下载内容实证正确：恰好 30 条、`export-history-0~29` 各出现一次**——R-1「导出拉全历史、不重复不截断」端到端成立（CREN9 前置断言 `export-history-0` 未加载也已验证窗口截断场景真实） |
+| E2E-CREN8 导出 | ✅ 通过（N-2 修复后） | 页面侧捕获 Blob 文本断言含 `export-me`；下载文件名 `session-*.md` 断言保留 |
+| E2E-CREN9 长会话导出拉全历史 | ✅ 通过（N-2 修复后） | 页面侧捕获 Blob 文本：恰好 30 条、`export-history-0~29` 各一次；前置断言 `export-history-0` 未加载，验证窗口截断场景真实 |
 
 > N-2 定性依据：纯 `Blob + a[download] + revokeObjectURL` vanilla 探针（含「从不 revoke」对照）在本环境同样 `ENOENT`，`download.failure()` 为 `null`、`saveAs()` 亦失败——chrome-headless-shell 151 + Playwright 1.62 的下载工件处理问题，**非产品缺陷**；产品导出内容经落盘文件逐条核对正确。
 
@@ -425,13 +425,13 @@ type: Permanent
 - **问题描述**：`tests/e2e/src/session-rendering.spec.ts:79` `expect(page.getByTestId('mermaid-block').first().locator('svg')).toBeVisible()` —— `mermaid-block` 内除图表 SVG 外还有工具栏 3 个 lucide 图标 SVG（缩小/放大/查看源码，`MermaidBlock.tsx:106-141`），`locator('svg')` 恒命中 ≥3 个元素，`toBeVisible()` 严格模式立即抛 `strict mode violation`（实跑日志证实）；图表渲染成功后为 4 个，仍歧义。**该断言任何情况下都无法通过**——PRD 功能点 2 的唯一 E2E 验收载体不可用，与首轮 R-2/R-15 同类（断言可红性/交付前实跑缺失）。R-2 修复仅解决了 chunk 合并粘连，未解决定位器歧义，8.3 注「E2E 断言已按可红口径改写」与事实不符。
 - **根因分析**：断言作用域未收窄到图表容器；工具栏图标与图表同为 `svg` 后代；返工期间 E2E 无法实跑，「可红」验证只覆盖单测层。
 - **修复方案**：① 为 mermaid 图表注入容器（`MermaidBlock.tsx:172` `dangerouslySetInnerHTML` 所在 div）增加 `data-testid="mermaid-diagram"`，断言改为 `getByTestId('mermaid-diagram').locator('svg')`（或 `getByTestId('mermaid-block').first().locator('.overflow-auto svg')`）；② 按 9.3 的环境修复配方**实跑全 spec** 并附结果；③ 非法块回退断言 `getByTestId('code-block').first()` 同样收窄作用域核对一次。
-- **验证结果**：待返工回填。
+- **验证结果**：✅ 已修复（`70d1e926`）。`MermaidBlock` 图表注入容器新增 `data-testid="mermaid-diagram"`；E2E-CREN2 改为 `getByTestId('mermaid-diagram').locator('svg')`，非法块改用 `getByTestId('code-block').filter({ hasText: ... })` 收窄作用域；单测 T-MM1 同步断言图表容器内 SVG。**实跑 9/9 通过（24.5s）**。
 
 #### N-2（🟡）CREN8/CREN9 下载内容断言环境依赖
 
 - **问题描述**：`spec:276/:304` 用 `download.path()` + `readFile` 读取导出内容，该路径（`test-results/.playwright-artifacts-N/…`）在 chrome-headless-shell 环境从不生成（文件实际落在 CWD），导致两条用例在部分环境必然红。已实证产品导出内容正确（见 9.3），但验收载体应可在任何环境红/绿。
 - **修复方案（建议）**：改为页面侧拦截导出内容（如 `page.addInitScript` 覆写 `URL.createObjectURL` 捕获 Blob 文本，或对 `a[download]` 点击做内容捕获）后再断言；或以 `download.createReadStream()` 并对 `failure()` 做显式判定。若判定该问题属环境限制不修，需人类书面豁免并以 9.3 落盘实证存档。
-- **验证结果**：待返工回填。
+- **验证结果**：✅ 已收口（`70d1e926`）。CREN8/CREN9 改为页面侧覆写 `URL.createObjectURL` 捕获 Blob 文本后断言，不再调用 `download.path()` + `readFile`；两条用例实跑通过，且 R-1 长历史导出内容仍逐条核对（30 条不重不漏）。
 
 #### N-3（🟡）报告 R-17/R-18「验证结果」行内容错位（已更正）
 
@@ -441,6 +441,8 @@ type: Permanent
 
 ### 9.5 判定与返工要求
 
+> 注：以下为第二轮复核时点判定；N-1/N-2 已在 9.6 闭环，当前状态以文首横幅与 9.6 为准。
+
 **判定：打回（REJECT）**。返工对 18 × 🔴🟠 + 15 × 🟡 的修复经复核**全部属实**、单测/类型/lint/探针/区分力全绿，且 R-1/R-12/R-14/R-15/R-17 的端到端行为已实跑或落盘实证；但交付物中的 E2E-CREN2 断言确定性红（N-1），违反「交付前实跑全 spec」的首轮返工要求 ③ 与「断言可红」要求 ②，须打回修复。
 
 【返工要求】
@@ -448,3 +450,42 @@ type: Permanent
 2. **收口 N-2**（🟡）：CREN8/9 内容断言改环境无关写法，或人类书面豁免 + 9.3 落盘实证存档。
 3. **核对 N-3**（🟡）：回填时逐项核对报告行文与 8.1 一致（错位已更正，勿回退）。
 4. 自报数值继续与独立复跑逐项一致；E2E 结果必须附运行输出摘要。
+
+
+### 9.6 第二轮返工闭环（2026-10-28）
+
+> **修复提交**：`70d1e926`（N-1 Mermaid 图表 testid + E2E 断言收窄；N-2 页面侧 Blob 捕获）。本报告回填随文档提交。
+
+**N-1 修复**
+- `MermaidBlock.tsx`：`dangerouslySetInnerHTML` 所在图表容器新增 `data-testid="mermaid-diagram"`。
+- `session-rendering.spec.ts`：CREN2 改为 `await expect(page.getByTestId('mermaid-diagram').locator('svg')).toBeVisible()`；非法块断言改为 `page.getByTestId('code-block').filter({ hasText: 'this is definitely not a diagram' })`，避免 `.first()` 顺序依赖。
+- 单测 `MermaidBlock.test.tsx` T-MM1 同步断言 `[data-testid="mermaid-diagram"] svg`。
+
+**N-2 修复**
+- CREN8/CREN9 在点击导出前执行页面侧注入：覆写 `URL.createObjectURL`，对 Blob 调用 `text()` 并写入 `window.__exportedMarkdown`；点击后用 `expect.poll` 读取并断言内容。
+- 不再依赖 `download.path()` / `readFile`，与 headless-shell 下载工件落盘行为解耦；下载事件与文件名断言保留。
+
+**E2E 实跑结果（本机，环境修复配方见 9.3）**
+
+```
+Running 9 tests using 1 worker
+✓ 1 E2E-CREN1 代码块工具栏 (2.3s)
+✓ 2 E2E-CREN2 Mermaid 渲染与语法错误回退 (2.5s)
+✓ 3 E2E-CREN3 差异渲染 (2.1s)
+✓ 4 E2E-CREN4 终端 ANSI (2.1s)
+✓ 5 E2E-CREN5 工具生命周期一致 (2.1s)
+✓ 6 E2E-CREN6 滚动导航 (5.0s)
+✓ 7 E2E-CREN7 窄视口无横向溢出 (2.1s)
+✓ 8 E2E-CREN8 导出对话为 Markdown (2.2s)
+✓ 9 E2E-CREN9 长会话导出拉全历史（R-1） (3.3s)
+9 passed (24.5s)
+```
+
+**本机复跑**
+| 项目 | 结果 |
+|---|---|
+| `cd apps/agent-web && npx tsc -b` | ✅ 0 error |
+| `cd apps/agent-web && npx vitest run` | ✅ 913 passed / 94 files |
+| `cd apps/agent-web && npx eslint .` | ⚠️ 仅存量 2 error + 5 warning，本轮零新增 |
+| `cd tests/e2e && npm run typecheck` | ✅ 0 error |
+| `npx playwright test src/session-rendering.spec.ts` | ✅ **9 passed / 24.5s** |
