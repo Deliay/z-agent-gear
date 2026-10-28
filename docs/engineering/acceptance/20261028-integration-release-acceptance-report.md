@@ -1,11 +1,11 @@
 ---
-description: integration→release 集成验收报告（PR #337）——对话渲染重构（Issue #332，PRD v1.1）集成验收首轮：对 git diff origin/release...integration（11 提交 / 59 文件 / +5316 −294）做集成级 AI 代码评审 + 本机独立验证（tsc/lint/单测 848/e2e typecheck/9 组实机探针），发现 2×🔴 + 16×🟠 + 15×🟡——🔴 R-1 导出对话静默截断历史（只导出已加载 25 条窗口却提示「已导出对话」，功能点 6「整段对话导出」主场景失效）；🔴 R-2 交付的 E2E-CREN2 确定性红（3 条无 messageId chunk 被相邻合并 + join('') 粘连围栏成单个非法 mermaid 块，remark-parse AST 实证，mermaid-block 定位器永不命中）；🟠 含工具生命周期退化残留（创建事件缺失时标题退化「Tool Call: Tool Call」+ 原始输入入口整体消失、失败态输出不渲染）、group-messages 未防护 JSON.parse 整页崩溃、diff 尾行无换行误报且测试固化错误对齐、Mermaid 错误图残留 document.body、ansi 剥离器三类边界（未终结 DCS 吞全部后续输出/截断序列乱码/冒号真彩乱码）、导出三缺陷（流式分片不合并/content 结果摘要丢失/纯文本混入 UI chrome）、滚动跟随双竞态、E2E-CREN5 负向断言恒真、TerminalOutput 测试未按计划交付、功能点 7 验收无断言、resource_link 无协议白名单；首轮打回（REJECT）。第二轮复核（返工 `eba92a8d`~`34fcf81a`）：18+15 项修复逐项确认落地（tsc 0 / vitest 913 全绿 / lint 零新增 / 12 组探针复测 / 3 组区分力抽查 RED-AS-EXPECTED），定位并绕过 E2E 环境阻断（docker shim 将 `--name` 值误当镜像归一）后 CREN1~9 实跑 6 过 3 挂——N-1（🟠）E2E-CREN2 断言 `mermaid-block svg` 严格模式歧义确定性红（工具栏图标 SVG 同为后代）、N-2（🟡）CREN8/9 下载断言环境依赖（导出内容已落盘实证正确，CREN9 恰好 30 条各一次）、N-3（🟡）报告 R-17/R-18 行文错位（已更正）；第二轮打回（REJECT）
+description: integration→release 集成验收报告（PR #337）——对话渲染重构（Issue #332，PRD v1.1）集成验收首轮：对 git diff origin/release...integration（11 提交 / 59 文件 / +5316 −294）做集成级 AI 代码评审 + 本机独立验证（tsc/lint/单测 848/e2e typecheck/9 组实机探针），发现 2×🔴 + 16×🟠 + 15×🟡——🔴 R-1 导出对话静默截断历史（只导出已加载 25 条窗口却提示「已导出对话」，功能点 6「整段对话导出」主场景失效）；🔴 R-2 交付的 E2E-CREN2 确定性红（3 条无 messageId chunk 被相邻合并 + join('') 粘连围栏成单个非法 mermaid 块，remark-parse AST 实证，mermaid-block 定位器永不命中）；🟠 含工具生命周期退化残留（创建事件缺失时标题退化「Tool Call: Tool Call」+ 原始输入入口整体消失、失败态输出不渲染）、group-messages 未防护 JSON.parse 整页崩溃、diff 尾行无换行误报且测试固化错误对齐、Mermaid 错误图残留 document.body、ansi 剥离器三类边界（未终结 DCS 吞全部后续输出/截断序列乱码/冒号真彩乱码）、导出三缺陷（流式分片不合并/content 结果摘要丢失/纯文本混入 UI chrome）、滚动跟随双竞态、E2E-CREN5 负向断言恒真、TerminalOutput 测试未按计划交付、功能点 7 验收无断言、resource_link 无协议白名单；首轮打回（REJECT）。第二轮复核（返工 `eba92a8d`~`34fcf81a`）：18+15 项修复逐项确认落地（tsc 0 / vitest 913 全绿 / lint 零新增 / 12 组探针复测 / 3 组区分力抽查 RED-AS-EXPECTED），定位并绕过 E2E 环境阻断（docker shim 将 `--name` 值误当镜像归一）后 CREN1~9 实跑 6 过 3 挂——N-1（🟠）E2E-CREN2 断言 `mermaid-block svg` 严格模式歧义确定性红（工具栏图标 SVG 同为后代）、N-2（🟡）CREN8/9 下载断言环境依赖（导出内容已落盘实证正确，CREN9 恰好 30 条各一次）、N-3（🟡）报告 R-17/R-18 行文错位（已更正）；第二轮打回（REJECT）。第三轮复核（返工 `70d1e926`/`216425bb`）：N-1（`mermaid-diagram` testid 收窄断言作用域）/N-2（页面侧 `URL.createObjectURL` 捕获 Blob 文本）/N-3 逐项确认闭环；独立复跑 tsc 0 / vitest 913 / eslint 存量 2 error+5 warning / e2e typecheck 0，**E2E 独立实跑 9/9（25.4s）** + 2 组「回退→转红」区分力自证 RED-AS-EXPECTED（移除 testid→CREN2 红；破坏导出内容→CREN8/9 红）；全部 🔴🟠🟡 收口、无遗留问题——**集成验收通过（DONE）**
 type: Permanent
 ---
 
 # integration→release 集成验收报告（2026-10-28，AI Review）
 
-> **状态**: ✅ **第二轮返工完成（待复核）**。N-1（CREN2 断言严格模式歧义）已通过 `data-testid="mermaid-diagram"` 收窄作用域修复；N-2（CREN8/9 下载内容读取环境依赖）已改为页面侧拦截 `URL.createObjectURL` 捕获 Blob 文本；N-3 复核更正保留不回退。**E2E 全量实跑 9/9 通过（24.5s）**：`npx playwright test src/session-rendering.spec.ts`。修复提交 `70d1e926`，详见 9.6。
+> **状态**: ✅ **集成验收通过（三轮闭环，2026-10-28）**。第三轮复核确认 N-1（`mermaid-diagram` testid 收窄断言作用域）/N-2（页面侧 `URL.createObjectURL` 捕获 Blob 文本，下载断言环境无关）/N-3（报告行文口径）全部闭环；AI Review 独立复跑 tsc 0 / vitest 913 / eslint 存量 2 error+5 warning 零新增 / e2e typecheck 0，**E2E 独立实跑 9/9 通过（25.4s）**，并以 2 组「回退→转红」区分力自证确认新断言可红。全部 🔴×2 + 🟠×16 + 🟡×15 + N-1/N-2/N-3 收口，无遗留问题。详见第十节。
 
 ## 关联文档
 
@@ -489,3 +489,68 @@ Running 9 tests using 1 worker
 | `cd apps/agent-web && npx eslint .` | ⚠️ 仅存量 2 error + 5 warning，本轮零新增 |
 | `cd tests/e2e && npm run typecheck` | ✅ 0 error |
 | `npx playwright test src/session-rendering.spec.ts` | ✅ **9 passed / 24.5s** |
+
+## 十、AI Review 复核记录（第三轮，2026-10-28）——集成验收通过
+
+> 复核对象：第二轮返工提交 `70d1e926`（N-1/N-2 修复）+ `216425bb`（报告回填），即 `git diff 311e8019..216425bb`（4 文件 +93 −18）。
+> 复核方式：逐行回读 diff 与变更后全文、断言可红性推演、独立复跑验证（不采信自报）、**E2E 独立实跑（AI Review 自建环境，含环境配方补全）**、2 组「回退实现→断言转红」区分力自证。
+
+### 10.1 独立验证（本机复跑，不采信自报）
+
+| 项目 | 复跑结果 | 与自报一致 |
+|---|---|---|
+| `apps/agent-web` `tsc -b` | ✅ 0 error | ✅ |
+| `apps/agent-web` `vitest run` | ✅ **913 passed / 94 files / 0 failed** | ✅ |
+| `apps/agent-web` eslint 全仓 | ⚠️ 2 error + 5 warning，与第二轮存量清单逐条一致（2 error 均在 `cloud-host/IssuesLinkageDialog.tsx`，该文件与 release 逐字一致、不在本 diff；本轮改动文件 `MermaidBlock.tsx`/`MermaidBlock.test.tsx` eslint 0 problem），**零新增** | ✅ |
+| `tests/e2e` typecheck | ✅ 0 error | ✅ |
+| `npx playwright test src/session-rendering.spec.ts` | ✅ **9 passed / 25.4s**（AI Review 独立实跑，见 10.3） | ✅ |
+
+### 10.2 N-1/N-2/N-3 逐项复核结论
+
+| # | 复核结论 | 关键证据 |
+|---|---|---|
+| N-1 🟠 | ✅ 修复属实且断言可红 | `MermaidBlock.tsx:177` `data-testid="mermaid-diagram"` 位于 `dangerouslySetInnerHTML` 图表容器上，工具栏 lucide 图标为其**兄弟节点**（`:85-113` 头部栏），作用域天然隔离；CREN2 改 `getByTestId('mermaid-diagram').locator('svg')`，fixture `graph TD; A-->B;` 渲染单根 SVG，严格模式唯一命中（实跑证实）；非法块断言 `getByTestId('code-block').filter({ hasText: ... })` 去 `.first()` 顺序依赖且作用域唯一；单测 T-MM1 同步。**区分力自证**：临时移除 testid → CREN2 在 `spec:113` 立即转红（10.4-A） |
+| N-2 🟡 | ✅ 收口属实且断言可红/环境无关 | CREN8/CREN9 点击导出前覆写 `URL.createObjectURL` 捕获 `Blob.text()` 至 `window.__exportedMarkdown`，`expect.poll` 读后断言；不再调用 `download.path()+readFile`，与 chrome-headless-shell 下载落盘行为解耦；下载事件 + 文件名断言保留。内容断言可红：CREN8 `toContain('export-me')`；CREN9 30 条逐条 + `match(/export-history-/g)` 计数恰 30。**区分力自证**：破坏导出序列化 → CREN8/CREN9 双双转红（10.4-B） |
+| N-3 🟡 | ✅ 口径正确未回退 | R-17/R-18「验证结果」行与 8.1 逐项表一致，第二轮更正保留 |
+
+### 10.3 E2E 独立实跑（AI Review 自建环境，9/9）
+
+环境：PATH 前置修复版 docker shim（正确跳过带值 flag 的值、本地已有镜像不改名）→ `aspire start` 全栈 **mongodb/redis/rabbitmq + admin-api/admin-web/agent-api/agent-web/cloud-controller/controller-api 全部 Running/Healthy**。**运行配方补全（对 9.3 的补充）**：除 `BASE_URL`（`aspire describe agent-web` 动态端口）外，开户链路还需 `INTERNAL_API_TOKEN`（可从任一服务进程 `environ` 取得，与 Aspire 注入的 `internal-api-token` 一致）或 `MONGODB_URI`（`mongodb://<mongodb 端口>`），否则 `provisionFrontUser` 全部 9 条在开户环节阻断（本轮首跑实证，与产品/断言无关）。
+
+```
+BASE_URL=http://localhost:41119 API_URL=http://localhost:10001/graphql \
+ADMIN_API_URL=http://localhost:10003/graphql ADMIN_WEB_URL=http://localhost:46517 \
+CONTROLLER_API_URL=http://localhost:41719 CLOUD_CONTROLLER_URL=http://localhost:10004 \
+MONGODB_URI=mongodb://localhost:40615 INTERNAL_API_TOKEN=<internal-api-token> \
+npx playwright test src/session-rendering.spec.ts
+
+Running 9 tests using 1 worker
+✓ 1 E2E-CREN1 代码块工具栏 (2.8s)
+✓ 2 E2E-CREN2 Mermaid 渲染与语法错误回退 (2.9s)
+✓ 3 E2E-CREN3 差异渲染 (2.1s)
+✓ 4 E2E-CREN4 终端 ANSI (2.0s)
+✓ 5 E2E-CREN5 工具生命周期一致 (2.1s)
+✓ 6 E2E-CREN6 滚动导航 (5.0s)
+✓ 7 E2E-CREN7 窄视口无横向溢出 (2.1s)
+✓ 8 E2E-CREN8 导出对话为 Markdown (2.1s)
+✓ 9 E2E-CREN9 长会话导出拉全历史（R-1） (3.3s)
+9 passed (25.4s)
+```
+
+### 10.4 区分力自证（回退实现 → 断言转红 → 恢复 → 复绿）
+
+| # | 回退方式 | 预期 | 实测 |
+|---|---|---|---|
+| A（N-1） | 移除 `MermaidBlock.tsx` 图表容器 `data-testid="mermaid-diagram"` | CREN2 转红 | ✅ RED-AS-EXPECTED：`spec:113` `getByTestId('mermaid-diagram').locator('svg')` 超时失败 |
+| B（N-2） | `export-thread.ts` `contentText` 破坏为常量串 | CREN8/CREN9 转红 | ✅ RED-AS-EXPECTED：CREN8 `toContain('export-me')` 失败、CREN9 `spec:340` 逐条断言失败 |
+
+> 恢复实现后复跑 CREN2/8/9：**3 passed（8.9s）**，红检未污染交付代码（工作树逐字还原）。
+
+### 10.5 复核观察（非阻断，记录备查）
+
+1. **CREN9「各一次」断言的前缀碰撞软化（🟡 级，可选加固）**：`toContain('export-history-${i}')` 对 `i=1/2` 会被 `export-history-10~19/20~29` 的前缀覆盖（字符串子串语义），「各一次」实际由「30 条计数断言 + 逐条出现」联合保证——消息文本唯一、导出去重的现实前提下等价于「不重不漏」，且10.4-B 已证内容错误可红。如需完全精确，可改为 `content.match(/export-history-(\d+)/g)` 解析后与 `0~29` 集合对拍。不构成打回。
+2. **运行配方文档补全（🟡 级）**：9.3 环境配方未含 `INTERNAL_API_TOKEN`/`MONGODB_URI`/动态端口注入，复刻时会在开户环节阻断（本轮首跑实证）；已在 10.3 补全完整命令，建议后续同步进 `tests/e2e/AGENTS.md` 已有环境变量表即可（表已存在，仅执行示例缺注入）。不构成打回。
+
+### 10.6 判定
+
+**✅ 通过（DONE）**。第二轮返工要求①~④逐项达成：N-1 修复并附全量实跑（9/9）✅；N-2 收口为环境无关断言且经区分力自证 ✅；N-3 报告口径逐项一致 ✅；自报数值与独立复跑逐项一致 ✅。全部 🔴×2 + 🟠×16 + 🟡×15 + N-1/N-2/N-3 收口，**无遗留问题**，integration 分支达成集成验收标准，可进入后续交付环节。
