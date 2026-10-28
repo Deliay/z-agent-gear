@@ -12,6 +12,7 @@ import { RESPOND_PERMISSION } from '../graphql/mutations';
 import { GET_SESSION_MESSAGES } from '../graphql/queries';
 import type { TodoItemData, PermissionToolCallData, RespondPermissionMutation, GetSessionMessagesQuery } from '../graphql/types';
 import ToolCallCard from './session/ToolCallCard';
+import { mergeToolCallMessages } from './session/tool-call-state';
 
 const SUMMARY_MAX_LENGTH = 200;
 
@@ -57,19 +58,19 @@ export function PermissionDialog({ open, onOpenChange, todo }: PermissionDialogP
 
   const messages = messagesData?.sessionMessages ?? [];
   
-  // 查找对应的ToolCall消息
-  const toolCallMessage = todo.data?.toolCallId 
-    ? messages.find((msg) => {
+  // 查找对应的 ToolCall 消息（同一 toolCallId 可能有多条稀疏更新，合并后渲染）
+  const toolCallMessages = todo.data?.toolCallId
+    ? messages.filter((msg) => {
         try {
           const content = typeof msg.content === 'string' ? JSON.parse(msg.content) : msg.content;
-          return content?.toolCallId === todo.data?.toolCallId || 
+          return content?.toolCallId === todo.data?.toolCallId ||
                  content?.sessionUpdate === 'tool_call' && content?.toolCallId === todo.data?.toolCallId ||
                  content?.sessionUpdate === 'tool_call_update' && content?.toolCallId === todo.data?.toolCallId;
         } catch {
           return false;
         }
       })
-    : null;
+    : [];
 
   const handleRespond = async (optionId?: string) => {
     if (!todo.data) return;
@@ -135,17 +136,17 @@ export function PermissionDialog({ open, onOpenChange, todo }: PermissionDialogP
           )}
 
           {/* 显示ToolCall卡片 */}
-          {!toolCallDetail && toolCallMessage && (
+          {!toolCallDetail && toolCallMessages.length > 0 && (
             <div className="border rounded-lg p-2">
-              <ToolCallCard 
-                messages={[toolCallMessage]} 
+              <ToolCallCard
+                toolCall={mergeToolCallMessages(toolCallMessages)}
                 expanded={true}
               />
             </div>
           )}
 
           {/* 如果没有找到ToolCall消息，显示toolCallId */}
-          {!toolCallDetail && !toolCallMessage && todo.data.toolCallId && (
+          {!toolCallDetail && toolCallMessages.length === 0 && todo.data.toolCallId && (
             <div className="p-3 bg-muted rounded-lg">
               <p className="text-sm font-medium">工具调用 ID</p>
               <p className="text-xs text-muted-foreground font-mono">

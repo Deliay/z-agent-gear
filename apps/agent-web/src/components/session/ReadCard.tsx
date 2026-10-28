@@ -1,8 +1,11 @@
 import AcpCard from './AcpCard';
 import MarkdownContent from './MarkdownContent';
+import ToolCallRawSection from './ToolCallRawSection';
+import ToolKindIcon from './tool-call-icons';
+import { toolCallColor, type MergedToolCall } from './tool-call-state';
 
 interface ReadCardProps {
-  messages: Array<{ content: string | Record<string, unknown>; createdAt: string }>;
+  toolCall: MergedToolCall;
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
 }
@@ -12,20 +15,11 @@ interface ToolCallLocation {
   line?: number;
 }
 
-function parseMessage(content: string | Record<string, unknown>): Record<string, unknown> | null {
-  if (typeof content === 'object') return content as Record<string, unknown>;
-  try { return JSON.parse(content) as Record<string, unknown>; } catch { return null; }
-}
-
-export default function ReadCard({ messages, expanded, onExpandedChange }: ReadCardProps) {
-  const last = messages[messages.length - 1];
-  const parsed = parseMessage(last.content);
-  if (!parsed) return null;
-
-  const rawInput = parsed.rawInput as Record<string, unknown> | undefined;
-  const rawOutput = parsed.rawOutput as Record<string, unknown> | undefined;
-  const locations = parsed.locations as ToolCallLocation[] | undefined;
-  const status = typeof parsed.status === 'string' ? parsed.status : 'in_progress';
+export default function ReadCard({ toolCall, expanded, onExpandedChange }: ReadCardProps) {
+  const rawInput = toolCall.rawInput as Record<string, unknown> | undefined;
+  const rawOutput = toolCall.rawOutput as Record<string, unknown> | undefined;
+  const locations = toolCall.locations as ToolCallLocation[] | undefined;
+  const status = toolCall.status || 'in_progress';
 
   const filePath = (rawInput?.filePath as string) || locations?.[0]?.path || '';
   const filePaths: string[] = [];
@@ -44,9 +38,10 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
       title="Read Files"
       summary={summary}
       defaultCollapsed={true}
-      color={status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'active'}
+      color={toolCallColor(status)}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
+      icon={<ToolKindIcon kind="read" className="size-4" aria-hidden="true" />}
     >
       <div className="space-y-3">
         {filePaths.length > 0 && (
@@ -71,6 +66,8 @@ export default function ReadCard({ messages, expanded, onExpandedChange }: ReadC
             </div>
           </div>
         )}
+        <ToolCallRawSection label="输入" value={toolCall.rawInput} />
+        <ToolCallRawSection label="输出" value={toolCall.rawOutput} />
       </div>
     </AcpCard>
   );

@@ -1,25 +1,19 @@
 import AcpCard from './AcpCard';
 import MarkdownContent from './MarkdownContent';
+import ToolCallRawSection from './ToolCallRawSection';
+import ToolKindIcon from './tool-call-icons';
+import { toolCallColor, type MergedToolCall } from './tool-call-state';
 
 interface FetchCardProps {
-  messages: Array<{ content: string | Record<string, unknown>; createdAt: string }>;
+  toolCall: MergedToolCall;
   expanded?: boolean;
   onExpandedChange?: (expanded: boolean) => void;
 }
 
-function parseMessage(content: string | Record<string, unknown>): Record<string, unknown> | null {
-  if (typeof content === 'object') return content as Record<string, unknown>;
-  try { return JSON.parse(content) as Record<string, unknown>; } catch { return null; }
-}
-
-export default function FetchCard({ messages, expanded, onExpandedChange }: FetchCardProps) {
-  const last = messages[messages.length - 1];
-  const parsed = parseMessage(last.content);
-  if (!parsed) return null;
-
-  const rawInput = parsed.rawInput as Record<string, unknown> | undefined;
-  const rawOutput = parsed.rawOutput as Record<string, unknown> | undefined;
-  const status = typeof parsed.status === 'string' ? parsed.status : 'in_progress';
+export default function FetchCard({ toolCall, expanded, onExpandedChange }: FetchCardProps) {
+  const rawInput = toolCall.rawInput as Record<string, unknown> | undefined;
+  const rawOutput = toolCall.rawOutput as Record<string, unknown> | undefined;
+  const status = toolCall.status || 'in_progress';
   const url = typeof rawInput?.url === 'string' ? rawInput.url : '';
   const output = typeof rawOutput?.output === 'string' ? rawOutput.output : '';
   const summary = url ? `Fetch: ${url.length > 40 ? url.slice(0, 40) + '...' : url}` : 'Fetch URL';
@@ -29,9 +23,10 @@ export default function FetchCard({ messages, expanded, onExpandedChange }: Fetc
       title="Fetch URL"
       summary={summary}
       defaultCollapsed={true}
-      color={status === 'completed' ? 'completed' : status === 'failed' ? 'failed' : 'active'}
+      color={toolCallColor(status)}
       expanded={expanded}
       onExpandedChange={onExpandedChange}
+      icon={<ToolKindIcon kind="fetch" className="size-4" aria-hidden="true" />}
     >
       <div className="space-y-3">
         {url && (
@@ -55,6 +50,8 @@ export default function FetchCard({ messages, expanded, onExpandedChange }: Fetc
             </div>
           </div>
         )}
+        <ToolCallRawSection label="输入" value={toolCall.rawInput} />
+        <ToolCallRawSection label="输出" value={toolCall.rawOutput} />
       </div>
     </AcpCard>
   );

@@ -1,5 +1,7 @@
+import { useRef } from 'react';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import MarkdownContent from './MarkdownContent';
+import MessageActions from './MessageActions';
 
 interface AcpMessage {
   id: string;
@@ -17,6 +19,7 @@ interface MessageItemProps {
 
 export default function MessageItem({ message }: MessageItemProps) {
   const isUser = message.direction === 'input';
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const acpUpdate = (() => {
     if (typeof message.content === 'object') return message.content as unknown as SessionUpdate;
@@ -95,12 +98,24 @@ export default function MessageItem({ message }: MessageItemProps) {
   const typeLabel = getTypeLabel(displayType);
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`group flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div className={`max-w-[70%] rounded-lg px-4 py-2 overflow-hidden ${getMessageStyle(displayType)}`}>
-        {typeLabel && (
-          <div className="mb-1 text-xs font-medium opacity-75">{typeLabel}</div>
+        {(typeLabel || !isUser) && (
+          <div className="mb-1 flex items-center gap-2">
+            {typeLabel && (
+              <div className="text-xs font-medium opacity-75">{typeLabel}</div>
+            )}
+            {!isUser && (
+              <div className="ml-auto">
+                <MessageActions
+                  content={displayContent}
+                  getPlainText={() => contentRef.current?.innerText || contentRef.current?.textContent || ''}
+                />
+              </div>
+            )}
+          </div>
         )}
-        <div className="prose prose-sm max-w-none break-words">
+        <div ref={contentRef} className="prose prose-sm max-w-none break-words">
           {displayType === 'image' ? (
             <img
               src={displayContent.startsWith('data:') || displayContent.startsWith('http') ? displayContent : `data:image/png;base64,${displayContent}`}

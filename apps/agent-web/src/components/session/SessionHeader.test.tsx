@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import SessionHeader from './SessionHeader';
 
 describe('SessionHeader', () => {
@@ -299,5 +299,18 @@ describe('SessionHeader - 能力入口与门控', () => {
 
     const continueButton = screen.getByText('继续') as HTMLButtonElement;
     expect(continueButton.disabled).toBe(false);
+  });
+
+  it('should render export button and trigger callback', () => {
+    const onExport = vi.fn();
+    render(<SessionHeader session={baseSession} status="running" onClose={vi.fn()} onDelete={vi.fn()} onExport={onExport} />);
+
+    fireEvent.click(screen.getByRole('button', { name: '导出对话' }));
+    expect(onExport).toHaveBeenCalledOnce();
+  });
+
+  it('should hide export button when no callback is provided', () => {
+    render(<SessionHeader session={baseSession} status="running" onClose={vi.fn()} onDelete={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '导出对话' })).toBeNull();
   });
 });

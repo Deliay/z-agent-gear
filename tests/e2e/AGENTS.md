@@ -237,6 +237,21 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | Gemini CLI badge | 选择 gemini_cli 创建 session → 详情页显示「Gemini CLI」徽章 |
 | Codex badge | 选择 codex 创建 session → 详情页显示「Codex」徽章 |
 
+### Session Rendering E2E (`session-rendering.spec.ts`)
+
+> fake controller 注入 ACP `SessionUpdate`（`socket.emit('acp:message')`），不依赖真实 Agent；串行执行。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-CREN1 代码块工具栏 | 注入围栏代码块 → 语言标签 + 复制成功 toast + 自动换行切换 |
+| E2E-CREN2 Mermaid | 合法 mermaid 渲染 SVG；语法错误回退代码块且同页其余内容正常 |
+| E2E-CREN3 差异渲染 | 注入 diff 工具内容 → 双行号列数值正确、插入行对齐不串位 |
+| E2E-CREN4 终端 ANSI | 注入带颜色码输出 → 颜色 span 出现且文本可读 |
+| E2E-CREN5 工具生命周期一致 | 创建（execute + title + rawInput）→ 稀疏完成更新后标题仍为命令名，无「Tool Call: other」，可展开查看原始输入 |
+| E2E-CREN6 滚动导航 | 长列表上翻后注入新消息 → 视口保持 + 「回到底部」出现；点击后按钮消失并恢复跟随 |
+| E2E-CREN7 窄视口溢出 | 375px 下超长代码/差异 → `scrollWidth - clientWidth ≤ 1` |
+| E2E-CREN8 导出 | 点击导出对话 → download 事件触发且文件名 `session-*.md` |
+
 ### Port Forward E2E (`port-forward.spec.ts`)
 
 | 测试 | 描述 |

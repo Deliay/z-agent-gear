@@ -107,6 +107,19 @@ npm run preview  # Preview production build
 - **展示名消费点**：`Sidebar` 的 prop 为 `name`（`MainLayout` 传 `user?.name`）、`SettingsPage` 个人资料展示 `user?.name`；不再读写 `user.username`。登录表单的 `username` 输入只是登录凭据字段，与展示名无关。
 - **计费**：`MyBillingAccountData.ownerType` 联合类型包含 `tenant`（`front_user` 仅历史兼容，`admin_user` 保持不变）；前端不展示 ownerType 文案，数值口径零改动。
 
+## 会话渲染层（对话渲染重构一期）
+
+> 纯前端渲染层，不改 ACP 协议、消息存储与后端契约。实现计划见 `docs/engineering/plan/20261028-refactor-conversation-rendering.md`。
+
+- **工具调用视图模型合并**（`components/session/tool-call-state.ts`）：同一 `toolCallId` 的全部消息经 `mergeToolCallMessages` 合并为 `MergedToolCall`，三态语义——字段未携带（`undefined`）保留原值、显式 `null` 清除、有值替换。`MessageList` 在分组 memo 后统一合并，`ToolCallCard`/`ReadCard`/`FetchCard`/`SubAgentCard` 只消费合并结果（props 为 `toolCall`，不再接收 `messages[]`）；标题口径为合并后 `title ?? kindLabel(kind)`，保证「工具完成后标题/类型/参数不丢失」（禁止再退化为 `Tool Call: other`）。`group-messages.ts` 分组逻辑保持不变。
+- **Markdown 管线**（`components/session/markdown/`）：代码块统一由 `MarkdownContent` 的 `pre` 覆写承接——`language-mermaid` 分流 `MermaidBlock`，其余（含无语言）走 `CodeBlock`（语言标签 + 复制 + 换行切换）；`code` 覆写仅保留行内代码样式。Mermaid 必须 `import('mermaid')` 动态导入（securityLevel=strict，失败回退 CodeBlock），不得改为静态引入。
+- **差异与终端**：`lib/diff.ts` 基于 jsdiff `diffLines` 输出带新旧行号的行序列（>2000 行截断提示）；`DiffView` 双行号列 + `lib/language-from-path.ts` 语言推断 + Prism 逐行高亮（removed 行纯文本）。`lib/ansi.ts` 仅保留 SGR（final byte `m`，ansi-to-html + escapeXML），其余 CSI（光标移动/清屏/`?25l`/`?2004h` 等私有模式）、OSC（含 OSC-8 超链接）、字符集切换序列全部剥离；`TerminalOutput` 经 `dangerouslySetInnerHTML` 注入已转义 HTML，空行由 `whitespace-pre-wrap` 自然保留（视觉等价于原 `&nbsp;` 占位）。
+- **工具卡片体系**：`tool-call-icons.tsx` 提供 `ToolKindIcon`（未识别类型回退 Hammer）；`AcpCard` 新增 `pending` 弱化样式（legacy 颜色键保留）；`ToolCallRawSection` 提供 rawInput/rawOutput 折叠（JSON，>500 行截断）；`ContentBlockRenderer` 覆盖 text/image/audio/resource_link/resource 以及 diff/terminal，未知类型降级提示不空白。
+- **消息操作与导出**：`MessageActions` 在 agent 消息 hover 操作条提供「复制 Markdown」（与展示同源的合成文本）与「复制纯文本」（渲染 DOM innerText）；`SessionHeader` 的「导出对话」经 `lib/export-thread.ts` 生成 Markdown（用户/助手/思考/工具分节，工具经合并口径）并 Blob 下载，文件名 `session-{id}-{date}.md`。
+- **滚动跟随**：`MessageList` 用 IntersectionObserver（threshold 0.9）观测底部锚点判定是否在底部；append 时在底部才滚底，否则保持视口并显示「回到底部」+ 新消息圆点；初始滚底与 prepend 位置恢复逻辑保持不变。组件测试通过 `vitest.setup.ts` 的可控 IntersectionObserver stub 驱动（`(globalThis as any).__triggerIntersection(bool)`）。
+- **计划展示**：`PlanCard`/`PlanFloatingCard` 摘要三态（全部完成 / x/y / N 项任务）由 `plan-summary.ts` 统一，完成条目内容 `line-through`。
+- **测试入口**：`components/session/__tests__/`（tool-call-state / ToolCallCard / ToolCards / ContentBlockRenderer / MessageActions / ScrollToBottomButton / PlanCard / DiffView / AcpCard）、`components/session/markdown/__tests__/`、`src/lib/__tests__/`（diff/ansi/language-from-path/export-thread）、`tests/e2e/src/session-rendering.spec.ts`（E2E-CREN1~8）。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
