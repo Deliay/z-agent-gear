@@ -540,7 +540,7 @@ class WorkflowOrchestrator {
             enabled: true,
           },
         },
-        { upsert: true, new: true },
+        { upsert: true, returnDocument: 'after' },
       );
       return server._id.toString();
     } catch (err: unknown) {

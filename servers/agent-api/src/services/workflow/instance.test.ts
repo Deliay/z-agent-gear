@@ -506,7 +506,7 @@ describe('WorkflowInstanceService.updateNode', () => {
         },
       }),
       expect.objectContaining({ $set: expect.objectContaining({ 'nodes.$[n].name': '新名字' }) }),
-      expect.objectContaining({ arrayFilters: [{ 'n.nodeId': 'n1' }], new: true }),
+      expect.objectContaining({ arrayFilters: [{ 'n.nodeId': 'n1' }], returnDocument: 'after' }),
     );
     expect(mockRedis.del).toHaveBeenCalledWith('workflow:instance:inst-1');
   });
@@ -1015,7 +1015,7 @@ describe('WorkflowInstanceService 追加提示词与联动注销', () => {
     expect(WorkflowInstance.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: 'inst-1', userId: 'user-1', deletedAt: null },
       { $set: { 'additionalPrompts.my-note': 'v' } },
-      { new: true },
+      { returnDocument: 'after' },
     );
 
     await expect(
@@ -1032,7 +1032,7 @@ describe('WorkflowInstanceService 追加提示词与联动注销', () => {
     expect(WorkflowInstance.findOneAndUpdate).toHaveBeenCalledWith(
       { _id: 'inst-1', userId: 'user-1', deletedAt: null },
       { $unset: { 'additionalPrompts.my-note': 1 } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     await expect(
       workflowInstanceService.removeAdditionalPrompt('user-1', 'inst-1', 'github-pr-review'),

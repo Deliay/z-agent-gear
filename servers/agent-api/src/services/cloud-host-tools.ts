@@ -57,7 +57,7 @@ export async function ensureCloudHostToolsServer(userId: string): Promise<string
           })),
         },
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
     return server._id.toString();
   } catch (err) {

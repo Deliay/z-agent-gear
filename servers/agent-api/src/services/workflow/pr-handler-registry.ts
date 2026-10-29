@@ -162,7 +162,7 @@ class PrHandlerRegistry {
             registeredBySessionId: input.sessionId ?? null,
           },
         },
-        { upsert: true, new: true },
+        { upsert: true, returnDocument: 'after' },
       ).lean()) as unknown as HandlerDoc | null;
     } catch (err) {
       // 并发注册撞唯一键：读取已存在行视为成功

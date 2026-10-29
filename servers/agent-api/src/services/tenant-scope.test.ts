@@ -206,7 +206,7 @@ describe('tenant scope plugin：真实 MongoDB upsert（回归 GitHub 绑定冲�
           $set: { tenantId: 't1', workspaceId: 'w1', githubUserId: 42 },
           $setOnInsert: { userId: 'u1' },
         },
-        { upsert: true, new: true },
+        { upsert: true, returnDocument: 'after' },
       ).exec(),
     );
 

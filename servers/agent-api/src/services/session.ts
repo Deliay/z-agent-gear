@@ -411,7 +411,7 @@ export class SessionService {
     const result = await Session.findOneAndUpdate(
       { _id: id, ...actorFilter(userId) },
       updateData,
-      { new: true },
+      { returnDocument: 'after' },
     );
 
     if (result) {

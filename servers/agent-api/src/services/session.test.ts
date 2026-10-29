@@ -804,7 +804,7 @@ describe('SessionService', () => {
       expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: 'sess-1', userId: 'user-1' },
         expect.objectContaining({ externalSessionId: 'ext-123' }),
-        { new: true },
+        { returnDocument: 'after' },
       );
     });
 
