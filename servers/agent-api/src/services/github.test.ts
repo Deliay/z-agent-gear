@@ -313,6 +313,50 @@ describe('GitHubService', () => {
 
       expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
+
+    it('T-GH9 (REPRO): 容器 50 分钟后续期不得命中仅剩 10 分钟有效期的缓存 token', async () => {
+      const t0 = Date.parse('2026-10-22T10:00:00.000Z');
+      let now = t0;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      const originalFetch = globalThis.fetch;
+      let minted = 0;
+      const fetchSpy = vi.fn(() => {
+        minted += 1;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              token: `ghs_${minted}`,
+              expires_at: new Date(now + 60 * 60 * 1000).toISOString(),
+            }),
+        } as Response);
+      });
+      globalThis.fetch = fetchSpy as never;
+
+      // 容器侧契约：每 50 分钟续期一次，且要求交出的凭据留足 50 分钟可用期。
+      const CONTAINER_MIN_REMAINING_MS = 55 * 60 * 1000;
+      const mint = (githubService.createRepoScopedToken as unknown as (
+        accountId: string,
+        repoFullName: string,
+        options?: { minRemainingMs?: number },
+      ) => Promise<{ token: string; expiresAt: Date }>).bind(githubService);
+
+      const first = await mint('acc1', 'Owner/Repo', {
+        minRemainingMs: CONTAINER_MIN_REMAINING_MS,
+      });
+      now = t0 + 50 * 60 * 1000;
+      const second = await mint('acc1', 'Owner/Repo', {
+        minRemainingMs: CONTAINER_MIN_REMAINING_MS,
+      });
+
+      globalThis.fetch = originalFetch;
+      nowSpy.mockRestore();
+
+      // 实际：第二次命中缓存，返回 10 分钟后到期的同一枚 token（容器随后 40 分钟无可用凭据）。
+      expect(second.expiresAt.getTime() - now).toBeGreaterThanOrEqual(CONTAINER_MIN_REMAINING_MS);
+      expect(second.token).not.toBe(first.token);
+    });
+
   });
 
   describe('createRepoScopedTokenForUser', () => {
