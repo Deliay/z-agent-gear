@@ -85,6 +85,7 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
 
   let accountId = '';
   let accountObjectId: mongoose.Types.ObjectId;
+  let githubUserId = 0;
   let installationId = 0;
   let githubLogin = '';
 
@@ -200,7 +201,7 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
       tenantId: teamId,
       // 共享行归属团队全局工作区（String 口径 = workspace._id.toString()）
       workspaceId: teamGlobalId,
-      githubUserId: 800000 + Math.floor(Math.random() * 100000),
+      githubUserId: (githubUserId = 800000 + Math.floor(Math.random() * 100000)),
       githubLogin,
       githubAvatarUrl: null,
       accessToken: 'gho_ghws_test_token',
@@ -387,6 +388,50 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
         source: 'WORKSPACE',
         readOnly: false,
       });
+    },
+  );
+
+  it(
+    'T-GH-WS5（阻断-I，MONGODB_URI 直插夹具）：同账号双工作区解绑全局行保留 normal 绑定安装数据',
+    async (ctx) => {
+      if (!HAS_MONGO) ctx.skip();
+      const db = await mongoDb();
+      const normalAccountId = new mongoose.Types.ObjectId();
+      const now = new Date();
+      await db!.collection('githubaccounts').insertOne({
+        _id: normalAccountId,
+        userId: developer.userId,
+        tenantId: teamId,
+        workspaceId: normalWorkspaceId,
+        githubUserId,
+        githubLogin,
+        githubAvatarUrl: null,
+        accessToken: 'gho_ghws_test_token_normal',
+        tokenExpiresAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // admin 在团队全局上下文解绑全局行：normal 行仍存活，不得卸载 App/删除安装数据
+      const unbound = await gqlCtx(UNBIND_GITHUB_ACCOUNT, { accountId }, admin.token, teamGlobalId);
+      expect(unbound.errors, JSON.stringify(unbound.errors)).toBeUndefined();
+      expect(unbound.data.unbindGitHubAccount).toBe(true);
+
+      expect(
+        await db!.collection('githubaccounts').countDocuments({ _id: normalAccountId }),
+      ).toBe(1);
+      expect(
+        await db!.collection('githubaccounts').countDocuments({ _id: accountObjectId }),
+      ).toBe(0);
+      const installation = await db!
+        .collection('githubinstallations')
+        .findOne({ installationId });
+      expect(installation, '共享安装数据必须保留').not.toBeNull();
+      expect(String(installation?.accountId)).toBe(String(normalAccountId));
+
+      // 清理，避免影响其它套件/重跑
+      await db!.collection('githubaccounts').deleteOne({ _id: normalAccountId });
+      await db!.collection('githubinstallations').deleteOne({ installationId });
     },
   );
 });

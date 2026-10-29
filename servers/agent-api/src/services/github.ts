@@ -287,6 +287,31 @@ export class GitHubService {
     }));
   }
 
+  /**
+   * 同账号的其它工作区/租户绑定行（阻断-I）：必须绕过 workspace-scope 读过滤，
+   * 否则「最后一个绑定」判定会被当前可见集收窄而误删共享安装数据。
+   * 单测无 DB 连接时回退普通查询（mock 友好）。
+   */
+  private async findSurvivingBindings(account: {
+    _id: unknown;
+    githubUserId: number;
+  }): Promise<Array<{ _id: unknown }>> {
+    const db = mongoose.connection.db;
+    if (!db) {
+      return (await GitHubAccount.find({
+        githubUserId: account.githubUserId,
+        _id: { $ne: account._id },
+      })
+        .select('_id')
+        .lean()) as Array<{ _id: unknown }>;
+    }
+    return (await db
+      .collection('githubaccounts')
+      .find({ githubUserId: account.githubUserId, _id: { $ne: account._id as never } })
+      .project({ _id: 1 })
+      .toArray()) as Array<{ _id: unknown }>;
+  }
+
   async unbindAccount(userId: string, accountId: string): Promise<boolean> {
     const account = await GitHubAccount.findOne({ _id: accountId, ...actorFilter(userId) });
     if (!account) return false;
@@ -304,12 +329,10 @@ export class GitHubService {
     );
     // 同一 GitHub 账号可能在其他工作区仍有绑定行：只有最后一个绑定才卸载 App 并清理安装数据，
     // 否则把安装行 accountId 改指存活绑定（避免“改嫁”与误删）。
-    const survivors = await GitHubAccount.find({
-      githubUserId: account.githubUserId,
-      _id: { $ne: account._id },
-    })
-      .select('_id')
-      .lean();
+    const survivors = await this.findSurvivingBindings(account as unknown as {
+      _id: unknown;
+      githubUserId: number;
+    });
     if (survivors.length === 0) {
       for (const inst of installations) {
         try {

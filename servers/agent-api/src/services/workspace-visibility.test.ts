@@ -119,8 +119,7 @@ describe('工作区资源共享（T-WS 跨成员可见性，真库）', () => {
     });
   });
 
-  it('工作流自定义模板/实例按工作区共享（含内置模板全局可见）', async () => {
-    await mongoose.connection.collection('workflowtemplates').insertMany([
+  it('工作流自定义模板/实例按工作区共享（含内置模板全局可见）', async () => {    await mongoose.connection.collection('workflowtemplates').insertMany([
       {
         userId: USER_A,
         tenantId: TENANT,
@@ -158,5 +157,28 @@ describe('工作区资源共享（T-WS 跨成员可见性，真库）', () => {
       const instances = await workflowInstanceService.list(String(USER_B), { archived: false });
       expect(instances.map((i) => i.name)).toContain('团队实例');
     });
+  });
+
+  it('团队租户显式 {_id,userId} 查询在上下文命中（阻断-H：tenantId 注入取 context.tenantId）', async () => {
+    const hostId = new mongoose.Types.ObjectId();
+    await mongoose.connection.collection('cloudhosts').insertOne({
+      _id: hostId,
+      userId: USER_A,
+      tenantId: TENANT,
+      resourceWorkspaceId: WS,
+      controllerId: new mongoose.Types.ObjectId(),
+      keyId: new mongoose.Types.ObjectId(),
+      name: 'team-host',
+      harnessTypes: ['OPENCODE'],
+      status: 'RUNNING',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const host = await runWithWorkspace(context('admin'), async () =>
+      CloudHost.findOne({ _id: hostId, userId: String(USER_A) }).lean(),
+    );
+    expect(host).not.toBeNull();
+    expect(String(host?.tenantId)).toBe(String(TENANT));
   });
 });
