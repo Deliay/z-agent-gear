@@ -189,7 +189,7 @@ export class ReservationService {
     const activated = await BillingReservation.findOneAndUpdate(
       { _id: reservationId, status: 'PENDING' },
       { $set: { status: 'ACTIVE' }, $inc: { version: 1 } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     return activated ?? (await BillingReservation.findById(reservationId))!;
   }
@@ -465,7 +465,7 @@ export class ReservationService {
     const claimed = await BillingReservation.findOneAndUpdate(
       { _id: reservationId, status: { $in: ['ACTIVE', 'PENDING'] }, version: reservation.version },
       { $set: { status: 'SETTLING' }, $inc: { version: 1 } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!claimed) {
       const latest = await this.findById(reservationId);

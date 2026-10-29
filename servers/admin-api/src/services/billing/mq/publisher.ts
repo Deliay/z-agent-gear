@@ -96,7 +96,7 @@ export class AdminOutboxPublisher {
           $or: [{ claimedAt: null }, { claimedAt: { $lte: leaseCutoff } }],
         },
         { $set: { claimedAt: now, claimedBy: this.instanceId } },
-        { new: true, sort: { createdAt: 1 } },
+        { returnDocument: 'after', sort: { createdAt: 1 } },
       ).lean<{
         eventId: string;
         routingKey: string;

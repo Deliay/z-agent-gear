@@ -118,7 +118,7 @@ export class MongoOutboxRepository implements OutboxRepository {
           $or: [{ claimedAt: null }, { claimedAt: { $lte: leaseCutoff } }],
         },
         { $set: { claimedAt: now, claimedBy: claimant } },
-        { new: true, sort: { createdAt: 1 } },
+        { returnDocument: 'after', sort: { createdAt: 1 } },
       ).lean<{
         eventId: string;
         producer: OutboxProducer;
@@ -160,7 +160,7 @@ export class MongoOutboxRepository implements OutboxRepository {
         $inc: { attempts: 1 },
         $set: { lastError: error.slice(0, 1000), claimedAt: null, claimedBy: null },
       },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean<{ attempts?: number } | null>();
     if (doc && (doc.attempts ?? 0) >= maxAttempts) {
       await BillingOutbox.updateOne({ eventId }, { $set: { failed: true } });
