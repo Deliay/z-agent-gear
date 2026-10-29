@@ -387,7 +387,7 @@ export class CloudHostService {
         const updated = await CloudHost.findOneAndUpdate(
           { _id: cloudHostId, status: 'STARTING' },
           { $set: { containerId: container.id } },
-          { new: true },
+          { returnDocument: 'after' },
         ).lean();
         if (!updated) {
           await this.reclaimStartedContainer(cloudHostId, container.id);
@@ -547,7 +547,7 @@ export class CloudHostService {
       const stopping = await CloudHost.findOneAndUpdate(
         { _id: id, ...actorFilter(userId), status: { $in: ACTIVE_STATUSES } },
         { $set: { status: 'STOPPING' } },
-        { new: true },
+        { returnDocument: 'after' },
       ).lean();
       if (!stopping) {
         const current = await this.findOwnedHost(id, userId);
@@ -595,7 +595,7 @@ export class CloudHostService {
             containerId: null,
           },
         },
-        { new: true },
+        { returnDocument: 'after' },
       ).lean();
       const latest = stopped ?? (await this.findOwnedHost(id, userId));
       // A-3：终态 CAS 后再兜一次，回收 CAS 与 Session.create 之间漏网的晚到会话。
@@ -688,7 +688,7 @@ export class CloudHostService {
             ...(defaultSessionId ? { defaultSessionId } : {}),
           },
         },
-        { new: true },
+        { returnDocument: 'after' },
       ).lean();
       const fetched = updated ?? (await this.findRawHost(id));
       if (!fetched) return null;
@@ -762,7 +762,7 @@ export class CloudHostService {
           failureReason: target === 'FAILED' ? input.reason ?? 'cloud host failed' : null,
         },
       },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean();
     const current = updated ?? (await this.findRawHost(id));
     if (!current) return null;

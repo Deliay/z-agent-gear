@@ -91,7 +91,7 @@ export class ControllerWorkspaceService {
           isEnabled: true,
         },
       },
-      { new: true, upsert: true },
+      { returnDocument: 'after', upsert: true },
     ).lean();
     return this.mapWorkspace(workspace);
   }

@@ -160,7 +160,7 @@ describe('ControllerService', () => {
       expect(Controller.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: 'ctrl1', userId: 'user1' },
         { worktreeDir: '/custom/worktrees' },
-        { new: true },
+        { returnDocument: 'after' },
       );
     });
 

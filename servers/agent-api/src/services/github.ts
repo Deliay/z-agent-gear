@@ -164,7 +164,7 @@ export class GitHubService {
           },
           $setOnInsert: { userId: params.userId },
         },
-        { upsert: true, new: true },
+        { upsert: true, returnDocument: 'after' },
       );
     } catch (err) {
       if ((err as { code?: number }).code === 11000) {
@@ -178,7 +178,7 @@ export class GitHubService {
               tokenExpiresAt: tokenResponse.expiresAt,
             },
           },
-          { new: true },
+          { returnDocument: 'after' },
         );
       } else {
         throw err;
@@ -205,7 +205,7 @@ export class GitHubService {
           },
         })),
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     ).lean();
   }
 

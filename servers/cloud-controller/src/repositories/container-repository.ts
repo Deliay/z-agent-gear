@@ -324,7 +324,7 @@ export class MongoContainerRepository implements ContainerRepository {
     const doc = await CloudContainer.findOneAndUpdate(
       filter,
       { $set: patch },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean<RawDoc | null>();
     return doc ? toEntity(doc) : null;
   }

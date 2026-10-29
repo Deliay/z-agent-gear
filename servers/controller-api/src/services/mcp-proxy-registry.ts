@@ -82,7 +82,7 @@ export class McpProxyRegistry {
         const server = await McpServer.findByIdAndUpdate(
           serverId,
           { proxyConnectionId: socket.id, status: 'active', lastHeartbeatAt: new Date() },
-          { new: true },
+          { returnDocument: 'after' },
         );
 
         if (!server) {

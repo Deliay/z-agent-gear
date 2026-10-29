@@ -366,7 +366,7 @@ class WorkflowInstanceService {
       { $set: patch },
       {
         arrayFilters: [{ 'n.nodeId': nodeId }],
-        new: true,
+        returnDocument: 'after',
       },
     ).lean();
 
@@ -421,7 +421,7 @@ class WorkflowInstanceService {
     const updated = await WorkflowInstance.findOneAndUpdate(
       { _id: instanceId, ...actorFilter(userId), deletedAt: null },
       { $set: { [`additionalPrompts.${key}`]: value } },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean();
     if (!updated) {
       throw new Error('工作流实例不存在或无权限');
@@ -436,7 +436,7 @@ class WorkflowInstanceService {
     const updated = await WorkflowInstance.findOneAndUpdate(
       { _id: instanceId, ...actorFilter(userId), deletedAt: null },
       { $unset: { [`additionalPrompts.${key}`]: 1 } },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean();
     if (!updated) {
       throw new Error('工作流实例不存在或无权限');
@@ -458,7 +458,7 @@ class WorkflowInstanceService {
     const updated = await WorkflowInstance.findOneAndUpdate(
       { _id: instanceId, deletedAt: null },
       { $set: { [`additionalPrompts.${key}`]: value } },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean();
     if (!updated) {
       throw new Error('工作流实例不存在');

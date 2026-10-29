@@ -46,7 +46,7 @@ export class InvoicingService {
     const doc = await BillingAccount.findOneAndUpdate(
       { _id: accountId },
       { $inc: { invoiceSeq: 1 } },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean<IBillingAccount | null>();
     if (!doc) throw new Error('账户不存在');
     return Math.max(0, (doc.invoiceSeq ?? 1) - 1);

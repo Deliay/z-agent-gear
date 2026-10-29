@@ -126,7 +126,7 @@ export function createSocketIOServer(io: SocketIOServer): void {
             lastHeartbeatAt: new Date(),
             $setOnInsert: { name: hostname },
           },
-          { upsert: true, new: true },
+          { upsert: true, returnDocument: 'after' },
         );
 
         await ControllerKey.updateOne(

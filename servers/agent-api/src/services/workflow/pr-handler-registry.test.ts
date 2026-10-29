@@ -93,7 +93,7 @@ describe('prHandlerRegistry', () => {
           pullRequestIdLower: 'deliay/z-agent-gear#264',
         }),
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
     expect(result.pullRequestId).toBe('Deliay/z-agent-gear#264');
   });
