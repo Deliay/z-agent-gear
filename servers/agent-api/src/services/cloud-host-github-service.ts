@@ -330,7 +330,7 @@ export class CloudHostGithubService {
           targetPath,
         },
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
 
     const github = await this.catalog.findGithubPreset();

@@ -171,7 +171,7 @@ describe('McpServer Resolvers', () => {
       expect(McpServer.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: 'server-1', userId: 'user1' },
         { $set: { enabled: false } },
-        { new: true },
+        { returnDocument: 'after' },
       );
       expect(result.enabled).toBe(false);
       expect(result.id).toBe('server-1');

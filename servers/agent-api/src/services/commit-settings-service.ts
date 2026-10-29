@@ -183,7 +183,7 @@ export class CommitSettingsService {
             }
           : fields,
       },
-      { upsert: true, new: true, setDefaultsOnInsert: true },
+      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
     )
       .lean()
       .catch(async (err: { code?: number }) => {

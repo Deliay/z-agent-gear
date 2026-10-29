@@ -996,7 +996,7 @@ describe('CloudHostService', () => {
             defaultSessionId: 'sess-1',
           },
         },
-        { new: true },
+        { returnDocument: 'after' },
       );
       expect(result).toMatchObject({ status: 'RUNNING', defaultSessionId: 'sess-1' });
     });
@@ -1016,7 +1016,7 @@ describe('CloudHostService', () => {
       expect(CloudHost.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: HOST_ID, deletedAt: null, status: 'STARTING' },
         { $set: { status: 'RUNNING', readyAt: expect.any(Date) } },
-        { new: true },
+        { returnDocument: 'after' },
       );
     });
 
@@ -1035,7 +1035,7 @@ describe('CloudHostService', () => {
       expect(CloudHost.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: HOST_ID, deletedAt: null, status: 'STARTING' },
         { $set: { status: 'RUNNING', readyAt: expect.any(Date) } },
-        { new: true },
+        { returnDocument: 'after' },
       );
     });
 
@@ -1103,7 +1103,7 @@ describe('CloudHostService', () => {
             failureReason: null,
           },
         },
-        { new: true },
+        { returnDocument: 'after' },
       );
       expect(sessionService.endByController).toHaveBeenCalledWith(CONTROLLER_ID, 'user-1');
       expect(billingClient.revokeApiKeysByHost).toHaveBeenCalledWith(HOST_ID);
@@ -1130,7 +1130,7 @@ describe('CloudHostService', () => {
             failureReason: 'job failed',
           },
         },
-        { new: true },
+        { returnDocument: 'after' },
       );
       expect(result).toMatchObject({ status: 'FAILED', failureReason: 'job failed' });
     });

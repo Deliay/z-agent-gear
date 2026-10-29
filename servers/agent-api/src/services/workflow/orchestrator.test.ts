@@ -255,7 +255,7 @@ describe('WorkflowOrchestrator', () => {
           enabled: true,
         }),
       },
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
     // 管理工具集同样被装配进节点会话
     expect(sessionService.create).toHaveBeenCalledWith(

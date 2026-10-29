@@ -91,7 +91,7 @@ export class WorkspaceService {
             createdBy: null,
           },
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
       );
     } catch (err) {
       // 并发开户：部分唯一索引冲突视为已就绪
@@ -244,7 +244,7 @@ export class WorkspaceService {
       const updated = await Workspace.findByIdAndUpdate(
         id,
         { $set: { name: trimmed } },
-        { new: true, lean: true },
+        { returnDocument: 'after', lean: true },
       );
       if (!updated) throw new Error(WORKSPACE_ERRORS.notFound);
       audit('workspace.rename', userId, String(workspace.tenantId), id, 'admin');

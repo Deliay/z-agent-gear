@@ -165,7 +165,7 @@ export class MongoWorkloadLogRepository implements WorkloadLogRepository {
     const doc = await CloudWorkloadLog.findByIdAndUpdate(
       id,
       { $set: patch },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean<RawDoc | null>();
     return doc ? toEntity(doc) : null;
   }

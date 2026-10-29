@@ -59,12 +59,13 @@ function owner() {
 /** 只读模型口径：cloudhosts 由 agent-api 写入，测试用原生集合插入。 */
 async function seedCloudHost(
   userId: string,
-  options: { deletedAt?: Date | null } = {},
+  options: { deletedAt?: Date | null; tenantId?: string } = {},
 ): Promise<string> {
   const _id = new mongoose.Types.ObjectId();
   await mongoose.connection.db!.collection('cloudhosts').insertOne({
     _id,
     userId: new mongoose.Types.ObjectId(userId),
+    tenantId: options.tenantId ? new mongoose.Types.ObjectId(options.tenantId) : null,
     controllerId: new mongoose.Types.ObjectId(),
     status: 'RUNNING',
     deletedAt: options.deletedAt ?? null,
@@ -214,6 +215,44 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
     const ownHostId = await seedCloudHost(base.ownerId);
     const ok = await post('/api-keys', body(ownHostId));
     expect(ok.status).toBe(201);
+  });
+
+  it('多租户二期：团队租户 ownerId=tenantId 可铸造（host.userId 与 tenantId 不同）', async () => {
+    const tenantId = new mongoose.Types.ObjectId().toString();
+    const creatorId = new mongoose.Types.ObjectId().toString();
+    const cloudHostId = await seedCloudHost(creatorId, { tenantId });
+
+    const res = await post('/api-keys', {
+      ownerType: 'tenant',
+      ownerId: tenantId,
+      name: 'team-host-key',
+      scope: 'cloud_host',
+      cloudHostId,
+    });
+
+    expect(res.status).toBe(201);
+    const payload = (await res.json()) as { apiKey: { cloudHostId: string } };
+    expect(payload.apiKey.cloudHostId).toBe(cloudHostId);
+  });
+
+  it('多租户二期：团队租户 tenantId 不匹配 → 404（userId 相同也不能越权）', async () => {
+    const tenantId = new mongoose.Types.ObjectId().toString();
+    const userId = new mongoose.Types.ObjectId().toString();
+    const cloudHostId = await seedCloudHost(userId, { tenantId });
+    const body = (ownerId: string) => ({
+      ownerType: 'tenant',
+      ownerId,
+      name: 'team-host-key',
+      scope: 'cloud_host',
+      cloudHostId,
+    });
+
+    // 其他租户
+    const otherTenant = await post('/api-keys', body(new mongoose.Types.ObjectId().toString()));
+    expect(otherTenant.status).toBe(404);
+    // 用于创建该云电脑的用户 ID（个人口径）也不能代替租户
+    const creatorUserId = await post('/api-keys', body(userId));
+    expect(creatorUserId.status).toBe(404);
   });
 
   it('T-BK6: POST /api-keys/:id/revoke 幂等，未知 id 404，不要求 owner', async () => {

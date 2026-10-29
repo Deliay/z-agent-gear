@@ -104,7 +104,7 @@ export class ControllerKeyService {
     const key = await ControllerKey.findOneAndUpdate(
       { _id: id, ...actorFilter(userId) },
       { name },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean();
     if (!key) return null;
     return this.mapKey(key);
@@ -143,7 +143,7 @@ export class ControllerKeyService {
         keyPrefix,
         lastUsedAt: new Date(),
       },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean();
 
     if (!updatedKey) return null;

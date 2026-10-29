@@ -139,7 +139,7 @@ export class ProviderService {
         credentialType: (input.credentialType || 'api_key') as 'api_key',
         encryptedCredential: encrypted,
       },
-      { new: true, lean: true },
+      { returnDocument: 'after', lean: true },
     );
     if (!provider) return null;
 

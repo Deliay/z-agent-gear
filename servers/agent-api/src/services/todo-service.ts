@@ -192,7 +192,7 @@ export class TodoService {
           expiresAt,
         },
       },
-      { upsert: true, new: true, includeResultMetadata: true },
+      { upsert: true, returnDocument: 'after', includeResultMetadata: true },
     );
 
     return {

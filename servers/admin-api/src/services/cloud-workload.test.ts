@@ -432,7 +432,7 @@ describe('CloudWorkloadService', () => {
           paramSchema: [],
           dependsOnWorkloadIds: [],
         },
-        { new: true, lean: true },
+        { returnDocument: 'after', lean: true },
       );
       expect(result!.name).toBe('renamed');
     });

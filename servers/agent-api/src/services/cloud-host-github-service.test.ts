@@ -517,7 +517,7 @@ describe('CloudHostGithubService', () => {
         expect.objectContaining({
           $set: expect.objectContaining({ targetPath: '/home/worker/workspace/User/Repo' }),
         }),
-        { upsert: true, new: true },
+        { upsert: true, returnDocument: 'after' },
       );
       expect(controllerClient.startRuntimeScript).toHaveBeenCalledWith(
         expect.objectContaining({
