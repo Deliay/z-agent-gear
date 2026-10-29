@@ -1,6 +1,8 @@
 import { Checkbox } from '@/components/ui/checkbox'
 import ProviderActionMenu from './ProviderActionMenu'
+import { ResourceSourceBadge } from './ResourceSourceBadge'
 import { maskCredential } from '@/lib/credential'
+import type { ResourceSource } from '@/lib/workspace-source'
 
 interface ProviderItemData {
   id: string
@@ -20,6 +22,9 @@ interface ProviderItemProps {
   onEdit: (provider: ProviderItemData) => void
   onToggle: (id: string) => void
   onDelete: (id: string) => void
+  /** 当前上下文不可写（全局上下文 developer / 全局工作区资源在普通上下文） */
+  readOnly?: boolean
+  source?: ResourceSource
 }
 
 export default function ProviderItem({
@@ -29,6 +34,8 @@ export default function ProviderItem({
   onEdit,
   onToggle,
   onDelete,
+  readOnly = false,
+  source,
 }: ProviderItemProps) {
   return (
     <div
@@ -38,12 +45,16 @@ export default function ProviderItem({
     >
       <Checkbox
         checked={selected}
-        onCheckedChange={() => onSelect(provider.id)}
+        disabled={readOnly}
+        onCheckedChange={() => {
+          if (!readOnly) onSelect(provider.id)
+        }}
         aria-label={`选择 ${provider.name}`}
       />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="font-medium text-foreground">{provider.name}</span>
+          {source && <ResourceSourceBadge source={source} />}
           {!provider.isEnabled && (
             <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
               已禁用
@@ -56,12 +67,14 @@ export default function ProviderItem({
           <span>{provider.models.length} 个模型</span>
         </div>
       </div>
-      <ProviderActionMenu
-        isEnabled={provider.isEnabled}
-        onEdit={() => onEdit(provider)}
-        onToggle={() => onToggle(provider.id)}
-        onDelete={() => onDelete(provider.id)}
-      />
+      {!readOnly && (
+        <ProviderActionMenu
+          isEnabled={provider.isEnabled}
+          onEdit={() => onEdit(provider)}
+          onToggle={() => onToggle(provider.id)}
+          onDelete={() => onDelete(provider.id)}
+        />
+      )}
     </div>
   )
 }

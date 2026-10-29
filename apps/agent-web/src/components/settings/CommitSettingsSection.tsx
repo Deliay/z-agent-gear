@@ -14,6 +14,8 @@ import type {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import { useWorkspaceAccess } from '@/stores/workspace'
 
 const MODE_OPTIONS: Array<{ value: CommitterModeValue; label: string }> = [
   { value: 'AGENT_ONLY', label: '仅Agent' },
@@ -61,6 +63,7 @@ function mapCommitSettingsError(error: unknown): string {
  * 仅对云容器环境生效；服务端校验为权威，前端拦截只做即时反馈。
  */
 export default function CommitSettingsSection() {
+  const { readOnly: contextReadOnly } = useWorkspaceAccess()
   const { data: settingsData, loading: settingsLoading } = useQuery<GetCommitSettingsQuery>(
     GET_COMMIT_SETTINGS,
     // CommitSettings 无 id 字段、Apollo 无法归一化 mutation 结果：必须显式回写 / 重拉缓存。
@@ -86,6 +89,7 @@ export default function CommitSettingsSection() {
   const dirtyRef = useRef(false)
 
   const commitSettings = settingsData?.commitSettings
+  const readOnly = commitSettings?.readOnly ?? contextReadOnly
   const accounts = accountsData?.githubAccounts ?? []
   const accountsReady = accountsData != null
 
@@ -129,7 +133,7 @@ export default function CommitSettingsSection() {
   }
 
   const handleSave = async () => {
-    if (blockingMessage || saving) return
+    if (readOnly || blockingMessage || saving) return
     setServerError(null)
     const input: CommitSettingsInputData = {
       committerMode,
@@ -173,6 +177,25 @@ export default function CommitSettingsSection() {
       <div>
         <h3 className="text-lg font-medium text-foreground">Commit 设置</h3>
         <p className="mt-1 text-sm text-muted-foreground">设置只对云容器环境生效</p>
+        {commitSettings?.source && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <span>生效来源</span>
+            <Badge
+              variant={commitSettings.source === 'WORKSPACE' ? 'outline' : 'secondary'}
+              data-testid="commit-settings-source"
+              data-source={commitSettings.source}
+            >
+              {commitSettings.source === 'WORKSPACE'
+                ? '本工作区'
+                : commitSettings.source === 'GLOBAL'
+                  ? '继承自全局工作区'
+                  : '未设置'}
+            </Badge>
+          </div>
+        )}
+        {readOnly && (
+          <p className="mt-2 text-xs text-muted-foreground">全局工作区对开发者只读，不可修改 Commit 设置</p>
+        )}
       </div>
 
       <div className="space-y-2" role="radiogroup" aria-label="提交人模式">
@@ -185,7 +208,9 @@ export default function CommitSettingsSection() {
                 name="committer-mode"
                 value={option.value}
                 checked={committerMode === option.value}
+                disabled={readOnly}
                 onChange={() => {
+                  if (readOnly) return
                   markDirty()
                   setCommitterMode(option.value)
                 }}
@@ -206,7 +231,9 @@ export default function CommitSettingsSection() {
                 name="committer-type"
                 value={option.value}
                 checked={committerType === option.value}
+                disabled={readOnly}
                 onChange={() => {
+                  if (readOnly) return
                   markDirty()
                   setCommitterType(option.value)
                 }}
@@ -226,6 +253,7 @@ export default function CommitSettingsSection() {
               aria-label="Github 帐号"
               className="h-8 min-w-0 flex-1 rounded-lg border border-input bg-transparent px-2.5 py-1 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
               value={githubAccountId}
+              disabled={readOnly}
               onChange={(event) => {
                 markDirty()
                 setGithubAccountId(event.target.value)
@@ -262,6 +290,7 @@ export default function CommitSettingsSection() {
               id="commit-settings-custom-name"
               value={customName}
               maxLength={100}
+              disabled={readOnly}
               onChange={(event) => {
                 markDirty()
                 setCustomName(event.target.value)
@@ -275,6 +304,7 @@ export default function CommitSettingsSection() {
               type="email"
               value={customEmail}
               maxLength={254}
+              disabled={readOnly}
               onChange={(event) => {
                 markDirty()
                 setCustomEmail(event.target.value)
@@ -299,7 +329,7 @@ export default function CommitSettingsSection() {
           onClick={() => {
             void handleSave()
           }}
-          disabled={Boolean(blockingMessage) || saving}
+          disabled={Boolean(blockingMessage) || saving || readOnly}
         >
           {saving ? '保存中...' : '保存 Commit 设置'}
         </Button>

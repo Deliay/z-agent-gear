@@ -21,6 +21,8 @@ export interface CloudContainerEntity {
   userId: string | null;
   /** 租户归属（多租户一期）：personal 期恒等于 userId；历史行/未携带时为 null。 */
   tenantId: string | null;
+  /** 租户工作区归属（多租户二期）：String 口径（= workspaces._id.toString()）；历史行/未携带时为 null。 */
+  workspaceId: string | null;
   /** 云电脑 ID（purpose=harness）；历史记录为 null。 */
   hostId: string | null;
   /** 云电脑用户命名（purpose=harness）。 */
@@ -73,6 +75,7 @@ export interface CreateContainerInput {
   refId?: string | null;
   userId?: string | null;
   tenantId?: string | null;
+  workspaceId?: string | null;
   hostId?: string | null;
   hostName?: string | null;
   harnessTypes?: string[];
@@ -134,6 +137,7 @@ interface RawDoc {
   refId?: string | null;
   userId?: string | null;
   tenantId?: string | null;
+  workspaceId?: string | null;
   hostId?: string | null;
   hostName?: string | null;
   harnessTypes?: string[] | null;
@@ -224,6 +228,7 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     refId: doc.refId ?? null,
     userId: doc.userId ?? null,
     tenantId: doc.tenantId ?? null,
+    workspaceId: doc.workspaceId ?? null,
     hostId: doc.hostId ?? null,
     hostName: doc.hostName ?? null,
     harnessTypes: (doc.harnessTypes ?? []).map((value) => String(value)),
@@ -262,6 +267,7 @@ export class MongoContainerRepository implements ContainerRepository {
       refId: input.refId ?? null,
       userId: input.userId ?? null,
       tenantId: input.tenantId ?? null,
+      workspaceId: input.workspaceId ?? null,
       hostId: input.hostId ?? null,
       hostName: input.hostName ?? null,
       harnessTypes: input.harnessTypes ?? [],
@@ -344,6 +350,7 @@ export class InMemoryContainerRepository implements ContainerRepository {
       refId: input.refId ?? null,
       userId: input.userId ?? null,
       tenantId: input.tenantId ?? null,
+      workspaceId: input.workspaceId ?? null,
       hostId: input.hostId ?? null,
       hostName: input.hostName ?? null,
       harnessTypes: [...(input.harnessTypes ?? [])],

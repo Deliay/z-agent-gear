@@ -8,8 +8,10 @@ export interface StartHarnessInput {
   controllerKeyId: string;
   containerApiKeyId: string;
   userId: string;
-  /** 前台租户 ID（一期 personal 期与 userId 同值）。 */
+  /** 前台租户 ID（多租户二期：工作区所属租户） */
   tenantId: string;
+  /** 前台当前租户工作区 ID（多租户二期；缺失由 cloud-controller 按 tenantId 回退全局工作区） */
+  workspaceId?: string | null;
   hostName: string;
   harnessTypes: string[];
   expiresAt: Date;
@@ -137,6 +139,7 @@ export class CloudControllerClient {
       refId: input.controllerKeyId,
       userId: input.userId,
       tenantId: input.tenantId,
+      workspaceId: input.workspaceId ?? undefined,
       hostName: input.hostName,
       harnessTypes: input.harnessTypes,
       expiresAt: input.expiresAt.toISOString(),

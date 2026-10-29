@@ -1,3 +1,6 @@
+# 项目工作区（ControllerWorkspace）：控制器/云电脑上的 Git 项目目录。
+# 注意：与多租户二期的「租户工作区」（contracts/workspace.graphql 的 Workspace / workspaces 集合）是
+# 不同概念，本契约的 workspaceId 语义与命名本期零改动。
 type ControllerWorkspace {
   id: ID!
   userId: ID!

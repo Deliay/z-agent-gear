@@ -24,10 +24,20 @@ vi.mock('../models/github-account.js', () => ({
   },
 }));
 
+vi.mock('../models/workspace.js', () => ({
+  Workspace: { findById: vi.fn(), findOne: vi.fn() },
+}));
+vi.mock('../models/tenant-member.js', () => ({
+  TenantMember: { findOne: vi.fn() },
+}));
+vi.mock('../models/workspace-member.js', () => ({
+  WorkspaceMember: { findOne: vi.fn() },
+}));
 vi.mock('../models/github-installation.js', () => ({
   GitHubInstallation: {
     find: vi.fn(),
     findOneAndUpdate: vi.fn(),
+    updateMany: vi.fn(),
     deleteMany: vi.fn(),
   },
 }));
@@ -49,9 +59,16 @@ import {
 } from './github.js';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
+import { Workspace } from '../models/workspace.js';
+import { TenantMember } from '../models/tenant-member.js';
+import { WorkspaceMember } from '../models/workspace-member.js';
+import { runWithWorkspace } from './workspace-context.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(GitHubAccount.find).mockReturnValue({
+    select: () => ({ lean: async () => [] }),
+  } as never);
 });
 
 describe('GitHubService', () => {
@@ -132,7 +149,7 @@ describe('GitHubService', () => {
     it('should uninstall app and delete installations when account exists', async () => {
       const mockInstallations = [{ installationId: 42 }, { installationId: 43 }];
 
-      vi.mocked(GitHubAccount.findOne).mockResolvedValue({ _id: 'acc1' } as any);
+      vi.mocked(GitHubAccount.findOne).mockResolvedValue({ _id: 'acc1', githubUserId: 42 } as any);
       vi.mocked(GitHubInstallation.find).mockResolvedValue(mockInstallations as any);
       vi.mocked(GitHubInstallation.deleteMany).mockResolvedValue({ deletedCount: 2 } as any);
 
@@ -149,16 +166,20 @@ describe('GitHubService', () => {
 
       expect(result).toBe(true);
       expect(GitHubAccount.findOne).toHaveBeenCalledWith({ _id: 'acc1', userId: 'user1' });
-      expect(GitHubInstallation.find).toHaveBeenCalledWith({ accountId: 'acc1' });
+      expect(GitHubInstallation.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          $or: expect.arrayContaining([expect.objectContaining({ githubUserId: 42 })]),
+        }),
+      );
       expect(fetchCalls.length).toBe(2);
       expect(fetchCalls[0][0]).toBe('https://api.github.com/app/installations/42');
       expect(fetchCalls[1][0]).toBe('https://api.github.com/app/installations/43');
-      expect(GitHubInstallation.deleteMany).toHaveBeenCalledWith({ accountId: 'acc1' });
+      expect(GitHubInstallation.deleteMany).toHaveBeenCalledWith({ githubUserId: 42 });
       expect(GitHubAccount.deleteOne).toHaveBeenCalledWith({ _id: 'acc1', userId: 'user1' });
     });
 
     it('should clean up local data even if uninstall fails', async () => {
-      vi.mocked(GitHubAccount.findOne).mockResolvedValue({ _id: 'acc1' } as any);
+      vi.mocked(GitHubAccount.findOne).mockResolvedValue({ _id: 'acc1', githubUserId: 42 } as any);
       vi.mocked(GitHubInstallation.find).mockResolvedValue([{ installationId: 42 }] as any);
       vi.mocked(GitHubInstallation.deleteMany).mockResolvedValue({ deletedCount: 1 } as any);
 
@@ -614,5 +635,196 @@ describe('GitHubService', () => {
       expect(String(fetchMock.mock.calls[0][0])).toContain('/repos/a/b/issues/42/comments');
       vi.unstubAllGlobals();
     });
+  });
+});
+
+describe('GitHub 绑定工作区归属（阻断-A/C）', () => {
+  function lean<T>(value: T) {
+    return { lean: async () => value, select: () => lean(value) } as never;
+  }
+  const WS_NORMAL = '507f1f77bcf86cd799439071';
+  const WS_GLOBAL = '507f1f77bcf86cd799439072';
+
+  it('resolveSetupWorkspace：normal 工作区需成员资格，否则 workspace not found', async () => {
+    vi.mocked(Workspace.findById).mockReturnValue(
+      lean({ _id: WS_NORMAL, tenantId: 'tenant-team', type: 'normal' }) as never,
+    );
+    vi.mocked(TenantMember.findOne).mockReturnValue(lean({ role: 'developer' }) as never);
+    vi.mocked(WorkspaceMember.findOne).mockReturnValue(lean(null) as never);
+
+    await expect(
+      (githubService as unknown as { resolveSetupWorkspace: (u: string, w: string) => Promise<unknown> })
+        .resolveSetupWorkspace('user1', WS_NORMAL),
+    ).rejects.toThrow('workspace not found');
+
+    vi.mocked(WorkspaceMember.findOne).mockReturnValue(lean({ _id: 'm1' }) as never);
+    await expect(
+      (githubService as unknown as { resolveSetupWorkspace: (u: string, w: string) => Promise<unknown> })
+        .resolveSetupWorkspace('user1', WS_NORMAL),
+    ).resolves.toEqual({ workspaceId: WS_NORMAL, tenantId: 'tenant-team' });
+  });
+
+  it('resolveSetupWorkspace：全局工作区 + developer 拒绝（只读红线）', async () => {
+    vi.mocked(Workspace.findById).mockReturnValue(
+      lean({ _id: WS_GLOBAL, tenantId: 'tenant-team', type: 'global' }) as never,
+    );
+    vi.mocked(TenantMember.findOne).mockReturnValue(lean({ role: 'developer' }) as never);
+
+    await expect(
+      (githubService as unknown as { resolveSetupWorkspace: (u: string, w: string) => Promise<unknown> })
+        .resolveSetupWorkspace('user1', WS_GLOBAL),
+    ).rejects.toThrow('global workspace is read-only');
+  });
+
+  it('unbindAccount：共享行越界删除抛 workspace not found 且不删安装数据', async () => {
+    vi.mocked(GitHubAccount.findOne).mockResolvedValue({
+      _id: 'acc-global',
+      workspaceId: WS_GLOBAL,
+    } as never);
+
+    await runWithWorkspace(
+      {
+        id: WS_NORMAL,
+        tenantId: 'tenant-team',
+        type: 'normal',
+        role: 'developer',
+        readOnly: false,
+        globalWorkspaceId: WS_GLOBAL,
+      },
+      async () => {
+        await expect(githubService.unbindAccount('user1', 'acc-global')).rejects.toThrow(
+          'workspace not found',
+        );
+      },
+    );
+    expect(GitHubInstallation.deleteMany).not.toHaveBeenCalled();
+    expect(GitHubAccount.deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('unbindAccount：全局工作区 developer 只读拒绝', async () => {
+    vi.mocked(GitHubAccount.findOne).mockResolvedValue({
+      _id: 'acc-global',
+      workspaceId: WS_GLOBAL,
+    } as never);
+    await runWithWorkspace(
+      {
+        id: WS_GLOBAL,
+        tenantId: 'tenant-team',
+        type: 'global',
+        role: 'developer',
+        readOnly: true,
+        globalWorkspaceId: WS_GLOBAL,
+      },
+      async () => {
+        await expect(githubService.unbindAccount('user1', 'acc-global')).rejects.toThrow(
+          'global workspace is read-only',
+        );
+      },
+    );
+    expect(GitHubInstallation.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleSetup 落账（阻断-E/F）', () => {
+  function lean<T>(value: T) {
+    return { lean: async () => value, select: () => lean(value) } as never;
+  }
+  const WS = '507f1f77bcf86cd799439081';
+  const TENANT = '507f1f77bcf86cd799439082';
+
+  beforeEach(() => {
+    vi.mocked(Workspace.findById).mockReturnValue(
+      lean({ _id: WS, tenantId: TENANT, type: 'normal' }) as never,
+    );
+    vi.mocked(TenantMember.findOne).mockReturnValue(lean({ role: 'admin' }) as never);
+    vi.spyOn(
+      githubService as unknown as { getInstallationToken: (id: number) => Promise<unknown> },
+      'getInstallationToken',
+    ).mockResolvedValue({ token: 'inst-token', expiresAt: new Date(Date.now() + 3600_000) });
+    vi.spyOn(
+      githubService as unknown as { getInstallationAccount: (id: number) => Promise<unknown> },
+      'getInstallationAccount',
+    ).mockResolvedValue({ id: 42, login: 'octo', avatar_url: 'a', type: 'User' });
+    vi.spyOn(
+      githubService as unknown as { getRepositories: (t: string) => Promise<unknown> },
+      'getRepositories',
+    ).mockResolvedValue([]);
+    vi.mocked(GitHubInstallation.findOneAndUpdate).mockReturnValue({
+      lean: async () => ({}),
+    } as never);
+  });
+
+  it('upsert 键对齐唯一索引（不含 userId），userId 仅 $setOnInsert，安装行写 githubUserId', async () => {
+    vi.mocked(GitHubAccount.findOneAndUpdate).mockResolvedValue({
+      _id: 'acc-a',
+      githubUserId: 42,
+    } as never);
+
+    await githubService.handleSetup({
+      installationId: 7,
+      state: 's',
+      userId: 'user-a',
+      workspaceId: WS,
+    });
+
+    expect(GitHubAccount.findOneAndUpdate).toHaveBeenCalledWith(
+      { tenantId: TENANT, workspaceId: WS, githubUserId: 42 },
+      expect.objectContaining({
+        $setOnInsert: { userId: 'user-a' },
+        $set: expect.objectContaining({ tenantId: TENANT, workspaceId: WS }),
+      }),
+      expect.objectContaining({ upsert: true }),
+    );
+    expect(GitHubInstallation.findOneAndUpdate).toHaveBeenCalledWith(
+      { installationId: 7 },
+      expect.objectContaining({ githubUserId: 42, accountId: 'acc-a' }),
+      expect.objectContaining({ upsert: true }),
+    );
+  });
+
+  it('同工作区第二人绑定同账号：顺序 upsert 不因 userId 撞唯一索引', async () => {
+    vi.mocked(GitHubAccount.findOneAndUpdate)
+      .mockRejectedValueOnce(Object.assign(new Error('E11000'), { code: 11000 }))
+      .mockResolvedValueOnce({ _id: 'acc-existing', githubUserId: 42 } as never);
+
+    await githubService.handleSetup({
+      installationId: 7,
+      state: 's',
+      userId: 'user-b',
+      workspaceId: WS,
+    });
+
+    const [firstFilter, , firstOptions] = vi.mocked(GitHubAccount.findOneAndUpdate).mock.calls[0];
+    expect(firstFilter).toEqual({ tenantId: TENANT, workspaceId: WS, githubUserId: 42 });
+    expect((firstFilter as unknown as Record<string, unknown>).userId).toBeUndefined();
+    expect(firstOptions).toMatchObject({ upsert: true });
+    expect(GitHubAccount.findOneAndUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it('同一 GitHub 账号跨工作区两条绑定共享同一安装数据（不改嫁）', async () => {
+    vi.mocked(GitHubAccount.find).mockReturnValue({
+      lean: async () => [
+      { _id: 'acc-personal', githubUserId: 42, workspaceId: 'ws-personal' },
+      { _id: 'acc-team', githubUserId: 42, workspaceId: WS },
+      ],
+    } as never);
+    vi.mocked(GitHubInstallation.find).mockResolvedValue([
+      {
+        _id: 'inst-1',
+        accountId: 'acc-personal',
+        githubUserId: 42,
+        installationId: 7,
+        accountLogin: 'octo',
+        accountType: 'User',
+        repos: [{ repoId: 1, repoName: 'r', fullName: 'o/r', private: false, permissions: { read: true, write: true } }],
+        createdAt: new Date(),
+      },
+    ] as never);
+
+    const accounts = await githubService.getAccounts('user-a');
+    expect(accounts).toHaveLength(2);
+    expect(accounts[0].installations).toHaveLength(1);
+    expect(accounts[1].installations).toHaveLength(1);
+    expect(accounts[1].installations[0].repos[0].fullName).toBe('o/r');
   });
 });

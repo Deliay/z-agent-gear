@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { Controller } from '../models/controller.js';
+import { actorFilter } from './workspace-context.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { McpServer } from '../models/mcp-server.js';
@@ -14,7 +15,7 @@ export interface ControllerDefaultMcpInput {
 
 export class ControllerService {
   async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
-    const controllers = await Controller.find({ userId }).sort({ createdAt: -1 }).lean();
+    const controllers = await Controller.find({ ...actorFilter(userId) }).sort({ createdAt: -1 }).lean();
     // 软删除的云电脑不再展示（Controller/会话保留）。普通主机不受影响。
     const cloudControllerIds = controllers
       .filter((controller) => controller.type === 'cloud')
@@ -57,21 +58,21 @@ export class ControllerService {
   /** 云电脑删除后 Controller 留档：仅置连接态 offline。 */
   async markCloudHostOffline(controllerId: string, userId: string): Promise<boolean> {
     const result = await Controller.findOneAndUpdate(
-      { _id: controllerId, userId, type: 'cloud' },
+      { _id: controllerId, ...actorFilter(userId), type: 'cloud' },
       { $set: { status: 'offline' } },
     );
     return result !== null;
   }
 
   async findById(id: string, userId: string): Promise<Record<string, unknown> | null> {
-    const controller = await Controller.findOne({ _id: id, userId }).lean();
+    const controller = await Controller.findOne({ _id: id, ...actorFilter(userId) }).lean();
     if (!controller) return null;
     return this.mapController(controller);
   }
 
   async rename(id: string, userId: string, name: string): Promise<Record<string, unknown> | null> {
     const controller = await Controller.findOneAndUpdate(
-      { _id: id, userId },
+      { _id: id, ...actorFilter(userId) },
       { name },
       { new: true },
     ).lean();
@@ -80,7 +81,7 @@ export class ControllerService {
   }
 
   async unbind(id: string, userId: string): Promise<boolean> {
-    const controller = await Controller.findOne({ _id: id, userId });
+    const controller = await Controller.findOne({ _id: id, ...actorFilter(userId) });
     if (!controller) return false;
 
     const keyId = controller.keyId.toString();
@@ -100,7 +101,7 @@ export class ControllerService {
 
   async setWorktreeDir(id: string, userId: string, worktreeDir: string): Promise<Record<string, unknown> | null> {
     const controller = await Controller.findOneAndUpdate(
-      { _id: id, userId },
+      { _id: id, ...actorFilter(userId) },
       { worktreeDir },
       { new: true },
     ).lean();
@@ -118,7 +119,7 @@ export class ControllerService {
     controllerId: string,
     input: ControllerDefaultMcpInput,
   ): Promise<Record<string, unknown> | null> {
-    const controller = await Controller.findOne({ _id: controllerId, userId });
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) });
     if (!controller) return null;
 
     const useAllEnabled = input.useAllEnabled !== false;

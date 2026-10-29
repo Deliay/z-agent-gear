@@ -10,6 +10,8 @@ export const GET_PROVIDERS = gql`
       credentialType
       credentialValue
       isEnabled
+      scope
+      workspaceId
       models {
         id
         providerId
@@ -40,6 +42,7 @@ export const GET_MODELS = gql`
       isEnabled
       sortOrder
       scope
+      workspaceId
       createdAt
       updatedAt
     }
@@ -234,6 +237,7 @@ export const CLOUD_HOST_FIELDS = gql`
     hasDefaultWorkspace
     workloadInstalling
     githubAccountId
+    workspaceId
   }
 `
 
@@ -550,6 +554,7 @@ export const GET_GITHUB_ACCOUNTS = gql`
       githubUserId
       githubLogin
       githubAvatarUrl
+      workspaceId
       createdAt
       installations {
         id
@@ -588,6 +593,8 @@ export const GET_COMMIT_SETTINGS = gql`
       githubAccountId
       customName
       customEmail
+      source
+      readOnly
     }
   }
 `
@@ -758,6 +765,72 @@ export const CLOUD_HOST_ISSUES_LINKAGES = gql`
       repoFullNames
       createdAt
       updatedAt
+    }
+  }
+`
+
+// ---------- 多租户二期：租户工作区 / 成员（contracts/workspace.graphql） ----------
+
+/** 工作区切换器数据源：myWorkspaces 已按角色过滤，myTenants 透出各租户角色 */
+export const GET_WORKSPACE_CONTEXT = gql`
+  query GetWorkspaceContext {
+    myWorkspaces {
+      id
+      name
+      type
+      tenant {
+        id
+        name
+        type
+        memberCount
+      }
+      memberCount
+      myRole
+      readOnly
+      createdAt
+    }
+    myTenants {
+      tenant {
+        id
+        name
+        type
+        memberCount
+      }
+      role
+    }
+  }
+`
+
+export const GET_WORKSPACE_MEMBERS = gql`
+  query GetWorkspaceMembers($workspaceId: ID!) {
+    workspaceMembers(workspaceId: $workspaceId) {
+      id
+      name
+      username
+      role
+      createdAt
+    }
+  }
+`
+
+export const GET_TENANT_MEMBERS = gql`
+  query GetTenantMembers($tenantId: ID!) {
+    tenantMembers(tenantId: $tenantId) {
+      id
+      name
+      username
+      role
+      createdAt
+    }
+  }
+`
+
+export const SEARCH_ACCOUNTS = gql`
+  query SearchAccounts($keyword: String!) {
+    searchAccounts(keyword: $keyword) {
+      username
+      name
+      userId
     }
   }
 `

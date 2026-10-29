@@ -1,8 +1,14 @@
 import { config } from '../config/index.js';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
+import { User } from '../models/user.js';
+import { Workspace } from '../models/workspace.js';
+import { TenantMember } from '../models/tenant-member.js';
+import { WorkspaceMember } from '../models/workspace-member.js';
+import { actorFilter, getWorkspaceContext, WORKSPACE_READ_ONLY_MESSAGE } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 export interface GitHubRepoInfo {
@@ -26,6 +32,8 @@ export interface GitHubAccountInfo {
   githubUserId: number;
   githubLogin: string;
   githubAvatarUrl?: string;
+  /** 所属租户工作区 id（多租户二期） */
+  workspaceId?: string;
   createdAt: string;
   installations: GitHubInstallationInfo[];
 }
@@ -85,33 +93,108 @@ export class GitHubService {
     return { url, state };
   }
 
-  async handleSetup(params: { installationId: number; state: string; userId: string }): Promise<void> {
+  /**
+   * 解析 OAuth 绑定落点（多租户二期）：state 携带发起绑定的工作区；
+   * 校验租户成员资格与 normal 工作区成员资格，全局工作区 + developer 拒绝（只读红线）。
+   * 缺失 workspaceId（一期旧 state）回退个人租户全局工作区。
+   */
+  private async resolveSetupWorkspace(
+    userId: string,
+    workspaceId?: string,
+  ): Promise<{ workspaceId: string; tenantId: string }> {
+    if (!workspaceId) {
+      const user = await User.findById(userId).select('tenantId').lean();
+      const tenantId = user?.tenantId ? String(user.tenantId) : userId;
+      const global = await Workspace.findOne({ tenantId, type: 'global' }).select('_id').lean();
+      return { workspaceId: global ? String(global._id) : '', tenantId };
+    }
+    if (!mongoose.isValidObjectId(workspaceId)) throw new Error('workspace not found');
+    const workspace = await Workspace.findById(workspaceId).lean();
+    if (!workspace) throw new Error('workspace not found');
+    const tenantId = String(workspace.tenantId);
+    const membership = await TenantMember.findOne({ tenantId, userId }).lean();
+    if (!membership) throw new Error('workspace not found');
+    const role = membership.role === 'admin' ? 'admin' : 'developer';
+    const type = workspace.type === 'global' ? 'global' : 'normal';
+    if (type === 'global' && role === 'developer') {
+      throw new Error(WORKSPACE_READ_ONLY_MESSAGE);
+    }
+    if (type === 'normal' && role !== 'admin') {
+      const join = await WorkspaceMember.findOne({ workspaceId: workspace._id, userId }).lean();
+      if (!join) throw new Error('workspace not found');
+    }
+    return { workspaceId: String(workspace._id), tenantId };
+  }
+
+  async handleSetup(params: {
+    installationId: number;
+    state: string;
+    userId: string;
+    workspaceId?: string;
+  }): Promise<void> {
     const tokenResponse = await this.getInstallationToken(params.installationId);
     const accountInfo = await this.getInstallationAccount(params.installationId);
     const repos = await this.getRepositories(tokenResponse.token);
+    const { workspaceId, tenantId } = await this.resolveSetupWorkspace(
+      params.userId,
+      params.workspaceId,
+    );
 
     const encryptedToken = encrypt(tokenResponse.token);
-    const account = await GitHubAccount.findOneAndUpdate(
-      { userId: params.userId, githubUserId: accountInfo.id },
-      {
-        userId: params.userId,
-        githubUserId: accountInfo.id,
-        githubLogin: accountInfo.login,
-        githubAvatarUrl: accountInfo.avatar_url,
-        accessToken: encryptedToken,
-        tokenExpiresAt: tokenResponse.expiresAt,
-      },
-      { upsert: true, new: true },
-    );
+    // 阻断-F：upsert 键与唯一索引 {tenantId,workspaceId,githubUserId} 对齐；userId 仅首次落创建者
+    const accountFilter = {
+      // githubaccounts.tenantId/workspaceId 为 String 口径（F8）
+      tenantId,
+      workspaceId,
+      githubUserId: accountInfo.id,
+    };
+    let account;
+    try {
+      account = await GitHubAccount.findOneAndUpdate(
+        accountFilter,
+        {
+          $set: {
+            tenantId,
+            workspaceId,
+            githubUserId: accountInfo.id,
+            githubLogin: accountInfo.login,
+            githubAvatarUrl: accountInfo.avatar_url,
+            accessToken: encryptedToken,
+            tokenExpiresAt: tokenResponse.expiresAt,
+          },
+          $setOnInsert: { userId: params.userId },
+        },
+        { upsert: true, new: true },
+      );
+    } catch (err) {
+      if ((err as { code?: number }).code === 11000) {
+        account = await GitHubAccount.findOneAndUpdate(
+          accountFilter,
+          {
+            $set: {
+              githubLogin: accountInfo.login,
+              githubAvatarUrl: accountInfo.avatar_url,
+              accessToken: encryptedToken,
+              tokenExpiresAt: tokenResponse.expiresAt,
+            },
+          },
+          { new: true },
+        );
+      } else {
+        throw err;
+      }
+    }
+    if (!account) throw new Error('account not found');
 
     await GitHubInstallation.findOneAndUpdate(
       { installationId: params.installationId },
       {
-        accountId: account._id,
+        accountId: (account as unknown as { _id: unknown })._id,
+        githubUserId: accountInfo.id,
         installationId: params.installationId,
         accountLogin: accountInfo.login,
         accountType: accountInfo.type,
-        repos: repos.map(r => ({
+        repos: repos.map((r: Record<string, any>) => ({
           repoId: r.id,
           repoName: r.name,
           fullName: r.full_name,
@@ -126,20 +209,65 @@ export class GitHubService {
     ).lean();
   }
 
+  /** 同一 GitHub 用户在各工作区的绑定共享同一份安装数据（按 githubUserId 关联；旧行按 accountId 兜底）。 */
+  private async installationsForAccount(account: {
+    _id: unknown;
+    githubUserId: number;
+  }): Promise<Array<Record<string, any>>> {
+    const accountRef = mongoose.isValidObjectId(account._id)
+      ? new mongoose.Types.ObjectId(String(account._id))
+      : account._id;
+    const query = GitHubInstallation.find({
+      $or: [
+        { githubUserId: account.githubUserId },
+        { accountId: accountRef as never },
+      ],
+    }) as unknown as { lean?: () => Promise<unknown> };
+    const rows = (typeof query.lean === 'function'
+      ? await query.lean()
+      : await (query as unknown as Promise<unknown>)) as Array<Record<string, any>>;
+    // 旧行补齐 githubUserId（幂等）
+    const legacyIds = rows
+      .filter((row) => row.githubUserId === null || row.githubUserId === undefined)
+      .map((row) => row._id);
+    if (legacyIds.length > 0) {
+      await GitHubInstallation.updateMany(
+        { _id: { $in: legacyIds } },
+        { $set: { githubUserId: account.githubUserId } },
+      );
+      for (const row of rows) {
+        if (row.githubUserId === null || row.githubUserId === undefined) {
+          row.githubUserId = account.githubUserId;
+        }
+      }
+    }
+    return rows.filter(
+      (row) =>
+        row.githubUserId === account.githubUserId ||
+        String(row.accountId) === String(account._id),
+    );
+  }
+
   async getAccounts(userId: string): Promise<GitHubAccountInfo[]> {
-    const accounts = await GitHubAccount.find({ userId }).lean();
-    const installations = await GitHubInstallation.find({
-      accountId: { $in: accounts.map(a => a._id) },
-    }).lean();
+    const accounts = await GitHubAccount.find(actorFilter(userId)).lean();
+    const installationsByUser = new Map<number, Array<Record<string, any>>>();
+    for (const account of accounts) {
+      if (!installationsByUser.has(account.githubUserId)) {
+        installationsByUser.set(
+          account.githubUserId,
+          await this.installationsForAccount(account as { _id: unknown; githubUserId: number }),
+        );
+      }
+    }
 
     return accounts.map(account => ({
       id: account._id.toString(),
       githubUserId: account.githubUserId,
       githubLogin: account.githubLogin,
       githubAvatarUrl: account.githubAvatarUrl ?? undefined,
+      workspaceId: account.workspaceId ? String(account.workspaceId) : '',
       createdAt: account.createdAt instanceof Date ? account.createdAt.toISOString() : String(account.createdAt),
-      installations: installations
-        .filter(i => i.accountId.toString() === account._id.toString())
+      installations: (installationsByUser.get(account.githubUserId) ?? [])
         .map(i => ({
           id: i._id.toString(),
           installationId: i.installationId,
@@ -147,7 +275,7 @@ export class GitHubService {
             ? `https://github.com/organizations/${i.accountLogin}/settings/installations/${i.installationId}`
             : `https://github.com/settings/installations/${i.installationId}`,
           createdAt: i.createdAt instanceof Date ? i.createdAt.toISOString() : String(i.createdAt),
-          repos: (i.repos || []).map(r => ({
+          repos: (i.repos || []).map((r: Record<string, any>) => ({
             id: String(r.repoId),
             repoId: r.repoId,
             repoName: r.repoName,
@@ -159,34 +287,93 @@ export class GitHubService {
     }));
   }
 
+  /**
+   * 同账号的其它工作区/租户绑定行（阻断-I）：必须绕过 workspace-scope 读过滤，
+   * 否则「最后一个绑定」判定会被当前可见集收窄而误删共享安装数据。
+   * 单测无 DB 连接时回退普通查询（mock 友好）。
+   */
+  private async findSurvivingBindings(account: {
+    _id: unknown;
+    githubUserId: number;
+  }): Promise<Array<{ _id: unknown }>> {
+    const db = mongoose.connection.db;
+    if (!db) {
+      return (await GitHubAccount.find({
+        githubUserId: account.githubUserId,
+        _id: { $ne: account._id },
+      })
+        .select('_id')
+        .lean()) as Array<{ _id: unknown }>;
+    }
+    return (await db
+      .collection('githubaccounts')
+      .find({ githubUserId: account.githubUserId, _id: { $ne: account._id as never } })
+      .project({ _id: 1 })
+      .toArray()) as Array<{ _id: unknown }>;
+  }
+
   async unbindAccount(userId: string, accountId: string): Promise<boolean> {
-    const account = await GitHubAccount.findOne({ _id: accountId, userId });
+    const account = await GitHubAccount.findOne({ _id: accountId, ...actorFilter(userId) });
     if (!account) return false;
 
-    const installations = await GitHubInstallation.find({ accountId: account._id });
-    for (const inst of installations) {
-      try {
-        await this.uninstallApp(inst.installationId);
-      } catch {
-        // ignore uninstall failure — clean up local data regardless
-      }
+    // 多租户二期：共享读可能命中全局/他人工作区行；写（解绑）仅允许当前工作区自身行，
+    // 越界统一 Not found（在删除安装数据之前校验，避免“假成功 + 半删除”）。
+    const context = getWorkspaceContext();
+    if (context?.readOnly) throw new Error(WORKSPACE_READ_ONLY_MESSAGE);
+    if (context && String(account.workspaceId ?? '') !== context.id) {
+      throw new Error('workspace not found');
     }
 
-    await GitHubInstallation.deleteMany({ accountId: account._id });
-    await GitHubAccount.deleteOne({ _id: accountId, userId });
+    const installations = await this.installationsForAccount(
+      account as unknown as { _id: unknown; githubUserId: number },
+    );
+    // 同一 GitHub 账号可能在其他工作区仍有绑定行：只有最后一个绑定才卸载 App 并清理安装数据，
+    // 否则把安装行 accountId 改指存活绑定（避免“改嫁”与误删）。
+    const survivors = await this.findSurvivingBindings(account as unknown as {
+      _id: unknown;
+      githubUserId: number;
+    });
+    if (survivors.length === 0) {
+      for (const inst of installations) {
+        try {
+          await this.uninstallApp(Number(inst.installationId));
+        } catch {
+          // ignore uninstall failure — clean up local data regardless
+        }
+      }
+      await GitHubInstallation.deleteMany({ githubUserId: account.githubUserId });
+    } else if (installations.length > 0) {
+      await GitHubInstallation.updateMany(
+        { githubUserId: account.githubUserId },
+        { $set: { accountId: survivors[0]._id } },
+      );
+    }
+
+    await GitHubAccount.deleteOne({ _id: accountId, ...actorFilter(userId) });
     return true;
   }
 
   async refreshInstallations(userId: string, accountId: string): Promise<GitHubAccountInfo | undefined> {
-    const account = await GitHubAccount.findOne({ _id: accountId, userId });
+    const account = await GitHubAccount.findOne({ _id: accountId, ...actorFilter(userId) });
     if (!account) throw new Error('Account not found');
+
+    // 阻断-G：刷新写安装数据属于写操作，与 unbind 同款前置校验（只读/越界）
+    const context = getWorkspaceContext();
+    if (context?.readOnly) throw new Error(WORKSPACE_READ_ONLY_MESSAGE);
+    if (context && String(account.workspaceId ?? '') !== context.id) {
+      throw new Error('workspace not found');
+    }
 
     const token = decrypt(account.accessToken);
     const repos = await this.getRepositories(token);
 
-    const installations = await GitHubInstallation.find({ accountId: account._id });
+    const installations = await this.installationsForAccount(
+      account as unknown as { _id: unknown; githubUserId: number },
+    );
     for (const inst of installations) {
-      inst.repos = repos.map(r => ({
+      const doc = await GitHubInstallation.findById(inst._id);
+      if (!doc) continue;
+      doc.repos = repos.map((r: Record<string, any>) => ({
         repoId: r.id,
         repoName: r.name,
         fullName: r.full_name,
@@ -196,7 +383,7 @@ export class GitHubService {
           write: r.permissions.push || r.permissions.admin,
         },
       })) as any;
-      await inst.save();
+      await doc.save();
     }
 
     const accounts = await this.getAccounts(userId);
@@ -210,7 +397,7 @@ export class GitHubService {
     const tokenResponse = await this.getInstallationToken(installationId);
     const repos = await this.getRepositories(tokenResponse.token);
 
-    installation.repos = repos.map(r => ({
+    installation.repos = repos.map((r: Record<string, any>) => ({
       repoId: r.id,
       repoName: r.name,
       fullName: r.full_name,
@@ -239,10 +426,10 @@ export class GitHubService {
     const cached = this.readCachedToken(String(account._id), repoFullName);
     if (cached) return cached;
 
-    const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
+    const installations = await this.installationsForAccount(account as unknown as { _id: unknown; githubUserId: number });
     const match = installations.find((installation) =>
       (installation.repos ?? []).some(
-        (repo) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
+        (repo: { fullName: string }) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
       ),
     );
     if (!match) throw new Error('repository is not authorized');
@@ -258,16 +445,16 @@ export class GitHubService {
     userId: string,
     repoFullName: string,
   ): Promise<{ token: string; expiresAt: Date }> {
-    const accounts = await GitHubAccount.find({ userId }).lean();
+    const accounts = await GitHubAccount.find(actorFilter(userId)).lean();
     for (const account of accounts) {
       const accountId = String(account._id);
       const cached = this.readCachedToken(accountId, repoFullName);
       if (cached) return cached;
 
-      const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
+      const installations = await this.installationsForAccount(account as unknown as { _id: unknown; githubUserId: number });
       const match = installations.find((installation) =>
         (installation.repos ?? []).some(
-          (repo) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
+          (repo: { fullName: string }) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
         ),
       );
       if (match) {
@@ -409,11 +596,11 @@ export class GitHubService {
   /** 解析仓库归属账号（`GitHubInstallation.repos[].fullName` 大小写不敏感反查，多匹配取首个）。 */
   async resolveRepoAccount(userId: string, repoFullName: string): Promise<string> {
     const target = repoFullName.trim().toLowerCase();
-    const accounts = await GitHubAccount.find({ userId }).sort({ createdAt: 1 }).lean();
+    const accounts = await GitHubAccount.find(actorFilter(userId)).sort({ createdAt: 1 }).lean();
     for (const account of accounts) {
-      const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
+      const installations = await this.installationsForAccount(account as unknown as { _id: unknown; githubUserId: number });
       const matched = installations.some((installation) =>
-        (installation.repos ?? []).some((repo) => repo.fullName.toLowerCase() === target),
+        (installation.repos ?? []).some((repo: { fullName: string }) => repo.fullName.toLowerCase() === target),
       );
       if (matched) return account._id.toString();
     }

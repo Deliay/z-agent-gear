@@ -9,6 +9,12 @@ enum CredentialType {
 
 # 配置归属：user 为用户侧配置，global 为管理后台全局配置。
 # global 且 isEnabled 的模型对所有用户可用。
+#
+# 多租户二期工作区口径（契约 3）：
+# - `scope=user` 行读口径 = 当前工作区 ∪ 本租户全局工作区（普通工作区可共享全局资源，来源徽标区分）；
+# - 写口径（增删改/排序/启停/batch*）= 仅当前工作区自身行；全局工作区上下文要求 admin，
+#   developer 被 `global workspace is read-only` 拦截；
+# - 同租户内 `scope=user` 行唯一性按 `(workspaceId, name)` 判定；不同工作区（含全局）允许同名并存。
 enum ConfigScope {
   user
   global
@@ -32,6 +38,8 @@ type Provider {
   credentialValue: String!
   isEnabled: Boolean!
   scope: ConfigScope!
+  # 所属租户工作区 id（多租户二期）：scope=user 行为所属工作区；scope=global 平台内置行恒为 null
+  workspaceId: ID
   models: [Model!]!
   createdAt: String!
   updatedAt: String!
@@ -51,7 +59,9 @@ type Model {
   isEnabled: Boolean!
   sortOrder: Int!
   scope: ConfigScope!
-  # 模型定价（只读展示）；与 admin-llm.graphql 的 ModelPricing 逐字一致。
+  # 所属租户工作区 id（多租户二期）：scope=user 行为所属工作区；scope=global 平台内置行恒为 null。
+  # 读口径 = 当前工作区 ∪ 本租户全局工作区；写口径 = 仅当前工作区自身行（全局上下文要求 admin）。
+  workspaceId: ID  # 模型定价（只读展示）；与 admin-llm.graphql 的 ModelPricing 逐字一致。
   pricing: ModelPricing
   # 最长上下文大小（token）；null = 未设置（只读，与 admin-llm.graphql 同步演进）
   contextLength: Int

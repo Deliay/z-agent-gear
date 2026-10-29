@@ -21,6 +21,7 @@ let k8sClient: InMemoryK8sClient;
 let containerService: ContainerService;
 let workloadLogRepository: InMemoryWorkloadLogRepository;
 let workloadRepository: InMemoryWorkloadRepository;
+let stubWorkspaceResolver: ReturnType<typeof vi.fn>;
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return { Authorization: `Bearer ${INTERNAL_TOKEN}`, ...extra };
@@ -32,6 +33,40 @@ async function createContainer(body: Record<string, unknown>): Promise<Response>
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
   });
+}
+
+/** 注入全局工作区解析器的路由（多租户二期 workspaceId 回退用例，免真库）。 */
+async function createStubContainer(body: Record<string, unknown>): Promise<Response> {
+  return fetch(`${baseUrl}/stub/containers`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(body),
+  });
+}
+
+/** harness 最小合法请求体（多租户二期 workspaceId 用例复用）。 */
+function harnessPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    purpose: 'harness',
+    hostId: 'host-ws',
+    refId: 'ck-ws',
+    userId: 'user-ws',
+    tenantId: 'tenant-ws',
+    hostName: 'pc-ws',
+    harnessTypes: ['opencode'],
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    agentGearMinVersion: '2.10.0',
+    secrets: {
+      hostEndpoint: 'wss://controller.example.com',
+      hostKey: 'zag_k_1_ws',
+      modelApiKey: 'zag_sk_ws',
+      modelBaseUrl: 'http://admin-api:8002/v1',
+      modelIds: '["a"]',
+      defaultWorkspace: '/home/worker/workspace',
+    },
+    workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false, required: true }],
+    ...overrides,
+  };
 }
 
 beforeAll(async () => {
@@ -127,6 +162,17 @@ beforeAll(async () => {
     '/internal',
     internalAuth(INTERNAL_TOKEN),
     createInternalRouter(service, { workloadRepository, workloadLogRepository }),
+  );
+  // 多租户二期：workspaceId 缺失回退解析器注入（真库不可用时的确定性用例）。
+  stubWorkspaceResolver = vi.fn();
+  app.use(
+    '/stub',
+    internalAuth(INTERNAL_TOKEN),
+    createInternalRouter(service, {
+      workloadRepository,
+      workloadLogRepository,
+      resolveGlobalWorkspaceId: stubWorkspaceResolver,
+    }),
   );
   httpServer = createServer(app);
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
@@ -703,6 +749,56 @@ describe('internal management API', () => {
     for (const tenantId of ['', '   ', 123]) {
       const res = await createContainer({ ...base, tenantId });
       expect(res.status, String(tenantId)).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('INVALID_HARNESS');
+    }
+  });
+
+  it('T-IC-HARNESS2a: 显式 workspaceId 落库（与 tenantId 并列）', async () => {
+    const res = await createContainer(
+      harnessPayload({ tenantId: 'tenant-ws-1', workspaceId: 'ws-explicit-1' }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string };
+    // 契约附录 A.3：响应结构不变（workspaceId 仅落库，读侧由 agent-api 直连集合）
+    expect(body).not.toHaveProperty('workspaceId');
+    const stored = await repo.findById(body.id);
+    expect(stored?.tenantId).toBe('tenant-ws-1');
+    expect(stored?.workspaceId).toBe('ws-explicit-1');
+  });
+
+  it('T-IC-HARNESS2b: 缺失 workspaceId 时按 tenantId 解析全局工作区并落库', async () => {
+    stubWorkspaceResolver.mockResolvedValue('ws-global-1');
+    const res = await createStubContainer(
+      harnessPayload({ tenantId: 'tenant-ws-global', workspaceId: undefined }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string };
+    const stored = await repo.findById(body.id);
+    expect(stubWorkspaceResolver).toHaveBeenCalledWith('tenant-ws-global');
+    expect(stored?.workspaceId).toBe('ws-global-1');
+  });
+
+  it('T-IC-HARNESS2c: 缺失且解析不到 → 落库 null + warn（不阻断创建）', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      stubWorkspaceResolver.mockResolvedValue(null);
+      const res = await createStubContainer(
+        harnessPayload({ tenantId: 'tenant-ws-missing', workspaceId: undefined }),
+      );
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { id: string };
+      const stored = await repo.findById(body.id);
+      expect(stored?.workspaceId).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('缺少 workspaceId'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('T-IC-HARNESS2d: workspaceId 显式非法（空串/非字符串）→ 400 INVALID_HARNESS', async () => {
+    for (const workspaceId of ['', '   ', 123, {}]) {
+      const res = await createContainer(harnessPayload({ workspaceId }));
+      expect(res.status, String(workspaceId)).toBe(400);
       expect(((await res.json()) as { error: string }).error).toBe('INVALID_HARNESS');
     }
   });

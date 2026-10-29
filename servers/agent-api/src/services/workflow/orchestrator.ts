@@ -200,6 +200,9 @@ class WorkflowOrchestrator {
       existingWorktreePath,
       workflowInstanceId: instance._id.toString(),
       workflowNodeId: node.nodeId,
+      resourceWorkspaceId: instance.resourceWorkspaceId
+        ? instance.resourceWorkspaceId.toString()
+        : undefined,
       // 节点会话自动装配平台工作流工具服务 + 管理工作流管理工具集（AI 可通过 admin 工具集完成编排）
       mcpServerIds: [
         await this.ensureWorkflowToolsServer(instance.userId.toString()),

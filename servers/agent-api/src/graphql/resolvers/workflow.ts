@@ -42,6 +42,7 @@ function mapTemplate(doc: Doc) {
     nodes: ((doc.nodes as Doc[]) ?? []).map(mapTemplateNode),
     isBuiltin: doc.isBuiltin ?? false,
     createdBy: doc.createdBy ?? 'HUMAN',
+    resourceWorkspaceId: toId(doc.resourceWorkspaceId),
     createdAt: toIso(doc.createdAt),
     updatedAt: toIso(doc.updatedAt),
   };
@@ -68,6 +69,7 @@ function mapConfigured(doc: Doc) {
           : null,
     })),
     createdBy: doc.createdBy ?? 'HUMAN',
+    resourceWorkspaceId: toId(doc.resourceWorkspaceId),
     createdAt: toIso(doc.createdAt),
     updatedAt: toIso(doc.updatedAt),
   };
@@ -143,6 +145,7 @@ export function mapInstance(doc: Doc) {
     configuredWorkflowId: toId(doc.configuredWorkflowId),
     controllerId: toId(doc.controllerId),
     workspaceId: toId(doc.workspaceId),
+    resourceWorkspaceId: toId(doc.resourceWorkspaceId),
     name: doc.name,
     currentNodeNames: doc.currentNodeNames ?? [],
     lastNodeName: doc.lastNodeName ?? null,

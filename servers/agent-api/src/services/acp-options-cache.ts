@@ -1,3 +1,4 @@
+import { actorFilter } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { Controller } from '../models/controller.js';
 
@@ -53,7 +54,7 @@ export async function invalidateAcpOptionsForController(controllerId: string): P
 export async function invalidateAcpOptionsForUser(userId: string): Promise<number> {
   let controllers: Array<{ _id: unknown }>;
   try {
-    controllers = await Controller.find({ userId }).select('_id').lean();
+    controllers = await Controller.find(actorFilter(userId)).select('_id').lean();
   } catch (err) {
     console.warn(
       '[acp-options-cache] list controllers failed:',

@@ -33,6 +33,7 @@ export const providerTypeDefs = `#graphql
     credentialValue: String!
     isEnabled: Boolean!
     scope: ConfigScope!
+    workspaceId: ID
     models: [Model!]!
     createdAt: String!
     updatedAt: String!

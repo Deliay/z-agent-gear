@@ -7,10 +7,14 @@ import type { GetGithubAccountsQuery, GetGithubAppUrlQuery } from '@/graphql/typ
 import { Button } from '@/components/ui/button'
 import GithubAccountCard from './GithubAccountCard'
 import UnbindConfirmDialog from './UnbindConfirmDialog'
+import { useResourceSourceResolver } from '@/hooks/useResourceSource'
+import { useWorkspaceAccess } from '@/stores/workspace'
 
 export default function GithubBindingSection() {
   const { data, loading } = useQuery<GetGithubAccountsQuery>(GET_GITHUB_ACCOUNTS)
   const { data: appUrlData } = useQuery<GetGithubAppUrlQuery>(GET_GITHUB_APP_URL)
+  const { readOnly: contextReadOnly } = useWorkspaceAccess()
+  const resolveSource = useResourceSourceResolver()
   const [unbindAccount] = useMutation(UNBIND_GITHUB_ACCOUNT)
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -77,9 +81,13 @@ export default function GithubBindingSection() {
       )}
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium text-foreground">GitHub 绑定</h3>
-        <Button size="sm" onClick={handleBind} disabled={!appUrlData?.githubAppUrl?.url}>
-          绑定 GitHub 帐号
-        </Button>
+        {contextReadOnly ? (
+          <span className="text-xs text-muted-foreground">全局工作区对开发者只读</span>
+        ) : (
+          <Button size="sm" onClick={handleBind} disabled={!appUrlData?.githubAppUrl?.url}>
+            绑定 GitHub 帐号
+          </Button>
+        )}
       </div>
 
       {accounts.length === 0 ? (
@@ -93,6 +101,8 @@ export default function GithubBindingSection() {
               key={account.id}
               account={account}
               onUnbind={(id) => setUnbindTarget(id)}
+              readOnly={contextReadOnly || !resolveSource(account.workspaceId).editable}
+              source={resolveSource(account.workspaceId)}
             />
           ))}
         </div>

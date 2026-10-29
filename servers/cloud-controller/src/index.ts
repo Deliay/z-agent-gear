@@ -30,6 +30,7 @@ import { internalAuth } from './middleware/internal-auth.js';
 import { createInternalRouter } from './routes/internal-api.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001CloudcontainersTenantId from './migrations/001-cloudcontainers-tenant-id-backfill.js';
+import * as migration002CloudcontainersWorkspaceId from './migrations/002-cloudcontainers-workspace-id.js';
 
 export interface CloudControllerApp {
   app: express.Express;
@@ -309,7 +310,10 @@ export function createCloudControllerApp(): CloudControllerApp {
     // 失败只记录日志、不阻断启动（runner 逐迁移吞错，下次启动按未完成重试）——
     // 与 agent-api / admin-api 既有启动口径一致。
     try {
-      await runMigrations([migration001CloudcontainersTenantId]);
+      await runMigrations([
+        migration001CloudcontainersTenantId,
+        migration002CloudcontainersWorkspaceId,
+      ]);
     } catch (err) {
       logger.warn?.(`[Migration] runMigrations failed (non-fatal): ${(err as Error).message}`);
     }

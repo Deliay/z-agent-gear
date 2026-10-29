@@ -65,6 +65,10 @@ type WorkflowTemplate {
   isBuiltin: Boolean!
   # 资源归属：HUMAN（默认，界面创建）/ AI（工作流管理工具集创建）
   createdBy: ResourceCreatedBy!
+  # 所属租户工作区 id（多租户二期）：自定义模板归属创建时工作区；
+  # 系统内置模板（isBuiltin=true）恒为 null，全工作区可见可用。
+  # 注意：与 WorkflowInstance.workspaceId（项目工作区 ControllerWorkspace）是不同概念。
+  resourceWorkspaceId: ID
   createdAt: String!
   updatedAt: String!
 }
@@ -106,6 +110,9 @@ type ConfiguredWorkflow {
   nodes: [ConfiguredWorkflowNode!]!
   # 资源归属：HUMAN（默认，界面创建）/ AI（工作流管理工具集创建）
   createdBy: ResourceCreatedBy!
+  # 所属租户工作区 id（多租户二期）：跟随其控制器的工作区（服务端推导）。
+  # 注意：与 controllerId 的「项目工作区」概念不同。
+  resourceWorkspaceId: ID!
   createdAt: String!
   updatedAt: String!
 }
@@ -191,7 +198,10 @@ type WorkflowInstance {
   # 统一实例化三来源（CONFIGURED/TEMPLATE/BLANK）中仅 CONFIGURED 来源保证存在，故可空
   configuredWorkflowId: ID
   controllerId: ID!
+  # 项目工作区（ControllerWorkspace）id —— 注意：不是租户工作区（多租户二期）
   workspaceId: ID!
+  # 租户工作区 id（多租户二期）：继承自已配置工作流 / 实例化时当前工作区
+  resourceWorkspaceId: ID!
   name: String!
   # 实例对外状态 = 全部 RUNNING 节点名
   currentNodeNames: [String!]!
@@ -284,6 +294,7 @@ input InstantiateWorkflowInput {
   templateId: ID
   # 三来源均必填（实例归属控制器）
   controllerId: ID!
+  # 项目工作区（ControllerWorkspace）id；租户工作区取当前请求上下文，不在此入参暴露
   workspaceId: ID!
   name: String!
   # 实例化前配置界面编辑后的最终节点图（服务端以此为准校验并快照落库）
@@ -316,6 +327,7 @@ type Query {
   configuredWorkflows(controllerId: ID): [ConfiguredWorkflow!]!
   configuredWorkflow(id: ID!): ConfiguredWorkflow
   # workspaceId / controllerId 均可选：都不传 = 当前用户全部实例；二者同传取交集
+  # workspaceId 为项目工作区（ControllerWorkspace）语义；租户工作区取当前请求上下文
   # archived 缺省/false 返回活跃实例（未归档）；true 返回已归档实例
   workflowInstances(workspaceId: ID, controllerId: ID, archived: Boolean): [WorkflowInstance!]!
   workflowInstance(id: ID!): WorkflowInstance

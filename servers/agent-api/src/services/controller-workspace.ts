@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { createHash } from 'crypto';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { Controller } from '../models/controller.js';
+import { actorFilter } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 const MAX_WORKSPACES = 10;
@@ -28,7 +29,7 @@ export class ControllerWorkspaceService {
   }
 
   async create(controllerId: string, userId: string, path: string): Promise<Record<string, unknown>> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
@@ -128,7 +129,7 @@ export class ControllerWorkspaceService {
   }
 
   async detectGitRepo(controllerId: string, workspaceId: string, userId: string): Promise<Record<string, unknown>> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
@@ -177,7 +178,7 @@ export class ControllerWorkspaceService {
   }
 
   async createFolder(controllerId: string, userId: string, parentPath: string, folderName: string): Promise<Record<string, unknown>> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
@@ -214,7 +215,7 @@ export class ControllerWorkspaceService {
   }
 
   async initGitRepo(controllerId: string, workspaceId: string, userId: string): Promise<boolean> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }

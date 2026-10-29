@@ -7,6 +7,7 @@ import { inferModelSource } from '../../services/model-source.js';
 import { cloudHostService } from '../../services/cloud-host-service.js';
 import { Controller } from '../../models/controller.js';
 import { CloudHost } from '../../models/cloud-host.js';
+import { actorFilter } from '../../services/workspace-context.js';
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
@@ -304,7 +305,7 @@ export const sessionResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        const controller = await Controller.findOne({ _id: args.controllerId, userId: context.currentUser.id }).lean();
+        const controller = await Controller.findOne({ _id: args.controllerId, ...actorFilter(context.currentUser.id) }).lean();
         const controllerName = controller?.name || 'Unknown';
 
         return await sessionImportService.importSessions(

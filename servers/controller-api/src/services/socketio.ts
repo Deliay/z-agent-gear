@@ -71,6 +71,12 @@ export function createSocketIOServer(io: SocketIOServer): void {
         }
 
         const { keyId, keyHash, userId, type: keyType } = cached;
+        // 多租户二期：控制器注册从 ControllerKey 继承租户/工作区归属（key 写方为 agent-api）
+        const keyDoc = await ControllerKey.findById(keyId)
+          .select('tenantId workspaceId')
+          .lean<{ tenantId?: unknown; workspaceId?: unknown }>();
+        const tenantId = keyDoc?.tenantId ?? userId;
+        const keyWorkspaceId = keyDoc?.workspaceId ?? null;
 
         const valid = await bcrypt.compare(key, keyHash);
         if (!valid) {
@@ -106,6 +112,9 @@ export function createSocketIOServer(io: SocketIOServer): void {
           { keyId },
           {
             userId,
+            // 多租户二期：租户/工作区归属从 ControllerKey 继承（key 创建时由 agent-api 落当前工作区）
+            tenantId,
+            workspaceId: keyWorkspaceId,
             hostname,
             type: keyType,
             status: 'online',

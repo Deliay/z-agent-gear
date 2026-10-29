@@ -1,4 +1,12 @@
 import type mongoose from 'mongoose';
+import { getWorkspaceContext } from './workspace-context.js';
+
+/** 注入用 tenantId：有请求工作区上下文时用工作区所属租户（团队租户不再恒等 userId）。 */
+function resolveTenantId(userId: unknown): unknown {
+  if (userId === undefined || userId === null) return userId;
+  const context = getWorkspaceContext();
+  return context?.tenantId ?? userId;
+}
 
 /**
  * 租户归属守卫插件（多租户一期）。
@@ -63,7 +71,7 @@ function injectFilterObject(filter: Record<string, unknown>): Record<string, unk
     !isOperatorValue(filter.userId) &&
     filter.tenantId === undefined
   ) {
-    next = { ...filter, tenantId: filter.userId };
+    next = { ...filter, tenantId: resolveTenantId(filter.userId) };
   }
   for (const operator of ['$or', '$and', '$nor'] as const) {
     const branches = next[operator];
@@ -104,9 +112,9 @@ export function injectUpdate(query: AnyQuery): void {
   const userId = setObj?.userId !== undefined ? setObj.userId : doc.userId;
   if (userId !== undefined && userId !== null) {
     if (setObj) {
-      if (setObj.tenantId === undefined) doc.$set = { ...setObj, tenantId: userId };
+      if (setObj.tenantId === undefined) doc.$set = { ...setObj, tenantId: resolveTenantId(userId) };
     } else if (doc.tenantId === undefined) {
-      doc.tenantId = userId;
+      doc.tenantId = resolveTenantId(userId);
     }
   }
 
@@ -114,7 +122,7 @@ export function injectUpdate(query: AnyQuery): void {
   if (setOnInsert && typeof setOnInsert === 'object') {
     const insertObj = setOnInsert as Record<string, unknown>;
     if (insertObj.userId !== undefined && insertObj.tenantId === undefined) {
-      doc.$setOnInsert = { ...insertObj, tenantId: insertObj.userId };
+      doc.$setOnInsert = { ...insertObj, tenantId: resolveTenantId(insertObj.userId) };
     }
   }
 }
@@ -139,7 +147,7 @@ export function applyTenantScope(schema: any): void {
   // Mongoose v9 文档中间件为同步钩子（无 next 参数）。
   schema.pre('validate', function tenantScopeValidate(this: Record<string, unknown>) {
     if (this.userId !== undefined && this.userId !== null && (this.tenantId === undefined || this.tenantId === null)) {
-      this.tenantId = this.userId;
+      this.tenantId = resolveTenantId(this.userId);
     }
   });
 
@@ -150,7 +158,7 @@ export function applyTenantScope(schema: any): void {
     if (Array.isArray(docs)) {
       for (const doc of docs) {
         if (doc && doc.userId !== undefined && doc.userId !== null && (doc.tenantId === undefined || doc.tenantId === null)) {
-          doc.tenantId = doc.userId;
+          doc.tenantId = resolveTenantId(doc.userId);
         }
       }
     }

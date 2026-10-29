@@ -43,6 +43,8 @@ export const cloudHostTypeDefs = `#graphql
     workloadInstalling: String
     # 云电脑锁定的 Github 帐号；null = 未选定（可在首次 Git 项目设置时选定一次），一经绑定不可修改
     githubAccountId: ID
+    # 所属租户工作区 id（多租户二期；服务端取当前上下文，不入参）
+    workspaceId: ID!
   }
 
   # 云电脑创建/运行报价（金额单位 credits，来自 admin-api 价目档）
