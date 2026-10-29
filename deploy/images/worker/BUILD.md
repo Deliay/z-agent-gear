@@ -258,7 +258,7 @@ test -d "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}" && echo workspace-ok
 
 ### 预制工作负载脚本手工验收（真实集群）
 
-在挂载了「Docker」/「Node.js」/「.NET」/「Aspire」工作负载的容器内，按初始化顺序逐项核对脚本产物：
+在挂载了「Docker」/「Node.js」/「.NET」/「Aspire」/「MongoDB」/「Playwright」工作负载的容器内，按初始化顺序逐项核对脚本产物：
 
 ```bash
 # Docker（首个执行；未选择时容器内不应存在 docker/dockerd）
@@ -282,6 +282,23 @@ bash -c 'test ! -e /tmp/dotnet-install.sh'   # 不再下载 dotnet-install.sh
 # `aspire_cli_url`——迁移 004 默认填入内网缓存代理安装包直链，启动时可按次调整，运行时
 # `ASPIRE_CLI_URL` 环境变量可覆盖且优先；脚本本身不内置默认值）
 aspire --version
+
+# Playwright（依赖 Node.js，最后执行；默认仅 Chromium。下载来源为「Playwright」工作负载参数
+# `playwright_download_host`——迁移 015 默认填入内网 playwright-proxy 地址，启动时可按次调整；
+# 运行时 `PLAYWRIGHT_DOWNLOAD_HOST` 环境变量可覆盖且优先；脚本本身不内置默认值）
+playwright --version
+ls "$HOME/.cache/ms-playwright" | grep '^chromium-'   # 默认仅 Chromium（Firefox/WebKit 按需补装）
+echo "$PLAYWRIGHT_DOWNLOAD_HOST"                      # 安装时已持久化到用户环境
+```
+
+MongoDB（原生 apt 安装；成功判据仅 `mongod --version`，不拉起实例）：
+
+```bash
+# MongoDB（零参数零依赖；内网 Nexus GPG + apt 源）
+mongod --version                                   # 输出版本信息（8.0.x）即安装成功
+pgrep -a mongod                                    # 无输出：安装流程不拉起 mongod 实例（服务由用户按需自行启动）
+cat /etc/apt/sources.list.d/mongodb-org-8.0.list   # 指向内网 nexus mongodb-apt-proxy（<codename>/mongodb-org/8.0）
+ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world-readable
 ```
 
 逐项核对：
@@ -300,6 +317,18 @@ aspire --version
 - [ ] **下载来源默认已填且可达**：「Aspire」工作负载参数 `aspire_cli_url` 默认已填内网缓存代理安装包直链 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`；核对 `curl -fsS "<地址>"` 返回 200（`content-type: application/x-gzip`）
 - [ ] 清空 `aspire_cli_url` 参数（且未提供 `ASPIRE_CLI_URL`）且 Aspire 尚未安装时：该工作负载**快速失败**并在执行记录中给出含正确地址形态的明确指引（容器仍继续后续初始化并上线）
 - [ ] 下载地址不可达时该工作负载记录失败与日志，容器仍继续后续初始化并上线
+- [ ] 「MongoDB」安装后 `mongod --version` 输出 8.0.x 版本信息（安装成功硬校验；仅此判据）
+- [ ] 安装流程**不拉起** mongod 实例：安装结束后 `pgrep -a mongod` 无输出（无 `--fork`/`nohup`/`runuser`/`systemctl`）；服务由用户按需自行启动
+- [ ] 已安装环境重复执行「MongoDB」幂等：`command -v mongod` 短路秒回、不重复安装、不触碰既有源文件，用户已在运行的服务不受影响
+- [ ] 安装源为需求指定内网地址：GPG 落 `/etc/apt/keyrings/mongodb-server-8.0.asc`，源文件 `/etc/apt/sources.list.d/mongodb-org-8.0.list` 指向 `https://nexus.internal.fffdan.com/repository/mongodb-apt-proxy`，全程不访问公网 `repo.mongodb.org`
+- [ ] Nexus 不可达（`misc-cache/mongodb/server-8.0.asc` 或 `mongodb-apt-proxy`）时该工作负载记录失败与可读原因、可重试恢复，容器仍继续后续初始化并上线
+- [ ] Playwright 脚本前置检查（`command -v node`/`npm`）通过，安装后 `playwright --version` 输出非空
+- [ ] **默认仅 Chromium**：`$HOME/.cache/ms-playwright` 下存在 `chromium-*` 目录，默认不存在 `firefox-*`/`webkit-*`（按需补装）
+- [ ] **下载来源默认已填且可达**：「Playwright」工作负载参数 `playwright_download_host` 默认已填内网代理地址 `https://nexus.internal.fffdan.com/repository/playwright-proxy/`；按默认值安装成功，全程走 `npm-proxy` + `playwright-proxy`、不触公网
+- [ ] **地址已持久化到双用户环境**：root 与 worker 用户登录/交互 shell 均能读到 `PLAYWRIGHT_DOWNLOAD_HOST`（`/etc/profile.d/playwright.sh` + 各自 `~/.bashrc` 标记块）；两用户执行 `playwright install firefox` 补装走内网代理
+- [ ] 清空 `playwright_download_host` 参数（且未提供 `PLAYWRIGHT_DOWNLOAD_HOST`）且 Playwright 尚未安装时：该工作负载**快速失败**并在执行记录中给出含正确地址形态的明确指引（容器仍继续后续初始化并上线）
+- [ ] 下载地址不可达/Chromium 未就绪时该工作负载记录失败与日志，容器仍继续后续初始化并上线
+- [ ] Playwright 重复执行幂等（已安装直接校验通过、不重复下载）；工具与 Chromium 任一缺失时整体判失败
 
 > **安装来源（重要）**：默认来源由「Docker」工作负载参数 `docker_apt_url` 提供——迁移 003 默认填入内网
 > Docker CE apt 代理地址 `https://nexus.internal.fffdan.com/repository/docker-ce-apt`（实测该仓库根即 apt 源根，
@@ -313,6 +342,13 @@ aspire --version
 > `application/x-gzip`），启动时可按环境调整；脚本本身**不内置默认值**，运行时 `ASPIRE_CLI_URL` 环境变量可覆盖
 > 且优先。脚本直接下载安装包并解压到 `~/.aspire/bin` 后校验，**不再执行官方安装脚本**（`ASPIRE_INSTALL_URL`
 > 随官方安装脚本退役）。清空参数且需安装时快速失败、打印含地址形态的指引并不影响容器其余初始化。
+>
+> **Playwright 安装来源**：默认来源由「Playwright」工作负载参数 `playwright_download_host` 提供——迁移 015
+> 默认填入内网 `playwright-proxy` 地址 `https://nexus.internal.fffdan.com/repository/playwright-proxy/`，
+> 启动时可按次调整；脚本本身**不内置默认值**，运行时 `PLAYWRIGHT_DOWNLOAD_HOST` 环境变量可覆盖且优先。
+> 安装时解析到的地址持久注入 `/etc/profile.d/playwright.sh` 与 root/worker `~/.bashrc`；默认仅安装 Chromium，
+> Firefox / WebKit 由用户按需补装并自动沿用该代理。清空参数且需安装时快速失败、打印含地址形态的指引并不影响
+> 容器其余初始化。
 
 > 工作负载脚本由 cloud-controller 经 Socket.IO 下发（不经 K8s env / Job manifest 注入），
 > 因此变更后**需重新构建并推送 worker 镜像**（`entrypoint.sh` 的启动更新与版本不匹配自升级逻辑见下文「默认启动」）。

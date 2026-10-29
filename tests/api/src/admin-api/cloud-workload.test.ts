@@ -661,13 +661,13 @@ describe('Admin Cloud Workload API', () => {
   // 工作负载一期：预制项存在性与幂等（T-MIG1/T-MIG2）
   // -------------------------------------------------------------------------
 
-  it('T-IA: exposes the eight preset workloads with stable ids (idempotent)', async () => {
+  it('T-IA: exposes the ten preset workloads with stable ids (idempotent)', async () => {
     const first = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
     expect(first.errors).toBeUndefined();
     const all = first.data!.adminCloudWorkloads;
     const byName = new Map(all.map((workload) => [workload.name, workload]));
 
-    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'DeepSeek Harness（Harness）', 'Github']) {
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'DeepSeek Harness（Harness）', 'Github', 'MongoDB', 'Playwright']) {
       const preset = byName.get(name);
       expect(preset, `preset ${name} should exist`).toBeTruthy();
       expect(preset!.isPreset, `preset ${name} isPreset`).toBe(true);
@@ -695,7 +695,7 @@ describe('Admin Cloud Workload API', () => {
     const presetIds = (list: WorkloadNode[]) =>
       list.filter((workload) => workload.isPreset).map((workload) => workload.id).sort();
     expect(presetIds(second.data!.adminCloudWorkloads)).toEqual(presetIds(all));
-    expect(presetIds(all)).toHaveLength(8);
+    expect(presetIds(all)).toHaveLength(10);
 
     // T-ADM-WL-API1：分类透出（standard → STANDARD/null，harness → HARNESS/<slug>）
     expect(docker.workloadKind).toBe('STANDARD');
@@ -728,6 +728,52 @@ describe('Admin Cloud Workload API', () => {
     expect(deepseek.initScript).toContain('ZAG_HARNESS_TYPES=deepseek_harness');
     expect(deepseek.initScript).not.toContain('0.1.2-alpha.2');
     expect(deepseek.dependsOnWorkloadIds).toEqual([]);
+
+    // MongoDB：标准预制负载、零参数零依赖、内网 apt 安装 8.0、版本硬校验且不拉起实例
+    const mongodb = byName.get('MongoDB')!;
+    expect(mongodb.workloadKind).toBe('STANDARD');
+    expect(mongodb.harnessType).toBeNull();
+    expect(mongodb.isPreset).toBe(true);
+    expect(mongodb.paramSchema).toEqual([]);
+    expect(mongodb.dependsOnWorkloadIds).toEqual([]);
+    const mongoScript = mongodb.initScript ?? '';
+    expect(mongoScript).toContain('command -v mongod');
+    expect(mongoScript).toContain(
+      'https://nexus.internal.fffdan.com/repository/misc-cache/mongodb/server-8.0.asc',
+    );
+    expect(mongoScript).toContain('https://nexus.internal.fffdan.com/repository/mongodb-apt-proxy');
+    expect(mongoScript).toContain('apt-get install -y mongodb-org');
+    expect(mongoScript).toContain('mongod --version');
+    expect(mongoScript).not.toMatch(/--fork|nohup|runuser|systemctl|mongosh/);
+
+    // Playwright（迁移 015）：standard + 参数化浏览器下载地址 + 依赖 Node.js
+    const playwright = byName.get('Playwright')!;
+    expect(playwright.workloadKind).toBe('STANDARD');
+    expect(playwright.harnessType).toBeNull();
+    expect(playwright.paramSchema).toHaveLength(1);
+    expect(playwright.paramSchema?.[0]).toMatchObject({
+      key: 'playwright_download_host',
+      label: 'Playwright 浏览器下载地址',
+      type: 'TEXT',
+      options: [],
+      defaultValue: 'https://nexus.internal.fffdan.com/repository/playwright-proxy/',
+    });
+    expect(playwright.dependsOnWorkloadIds).toEqual([nodejs.id]);
+    const playwrightScript = playwright.initScript ?? '';
+    expect(playwrightScript).toContain('npm install -g playwright');
+    expect(playwrightScript).toContain('playwright install chromium');
+    expect(playwrightScript).toContain('WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST');
+    expect(playwrightScript).toContain('/etc/profile.d/playwright.sh');
+    expect(playwrightScript).toContain('/root/.bashrc');
+    expect(playwrightScript).toContain('/home/worker/.bashrc');
+    expect(playwrightScript).toContain('playwright --version');
+    expect(playwrightScript).toContain("grep -q '^chromium-'");
+    // 脚本内不内置浏览器下载地址（playwright-proxy 仅出现在失败指引的占位形态中）
+    expect(playwrightScript).not.toContain(
+      'https://nexus.internal.fffdan.com/repository/playwright-proxy/',
+    );
+    expect(playwrightScript.match(/playwright-proxy/g) ?? []).toHaveLength(1);
+
     for (const workload of all) {
       expect(['STANDARD', 'HARNESS']).toContain(workload.workloadKind);
     }

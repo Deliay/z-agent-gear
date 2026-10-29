@@ -136,4 +136,13 @@ export class AcpSyncBridge implements acp.Client {
   async unstable_completeElicitation(): Promise<void> {
     // no-op
   }
+
+  // SDK ≥1.4.0 注册的新方法名（1.9.0 起仅注册新名），委托到与 unstable_* 相同的实现。
+  async createElicitation(): Promise<acp.CreateElicitationResponse> {
+    return this.unstable_createElicitation();
+  }
+
+  async completeElicitation(): Promise<void> {
+    return this.unstable_completeElicitation();
+  }
 }
