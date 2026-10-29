@@ -216,6 +216,7 @@ flowchart LR
 - [[proposals/20261028-feat-multi-tenant-phase2.md]] — 多租户二期（tenantmembers 含 role 两级 admin/developer、personal 恒 admin 与 last-admin 保护；workspaces/workspacemembers 建模、全局工作区无成员行、每租户恰一个全局工作区部分唯一索引；权限矩阵：admin 全工作区可见可管+建工作区+帐号搜索加成员+角色变更，developer 仅成员工作区读写+全局只读（context.readOnly 插件统一写拦截）；11 资源集合复制新增 workspaceId 且可见性切工作区+角色判定；x-workspace-id 头解析缺省回退个人全局；providers/models 存量 scope=user 按租户复制入全局后删除原件；user_commit_settings 键改 workspaceId 与三段继承；计费 owner=workspace.tenantId；/internal/tenants team 开通与成员初始化含角色、cloudcontainers 补 workspaceId 迁移 002）
 - [[proposals/20261028-feat-mongodb-workload.md]] — 增加工作负载「MongoDB」（admin-api 迁移 016 预置标准工作负载 presetKey=mongodb、init 脚本 012 sudo 正典形态原生 apt 经内网 Nexus 代理安装 mongodb-org 8.0、mongod --version 硬校验且不拉起实例、全链路数据驱动零协议改动、预制项测试断言 9→10）
 - [[proposals/20261028-feat-playwright-workload.md]] — 增加工作负载「Playwright」（预制工作负载 015-preset-playwright：`npm install -g playwright` + `playwright install` 走内网 playwright-proxy、playwright_download_host 参数化与 env 覆盖、幂等锚点 + 结尾硬校验、依赖 Node.js 隐式展开、API/E2E 预制口径 8→9）
+- [[proposals/20261029-feat-pnpm-workload-and-harness-optional.md]] — 云电脑组件安装切换 pnpm 与工作负载 Harness 可选化（entrypoint 预装 pnpm@9.15.9 并接线 PNPM_HOME、迁移 017 字节匹配刷新 006/009/013/015 四脚本 `npm install -g`→`pnpm add -g` 含缺失自举回退、agent-gear 与 001 自举保持 npm；设置-工作负载与 MCP 暴露 harness（catalog listAll、createInstallOperation 放行、runtime 批次注入 harness env、逐类型版本门禁、appendInstalledWorkload 追加 harnessTypes）；harness 可选化（parseHarnessTypes 允许 0 个、创建计划 required=true→false、A.2.2 放宽））
 
 ### 实现计划（`plan/`）
 
