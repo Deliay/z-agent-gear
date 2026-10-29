@@ -2337,11 +2337,38 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       const memberHost = member.data.myCloudHosts.find((row: { id: string }) => row.id === cloudHostId);
       expect(memberHost).toMatchObject({ id: cloudHostId, workspaceId: normalId, controllerId });
 
-      // 列表按工作区可见（成员可见）；单机详情/生命周期操作仍为属主口径（resolver 保留 userId 过滤），
-      // 因此这里用属主 admin 断言契约字段 CloudHost.workspaceId = 租户工作区。
+      // 列表与详情均按工作区成员口径：成员可见/可读 admin 创建的主机
+      const memberDetail = await gql(ISO_CLOUD_HOST, { id: cloudHostId }, developer.token, normalId);
+      expect(memberDetail.errors, JSON.stringify(memberDetail.errors)).toBeUndefined();
+      expect(memberDetail.data.cloudHost).toMatchObject({ id: cloudHostId, workspaceId: normalId });
+
       const adminDetail = await gql(ISO_CLOUD_HOST, { id: cloudHostId }, admin.token, normalId);
       expect(adminDetail.errors, JSON.stringify(adminDetail.errors)).toBeUndefined();
       expect(adminDetail.data.cloudHost).toMatchObject({ id: cloudHostId, workspaceId: normalId });
+
+      // admin 可见/可读 developer 创建的成员主机
+      const db = await mongoDb();
+      const developerHostId = new mongoose.Types.ObjectId();
+      await db!.collection('cloudhosts').insertOne({
+        _id: developerHostId,
+        userId: developer.userId,
+        tenantId: teamId,
+        resourceWorkspaceId: new mongoose.Types.ObjectId(normalId),
+        controllerId: new mongoose.Types.ObjectId(),
+        keyId: new mongoose.Types.ObjectId(),
+        name: `dev-host-${Date.now()}`,
+        harnessTypes: ['OPENCODE'],
+        status: 'RUNNING',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      try {
+        const adminOnMemberHost = await gql(ISO_CLOUD_HOST, { id: String(developerHostId) }, admin.token, normalId);
+        expect(adminOnMemberHost.errors, JSON.stringify(adminOnMemberHost.errors)).toBeUndefined();
+        expect(adminOnMemberHost.data.cloudHost?.id).toBe(String(developerHostId));
+      } finally {
+        await db!.collection('cloudhosts').deleteOne({ _id: developerHostId });
+      }
 
       const outsiderList = await gql(ISO_CLOUD_HOSTS, undefined, outsider.token);
       expect(outsiderList.data.myCloudHosts.some((row: { id: string }) => row.id === cloudHostId)).toBe(false);

@@ -21,6 +21,7 @@ import {
   type CloudHostIssuesLinkageInput,
 } from '../../services/cloud-host-issues-linkage.js';
 import type { AuthContext } from './auth.js';
+import { actorFilter } from '../../services/workspace-context.js';
 
 type Doc = Record<string, unknown>;
 
@@ -78,11 +79,11 @@ export const cloudHostResolvers = {
       const userId = requireUser(context);
       if (!mongoose.isValidObjectId(args.id)) return null;
       // 软删除仍返回（与 Session.cloudHost 留档口径一致）；不存在/非本人返回 null。
-      const doc = await CloudHost.findOne({ _id: args.id, userId }).lean();
+      const doc = await CloudHost.findOne({ _id: args.id, ...actorFilter(userId) }).lean();
       if (!doc) return null;
       const activeSessionCount = await Session.countDocuments({
         controllerId: doc.controllerId,
-        userId,
+        ...actorFilter(userId),
         status: { $ne: 'ended' },
       });
       return cloudHostService.mapCloudHost(doc as Doc, activeSessionCount);
@@ -126,8 +127,16 @@ export const cloudHostResolvers = {
     ) => {
       const userId = requireUser(context);
       if (!mongoose.isValidObjectId(args.id)) return null;
-      const doc = await CloudHostSetupOperation.findOne({ _id: args.id, userId }).lean();
+      const doc = await CloudHostSetupOperation.findOne({ _id: args.id }).lean();
       if (!doc) return null;
+      // 操作单无 workspaceId：经 host 的工作区归属校验（成员可操作本工作区资源）
+      const hostVisible = await CloudHost.findOne({
+        _id: doc.hostId,
+        ...actorFilter(userId),
+      })
+        .select('_id')
+        .lean();
+      if (!hostVisible) return null;
       if (doc.status === 'RUNNING') {
         const updatedAt = doc.updatedAt instanceof Date ? doc.updatedAt.getTime() : 0;
         if (Date.now() - updatedAt > config.cloudHostSetupStaleMs) {

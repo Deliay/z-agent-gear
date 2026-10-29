@@ -103,12 +103,14 @@ describe('unbindAccount 跨工作区共享安装数据（阻断-I，真库）', 
       { $set: { accountId: normalAccount._id } },
     );
 
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
-    vi.stubGlobal('fetch', fetchMock);
+    const uninstallSpy = vi
+      .spyOn(githubService as unknown as { uninstallApp: (id: number) => Promise<void> }, 'uninstallApp')
+      .mockResolvedValue(undefined);
     const removed = await runWithWorkspace(ctx(WS_NORMAL, 'normal'), async () =>
       githubService.unbindAccount(USER, String(normalAccount._id)),
     );
-    vi.unstubAllGlobals();
+    expect(uninstallSpy).toHaveBeenCalledWith(777);
+    uninstallSpy.mockRestore();
 
     expect(removed).toBe(true);
     expect(await GitHubInstallation.countDocuments({ githubUserId: 4242 })).toBe(0);

@@ -12,6 +12,7 @@ import {
   CloudControllerUnavailableError,
 } from './cloud-controller-client.js';
 import { cloudWorkloadCatalog, type CloudWorkloadCatalogItem } from './cloud-workload-catalog.js';
+import { actorFilter } from './workspace-context.js';
 import { cloudHostService } from './cloud-host-service.js';
 
 type Doc = Record<string, unknown>;
@@ -112,7 +113,7 @@ export class CloudHostWorkloadService {
   /** 校验 Controller 归属/类型并返回云主机（不存在/非本人统一「Cloud host not found」）。 */
   async requireCloudHost(userId: string, controllerId: string): Promise<Doc> {
     if (!mongoose.isValidObjectId(controllerId)) throw new Error('Cloud host not found');
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller || controller.type !== 'cloud') throw new Error('Cloud host not found');
     const host = await cloudHostService.findOwnedRawHostByController(controllerId, userId);
     if (!host) throw new Error('Cloud host not found');
@@ -218,8 +219,16 @@ export class CloudHostWorkloadService {
 
   /** 重试失败的单步安装操作：仅 FAILED；重置未成功步骤为 PENDING。 */
   async retryInstall(opId: string, userId: string): Promise<Doc> {
-    const operation = await CloudHostSetupOperation.findOne({ _id: opId, userId }).lean();
+    const operation = await CloudHostSetupOperation.findOne({ _id: opId, ...actorFilter(userId) }).lean();
     if (!operation) throw new Error('Operation not found');
+    // 操作单无 workspaceId：经 host 的工作区归属校验
+    const hostVisible = await CloudHost.findOne({
+      _id: (operation as unknown as { hostId: unknown }).hostId,
+      ...actorFilter(userId),
+    })
+      .select('_id')
+      .lean();
+    if (!hostVisible) throw new Error('Operation not found');
     if (operation.status !== 'FAILED') throw new Error('仅失败的操作可以重试');
     const steps = (operation.steps as any[]).map((step: Record<string, unknown>) => ({
       ...step,

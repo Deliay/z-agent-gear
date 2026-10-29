@@ -3,6 +3,7 @@ import { CloudHost } from '../models/cloud-host.js';
 import { Controller } from '../models/controller.js';
 import { McpServer } from '../models/mcp-server.js';
 import { Session } from '../models/session.js';
+import { actorFilter } from './workspace-context.js';
 import {
   cloudHostWorkloadService,
   sanitizeOperationError,
@@ -70,16 +71,16 @@ export async function ensureCloudHostToolsServer(userId: string): Promise<string
 
 async function resolveCloudHost(sessionId: string, userId: string): Promise<Record<string, unknown> | null> {
   if (!mongoose.isValidObjectId(sessionId)) return null;
-  const session = await Session.findOne({ _id: sessionId, userId }).lean();
+  const session = await Session.findOne({ _id: sessionId, ...actorFilter(userId) }).lean();
   if (!session) return null;
   const controller = await Controller.findOne({
     _id: session.controllerId,
-    userId,
+    ...actorFilter(userId),
   }).lean();
   if (!controller || controller.type !== 'cloud') return null;
   const host = await CloudHost.findOne({
     controllerId: controller._id,
-    userId,
+    ...actorFilter(userId),
     deletedAt: null,
   }).lean();
   return host ? (host as unknown as Record<string, unknown>) : null;
