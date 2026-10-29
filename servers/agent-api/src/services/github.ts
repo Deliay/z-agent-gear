@@ -46,6 +46,11 @@ export const ISSUES_LINKAGE_LABEL_DESCRIPTION = '由 z-agent-gear 云电脑 Issu
 
 const GITHUB_API = 'https://api.github.com';
 
+/** GitHub REST base：生产默认 api.github.com；测试经 `GITHUB_API_BASE` 指向进程内 mock。 */
+function githubApiBase(): string {
+  return config.githubApiBaseUrl || GITHUB_API;
+}
+
 /** 仓库级 installation token 进程内缓存（不落库、不写日志；到期前 5 分钟作废） */
 interface RepoTokenCacheEntry {
   token: string;
@@ -503,7 +508,7 @@ export class GitHubService {
 
     const appJwt = this.createAppJwt();
     const response = await fetch(
-      `${config.githubApiBaseUrl || 'https://api.github.com'}/app/installations/${installationId}/access_tokens`,
+      `${githubApiBase()}/app/installations/${installationId}/access_tokens`,
       {
         method: 'POST',
         headers: {
@@ -639,7 +644,7 @@ export class GitHubService {
   private async getInstallationToken(installationId: number): Promise<{ token: string; expiresAt: Date }> {
     const appJwt = this.createAppJwt();
     const response = await fetch(
-      `https://api.github.com/app/installations/${installationId}/access_tokens`,
+      `${githubApiBase()}/app/installations/${installationId}/access_tokens`,
       {
         method: 'POST',
         headers: {
@@ -670,7 +675,7 @@ export class GitHubService {
   private async getInstallationAccount(installationId: number): Promise<{ id: number; login: string; avatar_url: string; type: 'User' | 'Organization' }> {
     const appJwt = this.createAppJwt();
     const response = await fetch(
-      `https://api.github.com/app/installations/${installationId}`,
+      `${githubApiBase()}/app/installations/${installationId}`,
       {
         headers: {
           Authorization: `Bearer ${appJwt}`,
@@ -684,7 +689,7 @@ export class GitHubService {
   }
 
   private async getRepositories(token: string): Promise<any[]> {
-    const response = await fetch('https://api.github.com/installation/repositories', {
+    const response = await fetch(`${githubApiBase()}/installation/repositories`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) throw new Error('Failed to get repositories');
@@ -695,7 +700,7 @@ export class GitHubService {
   private async uninstallApp(installationId: number): Promise<void> {
     const appJwt = this.createAppJwt();
     const response = await fetch(
-      `https://api.github.com/app/installations/${installationId}`,
+      `${githubApiBase()}/app/installations/${installationId}`,
       {
         method: 'DELETE',
         headers: {

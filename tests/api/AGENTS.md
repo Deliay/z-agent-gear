@@ -59,7 +59,7 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（46 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm test` | 运行全部常规测试文件（49 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -756,6 +756,7 @@ npm test
 | 文件 | 说明 |
 |------|------|
 | `tests/api/src/admin-api/cloud-host-charges.test.ts` | 内部一次性扣费/退款/报价：401、扣费 5 credits 与账单/收据、余额不足 409 `INSUFFICIENT_BALANCE`（带 `available`）、退款幂等、`price-quote` 5/1（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/admin-api/cloud-host-billing.test.ts` | 云电脑运行 Key：个人租户铸造 → STARTING 拒绝 → RUNNING 放行 → 软删除/过期/撤销失效；**团队租户 `ownerId=tenantId` 铸造 + 网关放行 + userId/其他租户拒绝**（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/cloud-host-billing-quote.test.ts` | `cloudHostBillingQuote` 转发价目（创建 5 credits / 运行 1 credit/分钟；需 `ADMIN_API_URL`） |
 | `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/多台并行/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.10.0` |
 | `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等、未 ready 自动退款留痕、已 ready 不退）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
@@ -771,9 +772,19 @@ npm test
 | T-MB* | 我的费用：账户派生自登录主体、账单/收据/调用记录/汇总、API Key 管理 |
 
 
+## 多租户上线回归（2026-10-30）
+
+| 文件 | 说明 |
+|------|------|
+| `tests/api/src/agent-api/mcp-tenant-upsert.test.ts` | T-MCP-API1：个人租户 ensure 内置 `agent-workflow-admin-tools` → 加入团队租户 → 团队全局工作区再 ensure；断言不再触发 `userId_1_name_1` E11000、两条不同 tenantId 行并存、旧索引不存在（需 agent-api + admin-api + `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/agent-api/github-setup-upsert.test.ts` | T-GHS-API1~3：`githubAppUrl` 取 state → `GET /api/github/setup` 首次/重复绑定均 302 success；断言只落一行（不触发 tenantId code 40）、token 密文落库、installation 仓库清单正确（需 `GITHUB_API_BASE` 指向进程内 mock + `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/agent-api/schema-index-invariants.test.ts` | T-IDX-API1~3：`user_commit_settings` 固定名 workspace 唯一索引存在且默认名/旧索引不残留；`mcpservers` / `githubaccounts` 无无租户维度唯一索引；`githubaccounts` / `user_commit_settings.workspaceId` 无 BSON ObjectId 行（需 `MONGODB_URI`） |
+
+> `GITHUB_API_BASE` 同时用于 `agent-api/github.test.ts`（Check Runs）与本套件；agent-api 的 GitHub App 安装信息/仓库清单/卸载调用均走该 base（生产默认 `https://api.github.com`）。
+
 ## 云主机工作负载 / Github 设置
 
 - `src/agent-api/cloud-host-workload.test.ts`：需要 `MONGODB_URI` + `HARNESS_ENABLED=true`，直插 `controllers/controllerworkspaces/cloudhosts` 造一个在线云主机，覆盖 `cloudHostWorkloads` 归属校验、`cloudHostWorkloadCatalog`（鉴权 + standard 列表 + `installed=false`）、Github 帐号锁定（T-GH-API-L1 首绑落库 / L2 异帐号拒绝 `github account is locked` / L3 同帐号换仓库放行）与 Github setup 输入校验（前缀相对路径/`..`/仓库格式与 `~` 展开矩阵：`~/workspace`/`~`/`~//a` 接受并归一、`~abc` 以「前缀地址必须以 / 或 ~ 开头」拒绝、`~/a/../b` 拒绝，T-GH-API-P1~P4）；不调用真实 GitHub。
 - `src/agent-api/cloud-host.test.ts`：新增创建期 `workloadIds` 用例（T-CH-API-W2/W3/W4：Docker 可创建、超 5 个 → `too many workloads (max 5)`、不存在 ID → `invalid workload`、harness ID → `workload is not installable`）；不传 `workloadIds` 的历史路径由既有创建用例覆盖。
 - `src/admin-api/cloud-workload.test.ts`：`adminCloudWorkloads` 断言 `workloadKind`/`harnessType`（standard → `STANDARD`/null，harness → `HARNESS`/`opencode`，T-ADM-WL-API1）。
-- 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖。
+- 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖；`GET /api/github/setup` 的 upsert 冲突回归由 `tests/api/src/agent-api/github-setup-upsert.test.ts` 覆盖。

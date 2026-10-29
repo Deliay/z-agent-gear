@@ -132,6 +132,74 @@ describe.skipIf(!TOKEN || !HAS_MONGO)('Admin cloud host billing key', () => {
     await db.collection('cloudhosts').deleteOne({ _id: new mongoose.Types.ObjectId(cloudHostId) });
   });
 
+  it('team tenant: ownerId=tenantId can mint and use key (host.userId differs)', async () => {
+    const db = (await mongoDb())!;
+    const tenantId = new mongoose.Types.ObjectId().toString();
+    const creatorUserId = new mongoose.Types.ObjectId().toString();
+    const cloudHostId = new mongoose.Types.ObjectId().toString();
+    const now = new Date();
+    await db.collection('cloudhosts').insertOne({
+      _id: new mongoose.Types.ObjectId(cloudHostId),
+      userId: new mongoose.Types.ObjectId(creatorUserId),
+      tenantId: new mongoose.Types.ObjectId(tenantId),
+      name: 'billing-team-tenant-test',
+      harnessTypes: ['OPENCODE'],
+      status: 'STARTING',
+      controllerId: new mongoose.Types.ObjectId(),
+      keyId: new mongoose.Types.ObjectId(),
+      workspaceId: new mongoose.Types.ObjectId(),
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    try {
+      // 团队租户：ownerId 是 tenantId，与 host.userId 不同
+      const minted = await internal('/internal/billing/api-keys', {
+        method: 'POST',
+        body: JSON.stringify({
+          ownerType: 'tenant',
+          ownerId: tenantId,
+          name: 'team-cloud-key',
+          scope: 'cloud_host',
+          cloudHostId,
+        }),
+      });
+      expect(minted.status).toBe(201);
+      const payload = (await minted.json()) as { secret: string };
+
+      await db
+        .collection('cloudhosts')
+        .updateOne(
+          { _id: new mongoose.Types.ObjectId(cloudHostId) },
+          { $set: { status: 'RUNNING' } },
+        );
+      expect((await models(payload.secret)).status).toBe(200);
+
+      // 创建者 userId / 其他租户不能代替 tenantId
+      for (const ownerId of [creatorUserId, new mongoose.Types.ObjectId().toString()]) {
+        const rejected = await internal('/internal/billing/api-keys', {
+          method: 'POST',
+          body: JSON.stringify({
+            ownerType: 'tenant',
+            ownerId,
+            name: 'team-cloud-key-wrong-owner',
+            scope: 'cloud_host',
+            cloudHostId,
+          }),
+        });
+        expect(rejected.status).toBe(404);
+      }
+    } finally {
+      await db
+        .collection('billingapikeys')
+        .deleteMany({ cloudHostId: new mongoose.Types.ObjectId(cloudHostId) });
+      await db
+        .collection('cloudhosts')
+        .deleteOne({ _id: new mongoose.Types.ObjectId(cloudHostId) });
+    }
+  });
+
   it('cloud_host key: missing host 400, no expiry allowed, invalid/foreign host 404', async () => {
     const db = (await mongoDb())!;
     const userId = new mongoose.Types.ObjectId().toString();
