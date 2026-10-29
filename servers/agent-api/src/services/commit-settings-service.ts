@@ -255,6 +255,7 @@ export class CommitSettingsService {
     workspaceId: string,
   ): Promise<SettingShape | null> {
     if (!workspaceId) {
+      // 无上下文（升级前存量/内部链路）回退创建者 userId 口径，不跨工作区共享。
       const legacy = await UserCommitSetting.findOne({ userId }).lean();
       return (legacy as SettingShape | null) ?? null;
     }
@@ -326,6 +327,7 @@ export class CommitSettingsService {
           if (!allowed) account = null;
         }
       } else {
+        // 无 ALS 上下文（内部链路）回退创建者口径；有上下文按「当前工作区 ∪ 全局」校验。
         account = await GitHubAccount.findOne({ _id: accountId, userId }).lean();
       }
       if (!account) throw new Error(COMMIT_SETTINGS_ERRORS.invalidGithubAccount);

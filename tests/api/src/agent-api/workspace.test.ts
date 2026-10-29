@@ -90,6 +90,34 @@ const GET_HOME_DIRECTORY = `
   }
 `;
 
+const LIST_HISTORY_SESSIONS = `
+  query ListHistorySessions($controllerId: ID!, $workspaceId: ID!) {
+    listHistorySessions(controllerId: $controllerId, workspaceId: $workspaceId) {
+      sessionId title cwd updatedAt
+    }
+  }
+`;
+
+const LIST_ISSUES_LINKAGES = `
+  query ListIssuesLinkages($controllerId: ID!) {
+    cloudHostIssuesLinkages(controllerId: $controllerId) {
+      id controllerId labelName
+    }
+  }
+`;
+
+const RETRY_SETUP_OPERATION = `
+  mutation RetrySetup($id: ID!) {
+    retryCloudHostSetupOperation(id: $id) { id kind status }
+  }
+`;
+
+const SETUP_GITHUB_PROJECT = `
+  mutation SetupSharedGithub($input: SetupCloudHostGithubProjectInput!) {
+    setupCloudHostGithubProject(input: $input) { id kind status }
+  }
+`;
+
 const CREATE_SESSION = `
   mutation CreateSession($input: CreateSessionInput!) {
     createSession(input: $input) {
@@ -2002,6 +2030,10 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
   let instanceId = '';
   let cloudHostId = '';
   let githubAccountId = '';
+  let cloudControllerId = '';
+  let globalGithubAccountId = '';
+  let adminFailedOperationId = '';
+  let developerFailedOperationId = '';
   let controllerSocket: ClientSocket | null = null;
   let cleanupDb: (() => Promise<void>) | null = null;
 
@@ -2072,6 +2104,20 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       socket.emit('acp:check:result', {
         requestId: data.requestId,
         servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
+    });
+    socket.on('acp:list-sessions', (data: { requestId: string; cwd: string }) => {
+      socket.emit('acp:list-sessions:result', {
+        requestId: data.requestId,
+        success: true,
+        sessions: [
+          {
+            sessionId: `acp-iso-${Date.now()}`,
+            title: 'ISO history',
+            cwd: data.cwd,
+            updatedAt: new Date().toISOString(),
+          },
+        ],
       });
     });
     const registered = waitForEvent<{ controllerId: string }>(socket, 'registered', 10000);
@@ -2208,6 +2254,13 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       if (db) {
         const hostObjectId = new mongoose.Types.ObjectId();
         const accountObjectId = new mongoose.Types.ObjectId();
+        const cloudControllerObjectId = new mongoose.Types.ObjectId();
+        const cloudHostObjectId = new mongoose.Types.ObjectId();
+        const globalAccountObjectId = new mongoose.Types.ObjectId();
+        const adminOperationObjectId = new mongoose.Types.ObjectId();
+        const developerOperationObjectId = new mongoose.Types.ObjectId();
+        const globalGithubUserId = 910000 + Math.floor(Math.random() * 100000);
+        const globalInstallationId = 300000000 + Math.floor(Math.random() * 100000000);
         const now = new Date();
         await db.collection('cloudhosts').insertOne({
           _id: hostObjectId,
@@ -2241,11 +2294,126 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
           createdAt: now,
           updatedAt: now,
         });
+
+        // 云主机设置链路要求 controller.type='cloud'（requireCloudHost），
+        // 直插一条 cloud 控制器 + 主机，避免用 local 控制器导致在主机门禁即被拦截。
+        await db.collection('controllers').insertOne({
+          _id: cloudControllerObjectId,
+          userId: new mongoose.Types.ObjectId(admin.userId),
+          tenantId: new mongoose.Types.ObjectId(teamId),
+          workspaceId: new mongoose.Types.ObjectId(normalId),
+          name: `iso-cloud-ctrl-${suffix}`,
+          hostname: `iso-cloud-${suffix}`,
+          type: 'cloud',
+          status: 'online',
+          keyId: new mongoose.Types.ObjectId(),
+          version: '2.0.0',
+          createdAt: now,
+          updatedAt: now,
+        });
+        await db.collection('cloudhosts').insertOne({
+          _id: cloudHostObjectId,
+          userId: new mongoose.Types.ObjectId(admin.userId),
+          tenantId: new mongoose.Types.ObjectId(teamId),
+          resourceWorkspaceId: new mongoose.Types.ObjectId(normalId),
+          controllerId: cloudControllerObjectId,
+          keyId: new mongoose.Types.ObjectId(),
+          name: 'iso-cloud-host-for-setup',
+          harnessTypes: ['OPENCODE'],
+          status: 'RUNNING',
+          containerId: cloudHostObjectId.toString(),
+          createDefaultSession: false,
+          startedAt: now,
+          readyAt: now,
+          deletedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        // 团队全局工作区的共享 GitHub 绑定（developer 作为普通工作区成员应可复用）。
+        // 安装数据按 githubUserId 共享读取，且包含待设置仓库的授权。
+        await db.collection('githubaccounts').insertOne({
+          _id: globalAccountObjectId,
+          userId: admin.userId,
+          tenantId: teamId,
+          workspaceId: teamGlobalId,
+          githubUserId: globalGithubUserId,
+          githubLogin: `iso-gh-global-${suffix}`,
+          githubAvatarUrl: null,
+          accessToken: 'gho_iso_global_token',
+          tokenExpiresAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await db.collection('githubinstallations').insertOne({
+          accountId: globalAccountObjectId,
+          githubUserId: globalGithubUserId,
+          installationId: globalInstallationId,
+          accountLogin: `iso-gh-global-${suffix}`,
+          accountType: 'User',
+          repos: [
+            {
+              repoId: 1,
+              repoName: 'global-shared',
+              fullName: 'octo/global-shared',
+              private: false,
+              permissions: { read: true, write: true },
+            },
+          ],
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        // retry 链夹具：admin 与 developer 各创建一条 FAILED 操作单，供对方重试（对称断言）。
+        await db.collection('cloud_host_setup_operations').insertMany([
+          {
+            _id: adminOperationObjectId,
+            userId: new mongoose.Types.ObjectId(admin.userId),
+            tenantId: new mongoose.Types.ObjectId(teamId),
+            controllerId: cloudControllerObjectId,
+            hostId: cloudHostObjectId,
+            kind: 'installWorkload',
+            status: 'FAILED',
+            workloadId: new mongoose.Types.ObjectId(),
+            installParams: {},
+            steps: [{ key: 'workload', status: 'FAILED', detail: 'seed failure' }],
+            containerId: cloudHostObjectId.toString(),
+            error: 'seed failure',
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            _id: developerOperationObjectId,
+            userId: new mongoose.Types.ObjectId(developer.userId),
+            tenantId: new mongoose.Types.ObjectId(teamId),
+            controllerId: cloudControllerObjectId,
+            hostId: cloudHostObjectId,
+            kind: 'installWorkload',
+            status: 'FAILED',
+            workloadId: new mongoose.Types.ObjectId(),
+            installParams: {},
+            steps: [{ key: 'workload', status: 'FAILED', detail: 'seed failure' }],
+            containerId: cloudHostObjectId.toString(),
+            error: 'seed failure',
+            createdAt: now,
+            updatedAt: now,
+          },
+        ]);
+
         cloudHostId = hostObjectId.toString();
         githubAccountId = accountObjectId.toString();
+        cloudControllerId = cloudControllerObjectId.toString();
+        globalGithubAccountId = globalAccountObjectId.toString();
+        adminFailedOperationId = adminOperationObjectId.toString();
+        developerFailedOperationId = developerOperationObjectId.toString();
         cleanupDb = async () => {
           await db.collection('cloudhosts').deleteOne({ _id: hostObjectId });
+          await db.collection('cloudhosts').deleteOne({ _id: cloudHostObjectId });
+          await db.collection('controllers').deleteOne({ _id: cloudControllerObjectId });
           await db.collection('githubaccounts').deleteOne({ _id: accountObjectId });
+          await db.collection('githubaccounts').deleteOne({ _id: globalAccountObjectId });
+          await db.collection('githubinstallations').deleteOne({ installationId: globalInstallationId });
+          await db.collection('cloud_host_setup_operations').deleteMany({ hostId: cloudHostObjectId });
         };
       }
     }
@@ -2381,8 +2549,11 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
   );
 
   it.skipIf(!Boolean(process.env.MONGODB_URI))(
-    'T-WS-ISO8 成员操作 admin 创建的控制器/云主机：browseFolder/getHomeDirectory/共享绑定 GitHub 设置门禁',
+    'T-WS-ISO8 成员/管理员辅助与操作路径：browse/home/listHistory/issues-linkage/retry/共享绑定 GitHub 设置',
     async () => {
+      expect(cloudControllerId, 'cloud 控制器夹具需 MONGODB_URI').toBeTruthy();
+      expect(globalGithubAccountId, '全局共享绑定夹具需 MONGODB_URI').toBeTruthy();
+
       // browseFolder：developer 对 admin 注册的控制器应过 Controller 门禁
       const fsBrowse = waitForEvent<{ requestId: string; path: string | null }>(
         controllerSocket,
@@ -2413,17 +2584,80 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       expect(home.errors, JSON.stringify(home.errors)).toBeUndefined();
       expect(home.data.getHomeDirectory).toBe('/home/developer');
 
+      // listHistorySessions：developer 在 admin 的控制器上创建自己的项目工作区后可实际拉取历史
+      const devWorkspace = await gql(
+        CREATE_WORKSPACE,
+        { input: { controllerId, path: `/tmp/iso-dev-history-${Date.now()}` } },
+        developer.token,
+        normalId,
+      );
+      expect(devWorkspace.errors, JSON.stringify(devWorkspace.errors)).toBeUndefined();
+      const devWorkspaceId = devWorkspace.data.createWorkspace.id as string;
+      const devHistory = await gql(
+        LIST_HISTORY_SESSIONS,
+        { controllerId, workspaceId: devWorkspaceId },
+        developer.token,
+        normalId,
+      );
+      expect(devHistory.errors, JSON.stringify(devHistory.errors)).toBeUndefined();
+      expect(Array.isArray(devHistory.data.listHistorySessions)).toBe(true);
+      expect(devHistory.data.listHistorySessions.length).toBeGreaterThanOrEqual(1);
+
+      // admin 在 admin 自己的项目工作区同样可拉取（同一 fake controller 应答）
+      const adminHistory = await gql(
+        LIST_HISTORY_SESSIONS,
+        { controllerId, workspaceId: projectWorkspaceId },
+        admin.token,
+        normalId,
+      );
+      expect(adminHistory.errors, JSON.stringify(adminHistory.errors)).toBeUndefined();
+      expect(adminHistory.data.listHistorySessions.length).toBeGreaterThanOrEqual(1);
+
+      // cloudHostIssuesLinkages：developer 对 admin 创建的 cloud 控制器应过门禁
+      const devLinkages = await gql(
+        LIST_ISSUES_LINKAGES,
+        { controllerId: cloudControllerId },
+        developer.token,
+        normalId,
+      );
+      expect(devLinkages.errors, JSON.stringify(devLinkages.errors)).toBeUndefined();
+      expect(Array.isArray(devLinkages.data.cloudHostIssuesLinkages)).toBe(true);
+      const adminLinkages = await gql(
+        LIST_ISSUES_LINKAGES,
+        { controllerId: cloudControllerId },
+        admin.token,
+        normalId,
+      );
+      expect(adminLinkages.errors, JSON.stringify(adminLinkages.errors)).toBeUndefined();
+
+      // retryCloudHostSetupOperation：developer 重试 admin 创建的失败操作单（对称断言：
+      // admin 重试 developer 创建的操作单），均应过 host 归属门禁而非 Operation not found
+      const devRetry = await gql(
+        RETRY_SETUP_OPERATION,
+        { id: adminFailedOperationId },
+        developer.token,
+        normalId,
+      );
+      expect(devRetry.errors, JSON.stringify(devRetry.errors)).toBeUndefined();
+      expect(devRetry.data.retryCloudHostSetupOperation.id).toBe(adminFailedOperationId);
+      const adminRetry = await gql(
+        RETRY_SETUP_OPERATION,
+        { id: developerFailedOperationId },
+        admin.token,
+        normalId,
+      );
+      expect(adminRetry.errors, JSON.stringify(adminRetry.errors)).toBeUndefined();
+      expect(adminRetry.data.retryCloudHostSetupOperation.id).toBe(developerFailedOperationId);
+
       // setupCloudHostGithubProject：developer 可选用 admin 维护的本工作区绑定；
-      // 账号门禁通过后因 fixture 无授权仓库返回「仓库未授权」（而非账号不存在）
-      const setup = await gql(
-        `mutation SetupSharedGithub($input: SetupCloudHostGithubProjectInput!) {
-          setupCloudHostGithubProject(input: $input) { id }
-        }`,
+      // 账号门禁通过后因该绑定无授权仓库返回「仓库未授权」（而非账号不存在）
+      const localSetup = await gql(
+        SETUP_GITHUB_PROJECT,
         {
           input: {
-            controllerId,
+            controllerId: cloudControllerId,
             accountId: githubAccountId,
-            repoFullName: 'octo/shared',
+            repoFullName: 'octo/local',
             targetPath: '/home/worker/workspace',
             createSession: false,
           },
@@ -2431,11 +2665,30 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
         developer.token,
         normalId,
       );
-      expect(setup.errors, '成员选用共享绑定应过账号门禁').toBeDefined();
-      expect(setup.errors[0].message).not.toContain('Github 账号');
-      expect(setup.errors[0].message).toContain('仓库未授权');
+      expect(localSetup.errors, '成员选用本工作区绑定应过账号门禁').toBeDefined();
+      expect(localSetup.errors[0].message).not.toContain('Github 账号');
+      expect(localSetup.errors[0].message).toContain('仓库未授权');
+
+      // 团队全局共享绑定（PRD 功能点7）：developer 作为普通工作区成员选用 admin 在
+      // 团队全局工作区创建的绑定 + 已授权仓库，应成功创建设置操作
+      const globalSetup = await gql(
+        SETUP_GITHUB_PROJECT,
+        {
+          input: {
+            controllerId: cloudControllerId,
+            accountId: globalGithubAccountId,
+            repoFullName: 'octo/global-shared',
+            targetPath: '/home/worker/workspace',
+            createSession: false,
+          },
+        },
+        developer.token,
+        normalId,
+      );
+      expect(globalSetup.errors, JSON.stringify(globalSetup.errors)).toBeUndefined();
+      expect(globalSetup.data.setupCloudHostGithubProject.id).toBeTruthy();
     },
-    30000,
+    60000,
   );
 
   it.skipIf(!Boolean(process.env.MONGODB_URI))(
