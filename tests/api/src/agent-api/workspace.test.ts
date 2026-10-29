@@ -2444,9 +2444,11 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
     expect(custom.isBuiltin).toBe(false);
     expect(custom.resourceWorkspaceId).toBe(normalId);
 
-    const outsider = await gql(ISO_WORKFLOW_TEMPLATES, undefined, outsider.token);
-    expect(outsider.errors).toBeUndefined();
-    expect(outsider.data.workflowTemplates.some((item: { id: string }) => item.id === templateId)).toBe(false);
+    const outsiderTemplates = await gql(ISO_WORKFLOW_TEMPLATES, undefined, outsider.token);
+    expect(outsiderTemplates.errors).toBeUndefined();
+    expect(
+      outsiderTemplates.data.workflowTemplates.some((item: { id: string }) => item.id === templateId),
+    ).toBe(false);
 
     const otherWorkspace = await gql(ISO_WORKFLOW_TEMPLATES, undefined, admin.token, teamGlobalId);
     expect(otherWorkspace.data.workflowTemplates.some((item: { id: string }) => item.id === templateId)).toBe(false);
@@ -2455,7 +2457,9 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
     expect(adminList.data.workflowTemplates.some((item: { id: string }) => item.id === templateId)).toBe(true);
 
     // 内置模板：跨工作区可用且 resourceWorkspaceId 恒 null（个人全局 / 团队全局 / 团队普通）
-    const builtins = outsider.data.workflowTemplates.filter((item: { isBuiltin: boolean }) => item.isBuiltin);
+    const builtins = outsiderTemplates.data.workflowTemplates.filter(
+      (item: { isBuiltin: boolean }) => item.isBuiltin,
+    );
     expect(builtins.length, '内置模板应由 agent-api 启动 seed 写入').toBeGreaterThan(0);
     for (const item of builtins) {
       expect(item.resourceWorkspaceId).toBeNull();

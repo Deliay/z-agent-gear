@@ -418,11 +418,11 @@ test.describe('多租户二期工作区 E2E（E2E-WS）', () => {
       await expect(page.locator('#workspace-switcher-select')).toHaveValue(fixture.normalWorkspaceId);
       await page.goto('/settings');
 
-      const globalItem = page.getByText(globalProviderName, { exact: true }).locator('..');
+      const globalItem = page.getByText(globalProviderName, { exact: true }).first().locator('..');
       await expect(globalItem.getByTestId('resource-source-badge')).toHaveText('全局工作区', {
         timeout: 15000,
       });
-      const localItem = page.getByText(localProviderName, { exact: true }).locator('..');
+      const localItem = page.getByText(localProviderName, { exact: true }).first().locator('..');
       await expect(localItem.getByTestId('resource-source-badge')).toHaveText('本工作区');
     } finally {
       await mock.close();

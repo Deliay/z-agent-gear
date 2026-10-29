@@ -280,7 +280,7 @@ test.describe('Admin Team Tenant E2E（E2E-TT）', () => {
       await expect(page.locator('#workspace-switcher-select')).toHaveValue(normalWorkspaceId);
 
       await page.goto('/settings');
-      const providerItem = page.getByText(providerName, { exact: true }).locator('..');
+      const providerItem = page.getByText(providerName, { exact: true }).first().locator('..');
       await expect(providerItem).toBeVisible({ timeout: 15000 });
       await expect(providerItem.getByTestId('resource-source-badge')).toHaveText('本工作区');
     } finally {
