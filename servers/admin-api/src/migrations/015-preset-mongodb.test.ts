@@ -124,10 +124,13 @@ describe('migration 015-preset-mongodb', () => {
       rmSync(dir, { recursive: true, force: true });
     }
 
-    // ② 012 sudo 正典形态
+    // ② 012 sudo 正典形态（含 root 写入 tee 形态，防止回归为 `>` 直写）
     expect(script).toContain('set -euo pipefail');
     expect(script).toContain('SUDO=sudo');
     expect(script).toContain('command -v sudo >/dev/null 2>&1 || SUDO=');
+    expect(script).toContain('${SUDO} tee');
+    expect(script).toContain('| ${SUDO} tee /etc/apt/keyrings/mongodb-server-8.0.asc >/dev/null');
+    expect(script).toContain('| ${SUDO} tee /etc/apt/sources.list.d/mongodb-org-8.0.list >/dev/null');
 
     // ③ 幂等锚点在 apt 源写入之前
     const idempotentAnchor = script.indexOf('command -v mongod');
