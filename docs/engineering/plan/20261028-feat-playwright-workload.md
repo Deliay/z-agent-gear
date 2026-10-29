@@ -1,18 +1,19 @@
 ---
-description: 增加工作负载「Playwright」实现计划：admin-api migration 015 播种预制工作负载（PLAYWRIGHT_SCRIPT_V1 幂等脚本 + playwright_download_host 参数化下载源 + Node.js 隐式依赖），含分阶段任务、T-MIG-PW1~PW5 测试覆盖与验收 checklist
+description: 增加工作负载「Playwright」实现计划：admin-api migration 015 播种预制工作负载（PLAYWRIGHT_SCRIPT_V1 幂等脚本 + playwright_download_host 参数化下载源并持久注入 root/worker 用户环境 + 默认仅安装 Chromium + Node.js 隐式依赖），含分阶段任务、T-MIG-PW1~PW5 测试覆盖与验收 checklist
 type: Permanent
 ---
 
 # 增加工作负载「Playwright」- 实现计划
 
-**关联 Proposal**: `docs/engineering/proposals/20261028-feat-playwright-workload.md`（v1.0）
-**关联 PRD**: `docs/product/draft/20261028-playwright-workload.md`（v1.0，Issue #342）
+**关联 Proposal**: `docs/engineering/proposals/20261028-feat-playwright-workload.md`（v1.1）
+**关联 PRD**: `docs/product/draft/20261028-playwright-workload.md`（v1.1，Issue #342）
 **需求总分支（feat-branch）**: `feat/playwright-workload`（基于 `main`，需求总 PR #344）
 **实现分支**: `feat/playwright-workload-impl`（基于 `feat/playwright-workload`）
 **创建日期**: 2026-10-28
-**计划版本**: v1.0
+**计划版本**: v1.1
 **版本说明**:
 - v1.0（2026-10-28）首版，与 PRD v1.0 / 提案 v1.0 对齐。
+- v1.1（2026-10-29）评审修订：① `PLAYWRIGHT_DOWNLOAD_HOST` 持久化注入 root 与 worker 用户环境（`/etc/profile.d/playwright.sh` + 双用户 `~/.bashrc`，裁决 16）；② 默认仅安装 Chromium（`playwright install chromium`，裁决 17）。
 
 ## 实现顺序
 
@@ -39,7 +40,8 @@ flowchart TD
 - **不改既有预制工作负载**（Docker / Node.js / .NET / Aspire / Github / Harness 系），不改依赖展开与「必须」失败语义。
 - **迁移只增不改**：presetKey / 精确 name 双查命中即跳过并告警，不覆盖管理员修改/删除。
 - **脚本内不内置浏览器下载地址**：默认值唯一来源是 `PLAYWRIGHT_DOWNLOAD_HOST_PARAM`（提案 决策 1）；npm 包来源沿用 `NPM_REGISTRY` 约定（默认内网 npm 代理）。
-- **浏览器范围固定内置三件**（Chromium / Firefox / WebKit）、工具版本跟随上游最新（PRD §5.2 约束，不加子集/版本参数）。
+- **下载地址持久化（评审意见）**：安装脚本必须把解析后的 `PLAYWRIGHT_DOWNLOAD_HOST` 写入 root 与 worker 用户环境（`/etc/profile.d/playwright.sh` + `/root/.bashrc` + `/home/worker/.bashrc`，裁决 16）。
+- **默认只安装 Chromium（评审意见）**：固定 `playwright install chromium`、不预装 Firefox/WebKit（裁决 17）；工具版本跟随上游最新（PRD §5.2 约束，不加子集/版本参数）。
 - **禁止 rebase/squash**：遵循 z-git 规范，仅允许 merge。
 
 ## 计划期裁决（提案留白/含混处的实现口径）
@@ -57,13 +59,18 @@ flowchart TD
 6. **幂等锚点顺序**（提案 §5.2 实现点 2）：「`playwright` 命令可用 + 浏览器缓存非空 → `playwright --version` 后 `exit 0`」锚点判定必须在下载地址取值**之前**——已安装但地址为空时直接成功（同 004 裁决 5 口径）。`BROWSERS_CACHE="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/.cache/ms-playwright}"` 不写死路径。
 7. **尾斜杠不做归一**：`playwright_download_host` 取值原样透传给 `PLAYWRIGHT_DOWNLOAD_HOST`（Issue 口径默认值自带尾斜杠）。若实现期实测因 `//` 拼接导致下载失败，按「实测裁决」通道在取值后补 `${VAR%/}` 归一并回写提案（对齐提案 §6.1 决策 7 的实测裁决机制）。
 8. **创建字段口径**：`CloudWorkload.create({ name, initScript, postScript: null, paramSchema: [PLAYWRIGHT_DOWNLOAD_HOST_PARAM], dependsOnWorkloadIds, presetKey, isPreset: true, workloadKind: 'standard', harnessType: null })`（`workloadKind` 显式落 `standard`，MCP `workload_list` 因此自动可见；与 007/009 创建形态一致）。
-9. **测试断言口径（澄清「不含硬编码下载地址」）**：以提案 §6.1 决策 1 为准——脚本不得出现 `playwright-proxy` 字样（浏览器来源只经参数/env 提供）；`npm-proxy` 默认值存在属既有约定、不判失败。API 新用例断言：`paramSchema` 含 `playwright_download_host`（TEXT，`defaultValue === PLAYWRIGHT_DOWNLOAD_HOST_PARAM.defaultValue`）；`initScript` 含 `npm install -g playwright`、`playwright install`、`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST` 三段取值、结尾 `playwright --version` 硬校验与浏览器就绪检查。
+9. **测试断言口径（澄清「不含硬编码下载地址」）**：以提案 §6.1 决策 1 为准——脚本不得出现 `playwright-proxy` 字样（浏览器来源只经参数/env 提供）；`npm-proxy` 默认值存在属既有约定、不判失败。API 新用例断言：`paramSchema` 含 `playwright_download_host`（TEXT，`defaultValue === PLAYWRIGHT_DOWNLOAD_HOST_PARAM.defaultValue`）；`initScript` 含 `npm install -g playwright`、`playwright install chromium`、`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST` 三段取值、`/etc/profile.d/playwright.sh` 与双 `~/.bashrc` 持久化写入（裁决 16）、结尾 `playwright --version` 硬校验与 `chromium-*` 就绪检查（裁决 17）。
 10. **tests/api / tests/e2e 的 AGENTS.md 口径校正**：两处用例表当前写「共 7 项 / 恰 7 个」（DeepSeek 迁移 010 后未同步，已落后于测试的 8 项断言）。本期一并校正为 9 项全清单（含 DeepSeek Harness（Harness）与 Playwright）。
 11. **写库与 mock 形态**：命中即跳过、未命中 `CloudWorkload.create`（与 007/009 一致）；单测 mock 沿用 `009-preset-harness-kimi-code.test.ts` 形态（`vi.mock('../models/cloud-workload.js')` + `findOne`/`create`）。
 12. **超时口径（提案 决策 6）**：不改 `WORKLOAD_INIT_TIMEOUT_MS` 默认 300s；standard 负载 `required=false`，失败不注销容器、可重试。验收期实测浏览器下载耗时，若持续偏紧由运维按环境上调该 env（不在本期代码内改）。
-13. **系统依赖（提案 决策 7）**：一期按 Issue 口径仅 `playwright install`；实现期内网集群以「无头 Chromium 启动跑通一次」冒烟验证系统库，若缺失则在同一脚本内补 `playwright install-deps`（apt 走内网源）并回写提案，不预先引入。
+13. **系统依赖（提案 决策 7）**：一期按 Issue 口径仅 `playwright install`（v1.1 起为 `playwright install chromium`）；实现期内网集群以「无头 Chromium 启动跑通一次」冒烟验证系统库，若缺失则在同一脚本内补 `playwright install-deps`（apt 走内网源）并回写提案，不预先引入。
 14. **失败不阻断**：脚本失败仅使该工作负载记录失败并保留日志，容器继续后续初始化并上线（沿用一期失败策略）；迁移失败仅记日志、下轮启动重试（runner 语义）。
 15. **文档生命周期**：PRD 与提案本期保持各自目录（`draft` / `proposals`）不移动，待实现验收后按既有流程归档。
+16. **下载地址持久化到用户环境（评审修订，裁决以提案 v1.1 决策 8 为准）**：安装脚本在取值成功后、下载浏览器前，把 `PLAYWRIGHT_DOWNLOAD_HOST` 写入：
+    - `/etc/profile.d/playwright.sh`（`export PLAYWRIGHT_DOWNLOAD_HOST=...`，所有用户登录 shell 生效，覆盖 root 与 worker）——经 `${SUDO} tee`（同 012 `withSudo` 口径，`sudo` 缺失时降级直写）；
+    - `/root/.bashrc` 与 `/home/worker/.bashrc`（交互 shell 生效）——写入幂等标记块（`# >>> playwright download host >>>` … `# <<< playwright download host <<<`），重装/改地址时先 `sed` 清除旧块再追加新块；`sed` 清块失败 `|| true` 不阻断；文件不存在则跳过该文件。
+    - 写完后 `export PLAYWRIGHT_DOWNLOAD_HOST="$PLAYWRIGHT_DOWNLOAD_HOST"` 供本次安装直接使用。`/etc/profile.d/playwright.sh` 的写入**不计入**「脚本不含 playwright-proxy 字样」断言范围（文件内容只有变量名不含地址）。
+17. **默认仅安装 Chromium（评审修订，裁决以提案 v1.1 决策 4 为准）**：安装命令固定为 `PLAYWRIGHT_DOWNLOAD_HOST="$PLAYWRIGHT_DOWNLOAD_HOST" playwright install chromium`；结尾硬校验由「缓存非空」细化为「`$BROWSERS_CACHE` 下存在 `chromium-*` 目录」（`ls "$BROWSERS_CACHE" | grep -q '^chromium-'`）。幂等锚点（裁决 6）维持「工具可用 + 缓存非空」不变（已装任一浏览器即视为就绪，避免重复安装覆盖管理员后续补装）。Firefox / WebKit 由用户/Agent 按需 `playwright install firefox|webkit` 补装，地址来自已持久化的用户环境。
 
 ---
 
@@ -123,11 +130,18 @@ export async function run(): Promise<void> {
 #   > WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST > 空 → exit 2 + 含地址形态指引
 PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-${WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST:-}}"
 ...
+# 持久化注入用户环境（裁决 16，评审意见）：
+#   /etc/profile.d/playwright.sh（${SUDO} tee，登录 shell 全局生效）
+#   /root/.bashrc + /home/worker/.bashrc（幂等标记块，先 sed 清旧块再追加）
+printf '%s\n' "$ENV_LINE" | ${SUDO} tee /etc/profile.d/playwright.sh >/dev/null
+...
+export PLAYWRIGHT_DOWNLOAD_HOST="$PLAYWRIGHT_DOWNLOAD_HOST"
 REGISTRY="${NPM_REGISTRY:-https://nexus.internal.fffdan.com/repository/npm-proxy/}"
 npm config set registry "$REGISTRY"
 npm install -g playwright
-PLAYWRIGHT_DOWNLOAD_HOST="$PLAYWRIGHT_DOWNLOAD_HOST" playwright install
-# 结尾硬校验：playwright --version + $BROWSERS_CACHE 非空，否则 exit 1
+# 默认仅安装 Chromium（裁决 17，评审意见）；Firefox/WebKit 按需补装
+PLAYWRIGHT_DOWNLOAD_HOST="$PLAYWRIGHT_DOWNLOAD_HOST" playwright install chromium
+# 结尾硬校验：playwright --version + $BROWSERS_CACHE 存在 chromium-* 目录，否则 exit 1
 ```
 
 > TS 模板字符串中 `${` 转义为 `\${`（同 001/004 写法）；`set -euo pipefail` 头部保留。
@@ -141,7 +155,7 @@ PLAYWRIGHT_DOWNLOAD_HOST="$PLAYWRIGHT_DOWNLOAD_HOST" playwright install
 | T-MIG-PW2 | 已存在（presetKey 命中） | warn 跳过、不 `create()`、不覆盖（含管理员改过的字段） |
 | T-MIG-PW3 | 仅精确 name 命中 | warn 跳过、不 `create()`（不产生重名项） |
 | T-MIG-PW4 | 幂等重跑 | 第二次 `run()` 因 presetKey 命中跳过：`create()` 全程至多一次、无重复写入 |
-| T-MIG-PW5 | 脚本不变量 + `bash -n` + 取值切片 | ① `bash -n` 退出 0；② 含 `npm install -g playwright`、`playwright install`、`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST` 三段取值、结尾 `playwright --version` 硬校验与 `$BROWSERS_CACHE` 就绪检查、`exit 2` 指引含地址形态 `https://<nexus-host>/repository/playwright-proxy/`；③ **不含** `playwright-proxy` 字样（裁决 5/9）；④ 取值切片 `bash -c` 三种组合断言：env 覆盖参数 / 仅参数生效 / 双空 `exit 2`（模式同 004 `T-MIG27`，不触发真实下载） |
+| T-MIG-PW5 | 脚本不变量 + `bash -n` + 取值切片 | ① `bash -n` 退出 0；② 含 `npm install -g playwright`、`playwright install chromium`、`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST` 三段取值、`/etc/profile.d/playwright.sh` 写入与 `/root/.bashrc`、`/home/worker/.bashrc` 标记块写入（裁决 16）、结尾 `playwright --version` 硬校验与 `$BROWSERS_CACHE` 下 `chromium-*` 就绪检查、`exit 2` 指引含地址形态 `https://<nexus-host>/repository/playwright-proxy/`；③ **不含** `playwright-proxy` 字样（裁决 5/9）；④ 取值切片 `bash -c` 三种组合断言：env 覆盖参数 / 仅参数生效 / 双空 `exit 2`（模式同 004 `T-MIG27`，不触发真实下载） |
 | 回归 | 001~014 / runner 既有测试 | 全绿（不改既有迁移源码） |
 
 ### 命令参考
@@ -158,6 +172,7 @@ npm run build                        # strict TS 编译
 - [ ] `npm run build` strict 通过；`Migration` 接口未变（`name` + `run`）
 - [ ] 脚本全文与提案 §5.2 逐字一致（转义差异除外）；`bash -n` 通过
 - [ ] 脚本内不含 `playwright-proxy` 字样（默认值只在 `PLAYWRIGHT_DOWNLOAD_HOST_PARAM` 里）
+- [ ] 脚本含 `/etc/profile.d/playwright.sh` 与 `/root/.bashrc`、`/home/worker/.bashrc` 持久化写入（裁决 16）、固定 `playwright install chromium`（裁决 17）
 - [ ] 015 仅写入 `cloudworkloads` 一条预制文档，不产生其他集合写入；防御路径只告警不写库
 
 ---
@@ -175,7 +190,7 @@ npm run build                        # strict TS 编译
 | `tests/e2e/src/admin-cloud-workload.spec.ts` | 修改 | T-E16 更新（见下表） |
 | `tests/api/AGENTS.md` | 修改 | 用例表更新（裁决 10）：预制项存在性行 7 项→9 项全清单（补 DeepSeek 与 Playwright），新增「T-IA 预制 Playwright 参数化下载」行 |
 | `tests/e2e/AGENTS.md` | 修改 | T-E16 行「恰 7 个」→「恰 9 个」并补名称清单（裁决 10） |
-| `deploy/images/worker/BUILD.md` | 修改 | 「预制工作负载脚本手工验收（真实集群）」补 Playwright 逐项核对块（文档口径同步，**不改镜像**）：`playwright --version`、浏览器就绪（`$HOME/.cache/ms-playwright` 非空）、参数默认值已填且可达、清空地址快速失败含地址形态、下载来源不可达留痕可重试、重复执行幂等 |
+| `deploy/images/worker/BUILD.md` | 修改 | 「预制工作负载脚本手工验收（真实集群）」补 Playwright 逐项核对块（文档口径同步，**不改镜像**）：`playwright --version`、Chromium 就绪（`$HOME/.cache/ms-playwright` 下 `chromium-*` 非空）、root 与 worker 用户环境均读到 `PLAYWRIGHT_DOWNLOAD_HOST`（`profile.d` + `~/.bashrc` 双入口）、两用户补装 `playwright install firefox` 走内网代理、参数默认值已填且可达、清空地址快速失败含地址形态、下载来源不可达留痕可重试、重复执行幂等 |
 | `docs/engineering/AGENTS.md` | 已完成 | 「实现计划（`plan/`）」索引已随本计划提交登记，无需在实现期重复改动 |
 
 ### tests/api 断言更新清单（`T-IA: exposes the eight preset workloads...`）
@@ -185,7 +200,7 @@ npm run build                        # strict TS 编译
   - `workloadKind === 'STANDARD'`、`harnessType === null`、`isPreset === true`；
   - `paramSchema` 仅一项：`{ key: 'playwright_download_host', type: 'TEXT', defaultValue: 'https://nexus.internal.fffdan.com/repository/playwright-proxy/' }`；
   - `dependsOnWorkloadIds` 等于 `[Node.js 预制项 id]`（与 Aspire 依赖断言同款）；
-  - `initScript` 含 `npm install -g playwright`、`playwright install`、`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST`、结尾 `playwright --version`；**不含** `playwright-proxy` 字样（裁决 9）。
+  - `initScript` 含 `npm install -g playwright`、`playwright install chromium`、`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST`、`/etc/profile.d/playwright.sh` 与 `/root/.bashrc`、`/home/worker/.bashrc` 写入、结尾 `playwright --version`；**不含** `playwright-proxy` 字样（裁决 9）。
 
 ### tests/e2e T-E16 更新
 
@@ -234,12 +249,13 @@ cd tests/e2e && aspire wait admin-web admin-api && npx playwright test admin-clo
 
 - [ ] 升级后工作负载列表自动出现「Playwright」预制项（带预制标识、只出现一次）；重复执行迁移不重复写入
 - [ ] 管理员修改/删除该预制项后再启动：不被系统覆盖或恢复（只告警）
-- [ ] 启动挂载安装成功：容器内 `playwright --version` 可用，`$HOME/.cache/ms-playwright` 非空（Chromium / Firefox / WebKit），可直接运行 Playwright 测试
+- [ ] 启动挂载安装成功：容器内 `playwright --version` 可用，`$HOME/.cache/ms-playwright` 下存在 `chromium-*`（仅 Chromium，默认不下载 Firefox/WebKit），可直接运行基于 Chromium 的 Playwright 测试
+- [ ] 安装成功后 root 用户与 worker 用户环境均读到 `PLAYWRIGHT_DOWNLOAD_HOST`（`/etc/profile.d/playwright.sh` 与双 `~/.bashrc` 生效）；两用户执行 `playwright install firefox` 补装下载走内网代理
 - [ ] 默认配置安装全程走内网代理（npm-proxy + playwright-proxy），不触公网
 - [ ] 参数表单展示「浏览器下载地址」且默认值已填内网代理地址；按默认值安装成功
 - [ ] 调整地址后安装按新地址下载浏览器；清空地址（且未提供 `PLAYWRIGHT_DOWNLOAD_HOST`）时快速失败，提示含地址形态
 - [ ] 依赖 Node.js 自动补齐、进度中可见；未预装 Node.js 的主机可完成安装
-- [ ] 重复安装幂等成功（已安装直接校验通过，不重复下载）；工具装好但浏览器下载失败时整体判失败、原因可读，重试对已成功部分幂等
+- [ ] 重复安装幂等成功（已安装直接校验通过，不重复下载）；工具装好但 Chromium 下载失败时整体判失败、原因可读，重试对已成功部分幂等
 - [ ] 三入口（启动挂载 / 拉起后安装 / Agent `workload_install`）安装均成功，进度/日志/失败原因展示与既有工作负载一致，执行记录可区分触发来源
 - [ ] 已安装状态在列表标记为已安装，不提供卸载入口；云主机不在线时不允许发起安装
 - [ ] 决策 7 冒烟：无头 Chromium 启动跑通一次；若缺系统库，同脚本补 `playwright install-deps` 并回写提案（连同尾斜杠归一裁决 7 如被触发）
@@ -259,14 +275,15 @@ cd tests/e2e && aspire wait admin-web admin-api && npx playwright test admin-clo
 |------|------|
 | 迁移编号与并行 MongoDB 需求（`015-preset-mongodb`）撞号 | 实现启动前核对主干编号，占用则顺延 016（裁决 1）；后合入方 merge 协调，不 rebase |
 | 预制计数断言与并行需求冲突（双方都改 8→9） | 后合入方按主干实际值合并名称清单与计数（并集 10 项，裁决 1） |
-| 浏览器体积大（三件数百 MB），300s 默认超时偏紧 | standard 负载 `required=false` 失败可重试；运维按环境上调 `WORKLOAD_INIT_TIMEOUT_MS`（裁决 12）；验收实测记录耗时 |
+| Chromium 体积较大（百余 MB），300s 默认超时偏紧 | 仅下载 Chromium 后超时压力显著缓解；standard 负载 `required=false` 失败可重试；运维按环境上调 `WORKLOAD_INIT_TIMEOUT_MS`（裁决 12）；验收实测记录耗时 |
+| `/etc/profile.d` 或 `~/.bashrc` 写入失败（sudo 缺失/文件缺失） | 写 `profile.d` 经 `${SUDO}` 且 `sudo` 缺失降级直写；`~/.bashrc` 不存在跳过、`sed` 清块失败不阻断（裁决 16）；`/etc/profile.d/playwright.sh` 保证登录 shell 生效兜底 |
 | 浏览器运行缺系统库 | 决策 7 实测裁决：无头 Chromium 冒烟，缺失则同脚本补 `playwright install-deps` 并回写提案（裁决 13） |
 | playwright-proxy 不可达 / 尾斜杠拼 `//` | 失败留痕、原因可读、可重试；实测拼接问题时按裁决 7 归一并回写提案 |
 | 误覆盖管理员定制/删除 | presetKey / 精确 name 双查命中即跳过（T-MIG-PW2/PW3）；迁移只增不改 |
 | 浏览器下载地址写死回流 | T-MIG-PW5 / API 断言脚本不含 `playwright-proxy` 字样；默认值只在参数定义 |
 | 极老 worker 不注入参数 | 取值为空 → 快速失败 + 指引，不静默回退公网；不提高 `MIN_WORKER_VERSION` |
 | 迁移失败阻断启动 | runner 语义：失败仅记日志、下轮启动重试，不阻断服务 |
-| 脚本安装返回 0 但实际不可用 | 结尾硬校验 `playwright --version` + 浏览器就绪检查，任一不满足 `exit 1`（T-MIG-PW5） |
+| 脚本安装返回 0 但实际不可用 | 结尾硬校验 `playwright --version` + `$BROWSERS_CACHE` 存在 `chromium-*` 目录，任一不满足 `exit 1`（T-MIG-PW5） |
 
 ## 相关文档
 
