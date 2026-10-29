@@ -14,7 +14,7 @@ import { ADMIN_WEB_URL, adminGqlRequest, adminLoginApi, adminLoginViaUI } from '
 //   - T-E11 未登录访问 /cloud-workloads 重定向登录
 //   - T-E12 四种参数类型配置 → 保存 → 编辑回显；非法参数被拦截
 //   - T-E13 多依赖配置与展示；依赖环被拦截
-//   - T-E16 预制工作负载（Docker/Node.js/.NET/Aspire）与「预制」徽章
+//   - T-E16 预制工作负载（Docker/Node.js/.NET/Aspire/Github/Playwright 与 Harness 系）与「预制」徽章
 
 const WL_PREFIX = 'e2e-wl-';
 
@@ -565,19 +565,19 @@ test.describe('Admin Cloud Workload E2E', () => {
     }
   });
 
-  test('T-E16: lists the eight preset workloads with the preset badge', async ({ page }) => {
+  test('T-E16: lists the nine preset workloads with the preset badge', async ({ page }) => {
     const token = await adminLoginApi(page);
     await adminLoginViaUI(page);
     await page.getByRole('link', { name: /工作负载/ }).click();
     await expect(page).toHaveURL(/\/cloud-workloads/);
     await expect(page.getByRole('heading', { name: '工作负载' })).toBeVisible();
 
-    // 迁移已执行：七个预制项均出现（含 Github / Kimi Code）
-    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'DeepSeek Harness（Harness）', 'Github']) {
+    // 迁移已执行：九个预制项均出现（含 Github / Kimi Code / DeepSeek / Playwright）
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'DeepSeek Harness（Harness）', 'Github', 'Playwright']) {
       await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
     }
-    // 「预制」徽章恰好 7 个
-    await expect(page.getByText('预制', { exact: true })).toHaveCount(8);
+    // 「预制」徽章恰好 9 个
+    await expect(page.getByText('预制', { exact: true })).toHaveCount(9);
 
     // Aspire 行展示依赖 Docker / .NET
     const aspireRow = page.locator('tr', { has: page.getByText('Aspire', { exact: true }) });
@@ -599,6 +599,7 @@ test.describe('Admin Cloud Workload E2E', () => {
       'Kimi Code（Harness）',
       'Node.js',
       'OpenCode（Harness）',
+      'Playwright',
     ]);
   });
 });

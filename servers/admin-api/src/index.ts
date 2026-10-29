@@ -51,6 +51,7 @@ import * as migration010ClearCloudHostKeyExpiry from './migrations/010-clear-clo
 import * as migration011RefreshHarnessPrepareScope from './migrations/011-refresh-harness-prepare-scope.js';
 import * as migration013PresetHarnessDeepseekHeaderMasq from './migrations/013-preset-harness-deepseek-header-masq.js';
 import * as migration014BillingOwnerTenant from './migrations/014-billing-owner-tenant.js';
+import * as migration015PresetPlaywright from './migrations/015-preset-playwright.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const app = express();
@@ -130,6 +131,7 @@ async function start() {
   // 013-preset-harness-deepseek-header-masq——把未定制过的 DeepSeek harness 预置脚本刷新为 V4
   //   （固定版本 0.2.1-rc.2 + `dsh plugin --profile acp add Deliay/dsh-header-masq` 会话标识插件）
   // 014-billing-owner-tenant——前台计费归属 ownerType front_user→tenant（admin_user 行零改动、金额零改动）
+  // 015-preset-playwright——写入 Playwright 预制工作负载（工具 + Chromium，参数化内网下载地址）
   try {
     await runMigrations([
       migration001,
@@ -148,6 +150,7 @@ async function start() {
       migration011RefreshHarnessPrepareScope,
       migration013PresetHarnessDeepseekHeaderMasq,
       migration014BillingOwnerTenant,
+      migration015PresetPlaywright,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
