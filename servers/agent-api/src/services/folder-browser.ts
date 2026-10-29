@@ -1,9 +1,10 @@
 import { Controller } from '../models/controller.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { actorFilter } from './workspace-context.js';
 
 export class FolderBrowserService {
   async browse(controllerId: string, userId: string, path?: string): Promise<Record<string, unknown>[]> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
@@ -35,7 +36,7 @@ export class FolderBrowserService {
   }
 
   async getHomeDirectory(controllerId: string, userId: string): Promise<string | null> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }

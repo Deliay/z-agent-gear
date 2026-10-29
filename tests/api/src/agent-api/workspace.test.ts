@@ -2381,6 +2381,64 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
   );
 
   it.skipIf(!Boolean(process.env.MONGODB_URI))(
+    'T-WS-ISO8 成员操作 admin 创建的控制器/云主机：browseFolder/getHomeDirectory/共享绑定 GitHub 设置门禁',
+    async () => {
+      // browseFolder：developer 对 admin 注册的控制器应过 Controller 门禁
+      const fsBrowse = waitForEvent<{ requestId: string; path: string | null }>(
+        controllerSocket,
+        'fs:browse',
+        10000,
+      );
+      const browsePromise = gql(
+        BROWSE_FOLDER,
+        { controllerId, path: '/home/user' },
+        developer.token,
+        normalId,
+      );
+      const browseEvent = await fsBrowse;
+      controllerSocket.emit('fs:browse:result', {
+        requestId: browseEvent.requestId,
+        entries: [{ name: 'shared', path: '/home/user/shared', isDirectory: true }],
+      });
+      const browse = await browsePromise;
+      expect(browse.errors, JSON.stringify(browse.errors)).toBeUndefined();
+      expect(browse.data.browseFolder).toHaveLength(1);
+
+      // getHomeDirectory：同一门禁
+      const fsHome = waitForEvent<{ requestId: string }>(controllerSocket, 'fs:home', 10000);
+      const homePromise = gql(GET_HOME_DIRECTORY, { controllerId }, developer.token, normalId);
+      const homeEvent = await fsHome;
+      controllerSocket.emit('fs:home:result', { requestId: homeEvent.requestId, path: '/home/developer' });
+      const home = await homePromise;
+      expect(home.errors, JSON.stringify(home.errors)).toBeUndefined();
+      expect(home.data.getHomeDirectory).toBe('/home/developer');
+
+      // setupCloudHostGithubProject：developer 可选用 admin 维护的本工作区绑定；
+      // 账号门禁通过后因 fixture 无授权仓库返回「仓库未授权」（而非账号不存在）
+      const setup = await gql(
+        `mutation SetupSharedGithub($input: SetupCloudHostGithubProjectInput!) {
+          setupCloudHostGithubProject(input: $input) { id }
+        }`,
+        {
+          input: {
+            controllerId,
+            accountId: githubAccountId,
+            repoFullName: 'octo/shared',
+            targetPath: '/home/worker/workspace',
+            createSession: false,
+          },
+        },
+        developer.token,
+        normalId,
+      );
+      expect(setup.errors, '成员选用共享绑定应过账号门禁').toBeDefined();
+      expect(setup.errors[0].message).not.toContain('Github 账号');
+      expect(setup.errors[0].message).toContain('仓库未授权');
+    },
+    30000,
+  );
+
+  it.skipIf(!Boolean(process.env.MONGODB_URI))(
     'T-WS-ISO4 githubaccounts（MONGODB_URI 直插夹具）：共享读=本工作区∪全局，非成员不可见',
     async () => {
       expect(githubAccountId, 'githubaccounts 夹具需 MONGODB_URI').toBeTruthy();

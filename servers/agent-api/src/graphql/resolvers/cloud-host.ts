@@ -78,7 +78,7 @@ export const cloudHostResolvers = {
     ) => {
       const userId = requireUser(context);
       if (!mongoose.isValidObjectId(args.id)) return null;
-      // 软删除仍返回（与 Session.cloudHost 留档口径一致）；不存在/非本人返回 null。
+      // 软删除仍返回（与 Session.cloudHost 留档口径一致）；不存在/非本工作区成员返回 null（成员口径）。
       const doc = await CloudHost.findOne({ _id: args.id, ...actorFilter(userId) }).lean();
       if (!doc) return null;
       const activeSessionCount = await Session.countDocuments({
@@ -270,11 +270,17 @@ export const cloudHostResolvers = {
     ) => {
       const userId = requireUser(context);
       try {
-        const operation = await CloudHostSetupOperation.findOne({
-          _id: args.id,
-          userId,
-        }).lean();
+        const operation = await CloudHostSetupOperation.findOne({ _id: args.id }).lean();
+        // 越界与不存在统一返回 Operation not found（不泄露存在性）
         if (!operation) throw new Error('Operation not found');
+        // 操作单无 workspaceId：经 host 工作区归属校验（与详情口径一致）
+        const hostVisible = await CloudHost.findOne({
+          _id: (operation as unknown as { hostId: unknown }).hostId,
+          ...actorFilter(userId),
+        })
+          .select('_id')
+          .lean();
+        if (!hostVisible) throw new Error('Operation not found');
         if (operation.kind === 'githubSetup') {
           return await cloudHostGithubService.retry(args.id, userId);
         }

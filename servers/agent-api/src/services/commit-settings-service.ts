@@ -349,7 +349,10 @@ export class CommitSettingsService {
     };
   }
 
-  /** 提交人归一校验：解绑 / 越权 / 非法一律返回 null（上层按 unset 降级）。 */
+  /**
+   * 提交人归一校验：解绑 / 越权 / 非法一律返回 null（上层按 unset 降级）。
+   * 无 workspaceId（升级前存量/内部链路）时回退创建者 userId 口径。
+   */
   private async resolveCommitter(
     userId: string,
     setting: SettingShape,

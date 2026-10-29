@@ -17,6 +17,7 @@ export class ControllerKeyService {
     }
 
     // Delete any existing unbound key (only one unbound key allowed at a time)
+    // 裁决：未绑定 key 的复用/清理按创建者 {userId}（密钥属主语义；机械改 actorFilter 会误删他人未绑定 key）
     const existingUnbound = await ControllerKey.findOne({ userId, boundControllerId: null });
     if (existingUnbound) {
       await evictKeyById(existingUnbound._id.toString());
