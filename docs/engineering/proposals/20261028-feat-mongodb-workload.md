@@ -1,5 +1,5 @@
 ---
-description: 增加工作负载「MongoDB」技术提案：admin-api 迁移 015 预置标准工作负载（presetKey=mongodb）、init 脚本 012 sudo 正典形态原生 apt 经内网 Nexus 代理安装 mongodb-org 8.0、mongod --version 硬校验（不拉起实例）、全链路数据驱动零协议改动、测试断言 8→9 预制项收口
+description: 增加工作负载「MongoDB」技术提案：admin-api 迁移 016 预置标准工作负载（presetKey=mongodb）、init 脚本 012 sudo 正典形态原生 apt 经内网 Nexus 代理安装 mongodb-org 8.0、mongod --version 硬校验（不拉起实例）、全链路数据驱动零协议改动、测试断言 9→10 预制项收口
 type: Permanent
 ---
 
@@ -32,21 +32,21 @@ type: Permanent
 
 ### 1.2 目标
 
-- admin-api 迁移 `015-preset-mongodb`：写入预制工作负载「MongoDB」（`presetKey='mongodb'`、`isPreset=true`、`workloadKind='standard'`、无参数、无依赖、init-only），幂等不覆盖管理员修改。
+- admin-api 迁移 `016-preset-mongodb`：写入预制工作负载「MongoDB」（`presetKey='mongodb'`、`isPreset=true`、`workloadKind='standard'`、无参数、无依赖、init-only），幂等不覆盖管理员修改。
 - init 脚本（012 sudo 正典形态）：
   - 原生 apt 安装：需求指定的内网 GPG key + Nexus `mongodb-apt-proxy` 源（`{codename}/mongodb-org/8.0 multiverse`）→ `apt-get update && apt-get install -y mongodb-org`，全程不回退公网；
   - 安装成功硬校验：`mongod --version` 输出版本信息即视为成功（**不拉起 mongod 实例**、不做服务托管，服务由用户按需自行启动）；
   - 幂等：已安装（`command -v mongod` 命中）短路成功；重复执行不重复安装、不破坏既有安装、不影响运行中的服务。
 - 全链路自动呈现（零代码改动）：后台工作负载列表（「预制」徽章）、创建云电脑「预装工作负载」、云主机工作负载目录与运行期安装、MCP `workload_list` / `workload_install`。
-- 测试收口：迁移单测新增；`tests/api` / `tests/e2e` 预制项计数与名称断言 8→9 同步更新；既有测试零回归。
+- 测试收口：迁移单测新增；`tests/api` / `tests/e2e` 预制项计数与名称断言 9→10 同步更新；既有测试零回归。
 
 ### 1.3 范围
 
 **做**：
 
-- `servers/admin-api/src/migrations/015-preset-mongodb.ts`（预置项 + init 脚本）+ `servers/admin-api/src/index.ts` 注册。
-- `servers/admin-api/src/migrations/015-preset-mongodb.test.ts` 迁移单测。
-- 测试断言更新：`tests/api/src/admin-api/cloud-workload.test.ts`（T-IA 预制项 8→9）、`tests/e2e/src/admin-cloud-workload.spec.ts`（T-E16 名称清单与「预制」徽章计数）。
+- `servers/admin-api/src/migrations/016-preset-mongodb.ts`（预置项 + init 脚本）+ `servers/admin-api/src/index.ts` 注册。
+- `servers/admin-api/src/migrations/016-preset-mongodb.test.ts` 迁移单测。
+- 测试断言更新：`tests/api/src/admin-api/cloud-workload.test.ts`（T-IA 预制项 9→10）、`tests/e2e/src/admin-cloud-workload.spec.ts`（T-E16 名称清单与「预制」徽章计数）。
 - 可选补强：`tests/api/src/agent-api/cloud-host-workload.test.ts` 断言「MongoDB」出现在 `cloudHostWorkloads` / `cloudHostWorkloadCatalog`。
 
 **不做**：
@@ -64,7 +64,7 @@ type: Permanent
 
 ```mermaid
 graph TD
-    MIG[admin-api migration 015-preset-mongodb<br/>MongoDB 预置项 + init 脚本] -->|写入| DB[(MongoDB<br/>cloudworkloads)]
+    MIG[admin-api migration 016-preset-mongodb<br/>MongoDB 预置项 + init 脚本] -->|写入| DB[(MongoDB<br/>cloudworkloads)]
     AW[admin-web 工作负载页] -->|CRUD 只读展示 预制| AA[admin-api]
     AA --> DB
     U[用户/Agent] -->|创建云电脑预装 / 运行期安装 / MCP workload_install| AG[agent-api<br/>cloud-host-workload-service / cloud-host-tools]
@@ -79,7 +79,7 @@ graph TD
 
 关键边界：
 
-- **本期唯一写入点**：迁移 `015-preset-mongodb` 向 `cloudworkloads` 写一个预制文档；其余全部为既有链路的自然呈现。
+- **本期唯一写入点**：迁移 `016-preset-mongodb` 向 `cloudworkloads` 写一个预制文档；其余全部为既有链路的自然呈现。
 - **脚本执行环境**：worker 镜像 Ubuntu 24.04（apt 系、无 systemd）、`worker` uid + 免密 sudo、内网 Nexus 代理为唯一软件来源。
 
 ### 2.2 技术栈
@@ -96,7 +96,7 @@ graph TD
 
 ```mermaid
 graph LR
-    A[015-preset-mongodb<br/>预置项与脚本] --> B[cloudworkloads<br/>数据驱动]
+    A[016-preset-mongodb<br/>预置项与脚本] --> B[cloudworkloads<br/>数据驱动]
     B --> C[admin-api / agent-api<br/>列表与目录（复用）]
     B --> D[cloud-controller<br/>编排下发（复用）]
     D --> E[agent-gear<br/>bash 执行（复用）]
@@ -105,10 +105,10 @@ graph LR
 
 | 模块 | 职责 | 关键技术点 |
 |------|------|-----------|
-| `015-preset-mongodb.ts` | 写入「MongoDB」预制工作负载 | presetKey/name 双重幂等跳过、不覆盖管理员修改；init 脚本 012 正典形态 |
+| `016-preset-mongodb.ts` | 写入「MongoDB」预制工作负载 | presetKey/name 双重幂等跳过、不覆盖管理员修改；init 脚本 012 正典形态 |
 | init 脚本 | 原生 apt 安装 mongodb-org 8.0 + 成功硬校验 | 内网源、GPG 校验、幂等短路、`mongod --version` 硬校验（不拉起实例） |
 | 既有执行/展示链路 | 安装、留档、已安装标记、失败语义 | 零改动 |
-| 测试 | 迁移行为 + 预制项清单断言 | 8→9 同步、幂等回归 |
+| 测试 | 迁移行为 + 预制项清单断言 | 9→10 同步、幂等回归 |
 
 ## 3. API 设计
 
@@ -222,13 +222,13 @@ mongod --version
 - **技术细节**：已安装状态下重复执行秒级返回；不重复安装、不破坏既有安装与运行中的服务。
 - **风险点**：环境存在手工安装的 mongod 时短路成功即返回，不接管不破坏（PRD 异常表口径）。
 
-#### 实现点 3: 迁移 `015-preset-mongodb`（seed 幂等、不覆盖管理员修改）
+#### 实现点 3: 迁移 `016-preset-mongodb`（seed 幂等、不覆盖管理员修改）
 
-- **描述**：`run()` 顺序 `CloudWorkload.findOne({ presetKey: 'mongodb' })` → `findOne({ name: 'MongoDB' })`，命中即 `console.warn` 跳过；均空才 `CloudWorkload.create({...})`。注册进 `servers/admin-api/src/index.ts` 的 `runMigrations([...])`（注释行「015-preset-mongodb——写入 MongoDB 工作负载预置项」）。
+- **描述**：`run()` 顺序 `CloudWorkload.findOne({ presetKey: 'mongodb' })` → `findOne({ name: 'MongoDB' })`，命中即 `console.warn` 跳过；均空才 `CloudWorkload.create({...})`。注册进 `servers/admin-api/src/index.ts` 的 `runMigrations([...])`（注释行「016-preset-mongodb——写入 MongoDB 工作负载预置项」）。
 - **技术细节**：结构与 `007-preset-github.ts` 逐节对齐（导出 `name` / `MONGODB_PRESET_KEY` / `MONGODB_PRESET_NAME` / `MONGODB_INIT_SCRIPT` / `run()`）；脚本直接以 012 正典形态编写（不再走 `withSudo` 后补形态）。
 - **风险点**：迁移编号冲突——当前 `admin-api` 迁移已占用至 `014`，`015` 为下一个空位；若实现期主分支新增迁移需顺延并同步测试引用。
 
-#### 实现点 4: 测试断言收口（8→9）
+#### 实现点 4: 测试断言收口（9→10）
 
 - **描述**：既有断言硬编码预制项清单：`tests/api/src/admin-api/cloud-workload.test.ts`（T-IA「eight preset workloads」、`presetIds` 长度 8）与 `tests/e2e/src/admin-cloud-workload.spec.ts`（T-E16「eight preset workloads」、名称清单、「预制」徽章计数）——加「MongoDB」后同步为 9。
 - **技术细节**：E2E 名称清单为 `.sort()` 后全量比对，注意「MongoDB」排序位置；`cloud-host.spec.ts`「预装工作负载」如含名称断言一并核对。
@@ -265,14 +265,14 @@ mongod --version
 ```
 servers/admin-api/src/
 ├── migrations/
-│   ├── 015-preset-mongodb.ts        # 新增：MongoDB 预制工作负载 seed
-│   └── 015-preset-mongodb.test.ts   # 新增：迁移单测
+│   ├── 016-preset-mongodb.ts        # 新增：MongoDB 预制工作负载 seed
+│   └── 016-preset-mongodb.test.ts   # 新增：迁移单测
 └── index.ts                          # 修改：runMigrations 注册 015
 
 tests/
-├── api/src/admin-api/cloud-workload.test.ts        # 修改：预制项 8→9
+├── api/src/admin-api/cloud-workload.test.ts        # 修改：预制项 9→10
 ├── api/src/agent-api/cloud-host-workload.test.ts   # 可选：MongoDB 出现在目录/列表
-└── e2e/src/admin-cloud-workload.spec.ts            # 修改：T-E16 清单与徽章 8→9
+└── e2e/src/admin-cloud-workload.spec.ts            # 修改：T-E16 清单与徽章 9→10
 ```
 
 ## 8. 测试策略
@@ -280,22 +280,22 @@ tests/
 ### 8.1 测试覆盖要求
 
 - 迁移单测覆盖：写入字段全量断言、重复执行幂等（T-MIG1/T-MIG2 口径）、同名非预制跳过（T-MIG3 口径）。
-- API 测试覆盖：`adminCloudWorkloads` 预制项清单（9 项含「MongoDB」）、`cloudHostWorkloads` / `cloudHostWorkloadCatalog` 可见性。
+- API 测试覆盖：`adminCloudWorkloads` 预制项清单（10 项含「MongoDB」「Playwright」）、`cloudHostWorkloads` / `cloudHostWorkloadCatalog` 可见性。
 - E2E 覆盖：后台工作负载列表「MongoDB」+「预制」徽章计数 9。
 
 ### 8.2 测试类型
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 迁移单测 | vitest（mock `CloudWorkload`） | `015-preset-mongodb.test.ts`：create 参数（name/presetKey/isPreset/workloadKind/paramSchema=[]/dependsOn=[]/postScript=null）、幂等跳过、同名跳过、脚本形态（`SUDO` 前导、`${SUDO} apt-get`、`${SUDO} tee`、无公网源、`mongod --version` 硬校验、**无任何实例拉起动作**） |
-| API 测试 | tests/api（Aspire 全量 + `MONGODB_URI`） | `cloud-workload.test.ts` T-IA 预制项 8→9 与 ID 幂等；`cloud-host-workload.test.ts` 目录可见 `installed=false` |
-| E2E 测试 | Playwright | `admin-cloud-workload.spec.ts` T-E16 名称清单与「预制」徽章 8→9 |
+| 迁移单测 | vitest（mock `CloudWorkload`） | `016-preset-mongodb.test.ts`：create 参数（name/presetKey/isPreset/workloadKind/paramSchema=[]/dependsOn=[]/postScript=null）、幂等跳过、同名跳过、脚本形态（`SUDO` 前导、`${SUDO} apt-get`、`${SUDO} tee`、无公网源、`mongod --version` 硬校验、**无任何实例拉起动作**） |
+| API 测试 | tests/api（Aspire 全量 + `MONGODB_URI`） | `cloud-workload.test.ts` T-IA 预制项 9→10 与 ID 幂等；`cloud-host-workload.test.ts` 目录可见 `installed=false` |
+| E2E 测试 | Playwright | `admin-cloud-workload.spec.ts` T-E16 名称清单与「预制」徽章 9→10 |
 | 实测（人工/验收） | 云电脑真实安装 | 创建预装 + 运行期安装各一遍：`mongod --version` 通过、安装流程结束后无 mongod 进程（不拉起实例）、重复安装幂等、失败重试（见 §9） |
 
 ## 9. 验收标准
 
 - [ ] 技术方案评审通过
-- [ ] 迁移 `015-preset-mongodb` 单测全绿（含幂等/同名跳过/脚本形态）
+- [ ] 迁移 `016-preset-mongodb` 单测全绿（含幂等/同名跳过/脚本形态）
 - [ ] 后台工作负载列表出现「MongoDB」（「预制」徽章），预制项计数 9 的 API/E2E 断言全绿
 - [ ] 创建云电脑勾选「MongoDB」预装 → 就绪后标记已安装，容器内 `mongod --version` 输出版本信息
 - [ ] 运行期安装（界面 / MCP `workload_install`）成功，`workload_list` 可见且 `installed=true`

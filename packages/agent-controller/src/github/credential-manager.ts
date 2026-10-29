@@ -13,6 +13,13 @@ export const REQUEST_TIMEOUT_MS = 10_000;
 /** 401/403 退避序列（1/2/4 分钟，最多 3 次重试）。 */
 export const BACKOFF_MS = [60_000, 120_000, 240_000] as const;
 
+/**
+ * 凭据已进入「到期前余量区」（`beforeExpiry <= 0`）时的短间隔重试（60 秒）。
+ * 首次发现时立即重试一次（`delay=0`），其后按本间隔退避，避免服务端持续返回
+ * 近过期 token 时热循环打爆 agent-api。
+ */
+export const NEAR_EXPIRY_RETRY_MS = 60_000;
+
 /** 凭据管理器依赖注入（测试锚定网络/时钟/副作用；生产使用缺省实现）。 */
 export interface GithubCredentialManagerDeps {
   env?: NodeJS.ProcessEnv;
@@ -40,10 +47,12 @@ type Timer = ReturnType<typeof setTimeout>;
  * 云主机内 Github 凭据管理器（容器侧唯一凭据写入口）。
  *
  * - `start()`：校验 env 后立即申请一次，并按「50 分钟」或「token 到期前 10 分钟」（取较早）
- *   自续期；定时器 `unref()`，不阻止进程退出；
+ *   自续期；已进入/越过余量区（`beforeExpiry <= 0`）时首次立即重试、其后按 60 秒短间隔
+ *   重试并告警（绝不回落到 50 分钟）；定时器 `unref()`，不阻止进程退出；
  * - `refreshNow()`：向 agent-api 申请仓库级 token 并写入 gh 配置；并发调用合并为一次请求；
  *   401/403 在本次调用内按 1/2/4 分钟退避（最多 3 次）；
- * - 404（未绑定 Git 项目）返回 `no-binding`，不告警；
+ * - 404（未绑定 Git 项目）返回 `no-binding`，不告警；除 `disabled`/`no-binding` 外的失败
+ *   一律输出脱敏错误日志（便于线上取证）；
  * - token 只交给 `writeGhAuth`（stdin），从不进入日志/错误。
  */
 export class GithubCredentialManager {
@@ -60,6 +69,8 @@ export class GithubCredentialManager {
   private stopped = false;
   private expiresAt: Date | null = null;
   private activeRefresh: Promise<GithubCredentialRefreshResult> | null = null;
+  /** 近过期区「立即重试」是否已被消费（防止服务端持续返回近过期 token 时热循环）。 */
+  private nearExpiryImmediateTaken = false;
 
   constructor(deps: GithubCredentialManagerDeps = {}) {
     this.env = deps.env ?? process.env;
@@ -143,9 +154,16 @@ export class GithubCredentialManager {
         continue;
       }
       if (result.kind === 'retryable') {
+        // 退避耗尽：每次尝试已在上方记录告警，不重复输出。
         return { ok: false, error: `Github 凭据无效（HTTP ${result.status}）` };
       }
-      return result.value;
+      const value = result.value;
+      // 非 401/403/404 的失败（5xx / 超时 / 非法 JSON / 写 gh 失败）必须留痕，
+      // 否则线上只能看到「凭据没更新」而无任何线索；`disabled`/`no-binding` 属正常态不告警。
+      if (!value.ok && value.error && value.error !== 'no-binding' && value.error !== 'disabled') {
+        this.log(`[GithubCredential] 凭据续期失败：${value.error}`);
+      }
+      return value;
     }
   }
 
@@ -224,13 +242,25 @@ export class GithubCredentialManager {
     }
   }
 
-  /** 下一次续期：50 分钟与「到期前 10 分钟」取较早；定时器 unref，不阻止进程退出。 */
+  /** 下一次续期：50 分钟与「到期前 10 分钟」取较早；已进入/越过余量区时首次立即重试、
+   *  其后按 `NEAR_EXPIRY_RETRY_MS` 短间隔退避并告警（绝不回落 50 分钟，否则 token 过期后
+   *  还要再等 40 分钟才续期）。定时器 unref，不阻止进程退出。 */
   private scheduleNext(): void {
     if (this.stopped || !this.started || !this.isEnabled()) return;
     let delay = REFRESH_INTERVAL_MS;
     if (this.expiresAt) {
       const beforeExpiry = this.expiresAt.getTime() - EXPIRY_SKEW_MS - this.now();
-      if (beforeExpiry > 0 && beforeExpiry < delay) delay = beforeExpiry;
+      if (beforeExpiry <= 0) {
+        delay = this.nearExpiryImmediateTaken ? NEAR_EXPIRY_RETRY_MS : 0;
+        this.nearExpiryImmediateTaken = true;
+        this.log(
+          `[GithubCredential] 凭据剩余有效期不足（至 ${this.expiresAt.toISOString()}），` +
+            (delay === 0 ? '立即重试' : `${Math.round(delay / 1000)} 秒后重试`),
+        );
+      } else {
+        this.nearExpiryImmediateTaken = false;
+        if (beforeExpiry < delay) delay = beforeExpiry;
+      }
     }
     this.timer = this.setTimeoutFn(() => {
       this.timer = null;

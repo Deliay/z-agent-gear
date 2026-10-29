@@ -661,13 +661,13 @@ describe('Admin Cloud Workload API', () => {
   // 工作负载一期：预制项存在性与幂等（T-MIG1/T-MIG2）
   // -------------------------------------------------------------------------
 
-  it('T-IA: exposes the nine preset workloads with stable ids (idempotent)', async () => {
+  it('T-IA: exposes the ten preset workloads with stable ids (idempotent)', async () => {
     const first = await adminGql<{ adminCloudWorkloads: WorkloadNode[] }>(LIST, undefined, token);
     expect(first.errors).toBeUndefined();
     const all = first.data!.adminCloudWorkloads;
     const byName = new Map(all.map((workload) => [workload.name, workload]));
 
-    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'DeepSeek Harness（Harness）', 'Github', 'MongoDB']) {
+    for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'DeepSeek Harness（Harness）', 'Github', 'MongoDB', 'Playwright']) {
       const preset = byName.get(name);
       expect(preset, `preset ${name} should exist`).toBeTruthy();
       expect(preset!.isPreset, `preset ${name} isPreset`).toBe(true);
@@ -695,7 +695,7 @@ describe('Admin Cloud Workload API', () => {
     const presetIds = (list: WorkloadNode[]) =>
       list.filter((workload) => workload.isPreset).map((workload) => workload.id).sort();
     expect(presetIds(second.data!.adminCloudWorkloads)).toEqual(presetIds(all));
-    expect(presetIds(all)).toHaveLength(9);
+    expect(presetIds(all)).toHaveLength(10);
 
     // T-ADM-WL-API1：分类透出（standard → STANDARD/null，harness → HARNESS/<slug>）
     expect(docker.workloadKind).toBe('STANDARD');
@@ -745,6 +745,34 @@ describe('Admin Cloud Workload API', () => {
     expect(mongoScript).toContain('apt-get install -y mongodb-org');
     expect(mongoScript).toContain('mongod --version');
     expect(mongoScript).not.toMatch(/--fork|nohup|runuser|systemctl|mongosh/);
+
+    // Playwright（迁移 015）：standard + 参数化浏览器下载地址 + 依赖 Node.js
+    const playwright = byName.get('Playwright')!;
+    expect(playwright.workloadKind).toBe('STANDARD');
+    expect(playwright.harnessType).toBeNull();
+    expect(playwright.paramSchema).toHaveLength(1);
+    expect(playwright.paramSchema?.[0]).toMatchObject({
+      key: 'playwright_download_host',
+      label: 'Playwright 浏览器下载地址',
+      type: 'TEXT',
+      options: [],
+      defaultValue: 'https://nexus.internal.fffdan.com/repository/playwright-proxy/',
+    });
+    expect(playwright.dependsOnWorkloadIds).toEqual([nodejs.id]);
+    const playwrightScript = playwright.initScript ?? '';
+    expect(playwrightScript).toContain('npm install -g playwright');
+    expect(playwrightScript).toContain('playwright install chromium');
+    expect(playwrightScript).toContain('WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST');
+    expect(playwrightScript).toContain('/etc/profile.d/playwright.sh');
+    expect(playwrightScript).toContain('/root/.bashrc');
+    expect(playwrightScript).toContain('/home/worker/.bashrc');
+    expect(playwrightScript).toContain('playwright --version');
+    expect(playwrightScript).toContain("grep -q '^chromium-'");
+    // 脚本内不内置浏览器下载地址（playwright-proxy 仅出现在失败指引的占位形态中）
+    expect(playwrightScript).not.toContain(
+      'https://nexus.internal.fffdan.com/repository/playwright-proxy/',
+    );
+    expect(playwrightScript.match(/playwright-proxy/g) ?? []).toHaveLength(1);
 
     for (const workload of all) {
       expect(['STANDARD', 'HARNESS']).toContain(workload.workloadKind);

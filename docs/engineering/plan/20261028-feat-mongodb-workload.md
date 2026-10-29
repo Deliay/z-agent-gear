@@ -1,5 +1,5 @@
 ---
-description: 增加工作负载「MongoDB」实现计划：admin-api migration 015 播种预制工作负载（012 sudo 正典形态脚本 + 内网 Nexus GPG/apt 源原生安装 mongodb-org 8.0 + mongod --version 硬校验不拉起实例 + 零参数零依赖），含分阶段任务、T-MIG-MDB1~MDB5 测试覆盖与验收 checklist
+description: 增加工作负载「MongoDB」实现计划：admin-api migration 016 播种预制工作负载（012 sudo 正典形态脚本 + 内网 Nexus GPG/apt 源原生安装 mongodb-org 8.0 + mongod --version 硬校验不拉起实例 + 零参数零依赖），含分阶段任务、T-MIG-MDB1~MDB5 测试覆盖与验收 checklist
 type: Permanent
 ---
 
@@ -18,7 +18,7 @@ type: Permanent
 
 ```mermaid
 flowchart TD
-    P1["Phase 1 admin-api migration 015<br/>MONGODB_INIT_SCRIPT（012 sudo 正典形态）+ 零参数零依赖 seed（TDD）<br/>015-preset-mongodb.test.ts RED→GREEN"] --> P2
+    P1["Phase 1 admin-api migration 016<br/>MONGODB_INIT_SCRIPT（012 sudo 正典形态）+ 零参数零依赖 seed（TDD）<br/>016-preset-mongodb.test.ts RED→GREEN"] --> P2
     P2["Phase 2 注册与测试口径收口<br/>index.ts 注册 015<br/>tests/api 九预制项 + MongoDB 断言<br/>tests/e2e T-E16 更新 + AGENTS.md/BUILD.md 口径同步"] --> P3
     P3["Phase 3 全量回归 + 内网集群验收<br/>+ 实现 PR 合回需求总分支"]
 ```
@@ -26,7 +26,7 @@ flowchart TD
 依赖说明：
 
 - 本期**只有 admin-api 一个服务代码变更**（预置项与脚本均为库内数据），其余为 `tests/api` / `tests/e2e` 断言与文档口径更新；无跨服务/跨仓并行；
-- Phase 1 内先写 `015-preset-mongodb.test.ts`（RED）再实现迁移（GREEN）；
+- Phase 1 内先写 `016-preset-mongodb.test.ts`（RED）再实现迁移（GREEN）；
 - Phase 2 依赖 Phase 1 落定的常量名与脚本文案；
 - Phase 3 在实现分支合并回需求总分支后收口（`feat/mongodb-workload`）。
 
@@ -44,19 +44,16 @@ flowchart TD
 
 ## 计划期裁决（提案留白/含混处的实现口径）
 
-1. **迁移编号协调（与并行 Playwright 需求）**：并行需求「Playwright 工作负载」（Issue #342，PR #344）同样规划了 `015-preset-playwright`。实现启动前先核对主干 `servers/admin-api/src/migrations/` 实际占用编号（当前主干占用至 `014`）：
-   - 若 `015` 仍空闲：采用 `015-preset-mongodb`（文件名、`name`、测试引用同步）；
-   - 若 `015` 已被占用：顺延 `016-preset-mongodb`（提案 §5.2 实现点 3 口径）；
-   - 若两条需求先后合入主干：**后合入方**用 merge 协调时同步顺延迁移编号，并把预制项计数断言按主干实际值合并（两需求均为 8→9，先后合入后为 10，名称清单取并集）。禁止用 rebase/squash 改写历史。
+1. **迁移编号协调（与并行 Playwright 需求）**：并行需求「Playwright 工作负载」（Issue #342，PR #344）同样规划了 `015-preset-playwright`。实现启动前先核对主干 `servers/admin-api/src/migrations/` 实际占用编号（当时主干占用至 `014`，实现分支按 `015-preset-mongodb` 落地）；**merge 协调实际结果**：Playwright 需求（PR #344）先行合入主干占用 `015`，本需求按本裁决第三分支顺延为 `016-preset-mongodb`（文件名、`name`、`index.ts` 注册与测试引用同步改号），预制项计数断言按主干实际值合并（两需求均为 8→9，先后合入后为 10，名称清单取并集）。禁止用 rebase/squash 改写历史。
 2. **零依赖、零参数确认**：提案 §4.1 `paramSchema=[]`、`dependsOnWorkloadIds=[]`——`run()` 内**无**依赖解析逻辑（对照 Playwright 的 Node.js 依赖解析）；`CloudWorkload.create` 直接落空数组。
-3. **导出清单**（提案 §5.2 实现点 3，不额外新增）：`name = '015-preset-mongodb'`、`MONGODB_PRESET_KEY = 'mongodb'`、`MONGODB_PRESET_NAME = 'MongoDB'`、`MONGODB_INIT_SCRIPT`。导出不改变 runner 的 `Migration` 接口（`name` + `run`）。`GITHUB_PARAM_SCHEMA` 式的参数 schema 常量**不引入**（零参数）。
+3. **导出清单**（提案 §5.2 实现点 3，不额外新增）：`name = '016-preset-mongodb'`、`MONGODB_PRESET_KEY = 'mongodb'`、`MONGODB_PRESET_NAME = 'MongoDB'`、`MONGODB_INIT_SCRIPT`。导出不改变 runner 的 `Migration` 接口（`name` + `run`）。`GITHUB_PARAM_SCHEMA` 式的参数 schema 常量**不引入**（零参数）。
 4. **TS 模板字符串转义**：`MONGODB_INIT_SCRIPT` 全文与提案 §5.2 实现点 1 逐字一致，模板字符串内 `${...}` 转义为 `\${...}`（同 001/007 写法）；`set -euo pipefail` + `SUDO=sudo; command -v sudo >/dev/null 2>&1 || SUDO=` 前导保留（012 正典形态）。
 5. **幂等锚点顺序**：`command -v mongod` 命中 → `mongod --version` → `exit 0`，该锚点在 apt 源写入**之前**——已安装环境不触碰源文件、不跑 `apt-get update`（秒级返回、不动用户运行中的服务）。
 6. **GPG 与源行形态**：armored `.asc` 经 `tee` 落 `/etc/apt/keyrings/mongodb-server-8.0.asc` + `chmod a+r`，`signed-by` 直接指向 `.asc`（apt 原生支持）；源行 codename 取自 `. /etc/os-release` 的 `${VERSION_CODENAME}`（Ubuntu 24.04 → `noble`），不写死。
 7. **postinst 无 systemd 告警口径（实测裁决）**：`apt-get install mongodb-org` 的 postinst 在无 systemd 容器内可能打印 service 启动告警——以 `set -e` 不中断为准；若实测 postinst 返回非 0 导致失败，按实测裁决补 `RUNLEVEL=1` 前导并回写提案（不改变「不拉起实例」结论）。验收期确认安装结束后无 `mongod` 进程。
 8. **创建字段口径**：`CloudWorkload.create({ name, initScript, postScript: null, paramSchema: [], dependsOnWorkloadIds: [], presetKey, isPreset: true, workloadKind: 'standard', harnessType: null })`（与 007 创建形态逐字段一致，仅 paramSchema/dependsOn 为空）。
 9. **测试断言口径**：脚本断言含三个内网地址字样（`server-8.0.asc`、`mongodb-apt-proxy`）、`apt-get update`、`apt-get install -y mongodb-org`、结尾 `mongod --version` 硬校验、幂等锚点 `command -v mongod`；**断言不含**实例拉起动作（对脚本全文 `match(/--fork|nohup|runuser|systemctl|mongosh/)` 为空，锁死返工口径）。
-10. **tests/api / tests/e2e 的 AGENTS.md 陈旧口径校正**：`tests/api/AGENTS.md` 用例表写「共 7 项」、`tests/e2e/AGENTS.md` 写「恰 7 个」（均为 DeepSeek 迁移 010 后未同步的历史陈旧值，测试实际断言 8 项）——本期一并校正为 9 项全清单（含 DeepSeek Harness（Harness）与 MongoDB）。
+10. **tests/api / tests/e2e 的 AGENTS.md 陈旧口径校正**：`tests/api/AGENTS.md` 用例表写「共 7 项」、`tests/e2e/AGENTS.md` 写「恰 7 个」（均为 DeepSeek 迁移 010 后未同步的历史陈旧值，测试实际断言 8 项）——本期一并校正为 10 项全清单（含 DeepSeek Harness（Harness）与 MongoDB）。
 11. **写库与 mock 形态**：命中即跳过、未命中 `CloudWorkload.create`（与 007/009 一致）；单测 mock 沿用 `009-preset-harness-kimi-code.test.ts` 形态（`vi.mock('../models/cloud-workload.js')` + `findOne`/`create`）。
 12. **超时口径**：不改 `WORKLOAD_INIT_TIMEOUT_MS` 默认 300s；内网 apt 安装 mongodb-org（百余 MB）量级满足；standard 负载 `required=false`，失败不注销容器、可重试。
 13. **失败不阻断**：脚本失败仅使该工作负载记录失败并保留日志，容器继续后续初始化并上线（沿用一期失败策略）；迁移失败仅记日志、下轮启动重试（runner 语义）。
@@ -64,22 +61,22 @@ flowchart TD
 
 ---
 
-## Phase 1: admin-api migration 015（脚本 + 零参数零依赖 seed）
+## Phase 1: admin-api migration 016（脚本 + 零参数零依赖 seed）
 
-开发分支：`feat/mongodb-workload-impl`。TDD 顺序：先写 `015-preset-mongodb.test.ts`（RED）→ 实现 `015-preset-mongodb.ts`（GREEN）→ 重构收口。
+开发分支：`feat/mongodb-workload-impl`。TDD 顺序：先写 `016-preset-mongodb.test.ts`（RED）→ 实现 `016-preset-mongodb.ts`（GREEN）→ 重构收口。
 
 ### 文件修改
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/admin-api/src/migrations/015-preset-mongodb.ts` | 新增 | `name` / `MONGODB_PRESET_KEY` / `MONGODB_PRESET_NAME` / `MONGODB_INIT_SCRIPT`（裁决 3/4）；`run()` 按裁决 2/8 实现双查防重与创建 |
-| `servers/admin-api/src/migrations/015-preset-mongodb.test.ts` | 新增 | 覆盖 `T-MIG-MDB1`~`T-MIG-MDB5`（下表）；mock 形态沿用 009 单测（裁决 11） |
+| `servers/admin-api/src/migrations/016-preset-mongodb.ts` | 新增 | `name` / `MONGODB_PRESET_KEY` / `MONGODB_PRESET_NAME` / `MONGODB_INIT_SCRIPT`（裁决 3/4）；`run()` 按裁决 2/8 实现双查防重与创建 |
+| `servers/admin-api/src/migrations/016-preset-mongodb.test.ts` | 新增 | 覆盖 `T-MIG-MDB1`~`T-MIG-MDB5`（下表）；mock 形态沿用 009 单测（裁决 11） |
 | `servers/admin-api/src/migrations/007-preset-github.ts` 等既有迁移 | 不变 | 只读参考；不改任何既有迁移源码 |
 
 ### 015 迁移逻辑（伪代码）
 
 ```ts
-export const name = '015-preset-mongodb';
+export const name = '016-preset-mongodb';
 export const MONGODB_PRESET_KEY = 'mongodb';
 export const MONGODB_PRESET_NAME = 'MongoDB';
 export const MONGODB_INIT_SCRIPT = `#!/usr/bin/env bash\n...`;   // 提案 §5.2 实现点 1 全文（裁决 4 转义）
@@ -175,11 +172,11 @@ npm run build                        # strict TS 编译
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/admin-api/src/index.ts` | 修改 | 导入 `* as migration015PresetMongo from './migrations/015-preset-mongodb.js'`，在 `runMigrations([...])` 既有批次之后追加（顺序在 014 之后，注释行「015-preset-mongodb——写入 MongoDB 预制工作负载」） |
+| `servers/admin-api/src/index.ts` | 修改 | 导入 `* as migration016PresetMongo from './migrations/016-preset-mongodb.js'`，在 `runMigrations([...])` 既有批次之后追加（顺序在 014 之后，注释行「016-preset-mongodb——写入 MongoDB 预制工作负载」） |
 | `tests/api/src/admin-api/cloud-workload.test.ts` | 修改 | 见下方断言更新清单 |
 | `tests/e2e/src/admin-cloud-workload.spec.ts` | 修改 | T-E16 更新（见下表） |
-| `tests/api/AGENTS.md` | 修改 | 用例表更新（裁决 10）：预制项存在性行 7 项→9 项全清单（补 DeepSeek Harness 与 MongoDB），新增「T-IA 预制 MongoDB 原生 apt 安装」行 |
-| `tests/e2e/AGENTS.md` | 修改 | T-E16 行「恰 7 个」→「恰 9 个」并补名称清单（裁决 10） |
+| `tests/api/AGENTS.md` | 修改 | 用例表更新（裁决 10）：预制项存在性行 7 项→10 项全清单（补 DeepSeek Harness 与 MongoDB），新增「T-IA 预制 MongoDB 原生 apt 安装」行 |
+| `tests/e2e/AGENTS.md` | 修改 | T-E16 行「恰 7 个」→「恰 10 个」并补名称清单（裁决 10） |
 | `deploy/images/worker/BUILD.md` | 修改 | 「预制工作负载脚本手工验收（真实集群）」补 MongoDB 逐项核对块（文档口径同步，**不改镜像**）：`mongod --version` 输出版本、安装结束后无 mongod 进程（不拉起实例）、已装环境重复执行幂等秒回、内网源写入（`/etc/apt/keyrings/mongodb-server-8.0.asc` + `/etc/apt/sources.list.d/mongodb-org-8.0.list`）、失败（源不可达）留痕可重试 |
 | `docs/engineering/AGENTS.md` | 已完成 | 「实现计划（`plan/`）」索引已随本计划提交登记，无需在实现期重复改动 |
 
@@ -195,19 +192,19 @@ npm run build                        # strict TS 编译
 
 | # | 用例 | 预期 |
 |---|------|------|
-| T-E16 更新 | `lists the nine preset workloads with the preset badge` | 名称清单补 `'MongoDB'`；`toHaveText('预制')` 计数 `8 → 9`；API 侧 sorted 名称清单补 `'MongoDB'`（注意排序位置）；顺带修正注释陈旧计数（「七个/7 个」→ 9） |
+| T-E16 更新 | `lists the ten preset workloads with the preset badge` | 名称清单补 `'MongoDB'`（merge 协调后含 Playwright，共 10 项）；`toHaveText('预制')` 计数 `8 → 10`；API 侧 sorted 名称清单补 `'MongoDB'`（注意排序位置）；顺带修正注释陈旧计数（「七个/7 个」→ 10） |
 
 ### 命令参考
 
 ```bash
 cd servers/admin-api && npm run build
-grep -nE -- "--fork|nohup|runuser|systemctl|mongosh|repo.mongodb.org" servers/admin-api/src/migrations/015-preset-mongodb.ts   # 应无输出
+grep -nE -- "--fork|nohup|runuser|systemctl|mongosh|repo.mongodb.org" servers/admin-api/src/migrations/016-preset-mongodb.ts   # 应无输出
 ```
 
 ### 验收 checklist
 
 - [ ] `index.ts` 注册链含 015 且顺序在 014 之后，`npm run build` 通过
-- [ ] tests/api 新旧断言与实现一致（9 项、零参数零依赖、脚本内容、无实例拉起动作）
+- [ ] tests/api 新旧断言与实现一致（10 项、零参数零依赖、脚本内容、无实例拉起动作）
 - [ ] tests/e2e T-E16 计数 9、名称清单含 MongoDB
 - [ ] `tests/api/AGENTS.md` / `tests/e2e/AGENTS.md` 用例表与实现一致（含 7→9 陈旧口径校正）
 - [ ] BUILD.md MongoDB 手工验收块成文（仅文档，不涉及镜像）
@@ -234,7 +231,7 @@ cd tests/e2e && aspire wait admin-web admin-api && npx playwright test admin-clo
 
 ### 内网 K8s 手工验收（对齐 PRD §1.3 成功标准 / 提案 §9）
 
-前置：admin-api 已部署含 migration 015 的版本；内网 Nexus `misc-cache/mongodb/server-8.0.asc` 与 `mongodb-apt-proxy` 可达。
+前置：admin-api 已部署含 migration 016 的版本；内网 Nexus `misc-cache/mongodb/server-8.0.asc` 与 `mongodb-apt-proxy` 可达。
 
 - [ ] 升级后工作负载列表自动出现「MongoDB」预制项（带预制标识、只出现一次）；重复执行迁移不重复写入
 - [ ] 管理员修改/删除该预制项后再启动：不被系统覆盖或恢复（只告警）

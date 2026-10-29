@@ -196,7 +196,10 @@ function toAuthMethods(authMethods: acp.AuthMethod[] | undefined): AcpAuthMethod
   if (!authMethods || authMethods.length === 0) return [];
   return authMethods.map((m) => {
     if ('type' in m) {
-      const kind = m.type === 'env_var' ? 'env_var' : m.type === 'terminal' ? 'terminal' : 'agent';
+      // SDK 1.9.0 起 AuthMethod 仅声明 terminal/agent 变体（env_var 变体已移除），
+      // 但线上 Agent 仍可能下发 env_var：按原始 wire 值判定，行为与旧版一致。
+      const wireType = (m as { type?: string }).type;
+      const kind = wireType === 'env_var' ? 'env_var' : wireType === 'terminal' ? 'terminal' : 'agent';
       return {
         id: m.id,
         kind,
@@ -1025,6 +1028,13 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     });
   }
 
+  // SDK ≥1.4.0 把客户端 elicitation 处理器改名为 createElicitation/completeElicitation
+  // （1.9.0 起不再注册 unstable_*），而 lockfile 1.3.0 只认旧名；两个名字同时暴露，
+  // 保证仓库与发布包（实际安装 1.9.0）都能命中处理器，避免 elicitation/create 无处理器被秒取消。
+  async createElicitation(params: acp.CreateElicitationRequest): Promise<acp.CreateElicitationResponse> {
+    return this.unstable_createElicitation(params);
+  }
+
   handleElicitationResponse(
     requestId: string,
     action: 'accept' | 'decline' | 'cancel',
@@ -1070,6 +1080,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       reason: 'cancelled',
       detail: 'agent completed elicitation',
     });
+  }
+
+  async completeElicitation(params: acp.CompleteElicitationNotification): Promise<void> {
+    return this.unstable_completeElicitation(params);
   }
 
   // ── text buffering ──

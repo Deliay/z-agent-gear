@@ -9,7 +9,7 @@ vi.mock('../models/cloud-workload.js', () => ({
 }));
 
 import { CloudWorkload } from '../models/cloud-workload.js';
-import * as migration from './015-preset-mongodb';
+import * as migration from './016-preset-mongodb';
 
 type CreateArg = {
   name: string;
@@ -27,7 +27,7 @@ function createdArgs(): CreateArg[] {
   return (CloudWorkload.create as any).mock.calls.map((call: unknown[]) => call[0] as CreateArg);
 }
 
-describe('migration 015-preset-mongodb', () => {
+describe('migration 016-preset-mongodb', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -39,7 +39,7 @@ describe('migration 015-preset-mongodb', () => {
   });
 
   it('exposes the migration name', () => {
-    expect(migration.name).toBe('015-preset-mongodb');
+    expect(migration.name).toBe('016-preset-mongodb');
   });
 
   it('T-MIG-MDB1: 空库执行迁移写入 standard 预制项（零参数零依赖、init-only）', async () => {
@@ -115,7 +115,7 @@ describe('migration 015-preset-mongodb', () => {
     const script = migration.MONGODB_INIT_SCRIPT;
 
     // ① bash -n 语法通过
-    const dir = mkdtempSync(join(tmpdir(), 'zag-mig015-'));
+    const dir = mkdtempSync(join(tmpdir(), 'zag-mig016-'));
     const file = join(dir, 'mongodb.sh');
     try {
       writeFileSync(file, script);

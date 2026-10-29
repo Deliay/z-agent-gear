@@ -1,7 +1,9 @@
 import { CloudWorkload } from '../models/cloud-workload.js';
 
 /**
- * 015-preset-mongodb：写入预制工作负载「MongoDB」（原生 apt 安装 mongodb-org 8.0）。
+ * 016-preset-mongodb：写入预制工作负载「MongoDB」（原生 apt 安装 mongodb-org 8.0）。
+ *
+ * 编号说明：015 已被并行合入主干的 `015-preset-playwright` 占用，按实现计划裁决 1 顺延为 016。
  *
  * 口径（实现计划 Phase 1 / 提案 v1.1 返工口径）：
  * - `workloadKind='standard'`、`isPreset=true`、`presetKey='mongodb'`；
@@ -10,7 +12,7 @@ import { CloudWorkload } from '../models/cloud-workload.js';
  * - 成功判据仅 `mongod --version` 硬校验，**不拉起 mongod 实例**（服务由用户按需自行启动）；
  * - 已存在（presetKey 或精确 name 命中）则跳过并告警，**不覆盖管理员修改**。
  */
-export const name = '015-preset-mongodb';
+export const name = '016-preset-mongodb';
 
 export const MONGODB_PRESET_KEY = 'mongodb';
 export const MONGODB_PRESET_NAME = 'MongoDB';
@@ -47,13 +49,13 @@ export async function run(): Promise<void> {
   const byKey = await CloudWorkload.findOne({ presetKey: MONGODB_PRESET_KEY });
   if (byKey) {
     console.warn(
-      `[Migration 015] preset workload "${MONGODB_PRESET_KEY}" already exists (by presetKey), skipping`,
+      `[Migration 016] preset workload "${MONGODB_PRESET_KEY}" already exists (by presetKey), skipping`,
     );
     return;
   }
   const byName = await CloudWorkload.findOne({ name: MONGODB_PRESET_NAME });
   if (byName) {
-    console.warn(`[Migration 015] workload named "${MONGODB_PRESET_NAME}" already exists, skipping`);
+    console.warn(`[Migration 016] workload named "${MONGODB_PRESET_NAME}" already exists, skipping`);
     return;
   }
 
@@ -68,5 +70,5 @@ export async function run(): Promise<void> {
     workloadKind: 'standard',
     harnessType: null,
   });
-  console.log(`[Migration 015] preset workload "${MONGODB_PRESET_KEY}" created`);
+  console.log(`[Migration 016] preset workload "${MONGODB_PRESET_KEY}" created`);
 }
