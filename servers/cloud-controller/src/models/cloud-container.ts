@@ -98,6 +98,10 @@ const cloudContainerSchema = new mongoose.Schema(
     // 租户归属（多租户一期）：复制新增字段，personal 期恒等于 userId（迁移 001 回填存量行）；
     // default null 兼容历史行与未携带归属的 idle 容器（仅 harness 写入）。
     tenantId: { type: String, default: null, index: true },
+    // 租户工作区归属（多租户二期）：复制新增字段，String 口径（= workspaces._id.toString()，F8）。
+    // 写入口径与 tenantId 并列（仅 harness 写入）：请求显式下发优先，缺失时按 tenantId 解析
+    // 同库 workspaces{type:'global'} 回退，解析不到置 null（迁移 002 回填存量行）。
+    workspaceId: { type: String, default: null, index: true },
     // 云电脑（purpose=harness）关联字段；历史记录缺失时读取层容忍为 null/[]
     hostId: { type: String, default: null, index: true },
     hostName: { type: String, default: null },

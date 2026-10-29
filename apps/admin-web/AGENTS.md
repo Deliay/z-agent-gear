@@ -38,9 +38,22 @@ npm run preview
 
 - **租户管理页**（`/tenants`）：前台租户只读列表（名称/类型/成员数/余额/创建时间），名称关键字检索 + 分页（`adminTenants`，每页 20，`下一页` 以 `length === pageSize` 判定）；行点击进入 `/tenants/:id`。
 - **开户**：列表页「开户」对话框（用户名 + 初始密码），本地预校验用户名 2-20（trim 后）、密码 ≥6；调 `adminCreateFrontUser`（admin-api 转发 agent-api `/internal/users`），成功后刷新列表。错误映射：`Username already taken`/`USERNAME_TAKEN` →「用户名已被占用」、长度/密码规则 → 同文案中文、`AGENT_API_UNAVAILABLE` →「开户服务不可用（AGENT_API_UNAVAILABLE），请检查后台 AGENT_API_URL 配置」、其余原样透出。
-- **租户详情页**（`/tenants/:id`）：租户概要（名称/类型/成员数/创建时间）+ 只读成员列表（用户名/创建时间）。**只读页，无编辑/删除/停用入口**；「充值」跳 `/billing?ownerType=tenant&keyword=<tenantId>`。
+- **租户详情页**（`/tenants/:id`）：租户概要（名称/类型/成员数/创建时间）+ 成员列表（用户名/**角色**/创建时间）+ 只读工作区列表（名称/类型/成员数）。**无租户编辑/删除/停用入口**；「充值」跳 `/billing?ownerType=tenant&keyword=<tenantId>`。
 - **费用中心双 owner**：`BillingPage` 检索条件新增「账户类型」下拉（全部 / `tenant` / `admin_user`，`front_user` 已废弃不再提供入口），查询变量透传 `ownerType`；`AccountTable` 类型文案映射为 后台/租户/前台。租户详情页跳转时预置 `ownerType=tenant` 与 `keyword=tenantId`，账户列表加载后自动选中 `ownerId === tenantId` 的计费账户，复用既有充值对话框（充值 mutation 零改动）。
 - 组件从 agent-web 复制后独立演进，**禁止跨项目 import**。
+
+## 多租户二期（team 租户管理含角色）
+
+- **列表页类型列**：`adminTenants.type` → 「个人」/「团队」徽章（personal/team）。
+- **创建团队租户**：列表页「创建团队租户」对话框 → `adminCreateTeamTenant(name)`（admin-api 转发 agent-api `/internal/tenants`，自动开通全局工作区 + 零余额租户计费账户）。本地预校验名称 trim 后 1-60 字符（与服务端同口径）；错误映射：`TENANT_NAME_TAKEN`/`tenant name already exists` →「租户名称已存在」、`INVALID_BODY`/`INVALID_ARGUMENT` → 长度提示、`BILLING_UNAVAILABLE` → 计费不可用、`AGENT_API_UNAVAILABLE` → 转发通道不可用；成功后 `refetchQueries: [ADMIN_TENANTS]` 刷新列表。
+- **team 租户成员管理**（仅 `type === 'team'` 展示入口）：
+  - 成员列表经 `adminTenant.users`（tenantmembers 展开）展示角色徽章（管理员/开发；personal 恒管理员）。
+  - 「添加成员」：登录名（必填，trim 后非空）+ 角色下拉（缺省 `developer`）；`adminAddTenantMember(tenantId, username, role)`，错误映射 `ACCOUNT_NOT_FOUND`→账号不存在、`already a member`→已是成员、`INVALID_ROLE`、`PERSONAL_TENANT_IMMUTABLE`、`AGENT_API_UNAVAILABLE`。
+  - 「移除」：统一 `ConfirmDialog` 二次确认 → `adminRemoveTenantMember`；**last-admin 保护提示**（`LAST_ADMIN`/`last admin cannot be removed` →「该成员是租户最后一名管理员，无法移除（请先添加其他管理员）」），失败保留确认框并用 toast 提示。
+  - 「变更角色」：后台本期无角色变更 mutation，以「**移除 + 重新添加**」实现（`adminRemoveTenantMember` + `adminAddTenantMember`，对话框内明示成员会短暂失去访问权限；重新添加失败给出明确人工重试提示）。
+  - **personal 租户维持只读**：无添加/移除/变更角色入口，成员列表仅展示。
+- **工作区只读列表**：`adminTenant.workspaces`（`AdminWorkspace`：名称/类型/成员数），无任何新建/改名/删除入口（工作区管理在前台由租户 admin 完成）。
+- 错误文案以服务端为准，前端只做展示映射；组件位于 `src/components/tenants/`（`AddMemberDialog`、`ChangeMemberRoleDialog`、`roles.ts`）。
 
 ## TDD Workflow
 

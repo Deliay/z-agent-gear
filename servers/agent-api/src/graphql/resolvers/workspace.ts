@@ -109,7 +109,7 @@ export const workspaceResolvers = {
     },
   },
   Mutation: {
-    createWorkspace: async (_parent: unknown, args: { name: string }, context: AuthContext) => {
+    createTenantWorkspace: async (_parent: unknown, args: { name: string }, context: AuthContext) => {
       const access = requireWorkspace(context);
       requireTenantAdmin(context);
       const userId = requireUser(context);
@@ -121,7 +121,7 @@ export const workspaceResolvers = {
         return toGraphQLError(err);
       }
     },
-    renameWorkspace: async (_parent: unknown, args: { id: string; name: string }, context: AuthContext) => {
+    renameTenantWorkspace: async (_parent: unknown, args: { id: string; name: string }, context: AuthContext) => {
       const userId = requireUser(context);
       try {
         const updated = await workspaceService.renameWorkspace(userId, args.id, args.name);
@@ -131,7 +131,7 @@ export const workspaceResolvers = {
         return toGraphQLError(err);
       }
     },
-    deleteWorkspace: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
+    deleteTenantWorkspace: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
       const userId = requireUser(context);
       try {
         return await workspaceService.deleteWorkspace(userId, args.id);
@@ -139,7 +139,7 @@ export const workspaceResolvers = {
         return toGraphQLError(err);
       }
     },
-    addWorkspaceMember: async (
+    addTenantWorkspaceMember: async (
       _parent: unknown,
       args: { workspaceId: string; userId: string },
       context: AuthContext,
@@ -153,7 +153,7 @@ export const workspaceResolvers = {
         return toGraphQLError(err);
       }
     },
-    removeWorkspaceMember: async (
+    removeTenantWorkspaceMember: async (
       _parent: unknown,
       args: { workspaceId: string; userId: string },
       context: AuthContext,

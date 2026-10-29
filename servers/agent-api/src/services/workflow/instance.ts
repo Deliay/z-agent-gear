@@ -199,9 +199,7 @@ class WorkflowInstanceService {
       const inheritedWorkspaceId =
         input.source === 'CONFIGURED' && input.configuredWorkflowId
           ? (
-              await ConfiguredWorkflow.findById(input.configuredWorkflowId)
-                .select('resourceWorkspaceId')
-                .lean()
+              await ConfiguredWorkflow.findOne({ _id: input.configuredWorkflowId }).lean()
             )?.resourceWorkspaceId
           : undefined;
       return await WorkflowInstance.create({

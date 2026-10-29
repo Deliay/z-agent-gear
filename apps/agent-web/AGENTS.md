@@ -130,3 +130,17 @@ npm run preview  # Preview production build
 - **创建期不再预置 `/home/worker/workspace`**：「新建云电脑」**没有**「创建默认工作区」勾选项；默认工作区只在「Git 项目设置」初始化 Github 项目时由服务端按 `targetPath` 创建（`hasDefaultWorkspace` 反映 `workspaceId != null`）。
 - 无默认工作区且该控制器尚无任何工作区（`CloudHost.hasDefaultWorkspace === false && controllerWorkspaces.length === 0`）时 Sidebar 展示 `未创建默认工作区，请先创建或绑定工作区`，并提供 Github 项目设置与新建工作区入口；用户添加/绑定工作区后该提示消失。有默认工作区且单 Harness 无会话时才保留「默认会话创建失败」提示。
 - Git 项目设置前缀在有默认工作区时预填 `defaultWorkspace`，无默认工作区时预填 `~/workspace`（判定收口在 `hooks/useGithubProjectForm.ts` 的 `hasDefaultWorkspace === true` 分支；`~` 展开为 `/home/worker`，与服务端同源）。
+
+## 多租户二期（工作区切换器 / 管理页 / 来源徽标）
+
+> 纯前端上下文与展示收敛；服务端为权限权威（契约见 `contracts/workspace.graphql`）。计划见 `docs/engineering/plan/20261028-feat-multi-tenant-phase2.md` Phase 8。
+
+- **状态与持久化**：`stores/workspace.ts` 保存当前工作区 + `myWorkspaces`/`myTenants`（含角色）。选择写入 `localStorage['zag:current-workspace:<userId>']`（按 userId 隔离），刷新/重登恢复；缺省=个人租户全局工作区。
+- **失效回退**：`hooks/useWorkspaceContextSync.ts` 在 `myWorkspaces` 刷新后校验当前/持久化工作区；不在可见集（被移出团队/工作区已删除）时回退个人全局、清理持久化并 `resetStore()`，避免持续 `workspace not found`。
+- **上下文注入**：`lib/apollo.ts` 的 `workspaceLink` 注入 `x-workspace-id`（`stores/workspace.ts#getCurrentWorkspaceId`）；无选择时不发头 → 服务端回退个人全局（与一期等价）。
+- **切换器**：`components/WorkspaceSwitcher.tsx` 挂在 `Sidebar` 顶部，按租户分组、按角色过滤；未加入任何 team（仅个人租户）不渲染；切换后 `client.resetStore()` 重拉 `HOME_OVERVIEW` 等活跃查询。管理入口：`/workspaces`（team admin）与 `/tenants/:tenantId/members`（本租户 admin）。
+- **工作区管理页**：`pages/WorkspacePage.tsx` 仅 admin 可操作（developer 展示无权限提示、无入口）；列表展示名称/类型/成员数；创建/改名/删除（`workspace is not empty` 映射「工作区非空，无法删除」）/成员添加移除；全局工作区无改名/删除/成员入口；personal 租户无管理入口。
+- **租户成员管理页**：`pages/TenantMembersPage.tsx` 仅本租户 admin；成员列表（展示名/用户名/角色）、`searchAccounts` 搜索添加并指定角色、变更角色、移除；`last admin cannot be removed/demoted` 映射「至少保留一名管理员」提示；personal 租户无入口。
+- **共享资源来源与只读收敛**：`lib/workspace-source.ts` + `hooks/useResourceSource.ts` 判定本工作区/全局工作区/其他工作区；供应商/模型/GitHub 绑定展示 `ResourceSourceBadge`。普通上下文的全局工作区资源隐藏编辑/删除；全局工作区 + developer（`Workspace.readOnly`）整体只读（隐藏添加/编辑/解绑入口，Commit 设置禁用保存）。旧数据未携带 `workspaceId` 时保持升级前行为（无徽标、可编辑）。
+- **Commit 设置**：`CommitSettingsSection` 展示 `CommitSettings.source`（本工作区/继承自全局工作区/未设置）与 `readOnly`，只读时禁用表单与保存。
+- **测试入口**：`stores/__tests__/workspace.test.tsx`、`components/__tests__/WorkspaceSwitcher.test.tsx`、`pages/__tests__/WorkspacePage.test.tsx`、`pages/__tests__/TenantMembersPage.test.tsx`、`lib/__tests__/workspace-source.test.ts`、`components/settings/__tests__/ProviderSection.readonly.test.tsx`、`CommitSettingsSection.source.test.tsx`。

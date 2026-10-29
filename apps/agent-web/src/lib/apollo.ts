@@ -2,6 +2,7 @@ import { ApolloClient, InMemoryCache, HttpLink, ApolloLink, from } from '@apollo
 import { onError } from '@apollo/client/link/error';
 import { CombinedGraphQLErrors } from '@apollo/client/errors';
 import { toast } from 'sonner';
+import { getCurrentWorkspaceId } from '../stores/workspace';
 
 let isRedirecting = false;
 
@@ -32,12 +33,28 @@ const authLink = new ApolloLink((operation, forward) => {
   return forward(operation);
 });
 
+/**
+ * 注入当前租户工作区上下文（多租户二期）。
+ * 无选择时不发头 → 服务端回退个人租户全局工作区（与一期行为等价）。
+ */
+const workspaceLink = new ApolloLink((operation, forward) => {
+  const workspaceId = getCurrentWorkspaceId();
+  if (!workspaceId) return forward(operation);
+  operation.setContext(({ headers = {} }: { headers?: Record<string, string> }) => ({
+    headers: {
+      ...headers,
+      'x-workspace-id': workspaceId,
+    },
+  }));
+  return forward(operation);
+});
+
 export function createApolloClient(apiBase: string): ApolloClient {
   const httpLink = new HttpLink({
     uri: `${apiBase}/graphql`,
   });
   return new ApolloClient({
-    link: from([errorLink, authLink, httpLink]),
+    link: from([errorLink, authLink, workspaceLink, httpLink]),
     cache: new InMemoryCache(),
   });
 }

@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
-import { createFrontUser } from '../support/front-users.js';
+import { startMockServer, type MockServer } from '../mock-server.js';
+import { createFrontUser, type FrontUser } from '../support/front-users.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -989,7 +990,7 @@ describe('Workspace Git Support', () => {
   });
 
   describe('setWorkspaceDefaultBranch', () => {
-    let createdWorkspace: { id: string };
+    let createdWorkspace: { id: string; controllerId: string };
 
     beforeAll(async () => {
       const ctrl = await createKeyAndRegisterController(authToken);
@@ -1247,4 +1248,634 @@ describe('createFolder mutation', () => {
 
     client.disconnect();
   }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// 多租户二期：工作区上下文 / 工作区 CRUD / 共享读 / Commit 继承 / 租户成员
+// （计划 Phase 10 T-WS-API、T-TM-API；契约 contracts/workspace.graphql）
+// ---------------------------------------------------------------------------
+
+const AGENT_API_BASE = API_URL.replace(/\/graphql\/?$/, '');
+
+const MY_WORKSPACES = `
+  query MyWorkspaces {
+    myWorkspaces {
+      id name type memberCount myRole readOnly
+      tenant { id name type memberCount }
+      createdAt
+    }
+  }
+`;
+
+const MY_TENANTS = `
+  query MyTenants {
+    myTenants { role tenant { id name type memberCount } }
+  }
+`;
+
+const CREATE_TENANT_WORKSPACE = `
+  mutation CreateTenantWorkspace($name: String!) {
+    createTenantWorkspace(name: $name) {
+      id name type memberCount myRole readOnly
+      tenant { id type }
+    }
+  }
+`;
+
+const RENAME_TENANT_WORKSPACE = `
+  mutation RenameTenantWorkspace($id: ID!, $name: String!) {
+    renameTenantWorkspace(id: $id, name: $name) { id name type }
+  }
+`;
+
+const DELETE_TENANT_WORKSPACE = `
+  mutation DeleteTenantWorkspace($id: ID!) { deleteTenantWorkspace(id: $id) }
+`;
+
+const ADD_TENANT_WORKSPACE_MEMBER = `
+  mutation AddTenantWorkspaceMember($workspaceId: ID!, $userId: ID!) {
+    addTenantWorkspaceMember(workspaceId: $workspaceId, userId: $userId) {
+      id memberCount
+    }
+  }
+`;
+
+const WORKSPACE_MEMBERS = `
+  query WorkspaceMembers($workspaceId: ID!) {
+    workspaceMembers(workspaceId: $workspaceId) { id name username role }
+  }
+`;
+
+const SEARCH_ACCOUNTS = `
+  query SearchAccounts($keyword: String!) {
+    searchAccounts(keyword: $keyword) { username name userId }
+  }
+`;
+
+const ADD_TENANT_MEMBER = `
+  mutation AddTenantMember($tenantId: ID!, $username: String!, $role: TenantRole) {
+    addTenantMember(tenantId: $tenantId, username: $username, role: $role) {
+      id name username role
+    }
+  }
+`;
+
+const REMOVE_TENANT_MEMBER = `
+  mutation RemoveTenantMember($tenantId: ID!, $userId: ID!) {
+    removeTenantMember(tenantId: $tenantId, userId: $userId)
+  }
+`;
+
+const CHANGE_TENANT_MEMBER_ROLE = `
+  mutation ChangeTenantMemberRole($tenantId: ID!, $userId: ID!, $role: TenantRole!) {
+    changeTenantMemberRole(tenantId: $tenantId, userId: $userId, role: $role) {
+      id role
+    }
+  }
+`;
+
+const PROVIDERS = `
+  query Providers {
+    providers { id name scope workspaceId }
+  }
+`;
+
+const MODELS = `
+  query Models {
+    models { id name scope workspaceId providerId }
+  }
+`;
+
+const CREATE_PROVIDER = `
+  mutation CreateProvider($input: ProviderInput!) {
+    createProvider(input: $input) { id name scope workspaceId }
+  }
+`;
+
+const DELETE_PROVIDER = `mutation DeleteProvider($id: ID!) { deleteProvider(id: $id) }`;
+
+const COMMIT_SETTINGS = `
+  query CommitSettings {
+    commitSettings {
+      committerMode committerType customName customEmail source readOnly
+    }
+  }
+`;
+
+const UPDATE_COMMIT_SETTINGS = `
+  mutation UpdateCommitSettings($input: CommitSettingsInput!) {
+    updateCommitSettings(input: $input) {
+      committerMode committerType customName customEmail source readOnly
+    }
+  }
+`;
+
+describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
+  let admin: FrontUser;
+  let developer: FrontUser;
+  let outsider: FrontUser;
+  let teamId = '';
+  let teamName = '';
+  let teamGlobalId = '';
+  let normalWorkspaceId = '';
+  let globalProviderId = '';
+  let mockServer: MockServer;
+
+  async function internalJson(
+    path: string,
+    method: 'POST' | 'DELETE',
+    body?: unknown,
+  ): Promise<{ status: number; body: any }> {
+    const token = process.env.INTERNAL_API_TOKEN;
+    if (!token) throw new Error('T-WS-API requires INTERNAL_API_TOKEN');
+    const res = await fetch(`${AGENT_API_BASE}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    const text = await res.text();
+    let parsed: any = text;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // 保留原始文本便于排查
+    }
+    return { status: res.status, body: parsed };
+  }
+
+  async function gqlCtx(
+    query: string,
+    variables: Record<string, unknown> | undefined,
+    token: string,
+    workspaceId?: string,
+  ): Promise<{ data?: any; errors?: Array<{ message: string }> }> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    };
+    if (workspaceId) headers['x-workspace-id'] = workspaceId;
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query, variables }),
+    });
+    return (await res.json()) as { data?: any; errors?: Array<{ message: string }> };
+  }
+
+  async function createTeamTenant(name: string): Promise<{ tenantId: string; globalWorkspaceId: string }> {
+    const res = await internalJson('/internal/tenants', 'POST', { name });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return {
+      tenantId: res.body.tenant.id,
+      globalWorkspaceId: res.body.globalWorkspace.id,
+    };
+  }
+
+  async function addInternalMember(
+    tenantId: string,
+    username: string,
+    role: 'admin' | 'developer',
+  ): Promise<void> {
+    const res = await internalJson(`/internal/tenants/${tenantId}/members`, 'POST', {
+      username,
+      role,
+    });
+    expect([200, 201], JSON.stringify(res.body)).toContain(res.status);
+  }
+
+  beforeAll(async () => {
+    admin = await createFrontUser();
+    developer = await createFrontUser();
+    outsider = await createFrontUser();
+    mockServer = await startMockServer(['ws-shared-model']);
+
+    const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    teamName = `mt2-${suffix}`.slice(0, 60);
+    const team = await createTeamTenant(teamName);
+    teamId = team.tenantId;
+    teamGlobalId = team.globalWorkspaceId;
+    await addInternalMember(teamId, admin.username, 'admin');
+    await addInternalMember(teamId, developer.username, 'developer');
+
+    // team admin 在团队全局工作区创建普通工作区，并把 developer 加入
+    const created = await gqlCtx(
+      CREATE_TENANT_WORKSPACE,
+      { name: `normal-${suffix}` },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(created.errors, JSON.stringify(created.errors)).toBeUndefined();
+    normalWorkspaceId = created.data.createTenantWorkspace.id;
+
+    const joined = await gqlCtx(
+      ADD_TENANT_WORKSPACE_MEMBER,
+      { workspaceId: normalWorkspaceId, userId: developer.userId },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(joined.errors, JSON.stringify(joined.errors)).toBeUndefined();
+
+    // 团队全局工作区中的共享供应商/模型（普通工作区应可读）
+    const provider = await gqlCtx(
+      CREATE_PROVIDER,
+      {
+        input: {
+          name: `global-provider-${suffix}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mockServer.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-ws-api-test',
+        },
+      },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(provider.errors, JSON.stringify(provider.errors)).toBeUndefined();
+    globalProviderId = provider.data.createProvider.id;
+  }, 60_000);
+
+  afterAll(async () => {
+    await mockServer?.close();
+  });
+
+  it('T-WS-API1: 缺省上下文回退个人全局工作区（与一期一致）；header 指向本租户全局可用', async () => {
+    const workspaces = await gqlCtx(MY_WORKSPACES, undefined, outsider.token);
+    expect(workspaces.errors).toBeUndefined();
+    expect(workspaces.data.myWorkspaces).toHaveLength(1);
+    const personalGlobal = workspaces.data.myWorkspaces[0];
+    expect(personalGlobal.type).toBe('global');
+    expect(personalGlobal.tenant).toMatchObject({ id: outsider.tenantId, type: 'personal' });
+    expect(personalGlobal.myRole).toBe('admin');
+    expect(personalGlobal.readOnly).toBe(false);
+
+    // 无头请求沿用一期行为：共享资源查询可用（不因缺工作区上下文报错）
+    const providers = await gqlCtx(PROVIDERS, undefined, outsider.token);
+    expect(providers.errors).toBeUndefined();
+    expect(Array.isArray(providers.data.providers)).toBe(true);
+    const models = await gqlCtx(MODELS, undefined, outsider.token);
+    expect(models.errors).toBeUndefined();
+    expect(Array.isArray(models.data.models)).toBe(true);
+
+    // 显式发送自己的个人全局工作区 id：等价上下文
+    const explicit = await gqlCtx(MODELS, undefined, outsider.token, personalGlobal.id);
+    expect(explicit.errors).toBeUndefined();
+  });
+
+  it('T-WS-API2: 非法 / 不可达 x-workspace-id 一律 workspace not found（不泄露存在性）', async () => {
+    const invalid = await gqlCtx(MODELS, undefined, outsider.token, '000000000000000000000000');
+    expect(invalid.errors?.[0]?.message).toBe('workspace not found');
+
+    const notMemberGlobal = await gqlCtx(MODELS, undefined, outsider.token, teamGlobalId);
+    expect(notMemberGlobal.errors?.[0]?.message).toBe('workspace not found');
+
+    const notMemberNormal = await gqlCtx(MODELS, undefined, outsider.token, normalWorkspaceId);
+    expect(notMemberNormal.errors?.[0]?.message).toBe('workspace not found');
+  });
+
+  it('T-WS-API3: 工作区 CRUD —— developer 拒绝、重名、改名、global 不可变、空/非空删除', async () => {
+    const forbidden = await gqlCtx(
+      CREATE_TENANT_WORKSPACE,
+      { name: 'dev-workspace' },
+      developer.token,
+      teamGlobalId,
+    );
+    expect(forbidden.errors?.[0]?.message).toBe('not a tenant admin');
+
+    const created = await gqlCtx(
+      CREATE_TENANT_WORKSPACE,
+      { name: `renamed-${Date.now().toString(36)}` },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(created.errors).toBeUndefined();
+    const workspaceId = created.data.createTenantWorkspace.id;
+    expect(created.data.createTenantWorkspace).toMatchObject({
+      type: 'normal',
+      myRole: 'admin',
+      readOnly: false,
+      memberCount: 0,
+    });
+
+    const duplicate = await gqlCtx(
+      CREATE_TENANT_WORKSPACE,
+      { name: created.data.createTenantWorkspace.name },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(duplicate.errors?.[0]?.message).toBe('workspace name already exists');
+
+    const renamed = await gqlCtx(
+      RENAME_TENANT_WORKSPACE,
+      { id: workspaceId, name: `renamed-ok-${Date.now().toString(36)}` },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(renamed.errors).toBeUndefined();
+    expect(renamed.data.renameTenantWorkspace.name).toContain('renamed-ok-');
+
+    const globalRename = await gqlCtx(
+      RENAME_TENANT_WORKSPACE,
+      { id: teamGlobalId, name: 'renamed-global' },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(globalRename.errors?.[0]?.message).toBe('global workspace is immutable');
+
+    const globalDelete = await gqlCtx(DELETE_TENANT_WORKSPACE, { id: teamGlobalId }, admin.token, teamGlobalId);
+    expect(globalDelete.errors?.[0]?.message).toBe('global workspace is immutable');
+
+    const globalMember = await gqlCtx(
+      ADD_TENANT_WORKSPACE_MEMBER,
+      { workspaceId: teamGlobalId, userId: developer.userId },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(globalMember.errors?.[0]?.message).toBe('global workspace is immutable');
+
+    const outsiderMember = await gqlCtx(
+      ADD_TENANT_WORKSPACE_MEMBER,
+      { workspaceId: workspaceId, userId: outsider.userId },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(outsiderMember.errors?.[0]?.message).toBe('user is not a tenant member');
+
+    const deleted = await gqlCtx(DELETE_TENANT_WORKSPACE, { id: workspaceId }, admin.token, teamGlobalId);
+    expect(deleted.errors).toBeUndefined();
+    expect(deleted.data.deleteTenantWorkspace).toBe(true);
+
+    const after = await gqlCtx(MY_WORKSPACES, undefined, admin.token, teamGlobalId);
+    expect(after.data.myWorkspaces.some((workspace: { id: string }) => workspace.id === workspaceId)).toBe(false);
+
+    // 非空删除保护：先写入本工作区 commit 设置（user_commit_settings 计入 11 集合）
+    const nonEmpty = await gqlCtx(
+      CREATE_TENANT_WORKSPACE,
+      { name: `non-empty-${Date.now().toString(36)}` },
+      admin.token,
+      teamGlobalId,
+    );
+    const nonEmptyId = nonEmpty.data.createTenantWorkspace.id;
+    const saved = await gqlCtx(
+      UPDATE_COMMIT_SETTINGS,
+      {
+        input: {
+          committerMode: 'HUMAN_ONLY',
+          committerType: 'CUSTOM',
+          customName: 'Non Empty',
+          customEmail: 'non-empty@example.com',
+        },
+      },
+      admin.token,
+      nonEmptyId,
+    );
+    expect(saved.errors).toBeUndefined();
+    const blocked = await gqlCtx(DELETE_TENANT_WORKSPACE, { id: nonEmptyId }, admin.token, teamGlobalId);
+    expect(blocked.errors?.[0]?.message).toBe('workspace is not empty');
+  });
+
+  it('T-WS-API4: 普通工作区可读全局共享供应商/模型；普通上下文写全局被拒', async () => {
+    const providers = await gqlCtx(PROVIDERS, undefined, developer.token, normalWorkspaceId);
+    expect(providers.errors).toBeUndefined();
+    const shared = providers.data.providers.find(
+      (provider: { id: string }) => provider.id === globalProviderId,
+    );
+    expect(shared, '普通工作区应读到团队全局工作区的供应商').toBeDefined();
+    expect(shared.workspaceId).toBe(teamGlobalId);
+    expect(shared.scope).toBe('user');
+
+    const models = await gqlCtx(MODELS, undefined, developer.token, normalWorkspaceId);
+    expect(models.errors).toBeUndefined();
+    const model = models.data.models.find(
+      (row: { name: string }) => row.name === 'ws-shared-model',
+    );
+    expect(model, '普通工作区应读到全局共享模型').toBeDefined();
+    expect(model.workspaceId).toBe(teamGlobalId);
+
+    // 普通上下文删除全局工作区供应商：写口径仅当前工作区 → 不生效
+    const deleted = await gqlCtx(DELETE_PROVIDER, { id: globalProviderId }, developer.token, normalWorkspaceId);
+    expect(deleted.errors).toBeUndefined();
+    expect(deleted.data.deleteProvider).toBe(false);
+
+    // 全局上下文由 admin 删除后，普通工作区入口随即不可用
+    const deletedByAdmin = await gqlCtx(DELETE_PROVIDER, { id: globalProviderId }, admin.token, teamGlobalId);
+    expect(deletedByAdmin.errors).toBeUndefined();
+    expect(deletedByAdmin.data.deleteProvider).toBe(true);
+    const after = await gqlCtx(PROVIDERS, undefined, developer.token, normalWorkspaceId);
+    expect(after.data.providers.some((provider: { id: string }) => provider.id === globalProviderId)).toBe(false);
+  });
+
+  it('T-WS-API5: Commit 三段继承矩阵（UNSET → GLOBAL → WORKSPACE）', async () => {
+    const unset = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, normalWorkspaceId);
+    expect(unset.errors).toBeUndefined();
+    expect(unset.data.commitSettings).toMatchObject({ source: 'UNSET', committerMode: 'UNSET' });
+
+    const setGlobal = await gqlCtx(
+      UPDATE_COMMIT_SETTINGS,
+      {
+        input: {
+          committerMode: 'HUMAN_ONLY',
+          committerType: 'CUSTOM',
+          customName: 'Global Committer',
+          customEmail: 'global-committer@example.com',
+        },
+      },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(setGlobal.errors).toBeUndefined();
+    expect(setGlobal.data.updateCommitSettings).toMatchObject({
+      source: 'WORKSPACE',
+      customName: 'Global Committer',
+    });
+
+    const inherited = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, normalWorkspaceId);
+    expect(inherited.errors).toBeUndefined();
+    expect(inherited.data.commitSettings).toMatchObject({
+      source: 'GLOBAL',
+      customName: 'Global Committer',
+      committerMode: 'HUMAN_ONLY',
+    });
+
+    const setOwn = await gqlCtx(
+      UPDATE_COMMIT_SETTINGS,
+      {
+        input: {
+          committerMode: 'HUMAN_ONLY',
+          committerType: 'CUSTOM',
+          customName: 'Workspace Committer',
+          customEmail: 'workspace-committer@example.com',
+        },
+      },
+      admin.token,
+      normalWorkspaceId,
+    );
+    expect(setOwn.errors).toBeUndefined();
+    expect(setOwn.data.updateCommitSettings.source).toBe('WORKSPACE');
+
+    const own = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, normalWorkspaceId);
+    expect(own.data.commitSettings).toMatchObject({
+      source: 'WORKSPACE',
+      customName: 'Workspace Committer',
+    });
+  });
+
+  it('T-WS-API6: developer 在团队全局工作区只读（global workspace is read-only）', async () => {
+    // 共享资源写入在 workspace-scope 插件层统一拦截（provider 的 resolver 原样透出白名单文案）
+    const write = await gqlCtx(
+      CREATE_PROVIDER,
+      {
+        input: {
+          name: `dev-global-${Date.now().toString(36)}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mockServer.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-dev-readonly',
+        },
+      },
+      developer.token,
+      teamGlobalId,
+    );
+    expect(write.errors?.[0]?.message).toBe('global workspace is read-only');
+
+    const create = await gqlCtx(CREATE_TENANT_WORKSPACE, { name: 'nope' }, developer.token, teamGlobalId);
+    expect(create.errors?.[0]?.message).toBe('not a tenant admin');
+  });
+
+  it('T-WS-API7: personal 租户拒绝创建租户工作区', async () => {
+    const own = await gqlCtx(MY_WORKSPACES, undefined, outsider.token);
+    const personalGlobalId = own.data.myWorkspaces[0].id;
+    const res = await gqlCtx(
+      CREATE_TENANT_WORKSPACE,
+      { name: 'personal-workspace' },
+      outsider.token,
+      personalGlobalId,
+    );
+    expect(res.errors?.[0]?.message).toBe('personal tenant cannot create workspaces');
+  });
+
+  it('T-WS-API8: 租户成员管理 —— search/add(role)/changeRole/remove 失效', async () => {
+    const search = await gqlCtx(SEARCH_ACCOUNTS, { keyword: developer.username }, admin.token, teamGlobalId);
+    expect(search.errors).toBeUndefined();
+    const hit = search.data.searchAccounts.find(
+      (account: { username: string }) => account.username === developer.username,
+    );
+    expect(hit).toEqual({
+      username: developer.username,
+      name: developer.name,
+      userId: developer.userId,
+    });
+
+    const developerSearch = await gqlCtx(SEARCH_ACCOUNTS, { keyword: 'x' }, developer.token);
+    expect(developerSearch.errors?.[0]?.message).toBe('not a tenant admin');
+
+    const temp = await createFrontUser();
+    const added = await gqlCtx(
+      ADD_TENANT_MEMBER,
+      { tenantId: teamId, username: temp.username, role: 'developer' },
+      admin.token,
+    );
+    expect(added.errors).toBeUndefined();
+    expect(added.data.addTenantMember).toMatchObject({
+      id: temp.userId,
+      username: temp.username,
+      role: 'developer',
+    });
+
+    // 重复添加幂等，不覆盖既有角色
+    const again = await gqlCtx(
+      ADD_TENANT_MEMBER,
+      { tenantId: teamId, username: temp.username, role: 'admin' },
+      admin.token,
+    );
+    expect(again.errors).toBeUndefined();
+    expect(again.data.addTenantMember.role).toBe('developer');
+
+    const promoted = await gqlCtx(
+      CHANGE_TENANT_MEMBER_ROLE,
+      { tenantId: teamId, userId: temp.userId, role: 'admin' },
+      admin.token,
+    );
+    expect(promoted.errors).toBeUndefined();
+    expect(promoted.data.changeTenantMemberRole.role).toBe('admin');
+
+    // 加入普通工作区后移出租户：立即失去访问，workspacemembers 级联清理
+    const joined = await gqlCtx(
+      ADD_TENANT_WORKSPACE_MEMBER,
+      { workspaceId: normalWorkspaceId, userId: temp.userId },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(joined.errors).toBeUndefined();
+
+    const removed = await gqlCtx(
+      REMOVE_TENANT_MEMBER,
+      { tenantId: teamId, userId: temp.userId },
+      admin.token,
+    );
+    expect(removed.errors).toBeUndefined();
+    expect(removed.data.removeTenantMember).toBe(true);
+
+    const tempWorkspaces = await gqlCtx(MY_WORKSPACES, undefined, temp.token);
+    expect(
+      tempWorkspaces.data.myWorkspaces.some(
+        (workspace: { tenant: { id: string } }) => workspace.tenant.id === teamId,
+      ),
+    ).toBe(false);
+
+    const tempHeader = await gqlCtx(MODELS, undefined, temp.token, teamGlobalId);
+    expect(tempHeader.errors?.[0]?.message).toBe('workspace not found');
+
+    const members = await gqlCtx(WORKSPACE_MEMBERS, { workspaceId: normalWorkspaceId }, admin.token, normalWorkspaceId);
+    expect(members.errors).toBeUndefined();
+    expect(members.data.workspaceMembers.some((row: { id: string }) => row.id === temp.userId)).toBe(false);
+
+    // 资源/工作区保留：admin 仍可访问该普通工作区
+    const retained = await gqlCtx(MY_WORKSPACES, undefined, admin.token, teamGlobalId);
+    expect(retained.data.myWorkspaces.some((workspace: { id: string }) => workspace.id === normalWorkspaceId)).toBe(true);
+  });
+
+  it('T-WS-API9: last-admin 移除/降级拒绝；personal 租户写操作一律拒绝', async () => {
+    const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    const solo = await createTeamTenant(`mt2-solo-${suffix}`.slice(0, 60));
+    await addInternalMember(solo.tenantId, admin.username, 'admin');
+
+    const demote = await gqlCtx(
+      CHANGE_TENANT_MEMBER_ROLE,
+      { tenantId: solo.tenantId, userId: admin.userId, role: 'developer' },
+      admin.token,
+    );
+    expect(demote.errors?.[0]?.message).toBe('last admin cannot be demoted');
+
+    const remove = await gqlCtx(
+      REMOVE_TENANT_MEMBER,
+      { tenantId: solo.tenantId, userId: admin.userId },
+      admin.token,
+    );
+    expect(remove.errors?.[0]?.message).toBe('last admin cannot be removed');
+
+    const personal = await gqlCtx(MY_TENANTS, undefined, outsider.token);
+    const personalTenantId = personal.data.myTenants[0].tenant.id;
+    for (const result of [
+      await gqlCtx(
+        ADD_TENANT_MEMBER,
+        { tenantId: personalTenantId, username: developer.username, role: 'developer' },
+        admin.token,
+      ),
+      await gqlCtx(
+        REMOVE_TENANT_MEMBER,
+        { tenantId: personalTenantId, userId: outsider.userId },
+        admin.token,
+      ),
+      await gqlCtx(
+        CHANGE_TENANT_MEMBER_ROLE,
+        { tenantId: personalTenantId, userId: outsider.userId, role: 'admin' },
+        admin.token,
+      ),
+    ]) {
+      expect(result.errors?.[0]?.message).toBe('personal tenant is immutable');
+    }
+  });
 });

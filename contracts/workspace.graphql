@@ -73,13 +73,14 @@ extend type Query {
 
 extend type Mutation {
   # 仅 team 租户 admin；创建者不占用成员行（admin 天然可管）
-  createWorkspace(name: String!): Workspace!
-  renameWorkspace(id: ID!, name: String!): Workspace!
+  # 注意：createWorkspace 已被项目工作区（ControllerWorkspace）占用，租户工作区 mutation 统一加 Tenant 前缀（计划期裁决 F12）
+  createTenantWorkspace(name: String!): Workspace!
+  renameTenantWorkspace(id: ID!, name: String!): Workspace!
   # 删除保护：工作区内仍持有资源时拒绝
-  deleteWorkspace(id: ID!): Boolean!
+  deleteTenantWorkspace(id: ID!): Boolean!
   # 工作区成员管理：仅 team 租户 admin；成员仅能从本租户成员中选取；global 工作区调用被拒绝
-  addWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
-  removeWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
+  addTenantWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
+  removeTenantWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
   # 租户成员管理：仅本租户 admin；username 必须指向已存在账户；last-admin 保护
   addTenantMember(tenantId: ID!, username: String!, role: TenantRole): WorkspaceMember!
   removeTenantMember(tenantId: ID!, userId: ID!): Boolean!

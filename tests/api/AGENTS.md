@@ -59,7 +59,7 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（45 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm test` | 运行全部常规测试文件（46 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -168,6 +168,42 @@ npm test
 | T-MT2f 列表抽查 | controllers / configuredWorkflows 跨租户列表不含 A 数据（其余集合由各 service 的 T-ISO-* 单测覆盖） |
 | T-MT3 行为回归 | A 的会话/控制器/工作区/模板/MCP/待办列表仍能看到自己创建的数据 |
 | T-MT5 迁移核对（需 `MONGODB_URI`） | users 三件套（name/tenantId/accountId、tenantId==userId）、accounts/tenants 关联、sessions tenantId==userId、billingaccounts 前台 ownerType=tenant 且无遗留 front_user 行、controllers/controllerworkspaces tenantId 回填 |
+
+> 多租户二期扩展（同文件 `T-PROV`）：`POST /internal/users` 后个人全局工作区唯一、`tenantmembers{role:'admin'}`
+> 齐备、重复开户 200 幂等；team 成员被移除后 `myWorkspaces` 立即不可见且显式 `x-workspace-id` 访问返回
+> `workspace not found`。需要 `INTERNAL_API_TOKEN`。
+
+### 多租户二期工作区 API (`agent-api/workspace.test.ts` T-WS-API)
+
+> 契约 `contracts/workspace.graphql`（租户工作区 mutation 为 `*TenantWorkspace`，与项目工作区
+> `createWorkspace` 区分）。需要 agent-api + controller-api 就绪、`INTERNAL_API_TOKEN`（造 team 租户/成员）；
+> 共享供应商用例使用进程内 mock LLM（`src/mock-server.ts`，随机端口）。
+
+| 测试 | 描述 |
+|------|------|
+| T-WS-API1 缺省上下文 | 无 `x-workspace-id` 回退个人租户全局工作区（`myWorkspaces` 唯一、role=admin、readOnly=false），providers/models 可直接查询（与一期一致）；显式发送个人全局 id 等价 |
+| T-WS-API2 非法/不可达 | 非法 id / 非成员团队全局 / 非成员普通工作区均 `workspace not found`（不泄露存在性） |
+| T-WS-API3 工作区 CRUD | developer 创建拒绝 `not a tenant admin`；重名 `workspace name already exists`；改名生效；global 改名/删除/加成员 `global workspace is immutable`；非本租户成员 `user is not a tenant member`；空工作区删除返回 true；写入资源（commit 设置）后删除 `workspace is not empty` |
+| T-WS-API4 共享读/写口径 | 普通工作区 `providers`/`models` 含团队全局工作区共享资源（workspaceId=全局）；普通上下文删除全局供应商不生效；admin 在全局上下文删除后普通工作区不可见 |
+| T-WS-API5 Commit 三段矩阵 | 本工作区未设 + 全局未设 → `source=UNSET`；全局设 → 普通工作区 `source=GLOBAL`；本工作区设 → `source=WORKSPACE` |
+| T-WS-API6 developer 全局只读 | 团队全局上下文写共享资源（provider）被插件拦截 `global workspace is read-only`；创建工作区仍 `not a tenant admin` |
+| T-WS-API7 personal 拒绝 | personal 租户全局上下文 `createTenantWorkspace` → `personal tenant cannot create workspaces` |
+| T-WS-API8 租户成员管理 | `searchAccounts` admin 可搜（结果为 username/name/userId 最小集）、developer `not a tenant admin`；`addTenantMember` 指定/缺省 role、重复幂等不覆盖；`changeTenantMemberRole` 生效；加入工作区后 `removeTenantMember` 立即失去团队/工作区访问并级联清理 workspacemembers，资源保留 |
+| T-WS-API9 last-admin / personal | 最后一名 admin 降级 `last admin cannot be demoted`、移除 `last admin cannot be removed`；personal 租户 add/remove/changeRole 均 `personal tenant is immutable` |
+
+### Admin Team 租户 API (`admin-api/tenant-team.test.ts` T-TT-API)
+
+> `contracts/admin-tenant.graphql`：admin-api 仅转发 agent-api `/internal/tenants*`。需要 admin-api + agent-api
+> 就绪、`INTERNAL_API_TOKEN`（admin-api 侧 Bearer）与 `ADMIN_INITIAL_PASSWORD`（管理员登录归一化）。
+
+| 测试 | 描述 |
+|------|------|
+| T-TT-API1 未鉴权 | 三个 team mutation 均「Not authenticated」 |
+| T-TT-API2 创建 team | `adminCreateTeamTenant` → type=team、memberCount=0、余额 0/null；重名 409 `tenant name already exists` 且仅 1 条同名租户 |
+| T-TT-API3 加成员 | 指定 role=admin、缺省 developer；重复添加幂等且不覆盖既有角色 |
+| T-TT-API4 详情角色/工作区 | `adminTenant.users` 含 role；`workspaces` 只读且自动开通 global（memberCount=租户成员数）；introspection 无 workspace 写 mutation |
+| T-TT-API5 登录/移出闭环 | 成员登录 `myWorkspaces` 即含团队工作区；last-admin 移除 409 `last admin cannot be removed`；移除 developer 成功后成员立即不可见且 header 访问 `workspace not found` |
+| T-TT-API6 personal 全拒绝 | personal 租户 add/remove 成员均 `personal tenant is immutable`（INVALID_ARGUMENT） |
 
 ### LLM Provider & Model API (`llm.test.ts`)
 

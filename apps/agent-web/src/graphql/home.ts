@@ -11,6 +11,7 @@ const HOME_WORKFLOW_INSTANCE_FIELDS = gql`
     configuredWorkflowId
     controllerId
     workspaceId
+    resourceWorkspaceId
     name
     currentNodeNames
     lastNodeName

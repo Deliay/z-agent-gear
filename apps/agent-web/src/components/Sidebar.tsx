@@ -39,6 +39,7 @@ import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
 import { HOME_OVERVIEW } from '../graphql/home';
 import { CLOUD_HOST_CAPABILITIES } from '../graphql/queries';
 import { useHomeOverview } from '../stores/homeOverview';
+import WorkspaceSwitcher from './WorkspaceSwitcher';
 
 interface SidebarProps {
   /** 当前用户展示名（登录响应 User.name，迁移后=原用户名） */
@@ -175,6 +176,7 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
   return (
     <nav className={`flex flex-col bg-sidebar text-sidebar-foreground ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
       <div className="flex-1 overflow-y-auto p-4">
+        <WorkspaceSwitcher />
         <div className="mb-2 flex items-center justify-between gap-2 px-1">
           <span className="text-xs font-medium text-muted-foreground">主机</span>
           {capabilities?.enabled && (

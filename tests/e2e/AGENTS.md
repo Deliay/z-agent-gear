@@ -124,6 +124,29 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-MT3 租户口径计费 | 后台按租户（ownerType=tenant）检索计费账户 → `rechargeBillingAccount` 充值 → 前台「我的费用」可用余额与账单明细可见 |
 | E2E-MT4 双用户隔离（最小锚定） | A 创建 controller key 后 B 的 `controllerKeys` 为空（会话/工作区的完整隔离链路由 `tests/api` T-MT2 覆盖） |
 
+### 多租户二期工作区 E2E (`workspace.spec.ts` E2E-WS)
+
+> 数据经 admin-api `adminCreateTeamTenant` / `adminAddTenantMember` + agent-api GraphQL（`createTenantWorkspace`）
+> 准备；需要 admin-web/admin-api/agent-api/agent-web 与 `INTERNAL_API_TOKEN`（或 `MONGODB_URI` 回落开户）。
+> 每个用例使用独立 team 租户与全新用户，互不污染。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-WS1 切换器按角色过滤 | admin 见团队全部工作区（global+normal）并出现「工作区管理/租户成员」入口；developer 仅见团队全局、无管理入口（切到 global 后仍无） |
+| E2E-WS2 选择持久化 | 选择普通工作区 → `localStorage['zag:current-workspace:<userId>']` 写入；刷新后切换器恢复该选择 |
+| E2E-WS3 工作区管理仅 admin | admin 在 `/workspaces` 可新建工作区并即时出现在列表；developer 直达该页显示「仅租户管理员可访问工作区管理（开发角色无入口）」且无新建按钮 |
+| E2E-WS4 租户成员管理 | admin 在 `/tenants/:id/members` 搜索帐号并添加（默认开发）→ 尝试移除唯一管理员提示「至少保留一名管理员」→ 变更角色为管理员；developer 直达显示无权限提示 |
+| E2E-WS5 个人用户零感知 | 仅个人租户用户登录后无 `workspace-switcher`、无工作区管理入口 |
+| E2E-WS6 developer 全局只读 | developer 选择团队全局工作区后，设置页 `workspace-context-banner` 展示「全局工作区 / 只读」与「编辑入口已隐藏」，Commit 设置提示不可修改 |
+
+### 后台 team 租户 E2E (`admin-team-tenant.spec.ts` E2E-TT)
+
+> 需要 admin-web / admin-api / agent-api / agent-web 就绪；开户 helper 依赖 `INTERNAL_API_TOKEN`（或 `MONGODB_URI` 回落）。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-TT1 创建 + 加成员 + 成员登录 | 后台「创建团队租户」→ 列表类型为团队 → 详情自动开通全局工作区（只读视图）→「添加成员」按登录名指定管理员 → 成员前台登录后切换器出现团队租户分组，切换团队全局后可见「工作区管理/租户成员」入口 |
+
 ### Settings Commit 作者 E2E (`settings-commit-author.spec.ts`)
 
 > 仅前端交互与文案；`commitSettings` / `updateCommitSettings` / `githubAccounts` 经 `page.route` mock，

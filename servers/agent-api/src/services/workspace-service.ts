@@ -202,6 +202,14 @@ export class WorkspaceService {
     if (!tenant) throw new Error(WORKSPACE_ERRORS.notFound);
     if (tenant.type !== 'team') throw new Error(WORKSPACE_ERRORS.personalCreate);
     await this.requireAdmin(userId, tenantId);
+    // 重名前置校验（唯一索引可能尚未建立/关闭 autoIndex 的部署也返回稳定文案）
+    const duplicated = await Workspace.findOne({
+      tenantId: new mongoose.Types.ObjectId(tenantId),
+      name: trimmed,
+    })
+      .select('_id')
+      .lean();
+    if (duplicated) throw new Error(WORKSPACE_ERRORS.nameExists);
     try {
       const workspace = await Workspace.create({
         tenantId: new mongoose.Types.ObjectId(tenantId),

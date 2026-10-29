@@ -510,6 +510,12 @@ export interface GetAdminBillingApiCallsQuery {
 
 export type TenantType = 'personal' | 'team';
 
+/** 租户内角色（契约 TenantRole）：管理员可管理租户全部资源/工作区/成员；开发仅读写所在普通工作区。 */
+export type TenantRole = 'admin' | 'developer';
+
+/** 租户工作区类型（契约 WorkspaceType）：global = 全局工作区（每租户恰一个），normal = 普通工作区。 */
+export type WorkspaceType = 'global' | 'normal';
+
 export interface AdminTenantData {
   id: string;
   name: string;
@@ -519,10 +525,21 @@ export interface AdminTenantData {
   createdAt: string;
 }
 
+/** 后台只读工作区视图（contracts/admin-tenant.graphql AdminWorkspace）。 */
+export interface AdminWorkspaceData {
+  id: string;
+  name: string;
+  type: WorkspaceType;
+  memberCount: number;
+  createdAt: string;
+}
+
 export interface AdminTenantUserData {
   id: string;
   name: string;
   username: string;
+  /** 租户内角色；personal 租户唯一成员恒 admin */
+  role: TenantRole;
   createdAt: string;
 }
 
@@ -530,7 +547,10 @@ export interface AdminTenantDetailData {
   id: string;
   name: string;
   type: TenantType;
+  /** 经 tenantmembers 展开（含 role） */
   users: AdminTenantUserData[];
+  /** 只读工作区列表 */
+  workspaces: AdminWorkspaceData[];
   createdAt: string;
 }
 
@@ -544,4 +564,16 @@ export interface GetAdminTenantQuery {
 
 export interface AdminCreateFrontUserMutation {
   adminCreateFrontUser: AdminTenantUserData;
+}
+
+export interface AdminCreateTeamTenantMutation {
+  adminCreateTeamTenant: AdminTenantData;
+}
+
+export interface AdminAddTenantMemberMutation {
+  adminAddTenantMember: AdminTenantUserData;
+}
+
+export interface AdminRemoveTenantMemberMutation {
+  adminRemoveTenantMember: boolean;
 }

@@ -50,11 +50,11 @@ export const workspaceTypeDefs = `#graphql
   }
 
   extend type Mutation {
-    createWorkspace(name: String!): Workspace!
-    renameWorkspace(id: ID!, name: String!): Workspace!
-    deleteWorkspace(id: ID!): Boolean!
-    addWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
-    removeWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
+    createTenantWorkspace(name: String!): Workspace!
+    renameTenantWorkspace(id: ID!, name: String!): Workspace!
+    deleteTenantWorkspace(id: ID!): Boolean!
+    addTenantWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
+    removeTenantWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
     addTenantMember(tenantId: ID!, username: String!, role: TenantRole): WorkspaceMember!
     removeTenantMember(tenantId: ID!, userId: ID!): Boolean!
     changeTenantMemberRole(tenantId: ID!, userId: ID!, role: TenantRole!): WorkspaceMember!

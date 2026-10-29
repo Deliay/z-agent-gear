@@ -23,6 +23,10 @@ import { Button } from '@/components/ui/button'
 import ModelGroup from './ModelGroup'
 import ModelItem from './ModelItem'
 import CustomModelDialog from './CustomModelDialog'
+import { ResourceSourceBadge } from './ResourceSourceBadge'
+import { useResourceSourceResolver } from '@/hooks/useResourceSource'
+import { useWorkspaceAccess } from '@/stores/workspace'
+import type { ResourceSource } from '@/lib/workspace-source'
 
 interface ModelData {
   id: string
@@ -39,6 +43,8 @@ interface ModelData {
   isEnabled: boolean
   sortOrder: number
   scope: 'user' | 'global'
+  /** 所属租户工作区；scope=global 恒为 null（多租户二期） */
+  workspaceId?: string | null
 }
 
 interface ModelGroupData {
@@ -46,6 +52,7 @@ interface ModelGroupData {
   title: string
   models: ModelData[]
   sortable: boolean
+  source?: ResourceSource
 }
 
 const SYSTEM_KEY = 'system'
@@ -53,6 +60,8 @@ const SYSTEM_KEY = 'system'
 export default function ModelSection() {
   const { data, loading } = useQuery<GetModelsQuery>(GET_MODELS)
   const { data: providersData } = useQuery<GetProvidersQuery>(GET_PROVIDERS)
+  const { readOnly: contextReadOnly } = useWorkspaceAccess()
+  const resolveSource = useResourceSourceResolver()
   const [toggleModel] = useMutation(TOGGLE_MODEL)
   const [updateSortOrder] = useMutation(UPDATE_MODEL_SORT_ORDER)
   const [createCustom] = useMutation(CREATE_CUSTOM_MODEL)
@@ -73,11 +82,13 @@ export default function ModelSection() {
       if (model.scope === 'global') continue
       const key = model.provider ? (model.providerId ?? 'unknown') : 'unknown'
       if (!map.has(key)) {
+        const source = resolveSource(model.workspaceId)
         map.set(key, {
           key,
           title: model.provider?.name ?? '未知供应商',
           models: [],
-          sortable: true,
+          sortable: !contextReadOnly && source.editable,
+          source,
         })
         order.push(key)
       }
@@ -85,11 +96,17 @@ export default function ModelSection() {
     }
     return [
       ...(systemModels.length
-        ? [{ key: SYSTEM_KEY, title: '系统内置', models: systemModels, sortable: false }]
+        ? [{
+            key: SYSTEM_KEY,
+            title: '系统内置',
+            models: systemModels,
+            sortable: false,
+            source: { kind: 'global' as const, label: '全局工作区', editable: false },
+          }]
         : []),
       ...order.map((key) => map.get(key)!),
     ]
-  }, [models])
+  }, [models, contextReadOnly, resolveSource])
 
   const groupsRef = useRef(groups)
   useEffect(() => {
@@ -168,9 +185,13 @@ export default function ModelSection() {
     <section className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium text-foreground">可用模型</h3>
-        <Button size="sm" variant="outline" onClick={() => setCustomDialogOpen(true)}>
-          自定义模型
-        </Button>
+        {contextReadOnly ? (
+          <span className="text-xs text-muted-foreground">全局工作区对开发者只读</span>
+        ) : (
+          <Button size="sm" variant="outline" onClick={() => setCustomDialogOpen(true)}>
+            自定义模型
+          </Button>
+        )}
       </div>
 
       {loading ? (
@@ -196,6 +217,11 @@ export default function ModelSection() {
                 sortableIds={group.sortable ? group.models.map((m) => m.id) : undefined}
               >
                 <div className="space-y-2">
+                  {group.source && (
+                    <div className="flex justify-end">
+                      <ResourceSourceBadge source={group.source} />
+                    </div>
+                  )}
                   {group.models.map((model) => (
                     <ModelItem
                       key={model.id}
@@ -205,6 +231,8 @@ export default function ModelSection() {
                       sortable={group.sortable}
                       hideProviderName
                       readOnlyToggle={!group.sortable}
+                      readOnly={contextReadOnly || (group.source ? !group.source.editable : false)}
+                      source={group.source}
                     />
                   ))}
                 </div>

@@ -5,6 +5,7 @@ import TenantsPage from '@/pages/TenantsPage';
 const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
   createFrontUser: vi.fn(),
+  createTeamTenant: vi.fn(),
   refetch: vi.fn(),
   navigate: vi.fn(),
   toastSuccess: vi.fn(),
@@ -16,7 +17,13 @@ vi.mock('@apollo/client', () => ({
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mocks.useQuery(...args),
-  useMutation: () => [mocks.createFrontUser, { loading: false }],
+  useMutation: (document: unknown) => {
+    const text = String(document);
+    if (text.includes('adminCreateTeamTenant')) {
+      return [mocks.createTeamTenant, { loading: false }];
+    }
+    return [mocks.createFrontUser, { loading: false }];
+  },
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -48,6 +55,10 @@ function setupTenants(tenants: unknown[]) {
   });
 }
 
+function openTeamDialog() {
+  fireEvent.click(screen.getByRole('button', { name: '创建团队租户' }));
+}
+
 describe('TenantsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -65,6 +76,18 @@ describe('TenantsPage', () => {
     expect(screen.getByRole('button', { name: '开户' })).toBeDefined();
     // 只读：列表页没有任何编辑/删除/停用入口
     expect(screen.queryByRole('button', { name: /编辑|删除|停用/ })).toBeNull();
+  });
+
+  it('类型列区分个人租户与团队租户', () => {
+    setupTenants([
+      tenant(),
+      tenant({ id: 't2', name: 'team-a', type: 'team', memberCount: 3 }),
+    ]);
+    render(<TenantsPage />);
+
+    expect(screen.getByText('个人')).toBeDefined();
+    expect(screen.getByText('团队')).toBeDefined();
+    expect(screen.getByText('team-a')).toBeDefined();
   });
 
   it('按名称检索并重置页码', () => {
@@ -156,5 +179,67 @@ describe('TenantsPage', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toContain('AGENT_API_UNAVAILABLE'),
     );
+  });
+
+  it('创建团队租户表单本地校验名称非空且不超过 60 字符', () => {
+    setupTenants([]);
+    render(<TenantsPage />);
+    openTeamDialog();
+
+    fireEvent.click(screen.getByRole('button', { name: '确认创建' }));
+    expect(screen.getByRole('alert').textContent).toContain('租户名称长度需为 1-60 个字符');
+    expect(mocks.createTeamTenant).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('租户名称'), { target: { value: 'x'.repeat(61) } });
+    fireEvent.click(screen.getByRole('button', { name: '确认创建' }));
+    expect(screen.getByRole('alert').textContent).toContain('租户名称长度需为 1-60 个字符');
+    expect(mocks.createTeamTenant).not.toHaveBeenCalled();
+  });
+
+  it('创建团队租户成功调用 adminCreateTeamTenant（trim 名称）并刷新列表', async () => {
+    setupTenants([]);
+    mocks.createTeamTenant.mockResolvedValue({});
+    render(<TenantsPage />);
+    openTeamDialog();
+    fireEvent.change(screen.getByLabelText('租户名称'), { target: { value: ' 产品组 ' } });
+    fireEvent.click(screen.getByRole('button', { name: '确认创建' }));
+
+    await waitFor(() =>
+      expect(mocks.createTeamTenant).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variables: { name: '产品组' },
+          refetchQueries: [expect.any(String)],
+        }),
+      ),
+    );
+    expect(mocks.toastSuccess).toHaveBeenCalledWith('团队租户创建成功');
+    await waitFor(() => expect(screen.queryByLabelText('租户名称')).toBeNull());
+  });
+
+  it('创建团队租户错误映射重名 / 非法 / 服务不可用', async () => {
+    setupTenants([]);
+    render(<TenantsPage />);
+    openTeamDialog();
+    fireEvent.change(screen.getByLabelText('租户名称'), { target: { value: '产品组' } });
+
+    mocks.createTeamTenant.mockRejectedValueOnce(new Error('TENANT_NAME_TAKEN'));
+    fireEvent.click(screen.getByRole('button', { name: '确认创建' }));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('租户名称已存在'));
+
+    mocks.createTeamTenant.mockRejectedValueOnce(new Error('INVALID_BODY'));
+    fireEvent.click(screen.getByRole('button', { name: '确认创建' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('租户名称长度需为 1-60 个字符'),
+    );
+
+    mocks.createTeamTenant.mockRejectedValueOnce(new Error('AGENT_API_UNAVAILABLE'));
+    fireEvent.click(screen.getByRole('button', { name: '确认创建' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('AGENT_API_UNAVAILABLE'),
+    );
+
+    // 失败后弹窗保留，便于修正后重试
+    expect(screen.getByLabelText('租户名称')).toBeDefined();
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 });

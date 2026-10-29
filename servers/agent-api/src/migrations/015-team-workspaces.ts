@@ -190,7 +190,8 @@ async function backfillWorkspaceField(
   let total = 0;
   for (;;) {
     const filter: Record<string, unknown> = {
-      [target.field]: { $in: [null, undefined] },
+      // `{field: null}` 同时匹配字段缺失与显式 null
+      [target.field]: null,
     };
     if (target.customOnly) {
       filter.userId = { $exists: true, $ne: null };

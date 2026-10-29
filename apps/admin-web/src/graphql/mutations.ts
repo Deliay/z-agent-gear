@@ -376,7 +376,7 @@ export const REVOKE_BILLING_API_KEY = gql`
   }
 `
 
-// ---------- 租户开户（contracts/admin-tenant.graphql） ----------
+// ---------- 租户开户 / team 租户与成员管理（contracts/admin-tenant.graphql） ----------
 
 export const ADMIN_CREATE_FRONT_USER = gql`
   mutation AdminCreateFrontUser($username: String!, $password: String!) {
@@ -384,7 +384,39 @@ export const ADMIN_CREATE_FRONT_USER = gql`
       id
       name
       username
+      role
       createdAt
     }
+  }
+`
+
+export const ADMIN_CREATE_TEAM_TENANT = gql`
+  mutation AdminCreateTeamTenant($name: String!) {
+    adminCreateTeamTenant(name: $name) {
+      id
+      name
+      type
+      memberCount
+      balance
+      createdAt
+    }
+  }
+`
+
+export const ADMIN_ADD_TENANT_MEMBER = gql`
+  mutation AdminAddTenantMember($tenantId: ID!, $username: String!, $role: TenantRole) {
+    adminAddTenantMember(tenantId: $tenantId, username: $username, role: $role) {
+      id
+      name
+      username
+      role
+      createdAt
+    }
+  }
+`
+
+export const ADMIN_REMOVE_TENANT_MEMBER = gql`
+  mutation AdminRemoveTenantMember($tenantId: ID!, $userId: ID!) {
+    adminRemoveTenantMember(tenantId: $tenantId, userId: $userId)
   }
 `

@@ -45,7 +45,7 @@ internalTenantsRouter.post('/', async (req: Request, res: Response) => {
 
   const createdTenantId: unknown[] = [];
   try {
-    const existing = await Tenant.findOne({ name }).lean();
+    const existing = await Tenant.findOne({ name });
     if (existing) {
       if (existing.type !== 'team') {
         res.status(409).json({ error: 'TENANT_NAME_TAKEN' });
@@ -98,7 +98,7 @@ internalTenantsRouter.post('/:tenantId/members', async (req: Request, res: Respo
     res.status(404).json({ error: 'TENANT_NOT_FOUND' });
     return;
   }
-  const tenant = await Tenant.findById(tenantId).lean();
+  const tenant = await Tenant.findById(tenantId);
   if (!tenant) {
     res.status(404).json({ error: 'TENANT_NOT_FOUND' });
     return;
@@ -121,17 +121,17 @@ internalTenantsRouter.post('/:tenantId/members', async (req: Request, res: Respo
   }
 
   try {
-    const account = await Account.findOne({ username }).lean();
+    const account = await Account.findOne({ username });
     if (!account) {
       res.status(404).json({ error: 'ACCOUNT_NOT_FOUND' });
       return;
     }
-    const user = await User.findOne({ accountId: account._id }).lean();
+    const user = await User.findOne({ accountId: account._id });
     if (!user) {
       res.status(404).json({ error: 'ACCOUNT_NOT_FOUND' });
       return;
     }
-    const existing = await TenantMember.findOne({ tenantId, userId: user._id }).lean();
+    const existing = await TenantMember.findOne({ tenantId, userId: user._id });
     const view = await tenantMemberService.addTenantMember(
       operatorId,
       tenantId,
@@ -171,7 +171,7 @@ internalTenantsRouter.delete('/:tenantId/members/:userId', async (req: Request, 
     res.status(404).json({ error: 'NOT_MEMBER' });
     return;
   }
-  const tenant = await Tenant.findById(tenantId).lean();
+  const tenant = await Tenant.findById(tenantId);
   if (!tenant) {
     res.status(404).json({ error: 'TENANT_NOT_FOUND' });
     return;
