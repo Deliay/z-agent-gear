@@ -172,7 +172,10 @@ describe('internal cloud host routes', () => {
         token: 'ghs_scoped',
         expiresAt: '2026-10-22T01:00:00.000Z',
       });
-      expect(githubService.createRepoScopedToken).toHaveBeenCalledWith('acc1', 'owner/repo');
+      expect(githubService.createRepoScopedToken).toHaveBeenCalledWith('acc1', 'owner/repo', {
+        // 容器凭据契约：50min 续期间隔 + 10min 到期余量，取 55min 作为安全下限
+        minRemainingMs: 55 * 60 * 1000,
+      });
     });
 
     it('T-ICG4/T-ICG5: controller key 与 controllerId 不匹配 / 非 cloud 403', async () => {

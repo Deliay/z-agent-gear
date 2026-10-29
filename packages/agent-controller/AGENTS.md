@@ -121,8 +121,13 @@ process.env  →  容器 env（批次内所有 item）  →  WORKLOAD_PARAMS / W
   `Authorization: Bearer ${ZAG_HOST_KEY}`、无 body、10s 超时；`200 { token, expiresAt }`。
 - `404` → `{ ok:false, error:'no-binding' }`（未设置 Git 项目，不告警、不重试）；`401/403` 在
   `refreshNow()` 内按 1/2/4 分钟退避（最多 3 次）；网络/非法 JSON → 可读错误，不崩溃。
+  除 `disabled`/`no-binding` 外的失败（5xx/超时/非法 JSON/写 gh 失败）一律输出
+  `[GithubCredential] 凭据续期失败：<可读原因>` 脱敏日志，便于线上取证。
 - 成功时先 `writeGhAuth(token)` 再返回 `{ ok:true, expiresAt }`；随后按「50 分钟」或「到期前 10 分钟」
   （取较早）续期，定时器 `unref()`；`stop()` 随 supervisor `shutdown` 调用。
+  已进入/越过到期余量区（`beforeExpiry <= 0`，服务端交出近过期 token 时）**不回落 50 分钟**：
+  首次立即重试（`delay=0`）、其后按 `NEAR_EXPIRY_RETRY_MS`（60s）退避并告警（防热循环），
+  告警不含 token。回归：`credential-manager.test.ts` 的 T-CM9/T-CM10/T-CM11/T-CM12。
 - 并发 `refreshNow()` 合并为一次请求（串行化「申请 → 写入」）。
 - token 只经 stdin 进入 `gh auth login --with-token`，随后 `gh auth setup-git`；不进入 argv/env/日志，
   错误信息统一脱敏。
