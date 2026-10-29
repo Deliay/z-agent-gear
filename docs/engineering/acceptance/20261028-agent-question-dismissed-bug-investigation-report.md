@@ -116,7 +116,7 @@ npx tsx tests/manual/repro-question-tool.ts <none|accept|decline|cancel> \
 |---|---|
 | 前端问询弹窗 | **完全没有**；只有前端工具调用卡片 |
 | 工具返回 | `{"error":{"type":"aborted","message":"The user dismissed this question"},"content":[]}` |
-| 工具耗时 | 第 1 次约 **0.77s**，第 2 次约 **32ms**（OpenCode DB `tool.state.time.created → completed`） |
+| 工具耗时 | 第 1 次约 **0.77s**，第 2/3 次约 **32ms / 43ms**（OpenCode DB `tool.state.time.created → completed`） |
 | Redis `elicitation:request` | **0 条** |
 | Redis `permission:request` | **0 条** |
 | OpenCode 侧 `acp:elicitation` 上行 | **0 次** |
