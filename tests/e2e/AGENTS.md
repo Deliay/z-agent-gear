@@ -429,7 +429,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | T-E12 参数配置全流程 | 新建工作负载配置四种参数类型（下拉单选/下拉多选/文本/布尔）与默认值 → 保存 → 列表展示参数数量（4）→ 编辑回显类型/默认值 |
 | T-E12 非法值拦截 | 非法 key（数字开头）与下拉类型无可选项时给出提示且「保存」禁用 |
 | T-E13 多依赖 | 勾选多个依赖 → 展示「已选依赖（按初始化顺序）」→ 列表展示依赖名称；依赖环 → 「检测到依赖环」提示且「保存」禁用 |
-| T-E16 预制项展示 | 列表出现 Docker/Node.js/.NET/Aspire/OpenCode（Harness）/Kimi Code（Harness）/DeepSeek Harness（Harness）/Github/Playwright 与「预制」徽章（恰 9 个）；Aspire 行展示依赖 Docker/.NET；Node.js 展示 2 个参数 |
+| T-E16 预制项展示 | 列表出现 Docker/Node.js/.NET/Aspire/OpenCode（Harness）/Kimi Code（Harness）/DeepSeek Harness（Harness）/Github/MongoDB/Playwright 与「预制」徽章（恰 10 个）；Aspire 行展示依赖 Docker/.NET；Node.js 展示 2 个参数；Playwright 行展示依赖 Node.js |
 
 > 覆盖裁剪（计划裁决 17）：Aspire 以 `K8S_ENABLED=false` 启动、无真实工作容器回连，`INITIALIZING` 与脚本执行链路改由 cloud-controller/agent-controller 单测与 tests/api（直写 Mongo + 内部 API/GraphQL 查询）覆盖；E2E 只覆盖 CRUD、启动多选、状态/日志展示。真实集群链路（init/post 下发执行、超时保护、旧 worker 兼容、镜像重建）列部署侧手工验收。
 

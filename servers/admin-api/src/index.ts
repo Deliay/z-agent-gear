@@ -52,6 +52,7 @@ import * as migration011RefreshHarnessPrepareScope from './migrations/011-refres
 import * as migration013PresetHarnessDeepseekHeaderMasq from './migrations/013-preset-harness-deepseek-header-masq.js';
 import * as migration014BillingOwnerTenant from './migrations/014-billing-owner-tenant.js';
 import * as migration015PresetPlaywright from './migrations/015-preset-playwright.js';
+import * as migration016PresetMongo from './migrations/016-preset-mongodb.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const app = express();
@@ -132,6 +133,7 @@ async function start() {
   //   （固定版本 0.2.1-rc.2 + `dsh plugin --profile acp add Deliay/dsh-header-masq` 会话标识插件）
   // 014-billing-owner-tenant——前台计费归属 ownerType front_user→tenant（admin_user 行零改动、金额零改动）
   // 015-preset-playwright——写入 Playwright 预制工作负载（工具 + Chromium，参数化内网下载地址）
+  // 016-preset-mongodb——写入 MongoDB 预制工作负载（内网 Nexus apt 原生安装 mongodb-org 8.0；015 已被 Playwright 占用，顺延）
   try {
     await runMigrations([
       migration001,
@@ -151,6 +153,7 @@ async function start() {
       migration013PresetHarnessDeepseekHeaderMasq,
       migration014BillingOwnerTenant,
       migration015PresetPlaywright,
+      migration016PresetMongo,
     ]);
   } catch (err) {
     console.error('[admin-api] runMigrations failed (non-fatal):', err);
