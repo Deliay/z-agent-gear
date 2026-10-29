@@ -13,6 +13,8 @@ export const modelTypeDefs = `#graphql
     isEnabled: Boolean!
     sortOrder: Int!
     scope: ConfigScope!
+    # 所属租户工作区 id（scope=global 恒 null）；读 = 当前 ∪ 本租户全局，写仅当前
+    workspaceId: ID
     # 模型定价（只读展示）；与 admin-llm.graphql 逐字一致。
     pricing: ModelPricing
     # 最长上下文大小（token）；null = 未设置（只读，与 admin-llm.graphql 同步演进）

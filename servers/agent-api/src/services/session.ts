@@ -144,6 +144,8 @@ export class SessionService {
     /** 工作流内部打标（引擎编排节点会话时使用，不暴露到 GraphQL CreateSessionInput） */
     workflowInstanceId?: string;
     workflowNodeId?: string;
+    /** 租户工作区归属（引擎内部链路显式传值；GraphQL 链路由 workspace-scope 插件写入） */
+    resourceWorkspaceId?: string;
     /** 初始工作模式/模型（工作流节点配置，harness 会话启动时应用） */
     modeId?: string;
     modelId?: string;
@@ -325,6 +327,7 @@ export class SessionService {
       cwd,
       worktreePath,
       worktreeBranch,
+      ...(input.resourceWorkspaceId ? { workspaceId: input.resourceWorkspaceId } : {}),
       ...(input.workflowInstanceId ? { workflowInstanceId: input.workflowInstanceId } : {}),
       ...(input.workflowNodeId ? { workflowNodeId: input.workflowNodeId } : {}),
     });

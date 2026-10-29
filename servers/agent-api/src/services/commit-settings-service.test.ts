@@ -105,6 +105,8 @@ describe('CommitSettingsService CRUD', () => {
       githubAccountId: null,
       customName: null,
       customEmail: null,
+      source: 'UNSET',
+      readOnly: false,
     });
   });
 

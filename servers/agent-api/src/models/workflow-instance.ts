@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { applyTenantScope } from '../services/tenant-scope.js';
+import { applyWorkspaceScope } from '../services/workspace-scope.js';
 import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY } from './workflow-template.js';
 
 export const WORKFLOW_NODE_STATUSES = ['INITIALIZING', 'READY', 'RUNNING', 'DONE', 'REJECT', 'REWORK', 'FAILED'] as const;
@@ -74,7 +75,16 @@ const workflowInstanceSchema = new mongoose.Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true },
+    // 项目工作区（ControllerWorkspace）id —— 既有语义，零改动
     workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerWorkspace', required: true },
+    // 多租户二期（F1）：租户工作区维度（继承自已配置工作流 / 实例化时当前工作区）
+    resourceWorkspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Workspace',
+      required: false,
+      default: null,
+      index: true,
+    },
     configuredWorkflowId: { type: mongoose.Schema.Types.ObjectId, ref: 'ConfiguredWorkflow', default: null },
     name: { type: String, required: true },
     nodes: { type: [instanceNodeSchema], default: [] },
@@ -115,6 +125,7 @@ workflowInstanceSchema.index({ userId: 1, archivedAt: 1, createdAt: -1 });
 workflowInstanceSchema.index({ userId: 1, controllerId: 1, archivedAt: 1, createdAt: -1 });
 
 applyTenantScope(workflowInstanceSchema);
+applyWorkspaceScope(workflowInstanceSchema, { workspaceField: 'resourceWorkspaceId' });
 
 export const WorkflowInstance = mongoose.model('WorkflowInstance', workflowInstanceSchema);
 export type IWorkflowInstance = mongoose.InferSchemaType<typeof workflowInstanceSchema>;

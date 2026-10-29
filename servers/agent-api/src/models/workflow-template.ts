@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { applyTenantScope } from '../services/tenant-scope.js';
+import { applyWorkspaceScope } from '../services/workspace-scope.js';
 
 export const WORKFLOW_NODE_TYPES = ['HUMAN', 'AI', 'FLAG'] as const;
 export type WorkflowNodeType = (typeof WORKFLOW_NODE_TYPES)[number];
@@ -35,6 +36,15 @@ const workflowTemplateSchema = new mongoose.Schema(
     // 系统内置模板 userId 为空（无归属），tenantId 跟随可选（迁移 013 只清洗带 userId 行）。
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', default: null, index: true },
     name: { type: String, required: true },
+    // 多租户二期（F1）：租户工作区维度用 `resourceWorkspaceId`（`workspaceId` 属项目工作区语义）；
+    // 系统内置模板（isBuiltin=true）恒 null，全工作区可见可用。
+    resourceWorkspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Workspace',
+      required: false,
+      default: null,
+      index: true,
+    },
     description: { type: String },
     version: { type: Number, default: 1 },
     nodes: { type: [templateNodeSchema], default: [] },
@@ -49,6 +59,11 @@ const workflowTemplateSchema = new mongoose.Schema(
 workflowTemplateSchema.index({ userId: 1, createdAt: -1 });
 
 applyTenantScope(workflowTemplateSchema);
+// 多租户二期（F9）：内置模板例外全局可见
+applyWorkspaceScope(workflowTemplateSchema, {
+  workspaceField: 'resourceWorkspaceId',
+  builtinVisible: true,
+});
 
 export const WorkflowTemplate = mongoose.model('WorkflowTemplate', workflowTemplateSchema);
 export type IWorkflowTemplate = mongoose.InferSchemaType<typeof workflowTemplateSchema>;

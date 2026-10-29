@@ -3,6 +3,9 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
+import { User } from '../models/user.js';
+import { Workspace } from '../models/workspace.js';
+import { getWorkspaceContext } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 export interface GitHubRepoInfo {
@@ -26,6 +29,8 @@ export interface GitHubAccountInfo {
   githubUserId: number;
   githubLogin: string;
   githubAvatarUrl?: string;
+  /** 所属租户工作区 id（多租户二期） */
+  workspaceId?: string;
   createdAt: string;
   installations: GitHubInstallationInfo[];
 }
@@ -85,16 +90,32 @@ export class GitHubService {
     return { url, state };
   }
 
+  /**
+   * 当前请求工作区（多租户二期）；无 ALS 上下文（OAuth 回调/内部链路）时回退
+   * 「用户个人租户全局工作区」，与一期行为等价。
+   */
+  private async resolveWorkspace(userId: string): Promise<{ workspaceId: string; tenantId: string }> {
+    const context = getWorkspaceContext();
+    if (context) return { workspaceId: context.id, tenantId: context.tenantId };
+    const user = await User.findById(userId).select('tenantId').lean();
+    const tenantId = user?.tenantId ? String(user.tenantId) : userId;
+    const global = await Workspace.findOne({ tenantId, type: 'global' }).select('_id').lean();
+    return { workspaceId: global ? String(global._id) : '', tenantId };
+  }
+
   async handleSetup(params: { installationId: number; state: string; userId: string }): Promise<void> {
     const tokenResponse = await this.getInstallationToken(params.installationId);
     const accountInfo = await this.getInstallationAccount(params.installationId);
     const repos = await this.getRepositories(tokenResponse.token);
+    const { workspaceId, tenantId } = await this.resolveWorkspace(params.userId);
 
     const encryptedToken = encrypt(tokenResponse.token);
     const account = await GitHubAccount.findOneAndUpdate(
       { userId: params.userId, githubUserId: accountInfo.id },
       {
         userId: params.userId,
+        tenantId,
+        workspaceId,
         githubUserId: accountInfo.id,
         githubLogin: accountInfo.login,
         githubAvatarUrl: accountInfo.avatar_url,
@@ -137,6 +158,7 @@ export class GitHubService {
       githubUserId: account.githubUserId,
       githubLogin: account.githubLogin,
       githubAvatarUrl: account.githubAvatarUrl ?? undefined,
+      workspaceId: account.workspaceId ? String(account.workspaceId) : '',
       createdAt: account.createdAt instanceof Date ? account.createdAt.toISOString() : String(account.createdAt),
       installations: installations
         .filter(i => i.accountId.toString() === account._id.toString())

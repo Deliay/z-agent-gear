@@ -26,6 +26,9 @@ type GitHubAccount {
   githubLogin: String!
   githubAvatarUrl: String
   installations: [GitHubInstallation!]
+  # 所属租户工作区 id（多租户二期）：绑定归属创建时工作区。
+  # 读口径 = 当前工作区 ∪ 本租户全局工作区；绑定/解绑写操作仅作用于当前工作区且受只读拦截。
+  workspaceId: ID!
   createdAt: String!
 }
 
@@ -69,6 +72,16 @@ type CommitSettings {
   # committerType = CUSTOM 时为自定义用户名/邮箱（对应 git user/email），其余为 null
   customName: String
   customEmail: String
+  # 生效值来源（多租户二期新增）：本工作区已设置 / 继承自全局工作区 / 两级均未设置
+  source: CommitSettingsSource!
+  # 当前上下文是否只读（全局工作区且 developer 角色）
+  readOnly: Boolean!
+}
+
+enum CommitSettingsSource {
+  WORKSPACE # 本工作区已设置
+  GLOBAL # 继承自全局工作区
+  UNSET # 两级均未设置（行为与升级前一致）
 }
 
 input CommitSettingsInput {
@@ -82,7 +95,7 @@ input CommitSettingsInput {
 extend type Query {
   githubAccounts: [GitHubAccount!]!
   githubAppUrl: GitHubAppUrl!
-  """当前用户的 Commit 设置（仅对云容器环境生效）；从未保存返回双 UNSET 默认值"""
+  """当前工作区的生效 Commit 设置（仅对云容器环境生效）；继承链 本工作区 → 全局工作区 → 未设置，source 透出来源"""
   commitSettings: CommitSettings!
 }
 

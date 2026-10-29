@@ -18,6 +18,7 @@ import { evictKeyById } from './key-cache.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import { modelService } from './model.js';
 import { sessionService } from './session.js';
+import { getWorkspaceContext } from './workspace-context.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { cloudWorkloadCatalog } from './cloud-workload-catalog.js';
@@ -250,9 +251,13 @@ export class CloudHostService {
     const workloadPlan = await this.resolveWorkloadPlan(presets, workloadIds);
 
     return this.userMutex.runExclusive(`user:${userId}`, async () => {
+      // 多租户二期：计费 owner = 当前工作区所属租户（缺省上下文回退个人租户，与一期等价）
+      const workspaceContext = getWorkspaceContext();
+      const ownerTenantId = workspaceContext?.tenantId ?? userId;
+      const ownerWorkspaceId = workspaceContext?.id ?? null;
       let account: { id: string };
       try {
-        account = await billingClient.getAccount('tenant', userId);
+        account = await billingClient.getAccount('tenant', ownerTenantId);
       } catch {
         throw new Error('billing service unavailable');
       }
@@ -338,7 +343,7 @@ export class CloudHostService {
         const modelKey = await billingClient.createCloudHostApiKey({
           accountId: account.id,
           ownerType: 'tenant',
-          ownerId: userId,
+          ownerId: ownerTenantId,
           name: `cloud-host:${name}`.slice(0, 64),
           cloudHostId,
         });
@@ -351,7 +356,8 @@ export class CloudHostService {
             controllerKeyId: keyId,
             containerApiKeyId: modelKeyId,
             userId,
-            tenantId: userId,
+            tenantId: ownerTenantId,
+            workspaceId: ownerWorkspaceId,
             hostName: name,
             harnessTypes: harnessTypes.map((type) => harnessSlug(type)),
             expiresAt,
@@ -856,6 +862,8 @@ export class CloudHostService {
       failureReason: host.failureReason ?? null,
       deletedAt: iso(host.deletedAt),
       githubAccountId: host.githubAccountId ? String(host.githubAccountId) : null,
+      // 契约 CloudHost.workspaceId = 租户工作区（模型字段 resourceWorkspaceId，计划期裁决对齐 F1）
+      workspaceId: host.resourceWorkspaceId ? String(host.resourceWorkspaceId) : null,
       hasDefaultWorkspace: Boolean(host.workspaceId),
     };
   }

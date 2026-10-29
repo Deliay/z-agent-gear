@@ -14,6 +14,7 @@ import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktree
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { GITHUB_PR_PROMPT, GITHUB_PR_PROMPT_KEY, SYSTEM_PROMPT_KEYS } from './pr-prompts.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
+import { getWorkspaceContext } from '../workspace-context.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -195,10 +196,20 @@ class WorkflowInstanceService {
 
     try {
       const anyLink = nodes.some((n) => n.type === 'HUMAN' && n.linkUpstreamPullRequest);
+      const inheritedWorkspaceId =
+        input.source === 'CONFIGURED' && input.configuredWorkflowId
+          ? (
+              await ConfiguredWorkflow.findById(input.configuredWorkflowId)
+                .select('resourceWorkspaceId')
+                .lean()
+            )?.resourceWorkspaceId
+          : undefined;
       return await WorkflowInstance.create({
         userId,
         controllerId: input.controllerId,
         workspaceId: input.workspaceId,
+        resourceWorkspaceId:
+          inheritedWorkspaceId ?? getWorkspaceContext()?.id ?? undefined,
         configuredWorkflowId: input.source === 'CONFIGURED' ? input.configuredWorkflowId : null,
         name: input.name,
         nodes,

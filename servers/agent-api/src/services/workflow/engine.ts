@@ -34,6 +34,8 @@ export interface WorkflowInstanceDoc {
   userId: { toString(): string };
   controllerId: { toString(): string };
   workspaceId: { toString(): string };
+  /** 租户工作区 id（多租户二期；引擎建节点会话继承，显式传值绕过 ALS） */
+  resourceWorkspaceId?: { toString(): string } | null;
   configuredWorkflowId: { toString(): string };
   name: string;
   nodes: WorkflowNodeDoc[];

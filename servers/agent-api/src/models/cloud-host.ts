@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { applyTenantScope } from '../services/tenant-scope.js';
+import { applyWorkspaceScope } from '../services/workspace-scope.js';
 
 export const CLOUD_HOST_STATUSES = [
   'STARTING',
@@ -46,6 +47,16 @@ const cloudHostSchema = new mongoose.Schema(
       required: false,
       default: null,
     },
+    // 多租户二期（计划期裁决，对齐 F1 命名口径）：`workspaceId` 已为「项目工作区
+    // （ControllerWorkspace）」语义并被默认工作区链路强消费，租户工作区维度改用
+    // `resourceWorkspaceId`；契约 `CloudHost.workspaceId` 由 resolver 映射本字段。
+    resourceWorkspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Workspace',
+      required: false,
+      default: null,
+      index: true,
+    },
     containerId: { type: String, default: null },
     defaultSessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', default: null },
     // 锁定的 Github 帐号；null=未选定（创建时可选定，或首次 Git 项目设置时 CAS 绑定一次）
@@ -72,6 +83,8 @@ cloudHostSchema.index({ controllerId: 1 });
 // 已由迁移 011 下线（迁移 005 只读不回改），此处不得再声明。
 
 applyTenantScope(cloudHostSchema);
+// 多租户二期：独占型资源，租户工作区维度为 `resourceWorkspaceId`（计划期裁决，对齐 F1）
+applyWorkspaceScope(cloudHostSchema, { workspaceField: 'resourceWorkspaceId' });
 
 export const CloudHost = mongoose.model('CloudHost', cloudHostSchema);
 export type ICloudHost = mongoose.InferSchemaType<typeof cloudHostSchema>;

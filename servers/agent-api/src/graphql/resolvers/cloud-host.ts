@@ -47,12 +47,13 @@ export const cloudHostResolvers = {
     },
     cloudHostBillingQuote: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       const userId = requireUser(context);
+      const billingTenantId = context.workspaceAccess?.tenantId ?? context.currentUser?.tenantId ?? userId;
       let createCredits = FALLBACK_CREATE_CREDITS;
       let perMinuteCredits = FALLBACK_PER_MINUTE_CREDITS;
       let availableBalance: number | null = null;
       const [prices, account] = await Promise.allSettled([
         billingClient.getPriceQuote(['cloud_host.create', 'container.minute']),
-        billingClient.getAccount('tenant', userId),
+        billingClient.getAccount('tenant', billingTenantId),
       ]);
       if (prices.status === 'fulfilled') {
         for (const item of prices.value) {

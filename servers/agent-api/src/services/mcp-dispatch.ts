@@ -16,6 +16,8 @@ import {
   handleCloudHostToolRequest,
   CLOUD_HOST_TOOLS_SERVER_NAME,
 } from './cloud-host-tools.js';
+import { workspaceService } from './workspace-service.js';
+import { runWithWorkspace } from './workspace-context.js';
 
 interface McpTokenPayload {
   sessionId?: string;
@@ -100,8 +102,13 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
   // 平台内置服务（如 agent-workflow-tools / agent-workflow-admin-tools）：不经 Redis 转发，直接分发到本地 handler
   if (server.transport === 'platform') {
     const isPlatformNotification = request.id === undefined || request.id === null;
+    // 多租户二期（F11）：平台工具集按「会话所属租户工作区」过滤/校验
+    const sessionContext = await workspaceService.buildSessionWorkspaceContext(
+      payload.sessionId,
+      payload.userId,
+    );
     // 按 serverName 分发：节点作用域工具集要求 workflow payload；管理工具集仅需 userId/sessionId
-    const outcome =
+    const outcome = await runWithWorkspace(sessionContext, async () =>
       serverName === ADMIN_PLATFORM_SERVER_NAME
         ? await handleAdminPlatformMcpRequest(
             { userId: payload.userId, sessionId: payload.sessionId },
@@ -114,10 +121,11 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
             )
           : serverName === CLOUD_HOST_TOOLS_SERVER_NAME
             ? await handleCloudHostToolRequest(
-                { userId: payload.userId ?? '', sessionId: payload.sessionId },
+                { userId: payload.userId ?? '', sessionId: payload.sessionId ?? '' },
                 request,
               )
-            : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } };
+            : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } },
+    );
     if (isPlatformNotification) {
       return { status: 202, body: undefined };
     }

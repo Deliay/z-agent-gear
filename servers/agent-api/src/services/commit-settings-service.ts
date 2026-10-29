@@ -10,7 +10,11 @@ import { GitHubAccount } from '../models/github-account.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
 import { CloudContainer } from '../models/cloud-container.js';
+import { Workspace } from '../models/workspace.js';
 import { githubService, type AppBotIdentity } from './github.js';
+import { getWorkspaceContext, WORKSPACE_READ_ONLY_MESSAGE } from './workspace-context.js';
+
+export type CommitSettingsSource = 'WORKSPACE' | 'GLOBAL' | 'UNSET';
 
 /** GraphQL 输入（大写枚举）；兼容外部调用直接传小写字面量。 */
 export interface CommitSettingsInput {
@@ -21,13 +25,15 @@ export interface CommitSettingsInput {
   customEmail?: string | null;
 }
 
-/** GraphQL 输出（大写枚举）。 */
+/** GraphQL 输出（大写枚举）+ 来源/只读（多租户二期）。 */
 export interface CommitSettingsView {
   committerMode: Uppercase<CommitterMode>;
   committerType: Uppercase<CommitterType>;
   githubAccountId: string | null;
   customName: string | null;
   customEmail: string | null;
+  source: CommitSettingsSource;
+  readOnly: boolean;
 }
 
 /** 内部端点响应（裁决 4：unset 时仅返回 mode，不返回 null 字段）。 */
@@ -89,7 +95,11 @@ interface SettingShape {
   customEmail?: string | null;
 }
 
-function toView(setting: SettingShape | null | undefined): CommitSettingsView {
+function toView(
+  setting: SettingShape | null | undefined,
+  source: CommitSettingsSource = 'UNSET',
+  readOnly = false,
+): CommitSettingsView {
   const mode = toDbMode(setting?.committerMode) ?? 'unset';
   const type = toDbType(setting?.committerType) ?? 'unset';
   return {
@@ -101,6 +111,8 @@ function toView(setting: SettingShape | null | undefined): CommitSettingsView {
         : null,
     customName: type === 'custom' ? (setting?.customName ?? null) : null,
     customEmail: type === 'custom' ? (setting?.customEmail ?? null) : null,
+    source,
+    readOnly,
   };
 }
 
@@ -123,30 +135,57 @@ interface NormalizedSetting {
  * 归一规则仅按 `committerType`（裁决 1）：`committerMode=UNSET` 不清空提交人字段。
  */
 export class CommitSettingsService {
+  /**
+   * 当前工作区生效设置（三段继承：本工作区 → 本租户全局工作区 → unset）。
+   * 无请求上下文（内部链路）时回退个人全局工作区，与一期等价。
+   */
   async getCommitSettings(userId: string): Promise<CommitSettingsView> {
-    const setting = await UserCommitSetting.findOne({ userId }).lean();
-    return toView(setting as SettingShape | null);
+    const context = getWorkspaceContext();
+    if (!context) {
+      const setting = await UserCommitSetting.findOne({ userId }).lean();
+      return toView(setting as SettingShape | null, setting ? 'WORKSPACE' : 'UNSET', false);
+    }
+    const own = await UserCommitSetting.findOne({ workspaceId: context.id }).lean();
+    if (own) return toView(own as SettingShape, 'WORKSPACE', context.readOnly);
+    if (context.id !== context.globalWorkspaceId && context.globalWorkspaceId) {
+      const global = await UserCommitSetting.findOne({ workspaceId: context.globalWorkspaceId }).lean();
+      if (global) return toView(global as SettingShape, 'GLOBAL', context.readOnly);
+    }
+    return toView(null, 'UNSET', context.readOnly);
   }
 
   async updateCommitSettings(
     userId: string,
     input: CommitSettingsInput,
   ): Promise<CommitSettingsView> {
+    const context = getWorkspaceContext();
+    if (context?.readOnly) throw new Error(WORKSPACE_READ_ONLY_MESSAGE);
     const normalized = await this.validateAndNormalize(userId, input);
+    const workspaceId = context?.id;
+    const tenantId = context?.tenantId ?? workspaceId ?? userId;
+    const fields = {
+      committerMode: normalized.committerMode,
+      committerType: normalized.committerType,
+      githubAccountId: normalized.githubAccountId,
+      customName: normalized.customName,
+      customEmail: normalized.customEmail,
+    };
     const saved = await UserCommitSetting.findOneAndUpdate(
-      { userId },
+      workspaceId ? { workspaceId } : { userId },
       {
-        $set: {
-          committerMode: normalized.committerMode,
-          committerType: normalized.committerType,
-          githubAccountId: normalized.githubAccountId,
-          customName: normalized.customName,
-          customEmail: normalized.customEmail,
-        },
+        $set: workspaceId
+          ? {
+              // userId 保留为最近编辑者（审计）；tenantId 为工作区所属租户
+              userId,
+              tenantId,
+              workspaceId,
+              ...fields,
+            }
+          : fields,
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
     ).lean();
-    return toView(saved as SettingShape | null);
+    return toView(saved as SettingShape | null, 'WORKSPACE', false);
   }
 
   /**
@@ -162,7 +201,8 @@ export class CommitSettingsService {
     if (!host) return { mode: 'unset' };
 
     const userId = String(host.userId);
-    const setting = await UserCommitSetting.findOne({ userId }).lean();
+    const workspaceId = host.resourceWorkspaceId ? String(host.resourceWorkspaceId) : '';
+    const setting = await this.resolveEffectiveSetting(userId, workspaceId);
     if (!setting) return { mode: 'unset' };
 
     const mode = toDbMode((setting as SettingShape).committerMode) ?? 'unset';
@@ -178,7 +218,7 @@ export class CommitSettingsService {
       return { mode: 'agent_only', name: bot.name, email: bot.email };
     }
 
-    const committer = await this.resolveCommitter(userId, setting as SettingShape);
+    const committer = await this.resolveCommitter(userId, setting as SettingShape, workspaceId);
     if (!committer) return { mode: 'unset' };
 
     if (mode === 'human_only') {
@@ -198,6 +238,32 @@ export class CommitSettingsService {
     }
 
     return { mode: 'unset' };
+  }
+
+  /**
+   * 三段继承：本工作区设置 → 本租户全局工作区设置 → 无。
+   * 云电脑缺租户工作区（升级前存量）时回退按 userId 的历史行，保证行为与升级前一致。
+   */
+  private async resolveEffectiveSetting(
+    userId: string,
+    workspaceId: string,
+  ): Promise<SettingShape | null> {
+    if (!workspaceId) {
+      const legacy = await UserCommitSetting.findOne({ userId }).lean();
+      return (legacy as SettingShape | null) ?? null;
+    }
+    const own = await UserCommitSetting.findOne({ workspaceId }).lean();
+    if (own) return own as SettingShape;
+    if (!mongoose.isValidObjectId(workspaceId)) return null;
+    const workspace = await Workspace.findById(workspaceId).select('tenantId type').lean();
+    if (!workspace) return null;
+    if (workspace.type === 'global') return null;
+    const global = await Workspace.findOne({ tenantId: workspace.tenantId, type: 'global' })
+      .select('_id')
+      .lean();
+    if (!global) return null;
+    const inherited = await UserCommitSetting.findOne({ workspaceId: String(global._id) }).lean();
+    return (inherited as SettingShape | null) ?? null;
   }
 
   /** bot 身份解析失败按 unset 告警降级（下个周期重试，不阻断其余链路）。 */
@@ -265,13 +331,33 @@ export class CommitSettingsService {
   private async resolveCommitter(
     userId: string,
     setting: SettingShape,
+    workspaceId = '',
   ): Promise<{ name: string; email: string } | null> {
     const type = toDbType(setting.committerType);
     if (type === 'github_account') {
       const accountId = setting.githubAccountId ? String(setting.githubAccountId) : '';
       if (!accountId || !mongoose.isValidObjectId(accountId)) return null;
-      const account = await GitHubAccount.findOne({ _id: accountId, userId }).lean();
+      const account = workspaceId
+        ? await GitHubAccount.findById(accountId).lean()
+        : await GitHubAccount.findOne({ _id: accountId, userId }).lean();
       if (!account) return null;
+      // 共享读口径校验：帐号 ∈ 当前工作区 ∪ 本租户全局工作区（无上下文时回退创建者校验）
+      if (workspaceId) {
+        const accountWorkspace = account.workspaceId ? String(account.workspaceId) : '';
+        if (accountWorkspace && accountWorkspace !== workspaceId) {
+          const workspace = mongoose.isValidObjectId(workspaceId)
+            ? await Workspace.findById(workspaceId).select('tenantId').lean()
+            : null;
+          const global = workspace
+            ? await Workspace.findOne({ tenantId: workspace.tenantId, type: 'global' })
+                .select('_id')
+                .lean()
+            : null;
+          if (!global || accountWorkspace !== String(global._id)) return null;
+        }
+      } else if (String(account.userId) !== userId) {
+        return null;
+      }
       const login = account.githubLogin;
       const githubUserId = account.githubUserId;
       if (typeof login !== 'string' || !login || typeof githubUserId !== 'number') return null;

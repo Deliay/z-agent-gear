@@ -7,7 +7,7 @@ import mongoose from 'mongoose';
 import { config } from './config/index.js';
 import { typeDefs } from './graphql/schemas/index.js';
 import { resolvers } from './graphql/resolvers/index.js';
-import { authenticateUser } from './middleware/auth.js';
+import { authenticateUser, resolveWorkspaceAccess } from './middleware/auth.js';
 import { compressionMiddleware } from './middleware/compression.js';
 import { getRedisClient } from './middleware/redis.js';
 import { sessionStreamRouter } from './routes/session-stream.js';
@@ -32,7 +32,10 @@ import * as migration011UserCommitSettingsIndex from './migrations/011-user-comm
 import * as migration012AccountUserTenant from './migrations/012-account-user-tenant.js';
 import * as migration013TenantIdBackfill from './migrations/013-tenant-id-backfill.js';
 import * as migration014TenantIdRebackfill from './migrations/014-tenant-id-rebackfill.js';
+import * as migration015TeamWorkspaces from './migrations/015-team-workspaces.js';
 import { internalUsersRouter } from './routes/internal-users.js';
+import { internalTenantsRouter } from './routes/internal-tenants.js';
+import { enterWithWorkspace } from './services/workspace-context.js';
 import { scheduleTenantSelfCheck } from './services/tenant-self-check.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
@@ -63,7 +66,14 @@ const yoga = createYoga({
   schema,
   context: async ({ request }) => {
     const currentUser = await authenticateUser(request);
-    return { currentUser, tenantId: currentUser?.tenantId ?? null };
+    if (!currentUser) {
+      enterWithWorkspace(undefined);
+      return { currentUser: null, tenantId: null };
+    }
+    // 多租户二期：解析 x-workspace-id（非法/不可达一律 workspace not found）
+    const workspace = await resolveWorkspaceAccess(request, currentUser);
+    enterWithWorkspace(workspace);
+    return { currentUser, tenantId: currentUser.tenantId, workspaceAccess: workspace ?? null };
   },
   graphiql: true,
 });
@@ -75,6 +85,7 @@ app.use('/api', gatewayProxyRouter);
 app.use('/api', githubRouter);
 app.use('/internal/cloud-hosts', internalCloudHostRouter);
 app.use('/internal/users', internalUsersRouter);
+app.use('/internal/tenants', internalTenantsRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -117,6 +128,7 @@ async function start() {
       migration012AccountUserTenant,
       migration013TenantIdBackfill,
       migration014TenantIdRebackfill,
+      migration015TeamWorkspaces,
     ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);

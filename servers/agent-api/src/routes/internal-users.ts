@@ -7,6 +7,7 @@ import { Tenant } from '../models/tenant.js';
 import { User } from '../models/user.js';
 import { assertUsernamePasswordRules, hashPassword, verifyPassword } from '../services/auth.js';
 import { billingClient } from '../services/billing-client.js';
+import { workspaceService } from '../services/workspace-service.js';
 
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
@@ -161,10 +162,18 @@ internalUsersRouter.post('/', async (req: Request, res: Response) => {
       return;
     }
 
+    // 多租户二期（裁决 16）：确保全局工作区 + `tenantmembers{role:'admin'}`（幂等、半完成补齐）。
+    // 置于计费 get-or-create 成功之后，避免额外回滚面。
+    const globalWorkspace = await workspaceService.ensureGlobalWorkspace(String(tenantId), {
+      adminUserId: String(user._id),
+      createdBy: 'provision',
+    });
+
     res.status(created ? 201 : 200).json({
       user: userView(user),
       account: { id: String(account._id), username: account.username },
       tenant: { id: String(tenant._id), name: tenant.name, type: tenant.type },
+      globalWorkspace: { id: globalWorkspace.id, name: globalWorkspace.name, type: globalWorkspace.type },
     });
   } catch (err) {
     await rollback();

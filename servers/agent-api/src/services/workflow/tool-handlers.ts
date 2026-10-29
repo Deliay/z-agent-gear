@@ -3,6 +3,7 @@ import { workflowEngine, type TransitionPayload, type WorkflowInstanceDoc, type 
 import { getArtifactKeys, getValue, listKeys, removeKey } from './blackboard.js';
 import { prHandlerRegistry, normalizePullRequestId, PullRequestIdError } from './pr-handler-registry.js';
 import { syncNodeStatus } from './pr-check-run-sync.js';
+import { getWorkspaceContext } from '../workspace-context.js';
 
 /** 平台内置工作流工具服务名（transport: platform / source: platform） */
 export const PLATFORM_SERVER_NAME = 'agent-workflow-tools';
@@ -177,7 +178,17 @@ async function loadScopeContext(
     );
   }
   const instance = (await WorkflowInstance.findById(scope.instanceId)) as unknown as WorkflowInstanceDoc | null;
-  if (!instance || instance.userId.toString() !== scope.userId) {
+  if (!instance) {
+    throw new WorkflowToolError('NOT_FOUND', `工作流实例不存在或无权限：${scope.instanceId}`);
+  }
+  // 多租户二期（F11）：归属校验以「实例所属租户工作区 = 会话工作区」为准；
+  // 无请求上下文（引擎/内部）时退回创建者校验。
+  const workspaceContext = getWorkspaceContext();
+  if (workspaceContext) {
+    if (instance.resourceWorkspaceId && instance.resourceWorkspaceId.toString() !== workspaceContext.id) {
+      throw new WorkflowToolError('NOT_FOUND', `工作流实例不存在或无权限：${scope.instanceId}`);
+    }
+  } else if (instance.userId.toString() !== scope.userId) {
     throw new WorkflowToolError('NOT_FOUND', `工作流实例不存在或无权限：${scope.instanceId}`);
   }
   const node = instance.nodes.find((n) => n.nodeId === scope.nodeId);
