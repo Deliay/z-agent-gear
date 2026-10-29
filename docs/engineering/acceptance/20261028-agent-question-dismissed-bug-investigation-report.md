@@ -7,7 +7,7 @@ type: Permanent
 
 > **状态**: 🟡 **已复现（真实 Agent 进程级）+ 根因链已定位**。`cancel` 分支可秒级复现该文案；`accept` 分支对照可用；无响应时 65s 自动 cancel 后同样得到该文案。**触发到具体分支（是否真的弹过窗、为何如此快）仍需人类确认**（见 §七）。
 >
-> 分支：`bugfix/agent-question-dismissed`（基 `origin/main` @ `34745215`）；调查日期：2026-10-28。
+> 分支：`bugfix/agent-question-dismissed`（基 `origin/main` @ `34745215`）；调查日期：2026-10-28；复验日期：2026-10-29（同分支同环境，`cancel` 策略约 5.0s 稳定复现同一文案）。
 
 ## 关联文档
 
@@ -89,6 +89,21 @@ npx tsx tests/manual/repro-question-tool.ts <none|accept|decline|cancel> \
 
 - `acp:elicitation` 上行与失败文案**稳定复现**（4 次有效触发全部得到上述结论）。
 - 触发与否取决于模型是否真的调用 `question` 工具（自然语言「帮我提问」有时被模型用纯文本替代）：4/6 次触发，属模型随机性，不影响结论。
+
+### 3.4 复验记录（2026-10-29，`cancel` 策略）
+
+在 `packages/agent-controller` 下重新 `npm ci` 后执行同一脚本，模型 `zag/deepseek-v4.1-flash`，OpenCode `2.1.1`，一次性复现：
+
+```text
+[4402ms] emit acp:message  {"toolCallId":"call_3c38210c...","title":"question","status":"pending"}
+[4954ms] emit acp:elicitation {"requestId":"elic_1793263864771_08t2ggnejv0x","mode":"form","message":"Questions",...}
+[5004ms] -> respond elicitation elic_1793263864771_08t2ggnejv0x cancel
+[5015ms] emit acp:message  {"status":"failed","content":[{"content":{"text":"The user dismissed this question"}}],
+                            "rawOutput":{"metadata":{},"error":"The user dismissed this question"}}
+[5019ms] emit acp:prompt:complete {"stopReason":"cancelled"}
+```
+
+结论：从 `acp:elicitation` 上行到 `cancel` 回填仅 50ms，工具在 11ms 后即 `failed`，文案与 §3.2 完全一致；证明「非 accept → dismissed」映射与本次调查结论可重复验证。
 
 ## 四、根因分析（含证据）
 
