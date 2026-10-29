@@ -290,6 +290,9 @@ describe('TenantDetailPage', () => {
 
     fireEvent.click(screen.getAllByRole('button', { name: '变更角色' })[1]);
     const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain('成员会短暂失去访问权限');
+    expect(dialog.textContent).toContain('级联清空该成员在本租户全部普通工作区的成员关系');
+    expect(dialog.textContent).toContain('重新添加后不会自动恢复');
     const newRoleSelect = within(dialog).getByLabelText('新角色') as HTMLSelectElement;
     expect(newRoleSelect.value).toBe('developer');
     fireEvent.change(newRoleSelect, { target: { value: 'admin' } });

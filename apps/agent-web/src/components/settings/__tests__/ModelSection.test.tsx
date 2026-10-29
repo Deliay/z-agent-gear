@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import ModelSection from '../ModelSection'
+import { resetWorkspaceStore, selectWorkspace, syncWorkspaceContext } from '../../../stores/workspace'
 
 const dnd = vi.hoisted(() => ({ onDragEnd: null as null | ((event: unknown) => void) }))
 
@@ -274,5 +275,33 @@ describe('agent-web ModelSection', () => {
     setupQueries([])
     render(<ModelSection />)
     expect(screen.getByText('暂无可用模型，添加供应商后自动同步模型')).toBeDefined()
+  })
+
+  it('混合来源组不展示组头单一徽标，逐模型展示来源', () => {
+    resetWorkspaceStore()
+    const tenant = { id: 't1', name: '团队', type: 'team' as const, memberCount: 2 }
+    const globalWs = {
+      id: 'g1', name: '全局工作区', type: 'global' as const, tenant,
+      memberCount: 2, myRole: 'admin' as const, readOnly: false, createdAt: '',
+    }
+    const normalWs = {
+      id: 'w1', name: '项目 A', type: 'normal' as const, tenant,
+      memberCount: 1, myRole: 'admin' as const, readOnly: false, createdAt: '',
+    }
+    syncWorkspaceContext({
+      workspaces: [globalWs, normalWs],
+      tenants: [{ tenant, role: 'admin' }],
+      userId: 'u1',
+    })
+    selectWorkspace('w1')
+    setupQueries([
+      model('a', { workspaceId: 'w1' }),
+      model('b', { workspaceId: 'g1' }),
+    ])
+    render(<ModelSection />)
+    expandGroup('My OpenAI')
+    // 组头不展示单一来源徽标；行内分别展示「本工作区」「全局工作区」
+    expect(screen.getAllByText('本工作区')).toHaveLength(1)
+    expect(screen.getAllByText('全局工作区')).toHaveLength(1)
   })
 })

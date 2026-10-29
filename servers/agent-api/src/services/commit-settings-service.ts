@@ -184,7 +184,13 @@ export class CommitSettingsService {
           : fields,
       },
       { upsert: true, new: true, setDefaultsOnInsert: true },
-    ).lean();
+    )
+      .lean()
+      .catch(async (err: { code?: number }) => {
+        // 并发 upsert 撞 {workspaceId} 唯一索引：回读既同行，避免竞态 500
+        if (err?.code !== 11000 || !workspaceId) throw err;
+        return UserCommitSetting.findOne({ workspaceId }).lean();
+      });
     return toView(saved as SettingShape | null, 'WORKSPACE', false);
   }
 
@@ -305,7 +311,23 @@ export class CommitSettingsService {
       if (!accountId || !mongoose.isValidObjectId(accountId)) {
         throw new Error(COMMIT_SETTINGS_ERRORS.invalidGithubAccount);
       }
-      const account = await GitHubAccount.findOne({ _id: accountId, userId }).lean();
+      // 多租户二期（阻断-B）：候选列表 = 当前工作区 ∪ 本租户全局工作区，校验必须与
+      // resolveCommitter 的共享读口径一致；无上下文（内部链路）保持创建者口径。
+      const context = getWorkspaceContext();
+      let account;
+      if (context) {
+        account = await GitHubAccount.findById(accountId).lean();
+        if (account) {
+          const accountWorkspace = account.workspaceId ? String(account.workspaceId) : '';
+          const allowed =
+            accountWorkspace === context.id ||
+            (context.globalWorkspaceId !== '' && accountWorkspace === context.globalWorkspaceId) ||
+            (!accountWorkspace && String(account.userId) === userId);
+          if (!allowed) account = null;
+        }
+      } else {
+        account = await GitHubAccount.findOne({ _id: accountId, userId }).lean();
+      }
       if (!account) throw new Error(COMMIT_SETTINGS_ERRORS.invalidGithubAccount);
       return {
         committerMode: mode,

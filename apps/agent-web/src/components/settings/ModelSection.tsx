@@ -82,17 +82,24 @@ export default function ModelSection() {
       if (model.scope === 'global') continue
       const key = model.provider ? (model.providerId ?? 'unknown') : 'unknown'
       if (!map.has(key)) {
-        const source = resolveSource(model.workspaceId)
         map.set(key, {
           key,
           title: model.provider?.name ?? '未知供应商',
           models: [],
-          sortable: !contextReadOnly && source.editable,
-          source,
+          sortable: false,
         })
         order.push(key)
       }
       map.get(key)!.models.push(model)
+    }
+    // 来源/可编辑性逐模型计算；组头徽标仅在组内来源一致时展示，混合来源由行内徽标区分
+    for (const group of map.values()) {
+      const sources = group.models.map((model) => resolveSource(model.workspaceId))
+      group.sortable = !contextReadOnly && sources.every((source) => source.editable)
+      group.source =
+        sources.length > 0 && sources.every((source) => source.kind === sources[0].kind)
+          ? sources[0]
+          : undefined
     }
     return [
       ...(systemModels.length
@@ -223,7 +230,10 @@ export default function ModelSection() {
                     </div>
                   )}
                   {group.models.map((model) => {
-                    const modelSource = resolveSource(model.workspaceId)
+                    const modelSource: ResourceSource =
+                      model.scope === 'global'
+                        ? { kind: 'global', label: '全局工作区', editable: false }
+                        : resolveSource(model.workspaceId)
                     return (
                       <ModelItem
                         key={model.id}
@@ -232,7 +242,7 @@ export default function ModelSection() {
                         onDelete={handleDelete}
                         sortable={group.sortable}
                         hideProviderName
-                        readOnlyToggle={!group.sortable}
+                        readOnlyToggle={contextReadOnly || !modelSource.editable}
                         readOnly={contextReadOnly || !modelSource.editable}
                         source={modelSource}
                       />

@@ -1,11 +1,14 @@
 import { config } from '../config/index.js';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
+import mongoose from 'mongoose';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
 import { User } from '../models/user.js';
 import { Workspace } from '../models/workspace.js';
-import { actorFilter, getWorkspaceContext } from './workspace-context.js';
+import { TenantMember } from '../models/tenant-member.js';
+import { WorkspaceMember } from '../models/workspace-member.js';
+import { actorFilter, getWorkspaceContext, WORKSPACE_READ_ONLY_MESSAGE } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 export interface GitHubRepoInfo {
@@ -91,27 +94,55 @@ export class GitHubService {
   }
 
   /**
-   * 当前请求工作区（多租户二期）；无 ALS 上下文（OAuth 回调/内部链路）时回退
-   * 「用户个人租户全局工作区」，与一期行为等价。
+   * 解析 OAuth 绑定落点（多租户二期）：state 携带发起绑定的工作区；
+   * 校验租户成员资格与 normal 工作区成员资格，全局工作区 + developer 拒绝（只读红线）。
+   * 缺失 workspaceId（一期旧 state）回退个人租户全局工作区。
    */
-  private async resolveWorkspace(userId: string): Promise<{ workspaceId: string; tenantId: string }> {
-    const context = getWorkspaceContext();
-    if (context) return { workspaceId: context.id, tenantId: context.tenantId };
-    const user = await User.findById(userId).select('tenantId').lean();
-    const tenantId = user?.tenantId ? String(user.tenantId) : userId;
-    const global = await Workspace.findOne({ tenantId, type: 'global' }).select('_id').lean();
-    return { workspaceId: global ? String(global._id) : '', tenantId };
+  private async resolveSetupWorkspace(
+    userId: string,
+    workspaceId?: string,
+  ): Promise<{ workspaceId: string; tenantId: string }> {
+    if (!workspaceId) {
+      const user = await User.findById(userId).select('tenantId').lean();
+      const tenantId = user?.tenantId ? String(user.tenantId) : userId;
+      const global = await Workspace.findOne({ tenantId, type: 'global' }).select('_id').lean();
+      return { workspaceId: global ? String(global._id) : '', tenantId };
+    }
+    if (!mongoose.isValidObjectId(workspaceId)) throw new Error('workspace not found');
+    const workspace = await Workspace.findById(workspaceId).lean();
+    if (!workspace) throw new Error('workspace not found');
+    const tenantId = String(workspace.tenantId);
+    const membership = await TenantMember.findOne({ tenantId, userId }).lean();
+    if (!membership) throw new Error('workspace not found');
+    const role = membership.role === 'admin' ? 'admin' : 'developer';
+    const type = workspace.type === 'global' ? 'global' : 'normal';
+    if (type === 'global' && role === 'developer') {
+      throw new Error(WORKSPACE_READ_ONLY_MESSAGE);
+    }
+    if (type === 'normal' && role !== 'admin') {
+      const join = await WorkspaceMember.findOne({ workspaceId: workspace._id, userId }).lean();
+      if (!join) throw new Error('workspace not found');
+    }
+    return { workspaceId: String(workspace._id), tenantId };
   }
 
-  async handleSetup(params: { installationId: number; state: string; userId: string }): Promise<void> {
+  async handleSetup(params: {
+    installationId: number;
+    state: string;
+    userId: string;
+    workspaceId?: string;
+  }): Promise<void> {
     const tokenResponse = await this.getInstallationToken(params.installationId);
     const accountInfo = await this.getInstallationAccount(params.installationId);
     const repos = await this.getRepositories(tokenResponse.token);
-    const { workspaceId, tenantId } = await this.resolveWorkspace(params.userId);
+    const { workspaceId, tenantId } = await this.resolveSetupWorkspace(
+      params.userId,
+      params.workspaceId,
+    );
 
     const encryptedToken = encrypt(tokenResponse.token);
     const account = await GitHubAccount.findOneAndUpdate(
-      { userId: params.userId, githubUserId: accountInfo.id },
+      { userId: params.userId, githubUserId: accountInfo.id, workspaceId },
       {
         userId: params.userId,
         tenantId,
@@ -184,6 +215,14 @@ export class GitHubService {
   async unbindAccount(userId: string, accountId: string): Promise<boolean> {
     const account = await GitHubAccount.findOne({ _id: accountId, ...actorFilter(userId) });
     if (!account) return false;
+
+    // 多租户二期：共享读可能命中全局/他人工作区行；写（解绑）仅允许当前工作区自身行，
+    // 越界统一 Not found（在删除安装数据之前校验，避免“假成功 + 半删除”）。
+    const context = getWorkspaceContext();
+    if (context?.readOnly) throw new Error(WORKSPACE_READ_ONLY_MESSAGE);
+    if (context && String(account.workspaceId ?? '') !== context.id) {
+      throw new Error('workspace not found');
+    }
 
     const installations = await GitHubInstallation.find({ accountId: account._id });
     for (const inst of installations) {

@@ -24,6 +24,15 @@ vi.mock('../models/github-account.js', () => ({
   },
 }));
 
+vi.mock('../models/workspace.js', () => ({
+  Workspace: { findById: vi.fn(), findOne: vi.fn() },
+}));
+vi.mock('../models/tenant-member.js', () => ({
+  TenantMember: { findOne: vi.fn() },
+}));
+vi.mock('../models/workspace-member.js', () => ({
+  WorkspaceMember: { findOne: vi.fn() },
+}));
 vi.mock('../models/github-installation.js', () => ({
   GitHubInstallation: {
     find: vi.fn(),
@@ -49,6 +58,10 @@ import {
 } from './github.js';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
+import { Workspace } from '../models/workspace.js';
+import { TenantMember } from '../models/tenant-member.js';
+import { WorkspaceMember } from '../models/workspace-member.js';
+import { runWithWorkspace } from './workspace-context.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -614,5 +627,92 @@ describe('GitHubService', () => {
       expect(String(fetchMock.mock.calls[0][0])).toContain('/repos/a/b/issues/42/comments');
       vi.unstubAllGlobals();
     });
+  });
+});
+
+describe('GitHub 绑定工作区归属（阻断-A/C）', () => {
+  function lean<T>(value: T) {
+    return { lean: async () => value, select: () => lean(value) } as never;
+  }
+  const WS_NORMAL = '507f1f77bcf86cd799439071';
+  const WS_GLOBAL = '507f1f77bcf86cd799439072';
+
+  it('resolveSetupWorkspace：normal 工作区需成员资格，否则 workspace not found', async () => {
+    vi.mocked(Workspace.findById).mockReturnValue(
+      lean({ _id: WS_NORMAL, tenantId: 'tenant-team', type: 'normal' }) as never,
+    );
+    vi.mocked(TenantMember.findOne).mockReturnValue(lean({ role: 'developer' }) as never);
+    vi.mocked(WorkspaceMember.findOne).mockReturnValue(lean(null) as never);
+
+    await expect(
+      (githubService as unknown as { resolveSetupWorkspace: (u: string, w: string) => Promise<unknown> })
+        .resolveSetupWorkspace('user1', WS_NORMAL),
+    ).rejects.toThrow('workspace not found');
+
+    vi.mocked(WorkspaceMember.findOne).mockReturnValue(lean({ _id: 'm1' }) as never);
+    await expect(
+      (githubService as unknown as { resolveSetupWorkspace: (u: string, w: string) => Promise<unknown> })
+        .resolveSetupWorkspace('user1', WS_NORMAL),
+    ).resolves.toEqual({ workspaceId: WS_NORMAL, tenantId: 'tenant-team' });
+  });
+
+  it('resolveSetupWorkspace：全局工作区 + developer 拒绝（只读红线）', async () => {
+    vi.mocked(Workspace.findById).mockReturnValue(
+      lean({ _id: WS_GLOBAL, tenantId: 'tenant-team', type: 'global' }) as never,
+    );
+    vi.mocked(TenantMember.findOne).mockReturnValue(lean({ role: 'developer' }) as never);
+
+    await expect(
+      (githubService as unknown as { resolveSetupWorkspace: (u: string, w: string) => Promise<unknown> })
+        .resolveSetupWorkspace('user1', WS_GLOBAL),
+    ).rejects.toThrow('global workspace is read-only');
+  });
+
+  it('unbindAccount：共享行越界删除抛 workspace not found 且不删安装数据', async () => {
+    vi.mocked(GitHubAccount.findOne).mockResolvedValue({
+      _id: 'acc-global',
+      workspaceId: WS_GLOBAL,
+    } as never);
+
+    await runWithWorkspace(
+      {
+        id: WS_NORMAL,
+        tenantId: 'tenant-team',
+        type: 'normal',
+        role: 'developer',
+        readOnly: false,
+        globalWorkspaceId: WS_GLOBAL,
+      },
+      async () => {
+        await expect(githubService.unbindAccount('user1', 'acc-global')).rejects.toThrow(
+          'workspace not found',
+        );
+      },
+    );
+    expect(GitHubInstallation.deleteMany).not.toHaveBeenCalled();
+    expect(GitHubAccount.deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('unbindAccount：全局工作区 developer 只读拒绝', async () => {
+    vi.mocked(GitHubAccount.findOne).mockResolvedValue({
+      _id: 'acc-global',
+      workspaceId: WS_GLOBAL,
+    } as never);
+    await runWithWorkspace(
+      {
+        id: WS_GLOBAL,
+        tenantId: 'tenant-team',
+        type: 'global',
+        role: 'developer',
+        readOnly: true,
+        globalWorkspaceId: WS_GLOBAL,
+      },
+      async () => {
+        await expect(githubService.unbindAccount('user1', 'acc-global')).rejects.toThrow(
+          'global workspace is read-only',
+        );
+      },
+    );
+    expect(GitHubInstallation.deleteMany).not.toHaveBeenCalled();
   });
 });

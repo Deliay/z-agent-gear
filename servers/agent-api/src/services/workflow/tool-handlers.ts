@@ -185,7 +185,12 @@ async function loadScopeContext(
   // 无请求上下文（引擎/内部）时退回创建者校验。
   const workspaceContext = getWorkspaceContext();
   if (workspaceContext) {
-    if (instance.resourceWorkspaceId && instance.resourceWorkspaceId.toString() !== workspaceContext.id) {
+    if (instance.resourceWorkspaceId) {
+      if (instance.resourceWorkspaceId.toString() !== workspaceContext.id) {
+        throw new WorkflowToolError('NOT_FOUND', `工作流实例不存在或无权限：${scope.instanceId}`);
+      }
+    } else if (instance.userId.toString() !== scope.userId) {
+      // 旧实例缺租户工作区维度：回退创建者校验，避免任意工作区上下文放行
       throw new WorkflowToolError('NOT_FOUND', `工作流实例不存在或无权限：${scope.instanceId}`);
     }
   } else if (instance.userId.toString() !== scope.userId) {

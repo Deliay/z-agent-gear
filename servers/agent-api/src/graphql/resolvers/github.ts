@@ -23,7 +23,16 @@ export const githubResolvers = {
       if (!context.currentUser) throw new GraphQLError('Not authenticated');
       const { url, state } = await githubService.getAppUrl(context.currentUser.id);
       const redis = getRedisClient();
-      await redis.set(`github:oauth:state:${state}`, context.currentUser.id, 'EX', 600);
+      // 多租户二期：state 携带发起绑定的工作区（OAuth 回调无请求上下文，需显式传递）
+      await redis.set(
+        `github:oauth:state:${state}`,
+        JSON.stringify({
+          userId: context.currentUser.id,
+          workspaceId: context.workspaceAccess?.id ?? null,
+        }),
+        'EX',
+        600,
+      );
       return { url, state };
     },
   },
@@ -45,8 +54,11 @@ export const githubResolvers = {
       try {
         return await commitSettingsService.updateCommitSettings(context.currentUser.id, args.input);
       } catch (error) {
-        // 白名单文案原样透传（前端逐字映射）；未知错误不泄漏内部细节。
-        const whitelist = Object.values(COMMIT_SETTINGS_ERRORS) as string[];
+        // 白名单文案原样透传（前端逐字映射）；只读红线与未知错误区分
+        const whitelist = [
+          ...(Object.values(COMMIT_SETTINGS_ERRORS) as string[]),
+          'global workspace is read-only',
+        ];
         const message = error instanceof Error ? error.message : '';
         throw new GraphQLError(
           whitelist.includes(message) ? message : 'invalid commit settings',

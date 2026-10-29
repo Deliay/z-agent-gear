@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { Tenant } from './../models/tenant.js';
@@ -329,5 +329,20 @@ describe('TenantMemberService（T-TM，真库）', () => {
     expect(changed.role).toBe('admin');
     const row = await TenantMember.findOne({ tenantId: team._id, userId: developer._id }).lean();
     expect(row?.createdBy).toBe(String(admin._id));
+  });
+
+  it('T-TM5: 并发 upsert E11000 → already a member（唯一索引翻译）', async () => {
+    const team = await createTeam('team-k');
+    const admin = await createUser('sam');
+    await createUser('tina');
+    await TenantMember.create({ tenantId: team._id, userId: admin._id, role: 'admin' });
+
+    const spy = vi.spyOn(TenantMember, 'create').mockRejectedValueOnce(
+      Object.assign(new Error('E11000 duplicate key'), { code: 11000 }),
+    );
+    await expect(
+      tenantMemberService.addTenantMember(String(admin._id), String(team._id), 'tina', 'developer'),
+    ).rejects.toThrow(WORKSPACE_ERRORS.alreadyMember);
+    spy.mockRestore();
   });
 });
