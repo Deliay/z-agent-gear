@@ -227,16 +227,23 @@ export class GitHubService {
    * 签发仅对目标仓库有效的 installation token，权限与 App 安装授权保持一致：
    * actions / contents / checks / deployments / environments / issues / pull_requests / workflows 均为 write。
    * 错误信息不含 GitHub 响应体，避免泄露凭据/内部细节。
-   * 进程内缓存复用（到期前 5 分钟作废），行为对既有调用方透明。
+   * 进程内缓存复用：命中要求剩余有效期 > `options.minRemainingMs`（缺省 5 分钟，保持 Check Runs 等
+   * 既有调用方行为）；容器凭据端点传 55 分钟（`CONTAINER_CREDENTIAL_MIN_REMAINING_MS`），
+   * 避免 50 分钟续期拿到只剩 10 分钟的近过期 token。
    */
   async createRepoScopedToken(
     accountId: string,
     repoFullName: string,
+    options?: { minRemainingMs?: number },
   ): Promise<{ token: string; expiresAt: Date }> {
     const account = await GitHubAccount.findById(accountId).lean();
     if (!account) throw new Error('account not found');
 
-    const cached = this.readCachedToken(String(account._id), repoFullName);
+    const cached = this.readCachedToken(
+      String(account._id),
+      repoFullName,
+      options?.minRemainingMs,
+    );
     if (cached) return cached;
 
     const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
@@ -277,17 +284,25 @@ export class GitHubService {
     throw new Error('repository is not authorized');
   }
 
+  /**
+   * 读缓存：先按硬余量（5 分钟）作废，再按调用方要求的 `minRemainingMs` 判定命中。
+   * 未达调用方要求但仍在硬余量之上时**只 miss 不删除**——小余量调用方（Check Runs 等）仍可复用，
+   * 需要更长余量的调用方（容器 50 分钟续期）自行重新签发。
+   */
   private readCachedToken(
     accountId: string,
     repoFullName: string,
+    minRemainingMs: number = TOKEN_EXPIRY_MARGIN_MS,
   ): { token: string; expiresAt: Date } | null {
     const key = tokenCacheKey(accountId, repoFullName);
     const entry = repoTokenCache.get(key);
     if (!entry) return null;
-    if (entry.expiresAt.getTime() - Date.now() <= TOKEN_EXPIRY_MARGIN_MS) {
+    const remainingMs = entry.expiresAt.getTime() - Date.now();
+    if (remainingMs <= TOKEN_EXPIRY_MARGIN_MS) {
       repoTokenCache.delete(key);
       return null;
     }
+    if (remainingMs <= minRemainingMs) return null;
     return { token: entry.token, expiresAt: entry.expiresAt };
   }
 
