@@ -134,6 +134,27 @@ function stableErrorMessage(status: number): string {
   return '费用服务请求失败';
 }
 
+/** 日志只保留路径主体，去掉 query（可能含 accountId/ownerId/ownerName）。 */
+function billingPath(path: string): string {
+  return path.split('?')[0];
+}
+
+/**
+ * 计费调用失败日志（折叠为 `billing service unavailable` 之前记录）：
+ * 只写方法、路径主体、上游状态码与错误码/稳定文案；
+ * 不写请求头（含 Token）、响应体原文和 query 参数。
+ */
+function logBillingFailure(
+  level: 'warn' | 'error',
+  method: string,
+  path: string,
+  detail: string,
+): void {
+  const line = `[billing-client] ${method} ${billingPath(path)} failed: ${detail}`;
+  if (level === 'error') console.error(line);
+  else console.warn(line);
+}
+
 /**
  * admin-api `/internal/billing/*` 客户端（参照 CloudControllerClient 模式）：
  * 原生 fetch + AbortController 超时 + Bearer INTERNAL_API_TOKEN。
@@ -146,10 +167,13 @@ export class BillingClient {
   ) {}
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const method = (init.method ?? 'GET').toUpperCase();
     if (!this.baseUrl) {
+      logBillingFailure('error', method, path, 'ADMIN_API_URL 未配置，费用服务不可用');
       throw new BillingServiceUnavailableError('ADMIN_API_URL 未配置，费用服务不可用');
     }
     if (!this.token) {
+      logBillingFailure('error', method, path, 'INTERNAL_API_TOKEN 未配置，费用服务不可用');
       throw new BillingServiceUnavailableError('INTERNAL_API_TOKEN 未配置，费用服务不可用');
     }
     const controller = new AbortController();
@@ -165,29 +189,54 @@ export class BillingClient {
         },
         signal: controller.signal,
       });
-    } catch {
-      // C2：不回传底层网络错误详情（可能含内部主机/端口信息）。
+    } catch (err) {
+      // C2：不回传底层网络错误详情（可能含内部主机/端口信息）；日志只记录错误码。
+      const code = (err as { cause?: { code?: unknown } }).cause?.code;
+      logBillingFailure(
+        'error',
+        method,
+        path,
+        controller.signal.aborted
+          ? `timeout after ${TIMEOUT_MS}ms`
+          : `network error${typeof code === 'string' ? ` (${code})` : ''}`,
+      );
       throw new BillingServiceUnavailableError('费用服务不可达，请稍后重试');
     } finally {
       clearTimeout(timer);
     }
     if (!response.ok) {
-      if (response.status === 409) {
-        let available: number | undefined;
-        try {
-          const body = (await response.json()) as { available?: unknown };
-          if (typeof body.available === 'number') available = body.available;
-        } catch {
-          // 非 JSON 409 仍按余额不足上抛（调用方按错误码处理）
+      // 上游错误体固定为 { error, available? }：只取 error 错误码（限大写/数字/下划线、截断），
+      // 便于日志直接区分 UNAUTHORIZED / ACCOUNT_FROZEN / INTERNAL_ERROR 等，不记录原文。
+      let upstreamError: string | undefined;
+      let available: number | undefined;
+      try {
+        const body = (await response.json()) as { error?: unknown; available?: unknown };
+        if (typeof body.error === 'string' && /^[A-Z0-9_]{1,64}$/.test(body.error)) {
+          upstreamError = body.error;
         }
+        if (typeof body.available === 'number') available = body.available;
+      } catch {
+        // 非 JSON 错误体：仅按状态码映射
+      }
+      const upstreamDetail = upstreamError ? ` upstream=${upstreamError}` : '';
+      if (response.status === 409) {
+        logBillingFailure('warn', method, path, `status=409${upstreamDetail} insufficient balance`);
         throw new InsufficientBalanceError(available);
       }
-      throw new BillingServiceUnavailableError(stableErrorMessage(response.status), response.status);
+      const message = stableErrorMessage(response.status);
+      logBillingFailure(
+        response.status >= 500 ? 'error' : 'warn',
+        method,
+        path,
+        `status=${response.status}${upstreamDetail} ${message}`,
+      );
+      throw new BillingServiceUnavailableError(message, response.status);
     }
     try {
       return (await response.json()) as T;
     } catch {
       // C2：响应体非法（非 JSON）时抛稳定错误，不透传解析异常。
+      logBillingFailure('error', method, path, `status=${response.status} invalid JSON response`);
       throw new BillingServiceUnavailableError('费用服务响应异常', response.status);
     }
   }
