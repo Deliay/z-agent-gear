@@ -13,6 +13,7 @@ const mockRefetch = vi.fn();
 vi.mock('@apollo/client/react', () => ({
   useMutation: () => [mockUseMutation],
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
+  useApolloClient: () => ({ resetStore: vi.fn() }),
 }));
 
 vi.mock('../../stores/homeOverview', () => ({

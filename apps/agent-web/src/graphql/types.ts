@@ -1,5 +1,105 @@
 import type { WorkflowInstanceSummaryData } from './workflow'
 
+// ---------- 多租户二期：租户工作区与租户成员（contracts/workspace.graphql） ----------
+
+export type WorkspaceType = 'global' | 'normal'
+
+export type TenantRole = 'admin' | 'developer'
+
+export type TenantTypeValue = 'personal' | 'team'
+
+/** `Workspace.tenant` 内联租户摘要（复用 auth.graphql 的 Tenant 形状） */
+export interface WorkspaceTenantData {
+  id: string
+  name: string
+  type: TenantTypeValue
+  memberCount: number
+}
+
+export interface WorkspaceData {
+  id: string
+  name: string
+  type: WorkspaceType
+  tenant: WorkspaceTenantData
+  /** normal=成员数；global=租户成员数 */
+  memberCount: number
+  /** 当前用户在本工作区所属租户的角色 */
+  myRole: TenantRole
+  /** 全局工作区 + developer 时为只读 */
+  readOnly: boolean
+  createdAt: string
+}
+
+export interface TenantMembershipData {
+  tenant: WorkspaceTenantData
+  role: TenantRole
+}
+
+export interface WorkspaceMemberData {
+  /** 用户 id */
+  id: string
+  name: string
+  username: string
+  /** 仅租户成员列表透出；工作区成员无角色之分 */
+  role?: TenantRole | null
+  createdAt: string
+}
+
+export interface AccountSummaryData {
+  username: string
+  name: string
+  userId: string
+}
+
+export interface GetWorkspaceContextQuery {
+  myWorkspaces: WorkspaceData[]
+  myTenants: TenantMembershipData[]
+}
+
+export interface GetWorkspaceMembersQuery {
+  workspaceMembers: WorkspaceMemberData[]
+}
+
+export interface GetTenantMembersQuery {
+  tenantMembers: WorkspaceMemberData[]
+}
+
+export interface SearchAccountsQuery {
+  searchAccounts: AccountSummaryData[]
+}
+
+export interface CreateTenantWorkspaceMutation {
+  createTenantWorkspace: WorkspaceData
+}
+
+export interface RenameTenantWorkspaceMutation {
+  renameTenantWorkspace: WorkspaceData
+}
+
+export interface DeleteTenantWorkspaceMutation {
+  deleteTenantWorkspace: boolean
+}
+
+export interface AddWorkspaceMemberMutation {
+  addTenantWorkspaceMember: WorkspaceData
+}
+
+export interface RemoveWorkspaceMemberMutation {
+  removeTenantWorkspaceMember: WorkspaceData
+}
+
+export interface AddTenantMemberMutation {
+  addTenantMember: WorkspaceMemberData
+}
+
+export interface RemoveTenantMemberMutation {
+  removeTenantMember: boolean
+}
+
+export interface ChangeTenantMemberRoleMutation {
+  changeTenantMemberRole: WorkspaceMemberData
+}
+
 export interface ControllerKeyData {
   id: string
   name: string
@@ -44,6 +144,8 @@ export interface CloudHostData {
   workloadInstalling?: string | null
   /** 云电脑锁定的 Github 帐号；null=未选定（首次 Git 项目设置可选定一次，之后不可改） */
   githubAccountId?: string | null
+  /** 所属租户工作区 id（多租户二期）；缺失/未选择时为 undefined */
+  workspaceId?: string | null
 }
 
 /** 云电脑创建/运行报价（金额单位 credits） */
@@ -228,6 +330,10 @@ export interface ProviderData {
   credentialType: string
   credentialValue: string
   isEnabled: boolean
+  /** 平台内置（global）或用户工作区（user）；旧数据可能缺失 */
+  scope?: 'user' | 'global'
+  /** 所属租户工作区；scope=global 恒为 null（多租户二期） */
+  workspaceId?: string | null
   models: Array<{
     id: string
     name: string
@@ -253,6 +359,8 @@ export interface ModelData {
   isEnabled: boolean
   sortOrder: number
   scope: 'user' | 'global'
+  /** 所属租户工作区；scope=global 恒为 null（多租户二期） */
+  workspaceId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -752,6 +860,8 @@ export interface GitHubAccountData {
   githubLogin: string
   githubAvatarUrl?: string | null
   installations?: GitHubInstallationData[] | null
+  /** 所属租户工作区；读口径=当前∪全局（多租户二期） */
+  workspaceId?: string | null
   createdAt: string
 }
 
@@ -776,12 +886,19 @@ export type CommitterModeValue = 'AGENT_ONLY' | 'CO_AUTHOR' | 'HUMAN_ONLY' | 'UN
 
 export type CommitterTypeValue = 'GITHUB_ACCOUNT' | 'CUSTOM' | 'UNSET'
 
+/** Commit 设置生效值来源（多租户二期三段继承） */
+export type CommitSettingsSourceValue = 'WORKSPACE' | 'GLOBAL' | 'UNSET'
+
 export interface CommitSettingsData {
   committerMode: CommitterModeValue
   committerType: CommitterTypeValue
   githubAccountId: string | null
   customName: string | null
   customEmail: string | null
+  /** 本工作区 / 继承自全局工作区 / 未设置 */
+  source?: CommitSettingsSourceValue
+  /** 当前上下文是否只读（全局工作区 + developer） */
+  readOnly?: boolean
 }
 
 export interface CommitSettingsInputData {

@@ -704,7 +704,7 @@ describe('CloudHostGithubService', () => {
           repoFullName: 'owner/repo',
           targetPath: '/home/worker/workspace',
         }),
-      ).rejects.toThrow('Github 账号不存在或不属于当前用户');
+      ).rejects.toThrow('Github 账号不存在或不可用');
       expect(CloudHost.updateOne).not.toHaveBeenCalled();
       expect(CloudHostSetupOperation.create).not.toHaveBeenCalled();
     });

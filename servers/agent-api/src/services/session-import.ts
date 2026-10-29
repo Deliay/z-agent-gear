@@ -1,6 +1,7 @@
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
+import { actorFilter } from './workspace-context.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { sessionService } from './session.js';
@@ -44,7 +45,7 @@ export class SessionImportService {
     workspaceId: string,
     acpServerType: string = 'opencode',
   ): Promise<HistorySessionInfo[]> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
@@ -82,7 +83,7 @@ export class SessionImportService {
 
     // Filter out sessions that already exist in the system
     const existingIds: string[] = await Session.find({
-      userId,
+      ...actorFilter(userId),
       externalSessionId: { $exists: true, $ne: null },
     }).distinct('externalSessionId');
 
@@ -94,7 +95,7 @@ export class SessionImportService {
     sessionId: string,
     syncAgent: boolean = true,
   ): Promise<DeleteHistorySessionResult> {
-    const session = await Session.findOne({ _id: sessionId, userId });
+    const session = await Session.findOne({ _id: sessionId, ...actorFilter(userId) });
     if (!session) {
       throw new Error('Session not found');
     }
@@ -116,7 +117,7 @@ export class SessionImportService {
       // MCP endpoint 撤销 + 删库删消息），否则 ACP 进程会被保留
       await sessionService.delete(sessionId, userId);
     } else {
-      await Session.deleteOne({ _id: sessionId, userId });
+      await Session.deleteOne({ _id: sessionId, ...actorFilter(userId) });
       await AcpMessage.deleteMany({ sessionId });
     }
 
@@ -158,7 +159,7 @@ export class SessionImportService {
     acpSessionIds: string[],
     acpServerType: string = 'opencode',
   ): Promise<ImportSessionResult[]> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }

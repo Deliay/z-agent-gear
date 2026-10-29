@@ -1,5 +1,6 @@
 import { Controller } from '../../models/controller.js';
 import { getRedisClient } from '../../middleware/redis.js';
+import { actorFilter } from '../workspace-context.js';
 
 /**
  * 校验 controller 归属并读取其 ACP capabilities（Redis `acp:capability:<controllerId>`）
@@ -8,7 +9,7 @@ import { getRedisClient } from '../../middleware/redis.js';
  * 轮询最终缓存 key `acp:capability:<controllerId>` 而非中间结果，确保单一写入源。
  */
 export async function getAvailableServerTypes(controllerId: string, userId: string): Promise<string[]> {
-  const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+  const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
   if (!controller) {
     throw new Error('控制器不存在或不属于当前用户');
   }

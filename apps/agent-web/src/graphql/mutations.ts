@@ -619,3 +619,95 @@ export const CLEANUP_CLOUD_HOST_ISSUES_LABELS = gql`
     }
   }
 `
+
+// ---------- 多租户二期：工作区 CRUD / 成员管理（仅租户 admin） ----------
+
+const WORKSPACE_FIELDS = gql`
+  fragment WorkspaceFields on Workspace {
+    id
+    name
+    type
+    tenant {
+      id
+      name
+      type
+      memberCount
+    }
+    memberCount
+    myRole
+    readOnly
+    createdAt
+  }
+`
+
+export const CREATE_TENANT_WORKSPACE = gql`
+  mutation CreateTenantWorkspace($name: String!) {
+    createTenantWorkspace(name: $name) {
+      ...WorkspaceFields
+    }
+  }
+  ${WORKSPACE_FIELDS}
+`
+
+export const RENAME_TENANT_WORKSPACE = gql`
+  mutation RenameTenantWorkspace($id: ID!, $name: String!) {
+    renameTenantWorkspace(id: $id, name: $name) {
+      ...WorkspaceFields
+    }
+  }
+  ${WORKSPACE_FIELDS}
+`
+
+export const DELETE_TENANT_WORKSPACE = gql`
+  mutation DeleteTenantWorkspace($id: ID!) {
+    deleteTenantWorkspace(id: $id)
+  }
+`
+
+export const ADD_WORKSPACE_MEMBER = gql`
+  mutation AddWorkspaceMember($workspaceId: ID!, $userId: ID!) {
+    addTenantWorkspaceMember(workspaceId: $workspaceId, userId: $userId) {
+      ...WorkspaceFields
+    }
+  }
+  ${WORKSPACE_FIELDS}
+`
+
+export const REMOVE_WORKSPACE_MEMBER = gql`
+  mutation RemoveWorkspaceMember($workspaceId: ID!, $userId: ID!) {
+    removeTenantWorkspaceMember(workspaceId: $workspaceId, userId: $userId) {
+      ...WorkspaceFields
+    }
+  }
+  ${WORKSPACE_FIELDS}
+`
+
+export const ADD_TENANT_MEMBER = gql`
+  mutation AddTenantMember($tenantId: ID!, $username: String!, $role: TenantRole) {
+    addTenantMember(tenantId: $tenantId, username: $username, role: $role) {
+      id
+      name
+      username
+      role
+      createdAt
+    }
+  }
+`
+
+export const REMOVE_TENANT_MEMBER = gql`
+  mutation RemoveTenantMember($tenantId: ID!, $userId: ID!) {
+    removeTenantMember(tenantId: $tenantId, userId: $userId)
+  }
+`
+
+export const CHANGE_TENANT_MEMBER_ROLE = gql`
+  mutation ChangeTenantMemberRole($tenantId: ID!, $userId: ID!, $role: TenantRole!) {
+    changeTenantMemberRole(tenantId: $tenantId, userId: $userId, role: $role) {
+      id
+      name
+      username
+      role
+      createdAt
+    }
+  }
+`

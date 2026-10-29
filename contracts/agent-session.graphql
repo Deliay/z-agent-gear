@@ -381,6 +381,7 @@ type AuthenticateSessionPayload {
 input CreateSessionInput {
   controllerId: ID!
   acpServerType: AcpServerType! = opencode
+  # 项目工作区（ControllerWorkspace）id；租户工作区取当前请求上下文（x-workspace-id），不在此入参暴露
   workspaceId: ID!
   enableWorktree: Boolean = false
   worktreeBranchSuffix: String

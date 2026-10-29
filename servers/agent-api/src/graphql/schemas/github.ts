@@ -27,6 +27,7 @@ export const githubTypeDefs = `#graphql
     githubLogin: String!
     githubAvatarUrl: String
     installations: [GitHubInstallation!]
+    workspaceId: ID!
     createdAt: String!
   }
 
@@ -60,6 +61,14 @@ export const githubTypeDefs = `#graphql
     githubAccountId: ID
     customName: String
     customEmail: String
+    source: CommitSettingsSource!
+    readOnly: Boolean!
+  }
+
+  enum CommitSettingsSource {
+    WORKSPACE
+    GLOBAL
+    UNSET
   }
 
   input CommitSettingsInput {

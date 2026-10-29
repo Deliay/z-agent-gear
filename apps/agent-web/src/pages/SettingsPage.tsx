@@ -25,6 +25,7 @@ import McpRegistrySection from '@/components/settings/McpRegistrySection';
 import GithubBindingSection from '@/components/settings/GithubBindingSection';
 import CommitSettingsSection from '@/components/settings/CommitSettingsSection';
 import WorkflowSection from '@/components/settings/WorkflowSection';
+import WorkspaceContextBanner from '@/components/settings/WorkspaceContextBanner';
 import ControllerConfigPage from './ControllerConfigPage';
 import {
   User,
@@ -132,6 +133,7 @@ export default function SettingsPage() {
         </nav>
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8">
+          <WorkspaceContextBanner />
           <section id="account-section" className="mb-8 md:mb-10">
             <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">帐号</h2>
             <Card>

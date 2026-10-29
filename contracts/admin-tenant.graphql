@@ -1,31 +1,56 @@
-# 后台租户与账户管理（前台租户的只读视图 + 开户）
+# 后台租户与账户管理（前台租户的只读视图 + 开户 + team 开通/成员初始化）
 #
-# 后台不做多租户设计：admin_users 不建租户、管理面无租户隔离；本契约仅提供对前台租户/账户的只读盘点与开户转发。
-# 鉴权：全部需要 admin JWT；租户与用户为只读视图，开户为唯一写操作。
-# 模型口径：tenant→users 一对多（users.tenantId 承载）；account→users 一对多（users.accountId 承载登录关联）。
+# 后台不做多租户设计：admin_users 不建租户、管理面无租户隔离；本契约仅提供对前台租户/账户的只读盘点、
+# 开户转发与 team 租户开通/成员初始化转发。
+# 鉴权：全部需要 admin JWT；租户与用户为只读视图，开户/team 开通/成员初始化是唯一写操作。
+# 模型口径（多租户二期）：tenant→members 经 `tenantmembers`（含 role）展开；account→users 一对多
+# （users.accountId 承载登录关联）。
 #
-# 写权：accounts/users/tenants 写方仅 agent-api；admin-api 一律只读镜像，
-# 开户经 `POST {AGENT_API_URL}/internal/users`（Bearer INTERNAL_API_TOKEN）转发，
-# 由 agent-api 创建「账户+用户+同名个人专属租户+零余额租户计费账户」。
+# 写权：accounts/users/tenants/tenantmembers/workspaces/workspacemembers 写方仅 agent-api；
+# admin-api 一律只读镜像，开户经 `POST {AGENT_API_URL}/internal/users`、
+# team 开通经 `POST {AGENT_API_URL}/internal/tenants`、
+# 成员初始化经 `POST/DELETE {AGENT_API_URL}/internal/tenants/:id/members[/:userId]`（Bearer INTERNAL_API_TOKEN）转发。
+#
+# 错误口径：tenant name already exists / account not found / already a member / not a member /
+# personal tenant is immutable / last admin cannot be removed
 
 enum TenantType {
   personal
   team
 }
 
+enum WorkspaceType {
+  global
+  normal
+}
+
+enum TenantRole {
+  admin
+  developer
+}
+
 type AdminTenant {
   id: ID!
   name: String!
-  type: TenantType! # personal | team（一期仅 personal）
+  type: TenantType! # personal | team
   memberCount: Int!
   balance: Float # 租户计费账户可用余额（credits），无账户为 null
   createdAt: String!
 }
 
+type AdminWorkspace {
+  id: ID!
+  name: String!
+  type: WorkspaceType! # global | normal
+  memberCount: Int!
+  createdAt: String!
+}
+
 type AdminTenantUser {
-  id: ID! # 用户 id
-  name: String! # 用户展示名
-  username: String! # 登录账户名（取自其 account）
+  id: ID!
+  name: String!
+  username: String!
+  role: TenantRole! # 新增：租户内角色（personal 恒 admin）
   createdAt: String!
 }
 
@@ -33,7 +58,10 @@ type AdminTenantDetail {
   id: ID!
   name: String!
   type: TenantType!
-  users: [AdminTenantUser!]! # 只读列表（按 users.tenantId 查询，tenant→users 1..n）
+  # 口径变更：改经 tenantmembers 展开（含 role；personal 恒 1 且 admin）
+  users: [AdminTenantUser!]!
+  # 新增：只读工作区列表
+  workspaces: [AdminWorkspace!]!
   createdAt: String!
 }
 
@@ -45,4 +73,10 @@ type Query {
 type Mutation {
   # 后台开户：创建登录账户+用户+同名个人专属租户+零余额租户费用账户
   adminCreateFrontUser(username: String!, password: String!): AdminTenantUser!
+  # 创建 team 租户（自动获得全局工作区与零余额租户计费账户）
+  adminCreateTeamTenant(name: String!): AdminTenant!
+  # 成员初始化：成员必须是已存在账户（按登录名）；仅 team 租户；role 缺省 developer
+  adminAddTenantMember(tenantId: ID!, username: String!, role: TenantRole): AdminTenantUser!
+  # 移除成员：仅 team 租户；last-admin 保护同样生效
+  adminRemoveTenantMember(tenantId: ID!, userId: ID!): Boolean!
 }

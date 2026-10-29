@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { applyTenantScope } from '../services/tenant-scope.js';
+import { applyWorkspaceScope } from '../services/workspace-scope.js';
 
 const configOptionSchema = new mongoose.Schema({
   id: String,
@@ -14,6 +15,8 @@ const configOptionSchema = new mongoose.Schema({
 const sessionSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
+  // 多租户二期：租户工作区归属（创建时继承其控制器/云电脑；引擎建节点会话继承 instance）
+  workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Workspace', required: false, default: null, index: true },
   controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true, index: true },
   controllerName: { type: String, required: true },
   acpServerType: { type: String, enum: ['opencode', 'github_copilot', 'claude_code', 'gemini_cli', 'codex', 'mimo_code', 'kimi_code', 'deepseek_harness'], required: true },
@@ -45,8 +48,10 @@ const sessionSchema = new mongoose.Schema({
 
 sessionSchema.index({ userId: 1, createdAt: -1 });
 sessionSchema.index({ controllerId: 1, status: 1 });
+sessionSchema.index({ tenantId: 1, workspaceId: 1 });
 
 applyTenantScope(sessionSchema);
+applyWorkspaceScope(sessionSchema);
 
 export const Session = mongoose.model('Session', sessionSchema);
 export type ISession = mongoose.InferSchemaType<typeof sessionSchema>;

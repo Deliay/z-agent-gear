@@ -15,6 +15,7 @@ import {
 import { HOME_OVERVIEW } from '../graphql/home';
 import type { HomeOverviewQuery } from '../graphql/types';
 import { HomeOverviewContext } from '../stores/homeOverview';
+import { useWorkspaceContextSync } from '../hooks/useWorkspaceContextSync';
 
 function FullPageSpinner() {
   return (
@@ -30,6 +31,9 @@ export default function MainLayout() {
   const isMobile = useIsMobile();
   const location = useLocation();
   const navigate = useNavigate();
+
+  // 工作区上下文：myWorkspaces/myTenants 同步 + 失效回退（Phase 8）
+  useWorkspaceContextSync();
 
   // 首页 + 侧边栏统一数据源：单一查询、单一轮询（15s）
   const {

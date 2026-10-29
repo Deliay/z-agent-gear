@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { cacheKey, evictKeyById, getRawKeyById } from './key-cache.js';
+import { actorFilter } from './workspace-context.js';
 import { commandService } from './command.js';
 
 const KEY_FORMAT_VERSION = 1;
@@ -16,6 +17,7 @@ export class ControllerKeyService {
     }
 
     // Delete any existing unbound key (only one unbound key allowed at a time)
+    // 裁决：未绑定 key 的复用/清理按创建者 {userId}（密钥属主语义；机械改 actorFilter 会误删他人未绑定 key）
     const existingUnbound = await ControllerKey.findOne({ userId, boundControllerId: null });
     if (existingUnbound) {
       await evictKeyById(existingUnbound._id.toString());
@@ -52,7 +54,7 @@ export class ControllerKeyService {
 
   async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
     // Only return unbound keys (bound keys are represented by controllers)
-    const keys = await ControllerKey.find({ userId, boundControllerId: null }).sort({ createdAt: -1 }).lean();
+    const keys = await ControllerKey.find({ ...actorFilter(userId), boundControllerId: null }).sort({ createdAt: -1 }).lean();
     const results = await Promise.all(keys.map(async (key) => {
       const id = (key._id as mongoose.Types.ObjectId).toString();
       const rawKey = await getRawKeyById(id);
@@ -100,7 +102,7 @@ export class ControllerKeyService {
 
   async rename(id: string, userId: string, name: string): Promise<Record<string, unknown> | null> {
     const key = await ControllerKey.findOneAndUpdate(
-      { _id: id, userId },
+      { _id: id, ...actorFilter(userId) },
       { name },
       { new: true },
     ).lean();
@@ -109,7 +111,7 @@ export class ControllerKeyService {
   }
 
   async delete(id: string, userId: string): Promise<boolean> {
-    const result = await ControllerKey.findOneAndDelete({ _id: id, userId });
+    const result = await ControllerKey.findOneAndDelete({ _id: id, ...actorFilter(userId) });
     if (result) {
       await evictKeyById(id);
     }
@@ -118,13 +120,13 @@ export class ControllerKeyService {
 
   async regenerate(controllerId: string, userId: string): Promise<{ key: Record<string, unknown>; rawKey: string } | null> {
     // Find the controller and verify ownership
-    const controller = await Controller.findOne({ _id: controllerId, userId });
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) });
     if (!controller) return null;
 
     const keyId = controller.keyId.toString();
 
     // Find the existing key
-    const existingKey = await ControllerKey.findOne({ _id: keyId, userId }).lean();
+    const existingKey = await ControllerKey.findOne({ _id: keyId, ...actorFilter(userId) }).lean();
     if (!existingKey) return null;
 
     // Generate new key
@@ -135,7 +137,7 @@ export class ControllerKeyService {
 
     // Update the key record with new hash
     const updatedKey = await ControllerKey.findOneAndUpdate(
-      { _id: keyId, userId },
+      { _id: keyId, ...actorFilter(userId) },
       {
         keyHash,
         keyPrefix,
@@ -148,7 +150,7 @@ export class ControllerKeyService {
 
     // Update controller status to unbound (needs re-registration)
     await Controller.findOneAndUpdate(
-      { _id: controllerId, userId },
+      { _id: controllerId, ...actorFilter(userId) },
       { status: 'unbound' },
     );
 

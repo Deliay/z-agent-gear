@@ -146,6 +146,8 @@ export interface StartHarnessOptions {
   userId?: string | null;
   /** 租户归属（多租户一期）：personal 期与 `userId` 同值；缺省为 null。 */
   tenantId?: string | null;
+  /** 租户工作区归属（多租户二期）：String 口径；缺省/解析不到为 null（迁移 002 回填存量行）。 */
+  workspaceId?: string | null;
   /** 容器 TTL 到期时间（harness；仅落库留存，Job 不再设置最长运行时间）。 */
   expiresAt?: Date | null;
   /** 云电脑运行期 secret（仅内存，不落库）。 */
@@ -328,6 +330,7 @@ export class ContainerService {
       refId: refId ?? null,
       userId: options.userId ?? null,
       tenantId: options.tenantId ?? null,
+      workspaceId: options.workspaceId ?? null,
       hostId: options.hostId ?? null,
       hostName: options.hostName ?? null,
       harnessTypes: options.harnessTypes ?? [],

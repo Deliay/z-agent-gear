@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   account: { findOne: vi.fn() },
   user: { findOne: vi.fn(), findById: vi.fn(), countDocuments: vi.fn() },
   tenant: { findById: vi.fn() },
+  tenantMember: { countDocuments: vi.fn() },
   verifyPassword: vi.fn(),
   signToken: vi.fn(),
 }));
@@ -11,6 +12,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../../models/account.js', () => ({ Account: h.account }));
 vi.mock('../../models/user.js', () => ({ User: h.user }));
 vi.mock('../../models/tenant.js', () => ({ Tenant: h.tenant }));
+vi.mock('../../models/tenant-member.js', () => ({ TenantMember: h.tenantMember }));
 vi.mock('../../services/auth.js', () => ({
   verifyPassword: h.verifyPassword,
   signToken: h.signToken,
@@ -79,7 +81,7 @@ describe('auth resolvers (three-tier account model)', () => {
 
   it('User.tenant returns personal tenant with memberCount', async () => {
     h.tenant.findById.mockResolvedValue({ _id: USER_ID, name: 'alice', type: 'personal' });
-    h.user.countDocuments.mockResolvedValue(1);
+    h.tenantMember.countDocuments.mockResolvedValue(1);
 
     const tenant = await authResolvers.User.tenant({ id: USER_ID, name: 'alice' });
     expect(tenant).toEqual({ id: USER_ID, name: 'alice', type: 'personal', memberCount: 1 });

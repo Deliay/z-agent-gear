@@ -53,6 +53,7 @@ export const workflowTypeDefs = `#graphql
     nodes: [WorkflowTemplateNode!]!
     isBuiltin: Boolean!
     createdBy: ResourceCreatedBy!
+    resourceWorkspaceId: ID
     createdAt: String!
     updatedAt: String!
   }
@@ -91,6 +92,7 @@ export const workflowTypeDefs = `#graphql
     sourceTemplateVersion: Int
     nodes: [ConfiguredWorkflowNode!]!
     createdBy: ResourceCreatedBy!
+    resourceWorkspaceId: ID!
     createdAt: String!
     updatedAt: String!
   }
@@ -173,6 +175,7 @@ export const workflowTypeDefs = `#graphql
     configuredWorkflowId: ID
     controllerId: ID!
     workspaceId: ID!
+    resourceWorkspaceId: ID!
     name: String!
     currentNodeNames: [String!]!
     lastNodeName: String

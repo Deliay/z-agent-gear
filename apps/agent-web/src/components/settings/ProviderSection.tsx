@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/button'
 import ProviderItem from './ProviderItem'
 import ProviderFormDialog from './ProviderFormDialog'
 import BatchActionBar from './BatchActionBar'
+import { useResourceSourceResolver } from '@/hooks/useResourceSource'
+import { useWorkspaceAccess } from '@/stores/workspace'
 
 interface ProviderInput {
   name: string
@@ -29,6 +31,8 @@ interface ProviderInput {
 
 export default function ProviderSection() {
   const { data, loading } = useQuery<GetProvidersQuery>(GET_PROVIDERS)
+  const { readOnly: contextReadOnly } = useWorkspaceAccess()
+  const resolveSource = useResourceSourceResolver()
   const [createProvider] = useMutation(CREATE_PROVIDER)
   const [updateProvider] = useMutation(UPDATE_PROVIDER)
   const [deleteProvider] = useMutation(DELETE_PROVIDER)
@@ -166,9 +170,13 @@ export default function ProviderSection() {
     <section className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-medium text-foreground">供应商设置</h3>
-        <Button size="sm" onClick={handleAdd}>
-          添加供应商
-        </Button>
+        {contextReadOnly ? (
+          <span className="text-xs text-muted-foreground">全局工作区对开发者只读</span>
+        ) : (
+          <Button size="sm" onClick={handleAdd}>
+            添加供应商
+          </Button>
+        )}
       </div>
 
       {multiMode && selectedIds.size > 0 && (
@@ -189,17 +197,24 @@ export default function ProviderSection() {
         </div>
       ) : (
         <div className="space-y-2">
-          {providers.map((provider: { id: string; name: string; type: string; endpoint: string; credentialType: string; credentialValue: string; isEnabled: boolean; models: Array<{ id: string }> }) => (
-            <ProviderItem
-              key={provider.id}
-              provider={provider}
-              selected={selectedIds.has(provider.id)}
-              onSelect={handleSelect}
-              onEdit={handleEdit}
-              onToggle={handleToggle}
-              onDelete={handleDeleteWithConfirm}
-            />
-          ))}
+          {providers.map((provider: { id: string; name: string; type: string; endpoint: string; credentialType: string; credentialValue: string; isEnabled: boolean; scope?: 'user' | 'global'; workspaceId?: string | null; models: Array<{ id: string }> }) => {
+            const source = resolveSource(provider.workspaceId)
+            const isPlatformGlobal = provider.scope === 'global'
+            const itemReadOnly = contextReadOnly || !source.editable || isPlatformGlobal
+            return (
+              <ProviderItem
+                key={provider.id}
+                provider={provider}
+                selected={selectedIds.has(provider.id)}
+                onSelect={handleSelect}
+                onEdit={handleEdit}
+                onToggle={handleToggle}
+                onDelete={handleDeleteWithConfirm}
+                readOnly={itemReadOnly}
+                source={isPlatformGlobal ? { kind: 'global', label: '全局工作区', editable: false } : source}
+              />
+            )
+          })}
         </div>
       )}
 

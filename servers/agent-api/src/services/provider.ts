@@ -3,6 +3,7 @@ import { Model } from '../models/model.js';
 import { encrypt, decrypt } from './crypto.js';
 import { llmApiService, ProviderType } from './llm-api.js';
 import { GLOBAL_WRITE_FORBIDDEN } from './constants.js';
+import { getWorkspaceContext } from './workspace-context.js';
 import mongoose from 'mongoose';
 
 // 查询条件：仅 user scope，兼容无 scope 字段的存量数据
@@ -65,6 +66,7 @@ export class ProviderService {
       credentialType: (input.credentialType || 'api_key') as 'api_key',
       encryptedCredential: encrypted,
       scope: 'user',
+      ...this.workspaceFields(),
     });
 
     // 问题 54：与 update/resync 共用同一套 upsert/skip-custom 逻辑，对上游模型名去重（跳过空名），
@@ -171,6 +173,7 @@ export class ProviderService {
       .filter((name) => typeof name === 'string' && name.trim().length > 0)
       .filter((name) => !customNames.has(name));
     const objectId = new mongoose.Types.ObjectId(providerId);
+    const workspaceFields = this.workspaceFields();
 
     if (desired.length > 0) {
       const ops = desired.map((name, sortOrder) => ({
@@ -179,7 +182,7 @@ export class ProviderService {
           // 并发插入的同名自定义模型不会被 upsert 命中并改写为同步模型。
           filter: { providerId: objectId, name, isCustom: { $ne: true } },
           update: {
-            $set: { isCustom: false, isEnabled: true, sortOrder, scope: 'user' as const },
+            $set: { isCustom: false, isEnabled: true, sortOrder, scope: 'user' as const, ...workspaceFields },
           },
           upsert: true,
         },
@@ -302,9 +305,17 @@ export class ProviderService {
       credentialValue: masked,
       isEnabled: provider.isEnabled as boolean,
       scope: normalizeScope(provider.scope),
+      workspaceId: provider.workspaceId ? String(provider.workspaceId) : null,
       createdAt: (provider.createdAt as Date).toISOString(),
       updatedAt: (provider.updatedAt as Date).toISOString(),
     };
+  }
+
+  /** 当前请求的租户/工作区归属（无上下文时不落，兼容内部链路）。 */
+  private workspaceFields(): Record<string, string> {
+    const context = getWorkspaceContext();
+    if (!context) return {};
+    return { tenantId: context.tenantId, workspaceId: context.id };
   }
 
   private mapProviderSummary(provider: Record<string, unknown>) {
