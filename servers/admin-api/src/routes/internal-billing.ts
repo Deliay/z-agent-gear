@@ -25,6 +25,7 @@ import {
   InvalidChargeInputError,
   oneTimeChargeService,
 } from '../services/billing/one-time-charge.js';
+import { isCloudHostOwnedBy } from '../services/billing/cloud-host-ownership.js';
 
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
@@ -356,12 +357,16 @@ export function createInternalBillingRouter(): Router {
     try {
       // B-5/R2-14：非 admin_user 的 cloud_host Key 必须绑定本人且未软删除的云电脑，避免越权；
       // admin_user 与网关鉴权口径一致保留管理豁免（可代任意宿主铸造）。
-      // 注意：tenant 的 ownerId 即 tenantId（一期 personal 恒等于 userId），与宿主 userId 同口径比较。
+      // 归属口径：tenant 比较 host.tenantId（ownerId=tenantId），front_user 比较 host.userId。
       if (hostId && ownerType !== 'admin_user') {
         const host = await CloudHost.findById(hostId)
-          .select({ userId: 1, deletedAt: 1 })
-          .lean<{ userId?: unknown; deletedAt?: Date | null } | null>();
-        if (!host || host.deletedAt || !host.userId || String(host.userId) !== ownerId) {
+          .select({ userId: 1, tenantId: 1, deletedAt: 1 })
+          .lean<{
+            userId?: unknown;
+            tenantId?: unknown;
+            deletedAt?: Date | null;
+          } | null>();
+        if (!host || host.deletedAt || !isCloudHostOwnedBy(host, ownerType, ownerId)) {
           res.status(404).json({ error: 'CLOUD_HOST_NOT_FOUND' });
           return;
         }

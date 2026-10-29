@@ -28,11 +28,13 @@ async function seedCloudHost(input: {
   status?: string;
   deletedAt?: Date | null;
   userId?: string;
+  tenantId?: string;
 } = {}): Promise<string> {
   const _id = new mongoose.Types.ObjectId();
   await mongoose.connection.db!.collection('cloudhosts').insertOne({
     _id,
     userId: input.userId ?? 'probe-user',
+    tenantId: input.tenantId ?? null,
     controllerId: new mongoose.Types.ObjectId(),
     status: input.status ?? 'RUNNING',
     deletedAt: input.deletedAt ?? null,
@@ -45,21 +47,25 @@ async function seedCloudHost(input: {
 async function seedKey(input: {
   scope: 'account' | 'cloud_host';
   cloudHostId?: string;
+  ownerType?: 'front_user' | 'tenant' | 'admin_user';
+  ownerId?: string;
 }): Promise<string> {
   const accountId = new mongoose.Types.ObjectId().toString();
+  const ownerType = input.ownerType ?? 'front_user';
+  const ownerId = input.ownerId ?? 'probe-user';
   if (input.scope === 'account') {
     const { secret } = await apiKeyService.create({
       accountId,
-      ownerType: 'front_user',
-      ownerId: 'probe-user',
+      ownerType,
+      ownerId,
       name: 'account-key',
     });
     return secret;
   }
   const { secret } = await apiKeyService.createCloudHostScopedKey({
     accountId,
-    ownerType: 'front_user',
-    ownerId: 'probe-user',
+    ownerType,
+    ownerId,
     name: 'host-key',
     cloudHostId: input.cloudHostId!,
   });
@@ -140,6 +146,46 @@ describe('billingKeyAuth（CLOUD_HOST Key 实时失效）', () => {
     expect(res.status).toBe(401);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe('invalid_api_key');
+  });
+
+  it('多租户二期：团队租户 tenantId 一致时放行（userId 与 tenantId 不同）', async () => {
+    const tenantId = new mongoose.Types.ObjectId().toString();
+    const cloudHostId = await seedCloudHost({
+      status: 'RUNNING',
+      userId: new mongoose.Types.ObjectId().toString(),
+      tenantId,
+    });
+    const secret = await seedKey({
+      scope: 'cloud_host',
+      cloudHostId,
+      ownerType: 'tenant',
+      ownerId: tenantId,
+    });
+
+    expect((await probe(secret)).status).toBe(200);
+  });
+
+  it('多租户二期：团队租户 tenantId 不一致 → 401（userId 相同也不放行）', async () => {
+    const tenantId = new mongoose.Types.ObjectId().toString();
+    const userId = new mongoose.Types.ObjectId().toString();
+    const cloudHostId = await seedCloudHost({ status: 'RUNNING', userId, tenantId });
+
+    const otherTenant = await seedKey({
+      scope: 'cloud_host',
+      cloudHostId,
+      ownerType: 'tenant',
+      ownerId: new mongoose.Types.ObjectId().toString(),
+    });
+    expect((await probe(otherTenant)).status).toBe(401);
+
+    // 是否是云电脑创建者不影响租户维度归属
+    const creatorUserId = await seedKey({
+      scope: 'cloud_host',
+      cloudHostId,
+      ownerType: 'tenant',
+      ownerId: userId,
+    });
+    expect((await probe(creatorUserId)).status).toBe(401);
   });
 
   it('B-2: admin_user 豁免属主一致性校验（后台代运行）', async () => {

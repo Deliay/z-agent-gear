@@ -2,6 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import mongoose from 'mongoose';
 import { CloudHost } from '../models/cloud-host.js';
 import { apiKeyService, type VerifiedApiKey } from '../services/billing/api-key-service.js';
+import { isCloudHostOwnedBy } from '../services/billing/cloud-host-ownership.js';
 import { clientIpFromNode } from './client-ip.js';
 
 export interface BillingRequest extends Request {
@@ -67,15 +68,18 @@ async function isCloudHostKeyUsable(verified: VerifiedApiKey): Promise<boolean> 
   // 云电脑 Key 的失效开关是容器状态而非时间；仅对历史遗留的 expiresAt 做防御性校验。
   if (verified.expiresAt && verified.expiresAt.getTime() <= Date.now()) return false;
   const host = await CloudHost.findById(verified.cloudHostId)
-    .select({ status: 1, deletedAt: 1, userId: 1 })
-    .lean<{ status?: string; deletedAt?: Date | null; userId?: unknown } | null>();
+    .select({ status: 1, deletedAt: 1, userId: 1, tenantId: 1 })
+    .lean<{
+      status?: string;
+      deletedAt?: Date | null;
+      userId?: unknown;
+      tenantId?: unknown;
+    } | null>();
   if (!host || host.deletedAt || host.status !== 'RUNNING') return false;
   // 纵深防御：运行 Key 的属主必须与云电脑属主一致（防止跨用户 Key 复用）。
-  // 一期前台归属统一为 tenant（ownerId==tenantId==userId）；admin_user 保留管理豁免。
-  if (verified.ownerType !== 'admin_user') {
-    return !!host.userId && String(host.userId) === verified.ownerId;
-  }
-  return true;
+  // 口径与铸造端一致：tenant 比较 host.tenantId（ownerId=tenantId），
+  // 历史行缺 tenantId 时回退 userId；admin_user 保留管理豁免。
+  return isCloudHostOwnedBy(host, verified.ownerType, verified.ownerId);
 }
 
 /** `Authorization: Bearer zag_sk_<hex>` → 校验 API Key 并注入 `billing`。 */
