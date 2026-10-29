@@ -14,6 +14,15 @@ export default function WorkspaceContextBanner() {
       data-testid="workspace-context-banner"
     >
       <span className="text-muted-foreground">当前工作区</span>
+      <span
+        className="font-medium text-foreground"
+        data-testid="workspace-context-tenant"
+      >
+        {workspace.tenant.name}
+      </span>
+      <span className="text-muted-foreground" aria-hidden="true">
+        /
+      </span>
       <span className="font-medium text-foreground">{workspace.name}</span>
       <Badge variant={workspace.type === 'global' ? 'secondary' : 'outline'}>
         {workspace.type === 'global' ? '全局工作区' : '普通工作区'}
