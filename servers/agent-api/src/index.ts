@@ -36,6 +36,7 @@ import * as migration014TenantIdRebackfill from './migrations/014-tenant-id-reba
 import * as migration015TeamWorkspaces from './migrations/015-team-workspaces.js';
 import * as migration016GithubInstallationGithubUserId from './migrations/016-github-installation-github-user-id.js';
 import * as migration017NormalizeStringWorkspaceId from './migrations/017-normalize-string-workspace-id.js';
+import * as migration018DropLegacyUniqueIndexes from './migrations/018-drop-legacy-tenantless-unique-indexes.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -180,6 +181,7 @@ async function start() {
       migration015TeamWorkspaces,
       migration016GithubInstallationGithubUserId,
       migration017NormalizeStringWorkspaceId,
+      migration018DropLegacyUniqueIndexes,
     ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);
