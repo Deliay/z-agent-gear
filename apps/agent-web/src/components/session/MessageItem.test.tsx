@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import MessageItem from './MessageItem';
 
 describe('MessageItem', () => {
@@ -90,5 +90,26 @@ describe('MessageItem', () => {
 
     render(<MessageItem message={userMessage} />);
     expect(screen.queryByRole('button', { name: '复制 Markdown' })).toBeNull();
+  });
+
+  it('should copy plain text derived from markdown without code-block chrome (R-13)', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(<MessageItem message={{ ...agentMessage, content: '```typescript\nconst a = 1;\n```' }} />);
+    fireEvent.click(screen.getByRole('button', { name: '复制纯文本' }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('const a = 1;'));
+    expect(writeText.mock.calls[0][0]).not.toContain('typescript');
+  });
+
+  it('should not show copy actions for non-text messages (M-12)', () => {
+    render(<MessageItem message={{ ...agentMessage, type: 'tool_call', content: 'search("x")' }} />);
+
+    expect(screen.queryByRole('button', { name: '复制 Markdown' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '复制纯文本' })).toBeNull();
   });
 });

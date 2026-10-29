@@ -27,9 +27,10 @@ export default function MarkdownContent({ content }: MarkdownContentProps) {
             return <pre className="!my-0 overflow-x-auto">{children}</pre>;
           }
           const className = codeElement.props.className ?? '';
-          const language = /language-([\w-]+)/.exec(className)?.[1];
+          // 语言名可含 c++ / c# 等符号，不能用 \w 截断（M-4）
+          const language = /language-([^\s]+)/.exec(className)?.[1];
           const code = String(codeElement.props.children ?? '').replace(/\n$/, '');
-          if (language === 'mermaid') {
+          if (language?.toLowerCase() === 'mermaid') {
             return <MermaidBlock code={code} />;
           }
           return <CodeBlock code={code} language={language} />;

@@ -10,9 +10,20 @@ interface CodeBlockProps {
   language?: string;
 }
 
+/** Prism 高亮别名：展示标签保持原文，仅高亮器使用规范名（M-4） */
+const HIGHLIGHT_ALIASES: Record<string, string> = {
+  'c++': 'cpp',
+  'c#': 'csharp',
+  'objective-c': 'objectivec',
+  sh: 'bash',
+  shell: 'bash',
+  html: 'markup',
+};
+
 export default function CodeBlock({ code, language }: CodeBlockProps) {
   const [wrap, setWrap] = useState(false);
   const displayLanguage = language || 'text';
+  const highlightLanguage = HIGHLIGHT_ALIASES[displayLanguage.toLowerCase()] ?? displayLanguage;
 
   const handleCopy = async () => {
     try {
@@ -57,7 +68,7 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
       <div className={wrap ? 'overflow-x-hidden' : 'overflow-x-auto'}>
         {language ? (
           <SyntaxHighlighter
-            language={language}
+            language={highlightLanguage}
             style={oneDark}
             PreTag="pre"
             customStyle={{

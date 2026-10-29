@@ -11,9 +11,9 @@ interface DiffViewProps {
   inline?: boolean;
 }
 
-function HighlightedLine({ text, language }: { text: string; language: string }) {
+function HighlightedLine({ text, language, highlight }: { text: string; language: string; highlight: boolean }) {
   if (!text) return <span> </span>;
-  if (language === 'text') return <span>{text}</span>;
+  if (!highlight || language === 'text') return <span>{text}</span>;
   return (
     <SyntaxHighlighter
       language={language}
@@ -51,6 +51,8 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
     () => computeDiff(isNewFile ? '' : (oldText ?? ''), newText ?? ''),
     [isNewFile, oldText, newText],
   );
+  // 大 diff 逐行 Prism 开销高，超过阈值退化为纯文本（M-6）
+  const highlightEnabled = diffs.length <= 400;
 
   const containerClass = inline
     ? 'rounded border border-border text-xs'
@@ -88,13 +90,13 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
                 className={`flex ${lineClass(d.type)} ${d.type !== 'same' ? 'font-medium' : ''}`}
               >
                 <span
-                  className="w-10 shrink-0 select-none pr-1 text-right text-muted-foreground"
+                  className="min-w-10 shrink-0 select-none pr-1 text-right text-muted-foreground"
                   data-testid="diff-old-line-number"
                 >
                   {d.oldLineNumber ?? ''}
                 </span>
                 <span
-                  className="w-10 shrink-0 select-none pr-1 text-right text-muted-foreground"
+                  className="min-w-10 shrink-0 select-none pr-1 text-right text-muted-foreground"
                   data-testid="diff-new-line-number"
                 >
                   {d.newLineNumber ?? ''}
@@ -103,7 +105,7 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
                   {prefix(d.type)}
                 </span>
                 <span className="min-w-0 flex-1 whitespace-pre-wrap break-all px-1">
-                  {d.type === 'removed' ? (d.text || ' ') : <HighlightedLine text={d.text} language={language} />}
+                  <HighlightedLine text={d.text || ' '} language={language} highlight={highlightEnabled} />
                 </span>
               </div>
             );

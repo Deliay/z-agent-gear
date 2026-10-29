@@ -51,6 +51,28 @@ describe('ContentBlockRenderer', () => {
     expect(link.getAttribute('rel')).toBe('noreferrer');
   });
 
+  it('should block javascript:/data: resource_link URIs instead of rendering an executable href (R-18)', () => {
+    const javascript = renderContent([
+      { type: 'content', content: { type: 'resource_link', uri: 'javascript:alert(1)', name: 'Bad JS' } },
+    ]);
+    expect(javascript.container.querySelector('a')).toBeNull();
+    expect(javascript.container.querySelector('[data-testid="resource-link-blocked"]')).toBeTruthy();
+    javascript.unmount();
+
+    const dataUri = renderContent([
+      { type: 'content', content: { type: 'resource_link', uri: 'data:text/html,<script>alert(1)</script>', name: 'Bad data' } },
+    ]);
+    expect(dataUri.container.querySelector('a')).toBeNull();
+    expect(dataUri.container.querySelector('[data-testid="resource-link-blocked"]')).toBeTruthy();
+  });
+
+  it('should allow file:// resource links', () => {
+    renderContent([
+      { type: 'content', content: { type: 'resource_link', uri: 'file:///tmp/a.md', name: 'Local file' } },
+    ]);
+    expect(screen.getByText('Local file').closest('a')?.getAttribute('href')).toBe('file:///tmp/a.md');
+  });
+
   it('T-CBR5 should render embedded text resources and blob placeholders', () => {
     const text = renderContent([
       {

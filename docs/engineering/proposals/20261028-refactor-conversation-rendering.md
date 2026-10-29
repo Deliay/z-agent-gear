@@ -10,7 +10,7 @@ type: Permanent
 **技术提案版本**: v1.1
 **创建日期**: 2026-10-28
 **作者**: z-agent-gear 工作流
-**feat-branch**: `prd/conversation-rendering`（需求总分支；实现分支 `feat/conversation-rendering-impl`，参考 [[../git.md]] 与仓库 `prd/<slug>` + `feat/<slug>-impl` 惯例）
+**feat-branch**: `prd/conversation-rendering`（需求总分支；实现分支 `feat/conversation-rendering-impl`，参考 z-git skill 与仓库 `prd/<slug>` + `feat/<slug>-impl` 惯例）
 
 > v1.1 变更：根据 PR #333 评审意见，补充「工具调用完成后退化为 Tool Call: other」缺陷的根因调研（ACP `tool_call_update` 稀疏更新被渲染层当作全量数据），新增实现点 5「工具调用视图模型合并」，并同步 zed `apply_patch` 三态合并调研结论与测试用例。
 
@@ -131,11 +131,11 @@ graph LR
 | `components/session/markdown/CodeBlock.tsx` | 代码块容器：语言标签 + 复制 + 换行切换 + 横向滚动 | navigator.clipboard、hover 显示 |
 | `components/session/markdown/MermaidBlock.tsx` | ```mermaid 块渲染 | `import('mermaid')` 懒加载、失败回退、主题跟随 |
 | `components/session/MarkdownContent.tsx` | 重构：接线 CodeBlock/MermaidBlock | react-markdown components 覆写 |
-| `lib/diff.ts` | 行级 diff 计算 | jsdiff `diffLines`，输出 same/added/removed 行序列与行号 |
+| `lib/diff.ts` | 行级 diff 计算 | 换行归一 + jsdiff `diffArrays`，输出 same/added/removed 行序列与行号 |
 | `components/session/DiffView.tsx` | 真实 diff 渲染 | 双列行号、语义色、逐行 Prism 高亮 |
 | `lib/ansi.ts` | ANSI → 安全 HTML | ansi-to-html（escapeXML），过滤光标控制序列 |
 | `components/session/TerminalOutput.tsx` | 终端输出渲染 | dangerouslySetInnerHTML + 已转义 HTML |
-| `components/session/tool-call-icons.ts` | ToolKind → lucide 图标映射 | 语义化 |
+| `components/session/tool-call-icons.tsx` | ToolKind → lucide 图标映射 | 语义化 |
 | `components/session/tool-call-state.ts` | 同一 toolCallId 多消息合并为 MergedToolCall | 三态合并（未携带保留/null 清除/有值替换），对齐 zed apply_patch |
 | `components/session/ContentBlockRenderer.tsx` | ToolCallContent/ContentBlock 全类型渲染 | text/image/audio/resource_link/resource |
 | `components/session/MessageActions.tsx` | 消息悬停操作 | 复制 Markdown / 复制纯文本 |
@@ -180,7 +180,7 @@ export function downloadThreadMarkdown(filename: string, markdown: string): void
 
 ### 4.2 缓存设计
 
-无新增缓存。Mermaid 渲染结果按「源码 hash + 主题」做组件内 memo，避免流式追加时整页重算；diff 计算结果按 oldText/newText 引用 memo。
+无新增缓存。MermaidBlock 以 `code`/`theme` 为 effect 依赖重渲染（未做源码 hash memo）；diff 计算结果按 oldText/newText 引用 `useMemo`。
 
 ## 5. 技术实现方案
 
@@ -222,19 +222,19 @@ sequenceDiagram
 - **描述**: `language-mermaid` 代码块分流到 `MermaidBlock`：动态 `import('mermaid')` 初始化（`startOnLoad: false`，主题随 dark/light），`mermaid.render` 生成 SVG 注入；工具栏提供「缩放 +/−/重置」与「查看源码/查看图形」切换；渲染异常回退 `CodeBlock`。
 - **技术细节**:
   - 懒加载：`const mermaid = await import('mermaid')`，Vite 自动分包；加载中显示骨架。
-  - 主题：`document.documentElement.classList` 的 dark 判定（与现有 ThemeToggle 一致），`mermaid.initialize({ theme: 'dark' | 'default' })`，主题切换时触发重渲染（key 含主题）。
-  - 缩放：CSS transform scale + 平移容器，步进 0.25，范围 0.5–3。
+  - 主题：`document.documentElement.classList` 的 dark 判定（与现有 ThemeToggle 一致），`mermaid.initialize({ theme: 'dark' | 'default' })`，主题切换时由 `setTheme` 触发 effect 重渲染（非 key）。
+  - 缩放：CSS transform scale，步进 0.25，范围 0.5–3（未实现平移）。
   - 错误兜底：`mermaid.render` reject / parse 错误时渲染原代码块，不抛错阻断列表。
   - XSS：SVG 注入前经 `mermaid` 自带安全输出（`securityLevel: 'strict'`）。
 - **风险点**: mermaid 包体积（gzip ~500KB+）——通过动态导入隔离，仅会话页出现 mermaid 块时才加载；移动端首次渲染大图形有耗时，加载态兜底。
 
 #### 实现点 3: 真实差异渲染（lib/diff + DiffView 重构）
 
-- **描述**: 以 jsdiff `diffLines` 替换现有逐行对比：`computeDiff(oldText, newText)` 输出带新旧行号的 `DiffLine[]`；`DiffView` 渲染双行号列（旧/新）、`−`/`+` 标记、语义色（added=success、removed=destructive），added/same 行内容经 Prism 按语言高亮；保留文件头（路径 + 「新建文件」徽标）与最大高度滚动。
+- **描述**: 以「换行归一 + 纯行文本 diffArrays」替换现有逐行对比：`computeDiff(oldText, newText)` 输出带新旧行号的 `DiffLine[]`；`DiffView` 渲染双行号列（旧/新）、`−`/`+` 标记、语义色（added=success、removed=destructive），added/same 行内容经 Prism 按语言高亮；保留文件头（路径 + 「新建文件」徽标）与最大高度滚动。
 - **技术细节**:
-  - `diffLines(oldText, newText)` 返回 `{added, removed, value, count}` 块序列，展开为行并维护 oldLine/newLine 计数器生成行号。
+  - `diffArrays(oldLines, newLines)` 返回 `{added, removed, value: string[]}` 块序列，展开为行并维护 oldLine/newLine 计数器生成行号；入口先做 `\r\n`/`\r` → `\n` 归一并按纯行文本切分（忽略尾换行）。
   - 语言推断：从 `filePath` 扩展名映射 Prism 语言（`lib/language-from-path.ts`，覆盖 ts/tsx/js/jsx/py/rs/go/java/css/json/md/yaml 等常见扩展名，未知回退纯文本）。
-  - 高亮叠加：对 added/same 行调 `Prism.tokenize` 生成 token  span；removed 行纯文本（删除内容无需高亮，降低计算量）。
+  - 高亮叠加：所有行统一按语言高亮，changed 行叠加语义底色；超大输入先裁剪到计算上限再 diff。
   - 性能：diff 结果与 tokenize 结果按输入引用 `useMemo`；超过 2000 行的 diff 截断展示并提示「差异过长，仅展示前 2000 行」。
 - **风险点**: 现有 `DiffView.test.tsx` 断言旧行对比行为——按 TDD 先改测试（红），再替换实现（绿），再清理（重构）。
 
@@ -245,7 +245,7 @@ sequenceDiagram
   - `ansi-to-html`（`escapeXML: true`）转义后输出 `<span style="color:...">` HTML，经 `dangerouslySetInnerHTML` 注入；注入内容已由库转义，不引入 XSS 面。
   - 预处理保留现有 `\r\n`→`\n` 归一与 OSC/光标序列剥离正则。
   - 配色映射到主题：ansi-to-html 默认色板在深色容器上可读；容器维持深色底（`bg-gray-950`），浅色主题下终端区仍深色（终端语义如此）。
-  - 保持 `maxHeight` 滚动与空行 `&nbsp;` 行为。
+  - 保持 `maxHeight` 滚动与空行语义（`whitespace-pre-wrap` 自然保留，不使用 `&nbsp;`）。
 - **风险点**: ansi-to-html 多年未大版本更新但稳定（广泛应用）；若评估后不引入依赖，备选为自研 SGR 颜色子集解析（约 100 行）——决策见 §6.1。
 
 #### 实现点 5: 工具调用视图模型合并（修复完成后退化为「Tool Call: other」）
@@ -278,10 +278,10 @@ sequenceDiagram
 #### 实现点 6: 工具调用卡片体系增强
 
 - **描述**:
-  - 图标体系：`tool-call-icons.ts` 映射 `ToolKind` → lucide 图标（read=FileSearch、edit=FilePen、delete=Trash2、move=ArrowRightLeft、search=Search、execute=TerminalSquare、think=Brain、fetch=Globe、switch_mode=ArrowRightLeft、other=Hammer），卡片标题前置图标。
+  - 图标体系：`tool-call-icons.tsx` 映射 `ToolKind` → lucide 图标（read=FileSearch、edit=FilePen、delete=Trash2、move=ArrowRightLeft、search=Search、execute=TerminalSquare、think=Brain、fetch=Globe、switch_mode=ArrowRightLeft、other=Hammer），卡片标题前置图标。
   - 状态体系：保留 AcpCard 的 active/completed/failed 语义色，新增 `pending`（pending 状态，弱化样式）与「等待确认」提示位（ACP v1 状态仅 4 种，waiting_for_confirmation 由 PermissionDialog 流程承载，卡片层仅预留映射）。
   - 原始输入/输出：卡片底部「查看原始输入」折叠区（默认折叠），内容为 `rawInput` 的 JSON 美化代码块（复用 CodeBlock，language=json）；`rawOutput` 同理。zed 的 "View Raw Input" 同款交互。
-  - ContentBlock 全类型：`ContentBlockRenderer` 处理 `content` 项——text（MarkdownContent）、image（`<img>` 限高）、audio（`<audio controls>`）、resource_link（链接卡片，点击新窗口打开）、resource（嵌入资源：text 资源渲染 markdown，blob 资源展示 uri 占位）；`diff` 项走新 DiffView；`terminal` 项走 TerminalOutput。
+  - ContentBlock 全类型：`ContentBlockRenderer` 处理 `content` 项——text（MarkdownContent）、image（`<img>` 限高）、audio（`<audio controls>`）、resource_link（链接卡片，点击新窗口打开；仅放行 http(s)/file 白名单协议）、resource（嵌入资源：text 资源渲染 markdown，blob 资源展示 uri 占位）；`diff` 项走新 DiffView；`terminal` 项走 TerminalOutput。
 - **技术细节**:
   - 现有 kind 特化渲染（edit/execute/delete/move/search/think/read/fetch/sub_agent）保留，仅补齐：title 前图标、rawInput 折叠区、content 全类型。
   - 所有卡片输入由实现点 5 的 `MergedToolCall` 提供，不再各自解析单条消息；`group-messages.ts` 分组逻辑不变。
@@ -289,9 +289,9 @@ sequenceDiagram
 
 #### 实现点 7: 消息操作与对话导出
 
-- **描述**: `MessageItem`（agent 消息）hover 显示操作条：「复制 Markdown」（原始 text）、「复制纯文本」（渲染后 innerText 口径）；`SessionHeader` 或消息列表工具区新增「导出对话为 Markdown」：遍历消息生成结构化 Markdown（用户/助手/思考/工具调用/计划分节，附时间戳），Blob 下载为 `session-{id}-{date}.md`。
+- **描述**: `MessageItem`（agent 消息）hover 显示操作条：「复制 Markdown」（原始 text）、「复制纯文本」（源 Markdown 去标记口径）；`SessionHeader` 或消息列表工具区新增「导出对话为 Markdown」：遍历消息生成结构化 Markdown（用户/助手/思考/工具调用/计划分节，附时间戳），Blob 下载为 `session-{id}-{date}.md`。
 - **技术细节**:
-  - 复制纯文本：对渲染 DOM 取 `innerText`（保持块级换行），非 markdown 源码。
+  - 复制纯文本：对源 Markdown 经 `markdownToPlainText` 去标记（保留块级换行），避免混入代码块语言标签、Mermaid 工具栏等 UI chrome。
   - 导出格式参考 zed `to_markdown`：用户消息 `## User`、助手 `## Assistant`、思考包 `<thinking>` 注释块、工具调用 `### Tool: {title}` + 状态 + 代码块化输入输出。
   - 导出在客户端完成，无后端交互；失败 toast。
 - **风险点**: 长对话导出字符串构建为 O(n)，千级消息无压力；图片消息导出为占位说明（不内嵌 base64）。
@@ -318,7 +318,7 @@ sequenceDiagram
 
 | 决策 | 选项 A | 选项 B | 最终选择 | 原因 |
 |------|--------|--------|---------|------|
-| diff 算法 | jsdiff `diffLines` | 自研 Myers | A | 成熟稳定（周下载千万级）、API 简单、MIT；自研易出边界 bug |
+| diff 算法 | jsdiff `diffArrays`（换行归一后按行比较） | 自研 Myers | A | 成熟稳定（周下载千万级）、API 简单、MIT；自研易出边界 bug |
 | ANSI 渲染 | ansi-to-html | xterm.js | A | 静态输出渲染无需终端模拟器；xterm.js 体积与复杂度为交互终端设计 |
 | ANSI 渲染备选 | 引入 ansi-to-html 依赖 | 自研 SGR 颜色子集 | A | 库输出已转义、色板完整；自研仅作依赖评估不通过时的备选 |
 | Mermaid | mermaid 动态导入 | 不渲染/外链图片 | A | zed 同款体验；动态导入隔离体积 |
@@ -350,7 +350,7 @@ apps/agent-web/src/
 │   ├── DiffView.tsx                 # 重构：真实 diff + 行号 + 高亮
 │   ├── TerminalOutput.tsx           # 重构：ANSI 颜色渲染
 │   ├── ToolCallCard.tsx             # 增强：图标 + rawInput/rawOutput 折叠 + content 全类型
-│   ├── tool-call-icons.ts           # 新增：ToolKind → 图标映射
+│   ├── tool-call-icons.tsx          # 新增：ToolKind → 图标映射
 │   ├── tool-call-state.ts           # 新增：toolCallId 多消息合并（MergedToolCall）
 │   ├── ContentBlockRenderer.tsx     # 新增：ContentBlock 全类型渲染
 │   ├── MessageItem.tsx              # 增强：hover 操作条

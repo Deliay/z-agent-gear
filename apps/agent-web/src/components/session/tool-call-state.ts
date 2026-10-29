@@ -90,7 +90,19 @@ export function mergeToolCallMessages(messages: ToolCallMessageLike[]): MergedTo
 
 /** 标题口径：创建时与完成后同一条计算路径，避免「完成后退化为 Tool Call: other」 */
 export function toolCallTitle(toolCall: MergedToolCall): string {
-  return toolCall.title || kindLabel(toolCall.kind ?? 'other');
+  if (toolCall.title) return toolCall.title;
+  if (toolCall.name) return toolCall.name;
+  if (toolCall.kind) return kindLabel(toolCall.kind);
+  return 'Tool Call';
+}
+
+/**
+ * 卡片头部标题：仅在标题不是通用兜底词时加 `Tool Call: ` 前缀，
+ * 避免创建事件缺失时出现「Tool Call: Tool Call」（R-3）。
+ */
+export function toolCallHeaderTitle(toolCall: MergedToolCall): string {
+  const title = toolCallTitle(toolCall);
+  return title === 'Tool Call' ? title : `Tool Call: ${title}`;
 }
 
 /** 状态 → AcpCard 语义色（pending 为等待态弱化样式） */

@@ -4,6 +4,37 @@ import { registerUser, createControllerKey, registerController, loginViaUI, crea
 
 const statusBadge = () => '.px-2.py-1.text-xs.font-medium.rounded-full';
 
+interface ExportCaptureWindow {
+  __exportedMarkdown: string | null;
+}
+
+/**
+ * 页面侧拦截 URL.createObjectURL(Blob) 并记录 Blob 文本。
+ * 避免依赖 chrome-headless-shell 的 download artifacts 落盘路径（N-2）。
+ */
+async function captureExportedMarkdown(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const target = window as unknown as ExportCaptureWindow;
+    target.__exportedMarkdown = null;
+    const original = URL.createObjectURL.bind(URL);
+    URL.createObjectURL = (obj: Blob | MediaSource) => {
+      if (typeof Blob !== 'undefined' && obj instanceof Blob) {
+        void obj.text().then((text) => {
+          target.__exportedMarkdown = text;
+        });
+      }
+      return original(obj);
+    };
+  });
+}
+
+async function waitForExportedMarkdown(page: Page): Promise<string> {
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as ExportCaptureWindow).__exportedMarkdown), { timeout: 10000 })
+    .not.toBeNull();
+  return (await page.evaluate(() => (window as unknown as ExportCaptureWindow).__exportedMarkdown)) ?? '';
+}
+
 interface SessionContext {
   sessionId: string;
   socket: Socket;
@@ -65,19 +96,24 @@ test.describe('Session Rendering', () => {
 
     inject(session.socket, session.sessionId, {
       sessionUpdate: 'agent_message_chunk',
+      messageId: 'cren2-valid',
       content: { type: 'text', text: '```mermaid\ngraph TD;\n  A-->B;\n```' },
     });
     inject(session.socket, session.sessionId, {
       sessionUpdate: 'agent_message_chunk',
+      messageId: 'cren2-invalid',
       content: { type: 'text', text: '```mermaid\nthis is definitely not a diagram\n```' },
     });
     inject(session.socket, session.sessionId, {
       sessionUpdate: 'agent_message_chunk',
+      messageId: 'cren2-plain',
       content: { type: 'text', text: 'after-mermaid-marker' },
     });
 
-    await expect(page.getByTestId('mermaid-block').first().locator('svg')).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId('code-block').first()).toContainText('this is definitely not a diagram');
+    await expect(page.getByTestId('mermaid-diagram').locator('svg')).toBeVisible({ timeout: 15000 });
+    const invalidBlock = page.getByTestId('code-block').filter({ hasText: 'this is definitely not a diagram' });
+    await expect(invalidBlock).toBeVisible({ timeout: 5000 });
+    await expect(invalidBlock).toContainText('this is definitely not a diagram');
     await expect(page.getByText('after-mermaid-marker')).toBeVisible({ timeout: 5000 });
 
     session.disconnect();
@@ -161,7 +197,9 @@ test.describe('Session Rendering', () => {
     });
 
     await expect(page.getByText('Tool Call: npm test')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByText(/Tool Call: other/)).toHaveCount(0);
+    // 防退化断言可红：标题丢失时兜底会显示 "Tool Call: Command" 或通用 "Tool Call"（R-15）
+    await expect(page.getByText(/Tool Call: (Command|Tool Call)/)).toHaveCount(0);
+    await expect(page.getByText('Tool Call', { exact: true })).toHaveCount(0);
 
     await page.getByRole('button', { name: '查看原始输入' }).first().click();
     await expect(page.getByTestId('raw-section-输入').first()).toContainText('npm test -- --run');
@@ -169,29 +207,45 @@ test.describe('Session Rendering', () => {
     session.disconnect();
   });
 
-  test('E2E-CREN6 滚动导航：上翻不跟随 + 回到底部', async ({ page }) => {
+  test('E2E-CREN6 滚动导航：上翻视口保持、回到底部并恢复跟随', async ({ page }) => {
     const session = await setupSession(page, '/tmp/e2e-cren6');
 
     for (let i = 0; i < 40; i++) {
       inject(session.socket, session.sessionId, {
         sessionUpdate: 'agent_message_chunk',
+        messageId: `cren6-history-${i}`,
         content: { type: 'text', text: `history-message-${i}-${'filler '.repeat(40)}` },
       });
     }
     await expect(page.getByText(/history-message-39/)).toBeVisible({ timeout: 10000 });
 
-    const container = page.locator('.overflow-y-auto.bg-background').first();
+    const container = page.getByTestId('message-scroll-container');
     await container.evaluate((el) => { el.scrollTop = 0; });
     await page.waitForTimeout(500);
 
     inject(session.socket, session.sessionId, {
       sessionUpdate: 'agent_message_chunk',
+      messageId: 'cren6-new',
       content: { type: 'text', text: 'brand-new-message' },
     });
 
     await expect(page.getByTestId('scroll-to-bottom')).toBeVisible({ timeout: 10000 });
+    // 视口保持：上翻后新消息到达不得把用户拽回底部（R-17）
+    await expect.poll(async () => container.evaluate((el) => el.scrollTop)).toBeLessThan(50);
+
     await page.getByRole('button', { name: '回到底部' }).click();
     await expect(page.getByTestId('scroll-to-bottom')).toHaveCount(0);
+    // 点击后应真正滚到底部（R-17）
+    await expect.poll(async () => container.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(5);
+
+    // 恢复自动跟随：再注入一条消息后视口仍贴底（R-17）
+    inject(session.socket, session.sessionId, {
+      sessionUpdate: 'agent_message_chunk',
+      messageId: 'cren6-follow-up',
+      content: { type: 'text', text: 'follow-up-message' },
+    });
+    await expect(page.getByText('follow-up-message')).toBeVisible({ timeout: 10000 });
+    await expect.poll(async () => container.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)).toBeLessThan(5);
 
     session.disconnect();
   });
@@ -240,15 +294,52 @@ test.describe('Session Rendering', () => {
 
     inject(session.socket, session.sessionId, {
       sessionUpdate: 'agent_message_chunk',
+      messageId: 'cren8-text',
       content: { type: 'text', text: 'export-me' },
     });
     await expect(page.getByText('export-me')).toBeVisible({ timeout: 10000 });
 
+    await captureExportedMarkdown(page);
     const downloadPromise = page.waitForEvent('download');
     await page.getByRole('button', { name: '导出对话' }).click();
     const download = await downloadPromise;
 
     expect(download.suggestedFilename()).toMatch(/^session-.*\.md$/);
+    const content = await waitForExportedMarkdown(page);
+    expect(content).toContain('export-me');
+
+    session.disconnect();
+  });
+
+  test('E2E-CREN9 长会话导出拉全历史（R-1）', async ({ page }) => {
+    const session = await setupSession(page, '/tmp/e2e-cren9');
+
+    for (let i = 0; i < 30; i++) {
+      inject(session.socket, session.sessionId, {
+        sessionUpdate: 'agent_message_chunk',
+        messageId: `cren9-message-${i}`,
+        content: { type: 'text', text: `export-history-${i}` },
+      });
+    }
+    await expect(page.getByText('export-history-29', { exact: true })).toBeVisible({ timeout: 10000 });
+    // 等待消息落库后重载：SSE 首帧只回 25 条，hasMore=true
+    await page.waitForTimeout(500);
+    await page.reload();
+    await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
+    await expect(page.getByText('export-history-29', { exact: true })).toBeVisible({ timeout: 10000 });
+    // 更早消息未加载（只导出窗口外的历史必须由导出链路补齐）
+    await expect(page.getByText('export-history-0', { exact: true })).toHaveCount(0);
+
+    await captureExportedMarkdown(page);
+    const downloadPromise = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出对话' }).click();
+    await downloadPromise;
+    const content = await waitForExportedMarkdown(page);
+
+    for (let i = 0; i < 30; i++) {
+      expect(content).toContain(`export-history-${i}`);
+    }
+    expect(content.match(/export-history-/g)).toHaveLength(30);
 
     session.disconnect();
   });

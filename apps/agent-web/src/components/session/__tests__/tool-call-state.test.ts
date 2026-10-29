@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeToolCallMessages, kindLabel, toolCallTitle, toolCallColor } from '../tool-call-state';
+import { mergeToolCallMessages, kindLabel, toolCallTitle, toolCallColor, toolCallHeaderTitle } from '../tool-call-state';
 
 function message(content: Record<string, unknown>) {
   return { content };
@@ -194,6 +194,31 @@ describe('mergeToolCallMessages', () => {
     ]);
 
     expect(merged.toolCallId).toBe('');
+  });
+
+  it('T-MERGE11 should fall back to name/kind instead of duplicating the generic title (R-3)', () => {
+    const byName = mergeToolCallMessages([
+      message({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-1', name: 'my_tool', status: 'completed' }),
+    ]);
+    expect(toolCallTitle(byName)).toBe('my_tool');
+
+    const byKind = mergeToolCallMessages([
+      message({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-2', kind: 'execute', status: 'completed' }),
+    ]);
+    expect(toolCallTitle(byKind)).toBe('Command');
+  });
+
+  it('T-MERGE12 should not build a duplicated "Tool Call: Tool Call" header (R-3)', () => {
+    const missingCreation = mergeToolCallMessages([
+      message({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-9', status: 'completed' }),
+    ]);
+
+    expect(toolCallHeaderTitle(missingCreation)).toBe('Tool Call');
+
+    const withTitle = mergeToolCallMessages([
+      message({ sessionUpdate: 'tool_call', toolCallId: 'tc-1', title: 'npm test' }),
+    ]);
+    expect(toolCallHeaderTitle(withTitle)).toBe('Tool Call: npm test');
   });
 });
 

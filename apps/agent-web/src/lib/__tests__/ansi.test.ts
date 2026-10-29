@@ -106,4 +106,60 @@ describe('ansiToHtml', () => {
     expect(html).toContain('&lt;script&gt;');
     expect(html).toContain('&amp;');
   });
+
+  describe('boundary sequences (R-9)', () => {
+    it('should not swallow following output for an unterminated DCS/APC/PM sequence (P5)', () => {
+      const html = ansiToHtml('keep \x1bPtmux;unterminated…\nlater lines');
+
+      expect(html).toContain('keep');
+      expect(html).toContain('later lines');
+      expect(html).not.toContain('tmux');
+    });
+
+    it('should strip a truncated OSC sequence instead of leaking its parameters (P6)', () => {
+      const html = ansiToHtml('before \x1b]0;window title');
+
+      expect(html).toContain('before');
+      expect(html).not.toContain('window title');
+      expect(html).not.toContain('0;');
+    });
+
+    it('should strip a truncated CSI sequence instead of leaking its parameters (P7)', () => {
+      const html = ansiToHtml('before \x1b[38;5;2');
+
+      expect(html).toContain('before');
+      expect(html).not.toContain('38;5;2');
+    });
+
+    it('should normalize colon-separated truecolor SGR and keep the color (P8)', () => {
+      const html = ansiToHtml('\x1b[38:2::10:20:30mtruecolor');
+
+      expect(html).toContain('truecolor');
+      expect(html).toMatch(/color:\s*#/);
+      expect(html).not.toContain(':2::10:20:30');
+    });
+
+    it('should not let body text forge a placeholder (P9)', () => {
+      const html = ansiToHtml('a\u0001SGR0\u0001b');
+
+      expect(html).toContain('aSGR0b');
+      expect(html).not.toContain('\u0001');
+    });
+
+    it('should strip 8-bit C1 CSI controls instead of leaking them (M-2)', () => {
+      const html = ansiToHtml('a\x9b31mred\x9cb');
+
+      expect(html).toContain('ared');
+      expect(html).toContain('b');
+      expect(html).not.toContain('\x9b');
+      expect(html).not.toContain('\x9c');
+    });
+
+    it('should apply carriage-return overwrite semantics to progress output (M-3)', () => {
+      const html = ansiToHtml('progress 10%\rprogress 100%');
+
+      expect(html).toContain('progress 100%');
+      expect(html).not.toContain('progress 10%');
+    });
+  });
 });
