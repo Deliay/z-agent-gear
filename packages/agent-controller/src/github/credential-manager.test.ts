@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   GithubCredentialManager,
   REFRESH_INTERVAL_MS,
+  EXPIRY_SKEW_MS,
   BACKOFF_MS,
 } from './credential-manager.js';
 
@@ -172,6 +173,71 @@ describe('GithubCredentialManager', () => {
 
     manager.stop();
     earlyManager.stop();
+  });
+
+  it('T-CM9 (REPRO): 续期拿到仅剩 10 分钟的 token 时必须在到期前再次续期，而不是再等 50 分钟', async () => {
+    const t0 = Date.parse('2026-10-22T10:00:00.000Z');
+    let now = t0;
+    // 复现服务端进程内缓存：首次签发 60 分钟有效的 token，50 分钟后续期仍返回同一枚
+    // （命中缓存，剩余有效期只剩 10 分钟）。
+    const minted = new Date(t0 + 60 * 60 * 1000).toISOString();
+    const fetchFn = fakeFetch(async () => jsonResponse({ token: TOKEN, expiresAt: minted }));
+    const scheduler = fakeScheduler();
+
+    const manager = new GithubCredentialManager({
+      env: BASE_ENV,
+      fetch: fetchFn,
+      writeGhAuth: async () => {},
+      now: () => now,
+      log: () => {},
+      setTimeout: scheduler.setTimeoutFn,
+    });
+
+    manager.start();
+    await vi.waitFor(() => expect(scheduler.timers).toHaveLength(1));
+    expect(scheduler.timers[0].delay).toBe(REFRESH_INTERVAL_MS);
+
+    // 50 分钟后续期：服务端返回缓存 token（仅剩 10 分钟）
+    now = t0 + REFRESH_INTERVAL_MS;
+    scheduler.timers[0].fn();
+    await vi.waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(scheduler.timers).toHaveLength(2));
+
+    // 期望：下一次续期必须早于 token 过期（留出 EXPIRY_SKEW_MS 余量）。
+    // 实际：beforeExpiry 计算为 0 → 回落到 50 分钟，token 过期 40 分钟后才续期。
+    expect(now + scheduler.timers[1].delay).toBeLessThanOrEqual(
+      t0 + 60 * 60 * 1000 - EXPIRY_SKEW_MS,
+    );
+
+    manager.stop();
+  });
+
+  it('T-CM10 (REPRO): 收到即将过期的 token 时短间隔重试，而不是 50 分钟后再来', async () => {
+    const t0 = Date.parse('2026-10-22T10:00:00.000Z');
+    let now = t0;
+    const writeGhAuth = vi.fn(async () => {});
+    // 服务端返回的 token 在 1 分钟后过期（已是「续期也救不回来」的临界值）
+    const fetchFn = fakeFetch(async () =>
+      jsonResponse({ token: TOKEN, expiresAt: new Date(t0 + 60 * 1000).toISOString() }),
+    );
+    const scheduler = fakeScheduler();
+
+    const manager = new GithubCredentialManager({
+      env: BASE_ENV,
+      fetch: fetchFn,
+      writeGhAuth,
+      now: () => now,
+      log: () => {},
+      setTimeout: scheduler.setTimeoutFn,
+    });
+
+    manager.start();
+    await vi.waitFor(() => expect(scheduler.timers).toHaveLength(1));
+
+    // 期望：近过期 token 不应按 50 分钟排期，而是短间隔重试拿新凭据。
+    expect(scheduler.timers[0].delay).toBeLessThan(REFRESH_INTERVAL_MS);
+
+    manager.stop();
   });
 
   it('T-CM5: concurrent refreshNow calls are serialized into a single request', async () => {
