@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { createYoga } from 'graphql-yoga';
+import { GraphQLError } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import mongoose from 'mongoose';
 import { config } from './config/index.js';
@@ -33,9 +34,10 @@ import * as migration012AccountUserTenant from './migrations/012-account-user-te
 import * as migration013TenantIdBackfill from './migrations/013-tenant-id-backfill.js';
 import * as migration014TenantIdRebackfill from './migrations/014-tenant-id-rebackfill.js';
 import * as migration015TeamWorkspaces from './migrations/015-team-workspaces.js';
+import * as migration016GithubInstallationGithubUserId from './migrations/016-github-installation-github-user-id.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
-import { enterWithWorkspace } from './services/workspace-context.js';
+import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
 import { scheduleTenantSelfCheck } from './services/tenant-self-check.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
@@ -65,17 +67,63 @@ const schema = makeExecutableSchema({ typeDefs, resolvers });
 const yoga = createYoga({
   schema,
   context: async ({ request }) => {
+    const requestAuth = getRequestAuth();
+    if (requestAuth) {
+      if (requestAuth.error) {
+        throw new GraphQLError(requestAuth.error.message);
+      }
+      enterWithWorkspace(requestAuth.workspace);
+      return {
+        currentUser: requestAuth.user,
+        tenantId: requestAuth.user?.tenantId ?? null,
+        workspaceAccess: requestAuth.workspace ?? null,
+      };
+    }
+    // 兜底（直接调用 yoga handler 的非 Express 场景，如单测）
     const currentUser = await authenticateUser(request);
     if (!currentUser) {
       enterWithWorkspace(undefined);
       return { currentUser: null, tenantId: null };
     }
-    // 多租户二期：解析 x-workspace-id（非法/不可达一律 workspace not found）
     const workspace = await resolveWorkspaceAccess(request, currentUser);
     enterWithWorkspace(workspace);
     return { currentUser, tenantId: currentUser.tenantId, workspaceAccess: workspace ?? null };
   },
   graphiql: true,
+});
+
+/**
+ * 多租户二期：请求级鉴权 + 工作区上下文必须包裹整个下游执行链（Yoga resolver 在
+ * context 工厂之后的新异步资源中执行，单独 `enterWith` 无法可靠传播到 Mongoose 插件）。
+ */
+app.use('/graphql', async (req, res, next) => {
+  const headers = new Headers();
+  const authorization = req.headers.authorization;
+  if (typeof authorization === 'string') headers.set('authorization', authorization);
+  const workspaceHeader = req.headers['x-workspace-id'];
+  if (typeof workspaceHeader === 'string' && workspaceHeader) {
+    headers.set('x-workspace-id', workspaceHeader);
+  }
+  const webRequest = new Request('http://localhost/graphql', { method: 'POST', headers });
+  let currentUser = null;
+  try {
+    currentUser = await authenticateUser(webRequest);
+  } catch {
+    currentUser = null;
+  }
+  if (!currentUser) {
+    runWithRequestAuth({ user: null, workspace: undefined }, () => next());
+    return;
+  }
+  try {
+    const workspace = await resolveWorkspaceAccess(webRequest, currentUser);
+    runWithRequestAuth({ user: currentUser, workspace }, () => next());
+  } catch (err) {
+    runWithRequestAuth(
+      { user: currentUser, workspace: undefined, error: err as Error },
+      () => next(),
+    );
+  }
 });
 
 app.use('/graphql', yoga);
@@ -129,6 +177,7 @@ async function start() {
       migration013TenantIdBackfill,
       migration014TenantIdRebackfill,
       migration015TeamWorkspaces,
+      migration016GithubInstallationGithubUserId,
     ]);
   } catch (err) {
     console.warn('[Migration] Runner failed:', (err as Error).message);

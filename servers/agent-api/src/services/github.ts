@@ -141,29 +141,60 @@ export class GitHubService {
     );
 
     const encryptedToken = encrypt(tokenResponse.token);
-    const account = await GitHubAccount.findOneAndUpdate(
-      { userId: params.userId, githubUserId: accountInfo.id, workspaceId },
-      {
-        userId: params.userId,
-        tenantId,
-        workspaceId,
-        githubUserId: accountInfo.id,
-        githubLogin: accountInfo.login,
-        githubAvatarUrl: accountInfo.avatar_url,
-        accessToken: encryptedToken,
-        tokenExpiresAt: tokenResponse.expiresAt,
-      },
-      { upsert: true, new: true },
-    );
+    // 阻断-F：upsert 键与唯一索引 {tenantId,workspaceId,githubUserId} 对齐；userId 仅首次落创建者
+    const accountFilter = {
+      // githubaccounts.tenantId/workspaceId 为 String 口径（F8）
+      tenantId,
+      workspaceId,
+      githubUserId: accountInfo.id,
+    };
+    let account;
+    try {
+      account = await GitHubAccount.findOneAndUpdate(
+        accountFilter,
+        {
+          $set: {
+            tenantId,
+            workspaceId,
+            githubUserId: accountInfo.id,
+            githubLogin: accountInfo.login,
+            githubAvatarUrl: accountInfo.avatar_url,
+            accessToken: encryptedToken,
+            tokenExpiresAt: tokenResponse.expiresAt,
+          },
+          $setOnInsert: { userId: params.userId },
+        },
+        { upsert: true, new: true },
+      );
+    } catch (err) {
+      if ((err as { code?: number }).code === 11000) {
+        account = await GitHubAccount.findOneAndUpdate(
+          accountFilter,
+          {
+            $set: {
+              githubLogin: accountInfo.login,
+              githubAvatarUrl: accountInfo.avatar_url,
+              accessToken: encryptedToken,
+              tokenExpiresAt: tokenResponse.expiresAt,
+            },
+          },
+          { new: true },
+        );
+      } else {
+        throw err;
+      }
+    }
+    if (!account) throw new Error('account not found');
 
     await GitHubInstallation.findOneAndUpdate(
       { installationId: params.installationId },
       {
-        accountId: account._id,
+        accountId: (account as unknown as { _id: unknown })._id,
+        githubUserId: accountInfo.id,
         installationId: params.installationId,
         accountLogin: accountInfo.login,
         accountType: accountInfo.type,
-        repos: repos.map(r => ({
+        repos: repos.map((r: Record<string, any>) => ({
           repoId: r.id,
           repoName: r.name,
           fullName: r.full_name,
@@ -178,11 +209,56 @@ export class GitHubService {
     ).lean();
   }
 
+  /** 同一 GitHub 用户在各工作区的绑定共享同一份安装数据（按 githubUserId 关联；旧行按 accountId 兜底）。 */
+  private async installationsForAccount(account: {
+    _id: unknown;
+    githubUserId: number;
+  }): Promise<Array<Record<string, any>>> {
+    const accountRef = mongoose.isValidObjectId(account._id)
+      ? new mongoose.Types.ObjectId(String(account._id))
+      : account._id;
+    const query = GitHubInstallation.find({
+      $or: [
+        { githubUserId: account.githubUserId },
+        { accountId: accountRef as never },
+      ],
+    }) as unknown as { lean?: () => Promise<unknown> };
+    const rows = (typeof query.lean === 'function'
+      ? await query.lean()
+      : await (query as unknown as Promise<unknown>)) as Array<Record<string, any>>;
+    // 旧行补齐 githubUserId（幂等）
+    const legacyIds = rows
+      .filter((row) => row.githubUserId === null || row.githubUserId === undefined)
+      .map((row) => row._id);
+    if (legacyIds.length > 0) {
+      await GitHubInstallation.updateMany(
+        { _id: { $in: legacyIds } },
+        { $set: { githubUserId: account.githubUserId } },
+      );
+      for (const row of rows) {
+        if (row.githubUserId === null || row.githubUserId === undefined) {
+          row.githubUserId = account.githubUserId;
+        }
+      }
+    }
+    return rows.filter(
+      (row) =>
+        row.githubUserId === account.githubUserId ||
+        String(row.accountId) === String(account._id),
+    );
+  }
+
   async getAccounts(userId: string): Promise<GitHubAccountInfo[]> {
     const accounts = await GitHubAccount.find(actorFilter(userId)).lean();
-    const installations = await GitHubInstallation.find({
-      accountId: { $in: accounts.map(a => a._id) },
-    }).lean();
+    const installationsByUser = new Map<number, Array<Record<string, any>>>();
+    for (const account of accounts) {
+      if (!installationsByUser.has(account.githubUserId)) {
+        installationsByUser.set(
+          account.githubUserId,
+          await this.installationsForAccount(account as { _id: unknown; githubUserId: number }),
+        );
+      }
+    }
 
     return accounts.map(account => ({
       id: account._id.toString(),
@@ -191,8 +267,7 @@ export class GitHubService {
       githubAvatarUrl: account.githubAvatarUrl ?? undefined,
       workspaceId: account.workspaceId ? String(account.workspaceId) : '',
       createdAt: account.createdAt instanceof Date ? account.createdAt.toISOString() : String(account.createdAt),
-      installations: installations
-        .filter(i => i.accountId.toString() === account._id.toString())
+      installations: (installationsByUser.get(account.githubUserId) ?? [])
         .map(i => ({
           id: i._id.toString(),
           installationId: i.installationId,
@@ -200,7 +275,7 @@ export class GitHubService {
             ? `https://github.com/organizations/${i.accountLogin}/settings/installations/${i.installationId}`
             : `https://github.com/settings/installations/${i.installationId}`,
           createdAt: i.createdAt instanceof Date ? i.createdAt.toISOString() : String(i.createdAt),
-          repos: (i.repos || []).map(r => ({
+          repos: (i.repos || []).map((r: Record<string, any>) => ({
             id: String(r.repoId),
             repoId: r.repoId,
             repoName: r.repoName,
@@ -224,16 +299,33 @@ export class GitHubService {
       throw new Error('workspace not found');
     }
 
-    const installations = await GitHubInstallation.find({ accountId: account._id });
-    for (const inst of installations) {
-      try {
-        await this.uninstallApp(inst.installationId);
-      } catch {
-        // ignore uninstall failure — clean up local data regardless
+    const installations = await this.installationsForAccount(
+      account as unknown as { _id: unknown; githubUserId: number },
+    );
+    // 同一 GitHub 账号可能在其他工作区仍有绑定行：只有最后一个绑定才卸载 App 并清理安装数据，
+    // 否则把安装行 accountId 改指存活绑定（避免“改嫁”与误删）。
+    const survivors = await GitHubAccount.find({
+      githubUserId: account.githubUserId,
+      _id: { $ne: account._id },
+    })
+      .select('_id')
+      .lean();
+    if (survivors.length === 0) {
+      for (const inst of installations) {
+        try {
+          await this.uninstallApp(Number(inst.installationId));
+        } catch {
+          // ignore uninstall failure — clean up local data regardless
+        }
       }
+      await GitHubInstallation.deleteMany({ githubUserId: account.githubUserId });
+    } else if (installations.length > 0) {
+      await GitHubInstallation.updateMany(
+        { githubUserId: account.githubUserId },
+        { $set: { accountId: survivors[0]._id } },
+      );
     }
 
-    await GitHubInstallation.deleteMany({ accountId: account._id });
     await GitHubAccount.deleteOne({ _id: accountId, ...actorFilter(userId) });
     return true;
   }
@@ -242,12 +334,23 @@ export class GitHubService {
     const account = await GitHubAccount.findOne({ _id: accountId, ...actorFilter(userId) });
     if (!account) throw new Error('Account not found');
 
+    // 阻断-G：刷新写安装数据属于写操作，与 unbind 同款前置校验（只读/越界）
+    const context = getWorkspaceContext();
+    if (context?.readOnly) throw new Error(WORKSPACE_READ_ONLY_MESSAGE);
+    if (context && String(account.workspaceId ?? '') !== context.id) {
+      throw new Error('workspace not found');
+    }
+
     const token = decrypt(account.accessToken);
     const repos = await this.getRepositories(token);
 
-    const installations = await GitHubInstallation.find({ accountId: account._id });
+    const installations = await this.installationsForAccount(
+      account as unknown as { _id: unknown; githubUserId: number },
+    );
     for (const inst of installations) {
-      inst.repos = repos.map(r => ({
+      const doc = await GitHubInstallation.findById(inst._id);
+      if (!doc) continue;
+      doc.repos = repos.map((r: Record<string, any>) => ({
         repoId: r.id,
         repoName: r.name,
         fullName: r.full_name,
@@ -257,7 +360,7 @@ export class GitHubService {
           write: r.permissions.push || r.permissions.admin,
         },
       })) as any;
-      await inst.save();
+      await doc.save();
     }
 
     const accounts = await this.getAccounts(userId);
@@ -271,7 +374,7 @@ export class GitHubService {
     const tokenResponse = await this.getInstallationToken(installationId);
     const repos = await this.getRepositories(tokenResponse.token);
 
-    installation.repos = repos.map(r => ({
+    installation.repos = repos.map((r: Record<string, any>) => ({
       repoId: r.id,
       repoName: r.name,
       fullName: r.full_name,
@@ -300,10 +403,10 @@ export class GitHubService {
     const cached = this.readCachedToken(String(account._id), repoFullName);
     if (cached) return cached;
 
-    const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
+    const installations = await this.installationsForAccount(account as unknown as { _id: unknown; githubUserId: number });
     const match = installations.find((installation) =>
       (installation.repos ?? []).some(
-        (repo) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
+        (repo: { fullName: string }) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
       ),
     );
     if (!match) throw new Error('repository is not authorized');
@@ -325,10 +428,10 @@ export class GitHubService {
       const cached = this.readCachedToken(accountId, repoFullName);
       if (cached) return cached;
 
-      const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
+      const installations = await this.installationsForAccount(account as unknown as { _id: unknown; githubUserId: number });
       const match = installations.find((installation) =>
         (installation.repos ?? []).some(
-          (repo) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
+          (repo: { fullName: string }) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
         ),
       );
       if (match) {
@@ -472,9 +575,9 @@ export class GitHubService {
     const target = repoFullName.trim().toLowerCase();
     const accounts = await GitHubAccount.find(actorFilter(userId)).sort({ createdAt: 1 }).lean();
     for (const account of accounts) {
-      const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
+      const installations = await this.installationsForAccount(account as unknown as { _id: unknown; githubUserId: number });
       const matched = installations.some((installation) =>
-        (installation.repos ?? []).some((repo) => repo.fullName.toLowerCase() === target),
+        (installation.repos ?? []).some((repo: { fullName: string }) => repo.fullName.toLowerCase() === target),
       );
       if (matched) return account._id.toString();
     }

@@ -7,6 +7,7 @@ import {
   type CommitSettingsInput,
 } from '../../services/commit-settings-service.js';
 import { getRedisClient } from '../../middleware/redis.js';
+import { rethrowAsGraphQLError } from './errors.js';
 import type { AuthContext } from './auth.js';
 
 export const githubResolvers = {
@@ -21,6 +22,10 @@ export const githubResolvers = {
     },
     githubAppUrl: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       if (!context.currentUser) throw new GraphQLError('Not authenticated');
+      // 只读上下文（全局工作区 + developer）不得发起绑定（PRD：开发不能在全局工作区新增资源）
+      if (context.workspaceAccess?.readOnly) {
+        throw new GraphQLError('global workspace is read-only');
+      }
       const { url, state } = await githubService.getAppUrl(context.currentUser.id);
       const redis = getRedisClient();
       // 多租户二期：state 携带发起绑定的工作区（OAuth 回调无请求上下文，需显式传递）
@@ -39,11 +44,19 @@ export const githubResolvers = {
   Mutation: {
     unbindGitHubAccount: async (_parent: unknown, args: { accountId: string }, context: AuthContext) => {
       if (!context.currentUser) throw new GraphQLError('Not authenticated');
-      return githubService.unbindAccount(context.currentUser.id, args.accountId);
+      try {
+        return await githubService.unbindAccount(context.currentUser.id, args.accountId);
+      } catch (err) {
+        rethrowAsGraphQLError(err);
+      }
     },
     refreshGitHubInstallations: async (_parent: unknown, args: { accountId: string }, context: AuthContext) => {
       if (!context.currentUser) throw new GraphQLError('Not authenticated');
-      return githubService.refreshInstallations(context.currentUser.id, args.accountId);
+      try {
+        return await githubService.refreshInstallations(context.currentUser.id, args.accountId);
+      } catch (err) {
+        rethrowAsGraphQLError(err);
+      }
     },
     updateCommitSettings: async (
       _parent: unknown,

@@ -13,6 +13,8 @@ const gitHubRepoSchema = new mongoose.Schema({
 
 const githubInstallationSchema = new mongoose.Schema({
   accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'GitHubAccount', required: true, index: true },
+  // 多租户二期：GitHub 用户 id（同一账号可在多个工作区各有绑定行；安装数据按 githubUserId 共享读取）
+  githubUserId: { type: Number, default: null, index: true },
   installationId: { type: Number, required: true, unique: true },
   accountLogin: { type: String, required: true },
   accountType: { type: String, enum: ['User', 'Organization'], required: true },

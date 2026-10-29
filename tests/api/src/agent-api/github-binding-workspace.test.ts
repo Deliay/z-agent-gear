@@ -324,8 +324,7 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
       expect(settingsView.errors, JSON.stringify(settingsView.errors)).toBeUndefined();
       expect(settingsView.data.commitSettings.readOnly).toBe(true);
 
-      // 写 1：updateCommitSettings 在请求链路被拒。服务层抛 global workspace is read-only；
-      // resolver 对非白名单错误统一降级为 invalid commit settings（不泄漏内部细节），两者均表示拒绝。
+      // 写 1：updateCommitSettings 在请求链路被拒，resolver 白名单逐字透出只读红线
       const settingsWrite = await gqlCtx(
         UPDATE_COMMIT_SETTINGS,
         {
@@ -339,9 +338,7 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
         teamGlobalId,
       );
       expect(settingsWrite.errors, 'developer 在团队全局工作区写 commit 设置应被拒绝').toBeDefined();
-      expect(['global workspace is read-only', 'invalid commit settings']).toContain(
-        settingsWrite.errors?.[0]?.message,
-      );
+      expect(settingsWrite.errors?.[0]?.message).toBe('global workspace is read-only');
 
       // 写 2：unbindGitHubAccount 原样透出只读红线文案
       const unbind = await gqlCtx(UNBIND_GITHUB_ACCOUNT, { accountId }, developer.token, teamGlobalId);

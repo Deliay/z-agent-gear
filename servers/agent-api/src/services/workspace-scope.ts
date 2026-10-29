@@ -126,7 +126,7 @@ export function injectWorkspaceUpsert(query: AnyQuery, options: WorkspaceScopeOp
     throw new Error('workspace not found');
   }
   const options_ = query.getOptions?.() ?? {};
-  if (options_.upsert) {
+  if (options_.upsert && set?.[field] === undefined) {
     doc.$setOnInsert = { ...(setOnInsert ?? {}), [field]: context.id };
   }
 }

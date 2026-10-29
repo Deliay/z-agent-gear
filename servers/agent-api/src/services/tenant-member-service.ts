@@ -153,16 +153,18 @@ export class TenantMemberService {
     if (result.deletedCount === 0) throw new Error(WORKSPACE_ERRORS.notMemberRow);
     // 级联清理本租户全部工作区成员行；资源保留原工作区
     await WorkspaceMember.deleteMany({ tenantId, userId: targetUserId });
-    // 并发兜底：变更后复检（若已无 admin 则回滚）
-    const adminLeft = await TenantMember.countDocuments({ tenantId, role: 'admin' });
-    if (adminLeft === 0) {
-      await TenantMember.create({
-        tenantId: new mongoose.Types.ObjectId(tenantId),
-        userId: target.userId,
-        role: 'admin',
-        createdBy: 'rollback',
-      });
-      throw new Error(WORKSPACE_ERRORS.lastAdminRemoved);
+    // 并发兜底：仅在移除管理员时复检（若已无 admin 则回滚）
+    if (target.role === 'admin') {
+      const adminLeft = await TenantMember.countDocuments({ tenantId, role: 'admin' });
+      if (adminLeft === 0) {
+        await TenantMember.create({
+          tenantId: new mongoose.Types.ObjectId(tenantId),
+          userId: target.userId,
+          role: 'admin',
+          createdBy: 'rollback',
+        });
+        throw new Error(WORKSPACE_ERRORS.lastAdminRemoved);
+      }
     }
     audit('tenant.member.remove', operatorId, tenantId, targetUserId);
     return true;

@@ -32,6 +32,23 @@ export interface WorkspaceContext {
 
 const storage = new AsyncLocalStorage<WorkspaceContext | undefined>();
 
+/** 请求级认证/工作区上下文（Express 中间件解析后供 Yoga context 工厂读取，避免重复鉴权）。 */
+export interface RequestAuthContext {
+  user: { id: string; tenantId: string; name: string } | null;
+  workspace: WorkspaceContext | undefined;
+  error?: Error;
+}
+
+const requestAuthStorage = new AsyncLocalStorage<RequestAuthContext | undefined>();
+
+export function runWithRequestAuth<T>(context: RequestAuthContext | undefined, fn: () => T): T {
+  return requestAuthStorage.run(context, fn);
+}
+
+export function getRequestAuth(): RequestAuthContext | undefined {
+  return requestAuthStorage.getStore();
+}
+
 /** 写入请求级上下文（GraphQL context 工厂调用；不改变当前异步链归属）。 */
 export function enterWithWorkspace(context: WorkspaceContext | undefined): void {
   storage.enterWith(context);
