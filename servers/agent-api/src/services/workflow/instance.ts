@@ -13,6 +13,7 @@ import { getAvailableServerTypes } from './capability.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir } from './worktree-utils.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { GITHUB_PR_PROMPT, GITHUB_PR_PROMPT_KEY, SYSTEM_PROMPT_KEYS } from './pr-prompts.js';
+import { actorFilter } from '../workspace-context.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
 import { getWorkspaceContext } from '../workspace-context.js';
 
@@ -61,7 +62,7 @@ class WorkflowInstanceService {
     options: { workspaceId?: string | null; controllerId?: string | null; archived?: boolean } = {},
   ) {
     const filter: Record<string, unknown> = {
-      userId,
+      ...actorFilter(userId),
       deletedAt: null,
       archivedAt: options.archived ? { $ne: null } : null,
     };
@@ -78,7 +79,7 @@ class WorkflowInstanceService {
   }
 
   async findById(id: string, userId: string) {
-    return WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
+    return WorkflowInstance.findOne({ _id: id, ...actorFilter(userId), deletedAt: null }).lean();
   }
 
   /** 将节点图归一化为完整结构（补默认值，供图校验与快照落库） */
@@ -315,7 +316,7 @@ class WorkflowInstanceService {
     agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null;
     sortOrder?: number | null;
   }) {
-    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, ...actorFilter(userId), deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
     }
@@ -371,7 +372,7 @@ class WorkflowInstanceService {
 
     if (!updated) {
       // 二次查询区分原因
-      const cur = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
+      const cur = await WorkflowInstance.findOne({ _id: instanceId, ...actorFilter(userId), deletedAt: null }).lean();
       const curNode = cur?.nodes.find((n) => n.nodeId === nodeId);
       if (!curNode) {
         throw new Error(`工作流实例中不存在节点：${nodeId}`);
@@ -418,7 +419,7 @@ class WorkflowInstanceService {
   async setAdditionalPrompt(userId: string, instanceId: string, key: string, value: string) {
     this.assertUserPromptKey(key);
     const updated = await WorkflowInstance.findOneAndUpdate(
-      { _id: instanceId, userId, deletedAt: null },
+      { _id: instanceId, ...actorFilter(userId), deletedAt: null },
       { $set: { [`additionalPrompts.${key}`]: value } },
       { new: true },
     ).lean();
@@ -433,7 +434,7 @@ class WorkflowInstanceService {
   async removeAdditionalPrompt(userId: string, instanceId: string, key: string) {
     this.assertUserPromptKey(key);
     const updated = await WorkflowInstance.findOneAndUpdate(
-      { _id: instanceId, userId, deletedAt: null },
+      { _id: instanceId, ...actorFilter(userId), deletedAt: null },
       { $unset: { [`additionalPrompts.${key}`]: 1 } },
       { new: true },
     ).lean();
@@ -533,7 +534,7 @@ class WorkflowInstanceService {
   /** 人类节点完成：READY→RUNNING→DONE（已 RUNNING 时直接完成），input 作为产物写入黑板；
    *  REWORK（被 AI 打回）时走 completeRework 重新提交：重置旧产物入垃圾桶、复工下游 REJECT 节点 */
   async completeHumanNode(userId: string, instanceId: string, nodeId: string, input?: string | null) {
-    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, ...actorFilter(userId), deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
     }
@@ -562,7 +563,7 @@ class WorkflowInstanceService {
 
   /** 人类打回：READY 先补 start；RUNNING/REWORK→REJECT 并触发上游 REWORK（引擎校验） */
   async rejectNode(userId: string, instanceId: string, nodeId: string, reason: string) {
-    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, ...actorFilter(userId), deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
     }
@@ -584,7 +585,7 @@ class WorkflowInstanceService {
     nodeId: string,
     agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null,
   ) {
-    const instance = await WorkflowInstance.findOne({ _id: instanceId, userId, deletedAt: null }).lean();
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, ...actorFilter(userId), deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
     }
@@ -612,7 +613,7 @@ class WorkflowInstanceService {
 
   /** 归档/取消归档实例：仅分组展示差异，不影响流程运转与节点会话 */
   async setArchived(userId: string, id: string, archived: boolean) {
-    const instance = await WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
+    const instance = await WorkflowInstance.findOne({ _id: id, ...actorFilter(userId), deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
     }
@@ -633,7 +634,7 @@ class WorkflowInstanceService {
    * 如果实例有工作流 Worktree，一并清理；清理失败时标记 worktreeCleanupFailed 供后续孤儿回收。
    */
   async deleteInstance(userId: string, id: string) {
-    const instance = await WorkflowInstance.findOne({ _id: id, userId, deletedAt: null }).lean();
+    const instance = await WorkflowInstance.findOne({ _id: id, ...actorFilter(userId), deletedAt: null }).lean();
     if (!instance) {
       throw new Error('工作流实例不存在或无权限');
     }

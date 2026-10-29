@@ -112,6 +112,7 @@ vi.mock('./cloud-host-issues-linkage.js', () => ({
 }));
 
 import { CloudHostService, toCloudHostGraphQLError } from './cloud-host-service.js';
+import { runWithWorkspace } from './workspace-context.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
@@ -413,6 +414,33 @@ describe('CloudHostService', () => {
         modelContextLengths: '{"model-a":128000}',
         defaultWorkspace: '/home/worker/workspace',
       });
+    });
+
+    it('T-BILL2: 工作区上下文下计费 owner=workspace.tenantId 且 startHarness 下发 workspaceId', async () => {
+      setupCreateSuccess();
+      await runWithWorkspace(
+        {
+          id: 'ws-team-1',
+          tenantId: 'tenant-team',
+          type: 'normal',
+          role: 'developer',
+          readOnly: false,
+          globalWorkspaceId: 'ws-global',
+        },
+        async () => {
+          await service.create('user-1', { name: 'team-host', harnessTypes: ['OPENCODE'] });
+        },
+      );
+      expect(billingClient.getAccount).toHaveBeenCalledWith('tenant', 'tenant-team');
+      expect(billingClient.createCloudHostApiKey).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerType: 'tenant', ownerId: 'tenant-team' }),
+      );
+      expect(cloudControllerClient.startHarness).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: 'tenant-team', workspaceId: 'ws-team-1' }),
+      );
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ resourceWorkspaceId: 'ws-team-1' }),
+      );
     });
 
     it('T-CH-B1: 扣费发生在落库/拉起之前且键位正确', async () => {

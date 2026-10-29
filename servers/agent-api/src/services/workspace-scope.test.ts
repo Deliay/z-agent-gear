@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import mongoose from 'mongoose';
 import {
   injectWorkspaceFilter,
   injectWorkspaceUpsert,
+  applyWorkspaceScope,
 } from './workspace-scope.js';
 import {
   enterWithWorkspace,
@@ -150,5 +152,42 @@ describe('workspace-scope（T-SCOPE）', () => {
   it('T-SCOPE8: 只读上下文写拦截文案逐字', () => {
     expect(devGlobal.readOnly).toBe(true);
     expect(WORKSPACE_READ_ONLY_MESSAGE).toBe('global workspace is read-only');
+  });
+
+  it('T-SCOPE9: save/validate 路径强制归属当前工作区（共享读不可写全局行）', async () => {
+    const schema = new mongoose.Schema({
+      name: { type: String },
+      tenantId: { type: mongoose.Schema.Types.ObjectId },
+      workspaceId: { type: mongoose.Schema.Types.ObjectId },
+    });
+    applyWorkspaceScope(schema, { shared: true });
+    const TestModel = mongoose.model(`WorkspaceScopeDocTest${Date.now()}`, schema);
+
+    // 缺省归属当前工作区
+    const doc = new TestModel({ name: 'a' });
+    await runWithWorkspace(devNormal, async () => {
+      await doc.validate();
+      expect(String(doc.workspaceId)).toBe(CURRENT);
+    });
+
+    // 显式跨工作区（模拟共享读加载到全局行后 save）
+    const foreign = new TestModel({ name: 'b', workspaceId: GLOBAL });
+    await runWithWorkspace(devNormal, async () => {
+      await expect(foreign.validate()).rejects.toThrow('workspace not found');
+    });
+  });
+
+  it('T-SCOPE10: 只读上下文 save 被拒绝（global workspace is read-only）', () => {
+    const schema = new mongoose.Schema({
+      name: { type: String },
+      tenantId: { type: mongoose.Schema.Types.ObjectId },
+      workspaceId: { type: mongoose.Schema.Types.ObjectId },
+    });
+    applyWorkspaceScope(schema, {});
+    const TestModel = mongoose.model(`WorkspaceScopeReadonlyTest${Date.now()}`, schema);
+    const doc = new TestModel({ name: 'c', workspaceId: GLOBAL });
+    return runWithWorkspace(devGlobal, async () => {
+      await expect(doc.validate()).rejects.toThrow('global workspace is read-only');
+    });
   });
 });

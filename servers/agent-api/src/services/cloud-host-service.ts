@@ -18,7 +18,7 @@ import { evictKeyById } from './key-cache.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import { modelService } from './model.js';
 import { sessionService } from './session.js';
-import { getWorkspaceContext } from './workspace-context.js';
+import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { cloudWorkloadCatalog } from './cloud-workload-catalog.js';
@@ -314,6 +314,7 @@ export class CloudHostService {
           controllerId,
           keyId,
           workspaceId,
+          resourceWorkspaceId: ownerWorkspaceId,
           createDefaultSession,
           githubAccountId,
           startedAt: new Date(),
@@ -485,7 +486,7 @@ export class CloudHostService {
   }
 
   async list(userId: string): Promise<Doc[]> {
-    const hosts = await CloudHost.find({ userId, deletedAt: null })
+    const hosts = await CloudHost.find({ ...actorFilter(userId), deletedAt: null })
       .sort({ createdAt: -1 })
       .lean();
     if (hosts.length === 0) return [];
@@ -493,7 +494,7 @@ export class CloudHostService {
       hosts.map((host) =>
         Session.countDocuments({
           controllerId: host.controllerId,
-          userId,
+          ...actorFilter(userId),
           status: { $ne: 'ended' },
         }),
       ),
@@ -505,7 +506,7 @@ export class CloudHostService {
     const host = await this.findOwnedHost(id, userId);
     const sessions = await Session.find({
       controllerId: String(host.controllerId),
-      userId,
+      ...actorFilter(userId),
       status: { $ne: 'ended' },
     })
       .sort({ createdAt: -1 })
@@ -544,7 +545,7 @@ export class CloudHostService {
       // A-9：先 CAS STOPPING 再统计活动会话，关闭 stopImpact→stop 之间的 TOCTOU 窗口。
       const previousStatus = host.status;
       const stopping = await CloudHost.findOneAndUpdate(
-        { _id: id, userId, status: { $in: ACTIVE_STATUSES } },
+        { _id: id, ...actorFilter(userId), status: { $in: ACTIVE_STATUSES } },
         { $set: { status: 'STOPPING' } },
         { new: true },
       ).lean();
@@ -560,7 +561,7 @@ export class CloudHostService {
       if (activeCount > 0 && force !== true) {
         // 未确认强制停止：回滚到停止前状态，保持可继续使用。
         await CloudHost.updateOne(
-          { _id: id, userId, status: 'STOPPING' },
+          { _id: id, ...actorFilter(userId), status: 'STOPPING' },
           { $set: { status: previousStatus } },
         );
         throw new Error(
@@ -586,7 +587,7 @@ export class CloudHostService {
       });
 
       const stopped = await CloudHost.findOneAndUpdate(
-        { _id: id, userId, status: 'STOPPING' },
+        { _id: id, ...actorFilter(userId), status: 'STOPPING' },
         {
           $set: {
             status: 'STOPPED',
@@ -608,7 +609,7 @@ export class CloudHostService {
       if (!mongoose.isValidObjectId(id)) {
         throw new Error('Cloud host not found');
       }
-      const host = await CloudHost.findOne({ _id: id, userId }).lean();
+      const host = await CloudHost.findOne({ _id: id, ...actorFilter(userId) }).lean();
       if (!host) throw new Error('Cloud host not found');
       if (host.deletedAt) return true;
       if (host.status !== 'STOPPED' && host.status !== 'FAILED') {
@@ -813,7 +814,7 @@ export class CloudHostService {
     if (!mongoose.isValidObjectId(controllerId)) return null;
     return (await CloudHost.findOne({
       controllerId,
-      userId,
+      ...actorFilter(userId),
       deletedAt: null,
     }).lean()) as Doc | null;
   }
@@ -833,7 +834,7 @@ export class CloudHostService {
     if (!mongoose.isValidObjectId(id)) {
       throw new Error('Cloud host not found');
     }
-    const host = await CloudHost.findOne({ _id: id, userId, deletedAt: null }).lean();
+    const host = await CloudHost.findOne({ _id: id, ...actorFilter(userId), deletedAt: null }).lean();
     if (!host) throw new Error('Cloud host not found');
     return host as Doc;
   }
@@ -841,7 +842,7 @@ export class CloudHostService {
   private async countActive(host: Doc): Promise<number> {
     return Session.countDocuments({
       controllerId: String(host.controllerId),
-      userId: String(host.userId),
+      ...actorFilter(String(host.userId)),
       status: { $ne: 'ended' },
     });
   }

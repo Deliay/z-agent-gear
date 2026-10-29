@@ -215,4 +215,19 @@ describe('internal tenants router（T-IT 系列）', () => {
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({ error: 'UNAUTHORIZED' });
   });
+
+  it('T-IT8: 并发重复添加（E11000 → already a member）映射 409 ALREADY_MEMBER', async () => {
+    h.tenant.findById.mockResolvedValue({ _id: TENANT_ID, name: '团队A', type: 'team' });
+    h.account.findOne.mockResolvedValue({ _id: 'acc-1', username: 'bob' });
+    h.user.findOne.mockResolvedValue({ _id: USER_ID, name: 'bob' });
+    h.tenantMember.findOne.mockResolvedValue(null);
+    h.memberService.addTenantMember.mockRejectedValue(new Error('already a member'));
+
+    const res = await call(`/internal/tenants/${TENANT_ID}/members`, 'POST', {
+      username: 'bob',
+      role: 'developer',
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'ALREADY_MEMBER' });
+  });
 });

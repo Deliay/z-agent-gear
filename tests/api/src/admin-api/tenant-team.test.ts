@@ -63,6 +63,34 @@ const MY_WORKSPACES = `
 
 const MODELS = `query Models { models { id name } }`;
 
+const CLOUD_HOST_QUOTE = `
+  query CloudHostBillingQuote {
+    cloudHostBillingQuote { createCredits perMinuteCredits availableBalance }
+  }
+`;
+
+const ADMIN_HTTP = (process.env.ADMIN_API_URL || 'http://localhost:10003/graphql').replace(
+  /\/graphql\/?$/,
+  '',
+);
+
+const BILLING_ACCOUNTS_BY_OWNER = `
+  query BillingAccountsByOwner($keyword: String, $ownerType: BillingOwnerType) {
+    adminBillingAccounts(keyword: $keyword, ownerType: $ownerType) {
+      id ownerType ownerId ownerName availableBalance cashBalance status
+    }
+  }
+`;
+
+const RECHARGE = `
+  mutation Recharge($id: ID!, $amount: Float!, $note: String) {
+    rechargeBillingAccount(accountId: $id, amount: $amount, note: $note) {
+      id amount balanceAfter type
+    }
+  }
+`;
+
+
 function agentGql(
   query: string,
   variables?: Record<string, unknown>,
@@ -282,4 +310,117 @@ describe('Admin Team Tenant API（T-TT-API）', () => {
     expect(remove.errors?.[0]?.message).toBe('personal tenant is immutable');
     expect(remove.errors?.[0]?.extensions?.code).toBe('INVALID_ARGUMENT');
   });
+
+  /**
+   * T-B2 团队计费口径（最小断言，需 Aspire 全量服务：admin-api billing + agent-api）。
+   *
+   * 真实「在团队工作区创建云电脑 → 扣创建费 → 按分钟计费」依赖 HARNESS_ENABLED 与 RUNNING
+   * 容器（`cloud-host-charges.test.ts` + `cloud-host-billing-quote.test.ts` 已覆盖扣费/退款/报价链路）。
+   * 本用例断言计费归属：团队工作区上下文的报价/扣费使用 **team 租户**账户，个人租户余额不变。
+   */
+  it.skipIf(!process.env.INTERNAL_API_TOKEN)(
+    'T-B2: 团队工作区计费口径 —— 充值/扣费落 team 租户，个人余额不变（需 Aspire）',
+    async () => {
+      const billingOwnerName = uniqueFrontUsername('ttb');
+      const createdUser = await adminGql<{ adminCreateFrontUser: { id: string; username: string } }>(
+        CREATE_FRONT_USER,
+        { username: billingOwnerName, password },
+        token,
+      );
+      expect(createdUser.errors, JSON.stringify(createdUser.errors)).toBeUndefined();
+
+      const billingTeamName = `tb-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 4)}`.slice(0, 60);
+      const createdTeam = await adminGql<{ adminCreateTeamTenant: { id: string; name: string } }>(
+        CREATE_TEAM_TENANT,
+        { name: billingTeamName },
+        token,
+      );
+      expect(createdTeam.errors, JSON.stringify(createdTeam.errors)).toBeUndefined();
+      const billingTeamId = createdTeam.data!.adminCreateTeamTenant.id;
+
+      const added = await adminGql(
+        ADD_TENANT_MEMBER,
+        { tenantId: billingTeamId, username: billingOwnerName, role: 'admin' },
+        token,
+      );
+      expect(added.errors, JSON.stringify(added.errors)).toBeUndefined();
+
+      const login = await loginFrontUser(billingOwnerName, password);
+      const workspaces = await agentGql(MY_WORKSPACES, undefined, login.token);
+      expect(workspaces.errors, JSON.stringify(workspaces.errors)).toBeUndefined();
+      const teamGlobal = workspaces.data!.myWorkspaces.find(
+        (workspace: { type: string; tenant: { id: string } }) =>
+          workspace.tenant.id === billingTeamId && workspace.type === 'global',
+      );
+      expect(teamGlobal, 'team 租户应自动开通全局工作区').toBeDefined();
+
+      // team 租户计费账户（adminCreateTeamTenant 时创建，零余额）与个人租户账户
+      const teamAccounts = await adminGql<{
+        adminBillingAccounts: Array<{ id: string; ownerId: string; availableBalance: number }>;
+      }>(BILLING_ACCOUNTS_BY_OWNER, { keyword: billingTeamName, ownerType: 'tenant' }, token);
+      expect(teamAccounts.errors, JSON.stringify(teamAccounts.errors)).toBeUndefined();
+      const teamAccount = teamAccounts.data!.adminBillingAccounts.find(
+        (account) => account.ownerId === billingTeamId,
+      );
+      expect(teamAccount, 'team 租户应有 tenant 计费账户').toBeDefined();
+
+      const personalAccounts = await adminGql<{
+        adminBillingAccounts: Array<{ id: string; ownerId: string; availableBalance: number }>;
+      }>(BILLING_ACCOUNTS_BY_OWNER, { keyword: billingOwnerName, ownerType: 'tenant' }, token);
+      const personalAccount = personalAccounts.data!.adminBillingAccounts.find(
+        (account) => account.ownerId === login.user.id,
+      );
+      expect(personalAccount, '成员应有个人 tenant 计费账户').toBeDefined();
+      expect(personalAccount!.availableBalance).toBe(0);
+
+      // 充值到 team 租户：团队上下文报价可见，个人上下文仍为零
+      const recharge = await adminGql<{
+        rechargeBillingAccount: { amount: number; balanceAfter: number };
+      }>(RECHARGE, { id: teamAccount!.id, amount: 10, note: 'team billing caliber' }, token);
+      expect(recharge.errors, JSON.stringify(recharge.errors)).toBeUndefined();
+      expect(recharge.data!.rechargeBillingAccount.balanceAfter).toBe(10);
+
+      const teamQuote = await agentGql(CLOUD_HOST_QUOTE, undefined, login.token, teamGlobal!.id);
+      expect(teamQuote.errors, JSON.stringify(teamQuote.errors)).toBeUndefined();
+      expect(teamQuote.data!.cloudHostBillingQuote.availableBalance).toBe(10);
+
+      const personalQuote = await agentGql(CLOUD_HOST_QUOTE, undefined, login.token);
+      expect(personalQuote.errors, JSON.stringify(personalQuote.errors)).toBeUndefined();
+      expect(personalQuote.data!.cloudHostBillingQuote.availableBalance).toBe(0);
+
+      // 消费（等价「创建云电脑一次性扣费」）：扣 team 租户账户，个人账户不变
+      const charge = await fetch(`${ADMIN_HTTP}/internal/billing/charges`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}`,
+        },
+        body: JSON.stringify({
+          accountId: teamAccount!.id,
+          productId: 'cloud_host.create',
+          quantity: 1,
+          idempotentKey: `cloud_host.create:team:${teamAccount!.id}:${Date.now()}`,
+          refType: 'cloud_host',
+          refId: teamAccount!.id,
+          description: '团队工作区创建云电脑（T-B2 最小断言）',
+        }),
+      });
+      expect(charge.status).toBe(200);
+      expect((await charge.json()) as { charged?: boolean }).toMatchObject({ charged: true });
+
+      const teamQuoteAfter = await agentGql(CLOUD_HOST_QUOTE, undefined, login.token, teamGlobal!.id);
+      expect(teamQuoteAfter.data!.cloudHostBillingQuote.availableBalance).toBe(5);
+
+      const personalQuoteAfter = await agentGql(CLOUD_HOST_QUOTE, undefined, login.token);
+      expect(personalQuoteAfter.data!.cloudHostBillingQuote.availableBalance).toBe(0);
+
+      const personalAfter = await adminGql<{
+        adminBillingAccounts: Array<{ ownerId: string; availableBalance: number }>;
+      }>(BILLING_ACCOUNTS_BY_OWNER, { keyword: billingOwnerName, ownerType: 'tenant' }, token);
+      expect(
+        personalAfter.data!.adminBillingAccounts.find((account) => account.ownerId === login.user.id)
+          ?.availableBalance,
+      ).toBe(0);
+    },
+  );
 });

@@ -47,6 +47,26 @@ async function createPersonal(name: string) {
 }
 
 describe('WorkspaceService（T-WSP，真库）', () => {
+  it('T-WSP0: 错误文案白名单 15 条逐字锚定', () => {
+    expect(WORKSPACE_ERRORS).toEqual({
+      notFound: 'workspace not found',
+      nameExists: 'workspace name already exists',
+      globalImmutable: 'global workspace is immutable',
+      readOnly: 'global workspace is read-only',
+      personalCreate: 'personal tenant cannot create workspaces',
+      personalImmutable: 'personal tenant is immutable',
+      notEmpty: 'workspace is not empty',
+      notMember: 'not a workspace member',
+      notAdmin: 'not a tenant admin',
+      notTenantMember: 'user is not a tenant member',
+      accountNotFound: 'account not found',
+      alreadyMember: 'already a member',
+      notMemberRow: 'not a member',
+      lastAdminRemoved: 'last admin cannot be removed',
+      lastAdminDemoted: 'last admin cannot be demoted',
+    });
+  });
+
   it('T-WSP1: ensureGlobalWorkspace 幂等 + 写入 admin 成员行', async () => {
     const tenant = await createTeam('team-a');
     const user = await createUser('alice');

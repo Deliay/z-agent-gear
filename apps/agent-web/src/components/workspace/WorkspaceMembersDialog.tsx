@@ -90,7 +90,7 @@ export default function WorkspaceMembersDialog({ open, workspace, onClose }: Wor
           <DialogDescription>{workspace?.name ?? ''}</DialogDescription>
         </DialogHeader>
 
-        {loading ? (
+        {loading && members.length === 0 ? (
           <div className="text-sm text-muted-foreground">加载中...</div>
         ) : members.length === 0 ? (
           <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">

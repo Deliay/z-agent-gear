@@ -153,6 +153,7 @@ internalTenantsRouter.post('/:tenantId/members', async (req: Request, res: Respo
     else if (message === 'personal tenant is immutable')
       res.status(400).json({ error: 'PERSONAL_TENANT_IMMUTABLE' });
     else if (message === 'invalid tenant role') res.status(400).json({ error: 'INVALID_ROLE' });
+    else if (message === 'already a member') res.status(409).json({ error: 'ALREADY_MEMBER' });
     else {
       console.error('[internal-tenants] add member failed:', message);
       res.status(500).json({ error: 'INTERNAL_ERROR' });

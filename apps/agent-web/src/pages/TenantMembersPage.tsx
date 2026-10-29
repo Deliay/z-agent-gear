@@ -173,7 +173,7 @@ export default function TenantMembersPage() {
             </p>
           )}
 
-          {loading ? (
+          {loading && members.length === 0 ? (
             <div className="text-sm text-muted-foreground">加载中...</div>
           ) : members.length === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed p-6 text-sm text-muted-foreground">

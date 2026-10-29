@@ -5,7 +5,7 @@ import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
 import { User } from '../models/user.js';
 import { Workspace } from '../models/workspace.js';
-import { getWorkspaceContext } from './workspace-context.js';
+import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 export interface GitHubRepoInfo {
@@ -148,7 +148,7 @@ export class GitHubService {
   }
 
   async getAccounts(userId: string): Promise<GitHubAccountInfo[]> {
-    const accounts = await GitHubAccount.find({ userId }).lean();
+    const accounts = await GitHubAccount.find(actorFilter(userId)).lean();
     const installations = await GitHubInstallation.find({
       accountId: { $in: accounts.map(a => a._id) },
     }).lean();
@@ -182,7 +182,7 @@ export class GitHubService {
   }
 
   async unbindAccount(userId: string, accountId: string): Promise<boolean> {
-    const account = await GitHubAccount.findOne({ _id: accountId, userId });
+    const account = await GitHubAccount.findOne({ _id: accountId, ...actorFilter(userId) });
     if (!account) return false;
 
     const installations = await GitHubInstallation.find({ accountId: account._id });
@@ -195,12 +195,12 @@ export class GitHubService {
     }
 
     await GitHubInstallation.deleteMany({ accountId: account._id });
-    await GitHubAccount.deleteOne({ _id: accountId, userId });
+    await GitHubAccount.deleteOne({ _id: accountId, ...actorFilter(userId) });
     return true;
   }
 
   async refreshInstallations(userId: string, accountId: string): Promise<GitHubAccountInfo | undefined> {
-    const account = await GitHubAccount.findOne({ _id: accountId, userId });
+    const account = await GitHubAccount.findOne({ _id: accountId, ...actorFilter(userId) });
     if (!account) throw new Error('Account not found');
 
     const token = decrypt(account.accessToken);
@@ -280,7 +280,7 @@ export class GitHubService {
     userId: string,
     repoFullName: string,
   ): Promise<{ token: string; expiresAt: Date }> {
-    const accounts = await GitHubAccount.find({ userId }).lean();
+    const accounts = await GitHubAccount.find(actorFilter(userId)).lean();
     for (const account of accounts) {
       const accountId = String(account._id);
       const cached = this.readCachedToken(accountId, repoFullName);
@@ -431,7 +431,7 @@ export class GitHubService {
   /** 解析仓库归属账号（`GitHubInstallation.repos[].fullName` 大小写不敏感反查，多匹配取首个）。 */
   async resolveRepoAccount(userId: string, repoFullName: string): Promise<string> {
     const target = repoFullName.trim().toLowerCase();
-    const accounts = await GitHubAccount.find({ userId }).sort({ createdAt: 1 }).lean();
+    const accounts = await GitHubAccount.find(actorFilter(userId)).sort({ createdAt: 1 }).lean();
     for (const account of accounts) {
       const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
       const matched = installations.some((installation) =>

@@ -191,6 +191,27 @@ npm test
 | T-WS-API8 租户成员管理 | `searchAccounts` admin 可搜（结果为 username/name/userId 最小集）、developer `not a tenant admin`；`addTenantMember` 指定/缺省 role、重复幂等不覆盖；`changeTenantMemberRole` 生效；加入工作区后 `removeTenantMember` 立即失去团队/工作区访问并级联清理 workspacemembers，资源保留 |
 | T-WS-API9 last-admin / personal | 最后一名 admin 降级 `last admin cannot be demoted`、移除 `last admin cannot be removed`；personal 租户 add/remove/changeRole 均 `personal tenant is immutable` |
 
+### 多租户二期工作区资源隔离 (`agent-api/workspace.test.ts` T-WS-ISO)
+
+> 同一夹具（team 租户 + admin/developer/outsider 三用户 + 普通工作区）覆盖 8 个资源集合的
+> 工作区隔离：同工作区 developer 可见/可操作他人创建的资源、非成员（其它租户）不可见、
+> admin 切换到目标工作区后可见；「其它工作区」断言额外验证普通工作区资源不出现在团队全局上下文。
+> controllers/controllerkeys/sessions 走真实 GraphQL + controller-api 注册；configuredWorkflows/
+> workflowInstances 走真实模板 → 配置 → 实例化链路。**cloudhosts / githubaccounts 无前台创建 API**
+> （云电脑需 HARNESS_ENABLED、GitHub 绑定需真实 App OAuth），改由 `MONGODB_URI` 直插夹具，
+> 缺参时对应用例显式 `skipIf` 并在标题标注。
+
+| 测试 | 描述 |
+|------|------|
+| T-WS-ISO1 sessions | developer 在普通工作区可见/可读 admin 创建会话（`sessions` + `session(id)`）；outsider 列表不含且 `session(id)` 为 null；admin 在团队全局上下文不可见、切到普通工作区可见 |
+| T-WS-ISO2 controllers/controllerkeys | developer 可见 admin 注册控制器并**改名**（成员可操作他人资源）；outsider 列表不含且 `controller(id)` 为 null；admin 切换后可见；未绑定 key 同口径（developer 可重命名，非成员不可见） |
+| T-WS-ISO3 cloudhosts（需 `MONGODB_URI`） | 直插 `cloudhosts`（`resourceWorkspaceId`=普通工作区）→ developer `myCloudHosts`/`cloudHost(id)` 可见；outsider 不可见；admin 切换可见；契约 `CloudHost.workspaceId`=租户工作区 id |
+| T-WS-ISO4 githubaccounts（需 `MONGODB_URI`） | 直插 `githubaccounts`（`workspaceId`=普通工作区）→ developer 可见（共享读=本工作区∪全局）；outsider 不可见；普通工作区行不进入团队全局上下文 |
+| T-WS-ISO5 configuredWorkflows | developer 可见 admin 配置的工作流（列表 + `configuredWorkflow(id)`），`resourceWorkspaceId`=普通工作区；outsider/团队全局上下文不可见；admin 切换可见 |
+| T-WS-ISO6 workflowInstances | developer 可见 admin 实例化的实例，`resourceWorkspaceId`=租户工作区、`workspaceId`=项目工作区（语义互不影响）；outsider/团队全局上下文不可见；admin 切换可见 |
+| T-WS-ISO7 workflowTemplates | 自定义模板仅本工作区可见且 `resourceWorkspaceId`=普通工作区；outsider/团队全局上下文不可见；内置模板在个人全局 / 团队全局 / 团队普通三种上下文均可见且 `resourceWorkspaceId=null` |
+
+
 ### Admin Team 租户 API (`admin-api/tenant-team.test.ts` T-TT-API)
 
 > `contracts/admin-tenant.graphql`：admin-api 仅转发 agent-api `/internal/tenants*`。需要 admin-api + agent-api
@@ -204,6 +225,7 @@ npm test
 | T-TT-API4 详情角色/工作区 | `adminTenant.users` 含 role；`workspaces` 只读且自动开通 global（memberCount=租户成员数）；introspection 无 workspace 写 mutation |
 | T-TT-API5 登录/移出闭环 | 成员登录 `myWorkspaces` 即含团队工作区；last-admin 移除 409 `last admin cannot be removed`；移除 developer 成功后成员立即不可见且 header 访问 `workspace not found` |
 | T-TT-API6 personal 全拒绝 | personal 租户 add/remove 成员均 `personal tenant is immutable`（INVALID_ARGUMENT） |
+| T-B2 团队计费口径 | 团队工作区上下文 `cloudHostBillingQuote` 取 **team 租户**账户余额（充值 10 → 报价 10、`/internal/billing/charges` 扣 5 → 报价 5）；个人租户余额始终 0。为最小断言（不创建真实云电脑，需 Aspire + `INTERNAL_API_TOKEN`；完整扣费/退款/报价链路由 `cloud-host-charges` / `cloud-host-billing-quote` 覆盖） |
 
 ### LLM Provider & Model API (`llm.test.ts`)
 

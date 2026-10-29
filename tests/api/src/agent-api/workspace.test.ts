@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
+import mongoose from 'mongoose';
 import { startMockServer, type MockServer } from '../mock-server.js';
 import { createFrontUser, type FrontUser } from '../support/front-users.js';
 
@@ -1876,6 +1877,600 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
       ),
     ]) {
       expect(result.errors?.[0]?.message).toBe('personal tenant is immutable');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）
+//
+// 覆盖：sessions / controllers / controllerkeys / cloudhosts / githubaccounts /
+//       configuredworkflows / workflowinstances / workflowtemplates。
+// 每个集合断言三件事：同工作区成员（developer）可看到（并在可控处操作）他人创建的资源、
+// 非成员（其它租户）不可见、admin 切换到目标工作区后可见；workflowTemplates 额外断言
+// 「内置模板全工作区可用且 resourceWorkspaceId=null」。
+//
+// 夹具说明：
+// - controllers / controllerkeys / sessions 走真实 GraphQL + controller-api 注册（fake socket 在线）；
+// - configuredWorkflows / workflowInstances 走真实模板 → 配置 → 实例化链路；
+// - **cloudhosts 与 githubaccounts 没有前台创建 API**（云电脑需 HARNESS_ENABLED，GitHub 绑定
+//   需真实 GitHub App OAuth），本套件用 MONGODB_URI 直插夹具，缺参时两条用例显式 skip 并在用例名标注。
+//
+// 需要 agent-api + controller-api 就绪、INTERNAL_API_TOKEN（造 team 租户/成员）；
+// 其余依赖 MONGODB_URI 的用例见各自 skipIf。
+// ---------------------------------------------------------------------------
+
+const ISO_SESSIONS = `
+  query IsoSessions {
+    sessions { id status acpServerType controllerId }
+  }
+`;
+const ISO_SESSION = `query IsoSession($id: ID!) { session(id: $id) { id status controllerId } }`;
+const ISO_CONTROLLERS = `
+  query IsoControllers { controllers { id name type status } }
+`;
+const ISO_CONTROLLER = `query IsoController($id: ID!) { controller(id: $id) { id name } }`;
+const ISO_CONTROLLER_KEYS = `
+  query IsoControllerKeys { controllerKeys { id name } }
+`;
+const ISO_CLOUD_HOSTS = `
+  query IsoCloudHosts { myCloudHosts { id name status workspaceId controllerId } }
+`;
+const ISO_CLOUD_HOST = `query IsoCloudHost($id: ID!) { cloudHost(id: $id) { id name workspaceId } }`;
+const ISO_GITHUB_ACCOUNTS = `
+  query IsoGithubAccounts { githubAccounts { id githubLogin workspaceId } }
+`;
+const ISO_CONFIGURED_WORKFLOWS = `
+  query IsoConfiguredWorkflows {
+    configuredWorkflows { id name controllerId resourceWorkspaceId }
+  }
+`;
+const ISO_WORKFLOW_TEMPLATES = `
+  query IsoWorkflowTemplates {
+    workflowTemplates { id name isBuiltin resourceWorkspaceId }
+  }
+`;
+const ISO_WORKFLOW_INSTANCES = `
+  query IsoWorkflowInstances {
+    workflowInstances { id name resourceWorkspaceId workspaceId }
+  }
+`;
+const ISO_REFRESH_CAPABILITIES = `
+  mutation IsoRefreshCapabilities($controllerId: ID!) {
+    refreshAcpCapabilities(controllerId: $controllerId) { type available version }
+  }
+`;
+const ISO_RENAME_CONTROLLER_KEY = `
+  mutation IsoRenameControllerKey($input: RenameInput!) {
+    renameControllerKey(input: $input) { id name }
+  }
+`;
+const ISO_RENAME_CONTROLLER = `
+  mutation IsoRenameController($input: RenameInput!) {
+    renameController(input: $input) { id name }
+  }
+`;
+const ISO_CREATE_WORKFLOW_TEMPLATE = `
+  mutation IsoCreateTemplate($input: WorkflowTemplateInput!) {
+    createWorkflowTemplate(input: $input) {
+      id name isBuiltin version resourceWorkspaceId
+    }
+  }
+`;
+const ISO_CONFIGURE_WORKFLOW = `
+  mutation IsoConfigureWorkflow($templateId: ID!, $input: ConfigureWorkflowInput!) {
+    configureWorkflow(templateId: $templateId, input: $input) {
+      id name controllerId sourceTemplateId resourceWorkspaceId
+    }
+  }
+`;
+const ISO_INSTANTIATE_WORKFLOW = `
+  mutation IsoInstantiateWorkflow($input: InstantiateWorkflowInput!) {
+    instantiateWorkflow(input: $input) {
+      id name controllerId workspaceId resourceWorkspaceId
+      nodes { id nodeKey type name status }
+    }
+  }
+`;
+
+/** 单 HUMAN 节点的最小模板（不触发 acp:start / Worktree，专注工作区归属） */
+const ISO_TEMPLATE_NODE = {
+  nodeKey: 'approve',
+  type: 'HUMAN',
+  name: '审核',
+  stage: '阶段一',
+  dependsOn: [] as string[],
+  requiresWorktree: false,
+};
+
+describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', () => {
+  const HAS_MONGO = Boolean(process.env.MONGODB_URI);
+
+  let admin: FrontUser;
+  let developer: FrontUser;
+  let outsider: FrontUser;
+  let teamId = '';
+  let teamGlobalId = '';
+  let normalId = '';
+  let controllerId = '';
+  let controllerName = '';
+  let unboundKeyId = '';
+  let projectWorkspaceId = '';
+  let sessionId = '';
+  let templateId = '';
+  let configuredId = '';
+  let instanceId = '';
+  let cloudHostId = '';
+  let githubAccountId = '';
+  let controllerSocket: ClientSocket | null = null;
+  let cleanupDb: (() => Promise<void>) | null = null;
+
+  async function gql(
+    query: string,
+    variables: Record<string, unknown> | undefined,
+    token: string,
+    workspaceId?: string,
+  ): Promise<{ data?: any; errors?: Array<{ message: string }> }> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    };
+    if (workspaceId) headers['x-workspace-id'] = workspaceId;
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query, variables }),
+    });
+    return (await res.json()) as { data?: any; errors?: Array<{ message: string }> };
+  }
+
+  async function internalJson(path: string, method: 'POST', body: unknown) {
+    const token = process.env.INTERNAL_API_TOKEN;
+    if (!token) throw new Error('T-WS-ISO requires INTERNAL_API_TOKEN');
+    const res = await fetch(`${AGENT_API_BASE}${path}`, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    let parsed: any = text;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // 保留原文便于排查
+    }
+    return { status: res.status, body: parsed };
+  }
+
+  async function mongoDb(): Promise<mongoose.mongo.Db | null> {
+    const uri = process.env.MONGODB_URI;
+    if (!uri) return null;
+    if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+    return mongoose.connection.db ?? null;
+  }
+
+  /** 创建 key 并注册 fake controller（保持在线，用于 acp:check 能力探测）。 */
+  async function registerController(
+    token: string,
+    workspaceId: string,
+    name: string,
+  ): Promise<{ controllerId: string; socket: ClientSocket }> {
+    const keyRes = await gql(
+      CREATE_KEY,
+      { input: { name, type: 'local' } },
+      token,
+      workspaceId,
+    );
+    expect(keyRes.errors, JSON.stringify(keyRes.errors)).toBeUndefined();
+    const rawKey = keyRes.data.createControllerKey.rawKey as string;
+
+    const socket = createClient();
+    socket.on('acp:check', (data: { requestId: string }) => {
+      socket.emit('acp:check:result', {
+        requestId: data.requestId,
+        servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
+    });
+    const registered = waitForEvent<{ controllerId: string }>(socket, 'registered', 10000);
+    socket.emit('register', { key: rawKey, hostname: `iso-host-${Date.now()}`, version: '2.0.0' });
+    const reg = await registered;
+    return { controllerId: reg.controllerId, socket };
+  }
+
+  beforeAll(async () => {
+    admin = await createFrontUser();
+    developer = await createFrontUser();
+    outsider = await createFrontUser();
+
+    const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    const team = await internalJson('/internal/tenants', 'POST', {
+      name: `iso2-${suffix}`.slice(0, 60),
+    });
+    expect(team.status, JSON.stringify(team.body)).toBe(201);
+    teamId = team.body.tenant.id;
+    teamGlobalId = team.body.globalWorkspace.id;
+
+    for (const [username, role] of [
+      [admin.username, 'admin'],
+      [developer.username, 'developer'],
+    ] as const) {
+      const added = await internalJson(`/internal/tenants/${teamId}/members`, 'POST', { username, role });
+      expect([200, 201], JSON.stringify(added.body)).toContain(added.status);
+    }
+
+    // 团队普通工作区：admin 创建，developer 加入（admin 天然可管全部工作区）
+    const created = await gql(
+      CREATE_TENANT_WORKSPACE,
+      { name: `iso-normal-${suffix}` },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(created.errors, JSON.stringify(created.errors)).toBeUndefined();
+    normalId = created.data.createTenantWorkspace.id;
+
+    const joined = await gql(
+      ADD_TENANT_WORKSPACE_MEMBER,
+      { workspaceId: normalId, userId: developer.userId },
+      admin.token,
+      teamGlobalId,
+    );
+    expect(joined.errors, JSON.stringify(joined.errors)).toBeUndefined();
+
+    // 控制器 / key 均落在普通工作区上下文
+    controllerName = `iso-ctrl-${suffix}`;
+    const reg = await registerController(admin.token, normalId, controllerName);
+    controllerId = reg.controllerId;
+    controllerSocket = reg.socket;
+
+    const unbound = await gql(
+      CREATE_KEY,
+      { input: { name: `iso-unbound-${suffix}`, type: 'local' } },
+      admin.token,
+      normalId,
+    );
+    expect(unbound.errors, JSON.stringify(unbound.errors)).toBeUndefined();
+    unboundKeyId = unbound.data.createControllerKey.key.id;
+
+    // 项目工作区（ControllerWorkspace）供会话/工作流实例使用
+    const project = await gql(
+      CREATE_WORKSPACE,
+      { input: { controllerId, path: `/tmp/iso-${suffix}` } },
+      admin.token,
+      normalId,
+    );
+    expect(project.errors, JSON.stringify(project.errors)).toBeUndefined();
+    projectWorkspaceId = project.data.createWorkspace.id;
+
+    // 预热控制器能力缓存（fake controller 应答 acp:check），避免后续串行 12s 轮询
+    const caps = await gql(ISO_REFRESH_CAPABILITIES, { controllerId }, admin.token, normalId);
+    expect(caps.errors, JSON.stringify(caps.errors)).toBeUndefined();
+
+    // sessions 夹具：admin 在普通工作区创建
+    const session = await gql(
+      CREATE_SESSION,
+      { input: { controllerId, acpServerType: 'opencode', workspaceId: projectWorkspaceId } },
+      admin.token,
+      normalId,
+    );
+    expect(session.errors, JSON.stringify(session.errors)).toBeUndefined();
+    sessionId = session.data.createSession.session.id;
+
+    // workflowTemplates / configuredWorkflows 夹具：admin 在普通工作区创建
+    const template = await gql(
+      ISO_CREATE_WORKFLOW_TEMPLATE,
+      { input: { name: `iso-tpl-${suffix}`, nodes: [ISO_TEMPLATE_NODE] } },
+      admin.token,
+      normalId,
+    );
+    expect(template.errors, JSON.stringify(template.errors)).toBeUndefined();
+    templateId = template.data.createWorkflowTemplate.id;
+
+    const configured = await gql(
+      ISO_CONFIGURE_WORKFLOW,
+      {
+        templateId,
+        input: {
+          name: `iso-cfg-${suffix}`,
+          controllerId,
+          nodes: [{ ...ISO_TEMPLATE_NODE, agentConfig: null }],
+        },
+      },
+      admin.token,
+      normalId,
+    );
+    expect(configured.errors, JSON.stringify(configured.errors)).toBeUndefined();
+    configuredId = configured.data.configureWorkflow.id;
+
+    // workflowInstances 夹具：同一普通工作区实例化
+    const instance = await gql(
+      ISO_INSTANTIATE_WORKFLOW,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: configuredId,
+          controllerId,
+          workspaceId: projectWorkspaceId,
+          name: `iso-inst-${suffix}`,
+          nodes: [{ ...ISO_TEMPLATE_NODE, agentConfig: null }],
+        },
+      },
+      admin.token,
+      normalId,
+    );
+    expect(instance.errors, JSON.stringify(instance.errors)).toBeUndefined();
+    instanceId = instance.data.instantiateWorkflow.id;
+
+    if (HAS_MONGO) {
+      const db = await mongoDb();
+      if (db) {
+        const hostObjectId = new mongoose.Types.ObjectId();
+        const accountObjectId = new mongoose.Types.ObjectId();
+        const now = new Date();
+        await db.collection('cloudhosts').insertOne({
+          _id: hostObjectId,
+          userId: new mongoose.Types.ObjectId(admin.userId),
+          tenantId: new mongoose.Types.ObjectId(teamId),
+          resourceWorkspaceId: new mongoose.Types.ObjectId(normalId),
+          workspaceId: new mongoose.Types.ObjectId(projectWorkspaceId),
+          controllerId: new mongoose.Types.ObjectId(controllerId),
+          keyId: new mongoose.Types.ObjectId(),
+          name: 'iso-cloud-host',
+          harnessTypes: ['OPENCODE'],
+          status: 'RUNNING',
+          containerId: hostObjectId.toString(),
+          createDefaultSession: false,
+          startedAt: now,
+          readyAt: now,
+          deletedAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await db.collection('githubaccounts').insertOne({
+          _id: accountObjectId,
+          userId: admin.userId,
+          tenantId: teamId,
+          workspaceId: normalId,
+          githubUserId: 900000 + Math.floor(Math.random() * 100000),
+          githubLogin: `iso-gh-${suffix}`,
+          githubAvatarUrl: null,
+          accessToken: 'gho_iso_test_token',
+          tokenExpiresAt: null,
+          createdAt: now,
+          updatedAt: now,
+        });
+        cloudHostId = hostObjectId.toString();
+        githubAccountId = accountObjectId.toString();
+        cleanupDb = async () => {
+          await db.collection('cloudhosts').deleteOne({ _id: hostObjectId });
+          await db.collection('githubaccounts').deleteOne({ _id: accountObjectId });
+        };
+      }
+    }
+  }, 120_000);
+
+  afterAll(async () => {
+    controllerSocket?.disconnect();
+    await cleanupDb?.();
+  });
+
+  it('T-WS-ISO1 sessions：developer 可见/可读他人会话，非成员不可见，admin 切换后可见', async () => {
+    const member = await gql(ISO_SESSIONS, undefined, developer.token, normalId);
+    expect(member.errors, JSON.stringify(member.errors)).toBeUndefined();
+    expect(member.data.sessions.some((row: { id: string }) => row.id === sessionId)).toBe(true);
+
+    const detail = await gql(ISO_SESSION, { id: sessionId }, developer.token, normalId);
+    expect(detail.errors, JSON.stringify(detail.errors)).toBeUndefined();
+    expect(detail.data.session).toMatchObject({ id: sessionId, controllerId });
+
+    const outsiderList = await gql(ISO_SESSIONS, undefined, outsider.token);
+    expect(outsiderList.errors).toBeUndefined();
+    expect(outsiderList.data.sessions.some((row: { id: string }) => row.id === sessionId)).toBe(false);
+    const outsiderDetail = await gql(ISO_SESSION, { id: sessionId }, outsider.token);
+    expect(outsiderDetail.data.session).toBeNull();
+
+    const otherWorkspace = await gql(ISO_SESSIONS, undefined, admin.token, teamGlobalId);
+    expect(otherWorkspace.data.sessions.some((row: { id: string }) => row.id === sessionId)).toBe(false);
+
+    const adminList = await gql(ISO_SESSIONS, undefined, admin.token, normalId);
+    expect(adminList.errors).toBeUndefined();
+    expect(adminList.data.sessions.some((row: { id: string }) => row.id === sessionId)).toBe(true);
+  });
+
+  it('T-WS-ISO2 controllers/controllerkeys：developer 可见并可改名他人资源，非成员不可见', async () => {
+    const member = await gql(ISO_CONTROLLERS, undefined, developer.token, normalId);
+    expect(member.errors, JSON.stringify(member.errors)).toBeUndefined();
+    expect(member.data.controllers.some((row: { id: string }) => row.id === controllerId)).toBe(true);
+
+    // 操作：developer 重命名 admin 注册的控制器
+    const renamed = await gql(
+      ISO_RENAME_CONTROLLER,
+      { input: { id: controllerId, name: `${controllerName}-dev-renamed` } },
+      developer.token,
+      normalId,
+    );
+    expect(renamed.errors, JSON.stringify(renamed.errors)).toBeUndefined();
+    expect(renamed.data.renameController.name).toBe(`${controllerName}-dev-renamed`);
+
+    const outsiderList = await gql(ISO_CONTROLLERS, undefined, outsider.token);
+    expect(outsiderList.errors).toBeUndefined();
+    expect(outsiderList.data.controllers.some((row: { id: string }) => row.id === controllerId)).toBe(false);
+    const outsiderDetail = await gql(ISO_CONTROLLER, { id: controllerId }, outsider.token);
+    expect(outsiderDetail.data.controller).toBeNull();
+
+    const adminList = await gql(ISO_CONTROLLERS, undefined, admin.token, normalId);
+    const adminRow = adminList.data.controllers.find((row: { id: string }) => row.id === controllerId);
+    expect(adminRow?.name).toBe(`${controllerName}-dev-renamed`);
+
+    // controllerKeys：未绑定 key 落在普通工作区
+    const memberKeys = await gql(ISO_CONTROLLER_KEYS, undefined, developer.token, normalId);
+    expect(memberKeys.errors, JSON.stringify(memberKeys.errors)).toBeUndefined();
+    expect(memberKeys.data.controllerKeys.some((row: { id: string }) => row.id === unboundKeyId)).toBe(true);
+
+    // 操作：developer 可重命名他人创建的未绑定 key
+    const keyRenamed = await gql(
+      ISO_RENAME_CONTROLLER_KEY,
+      { input: { id: unboundKeyId, name: `iso-unbound-dev-${Date.now()}` } },
+      developer.token,
+      normalId,
+    );
+    expect(keyRenamed.errors, JSON.stringify(keyRenamed.errors)).toBeUndefined();
+    expect(keyRenamed.data.renameControllerKey.name).toContain('iso-unbound-dev-');
+
+    const outsiderKeys = await gql(ISO_CONTROLLER_KEYS, undefined, outsider.token);
+    expect(outsiderKeys.errors).toBeUndefined();
+    expect(outsiderKeys.data.controllerKeys.some((row: { id: string }) => row.id === unboundKeyId)).toBe(false);
+
+    const adminKeys = await gql(ISO_CONTROLLER_KEYS, undefined, admin.token, normalId);
+    expect(adminKeys.data.controllerKeys.some((row: { id: string }) => row.id === unboundKeyId)).toBe(true);
+  });
+
+  it.skipIf(!Boolean(process.env.MONGODB_URI))(
+    'T-WS-ISO3 cloudhosts（MONGODB_URI 直插夹具）：成员可见、非成员不可见、CloudHost.workspaceId=租户工作区',
+    async () => {
+      expect(cloudHostId, 'cloudhosts 夹具需 MONGODB_URI').toBeTruthy();
+
+      const member = await gql(ISO_CLOUD_HOSTS, undefined, developer.token, normalId);
+      expect(member.errors, JSON.stringify(member.errors)).toBeUndefined();
+      const memberHost = member.data.myCloudHosts.find((row: { id: string }) => row.id === cloudHostId);
+      expect(memberHost).toMatchObject({ id: cloudHostId, workspaceId: normalId, controllerId });
+
+      // 列表按工作区可见（成员可见）；单机详情/生命周期操作仍为属主口径（resolver 保留 userId 过滤），
+      // 因此这里用属主 admin 断言契约字段 CloudHost.workspaceId = 租户工作区。
+      const adminDetail = await gql(ISO_CLOUD_HOST, { id: cloudHostId }, admin.token, normalId);
+      expect(adminDetail.errors, JSON.stringify(adminDetail.errors)).toBeUndefined();
+      expect(adminDetail.data.cloudHost).toMatchObject({ id: cloudHostId, workspaceId: normalId });
+
+      const outsiderList = await gql(ISO_CLOUD_HOSTS, undefined, outsider.token);
+      expect(outsiderList.data.myCloudHosts.some((row: { id: string }) => row.id === cloudHostId)).toBe(false);
+      const outsiderDetail = await gql(ISO_CLOUD_HOST, { id: cloudHostId }, outsider.token);
+      expect(outsiderDetail.data.cloudHost).toBeNull();
+
+      const adminList = await gql(ISO_CLOUD_HOSTS, undefined, admin.token, normalId);
+      expect(adminList.data.myCloudHosts.some((row: { id: string }) => row.id === cloudHostId)).toBe(true);
+    },
+  );
+
+  it.skipIf(!Boolean(process.env.MONGODB_URI))(
+    'T-WS-ISO4 githubaccounts（MONGODB_URI 直插夹具）：共享读=本工作区∪全局，非成员不可见',
+    async () => {
+      expect(githubAccountId, 'githubaccounts 夹具需 MONGODB_URI').toBeTruthy();
+
+      const member = await gql(ISO_GITHUB_ACCOUNTS, undefined, developer.token, normalId);
+      expect(member.errors, JSON.stringify(member.errors)).toBeUndefined();
+      const account = member.data.githubAccounts.find((row: { id: string }) => row.id === githubAccountId);
+      expect(account).toMatchObject({ id: githubAccountId, workspaceId: normalId });
+
+      const outsiderList = await gql(ISO_GITHUB_ACCOUNTS, undefined, outsider.token);
+      expect(outsiderList.data.githubAccounts.some((row: { id: string }) => row.id === githubAccountId)).toBe(false);
+
+      // 普通工作区行不进入团队全局上下文（共享读仅本工作区∪全局，不跨普通工作区）
+      const globalList = await gql(ISO_GITHUB_ACCOUNTS, undefined, admin.token, teamGlobalId);
+      expect(globalList.data.githubAccounts.some((row: { id: string }) => row.id === githubAccountId)).toBe(false);
+
+      const adminList = await gql(ISO_GITHUB_ACCOUNTS, undefined, admin.token, normalId);
+      expect(adminList.data.githubAccounts.some((row: { id: string }) => row.id === githubAccountId)).toBe(true);
+    },
+  );
+
+  it('T-WS-ISO5 configuredWorkflows：成员可见他人配置，非成员不可见，resourceWorkspaceId=当前工作区', async () => {
+    const member = await gql(ISO_CONFIGURED_WORKFLOWS, undefined, developer.token, normalId);
+    expect(member.errors, JSON.stringify(member.errors)).toBeUndefined();
+    const row = member.data.configuredWorkflows.find((item: { id: string }) => item.id === configuredId);
+    expect(row, 'developer 应看到 admin 在普通工作区创建的已配置工作流').toBeDefined();
+    expect(row.resourceWorkspaceId).toBe(normalId);
+    expect(row.controllerId).toBe(controllerId);
+
+    const detail = await gql(
+      `query IsoConfiguredWorkflow($id: ID!) { configuredWorkflow(id: $id) { id name resourceWorkspaceId } }`,
+      { id: configuredId },
+      developer.token,
+      normalId,
+    );
+    expect(detail.errors, JSON.stringify(detail.errors)).toBeUndefined();
+    expect(detail.data.configuredWorkflow).toMatchObject({ id: configuredId, resourceWorkspaceId: normalId });
+
+    const outsiderList = await gql(ISO_CONFIGURED_WORKFLOWS, undefined, outsider.token);
+    expect(outsiderList.data.configuredWorkflows.some((item: { id: string }) => item.id === configuredId)).toBe(false);
+
+    const otherWorkspace = await gql(ISO_CONFIGURED_WORKFLOWS, undefined, admin.token, teamGlobalId);
+    expect(otherWorkspace.data.configuredWorkflows.some((item: { id: string }) => item.id === configuredId)).toBe(false);
+
+    const adminList = await gql(ISO_CONFIGURED_WORKFLOWS, undefined, admin.token, normalId);
+    const adminRow = adminList.data.configuredWorkflows.find((item: { id: string }) => item.id === configuredId);
+    expect(adminRow?.resourceWorkspaceId).toBe(normalId);
+  });
+
+  it('T-WS-ISO6 workflowInstances：成员可见他人实例，非成员不可见，resourceWorkspaceId=当前工作区', async () => {
+    const member = await gql(ISO_WORKFLOW_INSTANCES, undefined, developer.token, normalId);
+    expect(member.errors, JSON.stringify(member.errors)).toBeUndefined();
+    const row = member.data.workflowInstances.find((item: { id: string }) => item.id === instanceId);
+    expect(row, 'developer 应看到 admin 在普通工作区实例化的工作流').toBeDefined();
+    expect(row.resourceWorkspaceId).toBe(normalId);
+    // 项目工作区语义（workspaceId）与租户工作区语义（resourceWorkspaceId）互不影响
+    expect(row.workspaceId).toBe(projectWorkspaceId);
+
+    const detail = await gql(
+      `query IsoWorkflowInstance($id: ID!) { workflowInstance(id: $id) { id name resourceWorkspaceId workspaceId } }`,
+      { id: instanceId },
+      developer.token,
+      normalId,
+    );
+    expect(detail.errors, JSON.stringify(detail.errors)).toBeUndefined();
+    expect(detail.data.workflowInstance).toMatchObject({
+      id: instanceId,
+      resourceWorkspaceId: normalId,
+      workspaceId: projectWorkspaceId,
+    });
+
+    const outsiderList = await gql(ISO_WORKFLOW_INSTANCES, undefined, outsider.token);
+    expect(outsiderList.data.workflowInstances.some((item: { id: string }) => item.id === instanceId)).toBe(false);
+
+    const otherWorkspace = await gql(ISO_WORKFLOW_INSTANCES, undefined, admin.token, teamGlobalId);
+    expect(otherWorkspace.data.workflowInstances.some((item: { id: string }) => item.id === instanceId)).toBe(false);
+
+    const adminList = await gql(ISO_WORKFLOW_INSTANCES, undefined, admin.token, normalId);
+    expect(adminList.data.workflowInstances.some((item: { id: string }) => item.id === instanceId)).toBe(true);
+  });
+
+  it('T-WS-ISO7 workflowTemplates：内置模板全工作区可用且 resourceWorkspaceId=null，自定义模板归属工作区', async () => {
+    // 自定义模板：普通工作区成员可见，非成员不可见
+    const member = await gql(ISO_WORKFLOW_TEMPLATES, undefined, developer.token, normalId);
+    expect(member.errors, JSON.stringify(member.errors)).toBeUndefined();
+    const custom = member.data.workflowTemplates.find((item: { id: string }) => item.id === templateId);
+    expect(custom, 'developer 应看到 admin 在普通工作区创建的自定义模板').toBeDefined();
+    expect(custom.isBuiltin).toBe(false);
+    expect(custom.resourceWorkspaceId).toBe(normalId);
+
+    const outsider = await gql(ISO_WORKFLOW_TEMPLATES, undefined, outsider.token);
+    expect(outsider.errors).toBeUndefined();
+    expect(outsider.data.workflowTemplates.some((item: { id: string }) => item.id === templateId)).toBe(false);
+
+    const otherWorkspace = await gql(ISO_WORKFLOW_TEMPLATES, undefined, admin.token, teamGlobalId);
+    expect(otherWorkspace.data.workflowTemplates.some((item: { id: string }) => item.id === templateId)).toBe(false);
+
+    const adminList = await gql(ISO_WORKFLOW_TEMPLATES, undefined, admin.token, normalId);
+    expect(adminList.data.workflowTemplates.some((item: { id: string }) => item.id === templateId)).toBe(true);
+
+    // 内置模板：跨工作区可用且 resourceWorkspaceId 恒 null（个人全局 / 团队全局 / 团队普通）
+    const builtins = outsider.data.workflowTemplates.filter((item: { isBuiltin: boolean }) => item.isBuiltin);
+    expect(builtins.length, '内置模板应由 agent-api 启动 seed 写入').toBeGreaterThan(0);
+    for (const item of builtins) {
+      expect(item.resourceWorkspaceId).toBeNull();
+    }
+    const builtinId = builtins[0].id;
+    for (const [token, workspaceId] of [
+      [outsider.token, undefined],
+      [admin.token, teamGlobalId],
+      [developer.token, normalId],
+    ] as const) {
+      const list = await gql(ISO_WORKFLOW_TEMPLATES, undefined, token, workspaceId);
+      expect(list.errors, JSON.stringify(list.errors)).toBeUndefined();
+      const builtin = list.data.workflowTemplates.find((item: { id: string }) => item.id === builtinId);
+      expect(builtin, '内置模板在任意工作区均应可用').toBeDefined();
+      expect(builtin.resourceWorkspaceId).toBeNull();
     }
   });
 });

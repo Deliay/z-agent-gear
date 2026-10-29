@@ -46,6 +46,6 @@ export function useWorkspaceContextSync(): void {
     const fallbackId = getWorkspaceState().current?.id ?? '__none__';
     if (lastFallbackResetRef.current === fallbackId) return;
     lastFallbackResetRef.current = fallbackId;
-    void client.resetStore();
+    void client.resetStore().catch(() => undefined);
   }, [client, data, user?.id]);
 }

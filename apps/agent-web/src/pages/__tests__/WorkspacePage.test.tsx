@@ -7,6 +7,7 @@ import type {
   WorkspaceTenantData,
 } from '../../graphql/types';
 import { resetWorkspaceStore, selectWorkspace, syncWorkspaceContext } from '../../stores/workspace';
+import { toast } from 'sonner';
 
 const mockCreate = vi.fn();
 const mockUseQuery = vi.fn();
@@ -83,7 +84,7 @@ describe('WorkspacePage（仅 admin 可操作）', () => {
     mockUseQuery.mockReturnValue({ data: undefined, loading: false });
   });
 
-  it('team admin 展示工作区列表、类型与成员数，并可创建/改名/删除/成员管理', () => {
+  it('team admin 展示工作区列表、类型、成员数与操作入口', () => {
     setup(
       [PERSONAL_GLOBAL, TEAM_GLOBAL, TEAM_NORMAL],
       MEMBERSHIPS,
@@ -143,5 +144,49 @@ describe('WorkspacePage（仅 admin 可操作）', () => {
       expect(screen.getByRole('alert')).toHaveTextContent('工作区名称已存在');
     });
     expect(mockCreate).toHaveBeenCalledWith({ variables: { name: '重复名' } });
+  });
+
+  it('改名走真实交互路径', async () => {
+    setup([PERSONAL_GLOBAL, TEAM_GLOBAL, TEAM_NORMAL], MEMBERSHIPS, 'ws-tn');
+    render(<WorkspacePage />);
+
+    const row = screen.getByTestId('workspace-row-ws-tn');
+    fireEvent.click(within(row).getByRole('button', { name: '改名' }));
+    fireEvent.change(screen.getByLabelText('工作区名称'), { target: { value: '新名称' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => {
+      expect(mockCreate).toHaveBeenCalledWith({ variables: { id: 'ws-tn', name: '新名称' } });
+    });
+  });
+
+  it('删除非空拦截给出中文提示', async () => {
+    setup([PERSONAL_GLOBAL, TEAM_GLOBAL, TEAM_NORMAL], MEMBERSHIPS, 'ws-tn');
+    mockCreate.mockRejectedValueOnce(new Error('workspace is not empty'));
+    render(<WorkspacePage />);
+
+    const row = screen.getByTestId('workspace-row-ws-tn');
+    const deleteButtons = within(row).getAllByRole('button');
+    fireEvent.click(deleteButtons[deleteButtons.length - 1]);
+    fireEvent.click(screen.getAllByRole('button', { name: '删除' }).at(-1)!);
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('工作区非空（仍持有资源），无法删除');
+    });
+    expect(mockCreate).toHaveBeenCalledWith({ variables: { id: 'ws-tn' } });
+  });
+
+  it('成员管理对话框可打开并展示成员列表', () => {
+    setup([PERSONAL_GLOBAL, TEAM_GLOBAL, TEAM_NORMAL], MEMBERSHIPS, 'ws-tn');
+    mockUseQuery.mockReturnValue({
+      data: {
+        workspaceMembers: [
+          { id: 'u2', name: '李四', username: 'lisi', role: null, createdAt: '' },
+        ],
+      },
+      loading: false,
+    });
+    render(<WorkspacePage />);
+    fireEvent.click(within(screen.getByTestId('workspace-row-ws-tn')).getByRole('button', { name: '成员' }));
+    expect(screen.getByText('工作区成员')).toBeInTheDocument();
+    expect(screen.getByText('李四')).toBeInTheDocument();
   });
 });

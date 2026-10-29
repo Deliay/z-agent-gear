@@ -118,6 +118,11 @@ describe('WorkspaceSwitcher（按角色过滤）', () => {
 
     expect(screen.getByTestId('workspace-switcher')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: '团队一（开发）' })).toBeInTheDocument();
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      '全局工作区（全局）',
+      '全局工作区（全局）',
+      '项目 A',
+    ]);
     expect(screen.queryByLabelText('工作区管理')).toBeNull();
     expect(screen.queryByLabelText('租户成员')).toBeNull();
   });

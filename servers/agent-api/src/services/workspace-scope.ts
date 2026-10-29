@@ -160,9 +160,16 @@ export function applyWorkspaceScope(schema: any, options: WorkspaceScopeOptions 
   // Mongoose v9 文档中间件为同步钩子（无 next 参数）。
   schema.pre('validate', function workspaceScopeValidate(this: Record<string, unknown>) {
     assertWritable();
-    if (this[field] === undefined || this[field] === null) {
-      const context = getWorkspaceContext();
-      if (context) this[field] = context.id;
+    const context = getWorkspaceContext();
+    if (!context) return;
+    const current = this[field];
+    if (current === undefined || current === null) {
+      this[field] = context.id;
+      return;
+    }
+    // save() 路径强制归属当前工作区（共享读允许加载全局行，但写必须回到当前工作区）
+    if (String(current) !== context.id) {
+      throw new Error('workspace not found');
     }
   });
 

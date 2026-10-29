@@ -31,7 +31,7 @@ export default function WorkspaceSwitcher() {
   const handleChange = async (workspaceId: string) => {
     if (!workspaceId || workspaceId === current?.id) return;
     if (!selectWorkspace(workspaceId)) return;
-    await client.resetStore();
+    await client.resetStore().catch(() => undefined);
   };
 
   return (

@@ -1,4 +1,5 @@
 import { Controller } from '../../models/controller.js';
+import { actorFilter } from '../workspace-context.js';
 import { workflowTemplateService } from './template.js';
 import { configuredWorkflowService } from './configured.js';
 import { workflowInstanceService, type InstantiateSource } from './instance.js';
@@ -311,7 +312,7 @@ export async function callAdminTool(
 
     // ---- 控制器列表 ----
     case 'listControllers': {
-      const controllers = await Controller.find({ userId }).select('_id name status lastHeartbeatAt').lean();
+      const controllers = await Controller.find(actorFilter(userId)).select('_id name status lastHeartbeatAt').lean();
       return { controllers: controllers.map((c) => ({ id: toId(c._id), name: c.name, status: c.status, lastHeartbeatAt: c.lastHeartbeatAt ?? null })) };
     }
 

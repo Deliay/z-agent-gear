@@ -165,9 +165,15 @@ describe('migration 015-team-workspaces（T-MIG15）', () => {
       expect(String(row.resourceWorkspaceId)).toBe(globalByTenant.get(String(row.tenantId)));
       expect(row.workspaceId).toBeUndefined();
     }
-    const instances = await db().collection('workflowinstances').find({}).toArray();
-    for (const row of instances) {
-      expect(String(row.resourceWorkspaceId)).toBe(globalByTenant.get(String(row.tenantId)));
+    for (const collection of ['workflowinstances', 'configuredworkflows']) {
+      const rows = await db().collection(collection).find({}).toArray();
+      for (const row of rows) {
+        expect(String(row.resourceWorkspaceId)).toBe(globalByTenant.get(String(row.tenantId)));
+      }
+    }
+    const githubRows = await db().collection('githubaccounts').find({}).toArray();
+    for (const row of githubRows) {
+      expect(String(row.workspaceId)).toBe(globalByTenant.get(String(row.tenantId)));
     }
     const templates = await db().collection('workflowtemplates').find({}).toArray();
     const builtin = templates.find((row) => row.isBuiltin);
@@ -239,5 +245,54 @@ describe('migration 015-team-workspaces（T-MIG15）', () => {
     const first = await snapshot();
     await migration.run();
     expect(await snapshot()).toEqual(first);
+  });
+
+  it('T-MIG15d-guard: 复制写失败时中止且不删原件', async () => {
+    await seed();
+    // 制造跨租户复制冲突（同名唯一）→ 迁移必须抛错且保留原共享行
+    await db().collection('providers').createIndex({ name: 1 }, { unique: true, name: 'tmp_name_unique' });
+    await expect(migration.run()).rejects.toThrow();
+    const legacy = await db()
+      .collection('providers')
+      .find({ tenantId: { $exists: false }, scope: { $ne: 'global' } })
+      .toArray();
+    expect(legacy.map((row) => row.name).sort()).toEqual(['no-scope', 'openai-a']);
+    const legacyModels = await db()
+      .collection('models')
+      .find({ tenantId: { $exists: false } })
+      .toArray();
+    expect(legacyModels).toHaveLength(2);
+  });
+
+  it('T-MIG15g: 半完成（全局工作区缺失）重跑补齐', async () => {
+    const fixture = await seed();
+    await migration.run();
+    // 删除一个租户的全局工作区模拟半完成
+    await db()
+      .collection('workspaces')
+      .deleteOne({ tenantId: fixture.tenantIds[0], type: 'global' });
+    await migration.run();
+    expect(
+      await db().collection('workspaces').countDocuments({ tenantId: fixture.tenantIds[0], type: 'global' }),
+    ).toBe(1);
+  });
+
+  it('T-MIG15h: 批处理多页回填（> BATCH_SIZE）', async () => {
+    const fixture = await seed();
+    const tenantId = fixture.tenantIds[0];
+    const userId = fixture.userIds[0];
+    const docs = Array.from({ length: 520 }, () => ({
+      userId,
+      tenantId,
+      controllerId: new mongoose.Types.ObjectId(),
+      controllerName: 'c',
+      acpServerType: 'opencode',
+    }));
+    await db().collection('sessions').insertMany(docs);
+    await migration.run();
+    const global = await db().collection('workspaces').findOne({ tenantId, type: 'global' });
+    expect(
+      await db().collection('sessions').countDocuments({ tenantId, workspaceId: global?._id }),
+    ).toBe(521);
   });
 });

@@ -60,6 +60,22 @@ export function exclusiveVisibleWorkspaceIds(context: WorkspaceContext): string[
 }
 
 /**
+ * 可见性过滤助手（多租户二期，D5）：请求级工作区上下文存在时，服务层不再用 `userId` 过滤
+ * （工作区成员可读写本工作区全部资源，含他人创建）；无上下文（引擎/内部/迁移）时保留
+ * `userId` 归属校验，避免后台链路越权。
+ */
+export function actorFilter(userId: string): Record<string, unknown> {
+  return getWorkspaceContext() ? {} : { userId };
+}
+
+/** 工作流模板等「创建者自有 ∪ 内置」查询：有上下文时交给插件 builtinVisible，无上下文回退 userId。 */
+export function actorOrBuiltinFilter(userId: string): Record<string, unknown> {
+  return getWorkspaceContext()
+    ? {}
+    : { $or: [{ userId }, { isBuiltin: true }] };
+}
+
+/**
  * 只读上下文断言（服务层辅助，插件之外的第二道防线）：
  * 全局工作区 + developer 的一切写操作拒绝。
  */

@@ -222,19 +222,22 @@ export default function ModelSection() {
                       <ResourceSourceBadge source={group.source} />
                     </div>
                   )}
-                  {group.models.map((model) => (
-                    <ModelItem
-                      key={model.id}
-                      model={model}
-                      onToggle={handleToggle}
-                      onDelete={handleDelete}
-                      sortable={group.sortable}
-                      hideProviderName
-                      readOnlyToggle={!group.sortable}
-                      readOnly={contextReadOnly || (group.source ? !group.source.editable : false)}
-                      source={group.source}
-                    />
-                  ))}
+                  {group.models.map((model) => {
+                    const modelSource = resolveSource(model.workspaceId)
+                    return (
+                      <ModelItem
+                        key={model.id}
+                        model={model}
+                        onToggle={handleToggle}
+                        onDelete={handleDelete}
+                        sortable={group.sortable}
+                        hideProviderName
+                        readOnlyToggle={!group.sortable}
+                        readOnly={contextReadOnly || !modelSource.editable}
+                        source={modelSource}
+                      />
+                    )
+                  })}
                 </div>
               </ModelGroup>
             ))}

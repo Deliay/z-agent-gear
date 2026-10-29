@@ -10,6 +10,7 @@ import { getRedisClient } from '../middleware/redis.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 import { ensureCloudHostToolsServer, CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
+import { actorFilter } from './workspace-context.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
@@ -85,8 +86,8 @@ export class SessionService {
   ): Promise<Record<string, unknown>[]> {
     // 默认排除工作流节点会话（workflowInstanceId != null）
     const filter: Record<string, unknown> = options.includeWorkflowSessions
-      ? { userId }
-      : { userId, workflowInstanceId: null };
+      ? { ...actorFilter(userId) }
+      : { ...actorFilter(userId), workflowInstanceId: null };
     if (options.controllerId) {
       filter.controllerId = options.controllerId;
     }
@@ -95,7 +96,7 @@ export class SessionService {
   }
 
   async findById(id: string, userId: string): Promise<Record<string, unknown> | null> {
-    const session = await Session.findOne({ _id: id, userId }).lean();
+    const session = await Session.findOne({ _id: id, ...actorFilter(userId) }).lean();
     if (!session) return null;
     return this.mapSession(session);
   }
@@ -106,7 +107,7 @@ export class SessionService {
    * 普通本地/GitHub 会话不受影响。
    */
   async assertSessionWritable(sessionId: string, userId: string): Promise<void> {
-    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    const session = await Session.findOne({ _id: sessionId, ...actorFilter(userId) }).lean();
     if (!session) throw new Error('Session not found');
     await this.assertControllerWritable(session.controllerId, userId);
   }
@@ -115,12 +116,12 @@ export class SessionService {
     const controllerRef = controllerId as mongoose.Types.ObjectId;
     const controller = await Controller.findOne({
       _id: controllerRef,
-      userId,
+      ...actorFilter(userId),
     }).lean();
     if (controller?.type !== 'cloud') return;
     const host = await CloudHost.findOne({
       controllerId: controllerRef,
-      userId,
+      ...actorFilter(userId),
       deletedAt: null,
     }).lean();
     if (
@@ -152,7 +153,7 @@ export class SessionService {
     /** 内部编排：允许在云电脑 STARTING 窗口创建默认会话（ready 回调原子写 RUNNING+defaultSessionId） */
     allowStartingCloudHost?: boolean;
   }): Promise<Record<string, unknown>> {
-    const controller = await Controller.findOne({ _id: input.controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: input.controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
@@ -392,7 +393,7 @@ export class SessionService {
   /** 云电脑停止/终态：该主机下所有非 ENDED 会话批量结束（只读，消息保留）。 */
   async endByController(controllerId: string, userId: string): Promise<number> {
     const result = await Session.updateMany(
-      { controllerId, userId, status: { $ne: 'ended' } },
+      { controllerId, ...actorFilter(userId), status: { $ne: 'ended' } },
       { $set: { status: 'ended', endedAt: new Date() } },
     );
     return result.modifiedCount ?? 0;
@@ -408,7 +409,7 @@ export class SessionService {
     }
 
     const result = await Session.findOneAndUpdate(
-      { _id: id, userId },
+      { _id: id, ...actorFilter(userId) },
       updateData,
       { new: true },
     );
@@ -428,7 +429,7 @@ export class SessionService {
   }
 
   async setMode(sessionId: string, userId: string, modeId: string): Promise<boolean> {
-    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    const session = await Session.findOne({ _id: sessionId, ...actorFilter(userId) }).lean();
     if (!session) return false;
     if (session.status !== 'idling') return false;
 
@@ -439,12 +440,12 @@ export class SessionService {
       modeId,
     }));
     // 同步更新 Session 文档缓存，保证前端查询为最新值
-    await Session.updateOne({ _id: sessionId, userId }, { currentModeId: modeId });
+    await Session.updateOne({ _id: sessionId, ...actorFilter(userId) }, { currentModeId: modeId });
     return true;
   }
 
   async setModel(sessionId: string, userId: string, modelId: string): Promise<boolean> {
-    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    const session = await Session.findOne({ _id: sessionId, ...actorFilter(userId) }).lean();
     if (!session) return false;
     if (session.status !== 'idling') return false;
 
@@ -455,12 +456,12 @@ export class SessionService {
       modelId,
     }));
     // 同步更新 Session 文档缓存，保证前端查询为最新值
-    await Session.updateOne({ _id: sessionId, userId }, { currentModelId: modelId });
+    await Session.updateOne({ _id: sessionId, ...actorFilter(userId) }, { currentModelId: modelId });
     return true;
   }
 
   async setConfigOption(sessionId: string, userId: string, configId: string, value: string): Promise<boolean> {
-    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    const session = await Session.findOne({ _id: sessionId, ...actorFilter(userId) }).lean();
     if (!session) return false;
     if (session.status !== 'idling') return false;
     const configOptions = (session as Record<string, unknown>).configOptions as unknown[] | undefined;
@@ -477,7 +478,7 @@ export class SessionService {
   }
 
   async cancelGeneration(sessionId: string, userId: string): Promise<boolean> {
-    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    const session = await Session.findOne({ _id: sessionId, ...actorFilter(userId) }).lean();
     if (!session) return false;
 
     // A-2：只读留档会话不得继续（cancel 亦属于 session:command 写路径）。
@@ -492,7 +493,7 @@ export class SessionService {
   }
 
   async resume(id: string, userId: string, initial?: { modeId?: string; modelId?: string }): Promise<{ success: boolean; status: string; error?: string }> {
-    const session = await Session.findOne({ _id: id, userId }).lean();
+    const session = await Session.findOne({ _id: id, ...actorFilter(userId) }).lean();
     if (!session) {
       return { success: false, status: 'ended', error: 'Session not found' };
     }
@@ -504,12 +505,12 @@ export class SessionService {
     // 云电脑终态后会话只读：历史消息保留，但不允许继续（不新增 Session 字段）。
     const controller = await Controller.findOne({
       _id: session.controllerId,
-      userId,
+      ...actorFilter(userId),
     }).lean();
     if (controller?.type === 'cloud') {
       const host = await CloudHost.findOne({
         controllerId: session.controllerId,
-        userId,
+        ...actorFilter(userId),
         deletedAt: null,
       }).lean();
       if (
@@ -559,9 +560,9 @@ export class SessionService {
     userId: string,
     opts?: { suppressFallback?: boolean; reason?: string },
   ): Promise<boolean> {
-    const session = await Session.findOne({ _id: id, userId }).lean();
+    const session = await Session.findOne({ _id: id, ...actorFilter(userId) }).lean();
     const result = await Session.findOneAndUpdate(
-      { _id: id, userId },
+      { _id: id, ...actorFilter(userId) },
       { status: 'ended', endedAt: new Date() },
     );
     if (result) {
@@ -589,7 +590,7 @@ export class SessionService {
 
   async delete(id: string, userId: string, opts?: { skipAckWait?: boolean }): Promise<boolean> {
     const redis = getRedisClient();
-    const session = await Session.findOne({ _id: id, userId }).lean();
+    const session = await Session.findOne({ _id: id, ...actorFilter(userId) }).lean();
     if (!session) return false;
 
     // Stop ACP session first, then do worktree cleanup.
@@ -690,7 +691,7 @@ export class SessionService {
     await mcpEndpointService.revokeEndpoint(id);
 
     // Delete from DB
-    const result = await Session.findOneAndDelete({ _id: id, userId });
+    const result = await Session.findOneAndDelete({ _id: id, ...actorFilter(userId) });
     if (result) {
       await AcpMessage.deleteMany({ sessionId: id });
       await redis.del(`session:${id}:status`);
@@ -713,7 +714,7 @@ export class SessionService {
   }
 
   async getMessages(sessionId: string, userId: string, options: { before?: string; limit?: number } = {}): Promise<Record<string, unknown>[]> {
-    const session = await Session.findOne({ _id: sessionId, userId }).lean();
+    const session = await Session.findOne({ _id: sessionId, ...actorFilter(userId) }).lean();
     if (!session) {
       throw new Error('Session not found');
     }
@@ -784,7 +785,7 @@ export class SessionService {
 
   async getAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
     // Verify controller belongs to user
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
@@ -838,7 +839,7 @@ export class SessionService {
     userId: string,
     opts?: { minProbedAt?: number },
   ): Promise<Record<string, unknown>> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
@@ -889,7 +890,7 @@ export class SessionService {
     acpServerType: string,
     userId: string,
   ): Promise<Record<string, unknown>> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }
@@ -910,7 +911,7 @@ export class SessionService {
   }
 
   async refreshAcpCapabilities(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }

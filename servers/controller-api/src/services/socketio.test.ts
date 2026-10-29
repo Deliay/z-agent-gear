@@ -16,6 +16,7 @@ vi.mock('./key-cache.js', () => ({
 
 vi.mock('../models/controller-key.js', () => ({
   ControllerKey: {
+    findById: vi.fn(),
     findOne: vi.fn(),
     updateOne: vi.fn(),
     deleteOne: vi.fn(),
@@ -97,6 +98,9 @@ function createMockIO() {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+  vi.mocked(ControllerKey.findById).mockReturnValue({
+    select: () => ({ lean: async () => ({ tenantId: 'user1', workspaceId: null }) }),
+  } as never);
 });
 
 describe('SocketIO Service', () => {

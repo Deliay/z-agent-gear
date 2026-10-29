@@ -75,7 +75,9 @@ export default function ChangeMemberRoleDialog({
             ))}
           </select>
           <p className="text-xs text-muted-foreground">
-            后台暂未提供角色变更接口，本次变更以「移除并重新添加」完成，成员会短暂失去访问权限。
+            后台暂未提供角色变更接口，本次变更以「移除并重新添加」完成：成员会短暂失去访问权限。
+            移除会级联清空该成员在本租户全部普通工作区的成员关系，重新添加后不会自动恢复，
+            需由管理员在对应工作区重新添加成员。最后一名管理员将被服务端拒绝（last-admin 保护）。
           </p>
         </div>
         {error && (

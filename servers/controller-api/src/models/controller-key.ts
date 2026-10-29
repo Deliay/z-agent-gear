@@ -4,6 +4,8 @@ import { applyTenantScope } from '../services/tenant-scope.js';
 const controllerKeySchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
+  // 多租户二期：租户工作区归属（只读镜像；注册时由 agent-api 写方继承到 Controller）
+  workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Workspace', default: null, index: true },
   name: { type: String, required: true },
   type: { type: String, enum: ['local', 'cloud', 'github'], required: true },
   keyHash: { type: String, required: true, unique: true },
