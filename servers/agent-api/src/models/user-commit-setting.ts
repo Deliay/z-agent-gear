@@ -20,10 +20,14 @@ export type CommitterType = (typeof COMMITTER_TYPES)[number];
  */
 const userCommitSettingSchema = new mongoose.Schema(
   {
-    userId: { type: String, required: true, index: true },
+    // userId 仅作「最近编辑者」审计字段（多租户二期 D10），不再建索引：
+    // 旧的 `userId_1` / `uniq_user_commit_setting` 由迁移 011/015 清理，
+    // 字段级 index 会与迁移的固定索引名冲突（IndexOptionsConflict）。
+    userId: { type: String, required: true },
     tenantId: { type: String, required: true, index: true },
-    // 多租户二期（F8）：String 口径
-    workspaceId: { type: String, required: false, default: null, index: true },
+    // 多租户二期（F8）：String 口径；唯一索引由迁移 015 建固定名，
+    // 这里不再声明字段级 index，避免自动生成 `workspaceId_1` 与之冲突。
+    workspaceId: { type: String, required: false, default: null },
     committerMode: {
       type: String,
       enum: COMMITTER_MODES,
