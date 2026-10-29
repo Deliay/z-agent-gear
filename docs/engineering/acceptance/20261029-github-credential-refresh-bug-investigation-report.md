@@ -5,7 +5,7 @@ type: Permanent
 
 # 云电脑容器 Github 凭据不再自动续期 · 问题调查报告（2026-10-29）
 
-> **状态**: 🔍 **已完成复现与根因定位（REPRODUCED）**——最小复现用例在当前 `origin/main`（`34745215`）上稳定失败 3 例（1 例 agent-api + 2 例 agent-gear），确定性时间线模拟显示「凭据失效窗口 = 每 100 分钟 40 分钟（40%）」。修复由下游节点实施，本文档给出修复方案、风险与回归计划。另有 1 项**无法在本环境闭环**的疑点（容器/agent-api 生产日志缺失），已登记为「待确认问题」。
+> **状态**: ✅ **已复现、已定位并完成修复（FIXED，2026-10-29）**——最小复现用例在 `origin/main`（`34745215`）上稳定失败 3 例（1 例 agent-api + 2 例 agent-gear），确定性时间线模拟显示「凭据失效窗口 = 每 100 分钟 40 分钟（40%）」；修复节点已按 R1/R2/R3 落地（见第十节，修复 commit `e758c995`），3 个复现用例转 GREEN 并保留为长期回归锚点。另有 1 项**无法在本环境闭环**的疑点（容器/agent-api 生产日志缺失），已登记为「待确认问题」，上线后需按第七节 #7 长跑观察。
 
 ## 关联文档
 
@@ -286,3 +286,39 @@ private scheduleNext(): void {
 2. **对「交出近过期凭据」要有防御**：客户端在 `beforeExpiry <= 0` 时回落最大间隔，是把「意外输入」放大成「长时间故障」的典型写法；应改为短间隔重试并告警。
 3. **静默失败等于不可运维**：本缺陷之所以只能靠「用户感觉」上报，是因为失败分支一条日志都没有；凭据类链路必须做到「成功/失败/近过期」三态可观测且不含 secret。
 4. **时间维度缺陷必须可注入时钟**：E2E 无法等 50 分钟，本次以 `now` 注入 + `Date.now` mock 在同一代码路径复现，是可复用做法。
+
+## 十、修复记录（修复 BUG 节点，2026-10-29）
+
+- **修复 commit**：`e758c995`（`fix(cloud-host): 修复云电脑 Github 凭据不再自动续期（缓存余量/排期回落/失败静默）`，总分支 `bugfix/github-credential-refresh`，随总 PR #347 自动更新）。
+- **数据迁移 / 配置变更**：无（凭据不落库；不改 `MIN_HARNESS_WORKER_VERSION`；agent-gear 版本号按仓库惯例由独立 `chore(release)` 提交处理，本次不随修复升版）。
+
+| # | 根因 | 修复内容（最小化，仅根因相关） | 状态 |
+|---|---|---|---|
+| R1 | agent-api 缓存余量 5min < 容器续期间隔 50min | `github.ts`：`createRepoScopedToken(accountId, repo, options?: { minRemainingMs })`；`readCachedToken` 命中要求「剩余有效期 > 调用方阈值」（缺省仍 5min，Check Runs/Issues 同步语义不变；未达阈值但 > 5min 硬余量只 miss 不删除，供小余量调用方复用）；`internal-cloud-host.ts` 传 `CONTAINER_CREDENTIAL_MIN_REMAINING_MS = 55min` | ✅ `T-GH9` RED → GREEN |
+| R2 | `scheduleNext` 在 `beforeExpiry <= 0` 回落 50min | `credential-manager.ts`：进入/越过余量区时**首次立即重试**（`delay=0`）、其后按 `NEAR_EXPIRY_RETRY_MS`（60s）退避并告警；`nearExpiryImmediateTaken` 防止服务端持续返回近过期 token 时热循环 | ✅ `T-CM9`/`T-CM10` RED → GREEN；新增 `T-CM12` |
+| R3 | 续期失败静默 | `doRefresh()`：除 `disabled`/`no-binding` 外的失败输出 `[GithubCredential] 凭据续期失败：<可读原因>`（401/403 退避已有日志不重复；日志经 `redactSecrets` 脱敏，不含 token） | ✅ 新增 `T-CM11`（5xx/非法 JSON/网络错误三场景） |
+
+**有意收窄的范围**（不扩大范围，留待线上观察后按需补充）：§6.2 中「已过期 token 不写入 gh」的防御建议未纳入——近过期/已过期已由 R2 的立即重试 + 60s 退避兜底；若上线后仍观察到容器写入已过期凭据，再按待确认问题 2 一并处理。
+
+### 验证（本机实际执行的命令与结果）
+
+| 命令 | 结果 |
+|---|---|
+| `cd servers/agent-api && npx vitest run src/services/github.test.ts src/routes/internal-cloud-host.test.ts`（`git stash` 仅回退 2 个 src 文件、保留测试） | ❌ RED：2 failed（`T-GH9`、`T-ICG2`）/ 43 passed |
+| `cd servers/agent-api && npx vitest run src/services/github.test.ts src/routes/internal-cloud-host.test.ts`（修复后） | ✅ 45 passed |
+| `cd servers/agent-api && npx vitest run` | ✅ 102 files / 1370 tests passed |
+| `cd servers/agent-api && npx tsc --noEmit` | ✅ 0 类型错误 |
+| `cd packages/agent-controller && npx vitest run src/github/credential-manager.test.ts`（修复前） | ❌ RED：4 failed（`T-CM9`/`T-CM10`/`T-CM11`/`T-CM12`）/ 8 passed |
+| `cd packages/agent-controller && npx vitest run src/github/credential-manager.test.ts`（修复后） | ✅ 12 passed |
+| `cd packages/agent-controller && npx vitest run` | ✅ 48 files / 557 tests passed |
+| `cd packages/agent-controller && npx tsc --noEmit` | ✅ 0 类型错误 |
+| lint | ⚠️ 未执行：仓库仅 `apps/agent-web`、`apps/admin-web` 有 `eslint.config.js`，后端与包目录无 ESLint 配置；本次未改动任何前端文件 |
+| `tests/api` 集成套件 | ⚠️ 未执行：需完整服务栈（agent-api + MongoDB/Redis + mock GitHub server）；本次改动为内部参数透出，端点语义由 `routes/internal-cloud-host.test.ts` 覆盖 |
+| reviewer 视角 `git diff` 自查 | ✅ 无遗留 TODO/FIXME、无调试代码（`console.log`/`debugger`）、无硬编码密钥（测试常量为既有 fixture）、无未使用导入 |
+
+### 风险与回滚
+
+- 回滚方式：`git revert e758c995` 即可（无数据迁移、无配置变更；凭据不落库，回滚后行为回到调查基线）。
+- 行为变化：容器续期将每次真正签发新 token（每容器每小时最多 1 次，GitHub App 调用量按云电脑数线性、量级可接受）；Check Runs/Issues 同步仍走 5min 缓存，语义不变。
+- 兼容性：R1（服务端）对存量 2.11.0 容器立即生效，无需升级镜像；R2/R3 需容器使用含本次改动的 agent-gear 版本，未升级前容器仍按旧逻辑排期（但会被 R1 修复直接治愈）。
+- 待线上验证：回归计划 #7（连续 ≥2 小时 `gh auth status` + `git ls-remote`）与待确认问题 2（502 长尾日志观察一天）尚未执行，需在合并/部署后完成。
