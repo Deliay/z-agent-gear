@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import mongoose from 'mongoose';
+import { MongoMemoryServer } from 'mongodb-memory-server';
 import { applyTenantScope, injectFilter, injectUpdate } from './tenant-scope.js';
+import { applyWorkspaceScope } from './workspace-scope.js';
 import { runWithWorkspace } from './workspace-context.js';
 
 function fakeQuery(filter: Record<string, unknown>, update?: Record<string, unknown>) {
@@ -81,6 +83,29 @@ describe('tenant scope plugin', () => {
     });
   });
 
+  it('does not duplicate tenantId into $setOnInsert when $set already sets it (GitHub upsert)', () => {
+    // GitHubService.handleSetup：$set.tenantId + $setOnInsert.userId
+    // 再注入 $setOnInsert.tenantId 会触发 ConflictingUpdateOperators（code 40）
+    const query = fakeQuery(
+      {},
+      {
+        $set: { tenantId: 't1', workspaceId: 'w1', githubUserId: 42 },
+        $setOnInsert: { userId: 'u1' },
+      },
+    );
+    injectUpdate(query);
+    expect(query.state.update).toEqual({
+      $set: { tenantId: 't1', workspaceId: 'w1', githubUserId: 42 },
+      $setOnInsert: { userId: 'u1' },
+    });
+  });
+
+  it('does not duplicate tenantId into $setOnInsert when top-level tenantId exists', () => {
+    const query = fakeQuery({}, { tenantId: 't1', $setOnInsert: { userId: 'u1' } });
+    injectUpdate(query);
+    expect(query.state.update).toEqual({ tenantId: 't1', $setOnInsert: { userId: 'u1' } });
+  });
+
   it('fills tenantId from userId on document validate', async () => {
     const schema = new mongoose.Schema({
       userId: { type: String, required: true },
@@ -134,5 +159,58 @@ describe('tenant scope plugin：团队租户请求上下文（阻断-H）', () =
       userId: 'user-1',
       tenantId: 'user-1',
     });
+  });
+});
+
+describe('tenant scope plugin：真实 MongoDB upsert（回归 GitHub 绑定冲突）', () => {
+  let server: MongoMemoryServer;
+
+  beforeAll(async () => {
+    server = await MongoMemoryServer.create();
+    await mongoose.connect(server.getUri('agent-api-tenant-scope-upsert-test'));
+  }, 60_000);
+
+  afterAll(async () => {
+    await mongoose.disconnect();
+    await server.stop();
+  });
+
+  it('GitHub 绑定 upsert（$set.tenantId + $setOnInsert.userId）不触发 code 40', async () => {
+    const schema = new mongoose.Schema(
+      {
+        userId: { type: String, required: true },
+        tenantId: { type: String, required: true },
+        workspaceId: { type: String, default: null },
+        githubUserId: { type: Number, required: true },
+      },
+      { collection: 'githubaccounts_upsert_regression' },
+    );
+    applyTenantScope(schema);
+    applyWorkspaceScope(schema, { shared: true });
+    const Model = mongoose.model('TenantScopeUpsertRegression', schema);
+
+    const context = {
+      id: 'w1',
+      tenantId: 't1',
+      type: 'normal' as const,
+      role: 'developer' as const,
+      readOnly: false,
+      globalWorkspaceId: 'wg',
+    };
+    const filter = { tenantId: 't1', workspaceId: 'w1', githubUserId: 42 };
+
+    const doc = await runWithWorkspace(context, async () =>
+      Model.findOneAndUpdate(
+        filter,
+        {
+          $set: { tenantId: 't1', workspaceId: 'w1', githubUserId: 42 },
+          $setOnInsert: { userId: 'u1' },
+        },
+        { upsert: true, new: true },
+      ).exec(),
+    );
+
+    expect(doc?.userId).toBe('u1');
+    expect(await Model.countDocuments({ githubUserId: 42 })).toBe(1);
   });
 });
