@@ -89,6 +89,28 @@ function isSharedType(name: string): boolean {
 }
 
 /**
+ * 真库直插绕过 Mongoose 校验，但**唯一索引仍然生效**。
+ * 不同工作区的同构样本在 `keyId` / `keyHash` / `providerId+name` 等唯一索引上
+ * 会因为缺省统一落成 null 而互相冲突（E11000），因此为每条样本注入唯一值。
+ * 新增资源集合若带唯一索引，也需要在这里补齐。
+ */
+function uniqueSeedFields(name: string, seed: number): Record<string, unknown> {
+  switch (name) {
+    case 'controllers':
+      return { keyId: new mongoose.Types.ObjectId() };
+    case 'controllerkeys':
+      return { keyHash: `workspace-isolation-key-${seed}` };
+    case 'models':
+      return {
+        providerId: new mongoose.Types.ObjectId(),
+        name: `workspace-isolation-model-${seed}`,
+      };
+    default:
+      return {};
+  }
+}
+
+/**
  * T-WS 矩阵：11 集合 × 真实 Mongoose 查询中间件 × admin/developer 两档。
  * 断言：普通工作区仅见本工作区；共享型额外见本租户全局；全局上下文仅见全局；
  * 内置模板全工作区可见；角色不放大可见集（admin 通过切换工作区上下文直达）。
@@ -112,9 +134,15 @@ describe('workspace-isolation 矩阵（T-WS，真库）', () => {
       scope: isSharedType(testCase.name) ? 'user' : undefined,
     };
     const ws = (id: string) => (stringField ? id : new mongoose.Types.ObjectId(id));
-    await collection.insertOne({ ...base, [testCase.field]: ws(WS_A) });
-    await collection.insertOne({ ...base, [testCase.field]: ws(WS_B) });
-    await collection.insertOne({ ...base, [testCase.field]: ws(WS_GLOBAL) });
+    const insertSample = (workspaceId: string, seed: number) =>
+      collection.insertOne({
+        ...base,
+        ...uniqueSeedFields(testCase.name, seed),
+        [testCase.field]: ws(workspaceId),
+      });
+    await insertSample(WS_A, 1);
+    await insertSample(WS_B, 2);
+    await insertSample(WS_GLOBAL, 3);
     if (testCase.builtin) {
       await collection.insertOne({
         _id: BUILTIN_ID,
