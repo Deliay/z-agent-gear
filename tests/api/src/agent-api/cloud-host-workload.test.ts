@@ -391,7 +391,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
       expect(item.source).toBeNull();
     }
     expect(items.map((item) => item.name)).toEqual(
-      expect.arrayContaining(['Aspire', 'Docker', '.NET']),
+      expect.arrayContaining(['Aspire', 'Docker', '.NET', 'MongoDB']),
     );
   });
 });
