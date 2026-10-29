@@ -86,6 +86,14 @@ async function authenticateCredentialRequest(
 }
 
 /**
+ * 容器凭据契约要求的最小剩余有效期：agent-gear 的 `REFRESH_INTERVAL_MS`（50 分钟续期间隔）
+ * + `EXPIRY_SKEW_MS`（到期前 10 分钟余量）= 60 分钟，而 GitHub App 新签发的 installation token
+ * 约 60 分钟有效，故取 55 分钟作为安全下限（留 5 分钟时钟偏差余量）。
+ * 低于该值的缓存 token 不得交给容器续期（否则容器拿到近过期凭据后出现凭据空窗）。
+ */
+export const CONTAINER_CREDENTIAL_MIN_REMAINING_MS = 55 * 60 * 1000;
+
+/**
  * 容器凭据管理器申请本机绑定仓库的最小化 Github token。
  * 不做任何日志输出；错误只返回枚举码。
  */
@@ -130,6 +138,7 @@ internalCloudHostRouter.post(
       const { token, expiresAt } = await githubService.createRepoScopedToken(
         String(binding.accountId),
         binding.repoFullName,
+        { minRemainingMs: CONTAINER_CREDENTIAL_MIN_REMAINING_MS },
       );
       res.json({ token, expiresAt: expiresAt.toISOString() });
     } catch {

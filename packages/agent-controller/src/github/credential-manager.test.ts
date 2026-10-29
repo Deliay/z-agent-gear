@@ -240,6 +240,74 @@ describe('GithubCredentialManager', () => {
     manager.stop();
   });
 
+  it('T-CM11: 非 401/403/404 的续期失败必须留下脱敏日志（5xx / 非法 JSON / 网络错误不再静默）', async () => {
+    const scenarios: Array<() => Promise<Response>> = [
+      async () => new Response('boom', { status: 500 }),
+      async () =>
+        new Response('not json', { status: 200, headers: { 'content-type': 'application/json' } }),
+      async () => {
+        throw new Error('ECONNREFUSED');
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const logs: string[] = [];
+      const manager = new GithubCredentialManager({
+        env: BASE_ENV,
+        fetch: fakeFetch(scenario),
+        writeGhAuth: async () => {},
+        log: (message) => logs.push(message),
+      });
+
+      const result = await manager.refreshNow();
+
+      expect(result.ok).toBe(false);
+      const joined = logs.join('\n');
+      expect(joined).toContain('[GithubCredential] 凭据续期失败');
+      expect(joined).not.toContain(TOKEN);
+    }
+  });
+
+  it('T-CM12: 进入近过期区首次立即重试、其后按短间隔退避，并留下不含 token 的告警日志', async () => {
+    const t0 = Date.parse('2026-10-22T10:00:00.000Z');
+    let now = t0;
+    const logs: string[] = [];
+    // 服务端持续返回近过期 token（复现 R1 未修复时的缓存命中）
+    const minted = new Date(t0 + 60 * 60 * 1000).toISOString();
+    const fetchFn = fakeFetch(async () => jsonResponse({ token: TOKEN, expiresAt: minted }));
+    const scheduler = fakeScheduler();
+
+    const manager = new GithubCredentialManager({
+      env: BASE_ENV,
+      fetch: fetchFn,
+      writeGhAuth: async () => {},
+      now: () => now,
+      log: (message) => logs.push(message),
+      setTimeout: scheduler.setTimeoutFn,
+    });
+
+    manager.start();
+    await vi.waitFor(() => expect(scheduler.timers).toHaveLength(1));
+
+    // 50 分钟后续期仍拿到同一枚只剩 10 分钟的 token → 进入近过期区
+    now = t0 + REFRESH_INTERVAL_MS;
+    scheduler.timers[0].fn();
+    await vi.waitFor(() => expect(scheduler.timers).toHaveLength(2));
+    // 首次发现已到/已过续期余量：立即重试，绝不排到 token 过期之后
+    expect(scheduler.timers[1].delay).toBe(0);
+
+    scheduler.timers[1].fn();
+    await vi.waitFor(() => expect(scheduler.timers).toHaveLength(3));
+    // 服务端仍返回近过期 token → 退到短间隔重试（60s），避免热循环打爆 agent-api
+    expect(scheduler.timers[2].delay).toBe(60_000);
+
+    const joined = logs.join('\n');
+    expect(joined).toContain('[GithubCredential] 凭据剩余有效期不足');
+    expect(joined).not.toContain(TOKEN);
+
+    manager.stop();
+  });
+
   it('T-CM5: concurrent refreshNow calls are serialized into a single request', async () => {
     let release!: (response: Response) => void;
     const gate = new Promise<Response>((resolve) => {
