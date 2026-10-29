@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   },
   tenant: { findById: vi.fn(), create: vi.fn(), deleteOne: vi.fn() },
   billing: { getAccount: vi.fn() },
+  workspace: { ensureGlobalWorkspace: vi.fn() },
   hashPassword: vi.fn(),
   verifyPassword: vi.fn(),
 }));
@@ -22,6 +23,7 @@ vi.mock('../models/account.js', () => ({ Account: h.account }));
 vi.mock('../models/user.js', () => ({ User: h.user }));
 vi.mock('../models/tenant.js', () => ({ Tenant: h.tenant }));
 vi.mock('../services/billing-client.js', () => ({ billingClient: h.billing }));
+vi.mock('../services/workspace-service.js', () => ({ workspaceService: h.workspace }));
 vi.mock('../services/auth.js', () => ({
   assertUsernamePasswordRules: (username: unknown, password: unknown) => {
     if (typeof username !== 'string' || username.length < 2 || username.length > 20) {
@@ -48,6 +50,7 @@ describe('POST /internal/users (front user provisioning)', () => {
     h.hashPassword.mockResolvedValue('hash');
     h.verifyPassword.mockResolvedValue(true);
     h.billing.getAccount.mockResolvedValue({ id: 'billing-1' });
+    h.workspace.ensureGlobalWorkspace.mockResolvedValue({ id: 'ws-global-1', name: '全局工作区', type: 'global' });
     h.account.deleteOne.mockResolvedValue({});
     h.user.deleteOne.mockResolvedValue({});
     h.tenant.deleteOne.mockResolvedValue({});
@@ -182,6 +185,98 @@ describe('POST /internal/users (front user provisioning)', () => {
 
     const res = await post({ username: 'alice', password: 'secret1' });
     expect(res.status).toBe(503);
+    expect(h.account.deleteOne).toHaveBeenCalled();
+    expect(h.user.deleteOne).toHaveBeenCalled();
+    expect(h.tenant.deleteOne).toHaveBeenCalled();
+  });
+});
+
+describe('POST /internal/users 多租户二期（T-PROV 新开户运行时初始化）', () => {
+  let server: Server;
+  let baseUrl: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    h.hashPassword.mockResolvedValue('hash');
+    h.verifyPassword.mockResolvedValue(true);
+    h.billing.getAccount.mockResolvedValue({ id: 'billing-1' });
+    h.workspace.ensureGlobalWorkspace.mockResolvedValue({
+      id: 'ws-global-1',
+      name: '全局工作区',
+      type: 'global',
+    });
+    h.account.deleteOne.mockResolvedValue({});
+    h.user.deleteOne.mockResolvedValue({});
+    h.tenant.deleteOne.mockResolvedValue({});
+
+    const app = express();
+    app.use(express.json());
+    app.use('/internal/users', internalUsersRouter);
+    server = createServer(app);
+    await new Promise<void>((resolve) => server.listen(0, resolve));
+    const address = server.address();
+    baseUrl = `http://127.0.0.1:${typeof address === 'object' && address ? address.port : 0}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  function post(body: unknown) {
+    return fetch(`${baseUrl}/internal/users`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify(body),
+    });
+  }
+
+  function mockNewAccount() {
+    h.account.findOne.mockResolvedValue(null);
+    h.account.create.mockResolvedValue({ _id: 'acc-1', username: 'alice', passwordHash: 'hash' });
+    h.user.findOne.mockResolvedValue(null);
+    h.user.create.mockImplementation(async (doc: Record<string, unknown>) => doc);
+    h.tenant.findById.mockResolvedValue(null);
+    h.tenant.create.mockImplementation(async (doc: Record<string, unknown>) => doc);
+  }
+
+  it('T-PROV1: 新开户后确保全局工作区与 admin 成员行，并透出 globalWorkspace', async () => {
+    mockNewAccount();
+    const res = await post({ username: 'alice', password: 'secret1' });
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.globalWorkspace).toEqual({ id: 'ws-global-1', name: '全局工作区', type: 'global' });
+    expect(h.workspace.ensureGlobalWorkspace).toHaveBeenCalledTimes(1);
+    const [tenantIdArg, options] = h.workspace.ensureGlobalWorkspace.mock.calls[0];
+    expect(String(tenantIdArg)).toBeTruthy();
+    expect(options).toEqual({ adminUserId: expect.any(String), createdBy: 'provision' });
+  });
+
+  it('T-PROV2: 重复开户幂等且再次 ensure（幂等 upsert）', async () => {
+    mockNewAccount();
+    h.account.findOne.mockResolvedValue({ _id: 'acc-1', username: 'alice', passwordHash: 'hash' });
+    h.user.findOne.mockResolvedValue({ _id: 'user-1', tenantId: 'user-1', name: 'alice' });
+    h.tenant.findById.mockResolvedValue({ _id: 'user-1', name: 'alice', type: 'personal' });
+
+    const res = await post({ username: 'alice', password: 'secret1' });
+    expect(res.status).toBe(200);
+    expect(h.workspace.ensureGlobalWorkspace).toHaveBeenCalledTimes(1);
+    expect(h.account.create).not.toHaveBeenCalled();
+    expect(h.user.create).not.toHaveBeenCalled();
+  });
+
+  it('T-PROV3: 计费不可达时 503 且不调用工作区初始化（不残留工作区）', async () => {
+    mockNewAccount();
+    h.billing.getAccount.mockRejectedValue(new Error('billing down'));
+    const res = await post({ username: 'alice', password: 'secret1' });
+    expect(res.status).toBe(503);
+    expect(h.workspace.ensureGlobalWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('T-PROV4: 工作区初始化失败 → 500 并回滚本次新建文档', async () => {
+    mockNewAccount();
+    h.workspace.ensureGlobalWorkspace.mockRejectedValue(new Error('db down'));
+    const res = await post({ username: 'alice', password: 'secret1' });
+    expect(res.status).toBe(500);
     expect(h.account.deleteOne).toHaveBeenCalled();
     expect(h.user.deleteOne).toHaveBeenCalled();
     expect(h.tenant.deleteOne).toHaveBeenCalled();

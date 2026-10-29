@@ -1,8 +1,17 @@
 import { GraphQLError } from 'graphql';
 import { Account } from '../../models/account.js';
 import { Tenant } from '../../models/tenant.js';
+import { TenantMember } from '../../models/tenant-member.js';
 import { User } from '../../models/user.js';
 import { verifyPassword, signToken } from '../../services/auth.js';
+
+export interface WorkspaceAccess {
+  id: string;
+  tenantId: string;
+  type: 'global' | 'normal';
+  role: 'admin' | 'developer';
+  readOnly: boolean;
+}
 
 export interface AuthContext {
   currentUser: {
@@ -14,6 +23,10 @@ export interface AuthContext {
   } | null;
   /** 请求级租户上下文（= currentUser.tenantId；personal 期恒等于 userId）。 */
   tenantId?: string | null;
+  /** 请求级租户工作区上下文（多租户二期；缺省回退个人全局工作区）。 */
+  workspaceAccess?: WorkspaceAccess | null;
+  /** 请求级可访问工作区惰性缓存（与 modelLibraryPromise 同模式）。 */
+  accessibleWorkspacesPromise?: Promise<unknown[]>;
   /** 请求级平台模型库缓存（Session.availableModels 来源推断用，避免 N+1） */
   modelLibraryPromise?: Promise<Array<{ name: string; scope: 'user' | 'global' }>>;
 }
@@ -25,6 +38,23 @@ export function requireTenantId(context: AuthContext): string {
     throw new GraphQLError('Not authenticated');
   }
   return tenantId;
+}
+
+/** 请求级工作区上下文（未登录/缺数据时回退个人租户口径）。 */
+export function requireWorkspace(context: AuthContext): WorkspaceAccess {
+  if (context.workspaceAccess) return context.workspaceAccess;
+  const tenantId = requireTenantId(context);
+  return { id: '', tenantId, type: 'global', role: 'admin', readOnly: false };
+}
+
+/** 服务层 admin 断言（工作区管理 / 租户成员管理入口）。 */
+export function requireTenantAdmin(context: AuthContext): string {
+  const access = requireWorkspace(context);
+  if (access.role !== 'admin') {
+    throw new GraphQLError('not a tenant admin');
+  }
+  if (!context.currentUser) throw new GraphQLError('Not authenticated');
+  return context.currentUser.id;
 }
 
 function toUserView(user: {
@@ -86,7 +116,7 @@ export const authResolvers = {
         // 半迁移/历史行兜底：personal 租户 _id 复用 userId，缺失文档时返回等价视图。
         return { id: tenantId, name: parent.name ?? '', type: 'personal', memberCount: 1 };
       }
-      const memberCount = await User.countDocuments({ tenantId: tenant._id });
+      const memberCount = await TenantMember.countDocuments({ tenantId: tenant._id });
       return {
         id: tenant._id.toString(),
         name: tenant.name,

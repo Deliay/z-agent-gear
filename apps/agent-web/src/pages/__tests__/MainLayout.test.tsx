@@ -36,6 +36,7 @@ vi.mock('../../components/harness/HarnessLoginDialog', () => ({
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
+  useApolloClient: () => ({ resetStore: vi.fn() }),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -122,8 +123,10 @@ describe('MainLayout 首页聚合查询', () => {
 
     render(<MainLayout />);
 
-    expect(mockUseQuery).toHaveBeenCalledTimes(1);
+    // 工作区上下文查询（myWorkspaces/myTenants）与 HOME_OVERVIEW 各一次
     expect(mockUseQuery).toHaveBeenCalledWith(HOME_OVERVIEW, { pollInterval: 15000 });
+    const homeCalls = mockUseQuery.mock.calls.filter(([query]) => query === HOME_OVERVIEW);
+    expect(homeCalls).toHaveLength(1);
   });
 
   it('轮询期间 loading=true 但已有数据时不卸载子页面（T-F2）', () => {

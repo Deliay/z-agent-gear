@@ -17,7 +17,12 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import mongoose from 'mongoose';
-import { createFrontUser, type FrontUser } from '../support/front-users.js';
+import {
+  createFrontUser,
+  loginFrontUser,
+  uniqueFrontUsername,
+  type FrontUser,
+} from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -620,5 +625,179 @@ describe('多租户一期：T-MT 系列', () => {
         expect(String(doc!.userId), `${collection}.userId`).toBe(userA.userId);
       }
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 多租户二期：新开户运行时初始化（T-PROV）与移出租户立即失效
+// ---------------------------------------------------------------------------
+
+const AGENT_API_BASE = AGENT_API_URL.replace(/\/graphql\/?$/, '');
+const FRONT_PASSWORD = 'testpass123';
+
+const PROV_MY_WORKSPACES = `
+  query MyWorkspaces {
+    myWorkspaces {
+      id name type memberCount myRole readOnly
+      tenant { id name type memberCount }
+    }
+  }
+`;
+
+const PROV_MY_TENANTS = `
+  query MyTenants {
+    myTenants { role tenant { id name type memberCount } }
+  }
+`;
+
+const PROV_TENANT_MEMBERS = `
+  query TenantMembers($tenantId: ID!) {
+    tenantMembers(tenantId: $tenantId) { id username role }
+  }
+`;
+
+const PROV_MODELS = `query Models { models { id name } }`;
+
+function provGql(
+  query: string,
+  variables?: Record<string, unknown>,
+  token?: string,
+  workspaceId?: string,
+): Promise<{ data?: any; errors?: Array<{ message: string }> }> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (workspaceId) headers['x-workspace-id'] = workspaceId;
+  return fetch(AGENT_API_URL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query, variables }),
+  }).then((res) => res.json() as Promise<{ data?: any; errors?: Array<{ message: string }> }>);
+}
+
+async function internalProv(
+  path: string,
+  method: 'POST' | 'DELETE',
+  body?: unknown,
+): Promise<{ status: number; body: any }> {
+  const token = process.env.INTERNAL_API_TOKEN;
+  if (!token) throw new Error('T-PROV requires INTERNAL_API_TOKEN');
+  const res = await fetch(`${AGENT_API_BASE}${path}`, {
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const text = await res.text();
+  let parsed: any = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // 保留原始文本便于排查
+  }
+  return { status: res.status, body: parsed };
+}
+
+describe('多租户二期：T-PROV 新开户与移出租户失效', () => {
+  const username = uniqueFrontUsername('pv');
+  let created: any;
+  let loginToken = '';
+  let personalTenantId = '';
+
+  beforeAll(async () => {
+    const res = await internalProv('/internal/users', 'POST', {
+      username,
+      password: FRONT_PASSWORD,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    created = res.body;
+
+    const login = await loginFrontUser(username, FRONT_PASSWORD);
+    loginToken = login.token;
+    personalTenantId = login.user.tenant.id;
+  }, 30_000);
+
+  it('T-PROV1: 开户后立即登录即用 —— 个人全局工作区唯一 + tenantmembers admin', async () => {
+    expect(created.user.name).toBe(username);
+    expect(created.tenant).toMatchObject({ name: username, type: 'personal' });
+    expect(created.globalWorkspace, '开户响应应追加 globalWorkspace').toBeDefined();
+    expect(created.globalWorkspace.type).toBe('global');
+
+    const workspaces = await provGql(PROV_MY_WORKSPACES, undefined, loginToken);
+    expect(workspaces.errors).toBeUndefined();
+    expect(workspaces.data.myWorkspaces).toHaveLength(1);
+    expect(workspaces.data.myWorkspaces[0]).toMatchObject({
+      id: created.globalWorkspace.id,
+      type: 'global',
+      myRole: 'admin',
+      readOnly: false,
+      tenant: { id: personalTenantId, type: 'personal' },
+    });
+
+    const tenants = await provGql(PROV_MY_TENANTS, undefined, loginToken);
+    expect(tenants.errors).toBeUndefined();
+    expect(tenants.data.myTenants).toHaveLength(1);
+    expect(tenants.data.myTenants[0]).toMatchObject({
+      role: 'admin',
+      tenant: { id: personalTenantId, type: 'personal' },
+    });
+
+    const members = await provGql(PROV_TENANT_MEMBERS, { tenantId: personalTenantId }, loginToken);
+    expect(members.errors).toBeUndefined();
+    expect(members.data.tenantMembers).toHaveLength(1);
+    expect(members.data.tenantMembers[0]).toMatchObject({ username, role: 'admin' });
+  });
+
+  it('T-PROV2: 重复开户幂等 —— 200 且零新增全局工作区/成员行', async () => {
+    const again = await internalProv('/internal/users', 'POST', {
+      username,
+      password: FRONT_PASSWORD,
+    });
+    expect(again.status, JSON.stringify(again.body)).toBe(200);
+    expect(again.body.user.id).toBe(created.user.id);
+    expect(again.body.globalWorkspace.id).toBe(created.globalWorkspace.id);
+
+    const workspaces = await provGql(PROV_MY_WORKSPACES, undefined, loginToken);
+    expect(workspaces.data.myWorkspaces).toHaveLength(1);
+    const members = await provGql(PROV_TENANT_MEMBERS, { tenantId: personalTenantId }, loginToken);
+    expect(members.data.tenantMembers).toHaveLength(1);
+  });
+
+  it('T-PROV3: 移出租户立即失效（工作区不可见、header 访问 workspace not found）', async () => {
+    const teamName = `prov-team-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`.slice(0, 60);
+    const team = await internalProv('/internal/tenants', 'POST', { name: teamName });
+    expect(team.status, JSON.stringify(team.body)).toBe(201);
+    const teamId = team.body.tenant.id;
+    const teamGlobalId = team.body.globalWorkspace.id;
+
+    const added = await internalProv(`/internal/tenants/${teamId}/members`, 'POST', {
+      username,
+      role: 'developer',
+    });
+    expect([200, 201], JSON.stringify(added.body)).toContain(added.status);
+
+    const before = await provGql(PROV_MY_WORKSPACES, undefined, loginToken);
+    const teamBefore = before.data.myWorkspaces.filter(
+      (workspace: { tenant: { id: string } }) => workspace.tenant.id === teamId,
+    );
+    expect(teamBefore.some((workspace: { id: string }) => workspace.id === teamGlobalId)).toBe(true);
+
+    const removed = await internalProv(`/internal/tenants/${teamId}/members/${created.user.id}`, 'DELETE');
+    expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+
+    const after = await provGql(PROV_MY_WORKSPACES, undefined, loginToken);
+    expect(
+      after.data.myWorkspaces.some(
+        (workspace: { tenant: { id: string } }) => workspace.tenant.id === teamId,
+      ),
+    ).toBe(false);
+
+    const blocked = await provGql(PROV_MODELS, undefined, loginToken, teamGlobalId);
+    expect(blocked.errors?.[0]?.message).toBe('workspace not found');
+
+    // 个人全局工作区不受影响（零感知）
+    expect(after.data.myWorkspaces).toHaveLength(1);
+    expect(after.data.myWorkspaces[0].tenant.id).toBe(personalTenantId);
   });
 });

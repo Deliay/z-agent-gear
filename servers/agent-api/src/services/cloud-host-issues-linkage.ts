@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { Controller } from '../models/controller.js';
+import { actorFilter } from './workspace-context.js';
 import { ConfiguredWorkflow } from '../models/configured-workflow.js';
 import {
   CloudHostIssuesLinkage,
@@ -164,7 +165,7 @@ class CloudHostIssuesLinkageService {
     if (!mongoose.isValidObjectId(controllerId)) throw new Error('cloud host not found');
     const controller = await Controller.findOne({
       _id: controllerId,
-      userId,
+      ...actorFilter(userId),
       type: 'cloud',
     }).lean();
     if (!controller) throw new Error('cloud host not found');
@@ -204,7 +205,7 @@ class CloudHostIssuesLinkageService {
 
     const workflowId = String(input.configuredWorkflowId ?? '');
     const workflow = mongoose.isValidObjectId(workflowId)
-      ? await ConfiguredWorkflow.findOne({ _id: workflowId, userId, controllerId }).lean()
+      ? await ConfiguredWorkflow.findOne({ _id: workflowId, ...actorFilter(userId), controllerId }).lean()
       : null;
     const hasHuman = (workflow?.nodes ?? []).some(
       (node: { type?: string }) => node.type === 'HUMAN',

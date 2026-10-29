@@ -23,6 +23,7 @@ import {
   type StartHarnessOptions,
 } from '../services/container-service.js';
 import type { HarnessSecrets } from '../services/secret-store.js';
+import { resolveGlobalWorkspaceId } from '../services/workspace-resolver.js';
 import {
   harnessMinVersion,
   maxWorkerVersion,
@@ -144,6 +145,11 @@ export interface InternalRouterDeps {
   workloadRepository?: WorkloadRepository;
   workloadLogRepository?: WorkloadLogRepository;
   workloadDispatcher?: WorkloadDispatcher;
+  /**
+   * harness 请求缺失 `workspaceId` 时的全局工作区解析器（默认同库 `workspaces{tenantId,type:'global'}`）。
+   * 可注入用于单测（无需真库）。
+   */
+  resolveGlobalWorkspaceId?: (tenantId: string) => Promise<string | null>;
 }
 
 /**
@@ -215,6 +221,11 @@ interface ParsedHarnessRequest {
   userId: string;
   /** 租户归属（多租户一期）：与 `userId` 同值；旧版调用方缺省时回退 `userId`。 */
   tenantId: string;
+  /**
+   * 租户工作区归属（多租户二期）：请求显式下发优先；缺失时按 `tenantId` 解析同库
+   * `workspaces{type:'global'}` 回退，解析不到为 `null`。
+   */
+  workspaceId: string | null;
   hostName: string;
   harnessTypes: string[];
   controllerKeyId: string | null;
@@ -223,6 +234,36 @@ interface ParsedHarnessRequest {
   controllerId: string | null;
   expiresAt: Date;
   secrets: HarnessSecrets;
+}
+
+/** `parseHarnessRequest` 的可注入依赖（单测免真库）。 */
+export interface ParseHarnessRequestDeps {
+  resolveGlobalWorkspaceId?: (tenantId: string) => Promise<string | null>;
+}
+
+/**
+ * 解析 harness 请求的 `workspaceId`（多租户二期 / 契约附录 A.2.2）：
+ * - 缺失 → 按 `tenantId` 解析全局工作区回退，解析不到置 `null` 并 warn（不阻断创建）；
+ * - 解析异常（Mongo 不可用等）同样降级为 `null` + warn（容器仍可创建，迁移 002 可事后回填）。
+ */
+async function resolveHarnessWorkspaceId(
+  tenantId: string,
+  resolver: (tenantId: string) => Promise<string | null>,
+): Promise<string | null> {
+  try {
+    const resolved = await resolver(tenantId);
+    if (resolved) return resolved;
+    console.warn(
+      `[internal-api] harness 请求缺少 workspaceId 且未解析到全局工作区（tenantId=${tenantId}），已置 workspaceId=null`,
+    );
+  } catch (err) {
+    console.warn(
+      `[internal-api] harness 请求缺少 workspaceId，解析全局工作区失败（tenantId=${tenantId}）：${
+        err instanceof Error ? err.message : String(err)
+      }，已置 workspaceId=null`,
+    );
+  }
+  return null;
 }
 
 function nonEmptyString(value: unknown): string | null {
@@ -238,8 +279,14 @@ function isStartablePurpose(value: unknown): value is (typeof STARTABLE_PURPOSES
 /**
  * 校验 `purpose=harness` 的必填字段（契约 A.2.2 / T-CC5）。非法返回 `null`
  * （调用方 400 `INVALID_HARNESS`，且不创建 Job）。`workloadPlan` 在解析计划后单独校验。
+ *
+ * 多租户二期：额外解析可选 `workspaceId`（显式下发但非法 → `null` → 400；缺失按 `tenantId`
+ * 解析全局工作区回退，解析不到置 `null` 并 warn）。
  */
-export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnessRequest | null {
+export async function parseHarnessRequest(
+  body: Record<string, unknown>,
+  deps: ParseHarnessRequestDeps = {},
+): Promise<ParsedHarnessRequest | null> {
   const hostId = nonEmptyString(body.hostId);
   const refId = nonEmptyString(body.refId);
   const userId = nonEmptyString(body.userId);
@@ -268,6 +315,23 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
     if (!parsedTenantId) return null;
     tenantId = parsedTenantId;
   }
+
+  // 多租户二期（契约 A.2.2 / F2）：`workspaceId` 可选（String 口径）。显式下发时按非空字符串校验
+  //（空串/非字符串 → 400 `INVALID_HARNESS`）；缺失时按 `tenantId` 解析同库全局工作区回退，
+  // 解析不到置 `null` 并 warn（不阻断容器创建）。
+  const rawWorkspaceId = body.workspaceId;
+  let workspaceId: string | null;
+  if (rawWorkspaceId === undefined || rawWorkspaceId === null) {
+    workspaceId = await resolveHarnessWorkspaceId(
+      tenantId,
+      deps.resolveGlobalWorkspaceId ?? resolveGlobalWorkspaceId,
+    );
+  } else {
+    const parsedWorkspaceId = nonEmptyString(rawWorkspaceId);
+    if (!parsedWorkspaceId) return null;
+    workspaceId = parsedWorkspaceId;
+  }
+
   if (!agentGearMinVersion || !/^\d+\.\d+\.\d+$/.test(agentGearMinVersion)) {
     return null;
   }
@@ -322,6 +386,7 @@ export function parseHarnessRequest(body: Record<string, unknown>): ParsedHarnes
     refId,
     userId,
     tenantId,
+    workspaceId,
     hostName,
     harnessTypes: [...new Set(harnessTypes as string[])],
     controllerKeyId,
@@ -346,6 +411,7 @@ export function createInternalRouter(
   const workloadRepository = deps.workloadRepository ?? new InMemoryWorkloadRepository();
   const workloadLogRepository = deps.workloadLogRepository ?? new InMemoryWorkloadLogRepository();
   const workloadDispatcher = deps.workloadDispatcher;
+  const globalWorkspaceResolver = deps.resolveGlobalWorkspaceId;
 
   router.get('/containers', async (req: Request, res: Response) => {
     try {
@@ -378,7 +444,12 @@ export function createInternalRouter(
       return;
     }
     const isHarness = purpose === 'harness';
-    const harness = isHarness ? parseHarnessRequest(body) : null;
+    const harness = isHarness
+      ? await parseHarnessRequest(
+          body,
+          globalWorkspaceResolver ? { resolveGlobalWorkspaceId: globalWorkspaceResolver } : {},
+        )
+      : null;
     if (isHarness && !harness) {
       res.status(400).json({
         error: 'INVALID_HARNESS',
@@ -478,6 +549,7 @@ export function createInternalRouter(
           agentGearMinVersion: harness.agentGearMinVersion,
           userId: harness.userId,
           tenantId: harness.tenantId,
+          workspaceId: harness.workspaceId,
           expiresAt: harness.expiresAt,
           controllerId: harness.controllerId,
           secrets: harness.secrets,

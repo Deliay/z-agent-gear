@@ -3,6 +3,8 @@ import { CSS } from '@dnd-kit/utilities'
 import { GripVerticalIcon, Trash2Icon } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
+import { ResourceSourceBadge } from './ResourceSourceBadge'
+import type { ResourceSource } from '@/lib/workspace-source'
 
 interface ModelData {
   id: string
@@ -31,6 +33,9 @@ interface ModelItemProps {
   hideProviderName?: boolean
   /** 只读开关（系统内置模型不可改） */
   readOnlyToggle?: boolean
+  /** 当前上下文不可写（全局上下文 developer / 非本工作区资源） */
+  readOnly?: boolean
+  source?: ResourceSource
 }
 
 export default function ModelItem({
@@ -40,6 +45,8 @@ export default function ModelItem({
   sortable = true,
   hideProviderName = false,
   readOnlyToggle = false,
+  readOnly = false,
+  source,
 }: ModelItemProps) {
   const {
     attributes,
@@ -56,7 +63,7 @@ export default function ModelItem({
   }
 
   const providerDisabled = model.provider && !model.provider.isEnabled
-  const canToggle = !providerDisabled && !readOnlyToggle
+  const canToggle = !providerDisabled && !readOnlyToggle && !readOnly
 
   return (
     <div
@@ -79,6 +86,7 @@ export default function ModelItem({
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-foreground">{model.name}</span>
+          {source && <ResourceSourceBadge source={source} />}
           {model.isCustom && (
             <span className="rounded bg-accent px-1.5 py-0.5 text-xs text-accent-foreground">
               自定义
@@ -99,7 +107,7 @@ export default function ModelItem({
           <p className="mt-0.5 text-xs text-muted-foreground">{model.provider.name}</p>
         )}
       </div>
-      {model.isCustom && model.scope !== 'global' && (
+      {model.isCustom && model.scope !== 'global' && !readOnly && (
         <Button
           variant="ghost"
           size="icon"

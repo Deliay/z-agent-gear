@@ -6,7 +6,7 @@ vi.mock('../models/user-commit-setting.js', () => ({
   UserCommitSetting: { findOne: vi.fn(), findOneAndUpdate: vi.fn() },
 }));
 vi.mock('../models/github-account.js', () => ({
-  GitHubAccount: { findOne: vi.fn() },
+  GitHubAccount: { findOne: vi.fn(), findById: vi.fn() },
 }));
 vi.mock('../models/cloud-host.js', () => ({
   CloudHost: { findOne: vi.fn() },
@@ -17,6 +17,9 @@ vi.mock('../models/cloud-host-github-binding.js', () => ({
 vi.mock('../models/cloud-container.js', () => ({
   CloudContainer: { findOne: vi.fn() },
 }));
+vi.mock('../models/workspace.js', () => ({
+  Workspace: { findById: vi.fn(), findOne: vi.fn() },
+}));
 vi.mock('./github.js', () => ({
   githubService: { resolveAppBotIdentity: vi.fn() },
 }));
@@ -26,7 +29,9 @@ import { GitHubAccount } from '../models/github-account.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
 import { CloudContainer } from '../models/cloud-container.js';
+import { Workspace } from '../models/workspace.js';
 import { githubService } from './github.js';
+import { runWithWorkspace } from './workspace-context.js';
 import {
   CommitSettingsService,
   COMMIT_SETTINGS_ERRORS,
@@ -105,6 +110,8 @@ describe('CommitSettingsService CRUD', () => {
       githubAccountId: null,
       customName: null,
       customEmail: null,
+      source: 'UNSET',
+      readOnly: false,
     });
   });
 
@@ -483,5 +490,73 @@ describe('CommitSettingsService.resolveCommitIdentity', () => {
       'mode',
       'name',
     ]);
+  });
+
+  it('T-CSI2: 三段继承 本工作区 → 全局工作区 → unset', async () => {
+    const WS = '507f1f77bcf86cd799439021';
+    const GLOBAL_WS = '507f1f77bcf86cd799439022';
+    const TENANT = '507f1f77bcf86cd799439023';
+
+    mockHost({ ...hostDoc(), resourceWorkspaceId: WS });
+    // 本工作区已设置
+    mockSetting({ ...githubSetting, committerMode: 'human_only' });
+    mockAccount(githubAccount);
+    vi.mocked(GitHubAccount.findById).mockReturnValue(lean(githubAccount) as never);
+    const own = await service.resolveCommitIdentity(CONTROLLER_ID);
+    expect(own).toMatchObject({ mode: 'human_only', name: githubAccount.githubLogin });
+
+    // 本工作区未设置 → 全局工作区已设置
+    vi.mocked(UserCommitSetting.findOne).mockReset();
+    vi.mocked(UserCommitSetting.findOne)
+      .mockReturnValueOnce(lean(null) as never)
+      .mockReturnValueOnce(lean({ ...githubSetting, committerMode: 'human_only' }) as never);
+    vi.mocked(Workspace.findById).mockReturnValue({
+      select: () => lean({ tenantId: TENANT, type: 'normal' }),
+    } as never);
+    vi.mocked(Workspace.findOne).mockReturnValue({
+      select: () => lean({ _id: GLOBAL_WS }),
+    } as never);
+    const inherited = await service.resolveCommitIdentity(CONTROLLER_ID);
+    expect(inherited).toMatchObject({ mode: 'human_only', name: githubAccount.githubLogin });
+    expect(UserCommitSetting.findOne).toHaveBeenNthCalledWith(2, { workspaceId: GLOBAL_WS });
+
+    // 两级均未设置 → unset
+    vi.mocked(UserCommitSetting.findOne).mockReset();
+    vi.mocked(UserCommitSetting.findOne).mockReturnValue(lean(null) as never);
+    const unset = await service.resolveCommitIdentity(CONTROLLER_ID);
+    expect(unset).toEqual({ mode: 'unset' });
+  });
+
+  it('T-CS7（阻断-B）: 普通工作区可选用本租户全局共享 GitHubAccount', async () => {
+    vi.mocked(GitHubAccount.findById).mockReturnValue(
+      lean({ ...githubAccount, workspaceId: 'ws-global' }) as never,
+    );
+    mockSaved({ ...githubSetting, githubAccountId: ACCOUNT_ID });
+
+    await runWithWorkspace(
+      {
+        id: 'ws-normal',
+        tenantId: 'tenant-1',
+        type: 'normal',
+        role: 'developer',
+        readOnly: false,
+        globalWorkspaceId: 'ws-global',
+      },
+      async () => {
+        const view = await service.updateCommitSettings(USER_ID, {
+          committerMode: 'HUMAN_ONLY',
+          committerType: 'GITHUB_ACCOUNT',
+          githubAccountId: ACCOUNT_ID,
+        });
+        expect(view.committerType).toBe('GITHUB_ACCOUNT');
+      },
+    );
+    expect(UserCommitSetting.findOneAndUpdate).toHaveBeenCalledWith(
+      { workspaceId: 'ws-normal' },
+      expect.objectContaining({
+        $set: expect.objectContaining({ workspaceId: 'ws-normal', tenantId: 'tenant-1' }),
+      }),
+      expect.objectContaining({ upsert: true }),
+    );
   });
 });

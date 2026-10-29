@@ -127,3 +127,25 @@ describe('GitHub Resolvers', () => {
     });
   });
 });
+
+describe('GitHub Resolvers 错误透传（阻断-D）', () => {
+  it('unbindGitHubAccount 业务错误包装为 GraphQLError 逐字透传', async () => {
+    vi.mocked(githubService.unbindAccount).mockRejectedValue(new Error('workspace not found'));
+    await expect(
+      githubResolvers.Mutation.unbindGitHubAccount({}, { accountId: 'acc1' }, mockContext as never),
+    ).rejects.toThrow('workspace not found');
+  });
+
+  it('refreshGitHubInstallations 只读错误包装为 GraphQLError 逐字透传', async () => {
+    vi.mocked(githubService.refreshInstallations).mockRejectedValue(
+      new Error('global workspace is read-only'),
+    );
+    await expect(
+      githubResolvers.Mutation.refreshGitHubInstallations(
+        {},
+        { accountId: 'acc1' },
+        mockContext as never,
+      ),
+    ).rejects.toThrow('global workspace is read-only');
+  });
+});

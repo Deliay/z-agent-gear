@@ -4,6 +4,7 @@ import { CloudContainer } from '../models/cloud-container.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
 import { CloudHostSetupOperation } from '../models/cloud-host-setup-operation.js';
+import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
 import {
@@ -96,12 +97,14 @@ export class CloudHostGithubService {
     const prefix = normalizeWorkspacePrefix(input.targetPath);
     const targetPath = resolveClonePath(prefix, repoFullName);
 
-    const account = await GitHubAccount.findOne({
-      _id: input.accountId,
-      userId: input.userId,
+    const context = getWorkspaceContext();
+    const account = context
+      ? await GitHubAccount.findById(input.accountId).lean()
+      : await GitHubAccount.findOne({ _id: input.accountId, userId: input.userId }).lean();
+    if (!account) throw new Error('Github 账号不存在或不可用');
+    const installations = await GitHubInstallation.find({
+      $or: [{ githubUserId: account.githubUserId }, { accountId: account._id }],
     }).lean();
-    if (!account) throw new Error('Github 账号不存在或不属于当前用户');
-    const installations = await GitHubInstallation.find({ accountId: account._id }).lean();
     const authorized = installations.some((installation) =>
       (installation.repos ?? []).some(
         (repo) => repo.fullName.toLowerCase() === repoFullName.toLowerCase(),
@@ -131,7 +134,6 @@ export class CloudHostGithubService {
       }
       const running = await CloudHostSetupOperation.findOne({
         controllerId: input.controllerId,
-        userId: input.userId,
         kind: 'githubSetup',
         status: 'RUNNING',
       }).lean();
@@ -171,7 +173,7 @@ export class CloudHostGithubService {
 
   /** 重试：仅 FAILED；失败步骤及其后续步骤重置 PENDING，保留 SUCCEEDED/SKIPPED。 */
   async retry(opId: string, userId: string): Promise<Doc> {
-    const operation = await CloudHostSetupOperation.findOne({ _id: opId, userId }).lean();
+    const operation = await CloudHostSetupOperation.findOne({ _id: opId, ...actorFilter(userId) }).lean();
     if (!operation) throw new Error('Operation not found');
     if (operation.status !== 'FAILED') throw new Error('仅失败的操作可以重试');
     const steps = (operation.steps as any[]).map((step: Record<string, unknown>) => ({

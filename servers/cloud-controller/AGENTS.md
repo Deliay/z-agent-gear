@@ -37,13 +37,15 @@ src/
 │   ├── status-sync.ts          # watch + 断线重连对账 + 超时巡检 + 心跳离线巡检 + 工作负载看门狗
 │   ├── heartbeat-tracker.ts    # 心跳计时（30s × 3 次判离线）
 │   ├── worker-version.ts       # worker 版本解析/最低版本门禁（纯函数，MIN_WORKER_VERSION/SUPPORTED_MAJOR）
+│   ├── workspace-resolver.ts   # 按 tenantId 解析同库 workspaces{type:'global'}（workspaceId 回退，ObjectId/String 双口径）
 │   └── socketio-gateway.ts     # /worker namespace 接入与鉴权（含注册版本门禁、workload:run/result）
 ├── middleware/internal-auth.ts # Bearer INTERNAL_API_TOKEN
 ├── routes/internal-api.ts      # /internal/containers*（启动接收/校验 workloadPlan、含 workload-logs）
 ├── migrations/
 │   ├── runner.ts               # 迁移 runner（独立账本 cloud_controller_migrations、锁归属 + 5 分钟 TTL、逐迁移吞错）
 │   ├── models.ts               # 迁移账本模型（name/executedAt/_lock/owner/acquired/expiresAt）
-│   └── 001-cloudcontainers-tenant-id-backfill.ts # 存量容器 tenantId 回填 + {tenantId:1} 索引（幂等）
+│   ├── 001-cloudcontainers-tenant-id-backfill.ts # 存量容器 tenantId 回填 + {tenantId:1} 索引（幂等）
+│   └── 002-cloudcontainers-workspace-id.ts # 存量容器 workspaceId 回填（tenantId→global 工作区）+ {workspaceId:1} 索引（幂等）
 └── index.ts                    # createCloudControllerApp + 入口（DB 连接后 await runMigrations 再 listen）
 ```
 
@@ -62,7 +64,7 @@ src/
 - **runtimeClass + hostUsers**：配置了 `RUNTIME_CLASS_NAME`（默认 `sysbox-runc`）时，同时下发 `hostUsers: false`——sysbox 要求 Pod 停用宿主 user namespace，否则 sandbox 创建失败（写 `net.ipv4.ip_unprivileged_port_start` 被拒）；未配置 runtimeClass 时不设置该字段。
 - **env 通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker`（**不含 token**）与 `ZAG_CONTROLLER_KEY=<token>`（agent-gear 连接时经握手 `auth.token` 携带）。
 - **K8s 客户端可注入**：`K8S_ENABLED=false` 时使用 `InMemoryK8sClient`（本地/测试/E2E 全 mock，不依赖真实集群）。
-- **用途白名单**：`POST /internal/containers` 仅接受 `idle|harness`；其余用途返回 400「该任务类型暂未开放」。`purpose=harness` 必填 `hostId/refId(controllerKeyId)/userId/tenantId/hostName/harnessTypes(非空、白名单)/expiresAt/agentGearMinVersion(三段版本)/secrets/workloadPlan`，且 **workloadPlan 必须显式下发**（不允许仅 workloadIds 兜底展开）；缺失或非法返回 `400 INVALID_HARNESS` 且不创建 Job；`GET /containers?hostId=&userId=` 可选过滤（无参数保持全量）。`tenantId` 与 `userId` 同值（个人专属租户 `_id` 复用 userId）并落库到 `cloudcontainers.tenantId`；滚动升级兜底：旧版 agent-api 未下发 `tenantId` 时回退 `tenantId = userId` 并 `console.warn`（显式下发但空串/非字符串仍 400）。
+- **用途白名单**：`POST /internal/containers` 仅接受 `idle|harness`；其余用途返回 400「该任务类型暂未开放」。`purpose=harness` 必填 `hostId/refId(controllerKeyId)/userId/tenantId/hostName/harnessTypes(非空、白名单)/expiresAt/agentGearMinVersion(三段版本)/secrets/workloadPlan`，且 **workloadPlan 必须显式下发**（不允许仅 workloadIds 兜底展开）；缺失或非法返回 `400 INVALID_HARNESS` 且不创建 Job；`GET /containers?hostId=&userId=` 可选过滤（无参数保持全量）。`tenantId` 与 `userId` 同值（个人专属租户 `_id` 复用 userId）并落库到 `cloudcontainers.tenantId`；滚动升级兜底：旧版 agent-api 未下发 `tenantId` 时回退 `tenantId = userId` 并 `console.warn`（显式下发但空串/非字符串仍 400）。多租户二期起同链路口径追加 `workspaceId`（见「多租户二期」段）。
 - **云电脑 secret 与 TTL**：`secrets{hostEndpoint,hostKey,modelApiKey,modelBaseUrl,modelIds,defaultWorkspace}` 仅存入 `SecretStore`（进程内 Map，不落库、不返回、不打印），容器终态时删除；可选 `secrets.modelContextLengths`（模型 ID → 最长上下文 JSON object 字符串，不参与必填校验），携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传；`expiresAt` 仅落库留存（容器 TTL 留档，**不再关联模型 Key 有效期**——模型 Key 随容器回收：宿主非 `RUNNING`/删除/缺失由网关拒绝并对账撤销），**不再换算 Job 硬截止**（Job 不设 `activeDeadlineSeconds`，最长运行时间无限制）。
 - **云电脑 env**：Job env 仅追加 `ZAG_HOST_ENDPOINT/ZAG_HOST_KEY/ZAG_HOST_NAME/ZAG_HARNESS_TYPES/ZAG_DEFAULT_WORKSPACE/ZAG_USER_TYPE/ZAG_USER_ID`（`ZAG_CONTROLLER_KEY` 仍为 `/worker` 一次性 token）；模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发（仅 harness，idle 不携带 `env`）。harness secret/模型配置缺失时 dispatcher 判 init 失败、容器不 online。
 - **云电脑生命周期回调**：`onReady` 对 harness（首次 online）与计费事件共用时机，调用 agent-api `POST /internal/cloud-hosts/:hostId/ready`；`onDestroyed` 对 harness 终态调用 `/terminal`（exited→stopped、failed→failed）并按 hostId 调 admin-api `revoke-by-host`。回调均 Bearer `INTERNAL_API_TOKEN`，单次回调内置 4 次退避重试（0/250ms/1s/3s），外层容器钩子再重试 3 次；最终失败记录 error 日志（降级：agent-api 可用过期/对账与容器状态兜底，不阻断容器回收）。`AGENT_API_URL`/`ADMIN_API_URL` 未配置时启动即告警，回调 no-op。**SecretStore 为进程内存**：cloud-controller 重启会丢失在途 harness 的 secrets（该容器初始化将失败/不 online），需通过巡检/重建云电脑恢复；本期不引入持久化 secret。
@@ -147,3 +149,16 @@ npm run test:coverage
 ### 多租户一期补充（返工）
 - Mongoose v9 聚合管线更新必须显式 `{ updatePipeline: true }`（迁移 001 已在真库用例中验证）。
 - 迁移 001 具备 `mongodb-memory-server` 真库用例（回填/索引/幂等），与 mock 单测并行。
+
+## 多租户二期（cloudcontainers workspaceId 与迁移 002）
+
+- **数据口径**：`cloudcontainers.workspaceId`（String，`default: null`、`index: true`）为**复制新增**字段，与 `tenantId` 并列同类型（F8：对齐本集合既有 `tenantId` String 口径，值 = `workspaces._id.toString()`）。`userId`/`tenantId` 字段与筛选维度全保留；`idle` 等未接入工作区的容器保持 `null`；读取层对历史行容忍 `null`（迁移 002 负责回填）。
+- **写入口径（契约附录 A.2.2）**：仅 `purpose=harness` 写入，来自 harness 请求的 `workspaceId`（agent-api `StartHarnessInput.workspaceId` 随 `startHarness` 下发）：`parseHarnessRequest` 解析后经 `StartHarnessOptions.workspaceId → ContainerService.start → repo.create` 落库。显式下发但非法（空串/非字符串）→ `400 INVALID_HARNESS`（不创建 Job）。
+- **缺失回退解析**：未下发 `workspaceId` 时，按同一 `tenantId` 在同库 `workspaces` 集合解析 `{type:'global'}` 的全局工作区（`services/workspace-resolver.ts`）：
+  - `workspaces.tenantId` 为 **ObjectId**（agent-api 侧）而 `cloudcontainers.tenantId` 为 **String**，查询用 `tenantId: {$in: [<string>, <ObjectId>]}` 兼容两种存储口径（合法 24 位 hex 才追加 ObjectId 候选）；
+  - 解析结果取 `String(workspaces._id)`；解析不到（租户缺全局工作区/租户不存在）或解析异常（Mongo 不可用）→ `workspaceId = null` 并 `console.warn`，**不阻断容器创建**（迁移 002 可事后回填）；
+  - 数据库未连接（单测/初始化）时解析器直接返回 `null`，避免 Mongoose 命令缓冲导致请求挂起（生产在 `mongoose.connect` 之后才 listen）。
+  - 单测通过 `createInternalRouter(..., { resolveGlobalWorkspaceId })` 注入解析器，无需真库。
+- **迁移 002**：`002-cloudcontainers-workspace-id` 按 `tenantId`（存储原值精确命中）逐租户解析同库全局工作区，回填缺失 `workspaceId` 的行（字段不存在或 `null`）；解析不到置 `null` 并 warn；`tenantId` 缺失的行**跳过不改动**（与 001 的 `userId` 缺失行同口径）；随后显式 `createIndex({ workspaceId: 1 })`。已回填行不再命中，幂等可重跑（二次 run 数据零变更）。`index.ts` 在 001 之后登记（发布顺序：agent-api 迁移 015 → 本服务 002）。
+- **只读镜像**：`servers/agent-api/src/models/cloud-container.ts` 同步 `workspaceId` 字段（Phase 4/7 纪律：读取层经该只读模型透出 `CloudContainer.workspaceId`），写方仍仅本服务。
+- **契约**：`contracts/cloud-controller-websocket.md` 附录 A.2.2（`workspaceId` 可选 + 回退口径）与 A.3 响应结构（本期**不新增** `workspaceId` 字段，读侧直连集合）。

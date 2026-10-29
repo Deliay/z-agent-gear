@@ -1,3 +1,4 @@
+import { actorOrBuiltinFilter } from '../workspace-context.js';
 import { WorkflowTemplate, type WorkflowCreatedBy } from '../../models/workflow-template.js';
 
 export type { WorkflowCreatedBy };
@@ -178,13 +179,13 @@ export function assertAiOwned(resource: { createdBy?: string | null } | null | u
 class WorkflowTemplateService {
   /** 列出用户自有模板 + 内置模板 */
   async listForUser(userId: string) {
-    return WorkflowTemplate.find({ $or: [{ userId }, { isBuiltin: true }] })
+    return WorkflowTemplate.find(actorOrBuiltinFilter(userId))
       .sort({ isBuiltin: -1, createdAt: -1 })
       .lean();
   }
 
   async findById(id: string, userId: string) {
-    return WorkflowTemplate.findOne({ _id: id, $or: [{ userId }, { isBuiltin: true }] }).lean();
+    return WorkflowTemplate.findOne({ _id: id, ...actorOrBuiltinFilter(userId) }).lean();
   }
 
   async create(userId: string, input: WorkflowTemplateInput, meta?: WorkflowTemplateCreationMeta) {
@@ -203,7 +204,7 @@ class WorkflowTemplateService {
 
   async update(id: string, userId: string, input: WorkflowTemplateInput) {
     // 内置模板（userId=null）也要能查到，以便命中下方的只读保护，而不是误报「不存在」
-    const template = await WorkflowTemplate.findOne({ _id: id, $or: [{ userId }, { isBuiltin: true }] });
+    const template = await WorkflowTemplate.findOne({ _id: id, ...actorOrBuiltinFilter(userId) });
     if (!template) {
       throw new Error('工作流模板不存在或无权限');
     }
@@ -220,7 +221,7 @@ class WorkflowTemplateService {
   }
 
   async delete(id: string, userId: string, opts?: { requireAiOwned?: boolean }): Promise<boolean> {
-    const template = await WorkflowTemplate.findOne({ _id: id, $or: [{ userId }, { isBuiltin: true }] });
+    const template = await WorkflowTemplate.findOne({ _id: id, ...actorOrBuiltinFilter(userId) });
     if (!template) {
       throw new Error('工作流模板不存在或无权限');
     }

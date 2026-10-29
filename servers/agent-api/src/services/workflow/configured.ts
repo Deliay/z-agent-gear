@@ -1,4 +1,5 @@
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
+import { actorFilter, actorOrBuiltinFilter } from '../workspace-context.js';
 import { WorkflowTemplate } from '../../models/workflow-template.js';
 import { validateTemplateGraph, assertAiOwned, type WorkflowCreatedBy } from './template.js';
 import { getAvailableServerTypes } from './capability.js';
@@ -119,19 +120,19 @@ export function validateAgentConfigs(
 
 class ConfiguredWorkflowService {
   async listForUser(userId: string, controllerId?: string) {
-    const filter: Record<string, unknown> = { userId };
+    const filter: Record<string, unknown> = { ...actorFilter(userId) };
     if (controllerId) filter.controllerId = controllerId;
     return ConfiguredWorkflow.find(filter).sort({ createdAt: -1 }).lean();
   }
 
   async findById(id: string, userId: string) {
-    return ConfiguredWorkflow.findOne({ _id: id, userId }).lean();
+    return ConfiguredWorkflow.findOne({ _id: id, ...actorFilter(userId) }).lean();
   }
 
   /** 从模板复制生成已配置工作流（快照副本） */
   async configure(userId: string, templateId: string, input: ConfigureWorkflowInput, meta?: ConfiguredWorkflowCreationMeta) {    const template = await WorkflowTemplate.findOne({
       _id: templateId,
-      $or: [{ userId }, { isBuiltin: true }],
+      ...actorOrBuiltinFilter(userId),
     }).lean();
     if (!template) {
       throw new Error('工作流模板不存在或无权限');
@@ -154,7 +155,7 @@ class ConfiguredWorkflowService {
 
   /** 更新已配置工作流：接受全量节点图（完整图校验），nodeKey 集合可变；实例保有自身快照不受影响 */
   async update(userId: string, id: string, input: ConfigureWorkflowInput, meta?: ConfiguredWorkflowCreationMeta) {
-    const workflow = await ConfiguredWorkflow.findOne({ _id: id, userId });
+    const workflow = await ConfiguredWorkflow.findOne({ _id: id, ...actorFilter(userId) });
     if (!workflow) {
       throw new Error('已配置工作流不存在或无权限');
     }
@@ -179,7 +180,7 @@ class ConfiguredWorkflowService {
    * 快照模型下实例自包含，删除配置不影响任何实例，不再校验活跃实例引用。
    */
   async delete(userId: string, id: string, opts?: { requireAiOwned?: boolean }): Promise<boolean> {
-    const workflow = await ConfiguredWorkflow.findOne({ _id: id, userId });
+    const workflow = await ConfiguredWorkflow.findOne({ _id: id, ...actorFilter(userId) });
     if (!workflow) {
       throw new Error('已配置工作流不存在或无权限');
     }

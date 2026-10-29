@@ -21,6 +21,7 @@ import {
   type CloudHostIssuesLinkageInput,
 } from '../../services/cloud-host-issues-linkage.js';
 import type { AuthContext } from './auth.js';
+import { actorFilter } from '../../services/workspace-context.js';
 
 type Doc = Record<string, unknown>;
 
@@ -47,12 +48,13 @@ export const cloudHostResolvers = {
     },
     cloudHostBillingQuote: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       const userId = requireUser(context);
+      const billingTenantId = context.workspaceAccess?.tenantId ?? context.currentUser?.tenantId ?? userId;
       let createCredits = FALLBACK_CREATE_CREDITS;
       let perMinuteCredits = FALLBACK_PER_MINUTE_CREDITS;
       let availableBalance: number | null = null;
       const [prices, account] = await Promise.allSettled([
         billingClient.getPriceQuote(['cloud_host.create', 'container.minute']),
-        billingClient.getAccount('tenant', userId),
+        billingClient.getAccount('tenant', billingTenantId),
       ]);
       if (prices.status === 'fulfilled') {
         for (const item of prices.value) {
@@ -76,12 +78,12 @@ export const cloudHostResolvers = {
     ) => {
       const userId = requireUser(context);
       if (!mongoose.isValidObjectId(args.id)) return null;
-      // 软删除仍返回（与 Session.cloudHost 留档口径一致）；不存在/非本人返回 null。
-      const doc = await CloudHost.findOne({ _id: args.id, userId }).lean();
+      // 软删除仍返回（与 Session.cloudHost 留档口径一致）；不存在/非本工作区成员返回 null（成员口径）。
+      const doc = await CloudHost.findOne({ _id: args.id, ...actorFilter(userId) }).lean();
       if (!doc) return null;
       const activeSessionCount = await Session.countDocuments({
         controllerId: doc.controllerId,
-        userId,
+        ...actorFilter(userId),
         status: { $ne: 'ended' },
       });
       return cloudHostService.mapCloudHost(doc as Doc, activeSessionCount);
@@ -125,8 +127,16 @@ export const cloudHostResolvers = {
     ) => {
       const userId = requireUser(context);
       if (!mongoose.isValidObjectId(args.id)) return null;
-      const doc = await CloudHostSetupOperation.findOne({ _id: args.id, userId }).lean();
+      const doc = await CloudHostSetupOperation.findOne({ _id: args.id }).lean();
       if (!doc) return null;
+      // 操作单无 workspaceId：经 host 的工作区归属校验（成员可操作本工作区资源）
+      const hostVisible = await CloudHost.findOne({
+        _id: doc.hostId,
+        ...actorFilter(userId),
+      })
+        .select('_id')
+        .lean();
+      if (!hostVisible) return null;
       if (doc.status === 'RUNNING') {
         const updatedAt = doc.updatedAt instanceof Date ? doc.updatedAt.getTime() : 0;
         if (Date.now() - updatedAt > config.cloudHostSetupStaleMs) {
@@ -260,11 +270,17 @@ export const cloudHostResolvers = {
     ) => {
       const userId = requireUser(context);
       try {
-        const operation = await CloudHostSetupOperation.findOne({
-          _id: args.id,
-          userId,
-        }).lean();
+        const operation = await CloudHostSetupOperation.findOne({ _id: args.id }).lean();
+        // 越界与不存在统一返回 Operation not found（不泄露存在性）
         if (!operation) throw new Error('Operation not found');
+        // 操作单无 workspaceId：经 host 工作区归属校验（与详情口径一致）
+        const hostVisible = await CloudHost.findOne({
+          _id: (operation as unknown as { hostId: unknown }).hostId,
+          ...actorFilter(userId),
+        })
+          .select('_id')
+          .lean();
+        if (!hostVisible) throw new Error('Operation not found');
         if (operation.kind === 'githubSetup') {
           return await cloudHostGithubService.retry(args.id, userId);
         }

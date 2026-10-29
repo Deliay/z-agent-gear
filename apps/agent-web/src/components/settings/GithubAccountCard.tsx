@@ -2,13 +2,18 @@ import { useState } from 'react'
 import type { GitHubAccountData } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import GithubRepoList from './GithubRepoList'
+import { ResourceSourceBadge } from './ResourceSourceBadge'
+import type { ResourceSource } from '@/lib/workspace-source'
 
 interface Props {
   account: GitHubAccountData
   onUnbind: (id: string) => void
+  /** 全局工作区绑定在普通上下文只读；全局上下文 developer 整体只读 */
+  readOnly?: boolean
+  source?: ResourceSource
 }
 
-export default function GithubAccountCard({ account, onUnbind }: Props) {
+export default function GithubAccountCard({ account, onUnbind, readOnly = false, source }: Props) {
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -25,6 +30,7 @@ export default function GithubAccountCard({ account, onUnbind }: Props) {
           <div>
             <div className="flex items-center gap-2">
               <span className="font-medium">{account.githubLogin}</span>
+              {source && <ResourceSourceBadge source={source} />}
             </div>
             <div className="text-xs text-muted-foreground">
               绑定于 {new Date(account.createdAt).toLocaleDateString()}
@@ -41,7 +47,7 @@ export default function GithubAccountCard({ account, onUnbind }: Props) {
               {expanded ? '收起仓库' : '查看仓库'}
             </Button>
           )}
-          {account.installations && account.installations[0]?.managementUrl && (
+          {!readOnly && account.installations && account.installations[0]?.managementUrl && (
             <Button
               variant="outline"
               size="sm"
@@ -50,13 +56,15 @@ export default function GithubAccountCard({ account, onUnbind }: Props) {
               更新绑定
             </Button>
           )}
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => onUnbind(account.id)}
-          >
-            解绑
-          </Button>
+          {!readOnly && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => onUnbind(account.id)}
+            >
+              解绑
+            </Button>
+          )}
         </div>
       </div>
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { applyTenantScope, injectFilter, injectUpdate } from './tenant-scope.js';
+import { runWithWorkspace } from './workspace-context.js';
 
 function fakeQuery(filter: Record<string, unknown>, update?: Record<string, unknown>) {
   const state = { filter, update };
@@ -96,5 +97,42 @@ describe('tenant scope plugin', () => {
   it('does not apply to schemas without userId/tenantId', () => {
     const schema = new mongoose.Schema({ name: String });
     expect(() => applyTenantScope(schema)).not.toThrow();
+  });
+});
+
+describe('tenant scope plugin：团队租户请求上下文（阻断-H）', () => {
+  const context = {
+    id: 'ws-1',
+    tenantId: 'team-tenant-1',
+    type: 'normal' as const,
+    role: 'developer' as const,
+    readOnly: false,
+    globalWorkspaceId: 'ws-global',
+  };
+
+  it('有工作区上下文时注入 context.tenantId（不再复制 userId）', () => {
+    const query = fakeQuery({ _id: 'host-1', userId: 'user-1' });
+    runWithWorkspace(context, () => injectFilter(query));
+    expect(query.state.filter).toEqual({
+      _id: 'host-1',
+      userId: 'user-1',
+      tenantId: 'team-tenant-1',
+    });
+  });
+
+  it('更新/插入写入 context.tenantId；无上下文仍回退 userId', () => {
+    const query = fakeQuery({}, { $set: { userId: 'user-1' } });
+    runWithWorkspace(context, () => injectUpdate(query));
+    expect((query.state.update as Record<string, unknown>).$set).toEqual({
+      userId: 'user-1',
+      tenantId: 'team-tenant-1',
+    });
+
+    const legacy = fakeQuery({}, { $set: { userId: 'user-1' } });
+    injectUpdate(legacy);
+    expect((legacy.state.update as Record<string, unknown>).$set).toEqual({
+      userId: 'user-1',
+      tenantId: 'user-1',
+    });
   });
 });

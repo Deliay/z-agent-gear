@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { Gateway } from '../models/gateway.js';
 import { Controller } from '../models/controller.js';
+import { actorFilter } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
 
 const COMMAND_CHANNEL = 'port-forward:command';
@@ -16,7 +17,7 @@ export class GatewayService {
   }
 
   async create(controllerId: string, userId: string, name: string, port: number, maxPerController: number): Promise<Record<string, unknown>> {
-    const controller = await Controller.findOne({ _id: controllerId, userId }).lean();
+    const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean();
     if (!controller) {
       throw new Error('Controller not found');
     }

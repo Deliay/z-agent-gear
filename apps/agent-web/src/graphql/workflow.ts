@@ -39,6 +39,8 @@ export interface WorkflowTemplateData {
   nodes: WorkflowTemplateNodeData[]
   isBuiltin: boolean
   createdBy: ResourceCreatedBy
+  /** 所属租户工作区；系统内置模板恒为 null（多租户二期） */
+  resourceWorkspaceId?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -63,6 +65,8 @@ export interface ConfiguredWorkflowData {
   sourceTemplateVersion: number | null
   nodes: ConfiguredWorkflowNodeData[]
   createdBy: ResourceCreatedBy
+  /** 所属租户工作区（跟随控制器，多租户二期） */
+  resourceWorkspaceId?: string
   createdAt: string
   updatedAt: string
 }
@@ -134,7 +138,10 @@ export interface WorkflowInstanceSummaryData {
   // 统一实例化三来源中仅 CONFIGURED 来源保证存在，故可空
   configuredWorkflowId: string | null
   controllerId: string
+  /** 项目工作区（ControllerWorkspace）id；注意不是租户工作区 */
   workspaceId: string
+  /** 租户工作区 id（多租户二期） */
+  resourceWorkspaceId?: string
   name: string
   currentNodeNames: string[]
   lastNodeName: string | null
@@ -263,6 +270,7 @@ export const GET_WORKFLOW_TEMPLATES = gql`
       }
       isBuiltin
       createdBy
+      resourceWorkspaceId
       createdAt
       updatedAt
     }
@@ -304,6 +312,7 @@ export const GET_CONFIGURED_WORKFLOWS = gql`
         }
       }
       createdBy
+      resourceWorkspaceId
       createdAt
       updatedAt
     }
@@ -318,6 +327,7 @@ export const GET_WORKFLOW_INSTANCES = gql`
       configuredWorkflowId
       controllerId
       workspaceId
+      resourceWorkspaceId
       name
       currentNodeNames
       lastNodeName
@@ -338,6 +348,7 @@ export const GET_WORKFLOW_INSTANCE = gql`
       configuredWorkflowId
       controllerId
       workspaceId
+      resourceWorkspaceId
       name
       currentNodeNames
       lastNodeName

@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { applyTenantScope } from '../services/tenant-scope.js';
+import { applyWorkspaceScope } from '../services/workspace-scope.js';
 import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY } from './workflow-template.js';
 
 // 注意：agentConfig 使用独立子 Schema 声明，避免内联嵌套对象被 Mongoose 物化为 {}
@@ -40,6 +41,14 @@ const configuredWorkflowSchema = new mongoose.Schema(
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true, index: true },
     controllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller', required: true },
+    // 多租户二期（F1）：租户工作区维度（跟随其控制器的工作区，服务端推导）
+    resourceWorkspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Workspace',
+      required: false,
+      default: null,
+      index: true,
+    },
     name: { type: String, required: true },
     // 复制来源（仅展示用，无强关联；模板后续更新不影响本副本）
     sourceTemplateId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowTemplate' },
@@ -55,6 +64,7 @@ const configuredWorkflowSchema = new mongoose.Schema(
 configuredWorkflowSchema.index({ userId: 1, controllerId: 1 });
 
 applyTenantScope(configuredWorkflowSchema);
+applyWorkspaceScope(configuredWorkflowSchema, { workspaceField: 'resourceWorkspaceId' });
 
 export const ConfiguredWorkflow = mongoose.model('ConfiguredWorkflow', configuredWorkflowSchema);
 export type IConfiguredWorkflow = mongoose.InferSchemaType<typeof configuredWorkflowSchema>;

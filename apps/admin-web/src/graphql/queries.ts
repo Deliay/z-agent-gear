@@ -360,7 +360,7 @@ export const ADMIN_BILLING_API_CALLS = gql`
   }
 `
 
-// ---------- 租户管理（contracts/admin-tenant.graphql，只读视图 + 开户） ----------
+// ---------- 租户管理（contracts/admin-tenant.graphql，只读视图 + 开户 + team 租户/成员管理） ----------
 
 export const ADMIN_TENANTS = gql`
   query AdminTenants($keyword: String, $page: Int, $pageSize: Int) {
@@ -386,6 +386,14 @@ export const ADMIN_TENANT = gql`
         id
         name
         username
+        role
+        createdAt
+      }
+      workspaces {
+        id
+        name
+        type
+        memberCount
         createdAt
       }
     }

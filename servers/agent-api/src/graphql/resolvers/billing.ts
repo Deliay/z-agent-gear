@@ -11,12 +11,13 @@ interface BillingOwner {
   name?: string;
 }
 
-/** 前台计费归属：租户口径（ownerType=tenant，ownerId=tenantId；personal 期 == userId）。 */
+/** 前台计费归属：工作区所属租户（ownerType=tenant，ownerId=tenantId；缺省上下文=个人租户）。 */
 function requireUser(context: AuthContext): BillingOwner {
   if (!context.currentUser) {
     throw new GraphQLError('Not authenticated', { extensions: { code: 'UNAUTHENTICATED' } });
   }
-  const tenantId = context.currentUser.tenantId ?? context.currentUser.id;
+  const tenantId =
+    context.workspaceAccess?.tenantId ?? context.currentUser.tenantId ?? context.currentUser.id;
   return { tenantId, name: context.currentUser.name ?? context.currentUser.username };
 }
 

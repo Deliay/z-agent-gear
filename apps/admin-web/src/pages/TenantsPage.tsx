@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Building2 } from 'lucide-react'
 import { ADMIN_TENANTS } from '@/graphql/queries'
-import { ADMIN_CREATE_FRONT_USER } from '@/graphql/mutations'
+import { ADMIN_CREATE_FRONT_USER, ADMIN_CREATE_TEAM_TENANT } from '@/graphql/mutations'
 import type { AdminTenantData, GetAdminTenantsQuery, TenantType } from '@/graphql/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -41,6 +41,13 @@ function validatePassword(value: string): string | null {
   return null
 }
 
+/** 团队租户名称校验：与 agent-api `/internal/tenants` 同口径（trim 后 1-60 字符）。 */
+function validateTeamName(value: string): string | null {
+  const trimmed = value.trim()
+  if (trimmed.length < 1 || trimmed.length > 60) return '租户名称长度需为 1-60 个字符'
+  return null
+}
+
 /** 开户错误映射：重名 / 规则非法 / 开户通道未配置 / 其余原样透出。 */
 function mapCreateError(message: string): string {
   if (/USERNAME_TAKEN|Username already taken/i.test(message)) return '用户名已被占用'
@@ -52,6 +59,17 @@ function mapCreateError(message: string): string {
     return '开户服务不可用（AGENT_API_UNAVAILABLE），请检查后台 AGENT_API_URL 配置'
   }
   return message || '开户失败，请重试'
+}
+
+/** 创建团队租户错误映射：重名 / 名称非法 / 计费或转发通道不可用 / 其余原样透出。 */
+function mapCreateTeamError(message: string): string {
+  if (/TENANT_NAME_TAKEN|tenant name already exists/i.test(message)) return '租户名称已存在'
+  if (/INVALID_BODY|INVALID_ARGUMENT|length/i.test(message)) return '租户名称长度需为 1-60 个字符'
+  if (/BILLING_UNAVAILABLE/i.test(message)) return '计费服务不可用，请稍后重试'
+  if (/AGENT_API_UNAVAILABLE/.test(message)) {
+    return '团队租户服务不可用（AGENT_API_UNAVAILABLE），请检查后台 AGENT_API_URL 配置'
+  }
+  return message || '创建团队租户失败，请重试'
 }
 
 function tenantBalanceText(balance: number | null): string {
@@ -66,11 +84,15 @@ export default function TenantsPage() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
+  const [teamOpen, setTeamOpen] = useState(false)
+  const [teamName, setTeamName] = useState('')
+  const [teamError, setTeamError] = useState<string | null>(null)
 
   const { data, loading, error, refetch } = useQuery<GetAdminTenantsQuery>(ADMIN_TENANTS, {
     variables: { keyword: keyword || null, page, pageSize: PAGE_SIZE },
   })
   const [createFrontUser, { loading: creating }] = useMutation(ADMIN_CREATE_FRONT_USER)
+  const [createTeamTenant, { loading: creatingTeam }] = useMutation(ADMIN_CREATE_TEAM_TENANT)
 
   const tenants = data?.adminTenants ?? []
 
@@ -114,6 +136,32 @@ export default function TenantsPage() {
     }
   }
 
+  const openTeam = () => {
+    setTeamName('')
+    setTeamError(null)
+    setTeamOpen(true)
+  }
+
+  const submitTeam = async () => {
+    const nameError = validateTeamName(teamName)
+    if (nameError) {
+      setTeamError(nameError)
+      return
+    }
+    setTeamError(null)
+    try {
+      await createTeamTenant({
+        variables: { name: teamName.trim() },
+        refetchQueries: [ADMIN_TENANTS],
+      })
+      toast.success('团队租户创建成功')
+      setTeamOpen(false)
+      setTeamName('')
+    } catch (err) {
+      setTeamError(mapCreateTeamError(err instanceof Error ? err.message : ''))
+    }
+  }
+
   const openTenant = (tenant: AdminTenantData) => {
     navigate(`/tenants/${tenant.id}`)
   }
@@ -122,9 +170,14 @@ export default function TenantsPage() {
     <div className="mx-auto max-w-5xl space-y-6 p-6">
       <div className="flex items-center justify-between">
         <h1 className="font-heading text-xl font-medium text-foreground">租户管理</h1>
-        <Button size="sm" onClick={openCreate}>
-          开户
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={openTeam}>
+            创建团队租户
+          </Button>
+          <Button size="sm" onClick={openCreate}>
+            开户
+          </Button>
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -149,7 +202,7 @@ export default function TenantsPage() {
             <EmptyState
               icon={Building2}
               title="暂无租户"
-              description="点击「开户」创建前台登录账户与其个人专属租户"
+              description="点击「开户」创建前台登录账户与其个人专属租户，或「创建团队租户」开通团队空间"
             />
           </div>
         ) : (
@@ -262,6 +315,43 @@ export default function TenantsPage() {
             </Button>
             <Button onClick={submitCreate} disabled={creating}>
               {creating ? '开户中...' : '确认开户'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={teamOpen} onOpenChange={setTeamOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>创建团队租户</DialogTitle>
+            <DialogDescription>
+              创建团队租户并自动开通全局工作区与零余额租户计费账户；创建后可在租户详情添加成员。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="team-tenant-name">租户名称</Label>
+              <Input
+                id="team-tenant-name"
+                value={teamName}
+                onChange={(event) => setTeamName(event.target.value)}
+                placeholder="1-60 个字符"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+          </div>
+          {teamError && (
+            <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              {teamError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTeamOpen(false)} disabled={creatingTeam}>
+              取消
+            </Button>
+            <Button onClick={submitTeam} disabled={creatingTeam}>
+              {creatingTeam ? '创建中...' : '确认创建'}
             </Button>
           </DialogFooter>
         </DialogContent>

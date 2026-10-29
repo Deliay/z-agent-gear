@@ -18,6 +18,7 @@ import { evictKeyById } from './key-cache.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import { modelService } from './model.js';
 import { sessionService } from './session.js';
+import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { cloudWorkloadCatalog } from './cloud-workload-catalog.js';
@@ -250,9 +251,13 @@ export class CloudHostService {
     const workloadPlan = await this.resolveWorkloadPlan(presets, workloadIds);
 
     return this.userMutex.runExclusive(`user:${userId}`, async () => {
+      // 多租户二期：计费 owner = 当前工作区所属租户（缺省上下文回退个人租户，与一期等价）
+      const workspaceContext = getWorkspaceContext();
+      const ownerTenantId = workspaceContext?.tenantId ?? userId;
+      const ownerWorkspaceId = workspaceContext?.id ?? null;
       let account: { id: string };
       try {
-        account = await billingClient.getAccount('tenant', userId);
+        account = await billingClient.getAccount('tenant', ownerTenantId);
       } catch {
         throw new Error('billing service unavailable');
       }
@@ -309,6 +314,7 @@ export class CloudHostService {
           controllerId,
           keyId,
           workspaceId,
+          resourceWorkspaceId: ownerWorkspaceId,
           createDefaultSession,
           githubAccountId,
           startedAt: new Date(),
@@ -338,7 +344,7 @@ export class CloudHostService {
         const modelKey = await billingClient.createCloudHostApiKey({
           accountId: account.id,
           ownerType: 'tenant',
-          ownerId: userId,
+          ownerId: ownerTenantId,
           name: `cloud-host:${name}`.slice(0, 64),
           cloudHostId,
         });
@@ -351,7 +357,8 @@ export class CloudHostService {
             controllerKeyId: keyId,
             containerApiKeyId: modelKeyId,
             userId,
-            tenantId: userId,
+            tenantId: ownerTenantId,
+            workspaceId: ownerWorkspaceId,
             hostName: name,
             harnessTypes: harnessTypes.map((type) => harnessSlug(type)),
             expiresAt,
@@ -479,7 +486,7 @@ export class CloudHostService {
   }
 
   async list(userId: string): Promise<Doc[]> {
-    const hosts = await CloudHost.find({ userId, deletedAt: null })
+    const hosts = await CloudHost.find({ ...actorFilter(userId), deletedAt: null })
       .sort({ createdAt: -1 })
       .lean();
     if (hosts.length === 0) return [];
@@ -487,7 +494,7 @@ export class CloudHostService {
       hosts.map((host) =>
         Session.countDocuments({
           controllerId: host.controllerId,
-          userId,
+          ...actorFilter(userId),
           status: { $ne: 'ended' },
         }),
       ),
@@ -499,7 +506,7 @@ export class CloudHostService {
     const host = await this.findOwnedHost(id, userId);
     const sessions = await Session.find({
       controllerId: String(host.controllerId),
-      userId,
+      ...actorFilter(userId),
       status: { $ne: 'ended' },
     })
       .sort({ createdAt: -1 })
@@ -538,7 +545,7 @@ export class CloudHostService {
       // A-9：先 CAS STOPPING 再统计活动会话，关闭 stopImpact→stop 之间的 TOCTOU 窗口。
       const previousStatus = host.status;
       const stopping = await CloudHost.findOneAndUpdate(
-        { _id: id, userId, status: { $in: ACTIVE_STATUSES } },
+        { _id: id, ...actorFilter(userId), status: { $in: ACTIVE_STATUSES } },
         { $set: { status: 'STOPPING' } },
         { new: true },
       ).lean();
@@ -554,7 +561,7 @@ export class CloudHostService {
       if (activeCount > 0 && force !== true) {
         // 未确认强制停止：回滚到停止前状态，保持可继续使用。
         await CloudHost.updateOne(
-          { _id: id, userId, status: 'STOPPING' },
+          { _id: id, ...actorFilter(userId), status: 'STOPPING' },
           { $set: { status: previousStatus } },
         );
         throw new Error(
@@ -580,7 +587,7 @@ export class CloudHostService {
       });
 
       const stopped = await CloudHost.findOneAndUpdate(
-        { _id: id, userId, status: 'STOPPING' },
+        { _id: id, ...actorFilter(userId), status: 'STOPPING' },
         {
           $set: {
             status: 'STOPPED',
@@ -602,7 +609,7 @@ export class CloudHostService {
       if (!mongoose.isValidObjectId(id)) {
         throw new Error('Cloud host not found');
       }
-      const host = await CloudHost.findOne({ _id: id, userId }).lean();
+      const host = await CloudHost.findOne({ _id: id, ...actorFilter(userId) }).lean();
       if (!host) throw new Error('Cloud host not found');
       if (host.deletedAt) return true;
       if (host.status !== 'STOPPED' && host.status !== 'FAILED') {
@@ -807,7 +814,7 @@ export class CloudHostService {
     if (!mongoose.isValidObjectId(controllerId)) return null;
     return (await CloudHost.findOne({
       controllerId,
-      userId,
+      ...actorFilter(userId),
       deletedAt: null,
     }).lean()) as Doc | null;
   }
@@ -827,7 +834,7 @@ export class CloudHostService {
     if (!mongoose.isValidObjectId(id)) {
       throw new Error('Cloud host not found');
     }
-    const host = await CloudHost.findOne({ _id: id, userId, deletedAt: null }).lean();
+    const host = await CloudHost.findOne({ _id: id, ...actorFilter(userId), deletedAt: null }).lean();
     if (!host) throw new Error('Cloud host not found');
     return host as Doc;
   }
@@ -835,7 +842,7 @@ export class CloudHostService {
   private async countActive(host: Doc): Promise<number> {
     return Session.countDocuments({
       controllerId: String(host.controllerId),
-      userId: String(host.userId),
+      ...actorFilter(String(host.userId)),
       status: { $ne: 'ended' },
     });
   }
@@ -856,6 +863,8 @@ export class CloudHostService {
       failureReason: host.failureReason ?? null,
       deletedAt: iso(host.deletedAt),
       githubAccountId: host.githubAccountId ? String(host.githubAccountId) : null,
+      // 契约 CloudHost.workspaceId = 租户工作区（模型字段 resourceWorkspaceId，计划期裁决对齐 F1）
+      workspaceId: host.resourceWorkspaceId ? String(host.resourceWorkspaceId) : null,
       hasDefaultWorkspace: Boolean(host.workspaceId),
     };
   }

@@ -1,6 +1,7 @@
 import { Model, type IModel } from '../models/model.js';
 import { Provider } from '../models/provider.js';
 import { GLOBAL_WRITE_FORBIDDEN } from './constants.js';
+import { getWorkspaceContext } from './workspace-context.js';
 import mongoose from 'mongoose';
 
 // 用户可用模型：scope=user 全量（兼容无 scope 字段的存量数据）∪ scope=global 且启用的全局模型
@@ -56,12 +57,17 @@ export class ModelService {
     if (!mongoose.Types.ObjectId.isValid(input.providerId)) {
       throw new Error('Provider not found');
     }
-    const provider = await Provider.findOne({ _id: input.providerId }).select('scope').lean() as { scope?: string } | null;
+    const provider = await Provider.findOne({ _id: input.providerId }).select('scope workspaceId').lean() as { scope?: string; workspaceId?: unknown } | null;
     if (!provider) {
       throw new Error('Provider not found');
     }
     if (normalizeScope(provider.scope) !== 'user') {
       throw new Error(GLOBAL_WRITE_FORBIDDEN);
+    }
+    const context = getWorkspaceContext();
+    if (context && provider.workspaceId && String(provider.workspaceId) !== context.id) {
+      // 共享读允许看到全局工作区供应商；写（挂模型）仅限当前工作区自身
+      throw new Error('Provider not found');
     }
 
     const maxSort = await Model.findOne({ providerId: input.providerId })
@@ -76,6 +82,7 @@ export class ModelService {
       isEnabled: true,
       sortOrder: (maxSort?.sortOrder ?? -1) + 1,
       scope: 'user',
+      ...(context ? { tenantId: context.tenantId, workspaceId: context.id } : {}),
     });
 
     return this.mapModel(model.toObject());
@@ -165,6 +172,7 @@ export class ModelService {
       isEnabled: model.isEnabled as boolean,
       sortOrder: model.sortOrder as number,
       scope: normalizeScope(model.scope),
+      workspaceId: model.workspaceId ? String(model.workspaceId) : null,
       contextLength:
         typeof model.contextLength === 'number' && Number.isFinite(model.contextLength)
           ? model.contextLength

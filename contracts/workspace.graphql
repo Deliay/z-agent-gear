@@ -1,0 +1,88 @@
+# 租户内工作区与租户成员管理（多租户二期）
+#
+# 概念澄清：本契约的 Workspace（集合 `workspaces`）是**租户级资源分组**；既有的
+# ControllerWorkspace（集合 `controllerworkspaces`，控制器/云电脑上的 Git 项目目录）
+# 是**项目工作区**，两者不同、本期不改名。
+#
+# 角色：租户成员分 admin / developer（tenantmembers.role）。
+#   admin     —— 管理租户下所有资源；所有工作区对其可见（绕过成员列表）；
+#               可改变其他成员角色、创建工作区、按帐号名搜索账户并添加租户成员；
+#   developer —— 无法创建工作区；可读写删除自己所在普通工作区下的资源；全局工作区只读。
+# 约束：personal 租户唯一成员恒 admin 且不可变更；每租户至少保留一名 admin（last-admin 保护）。
+# 上下文：各资源契约的列表/创建均在「当前工作区」下进行（x-workspace-id 头，见 auth 中间件）。
+#
+# 错误口径（GraphQL errors message 白名单，逐字）：
+#   workspace not found / workspace name already exists / global workspace is immutable /
+#   global workspace is read-only / personal tenant cannot create workspaces /
+#   personal tenant is immutable / workspace is not empty / not a workspace member /
+#   not a tenant admin / user is not a tenant member / account not found / already a member /
+#   not a member / last admin cannot be removed / last admin cannot be demoted
+
+enum WorkspaceType {
+  global
+  normal
+}
+
+enum TenantRole {
+  admin
+  developer
+}
+
+type Workspace {
+  id: ID!
+  name: String!
+  type: WorkspaceType!
+  tenant: Tenant! # 复用 auth.graphql 的 Tenant 类型
+  memberCount: Int! # normal=成员数；global=租户成员数（语义=全员）
+  myRole: TenantRole! # 当前用户在本工作区所属租户的角色
+  readOnly: Boolean! # 当前用户对本工作区是否只读（type=global 且 myRole=developer）
+  createdAt: String!
+}
+
+type WorkspaceMember {
+  id: ID! # 用户 id
+  name: String! # 用户展示名
+  username: String! # 登录账户名
+  role: TenantRole # 仅租户成员列表（tenantMembers）透出；工作区成员无角色之分
+  createdAt: String! # 加入时间
+}
+
+type TenantMembership {
+  tenant: Tenant!
+  role: TenantRole! # 当前用户在该租户的角色（切换器/权限渲染数据源）
+}
+
+type AccountSummary {
+  username: String! # 登录账户名（添加成员的依据）
+  name: String! # 用户展示名
+  userId: ID!
+}
+
+extend type Query {
+  # 我可访问的全部工作区：admin=个人全局+各团队全部工作区；developer=个人全局+各团队全局+已加入的 normal
+  myWorkspaces: [Workspace!]!
+  # 我的租户成员关系（角色渲染数据源）
+  myTenants: [TenantMembership!]!
+  # normal 工作区成员列表（admin 或本工作区成员可见）；global 工作区恒返回 []
+  workspaceMembers(workspaceId: ID!): [WorkspaceMember!]!
+  # 租户成员列表（含角色；需为本租户成员）
+  tenantMembers(tenantId: ID!): [WorkspaceMember!]!
+  # 按帐号名模糊搜索已存在账户（添加成员用；限任一 team 租户的 admin 调用）
+  searchAccounts(keyword: String!): [AccountSummary!]!
+}
+
+extend type Mutation {
+  # 仅 team 租户 admin；创建者不占用成员行（admin 天然可管）
+  # 注意：createWorkspace 已被项目工作区（ControllerWorkspace）占用，租户工作区 mutation 统一加 Tenant 前缀（计划期裁决 F12）
+  createTenantWorkspace(name: String!): Workspace!
+  renameTenantWorkspace(id: ID!, name: String!): Workspace!
+  # 删除保护：工作区内仍持有资源时拒绝
+  deleteTenantWorkspace(id: ID!): Boolean!
+  # 工作区成员管理：仅 team 租户 admin；成员仅能从本租户成员中选取；global 工作区调用被拒绝
+  addTenantWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
+  removeTenantWorkspaceMember(workspaceId: ID!, userId: ID!): Workspace!
+  # 租户成员管理：仅本租户 admin；username 必须指向已存在账户；last-admin 保护
+  addTenantMember(tenantId: ID!, username: String!, role: TenantRole): WorkspaceMember!
+  removeTenantMember(tenantId: ID!, userId: ID!): Boolean!
+  changeTenantMemberRole(tenantId: ID!, userId: ID!, role: TenantRole!): WorkspaceMember!
+}

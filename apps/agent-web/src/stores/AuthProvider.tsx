@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { AuthContext, type User } from './auth';
+import { resetWorkspaceStore } from './workspace';
 
 function restoreUser(): User | null {
   const raw = localStorage.getItem('auth_user');
@@ -28,6 +29,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading] = useState(false);
 
   const login = (newToken: string, newUser: User) => {
+    // 切换账号：先清空上一个账号的工作区上下文，随后由 myWorkspaces 同步重建
+    resetWorkspaceStore();
     localStorage.setItem('auth_token', newToken);
     localStorage.setItem('auth_user', JSON.stringify(newUser));
     setTokenCookie(newToken);
@@ -36,6 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
+    resetWorkspaceStore();
     localStorage.removeItem('auth_token');
     localStorage.removeItem('auth_user');
     clearTokenCookie();
