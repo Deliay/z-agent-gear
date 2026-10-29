@@ -35,6 +35,7 @@ import * as migration013TenantIdBackfill from './migrations/013-tenant-id-backfi
 import * as migration014TenantIdRebackfill from './migrations/014-tenant-id-rebackfill.js';
 import * as migration015TeamWorkspaces from './migrations/015-team-workspaces.js';
 import * as migration016GithubInstallationGithubUserId from './migrations/016-github-installation-github-user-id.js';
+import * as migration017NormalizeStringWorkspaceId from './migrations/017-normalize-string-workspace-id.js';
 import * as migration018DropLegacyUniqueIndexes from './migrations/018-drop-legacy-tenantless-unique-indexes.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
@@ -179,6 +180,7 @@ async function start() {
       migration014TenantIdRebackfill,
       migration015TeamWorkspaces,
       migration016GithubInstallationGithubUserId,
+      migration017NormalizeStringWorkspaceId,
       migration018DropLegacyUniqueIndexes,
     ]);
   } catch (err) {
