@@ -216,6 +216,7 @@ flowchart LR
 - [[proposals/20261028-feat-multi-tenant-phase2.md]] — 多租户二期（tenantmembers 含 role 两级 admin/developer、personal 恒 admin 与 last-admin 保护；workspaces/workspacemembers 建模、全局工作区无成员行、每租户恰一个全局工作区部分唯一索引；权限矩阵：admin 全工作区可见可管+建工作区+帐号搜索加成员+角色变更，developer 仅成员工作区读写+全局只读（context.readOnly 插件统一写拦截）；11 资源集合复制新增 workspaceId 且可见性切工作区+角色判定；x-workspace-id 头解析缺省回退个人全局；providers/models 存量 scope=user 按租户复制入全局后删除原件；user_commit_settings 键改 workspaceId 与三段继承；计费 owner=workspace.tenantId；/internal/tenants team 开通与成员初始化含角色、cloudcontainers 补 workspaceId 迁移 002）
 - [[proposals/20261028-feat-mongodb-workload.md]] — 增加工作负载「MongoDB」（admin-api 迁移 016 预置标准工作负载 presetKey=mongodb、init 脚本 012 sudo 正典形态原生 apt 经内网 Nexus 代理安装 mongodb-org 8.0、mongod --version 硬校验且不拉起实例、全链路数据驱动零协议改动、预制项测试断言 9→10）
 - [[proposals/20261028-feat-playwright-workload.md]] — 增加工作负载「Playwright」（预制工作负载 015-preset-playwright：`npm install -g playwright` + `playwright install` 走内网 playwright-proxy、playwright_download_host 参数化与 env 覆盖、幂等锚点 + 结尾硬校验、依赖 Node.js 隐式展开、API/E2E 预制口径 8→9）
+- [[proposals/20261030-feat-unified-logging-and-otel.md]] — 规范化日志与全链路可观测性（单源 vendored 观测模块 + pino JSON 日志与 no-console 不变量、OTel NodeSDK 以入口首个 import 启动、auto-instrumentations 与手工 span 分工、W3C traceparent 经 HTTP/Socket.IO/Redis 封套/Job env 四通道传播、云电脑 Job `OTEL_*` 注入与 agent-gear 2.12.0 手动埋点、名单脱敏与审计例外、Aspire collector 编排）
 
 ### 实现计划（`plan/`）
 
