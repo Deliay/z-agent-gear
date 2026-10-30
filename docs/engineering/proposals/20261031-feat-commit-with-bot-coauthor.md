@@ -33,7 +33,8 @@ type: Permanent
 - 不恢复已下线的「提交人模式」；
 - 不改变云电脑自身（非 Worktree）恒为 bot 的规则；
 - 不支持自定义共同作者，共同作者固定为平台 bot；
-- 不修改 `POST /internal/cloud-hosts/:controllerId/commit-identity` 的响应语义。
+- 不改变**有效云电脑**的 `POST /internal/cloud-hosts/:controllerId/commit-identity` 响应语义
+  （仍恒 bot）；仅补充未知 / 已软删主机返回 `{mode:'unset'}` 的兜底，避免无主机的容器写入身份。
 
 ## 2. 关键决策
 

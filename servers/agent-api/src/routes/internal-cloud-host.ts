@@ -169,7 +169,8 @@ internalCloudHostRouter.post(
  *
  * - 双鉴权与 `github-credential` 完全一致（`INTERNAL_API_TOKEN` 或本机 Controller key）；
  * - **永不 404**：任何无法下发有效身份的场景一律 `200 {"mode":"unset"}`（鉴权失败仍 401/403）；
- * - **恒 bot**：云电脑自身身份无视成员个人设置，恒为平台 bot（保留 `mode` 包络兼容 2.11.x）。
+ *   主机不存在 / 已软删同样返回 `unset`，不再解析 bot（无主机的容器不应写入身份）；
+ * - **恒 bot**：有效云电脑自身的身份无视成员个人设置，恒为平台 bot（保留 `mode` 包络兼容 2.11.x）。
  */
 internalCloudHostRouter.post(
   '/:controllerId/commit-identity',
@@ -181,6 +182,14 @@ internalCloudHostRouter.post(
       // 本端点语义为「永不 404」，继续走 resolve 得到 unset 兜底。
       if (!auth.ok && auth.status !== 404) {
         res.status(auth.status ?? 401).json({ error: auth.error ?? 'UNAUTHORIZED' });
+        return;
+      }
+
+      // 未知 / 已软删主机没有可写入身份的容器：按 unset 兜底，且不解析 bot。
+      // 服务间 token 路径的 404 已在鉴权阶段判定；Controller key 路径这里补一次存在性校验。
+      const host = await cloudHostService.findRawHostByController(controllerId);
+      if (!host) {
+        res.json({ mode: 'unset' });
         return;
       }
 

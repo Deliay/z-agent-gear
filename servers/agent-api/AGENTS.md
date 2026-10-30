@@ -134,7 +134,8 @@ npm run start   # Start production server
   仅成员署名）、`resolveCloudHostIdentity()` = **恒 bot**（`resolveAppBotIdentity` → `{mode:'agent_only'}`；
   bot 失败 `{mode:'unset'}`）。`mode` 包络仅为兼容 2.11.x 容器 `consume()`，不再有 co_author/human_only。
 - 内部端点：`POST /internal/cloud-hosts/:controllerId/commit-identity` 与 `github-credential` 双鉴权一致
-  （`INTERNAL_API_TOKEN` 或本机 Controller key，401/403），**永不 404**，恒 200；**无视个人设置恒 bot**。
+  （`INTERNAL_API_TOKEN` 或本机 Controller key，401/403），**永不 404**，恒 200；**有效主机无视个人设置恒 bot**；
+  主机不存在 / 已软删返回 `{mode:'unset'}` 且不解析 bot（无主机的容器不写身份）。
 - 下发链：`git:worktree:add` 可选 `committer {name,email,coAuthorName?,coAuthorEmail?}`；
   `workflow/instance.ts` 实例化时解析一次并落 `WorkflowInstance.worktreeCommitterName/Email` +
   `worktreeCoAuthorName/Email` 快照（issue 触发人覆盖 > 创建者设置），实例级与节点级

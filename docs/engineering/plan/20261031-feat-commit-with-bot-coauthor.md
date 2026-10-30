@@ -163,7 +163,7 @@ async resolveWorktreeCommitter(userId: string): Promise<ResolvedWorktreeCommitte
 
 - 旧 worker：未知字段忽略，仅写 `user.name/email`；
 - 旧数据：字段缺失 = `false`；
-- 云电脑自身：`commit-identity` 端点不变；
+- 云电脑自身：有效主机的 `commit-identity` 响应不变（恒 bot）；未知 / 已软删主机补 unset 兜底；
 - 本地控制器：无 Worktree 提交人链路，行为不变。
 
 ## 5. 验证命令
