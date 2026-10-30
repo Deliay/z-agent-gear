@@ -35,6 +35,8 @@ interface CredentialAuthResult {
   error?: string;
   controllerId?: string;
   userId?: string;
+  /** 鉴权主体所属租户（云电脑/绑定查询的显式隔离维度；团队租户 tenantId != userId）。 */
+  tenantId?: string;
 }
 
 function timingSafeEquals(actual: string, expected: string): boolean {
@@ -61,10 +63,19 @@ async function authenticateCredentialRequest(
   if (config.internalApiToken && timingSafeEquals(credential, config.internalApiToken)) {
     const host = await cloudHostService.findRawHostByController(controllerId);
     if (!host) return { ok: false, status: 404, error: 'NOT_FOUND' };
+    // 租户维度以预先创建的 Controller 为准（controllerId === Controller._id）；
+    // 历史/异常数据缺 Controller 时回退 host.tenantId，避免退化成无隔离条件。
+    const controller = await Controller.findById(controllerId).lean();
+    const tenantId = controller?.tenantId
+      ? String(controller.tenantId)
+      : host.tenantId
+        ? String(host.tenantId)
+        : undefined;
     return {
       ok: true,
       controllerId,
       userId: String(host.userId),
+      tenantId,
     };
   }
 
@@ -82,6 +93,7 @@ async function authenticateCredentialRequest(
     ok: true,
     controllerId,
     userId: String(cached.userId),
+    tenantId: controller.tenantId ? String(controller.tenantId) : undefined,
   };
 }
 
@@ -112,9 +124,13 @@ internalCloudHostRouter.post(
         return;
       }
 
+      // 显式双条件：controllerId + tenantId。
+      // 不能再用 userId：多租户二期团队租户 tenantId != userId，且 binding.userId 是
+      // Git 设置发起者，可能不是云电脑创建者/凭据申请者。
+      const tenantId = auth.tenantId ?? auth.userId;
       const host = await CloudHost.findOne({
         controllerId,
-        userId: auth.userId,
+        ...(tenantId ? { tenantId } : {}),
         deletedAt: null,
       }).lean();
       if (!host) {
@@ -126,9 +142,10 @@ internalCloudHostRouter.post(
         return;
       }
 
+      // 绑定以云主机为边界（controllerId 唯一索引）+ 显式租户隔离。
       const binding = await CloudHostGithubBinding.findOne({
         controllerId,
-        userId: auth.userId,
+        ...(tenantId ? { tenantId } : {}),
       }).lean();
       if (!binding) {
         res.status(404).json({ error: 'NO_BINDING' });
