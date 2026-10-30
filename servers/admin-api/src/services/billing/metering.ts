@@ -2,6 +2,7 @@ import { config } from '../../config/index.js';
 import { BillingEvent, type IBillingEvent } from '../../models/billing-event.js';
 import { MeteringRecord } from '../../models/metering-record.js';
 import { ceilMinutes } from './money.js';
+import { splitAbortedInput } from './usage-split.js';
 
 export interface MeteringResult {
   created: boolean;
@@ -111,6 +112,22 @@ export class MeteringService {
         outputTokens = Math.max(1, toInt(payload.estimatedOutputTokens) || config.modelDefaultMaxOutputTokens);
       }
       if (cachedInputTokens > inputTokens) cachedInputTokens = inputTokens;
+      // 计量是事实、定价是解释：中断调用把「20% 未缓存 + 80% 缓存」的计价拆分固化为事实的一部分，
+      // 使「事件 → 计量 → 定价」重放永远得到同一金额（未来调整比例也不影响历史重放）。
+      // 实际三段（inputTokens / cachedInputTokens / outputTokens）与 quantity 保持实际用量不变。
+      const dims: Record<string, unknown> = {
+        modelId,
+        inputTokens,
+        cachedInputTokens,
+        outputTokens,
+        estimated,
+      };
+      if (event.eventType === 'model_call.aborted') {
+        const { nonCachedTokens, cachedTokens } = splitAbortedInput(inputTokens);
+        dims.aborted = true;
+        dims.billedInputNonCachedTokens = nonCachedTokens;
+        dims.billedInputCachedTokens = cachedTokens;
+      }
       return {
         eventId: event.eventId,
         accountId: event.accountId,
@@ -118,7 +135,7 @@ export class MeteringService {
         resourceId: event.resourceId,
         productId: `model.${modelId}.token`,
         quantity: inputTokens + outputTokens,
-        dims: { modelId, inputTokens, cachedInputTokens, outputTokens, estimated },
+        dims,
         windowFrom: event.occurredAt,
         windowTo: event.occurredAt,
         estimated,

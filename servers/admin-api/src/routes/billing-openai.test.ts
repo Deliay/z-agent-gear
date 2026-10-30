@@ -17,9 +17,11 @@ import {
   estimateCost,
   estimatePromptTextTokens,
   estimateRequestTokens,
+  finalizeCost,
   resolveUsageFallback,
 } from './billing-openai.js';
 import { tokenCostCents } from '../services/billing/money.js';
+import { splitAbortedInput } from '../services/billing/usage-split.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../services/billing/testing/mongo.js';
 import type { BillingEventMessage } from '../services/billing/mq/publisher.js';
 
@@ -408,6 +410,73 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
     });
   });
 
+  it('T-AB5: finalize(aborted) 落库成本按 20/80 拆分直算，事件 payload 仍为实际用量', async () => {
+    // 缓存单价显著低于输入单价，拆分口径与全价口径必然可区分
+    await Model.updateOne(
+      { name: 'test-model' },
+      {
+        $set: {
+          pricing: {
+            inputPerMillion: 1000,
+            cachedInputPerMillion: 100,
+            outputPerMillion: 1000,
+            isBillable: true,
+          },
+        },
+      },
+    );
+    upstreamMode = 'hang';
+    // 60KB prompt（< express.json 默认 100kb 上限）：估算输入 60k token，拆分与全价口径可区分
+    const prompt = 'x'.repeat(60_000);
+    const controller = new AbortController();
+    const pending = callGateway({
+      signal: controller.signal,
+      body: JSON.stringify({ model: 'test-model', messages: [{ role: 'user', content: prompt }] }),
+    }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    controller.abort();
+    await pending;
+
+    await vi.waitFor(
+      () => {
+        expect(publisher.events.some((e) => e.eventType === 'model_call.aborted')).toBe(true);
+      },
+      { timeout: 5000 },
+    );
+    const abortedEvent = publisher.events.find((e) => e.eventType === 'model_call.aborted')!;
+    const payload = abortedEvent.payload as {
+      inputTokens: number;
+      cachedInputTokens: number;
+      outputTokens: number;
+    };
+    // 事件载荷保持实际用量（网关未上报缓存段 → 0）
+    expect(payload.cachedInputTokens).toBe(0);
+
+    const expectedSplitCost =
+      tokenCostCents(splitAbortedInput(payload.inputTokens).nonCachedTokens, 1000) +
+      tokenCostCents(splitAbortedInput(payload.inputTokens).cachedTokens, 100) +
+      tokenCostCents(payload.outputTokens, 1000);
+    const fullPriceCost =
+      tokenCostCents(payload.inputTokens, 1000) + tokenCostCents(payload.outputTokens, 1000);
+
+    const call = await (async () => {
+      let doc: { cost?: number; status?: string; inputTokens?: number; cachedInputTokens?: number } | null =
+        null;
+      await vi.waitFor(async () => {
+        const found = await BillingApiCall.findOne({});
+        expect(found?.status).toBe('aborted');
+        doc = found as never;
+      });
+      return doc!;
+    })();
+    // 折后成本与管线同口径（拆分唯一源），且低于全价口径
+    expect(call.cost).toBe(expectedSplitCost);
+    expect(call.cost).toBeLessThan(fullPriceCost);
+    // 落库三段仍是实际用量
+    expect(call.inputTokens).toBe(payload.inputTokens);
+    expect(call.cachedInputTokens).toBe(payload.cachedInputTokens);
+  }, 20000);
+
   // ===== Phase 2：cloud_host Key 模型范围 / 分流 / 归因 =====
 
   it('T-BK9: 云电脑 /v1/models = global enabled ∪ user enabled（含自定义、不含禁用）', async () => {
@@ -652,6 +721,42 @@ describe('resolveUsageFallback（缺失用量兜底）', () => {
 });
 
 /** R10-1：预检估算必须构成实际费用上界。 */
+describe('finalizeCost（网关成本口径）', () => {
+  const pricing = {
+    inputPerMillion: 1000,
+    cachedInputPerMillion: 100,
+    outputPerMillion: 1000,
+    isBillable: true,
+  };
+
+  it('T-AB5: aborted 输入按 20/80 拆分、输出全价，低于全价口径', () => {
+    const cost = finalizeCost(
+      'aborted',
+      { inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 },
+      pricing,
+    );
+    // 200k×1000 + 800k×100 + 1M×1000 = 1,280,000,000 / 1e6 → 1280 分
+    expect(cost).toBe(1280);
+    expect(cost).toBeLessThan(
+      finalizeCost(
+        'completed',
+        { inputTokens: 1_000_000, cachedInputTokens: 0, outputTokens: 1_000_000 },
+        pricing,
+      ),
+    );
+  });
+
+  it('T-AB5: completed 成本口径零变化（实际缓存段计价）', () => {
+    expect(
+      finalizeCost(
+        'completed',
+        { inputTokens: 1_000_000, cachedInputTokens: 100_000, outputTokens: 1_000_000 },
+        pricing,
+      ),
+    ).toBe(1910);
+  });
+});
+
 describe('网关预检估算上界（R10-1）', () => {
   const pricing = {
     inputPerMillion: 100,

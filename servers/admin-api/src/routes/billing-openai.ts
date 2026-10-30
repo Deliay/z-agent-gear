@@ -11,6 +11,7 @@ import { billingKeyAuth, openAiError, type BillingRequest } from '../middleware/
 import { creditCheckService } from '../services/billing/credit-check.js';
 import { decrypt } from '../services/crypto.js';
 import { tokenCostCents } from '../services/billing/money.js';
+import { splitAbortedInput } from '../services/billing/usage-split.js';
 import type { BillingEventMessage } from '../services/billing/mq/publisher.js';
 
 interface PublisherLike {
@@ -247,6 +248,36 @@ export function resolveUsageFallback(
     usage.inputTokens = promptTokens || 1;
   }
   return { usage, estimated };
+}
+
+/**
+ * 网关 `finalize` 审计成本直算（`BillingApiCall.cost`，随后被管线出账金额覆盖，
+ * 但 reconciliation 会比对两者）。
+ *
+ * - `aborted`：与管线折后同口径——输入按 20% 未缓存 + 80% 缓存拆分（`splitAbortedInput` 唯一源），
+ *   输出全价；逐段 `ceil`（取整策略与既有实现一致，±1 分差由对账既有容忍带覆盖）。
+ * - `completed`：按实际缓存用量三段计价（口径零变化）。
+ *
+ * 入参 `usage` 始终是**实际用量**（落库与事件 payload 不受此函数影响）。
+ */
+export function finalizeCost(
+  status: 'completed' | 'aborted',
+  usage: UsageFallbackInput,
+  pricing: ModelPricingCents,
+): number {
+  if (status === 'aborted') {
+    const { nonCachedTokens, cachedTokens } = splitAbortedInput(usage.inputTokens);
+    return (
+      tokenCostCents(nonCachedTokens, pricing.inputPerMillion) +
+      tokenCostCents(cachedTokens, pricing.cachedInputPerMillion) +
+      tokenCostCents(usage.outputTokens, pricing.outputPerMillion)
+    );
+  }
+  return (
+    tokenCostCents(Math.max(0, usage.inputTokens - usage.cachedInputTokens), pricing.inputPerMillion) +
+    tokenCostCents(usage.cachedInputTokens, pricing.cachedInputPerMillion) +
+    tokenCostCents(usage.outputTokens, pricing.outputPerMillion)
+  );
 }
 
 function pricingFromModel(pricing: unknown): ModelPricingCents | null {
@@ -560,12 +591,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       const resolved = resolveUsageFallback(usage, promptTokens, maxOutputTokens, outputText, estimatedTokens);
       const estimated = resolved.estimated;
       estimatedTokens = estimated;
-      const cost =
-        billable && pricing
-          ? tokenCostCents(Math.max(0, usage.inputTokens - usage.cachedInputTokens), pricing.inputPerMillion) +
-            tokenCostCents(usage.cachedInputTokens, pricing.cachedInputPerMillion) +
-            tokenCostCents(usage.outputTokens, pricing.outputPerMillion)
-          : 0;
+      const cost = billable && pricing ? finalizeCost(status, usage, pricing) : 0;
       // R3：finalize 只负责「落事实」，绝不抛出——落库失败不得被外层 catch 当成 upstream_error
       // 而把正常完成的调用翻转为 aborted、换 eventType 重投双事实。此处原地重试 + 告警。
       const writeFinalize = async (): Promise<void> => {

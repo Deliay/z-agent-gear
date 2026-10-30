@@ -132,4 +132,80 @@ describe('MeteringService（事件 → 计量事实）', () => {
     expect(created.dims).toMatchObject({ inputTokens: 12, outputTokens: 34 });
     expect(created.estimated).toBe(true);
   });
+
+  it('T-AB2: aborted 记录在 dims 固化 20/80 拆分，实际三段与 quantity 不变', async () => {
+    (MeteringRecord.create as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (BillingEvent.updateOne as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    const service = new MeteringService();
+    const result = await service.meterEvent(
+      event({
+        eventType: 'model_call.aborted',
+        payload: {
+          modelId: 'gpt-5',
+          inputTokens: 100,
+          cachedInputTokens: 30,
+          outputTokens: 50,
+        },
+      }) as never,
+    );
+    const created = (MeteringRecord.create as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // 实际用量（事实）保持事件原值，不被计价口径污染
+    expect(created.dims).toMatchObject({
+      modelId: 'gpt-5',
+      inputTokens: 100,
+      cachedInputTokens: 30,
+      outputTokens: 50,
+      estimated: false,
+    });
+    // 计价口径固化：20% 未缓存 + 80% 缓存，且两段和 = 实际输入总量
+    expect(created.dims.aborted).toBe(true);
+    expect(created.dims.billedInputCachedTokens).toBe(80);
+    expect(created.dims.billedInputNonCachedTokens).toBe(20);
+    expect(
+      created.dims.billedInputCachedTokens + created.dims.billedInputNonCachedTokens,
+    ).toBe(created.dims.inputTokens);
+    // quantity 仍是事实口径（input + output）
+    expect(created.quantity).toBe(150);
+    expect(result?.quantity).toBe(150);
+  });
+
+  it('T-AB2: completed 记录不写拆分字段', async () => {
+    (MeteringRecord.create as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (BillingEvent.updateOne as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    const service = new MeteringService();
+    await service.meterEvent(
+      event({
+        eventType: 'model_call.completed',
+        payload: { modelId: 'gpt-5', inputTokens: 100, cachedInputTokens: 30, outputTokens: 50 },
+      }) as never,
+    );
+    const created = (MeteringRecord.create as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(created.dims.aborted).toBeUndefined();
+    expect(created.dims.billedInputCachedTokens).toBeUndefined();
+    expect(created.dims.billedInputNonCachedTokens).toBeUndefined();
+  });
+
+  it('T-AB2: estimated 兜底后输入同样按 20/80 拆分（拆分基数为估算归一后的输入）', async () => {
+    (MeteringRecord.create as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (BillingEvent.updateOne as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    const service = new MeteringService();
+    await service.meterEvent(
+      event({
+        eventType: 'model_call.aborted',
+        payload: {
+          modelId: 'gpt-5',
+          estimated: true,
+          estimatedInputTokens: 12,
+          estimatedOutputTokens: 34,
+        },
+      }) as never,
+    );
+    const created = (MeteringRecord.create as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(created.estimated).toBe(true);
+    expect(created.dims.billedInputCachedTokens).toBe(10); // round(12 × 0.8)
+    expect(created.dims.billedInputNonCachedTokens).toBe(2);
+    expect(
+      created.dims.billedInputCachedTokens + created.dims.billedInputNonCachedTokens,
+    ).toBe(created.dims.inputTokens);
+  });
 });
