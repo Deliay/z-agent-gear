@@ -17,9 +17,13 @@ describe('splitAbortedInput（中断输入 20/80 拆分）', () => {
       expect(nonCachedTokens).toBe(input - cachedTokens);
       // 不重不漏：两段和恰为输入总量
       expect(nonCachedTokens + cachedTokens).toBe(input);
-      // 取整余量归未缓存段（非负，且不超过 20% 的取整误差范围）
+      // 取整余量归未缓存段：两段与精确比例（20% / 80%）的偏差均不超过 0.5 token
       expect(nonCachedTokens).toBeGreaterThanOrEqual(0);
       expect(cachedTokens).toBeGreaterThanOrEqual(0);
+      expect(Math.abs(cachedTokens - input * ABORTED_INPUT_CACHED_RATIO)).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(nonCachedTokens - input * (1 - ABORTED_INPUT_CACHED_RATIO))).toBeLessThanOrEqual(
+        0.5,
+      );
     }
   });
 

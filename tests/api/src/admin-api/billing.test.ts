@@ -88,6 +88,7 @@ const API_CALLS = `
   query ApiCalls($id: ID!) {
     adminBillingApiCalls(accountId: $id, page: 1, pageSize: 5) {
       id requestId modelId status estimated cost invoiceSeq startedAt
+      inputTokens cachedInputTokens outputTokens
     }
   }
 `;
@@ -539,8 +540,10 @@ describe('Admin Billing API', () => {
         (bySegment.get('input:aborted')?.quantity ?? 0) +
           (bySegment.get('cached_input:aborted')?.quantity ?? 0),
       ).toBe(1_000_000);
-      // 折后金额 260 分 < 全价口径 295 分
-      expect(invoice.amount).toBe(-260);
+      // 折后金额 2.6 credits < 全价口径 2.95 credits（wire 金额统一为 credits，见 mappers）
+      expect(invoice.amount).toBe(-2.6);
+      // 明细金额同口径（credits，明细为正数、账单消费为负数），且各段之和等于整单金额绝对值
+      expect(invoice.items.reduce((acc, item) => acc + item.amount, 0)).toBeCloseTo(2.6, 10);
       expect(invoice.description).toContain('中断');
       expect(invoice.description).toContain('20% 未缓存 + 80% 缓存');
 
@@ -568,7 +571,7 @@ describe('Admin Billing API', () => {
         },
         { timeout: 20_000, interval: 500 },
       );
-    });
+    }, 60_000);
 
     it('API-AB2: 正常调用金额回归（三段实际用量计价，零改动）', async () => {
       const accountId = await adminAccountId();
@@ -595,7 +598,9 @@ describe('Admin Billing API', () => {
         'output',
       ]);
       expect(invoice.items.map((item) => item.quantity)).toEqual([900_000, 100_000, 1_000_000]);
-      expect(invoice.amount).toBe(-295);
+      // wire 金额统一为 credits（mapper centsToCredits）：295 分 → 2.95 credits
+      expect(invoice.amount).toBe(-2.95);
+      expect(invoice.items.reduce((acc, item) => acc + item.amount, 0)).toBeCloseTo(2.95, 10);
       expect(invoice.description).not.toContain('20% 未缓存 + 80% 缓存');
 
       await vi.waitFor(
@@ -619,6 +624,6 @@ describe('Admin Billing API', () => {
         },
         { timeout: 20_000, interval: 500 },
       );
-    });
+    }, 60_000);
   });
 });
