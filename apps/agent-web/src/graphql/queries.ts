@@ -585,16 +585,25 @@ export const GET_GITHUB_APP_URL = gql`
   }
 `
 
+/** 当前成员的提交人设置（成员独立、无共享/继承；仅对云容器环境生效） */
 export const GET_COMMIT_SETTINGS = gql`
   query GetCommitSettings {
     commitSettings {
-      committerMode
       committerType
-      githubAccountId
       customName
       customEmail
-      source
-      readOnly
+    }
+  }
+`
+
+/** 「导入Github帐号信息」弹窗数据源：当前账户个人租户绑定的全部 GitHub 帐号 */
+export const GET_PERSONAL_GITHUB_ACCOUNTS = gql`
+  query GetPersonalGithubAccounts {
+    personalGithubAccounts {
+      id
+      githubUserId
+      githubLogin
+      githubAvatarUrl
     }
   }
 `
