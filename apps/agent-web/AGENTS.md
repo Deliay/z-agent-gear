@@ -79,26 +79,28 @@ npm run preview  # Preview production build
 - **工作负载设置区**：云电脑配置页「工作负载」页签列出标准负载（预制/已安装徽标、参数表单 TEXT/SELECT/MULTI_SELECT/BOOLEAN 默认值），按 `workloadKind` 分组（standard 组标题「运行环境 / 工具」，harness 组「云电脑」，空组不渲染），每项展示依赖名称（依赖 ID 映射同列表名称，缺失回退 ID）；仅 RUNNING 可安装，已安装项禁用且**无卸载入口**；安装复用同一进度对话框（单步）。
 - **测试入口**：`components/__tests__/Sidebar.test.tsx`、`pages/__tests__/ControllerConfigPage.test.tsx`、`components/cloud-host/__tests__/*`（含 `GithubProjectSetupDialog` / `GithubSetupProgressDialog` / `CloudHostWorkloadsSection`）、`components/session/NewSessionDialog.test.tsx`、`components/session/__tests__/SessionView.cloudHost.test.tsx`、`graphql/__tests__/home.test.ts`（覆盖 T-AW1..15 与 T-AW-G1..G14 关键项）。
 
-## Commit 设置区块（设置页）
+## Git 区块（设置页）
 
-- 挂载：`pages/SettingsPage.tsx` 的 `#github-section` 内，紧接 `<GithubBindingSection />` 下方
-  渲染 `<CommitSettingsSection />`；标题「Commit 设置」+ 常驻提示「设置只对云容器环境生效」。
-- 数据：`GET_COMMIT_SETTINGS` / `UPDATE_COMMIT_SETTINGS` + `GET_GITHUB_ACCOUNTS`
-  （帐号下拉；`GitHubAccount` 即 OAuth 用户身份，org 不会出现），类型手写于 `graphql/types.ts`。
-- 交互：提交人模式（仅Agent / Co-Author / 仅人类 / 未设置）与提交人（Github帐号 / 自定义 / 未设置）
-  两个单选组；`GITHUB_ACCOUNT` 条件渲染帐号下拉，`CUSTOM` 渲染用户名 + 邮箱输入；
-  无绑定帐号提示「请先绑定 Github 帐号」并禁用保存；已选帐号被解绑提示重新选择。
-- 校验：Co-Author / 仅人类 + 提交人未设置 → 「请先设置提交人」并禁用保存；自定义校验与服务端同源
-  （trim 非空、≤100/≤254、禁换行/NUL、邮箱正则）；前端拦截不替代服务端权威校验。
-- 错误映射（逐字）：`committer is required for the selected mode` →「请先设置提交人」；
-  `invalid github account` →「Github 帐号无效，请重新选择」；
-  `invalid custom committer` →「提交人用户名或邮箱格式不正确」。
-- 保存成功 toast「对云容器环境生效，已运行的云电脑稍后自动更新」；加载分支用 `loading && !data`，
-  后台刷新不覆盖用户编辑（dirty 保护）。
+- 挂载：`pages/SettingsPage.tsx` 的独立 `#git-section`（NAV label「Git」，GitBranch 图标，紧随「GitHub 绑定」组），
+  渲染 `<GitSettingsSection />`。`#github-section` 只保留 `<GithubBindingSection />`（旧「Commit 设置」区块已下线）。
+- 数据：`GET_COMMIT_SETTINGS` / `UPDATE_COMMIT_SETTINGS`（仅 `committerType/customName/customEmail`）+
+  `GET_PERSONAL_GITHUB_ACCOUNTS`（导入弹窗数据源）；类型手写于 `graphql/types.ts`
+  （`CommitterType = 'CUSTOM' | 'UNSET'`，无 CommitterMode / source / readOnly）。
+- 交互：标题「Git」+ 常驻提示「仅对云电脑环境生效」；「提交人」单选组二选一（自定义 / 未设置）；
+  自定义时展示用户名、邮箱与「导入Github帐号信息」按钮（`ImportGithubAccountDialog`）；保存为**成员级**设置，
+  与当前工作区无关（无共享/继承、无只读禁用）。
+- 导入弹窗：列出 `personalGithubAccounts`（头像 + 帐号名），选择后回填 `customName=githubLogin`、
+  `customEmail=<githubUserId>+<githubLogin>@users.noreply.github.com`（可继续编辑）；空态引导
+  「先到『GitHub 绑定』绑定帐号」。
+- 校验：与服务端同源（trim 后非空且 ≤100、≤254、禁 `\n\r\0`、邮箱正则 `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`），
+  失败文案「提交人用户名或邮箱格式不正确」（服务端白名单 `invalid custom committer` 映射到同一条）；
+  前端拦截不替代服务端权威校验。
+- 保存成功 toast「对成员的会话/工作流 Worktree 生效」；加载分支用 `loading && !data`，后台刷新不覆盖用户编辑（dirty 保护）。
 - 缓存：`GET_COMMIT_SETTINGS` 用 `fetchPolicy: 'cache-and-network'`，保存 mutation 带
-  `refetchQueries: [GET_COMMIT_SETTINGS]`（`CommitSettings` 无 `id`，Apollo 无法归一化 mutation 结果），
-  保证保存后离开设置页再返回不回显旧值；回归见 `CommitSettingsSection.cache.test.tsx`。
-- 测试：`components/settings/__tests__/CommitSettingsSection.test.tsx`。
+  `refetchQueries: [GET_COMMIT_SETTINGS]`（`CommitSettings` 无 `id`，Apollo 无法归一化 mutation 结果）。
+- 测试：`components/settings/__tests__/GitSettingsSection.test.tsx`、
+  `components/settings/__tests__/ImportGithubAccountDialog.test.tsx`；
+  E2E `tests/e2e/src/settings-git.spec.ts`。
 
 ## 多租户一期（注册硬关闭与展示名）
 
@@ -141,6 +143,6 @@ npm run preview  # Preview production build
 - **切换器**：`components/WorkspaceSwitcher.tsx` 挂在 `Sidebar` 顶部，按租户分组、按角色过滤；未加入任何 team（仅个人租户）不渲染；切换后 `client.resetStore()` 重拉 `HOME_OVERVIEW` 等活跃查询。管理入口：`/workspaces`（team admin）与 `/tenants/:tenantId/members`（本租户 admin）。
 - **工作区管理页**：`pages/WorkspacePage.tsx` 仅 admin 可操作（developer 展示无权限提示、无入口）；列表展示名称/类型/成员数；创建/改名/删除（`workspace is not empty` 映射「工作区非空，无法删除」）/成员添加移除；全局工作区无改名/删除/成员入口；personal 租户无管理入口。
 - **租户成员管理页**：`pages/TenantMembersPage.tsx` 仅本租户 admin；成员列表（展示名/用户名/角色）、`searchAccounts` 搜索添加并指定角色、变更角色、移除；`last admin cannot be removed/demoted` 映射「至少保留一名管理员」提示；personal 租户无入口。
-- **共享资源来源与只读收敛**：`lib/workspace-source.ts` + `hooks/useResourceSource.ts` 判定本工作区/全局工作区/其他工作区；供应商/模型/GitHub 绑定展示 `ResourceSourceBadge`。普通上下文的全局工作区资源隐藏编辑/删除；全局工作区 + developer（`Workspace.readOnly`）整体只读（隐藏添加/编辑/解绑入口，Commit 设置禁用保存）。旧数据未携带 `workspaceId` 时保持升级前行为（无徽标、可编辑）。
-- **Commit 设置**：`CommitSettingsSection` 展示 `CommitSettings.source`（本工作区/继承自全局工作区/未设置）与 `readOnly`，只读时禁用表单与保存。
-- **测试入口**：`stores/__tests__/workspace.test.tsx`、`components/__tests__/WorkspaceSwitcher.test.tsx`、`pages/__tests__/WorkspacePage.test.tsx`、`pages/__tests__/TenantMembersPage.test.tsx`、`lib/__tests__/workspace-source.test.ts`、`components/settings/__tests__/ProviderSection.readonly.test.tsx`、`CommitSettingsSection.source.test.tsx`。
+- **共享资源来源与只读收敛**：`lib/workspace-source.ts` + `hooks/useResourceSource.ts` 判定本工作区/全局工作区/其他工作区；供应商/模型/GitHub 绑定展示 `ResourceSourceBadge`。普通上下文的全局工作区资源隐藏编辑/删除；全局工作区 + developer（`Workspace.readOnly`）整体只读（隐藏添加/编辑/解绑入口；成员级 Git 提交人设置不受影响）。旧数据未携带 `workspaceId` 时保持升级前行为（无徽标、可编辑）。
+- **Git 区块**：提交人设置为成员级（键 `userId`），无 `source`/`readOnly` 口径，只读工作区不影响保存。
+- **测试入口**：`stores/__tests__/workspace.test.tsx`、`components/__tests__/WorkspaceSwitcher.test.tsx`、`pages/__tests__/WorkspacePage.test.tsx`、`pages/__tests__/TenantMembersPage.test.tsx`、`lib/__tests__/workspace-source.test.ts`、`components/settings/__tests__/ProviderSection.readonly.test.tsx`。

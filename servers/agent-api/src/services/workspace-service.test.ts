@@ -121,7 +121,7 @@ describe('WorkspaceService（T-WSP，真库）', () => {
     ).rejects.toThrow(WORKSPACE_ERRORS.globalImmutable);
   });
 
-  it('T-WSP4: 删除保护（11 集合任一持有资源即拒绝）', async () => {
+  it('T-WSP4: 删除保护（10 集合任一持有资源即拒绝；Commit 设置已成员级不再计入）', async () => {
     const tenant = await createTeam('team-d');
     const user = await createUser('dave');
     await TenantMember.create({ tenantId: tenant._id, userId: user._id, role: 'admin' });

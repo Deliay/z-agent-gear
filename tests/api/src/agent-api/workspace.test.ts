@@ -1386,7 +1386,7 @@ const DELETE_PROVIDER = `mutation DeleteProvider($id: ID!) { deleteProvider(id: 
 const COMMIT_SETTINGS = `
   query CommitSettings {
     commitSettings {
-      committerMode committerType customName customEmail source readOnly
+      committerType customName customEmail
     }
   }
 `;
@@ -1394,7 +1394,7 @@ const COMMIT_SETTINGS = `
 const UPDATE_COMMIT_SETTINGS = `
   mutation UpdateCommitSettings($input: CommitSettingsInput!) {
     updateCommitSettings(input: $input) {
-      committerMode committerType customName customEmail source readOnly
+      committerType customName customEmail
     }
   }
 `;
@@ -1696,58 +1696,40 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
     expect(after.data.providers.some((provider: { id: string }) => provider.id === globalProviderId)).toBe(false);
   });
 
-  it('T-WS-API5: Commit 三段继承矩阵（UNSET → GLOBAL → WORKSPACE）', async () => {
+  it('T-WS-API5: Commit 成员级设置（无共享/继承，任意工作区同一份）', async () => {
     const unset = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, normalWorkspaceId);
     expect(unset.errors).toBeUndefined();
-    expect(unset.data.commitSettings).toMatchObject({ source: 'UNSET', committerMode: 'UNSET' });
-
-    const setGlobal = await gqlCtx(
-      UPDATE_COMMIT_SETTINGS,
-      {
-        input: {
-          committerMode: 'HUMAN_ONLY',
-          committerType: 'CUSTOM',
-          customName: 'Global Committer',
-          customEmail: 'global-committer@example.com',
-        },
-      },
-      admin.token,
-      teamGlobalId,
-    );
-    expect(setGlobal.errors).toBeUndefined();
-    expect(setGlobal.data.updateCommitSettings).toMatchObject({
-      source: 'WORKSPACE',
-      customName: 'Global Committer',
+    expect(unset.data.commitSettings).toEqual({
+      committerType: 'UNSET',
+      customName: null,
+      customEmail: null,
     });
 
-    const inherited = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, normalWorkspaceId);
-    expect(inherited.errors).toBeUndefined();
-    expect(inherited.data.commitSettings).toMatchObject({
-      source: 'GLOBAL',
-      customName: 'Global Committer',
-      committerMode: 'HUMAN_ONLY',
-    });
-
+    // 普通工作区保存后：团队全局工作区读到同一份（成员级，与工作区无关）
     const setOwn = await gqlCtx(
       UPDATE_COMMIT_SETTINGS,
-      {
-        input: {
-          committerMode: 'HUMAN_ONLY',
-          committerType: 'CUSTOM',
-          customName: 'Workspace Committer',
-          customEmail: 'workspace-committer@example.com',
-        },
-      },
+      { input: { committerType: 'CUSTOM', customName: 'Member Committer', customEmail: 'member@example.com' } },
       admin.token,
       normalWorkspaceId,
     );
     expect(setOwn.errors).toBeUndefined();
-    expect(setOwn.data.updateCommitSettings.source).toBe('WORKSPACE');
+    expect(setOwn.data.updateCommitSettings).toEqual({
+      committerType: 'CUSTOM',
+      customName: 'Member Committer',
+      customEmail: 'member@example.com',
+    });
 
-    const own = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, normalWorkspaceId);
-    expect(own.data.commitSettings).toMatchObject({
-      source: 'WORKSPACE',
-      customName: 'Workspace Committer',
+    const inGlobal = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, teamGlobalId);
+    expect(inGlobal.errors).toBeUndefined();
+    expect(inGlobal.data.commitSettings).toMatchObject({ customName: 'Member Committer' });
+
+    // 成员独立：developer 的设置不受 admin 影响
+    const devView = await gqlCtx(COMMIT_SETTINGS, undefined, developer.token, normalWorkspaceId);
+    expect(devView.errors).toBeUndefined();
+    expect(devView.data.commitSettings).toEqual({
+      committerType: 'UNSET',
+      customName: null,
+      customEmail: null,
     });
   });
 

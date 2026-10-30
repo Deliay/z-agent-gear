@@ -44,9 +44,7 @@ const UNBIND = `
 const COMMIT_SETTINGS = `
   query GetCommitSettings {
     commitSettings {
-      committerMode
       committerType
-      githubAccountId
       customName
       customEmail
     }
@@ -56,12 +54,16 @@ const COMMIT_SETTINGS = `
 const UPDATE_COMMIT_SETTINGS = `
   mutation UpdateCommitSettings($input: CommitSettingsInput!) {
     updateCommitSettings(input: $input) {
-      committerMode
       committerType
-      githubAccountId
       customName
       customEmail
     }
+  }
+`;
+
+const PERSONAL_GITHUB_ACCOUNTS = `
+  query GetPersonalGithubAccounts {
+    personalGithubAccounts { id githubUserId githubLogin githubAvatarUrl }
   }
 `;
 
@@ -157,7 +159,7 @@ describe('GitHub Binding API', () => {
       return res.json() as Promise<{ data?: any; errors?: Array<{ message: string }> }>;
     }
 
-    it('T-CS-API1: 未认证拒绝；从未保存返回双 UNSET 默认值', async () => {
+    it('T-CS-API1: 未认证拒绝；从未保存返回 UNSET 默认值', async () => {
       const unauth = await gqlRequest(COMMIT_SETTINGS);
       const unauthBody = await unauth.json();
       expect(unauthBody.errors?.[0]?.message).toBe('Not authenticated');
@@ -166,26 +168,21 @@ describe('GitHub Binding API', () => {
       const body = await res.json();
       expect(body.errors).toBeUndefined();
       expect(body.data.commitSettings).toEqual({
-        committerMode: 'UNSET',
         committerType: 'UNSET',
-        githubAccountId: null,
         customName: null,
         customEmail: null,
       });
     });
 
-    it('T-CS-API2: 保存 / 回读自定义提交人全字段', async () => {
+    it('T-CS-API2: 保存 / 回读自定义提交人（trim 归一）', async () => {
       const saved = await update({
-        committerMode: 'HUMAN_ONLY',
         committerType: 'CUSTOM',
         customName: '  Zhang San  ',
         customEmail: '  zhangsan@example.com  ',
       });
       expect(saved.errors).toBeUndefined();
       expect(saved.data.updateCommitSettings).toEqual({
-        committerMode: 'HUMAN_ONLY',
         committerType: 'CUSTOM',
-        githubAccountId: null,
         customName: 'Zhang San',
         customEmail: 'zhangsan@example.com',
       });
@@ -195,51 +192,116 @@ describe('GitHub Binding API', () => {
       expect(body.data.commitSettings).toEqual(saved.data.updateCommitSettings);
     });
 
-    it('T-CS-API3: 白名单错误逐字（联动 / 越权帐号 / 非法自定义）', async () => {
-      const required = await update({ committerMode: 'CO_AUTHOR', committerType: 'UNSET' });
-      expect(required.errors?.[0]?.message).toBe(
-        'committer is required for the selected mode',
-      );
+    it('T-CS-API3: 白名单 invalid custom committer 逐字 + 校验矩阵', async () => {
+      const emptyName = await update({ committerType: 'CUSTOM', customName: '', customEmail: 'a@b.com' });
+      expect(emptyName.errors?.[0]?.message).toBe('invalid custom committer');
 
-      const account = await update({
-        committerMode: 'HUMAN_ONLY',
-        committerType: 'GITHUB_ACCOUNT',
-        githubAccountId: new mongoose.Types.ObjectId().toString(),
-      });
-      expect(account.errors?.[0]?.message).toBe('invalid github account');
+      const badEmail = await update({ committerType: 'CUSTOM', customName: 'A', customEmail: 'not-an-email' });
+      expect(badEmail.errors?.[0]?.message).toBe('invalid custom committer');
 
-      const custom = await update({
-        committerMode: 'HUMAN_ONLY',
+      const newline = await update({ committerType: 'CUSTOM', customName: 'A\nB', customEmail: 'a@b.com' });
+      expect(newline.errors?.[0]?.message).toBe('invalid custom committer');
+
+      const tooLong = await update({
         committerType: 'CUSTOM',
-        customName: '',
-        customEmail: 'not-an-email',
+        customName: 'x'.repeat(101),
+        customEmail: 'a@b.com',
       });
-      expect(custom.errors?.[0]?.message).toBe('invalid custom committer');
+      expect(tooLong.errors?.[0]?.message).toBe('invalid custom committer');
+
+      // 已下线的 GITHUB_ACCOUNT 枚举：GraphQL 层直接拒绝（不再是白名单业务错误）
+      const legacyType = await update({ committerType: 'GITHUB_ACCOUNT' });
+      expect(legacyType.errors?.[0]?.message).toContain('CommitterType');
     });
 
-    it('T-CS-API4: 归一落库（mode=UNSET 不清提交人、按 type 清理）', async () => {
-      const keepCommitter = await update({
-        committerMode: 'UNSET',
-        committerType: 'CUSTOM',
-        customName: 'Keep Me',
-        customEmail: 'keep@example.com',
-      });
-      expect(keepCommitter.errors).toBeUndefined();
-      expect(keepCommitter.data.updateCommitSettings).toMatchObject({
-        committerMode: 'UNSET',
-        committerType: 'CUSTOM',
-        customName: 'Keep Me',
-        customEmail: 'keep@example.com',
-      });
+    it('T-CS-API4: 成员级隔离（A/B 互不影响）', async () => {
+      await update({ committerType: 'CUSTOM', customName: 'Alice', customEmail: 'alice@example.com' });
 
-      const cleared = await update({ committerMode: 'UNSET', committerType: 'UNSET' });
-      expect(cleared.data.updateCommitSettings).toEqual({
-        committerMode: 'UNSET',
+      const other = await createFrontUser();
+      const otherRead = await gqlRequest(COMMIT_SETTINGS, undefined, other.token);
+      const otherBody = await otherRead.json();
+      expect(otherBody.data.commitSettings).toEqual({
         committerType: 'UNSET',
-        githubAccountId: null,
         customName: null,
         customEmail: null,
       });
+
+      const otherRes = await gqlRequest(
+        UPDATE_COMMIT_SETTINGS,
+        { input: { committerType: 'CUSTOM', customName: 'Bob', customEmail: 'bob@example.com' } },
+        other.token,
+      );
+      const otherSaved = await otherRes.json();
+      expect(otherSaved.data.updateCommitSettings).toMatchObject({ customName: 'Bob' });
+
+      // 原成员设置不受他人影响
+      const mine = await gqlRequest(COMMIT_SETTINGS, undefined, token);
+      const mineBody = await mine.json();
+      expect(mineBody.data.commitSettings).toMatchObject({ customName: 'Alice' });
+
+      // 清理：他人设置随个人租户留档，测试结束删除
+      const mongo = await mongoDb();
+      await mongo?.collection('user_commit_settings').deleteMany({ userId: other.userId });
+    });
+
+    it('T-CS-API5: personalGithubAccounts 仅返回个人租户绑定帐号（排除普通工作区副本）', async () => {
+      const mongo = await mongoDb();
+      expect(mongo).toBeTruthy();
+      if (!mongo) return;
+
+      const globalWorkspace = await mongo.collection('workspaces').findOne({ tenantId: new mongoose.Types.ObjectId(userId), type: 'global' });
+      expect(globalWorkspace).toBeTruthy();
+      const normalWorkspaceId = new mongoose.Types.ObjectId();
+      await mongo.collection('workspaces').insertOne({
+        _id: normalWorkspaceId,
+        tenantId: new mongoose.Types.ObjectId(userId),
+        name: 'normal-workspace',
+        type: 'normal',
+        createdBy: new mongoose.Types.ObjectId(userId),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const personalAccountId = new mongoose.Types.ObjectId();
+      const workspaceAccountId = new mongoose.Types.ObjectId();
+      await mongo.collection('githubaccounts').insertMany([
+        {
+          _id: personalAccountId,
+          userId,
+          tenantId: userId,
+          workspaceId: String(globalWorkspace!._id),
+          githubUserId: 9001,
+          githubLogin: 'personal-octocat',
+          githubAvatarUrl: 'https://avatars.example/1.png',
+          accessToken: 'encrypted',
+          tokenExpiresAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        {
+          _id: workspaceAccountId,
+          userId,
+          tenantId: userId,
+          workspaceId: String(normalWorkspaceId),
+          githubUserId: 9002,
+          githubLogin: 'workspace-octocat',
+          githubAvatarUrl: null,
+          accessToken: 'encrypted',
+          tokenExpiresAt: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      ]);
+
+      const res = await gqlRequest(PERSONAL_GITHUB_ACCOUNTS, undefined, token);
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      const ids = (body.data.personalGithubAccounts as Array<{ id: string }>).map((a) => a.id);
+      expect(ids).toContain(personalAccountId.toString());
+      expect(ids).not.toContain(workspaceAccountId.toString());
+
+      await mongo.collection('githubaccounts').deleteMany({ _id: { $in: [personalAccountId, workspaceAccountId] } });
+      await mongo.collection('workspaces').deleteOne({ _id: normalWorkspaceId });
     });
   });
 });
@@ -248,7 +310,6 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
   const CONTROLLER_ID = new mongoose.Types.ObjectId().toString();
   const HOST_ID = new mongoose.Types.ObjectId();
   const HOST_USER_ID = new mongoose.Types.ObjectId();
-  const ACCOUNT_ID = new mongoose.Types.ObjectId();
 
   async function db(): Promise<mongoose.mongo.Db> {
     if (mongoose.connection.readyState === 0) await mongoose.connect(MONGODB_URI!);
@@ -303,7 +364,6 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
         $set: {
           userId: HOST_USER_ID.toString(),
           tenantId: HOST_USER_ID.toString(),
-          githubAccountId: null,
           customName: null,
           customEmail: null,
           updatedAt: new Date(),
@@ -316,132 +376,76 @@ describe.skipIf(!INTERNAL_TOKEN || !HAS_MONGO)('Commit Identity Internal API', (
   }
 
   async function identity(token: string | null = INTERNAL_TOKEN) {
-    return fetch(
-      `${API_BASE}/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`,
-      {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      },
-    );
+    return fetch(`${API_BASE}/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
   }
+
+  beforeAll(async () => {
+    if (GITHUB_API_BASE) {
+      const port = Number(new URL(GITHUB_API_BASE).port || 80);
+      try {
+        githubMock = await startMockGitHubServer({ port });
+      } catch {
+        githubMock = null;
+      }
+    }
+  });
 
   afterAll(async () => {
     const mongo = await db().catch(() => null);
     if (!mongo) return;
     await mongo.collection('cloudhosts').deleteOne({ _id: HOST_ID });
-    await mongo
-      .collection('controllers')
-      .deleteOne({ _id: new mongoose.Types.ObjectId(CONTROLLER_ID) });
-    await mongo
-      .collection('user_commit_settings')
-      .deleteMany({ userId: HOST_USER_ID.toString() });
-    await mongo.collection('githubaccounts').deleteMany({
-      _id: ACCOUNT_ID,
-    });
+    await mongo.collection('controllers').deleteOne({ _id: new mongoose.Types.ObjectId(CONTROLLER_ID) });
+    await mongo.collection('user_commit_settings').deleteMany({ userId: HOST_USER_ID.toString() });
+    await githubMock?.close();
+    githubMock = null;
   });
 
-  it('T-CI-API1: 无凭据 / 非法凭据 401（永不 404 仅针对已鉴权请求）', async () => {
+  it('T-IC-API1: 双鉴权 401 + 已鉴权请求永不 404（未知主机 200 unset）', async () => {
     expect((await identity(null)).status).toBe(401);
     expect((await identity('wrong-token')).status).toBe(401);
-  });
 
-  it('T-CI-API3: 主机不存在 / 未保存设置均 200 unset', async () => {
     const unknown = await fetch(
       `${API_BASE}/internal/cloud-hosts/${new mongoose.Types.ObjectId().toString()}/commit-identity`,
       { method: 'POST', headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` } },
     );
     expect(unknown.status).toBe(200);
     expect(await unknown.json()).toEqual({ mode: 'unset' });
-
-    await seedHost();
-    const unsaved = await identity();
-    expect(unsaved.status).toBe(200);
-    expect(await unsaved.json()).toEqual({ mode: 'unset' });
   });
 
-  it('T-CI-API4: 帐号解绑 / 越权降级 unset', async () => {
-    await setSetting({
-      committerMode: 'human_only',
-      committerType: 'github_account',
-      githubAccountId: ACCOUNT_ID,
-    });
+  it('T-IC-API2: 恒 bot（无视个人设置）', async () => {
+    await seedHost();
+    // 个人设置即便为 custom，也不影响云电脑身份
+    await setSetting({ committerType: 'custom', customName: 'Zhang San', customEmail: 'zhangsan@example.com' });
+
+    const response = await identity();
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    if (!GITHUB_API_BASE) {
+      // 无 bot mock 时优雅降级 unset（容器不写身份）
+      expect(body).toEqual({ mode: 'unset' });
+      return;
+    }
+    expect(body).toMatchObject({ mode: 'agent_only' });
+    expect(body.name).toBe('zag-test-bot[bot]');
+    expect(body.email).toBe('424242+zag-test-bot[bot]@users.noreply.github.com');
+  });
+
+  it('T-IC-API3: bot 解析失败兜底 { mode: "unset" }', async () => {
+    if (!githubMock) return; // 无 mock 时无法注入失败
+    githubMock.failNext(500, 2);
     const response = await identity();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ mode: 'unset' });
   });
 
-  it('T-CI-API5: human_only 自定义提交人全字段；unset 缺省字段', async () => {
-    await setSetting({
-      committerMode: 'human_only',
-      committerType: 'custom',
-      customName: 'Zhang San',
-      customEmail: 'zhangsan@example.com',
-    });
+  it('T-IC-API4: 响应恒含 mode 包络（兼容 2.11.x 容器 consume）', async () => {
     const response = await identity();
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      mode: 'human_only',
-      name: 'Zhang San',
-      email: 'zhangsan@example.com',
-    });
-
-    await setSetting({ committerMode: 'unset', committerType: 'unset' });
-    const unset = await identity();
-    const body = (await unset.json()) as Record<string, unknown>;
-    expect(body).toEqual({ mode: 'unset' });
-    expect(Object.keys(body)).toEqual(['mode']);
-  });
-
-  it.skipIf(!process.env.GITHUB_API_BASE)(
-    'T-CI-API2: co_author 返回提交人 + bot 全字段（GitHub mock）',
-    async () => {
-      const mongo = await db();
-      await mongo.collection('githubaccounts').insertOne({
-        _id: ACCOUNT_ID,
-        userId: HOST_USER_ID.toString(),
-        tenantId: HOST_USER_ID.toString(),
-        githubUserId: 777,
-        githubLogin: 'octocat',
-        githubAvatarUrl: null,
-        accessToken: 'encrypted-token',
-        tokenExpiresAt: null,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-      await mongo.collection('cloud_host_github_bindings').insertOne({
-        userId: HOST_USER_ID,
-        tenantId: HOST_USER_ID,
-        controllerId: new mongoose.Types.ObjectId(CONTROLLER_ID),
-        accountId: ACCOUNT_ID,
-        repoFullName: 'octocat/hello',
-        targetPath: '/home/worker/workspace/octocat/hello',
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-      await setSetting({
-        committerMode: 'co_author',
-        committerType: 'github_account',
-        githubAccountId: ACCOUNT_ID,
-      });
-
-      const response = await identity();
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({
-        mode: 'co_author',
-        name: 'octocat',
-        email: '777+octocat@users.noreply.github.com',
-        coAuthorName: 'zag-test-bot[bot]',
-        coAuthorEmail: '424242+zag-test-bot[bot]@users.noreply.github.com',
-      });
-
-      await mongo
-        .collection('cloud_host_github_bindings')
-        .deleteMany({ controllerId: new mongoose.Types.ObjectId(CONTROLLER_ID) });
-    },
-  );
-
-  afterAll(async () => {
-    await githubMock?.close();
-    githubMock = null;
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(typeof body.mode).toBe('string');
+    expect(['agent_only', 'unset']).toContain(body.mode);
   });
 });

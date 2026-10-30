@@ -6,7 +6,7 @@ type: Permanent
 # Commit 作者设置优化 - 实现计划
 
 **关联 Proposal**: `docs/engineering/proposals/20261029-feat-commit-author-settings-optimization.md`（v1.0）
-**关联 PRD**: `docs/product/draft/20261029-commit-author-settings-optimization.md`（v1.0）
+**关联 PRD**: `docs/product/shipping/20261029-commit-author-settings-optimization.md`（v1.0）
 **需求来源**: GitHub Issue Deliay/z-agent-gear#368
 **需求总分支（feat-branch）**: `feat/commit-author-settings-optimization`（需求总 PR #374）
 **实现分支**: `feat/commit-author-settings-optimization-impl`（基于需求总分支拉起）
@@ -321,7 +321,7 @@ cd tests/api && npm test -- github workflow-issues multi-tenant
 | `tests/api/AGENTS.md` | 修改 | `github.test.ts`/`workflow-issues.test.ts` 新增 describe 段与用例编号 |
 | `tests/e2e/AGENTS.md` | 修改 | 新增 `settings-git.spec.ts` 场景说明 |
 | `docs/engineering/AGENTS.md` | 修改 | 实现计划索引登记本文件（随需求总 PR 提交） |
-| `docs/product/draft/20261029-commit-author-settings-optimization.md` | 修改 | 生命周期 `draft/` → `shipping/`（实现中），随实现 PR 移动 |
+| `docs/product/shipping/20261029-commit-author-settings-optimization.md` | 修改 | 生命周期 `draft/` → `shipping/`（实现中），随实现 PR 移动 |
 
 ### PR 收口
 
