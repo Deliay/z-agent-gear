@@ -465,6 +465,32 @@ export class WorkspaceService {
       globalWorkspaceId: global ? String(global._id) : String(workspace._id),
     };
   }
+
+  /**
+   * 系统链路（事件回调 / 后台 runner）按工作区 id 构造上下文。
+   *
+   * 不做成员校验：调用方已完成归属判定（事件按实例 / 联动记录反查）。
+   * 角色固定 `admin`、`readOnly=false`：系统事件推进不受「全局工作区 + developer 只读」拦截，
+   * 同时让下游 `tenant-scope` 用工作区所属租户（而非 `userId`）注入 `tenantId`。
+   */
+  async systemWorkspaceContext(workspaceId: string): Promise<WorkspaceContext | undefined> {
+    if (!workspaceId || !mongoose.isValidObjectId(workspaceId)) return undefined;
+    const workspace = await Workspace.findById(workspaceId).select('_id tenantId type').lean();
+    if (!workspace) return undefined;
+    const tenantId = String(workspace.tenantId);
+    const type = workspace.type === 'global' ? 'global' : 'normal';
+    const global = await Workspace.findOne({ tenantId, type: 'global' })
+      .select('_id')
+      .lean();
+    return {
+      id: String(workspace._id),
+      tenantId,
+      type,
+      role: 'admin',
+      readOnly: false,
+      globalWorkspaceId: global ? String(global._id) : type === 'global' ? String(workspace._id) : '',
+    };
+  }
 }
 
 export const workspaceService = new WorkspaceService();
