@@ -82,6 +82,8 @@ export class SessionCommandService {
             branch?: string;
             message?: string;
             mcpEndpoint?: { token: string; serverNames: string[] };
+            /** Worktree 级提交人（可选；缺省不下发，worker 沿用容器级 bot）。仅此白名单字段，不开放任意 git 命令。 */
+            committer?: { name: string; email: string };
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {
@@ -123,7 +125,7 @@ export class SessionCommandService {
           } else if (command.type === 'fs:mkdir' && command.requestId && command.controllerId && command.parentPath && command.folderName) {
             await fsMkdirService.handleMkdir(command.requestId, command.controllerId, command.parentPath as string, command.folderName as string);
           } else if (command.type === 'git:worktree:add' && command.requestId && command.controllerId && command.repoPath && command.worktreePath && command.branch) {
-            await worktreeService.handleAdd(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, command.branch as string);
+            await worktreeService.handleAdd(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, command.branch as string, command.committer);
           } else if (command.type === 'git:worktree:remove' && command.requestId && command.controllerId && command.repoPath && command.worktreePath) {
             const force = (command as Record<string, unknown>).force === true;
             await worktreeService.handleRemove(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, force);

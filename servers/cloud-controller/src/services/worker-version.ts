@@ -14,21 +14,23 @@ export const MIN_WORKER_VERSION = '2.2.0';
 /**
  * 云电脑（`purpose=harness`）最低兼容版本：双连接 + `harness prepare` 自 2.5.0 起提供（worker 用户 + 保活退出码 42 自 2.10.0 起）。
  * 普通容器门禁不上调（仍为 `MIN_WORKER_VERSION`），按 purpose 分流。
+ * 2.12.0 起提供 Worktree 级提交人写入（`git:worktree:add` 的 `committer`），保证新拉起容器具备 worktree 身份能力。
  */
-export const MIN_HARNESS_WORKER_VERSION = '2.10.0';
+export const MIN_HARNESS_WORKER_VERSION = '2.12.0';
 
 /** Kimi Code harness 最低兼容版本：使用前 `kimi login` 登录闸门自 2.8.0 起提供。 */
 export const MIN_KIMI_HARNESS_WORKER_VERSION = '2.8.0';
 
 /**
  * DeepSeek Harness 最低兼容版本：`harness prepare` 的 deepseek_harness 注入分流自 2.9.0 起；
- * `cordis.patch.yml` 的 insert 形态 `header-masq` 配置注入（dsh-header-masq 会话标识请求头）自 2.11.0 起。
+ * `cordis.patch.yml` 的 insert 形态 `header-masq` 配置注入（dsh-header-masq 会话标识请求头）自 2.11.0 起；
+ * 随 harness 基线提升至 2.12.0（worktree committer 能力）。
  */
-export const MIN_DEEPSEEK_HARNESS_WORKER_VERSION = '2.11.0';
+export const MIN_DEEPSEEK_HARNESS_WORKER_VERSION = '2.12.0';
 
 /**
  * 按 harness 类型细分的最低版本（计划 §3 A7）：仅列出的类型才上调，
- * 未列出的类型沿用 `MIN_HARNESS_WORKER_VERSION`（仅 opencode 的运行仍为 2.10.0）。
+ * 未列出的类型沿用 `MIN_HARNESS_WORKER_VERSION`（仅 opencode 的运行亦为 2.12.0）。
  */
 export const MIN_HARNESS_VERSION_BY_TYPE: Record<string, string> = {
   kimi_code: MIN_KIMI_HARNESS_WORKER_VERSION,
@@ -141,8 +143,8 @@ export function maxWorkerVersion(a: string, b: string, fallback = MIN_HARNESS_WO
 /**
  * 按 harness 类型取最低版本（计划 §3 A7）：逐类型与
  * `MIN_HARNESS_VERSION_BY_TYPE` 比对后取最大，缺省/未知类型回退
- * `MIN_HARNESS_WORKER_VERSION`。以 2.10.0 为底取 max 后：仅 opencode / kimi_code
- * 的组合恒为 `2.10.0`，含 `deepseek_harness` 的组合为 `2.11.0`（header-masq 配置注入）。
+ * `MIN_HARNESS_WORKER_VERSION`。以 2.12.0 为底取 max 后：opencode / kimi_code / deepseek_harness
+ * 的组合恒为 `2.12.0`（kimi_code 的 2.8.0 低于基线，deepseek_harness 与基线同为 2.12.0）。
  */
 export function harnessMinVersion(harnessTypes: readonly string[]): string {
   let minimum: string = MIN_HARNESS_WORKER_VERSION;
