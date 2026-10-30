@@ -304,6 +304,44 @@ describe('WorkflowOrchestrator', () => {
     );
   });
 
+  describe('T-WF-C2 节点会话复用实例 worktreeCommitter 快照', () => {
+    type WithCommitter = ReturnType<typeof makeInstance> & {
+      worktreeCommitterName?: string | null;
+      worktreeCommitterEmail?: string | null;
+    };
+
+    function aiInstance(): WithCommitter {
+      return makeInstance([
+        makeNode(),
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'READY', dependsOn: ['n1'] }),
+      ]) as WithCommitter;
+    }
+
+    it('C2a: 实例快照非空 → session.create 显式传入 worktreeCommitter（节点级 worktree 复用）', async () => {
+      const instance = aiInstance();
+      instance.worktreeCommitterName = 'Deliay';
+      instance.worktreeCommitterEmail = 'deliay@example.com';
+
+      await workflowOrchestrator.startNodeSession(instance, instance.nodes[1]);
+
+      expect(sessionService.create).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          worktreeCommitter: { name: 'Deliay', email: 'deliay@example.com' },
+        }),
+      );
+    });
+
+    it('C2b: 快照缺失/为 null → 显式传 null（不触发会话创建者实时解析）', async () => {
+      const instance = aiInstance();
+
+      await workflowOrchestrator.startNodeSession(instance, instance.nodes[1]);
+
+      const call = vi.mocked(sessionService.create).mock.calls[0][1] as Record<string, unknown>;
+      expect(call).toHaveProperty('worktreeCommitter', null);
+    });
+  });
+
   it('O8: 节点完成时先触发下游 start（新建会话）再结束本会话', async () => {
     const instance = makeInstance([
       makeNode(),

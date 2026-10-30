@@ -15,7 +15,6 @@ import { WorkflowTemplate } from '../models/workflow-template.js';
 import { Provider } from '../models/provider.js';
 import { Model } from '../models/model.js';
 import { GitHubAccount } from '../models/github-account.js';
-import { UserCommitSetting } from '../models/user-commit-setting.js';
 import type { TenantRole, WorkspaceContext } from './workspace-context.js';
 
 /** 错误文案白名单（提案 §3.1，逐字；不新增变体）。 */
@@ -268,7 +267,8 @@ export class WorkspaceService {
     return result.deletedCount > 0;
   }
 
-  /** 删除保护：11 集合任一持有资源即拒绝（接受与资源创建的既有 TOCTOU 窗口）。 */
+  /** 删除保护：10 集合任一持有资源即拒绝（接受与资源创建的既有 TOCTOU 窗口）。
+   *  注：Commit 设置自本需求起为成员级（键 userId、无 workspaceId 维度），不再计入工作区资源。 */
   async hasResources(workspaceId: string): Promise<boolean> {
     const objectId = new mongoose.Types.ObjectId(workspaceId);
     const counts = await Promise.all([
@@ -282,7 +282,6 @@ export class WorkspaceService {
       Provider.countDocuments({ workspaceId: objectId }),
       Model.countDocuments({ workspaceId: objectId }),
       GitHubAccount.countDocuments({ workspaceId }),
-      UserCommitSetting.countDocuments({ workspaceId }),
     ]);
     return counts.some((count) => count > 0);
   }

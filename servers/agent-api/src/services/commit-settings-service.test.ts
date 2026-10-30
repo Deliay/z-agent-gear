@@ -1,37 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../models/user-commit-setting.js', () => ({
-  COMMITTER_MODES: ['agent_only', 'co_author', 'human_only', 'unset'],
-  COMMITTER_TYPES: ['github_account', 'custom', 'unset'],
-  UserCommitSetting: { findOne: vi.fn(), findOneAndUpdate: vi.fn() },
-}));
-vi.mock('../models/github-account.js', () => ({
-  GitHubAccount: { findOne: vi.fn(), findById: vi.fn() },
-}));
-vi.mock('../models/cloud-host.js', () => ({
-  CloudHost: { findOne: vi.fn() },
-}));
-vi.mock('../models/cloud-host-github-binding.js', () => ({
-  CloudHostGithubBinding: { findOne: vi.fn() },
-}));
-vi.mock('../models/cloud-container.js', () => ({
-  CloudContainer: { findOne: vi.fn() },
-}));
-vi.mock('../models/workspace.js', () => ({
-  Workspace: { findById: vi.fn(), findOne: vi.fn() },
-}));
-vi.mock('./github.js', () => ({
-  githubService: { resolveAppBotIdentity: vi.fn() },
+const h = vi.hoisted(() => ({
+  settingFindOne: vi.fn(),
+  settingFindOneAndUpdate: vi.fn(),
+  userFindById: vi.fn(),
+  resolveAppBotIdentity: vi.fn(),
+  workspaceContext: undefined as unknown,
 }));
 
-import { UserCommitSetting } from '../models/user-commit-setting.js';
-import { GitHubAccount } from '../models/github-account.js';
-import { CloudHost } from '../models/cloud-host.js';
-import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
-import { CloudContainer } from '../models/cloud-container.js';
-import { Workspace } from '../models/workspace.js';
-import { githubService } from './github.js';
-import { runWithWorkspace } from './workspace-context.js';
+vi.mock('../models/user-commit-setting.js', () => ({
+  COMMITTER_TYPES: ['custom', 'unset'],
+  UserCommitSetting: {
+    findOne: h.settingFindOne,
+    findOneAndUpdate: h.settingFindOneAndUpdate,
+  },
+}));
+vi.mock('../models/user.js', () => ({
+  User: { findById: h.userFindById },
+}));
+vi.mock('./github.js', () => ({
+  githubService: { resolveAppBotIdentity: h.resolveAppBotIdentity },
+}));
+vi.mock('./workspace-context.js', () => ({
+  getWorkspaceContext: () => h.workspaceContext,
+}));
+
 import {
   CommitSettingsService,
   COMMIT_SETTINGS_ERRORS,
@@ -39,26 +32,8 @@ import {
 } from './commit-settings-service.js';
 
 const USER_ID = '507f1f77bcf86cd799439011';
-const ACCOUNT_ID = '507f1f77bcf86cd799439012';
-const OTHER_ACCOUNT_ID = '507f1f77bcf86cd799439013';
-const CONTROLLER_ID = '507f1f77bcf86cd799439014';
-const HOST_ID = '507f1f77bcf86cd799439015';
-const TENANT_ID = '507f1f77bcf86cd799439016';
-
-function lean<T>(value: T) {
-  return { lean: vi.fn().mockResolvedValue(value) } as never;
-}
-
-function hostDoc(overrides: Record<string, unknown> = {}) {
-  return {
-    _id: HOST_ID,
-    controllerId: CONTROLLER_ID,
-    userId: USER_ID,
-    tenantId: TENANT_ID,
-    deletedAt: null,
-    ...overrides,
-  };
-}
+const OTHER_USER_ID = '507f1f77bcf86cd799439021';
+const TENANT_ID = '507f1f77bcf86cd799439031';
 
 const BOT = {
   slug: 'zag-bot',
@@ -67,503 +42,189 @@ const BOT = {
   email: '123456+zag-bot[bot]@users.noreply.github.com',
 };
 
-function mockHost(host: Record<string, unknown> | null = hostDoc()) {
-  vi.mocked(CloudHost.findOne).mockReturnValue(lean(host) as never);
+function lean<T>(value: T) {
+  return { lean: vi.fn().mockResolvedValue(value) } as never;
+}
+
+function selectLean<T>(value: T) {
+  return { select: vi.fn(() => lean(value)) } as never;
 }
 
 function mockSetting(setting: Record<string, unknown> | null) {
-  vi.mocked(UserCommitSetting.findOne).mockReturnValue(lean(setting) as never);
+  h.settingFindOne.mockReturnValue(lean(setting));
 }
 
-function mockAccount(account: Record<string, unknown> | null) {
-  vi.mocked(GitHubAccount.findOne).mockReturnValue(lean(account) as never);
+function service() {
+  return new CommitSettingsService();
 }
-
-function mockSaved(setting: Record<string, unknown>) {
-  vi.mocked(UserCommitSetting.findOneAndUpdate).mockReturnValue(lean(setting) as never);
-}
-
-function mockBinding(binding: Record<string, unknown> | null) {
-  vi.mocked(CloudHostGithubBinding.findOne).mockReturnValue(lean(binding) as never);
-}
-
-function mockContainer(installedWorkloads: Array<Record<string, unknown>>) {
-  vi.mocked(CloudContainer.findOne).mockReturnValue({
-    sort: vi.fn().mockReturnValue(lean({ installedWorkloads })),
-  } as never);
-}
-
-const service = new CommitSettingsService();
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockContainer([]);
-  mockBinding(null);
-  vi.mocked(githubService.resolveAppBotIdentity).mockResolvedValue(BOT);
+  h.workspaceContext = undefined;
+  h.userFindById.mockReturnValue(selectLean({ tenantId: TENANT_ID }));
 });
 
-describe('CommitSettingsService CRUD', () => {
-  it('T-CS1: 从未保存返回双 UNSET 默认值', async () => {
+describe('commit settings service', () => {
+  it('T-CS-P1: 成员级默认值为 UNSET', async () => {
     mockSetting(null);
-    const result = await service.getCommitSettings(USER_ID);
-    expect(result).toEqual({
-      committerMode: 'UNSET',
-      committerType: 'UNSET',
-      githubAccountId: null,
+    const view = await service().getCommitSettings(USER_ID);
+    expect(view).toEqual({ committerType: 'UNSET', customName: null, customEmail: null });
+    expect(h.settingFindOne).toHaveBeenCalledWith({ userId: USER_ID });
+  });
+
+  it('T-CS-P1b: 已保存 custom 设置按 userId 点查返回', async () => {
+    mockSetting({
+      userId: USER_ID,
+      committerType: 'custom',
+      customName: 'Alice',
+      customEmail: 'alice@example.com',
+    });
+    const view = await service().getCommitSettings(USER_ID);
+    expect(view).toEqual({
+      committerType: 'CUSTOM',
+      customName: 'Alice',
+      customEmail: 'alice@example.com',
+    });
+  });
+
+  it('T-CS-P2: 校验白名单仅 invalid custom committer（矩阵）', async () => {
+    const svc = service();
+    const base = { committerType: 'custom' };
+
+    await expect(svc.updateCommitSettings(USER_ID, { ...base, customName: '', customEmail: 'a@b.com' }))
+      .rejects.toThrow(COMMIT_SETTINGS_ERRORS.invalidCustomCommitter);
+    await expect(svc.updateCommitSettings(USER_ID, { ...base, customName: 'A', customEmail: 'not-an-email' }))
+      .rejects.toThrow(COMMIT_SETTINGS_ERRORS.invalidCustomCommitter);
+    await expect(
+      svc.updateCommitSettings(USER_ID, { ...base, customName: 'A\nB', customEmail: 'a@b.com' }),
+    ).rejects.toThrow(COMMIT_SETTINGS_ERRORS.invalidCustomCommitter);
+    await expect(
+      svc.updateCommitSettings(USER_ID, { ...base, customName: 'x'.repeat(101), customEmail: 'a@b.com' }),
+    ).rejects.toThrow(COMMIT_SETTINGS_ERRORS.invalidCustomCommitter);
+    await expect(
+      svc.updateCommitSettings(USER_ID, { ...base, customName: 'A', customEmail: `${'x'.repeat(250)}@b.com` }),
+    ).rejects.toThrow(COMMIT_SETTINGS_ERRORS.invalidCustomCommitter);
+    await expect(
+      svc.updateCommitSettings(USER_ID, { committerType: 'github_account' } as never),
+    ).rejects.toThrow(COMMIT_SETTINGS_ERRORS.invalidCustomCommitter);
+    expect(h.settingFindOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('T-CS-P2b: custom 保存 trim 后落库，unset 清空 custom 字段', async () => {
+    h.settingFindOneAndUpdate.mockReturnValue(
+      lean({ userId: USER_ID, committerType: 'custom', customName: 'Alice', customEmail: 'a@b.com' }),
+    );
+    await service().updateCommitSettings(USER_ID, {
+      committerType: 'CUSTOM',
+      customName: '  Alice  ',
+      customEmail: '  a@b.com  ',
+    });
+    const [, update] = h.settingFindOneAndUpdate.mock.calls[0];
+    expect(update.$set).toMatchObject({
+      userId: USER_ID,
+      tenantId: TENANT_ID,
+      committerType: 'custom',
+      customName: 'Alice',
+      customEmail: 'a@b.com',
+    });
+    expect(update.$set).not.toHaveProperty('githubAccountId');
+    expect(update.$set).not.toHaveProperty('committerMode');
+
+    h.settingFindOneAndUpdate.mockReturnValue(
+      lean({ userId: USER_ID, committerType: 'unset', customName: null, customEmail: null }),
+    );
+    const unsetView = await service().updateCommitSettings(USER_ID, { committerType: 'UNSET' });
+    expect(unsetView).toEqual({ committerType: 'UNSET', customName: null, customEmail: null });
+    const unsetUpdate = h.settingFindOneAndUpdate.mock.calls[1][1];
+    expect(unsetUpdate.$set).toMatchObject({
+      committerType: 'unset',
       customName: null,
       customEmail: null,
-      source: 'UNSET',
-      readOnly: false,
     });
   });
 
-  it('T-CS2: CO_AUTHOR/HUMAN_ONLY + UNSET 提交人 → committer is required', async () => {
-    for (const mode of ['CO_AUTHOR', 'HUMAN_ONLY']) {
-      await expect(
-        service.updateCommitSettings(USER_ID, { committerMode: mode, committerType: 'UNSET' }),
-      ).rejects.toThrow(COMMIT_SETTINGS_ERRORS.committerRequired);
-    }
-    expect(UserCommitSetting.findOneAndUpdate).not.toHaveBeenCalled();
-  });
-
-  it('T-CS2: GITHUB_ACCOUNT 缺失 / 越权帐号 → invalid github account', async () => {
-    await expect(
-      service.updateCommitSettings(USER_ID, {
-        committerMode: 'HUMAN_ONLY',
-        committerType: 'GITHUB_ACCOUNT',
-      }),
-    ).rejects.toThrow(COMMIT_SETTINGS_ERRORS.invalidGithubAccount);
-
-    mockAccount(null);
-    await expect(
-      service.updateCommitSettings(USER_ID, {
-        committerMode: 'HUMAN_ONLY',
-        committerType: 'GITHUB_ACCOUNT',
-        githubAccountId: OTHER_ACCOUNT_ID,
-      }),
-    ).rejects.toThrow(COMMIT_SETTINGS_ERRORS.invalidGithubAccount);
-    expect(GitHubAccount.findOne).toHaveBeenCalledWith({
-      _id: OTHER_ACCOUNT_ID,
-      userId: USER_ID,
+  it('T-CS-P3: upsert 幂等（同 userId 二次保存覆盖、不重复建行）', async () => {
+    h.settingFindOneAndUpdate.mockReturnValue(
+      lean({ userId: USER_ID, committerType: 'custom', customName: 'A', customEmail: 'a@b.com' }),
+    );
+    await service().updateCommitSettings(USER_ID, {
+      committerType: 'CUSTOM',
+      customName: 'A',
+      customEmail: 'a@b.com',
     });
-  });
+    h.settingFindOneAndUpdate.mockReturnValue(
+      lean({ userId: USER_ID, committerType: 'custom', customName: 'B', customEmail: 'b@b.com' }),
+    );
+    await service().updateCommitSettings(USER_ID, {
+      committerType: 'CUSTOM',
+      customName: 'B',
+      customEmail: 'b@b.com',
+    });
 
-  it('T-CS2: CUSTOM 空 / 超长 / 换行 / 非法邮箱 → invalid custom committer', async () => {
-    const cases = [
-      { customName: '  ', customEmail: 'a@b.com' },
-      { customName: 'a'.repeat(101), customEmail: 'a@b.com' },
-      { customName: 'a\nb', customEmail: 'a@b.com' },
-      { customName: 'name', customEmail: '' },
-      { customName: 'name', customEmail: 'not-an-email' },
-      { customName: 'name', customEmail: `${'a'.repeat(250)}@b.com` },
-    ];
-    for (const input of cases) {
-      await expect(
-        service.updateCommitSettings(USER_ID, {
-          committerMode: 'HUMAN_ONLY',
-          committerType: 'CUSTOM',
-          ...input,
-        }),
-      ).rejects.toThrow(COMMIT_SETTINGS_ERRORS.invalidCustomCommitter);
+    expect(h.settingFindOneAndUpdate).toHaveBeenCalledTimes(2);
+    for (const [filter] of h.settingFindOneAndUpdate.mock.calls) {
+      expect(filter).toEqual({ userId: USER_ID });
     }
   });
 
-  it('T-CS2: 校验规则与服务端同源（trim / 长度 / 邮箱正则）', () => {
-    expect(isValidCustomCommitter(' name ', ' a@b.com ')).toEqual({
-      ok: true,
-      name: 'name',
+  it('T-CS-P4: resolveWorktreeCommitter 三态（custom 合法 / unset / 非法）', async () => {
+    const svc = service();
+
+    mockSetting({ userId: USER_ID, committerType: 'custom', customName: 'Alice', customEmail: 'a@b.com' });
+    await expect(svc.resolveWorktreeCommitter(USER_ID)).resolves.toEqual({
+      name: 'Alice',
       email: 'a@b.com',
     });
-    expect(isValidCustomCommitter('a'.repeat(100), 'a@b.com').ok).toBe(true);
-    expect(isValidCustomCommitter('a'.repeat(101), 'a@b.com').ok).toBe(false);
-    expect(isValidCustomCommitter('name', 'a@b').ok).toBe(false);
-    expect(isValidCustomCommitter('name\r', 'a@b.com').ok).toBe(false);
-    expect(isValidCustomCommitter('name\0', 'a@b.com').ok).toBe(false);
-  });
 
-  it('T-CS3: type=unset 清空全部冗余字段（mode=UNSET 不清空提交人）', async () => {
-    mockSaved({
-      committerMode: 'unset',
-      committerType: 'unset',
-      githubAccountId: null,
-      customName: null,
-      customEmail: null,
-    });
+    mockSetting({ userId: USER_ID, committerType: 'unset', customName: null, customEmail: null });
+    await expect(svc.resolveWorktreeCommitter(USER_ID)).resolves.toBeNull();
 
-    await service.updateCommitSettings(USER_ID, {
-      committerMode: 'UNSET',
-      committerType: 'UNSET',
-      githubAccountId: ACCOUNT_ID,
-      customName: 'name',
-      customEmail: 'a@b.com',
-    });
+    mockSetting({ userId: USER_ID, committerType: 'custom', customName: '', customEmail: 'bad' });
+    await expect(svc.resolveWorktreeCommitter(USER_ID)).resolves.toBeNull();
 
-    expect(UserCommitSetting.findOneAndUpdate).toHaveBeenCalledWith(
-      { userId: USER_ID },
-      {
-        $set: {
-          committerMode: 'unset',
-          committerType: 'unset',
-          githubAccountId: null,
-          customName: null,
-          customEmail: null,
-        },
-      },
-      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
-    );
-  });
-
-  it('T-CS3: GITHUB_ACCOUNT 清空自定义字段；CUSTOM 清空帐号', async () => {
-    mockAccount({ _id: ACCOUNT_ID, userId: USER_ID, githubUserId: 1, githubLogin: 'user' });
-    mockSaved({
-      committerMode: 'co_author',
-      committerType: 'github_account',
-      githubAccountId: ACCOUNT_ID,
-      customName: null,
-      customEmail: null,
-    });
-    await service.updateCommitSettings(USER_ID, {
-      committerMode: 'CO_AUTHOR',
-      committerType: 'GITHUB_ACCOUNT',
-      githubAccountId: ACCOUNT_ID,
-      customName: 'ignored',
-      customEmail: 'ignored@b.com',
-    });
-    expect(vi.mocked(UserCommitSetting.findOneAndUpdate).mock.calls[0]![1]).toEqual({
-      $set: {
-        committerMode: 'co_author',
-        committerType: 'github_account',
-        githubAccountId: expect.anything(),
-        customName: null,
-        customEmail: null,
-      },
-    });
-
-    mockSaved({
-      committerMode: 'human_only',
-      committerType: 'custom',
-      githubAccountId: null,
-      customName: 'name',
-      customEmail: 'a@b.com',
-    });
-    await service.updateCommitSettings(USER_ID, {
-      committerMode: 'HUMAN_ONLY',
-      committerType: 'CUSTOM',
-      githubAccountId: ACCOUNT_ID,
-      customName: ' name ',
-      customEmail: ' a@b.com ',
-    });
-    expect(vi.mocked(UserCommitSetting.findOneAndUpdate).mock.calls[1]![1]).toEqual({
-      $set: {
-        committerMode: 'human_only',
-        committerType: 'custom',
-        githubAccountId: null,
-        customName: 'name',
-        customEmail: 'a@b.com',
-      },
-    });
-  });
-
-  it('T-CS3: mode=UNSET + type=github_account 保留提交人（先填提交人后选模式）', async () => {
-    mockAccount({ _id: ACCOUNT_ID, userId: USER_ID, githubUserId: 1, githubLogin: 'user' });
-    mockSaved({
-      committerMode: 'unset',
-      committerType: 'github_account',
-      githubAccountId: ACCOUNT_ID,
-      customName: null,
-      customEmail: null,
-    });
-    const result = await service.updateCommitSettings(USER_ID, {
-      committerMode: 'UNSET',
-      committerType: 'GITHUB_ACCOUNT',
-      githubAccountId: ACCOUNT_ID,
-    });
-    expect(result.committerMode).toBe('UNSET');
-    expect(result.committerType).toBe('GITHUB_ACCOUNT');
-    expect(result.githubAccountId).toBe(ACCOUNT_ID);
-    expect(vi.mocked(UserCommitSetting.findOneAndUpdate).mock.calls[0]![1]).toEqual({
-      $set: expect.objectContaining({
-        committerMode: 'unset',
-        committerType: 'github_account',
-        githubAccountId: expect.anything(),
-      }),
-    });
-  });
-
-  it('T-CS4: 按 userId upsert 幂等（二次保存仍为同一 filter，不新建行）', async () => {
-    mockAccount({ _id: ACCOUNT_ID, userId: USER_ID, githubUserId: 1, githubLogin: 'user' });
-    mockSaved({
-      committerMode: 'human_only',
-      committerType: 'github_account',
-      githubAccountId: ACCOUNT_ID,
-      customName: null,
-      customEmail: null,
-    });
-    await service.updateCommitSettings(USER_ID, {
-      committerMode: 'HUMAN_ONLY',
-      committerType: 'GITHUB_ACCOUNT',
-      githubAccountId: ACCOUNT_ID,
-    });
-    await service.updateCommitSettings(USER_ID, {
-      committerMode: 'CO_AUTHOR',
-      committerType: 'GITHUB_ACCOUNT',
-      githubAccountId: ACCOUNT_ID,
-    });
-    const calls = vi.mocked(UserCommitSetting.findOneAndUpdate).mock.calls;
-    expect(calls).toHaveLength(2);
-    expect(calls[0]![0]).toEqual({ userId: USER_ID });
-    expect(calls[1]![0]).toEqual({ userId: USER_ID });
-    expect(calls.every((call) => (call[2] as Record<string, unknown>).upsert === true)).toBe(true);
-  });
-});
-
-describe('CommitSettingsService.resolveCommitIdentity', () => {
-  const githubAccount = {
-    _id: ACCOUNT_ID,
-    userId: USER_ID,
-    githubUserId: 777,
-    githubLogin: 'octocat',
-  };
-  const githubSetting = {
-    committerMode: 'human_only',
-    committerType: 'github_account',
-    githubAccountId: ACCOUNT_ID,
-  };
-  const customSetting = {
-    committerMode: 'human_only',
-    committerType: 'custom',
-    customName: 'Zhang San',
-    customEmail: 'zhangsan@example.com',
-  };
-
-  it('T-CS5: 主机不存在 / 非法 controllerId / 未保存 → unset', async () => {
-    await expect(service.resolveCommitIdentity('not-an-object-id')).resolves.toEqual({
-      mode: 'unset',
-    });
-
-    mockHost(null);
-    mockSetting(githubSetting);
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({ mode: 'unset' });
-
-    mockHost();
     mockSetting(null);
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({ mode: 'unset' });
-    expect(CloudHost.findOne).toHaveBeenCalledWith({
-      controllerId: CONTROLLER_ID,
-      deletedAt: null,
-    });
+    await expect(svc.resolveWorktreeCommitter(USER_ID)).resolves.toBeNull();
   });
 
-  it('T-CS5: 解绑 / 越权帐号降级 unset', async () => {
-    mockHost();
-    mockSetting(githubSetting);
-    mockAccount(null);
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({ mode: 'unset' });
-    expect(GitHubAccount.findOne).toHaveBeenCalledWith({
-      _id: expect.anything(),
-      userId: USER_ID,
-    });
+  it('T-CS-P5: 成员独立隔离（A/B 各自点查互不影响）', async () => {
+    const svc = service();
+    h.settingFindOne.mockImplementation((filter: { userId: string }) =>
+      lean(
+        filter.userId === USER_ID
+          ? { userId: USER_ID, committerType: 'custom', customName: 'Alice', customEmail: 'a@b.com' }
+          : { userId: OTHER_USER_ID, committerType: 'unset', customName: null, customEmail: null },
+      ),
+    );
+
+    const a = await svc.getCommitSettings(USER_ID);
+    const b = await svc.getCommitSettings(OTHER_USER_ID);
+    expect(a.committerType).toBe('CUSTOM');
+    expect(b).toEqual({ committerType: 'UNSET', customName: null, customEmail: null });
+    expect(h.settingFindOne).toHaveBeenNthCalledWith(1, { userId: USER_ID });
+    expect(h.settingFindOne).toHaveBeenNthCalledWith(2, { userId: OTHER_USER_ID });
   });
 
-  it('T-CS5: human_only = 提交人（Github 帐号 noreply 邮箱）', async () => {
-    mockHost();
-    mockSetting(githubSetting);
-    mockAccount(githubAccount);
-
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({
-      mode: 'human_only',
-      name: 'octocat',
-      email: '777+octocat@users.noreply.github.com',
-    });
-    expect(githubService.resolveAppBotIdentity).not.toHaveBeenCalled();
-  });
-
-  it('T-CS5: human_only = 自定义提交人', async () => {
-    mockHost();
-    mockSetting(customSetting);
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({
-      mode: 'human_only',
-      name: 'Zhang San',
-      email: 'zhangsan@example.com',
-    });
-  });
-
-  it('T-CS5: 非法自定义提交人降级 unset', async () => {
-    mockHost();
-    mockSetting({ ...customSetting, customEmail: 'not-an-email' });
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({ mode: 'unset' });
-  });
-
-  it('T-CS5: co_author = 提交人 + bot 身份', async () => {
-    mockHost();
-    mockSetting({ ...githubSetting, committerMode: 'co_author' });
-    mockAccount(githubAccount);
-
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({
-      mode: 'co_author',
-      name: 'octocat',
-      email: '777+octocat@users.noreply.github.com',
-      coAuthorName: BOT.name,
-      coAuthorEmail: BOT.email,
-    });
-  });
-
-  it('T-CS5: agent_only 门控命中（绑定或 installedWorkloads 含 Github）', async () => {
-    mockHost();
-    mockSetting({ ...githubSetting, committerMode: 'agent_only' });
-    mockAccount(githubAccount);
-    mockBinding({ controllerId: CONTROLLER_ID });
-
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({
+  it('T-CS-P6: resolveCloudHostIdentity 恒 bot，bot 失败兜底 unset', async () => {
+    const svc = service();
+    h.resolveAppBotIdentity.mockResolvedValue(BOT);
+    await expect(svc.resolveCloudHostIdentity()).resolves.toEqual({
       mode: 'agent_only',
       name: BOT.name,
       email: BOT.email,
     });
-    // 团队租户：绑定按 controllerId + tenantId 查找，不叠加 userId
-    expect(CloudHostGithubBinding.findOne).toHaveBeenCalledWith({
-      controllerId: CONTROLLER_ID,
-      tenantId: TENANT_ID,
+
+    h.resolveAppBotIdentity.mockResolvedValue(null);
+    await expect(svc.resolveCloudHostIdentity()).resolves.toEqual({ mode: 'unset' });
+  });
+
+  it('isValidCustomCommitter: 邮箱/长度/换行边界', () => {
+    expect(isValidCustomCommitter('Alice', 'a@b.com')).toEqual({
+      ok: true,
+      name: 'Alice',
+      email: 'a@b.com',
     });
-
-    mockBinding(null);
-    mockContainer([{ workloadId: 'w1', name: 'Github' }]);
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({
-      mode: 'agent_only',
-      name: BOT.name,
-      email: BOT.email,
-    });
-  });
-
-  it('T-CS5: agent_only 不依赖提交人字段（type=unset 仍下发 bot）', async () => {
-    mockHost();
-    mockSetting({ committerMode: 'agent_only', committerType: 'unset' });
-    mockBinding({ controllerId: CONTROLLER_ID });
-
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({
-      mode: 'agent_only',
-      name: BOT.name,
-      email: BOT.email,
-    });
-    expect(GitHubAccount.findOne).not.toHaveBeenCalled();
-  });
-
-  it('T-CS5: agent_only 门控未命中（无绑定且未安装 Github 负载）→ unset', async () => {
-    mockHost();
-    mockSetting({ ...githubSetting, committerMode: 'agent_only' });
-    mockAccount(githubAccount);
-    mockBinding(null);
-    mockContainer([{ workloadId: 'w1', name: 'Docker' }]);
-
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({ mode: 'unset' });
-    expect(githubService.resolveAppBotIdentity).not.toHaveBeenCalled();
-  });
-
-  it('T-CS5: bot 解析失败 → co_author / agent_only 均降级 unset', async () => {
-    mockHost();
-    mockAccount(githubAccount);
-    vi.mocked(githubService.resolveAppBotIdentity).mockResolvedValue(null);
-
-    mockSetting({ ...githubSetting, committerMode: 'co_author' });
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({ mode: 'unset' });
-
-    mockSetting({ ...githubSetting, committerMode: 'agent_only' });
-    mockBinding({ controllerId: CONTROLLER_ID });
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({ mode: 'unset' });
-  });
-
-  it('T-CS5: mode=unset / type=unset → unset', async () => {
-    mockHost();
-    mockSetting({ ...githubSetting, committerMode: 'unset' });
-    mockAccount(githubAccount);
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({ mode: 'unset' });
-
-    mockSetting({ committerMode: 'co_author', committerType: 'unset' });
-    await expect(service.resolveCommitIdentity(CONTROLLER_ID)).resolves.toEqual({ mode: 'unset' });
-  });
-
-  it('T-CS6: unset 响应仅含 mode；co_author 才含 coAuthor*', async () => {
-    mockHost();
-    mockSetting({ ...githubSetting, committerMode: 'unset' });
-    mockAccount(githubAccount);
-    const unset = await service.resolveCommitIdentity(CONTROLLER_ID);
-    expect(Object.keys(unset)).toEqual(['mode']);
-
-    mockSetting({ ...githubSetting, committerMode: 'co_author' });
-    const coAuthor = await service.resolveCommitIdentity(CONTROLLER_ID);
-    expect(Object.keys(coAuthor).sort()).toEqual([
-      'coAuthorEmail',
-      'coAuthorName',
-      'email',
-      'mode',
-      'name',
-    ]);
-  });
-
-  it('T-CSI2: 三段继承 本工作区 → 全局工作区 → unset', async () => {
-    const WS = '507f1f77bcf86cd799439021';
-    const GLOBAL_WS = '507f1f77bcf86cd799439022';
-    const TENANT = '507f1f77bcf86cd799439023';
-
-    mockHost({ ...hostDoc(), resourceWorkspaceId: WS });
-    // 本工作区已设置
-    mockSetting({ ...githubSetting, committerMode: 'human_only' });
-    mockAccount(githubAccount);
-    vi.mocked(GitHubAccount.findById).mockReturnValue(lean(githubAccount) as never);
-    const own = await service.resolveCommitIdentity(CONTROLLER_ID);
-    expect(own).toMatchObject({ mode: 'human_only', name: githubAccount.githubLogin });
-
-    // 本工作区未设置 → 全局工作区已设置
-    vi.mocked(UserCommitSetting.findOne).mockReset();
-    vi.mocked(UserCommitSetting.findOne)
-      .mockReturnValueOnce(lean(null) as never)
-      .mockReturnValueOnce(lean({ ...githubSetting, committerMode: 'human_only' }) as never);
-    vi.mocked(Workspace.findById).mockReturnValue({
-      select: () => lean({ tenantId: TENANT, type: 'normal' }),
-    } as never);
-    vi.mocked(Workspace.findOne).mockReturnValue({
-      select: () => lean({ _id: GLOBAL_WS }),
-    } as never);
-    const inherited = await service.resolveCommitIdentity(CONTROLLER_ID);
-    expect(inherited).toMatchObject({ mode: 'human_only', name: githubAccount.githubLogin });
-    expect(UserCommitSetting.findOne).toHaveBeenNthCalledWith(2, { workspaceId: GLOBAL_WS });
-
-    // 两级均未设置 → unset
-    vi.mocked(UserCommitSetting.findOne).mockReset();
-    vi.mocked(UserCommitSetting.findOne).mockReturnValue(lean(null) as never);
-    const unset = await service.resolveCommitIdentity(CONTROLLER_ID);
-    expect(unset).toEqual({ mode: 'unset' });
-  });
-
-  it('T-CS7（阻断-B）: 普通工作区可选用本租户全局共享 GitHubAccount', async () => {
-    vi.mocked(GitHubAccount.findById).mockReturnValue(
-      lean({ ...githubAccount, workspaceId: 'ws-global' }) as never,
-    );
-    mockSaved({ ...githubSetting, githubAccountId: ACCOUNT_ID });
-
-    await runWithWorkspace(
-      {
-        id: 'ws-normal',
-        tenantId: 'tenant-1',
-        type: 'normal',
-        role: 'developer',
-        readOnly: false,
-        globalWorkspaceId: 'ws-global',
-      },
-      async () => {
-        const view = await service.updateCommitSettings(USER_ID, {
-          committerMode: 'HUMAN_ONLY',
-          committerType: 'GITHUB_ACCOUNT',
-          githubAccountId: ACCOUNT_ID,
-        });
-        expect(view.committerType).toBe('GITHUB_ACCOUNT');
-      },
-    );
-    expect(UserCommitSetting.findOneAndUpdate).toHaveBeenCalledWith(
-      { workspaceId: 'ws-normal' },
-      expect.objectContaining({
-        $set: expect.objectContaining({ workspaceId: 'ws-normal', tenantId: 'tenant-1' }),
-      }),
-      expect.objectContaining({ upsert: true }),
-    );
+    expect(isValidCustomCommitter('A', 'a\r@b.com').ok).toBe(false);
+    expect(isValidCustomCommitter('A', 'a\0@b.com').ok).toBe(false);
+    expect(isValidCustomCommitter('  ', 'a@b.com').ok).toBe(false);
   });
 });

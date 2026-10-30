@@ -120,19 +120,22 @@ npm test
 
 > T-CR01（绑定即首同步）的出站断言由 `servers/agent-api/src/services/workflow/tool-handlers.test.ts` 与 `pr-check-run-sync.test.ts` 覆盖（本套件不重复建 PR 工具链）。
 
-### Commit 设置与提交身份 (`agent-api/github.test.ts`)
+### Commit 设置与提交身份（成员级）(`agent-api/github.test.ts`)
 
 | 测试 | 描述 |
 |------|------|
-| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回双 UNSET |
-| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人全字段（trim 归一） |
-| T-CS-API3 | 白名单错误逐字：committer required / invalid github account / invalid custom committer |
-| T-CS-API4 | 归一落库：mode=UNSET 不清提交人、type=UNSET 清空冗余字段 |
-| T-CI-API1 | `POST /internal/cloud-hosts/:id/commit-identity` 无 / 非法凭据 401 |
-| T-CI-API2 | `co_author` 返回提交人 + bot 全字段（需 `GITHUB_API_BASE` 指向 mock-github-server） |
-| T-CI-API3 | 主机不存在 / 未保存设置均 200 `{mode:'unset'}`（永不 404） |
-| T-CI-API4 | 帐号解绑 / 越权降级 unset |
-| T-CI-API5 | unset 响应缺省字段（仅 mode） |
+| T-CS-R1~R4（`services/commit-settings-service.real.test.ts`，真库） | 跨工作区上下文成员级：团队保存→个人读取同一份；个人保存→团队二次保存覆盖不撞键不静默丢失；团队保存→无 ALS 解析 `resolveWorktreeCommitter` 正确；迁移 019 存量行在团队上下文可读且署名逐字一致 |
+| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回 `{committerType:'UNSET',customName:null,customEmail:null}` |
+| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人（trim 归一）；落库断言 `tenantId`=成员归属租户、单行、无 `workspaceId`/`committerMode` 残留 |
+| T-CS-API3 | 白名单仅 `invalid custom committer` 逐字 + 矩阵（空名 / 非法邮箱 / 换行 / >100）；`GITHUB_ACCOUNT` 已在 GraphQL 枚举层拒绝 |
+| T-CS-API4 | 成员级隔离：A 保存后 B 仍为 UNSET，B 保存不影响 A |
+| T-CS-API5 | `personalGithubAccounts` 仅返回个人租户绑定帐号（排除普通工作区副本） |
+| T-IC-API1 | `POST /internal/cloud-hosts/:id/commit-identity` 无 / 非法凭据 401；已鉴权未知主机仍 200（永不 404） |
+| T-IC-API2 | 恒 bot：个人设置为 custom 也不影响云电脑身份（需 `GITHUB_API_BASE`，缺省时断言 `{mode:'unset'}` 降级） |
+| T-IC-API3 | bot 解析失败 → `{mode:'unset'}`（`failNext` 注入） |
+| T-IC-API4 | 响应恒含 `mode` 包络（兼容 2.11.x 容器 consume） |
+| T-WF-API1/2（`workflow.test.ts`） | 实例化落 worktree 提交人快照并随 `git:worktree:add` 下发 `committer`；节点级 Worktree 复用实例快照（成员中途改设置不生效） |
+| T-GH-API1~3（`github-issues-webhook.test.ts`） | Issue 触发人 sender 落库与 `triggerUserId` 匹配；触发人自定义提交人优先；未识别回退 GitHub 身份（需真实云电脑 + `MONGODB_URI`） |
 
 > `tests/api/src/mock-github-server.ts` 提供 `GET /app`（slug）与 `GET /users/{slug}[bot]`（id）mock，
 > 并支持 `failNext` 注入失败（60s 失败 sentinel / 降级路径）。
@@ -183,9 +186,9 @@ npm test
 |------|------|
 | T-WS-API1 缺省上下文 | 无 `x-workspace-id` 回退个人租户全局工作区（`myWorkspaces` 唯一、role=admin、readOnly=false），providers/models 可直接查询（与一期一致）；显式发送个人全局 id 等价 |
 | T-WS-API2 非法/不可达 | 非法 id / 非成员团队全局 / 非成员普通工作区均 `workspace not found`（不泄露存在性） |
-| T-WS-API3 工作区 CRUD | developer 创建拒绝 `not a tenant admin`；重名 `workspace name already exists`；改名生效；global 改名/删除/加成员 `global workspace is immutable`；非本租户成员 `user is not a tenant member`；空工作区删除返回 true；写入资源（commit 设置）后删除 `workspace is not empty` |
+| T-WS-API3 工作区 CRUD | developer 创建拒绝 `not a tenant admin`；重名 `workspace name already exists`；改名生效；global 改名/删除/加成员 `global workspace is immutable`；非本租户成员 `user is not a tenant member`；空工作区删除返回 true；写入资源（供应商/会话等）后删除 `workspace is not empty`（Commit 设置已成员级，不再计入工作区资源） |
 | T-WS-API4 共享读/写口径 | 普通工作区 `providers`/`models` 含团队全局工作区共享资源（workspaceId=全局）；普通上下文删除全局供应商不生效；admin 在全局上下文删除后普通工作区不可见 |
-| T-WS-API5 Commit 三段矩阵 | 本工作区未设 + 全局未设 → `source=UNSET`；全局设 → 普通工作区 `source=GLOBAL`；本工作区设 → `source=WORKSPACE` |
+| T-WS-API5 Commit 成员级一致（跨上下文回归） | 默认 UNSET；团队工作区保存后团队全局与**个人工作区（缺省 x-workspace-id）**读到同一份（无三段继承）；落库 `tenantId`=成员归属租户（非保存上下文租户）、单成员单行；developer 设置独立于 admin |
 | T-WS-API6 developer 全局只读 | 团队全局上下文写共享资源（provider）被插件拦截 `global workspace is read-only`；创建工作区仍 `not a tenant admin` |
 | T-WS-API7 personal 拒绝 | personal 租户全局上下文 `createTenantWorkspace` → `personal tenant cannot create workspaces` |
 | T-WS-API8 租户成员管理 | `searchAccounts` admin 可搜（结果为 username/name/userId 最小集）、developer `not a tenant admin`；`addTenantMember` 指定/缺省 role、重复幂等不覆盖；`changeTenantMemberRole` 生效；加入工作区后 `removeTenantMember` 立即失去团队/工作区访问并级联清理 workspacemembers，资源保留 |

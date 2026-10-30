@@ -61,6 +61,12 @@ vi.mock('../workspace-default-branch.js', () => ({
   resolveWorkspaceDefaultBranch: vi.fn(),
 }));
 
+vi.mock('../commit-settings-service.js', () => ({
+  commitSettingsService: {
+    resolveWorktreeCommitter: vi.fn(),
+  },
+}));
+
 import { workflowInstanceService } from './instance.js';
 import { workflowEngine } from './engine.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
@@ -72,6 +78,7 @@ import { sessionService } from '../session.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
+import { commitSettingsService } from '../commit-settings-service.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -199,6 +206,7 @@ describe('WorkflowInstanceService.instantiate', () => {
     vi.mocked(ConfiguredWorkflow.findOne).mockReturnValue(leanQuery(makeConfigured()));
     vi.mocked(ControllerWorkspace.findOne).mockReturnValue(leanQuery(makeWorkspace()));
     vi.mocked(resolveWorkspaceDefaultBranch).mockResolvedValue(null);
+    vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue(null);
   });
 
   it('I1: CONFIGURED 正常实例化：节点全量快照落库，首节点 READY，其余 INITIALIZING', async () => {
@@ -452,6 +460,87 @@ describe('WorkflowInstanceService.instantiate', () => {
     await workflowInstanceService.instantiate('user-1', instantiateInput({ source: 'TEMPLATE', templateId: 'tpl-1', configuredWorkflowId: null }) as never);
     const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as { configuredWorkflowId: unknown };
     expect(created.configuredWorkflowId).toBeNull();
+  });
+
+  describe('T-WF-C1 worktreeCommitter 实例快照', () => {
+    const committer = { name: 'Deliay', email: 'deliay@example.com' };
+
+    function findAddCall() {
+      return vi
+        .mocked(mockRedis.publish)
+        .mock.calls.map(([, payload]) => JSON.parse(payload as string))
+        .find((p: { type?: string }) => p.type === 'git:worktree:add') as
+        | { committer?: { name: string; email: string } }
+        | undefined;
+    }
+
+    it('C1a: 未显式传入 → 解析创建者「提交人」，落库快照并随 worktree 载荷下发', async () => {
+      vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue(committer);
+      vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+      mockWorktreeRedis();
+
+      await workflowInstanceService.instantiate(
+        'user-1',
+        instantiateInput({ createWorkflowWorktree: true }) as never,
+      );
+
+      expect(commitSettingsService.resolveWorktreeCommitter).toHaveBeenCalledWith('user-1');
+      const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as Record<string, unknown>;
+      expect(created.worktreeCommitterName).toBe('Deliay');
+      expect(created.worktreeCommitterEmail).toBe('deliay@example.com');
+      expect(findAddCall()?.committer).toEqual(committer);
+    });
+
+    it('C1b: 创建者未设置提交人 → 快照 null 且 worktree 载荷不带 committer（沿用 bot）', async () => {
+      vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue(null);
+      vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+      mockWorktreeRedis();
+
+      await workflowInstanceService.instantiate(
+        'user-1',
+        instantiateInput({ createWorkflowWorktree: true }) as never,
+      );
+
+      const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as Record<string, unknown>;
+      expect(created.worktreeCommitterName).toBeNull();
+      expect(created.worktreeCommitterEmail).toBeNull();
+      expect(findAddCall()).toBeTruthy();
+      expect(findAddCall()).not.toHaveProperty('committer');
+    });
+
+    it('C1c: Issue 显式传入优先于创建者解析（不再查创建者设置）', async () => {
+      const issueCommitter = { name: 'octocat', email: '583231+octocat@users.noreply.github.com' };
+      vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+      mockWorktreeRedis();
+
+      await workflowInstanceService.instantiate(
+        'user-1',
+        instantiateInput({ createWorkflowWorktree: true, worktreeCommitter: issueCommitter }) as never,
+      );
+
+      expect(commitSettingsService.resolveWorktreeCommitter).not.toHaveBeenCalled();
+      const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as Record<string, unknown>;
+      expect(created.worktreeCommitterName).toBe('octocat');
+      expect(created.worktreeCommitterEmail).toBe('583231+octocat@users.noreply.github.com');
+      expect(findAddCall()?.committer).toEqual(issueCommitter);
+    });
+
+    it('C1d: 显式 null（触发人无法识别 → bot）覆盖创建者设置，快照 null 且不下发', async () => {
+      vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue(committer);
+      vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+      mockWorktreeRedis();
+
+      await workflowInstanceService.instantiate(
+        'user-1',
+        instantiateInput({ createWorkflowWorktree: true, worktreeCommitter: null }) as never,
+      );
+
+      expect(commitSettingsService.resolveWorktreeCommitter).not.toHaveBeenCalled();
+      const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as Record<string, unknown>;
+      expect(created.worktreeCommitterName).toBeNull();
+      expect(created.worktreeCommitterEmail).toBeNull();
+      expect(findAddCall()).not.toHaveProperty('committer');
+    });
   });
 });
 

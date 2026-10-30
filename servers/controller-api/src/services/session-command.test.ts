@@ -667,8 +667,76 @@ describe('SessionCommandService', () => {
       }));
 
       await vi.waitFor(() => {
-        expect(worktreeService.handleAdd).toHaveBeenCalledWith('req-1', 'ctrl-1', '/repo', '/wt', 'feat/branch');
+        expect(worktreeService.handleAdd).toHaveBeenCalledWith(
+          'req-1',
+          'ctrl-1',
+          '/repo',
+          '/wt',
+          'feat/branch',
+          undefined,
+        );
       });
+    });
+
+    it('should pass committer through to worktreeService.handleAdd', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      const committer = { name: 'Deliay', email: 'admin@remiliascarlet.com' };
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'git:worktree:add',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        repoPath: '/repo',
+        worktreePath: '/wt',
+        branch: 'feat/branch',
+        committer,
+      }));
+
+      await vi.waitFor(() => {
+        expect(worktreeService.handleAdd).toHaveBeenCalledWith(
+          'req-1',
+          'ctrl-1',
+          '/repo',
+          '/wt',
+          'feat/branch',
+          committer,
+        );
+      });
+    });
+
+    it('should not invent a committer channel: unknown extra fields are not forwarded', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'git:worktree:add',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        repoPath: '/repo',
+        worktreePath: '/wt',
+        branch: 'feat/branch',
+        command: 'rm -rf /',
+      }));
+
+      await vi.waitFor(() => {
+        expect(worktreeService.handleAdd).toHaveBeenCalled();
+      });
+      expect(worktreeService.handleAdd).toHaveBeenCalledWith(
+        'req-1',
+        'ctrl-1',
+        '/repo',
+        '/wt',
+        'feat/branch',
+        undefined,
+      );
+      expect(worktreeService.handleCommit).not.toHaveBeenCalled();
     });
   });
 

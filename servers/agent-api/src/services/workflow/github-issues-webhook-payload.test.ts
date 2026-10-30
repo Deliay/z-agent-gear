@@ -39,8 +39,25 @@ describe('parseGithubIssuesEvent', () => {
   });
 });
 
-describe('parseGithubIssuesEvent 边界', () => {
-  it.each(['opened', 'labeled', 'edited', 'reopened'])('受理 action %s', (action) => {
+describe('parseGithubIssuesEvent sender（触发人）', () => {
+  it('T-GH-S1a: labeled 事件解析 sender.id / sender.login', () => {
+    const result = parse({ sender: { id: 583231, login: 'octocat' } });
+    expect(result?.sender).toEqual({ id: 583231, login: 'octocat' });
+  });
+
+  it('T-GH-S1b: sender 缺失 → 省略字段（老 payload 兼容）', () => {
+    expect(parse()).not.toHaveProperty('sender');
+  });
+
+  it('T-GH-S1c: sender 非法（id 非正 / login 空 / 非对象）→ 省略且不抛错', () => {
+    expect(parse({ sender: { id: 0, login: 'octocat' } })).not.toHaveProperty('sender');
+    expect(parse({ sender: { id: 583231, login: '' } })).not.toHaveProperty('sender');
+    expect(parse({ sender: null })).not.toHaveProperty('sender');
+    expect(parse({ sender: 'octocat' })).not.toHaveProperty('sender');
+  });
+});
+
+describe('parseGithubIssuesEvent 边界', () => {  it.each(['opened', 'labeled', 'edited', 'reopened'])('受理 action %s', (action) => {
     expect(parse({ action })?.action).toBe(action);
   });
 

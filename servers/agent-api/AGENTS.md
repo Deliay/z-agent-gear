@@ -99,28 +99,52 @@ npm run start   # Start production server
 - MCP：平台服务 `agent-cloud-host-tools`（`transport/source=platform`），工具 `workload_list`/`workload_install`；云会话 `sessionService.create` 自动装配，非云会话不装配；`workload_install` 等待终态（上限 10 分钟），执行记录 `source=mcp`。
 - 会话：`controllerWorkspaceService.ensureWorkspace` 按路径幂等 upsert（不触发 10 个工作区上限）；Git 设置成功后自动建会话，失败仅 session 步骤 FAILED、operation 仍 SUCCEEDED 并提示手动建会话；`createSession=false` 时 session 步骤记 SKIPPED（多 Harness 不自动建会话）。
 
-## Commit 设置与提交身份（本期）
+## Commit 设置与提交身份（成员级）
 
-- 数据：`models/user-commit-setting.ts`（集合 `user_commit_settings`，`userId` String 唯一）+
-  迁移 `011-user-commit-settings-index` 显式创建唯一索引；按 userId upsert，每用户单行。
-- 契约：`contracts/github.graphql` 的 `CommitSettings` / `CommitSettingsInput` /
-  `CommitterMode` / `CommitterType`，GraphQL `commitSettings` / `updateCommitSettings`
+- 数据：`models/user-commit-setting.ts`（集合 `user_commit_settings`，`userId` String 唯一键
+  `uniq_user_commit_setting`）；**成员独立、无共享/继承**，任何工作区下同一份设置。
+  字段仅 `userId / tenantId（留档）/ committerType(custom|unset) / customName / customEmail`；
+  `committerMode` / `githubAccountId` / `workspaceId` 已下线。
+- **作用域插件豁免（返工修正）**：该集合**既不挂 `applyWorkspaceScope` 也不挂 `applyTenantScope`**。
+  `applyTenantScope` 会在查询编译期把 `tenantId` 注入为当前 ALS 工作区租户，导致同一成员
+  「团队工作区保存 / 个人工作区读取」互相不可见、二次保存撞 `uniq_user_commit_setting` 后回读落空
+  而**静默丢失**、Issue 链路（无 ALS）解析不到——与「成员独立、任何工作区同一份」矛盾。
+  跨租户泄漏不成立（`userId` 是全局唯一主键）；`models/tenant-isolation.test.ts` 对该集合显式豁免
+  并断言「查询不注入 tenantId」，`services/commit-settings-service.real.test.ts` 用真库 + 真实插件
+  覆盖跨上下文读写（T-CS-R1~R4）。
+- 读写口径：一律 `{ userId }` 点查/upsert，**不读取 ALS 工作区上下文**；`tenantId` 恒写成员归属租户
+  （`users.tenantId`，personal 租户 `_id`=userId），与迁移 019 `cleanFields` 的刷新口径一致。
+- 迁移：`019-commit-settings-per-member`（编号 017/018 已被占用）：`github_account` → `custom`
+  等价转换（`login` + `<githubUserId>+<login>@users.noreply.github.com`，帐号缺失 → unset）、
+  归属重键（personal → tenantId=owner userId；team → 行内 userId；碰撞保留最新非 unset）、
+  字段清洗（` committerMode/githubAccountId/workspaceId`）、索引「先建后删」。
+  注意顺序：**先建新唯一索引再删旧索引，最后才 ` workspaceId`**（旧唯一索引下多行置空会撞键）。
+  归属判定按**租户**`type`（`workspaces.type` 只有 global/normal，不是归属依据）。
+- 契约：`contracts/github.graphql` 的 `CommitterType { CUSTOM UNSET }` / `CommitSettings` /
+  `CommitSettingsInput` / `commitSettings` / `updateCommitSettings` / `personalGithubAccounts`
   （`schemas/github.ts` + `resolvers/github.ts`，未登录 `Not authenticated`）。
-- `services/commit-settings-service.ts`：服务端权威校验白名单（三行逐字：
-  `committer is required for the selected mode` / `invalid github account` /
-  `invalid custom committer`）；归一仅按 `committerType`（`committerMode=UNSET` 不清空提交人）；
-  自定义校验 trim / ≤100 / ≤254 / 禁 `\n\r\0` / 邮箱正则 `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`。
-- `resolveCommitIdentity(controllerId)` 五步：云主机（未删）→ userId → 设置（未保存 unset）→
-  提交人归一（解绑 / 越权 / 非法 → unset）→ 模式门控（`agent_only` 需
-  `cloud_host_github_bindings` 或 `cloudcontainers.installedWorkloads[].name==='Github'`；
-  `human_only` = 提交人；`co_author` = 提交人 + bot）→ bot 失败降级 unset。
-  任一异常一律 `{mode:'unset'}`，响应按字段存在性缺省（unset 仅 mode；co_author 才含 coAuthor*）。
-- 内部端点：`POST /internal/cloud-hosts/:controllerId/commit-identity`，与 `github-credential`
-  双鉴权一致（`INTERNAL_API_TOKEN` 或本机 Controller key，鉴权失败 401/403），**永不 404**。
+  服务端校验白名单**仅一条** `invalid custom committer`（trim 后 name ∈ (0,100]、email ≤254、
+  禁 `\n\r\0`、邮箱正则 `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`）。
+- `personalGithubAccounts`：`User.accountId` → 同账户 users → personal 租户 id（`_id` 复用 userId）
+  → `GitHubAccount` 按 `tenantId ∈ personal` 且 `workspaceId ∈ {null, 本租户全局工作区}` 过滤
+  （排除普通工作区副本）；实现为 `githubService.getPersonalAccounts`（直查 collection，绕 workspace-scope）。
+- `commit-settings-service`：`getCommitSettings/updateCommitSettings`（userId upsert）、
+  `resolveWorktreeCommitter(userId) → {name,email}|null`（custom 且合法才返回）、
+  `resolveCloudHostIdentity()` = **恒 bot**（`resolveAppBotIdentity` → `{mode:'agent_only'}`；
+  bot 失败 `{mode:'unset'}`）。`mode` 包络仅为兼容 2.11.x 容器 `consume()`，不再有 co_author/human_only。
+- 内部端点：`POST /internal/cloud-hosts/:controllerId/commit-identity` 与 `github-credential` 双鉴权一致
+  （`INTERNAL_API_TOKEN` 或本机 Controller key，401/403），**永不 404**，恒 200；**无视个人设置恒 bot**。
+- 下发链：`git:worktree:add` 可选 `committer {name,email}`；`workflow/instance.ts` 实例化时解析一次并落
+  `WorkflowInstance.worktreeCommitterName/Email` 快照（issue 触发人覆盖 > 创建者设置），实例级与节点级
+  worktree（`orchestrator.startNodeSession → session.create`）复用同一快照；独立会话在 `session.create` 内
+  实时解析创建者设置。缺省不写身份 = 沿用容器级 bot；旧 worker（<2.12.0）忽略未知字段优雅降级。
+- Issue 触发人：`github-issues-webhook-payload` 解析 `sender {id,login}` → `IssueWorkflowTrigger`
+  落 `triggerSenderId/triggerSenderLogin/triggerUserId`（`GitHubAccount.githubUserId` 匹配）；
+  `IssuesTriggerRunner.createInstance` 身份优先级「触发人提交人 → sender 的 GitHub 身份
+  （login + noreply）→ bot」。
 - bot 身份：`githubService.resolveAppBotIdentity()`（`GET /app` → `GET /users/{slug}[bot]`，裸 fetch），
-  Redis `github:app-bot-identity` 成功 24h、失败 sentinel 60s，进程内 Map 兜底；
-  GitHub 帐号 / bot 邮箱均使用 `{id}+{login}@users.noreply.github.com`。
-- 仅云容器生效；本地控制器链路零改动；不改 `MIN_HARNESS_WORKER_VERSION`（旧 worker 行为即未设置）。
+  Redis `github:app-bot-identity` 成功 24h、失败 sentinel 60s，进程内 Map 兜底。
+- 仅云容器生效；本地控制器链路零改动；agent-gear ≥2.12.0 提供 worktree 身份能力（门禁见 cloud-controller）。
 
 ## Related Rules
 
@@ -155,7 +179,7 @@ npm run start   # Start production server
 - **三层帐号模型**：`accounts`（登录凭据，不 ref User，username 唯一）→ `users`（身份主体，`accountId` 引用账户、`tenantId` 引用租户，保留原 `username/passwordHash` 一期不下线）→ `tenants`（`type=personal`，`_id` 复用 userId，无成员列表；成员关系由 `users.tenantId` 承载）。写方仅 agent-api；admin-api 为只读镜像。
 - **认证**：`login` 走 `Account.findOne({username})` → bcrypt → `User.findOne({accountId})` → 签发 token（载荷仍是 userId，已发 token 不失效）；`me`/`AuthPayload.user` 返回 `{id,name,tenant}`；`User.tenant` 为**字段级 resolver（已登记 `graphql/resolvers/index.ts` 的 `User` 键）**，`memberCount=User.countDocuments({tenantId})`（一期恒 1）。前台注册已硬关闭（契约/resolver/前端三层移除）。
 - **AuthContext**：`authenticateUser` 一次 `findById` 取 `{id,tenantId,name}`，`context.tenantId` 同步下发；`requireTenantId(context)` 回退链 `context.tenantId → currentUser.tenantId → currentUser.id`（personal 期恒等）。
-- **租户隔离（双条件）**：带 `userId` 的 19 个集合均**复制新增**同值 `tenantId`（`userId` 字段与筛选全部保留）；`services/tenant-scope.ts` 的 Mongoose 插件在查询编译前为 `{userId}` 过滤注入 `tenantId`（显式 tenantId 不覆盖；递归处理 `$or`/`$and`/`$nor` 内的 userId 分支）、写入（save/insertMany/`$set.userId`）自动补齐 `tenantId`。**例外**：`userId` 为操作符对象（如 `$in`/`$nin`）时不复制（值语义不同；一期运行时无此类过滤点，二期放开 userId 维度前需显式处理）。T-ISO 矩阵（`models/tenant-isolation.test.ts`）对 19 集合逐一走真实 Mongoose 查询中间件（驱动层 `countDocuments` spy），并与 `TENANT_ID_COLLECTIONS` 的集合名互校；Mongoose v9 的查询/文档中间件必须写成**同步钩子（无 next 参数）**，否则运行期抛 `next is not a function`。新增带 userId 的模型必须声明 `tenantId` 并 `applyTenantScope(schema)`；唯一索引保留 userId 维度：`{tenantId,userId,name}` / `{tenantId,userId,githubUserId}` / `{tenantId,userId}`。
+- **租户隔离（双条件）**：带 `userId` 的 19 个集合均**复制新增**同值 `tenantId`（`userId` 字段与筛选全部保留）；`services/tenant-scope.ts` 的 Mongoose 插件在查询编译前为 `{userId}` 过滤注入 `tenantId`（显式 tenantId 不覆盖；递归处理 `$or`/`$and`/`$nor` 内的 userId 分支）、写入（save/insertMany/`$set.userId`）自动补齐 `tenantId`。**例外**：`userId` 为操作符对象（如 `$in`/`$nin`）时不复制（值语义不同；一期运行时无此类过滤点，二期放开 userId 维度前需显式处理）。T-ISO 矩阵（`models/tenant-isolation.test.ts`）对 19 集合逐一走真实 Mongoose 查询中间件（驱动层 `countDocuments` spy），并与 `TENANT_ID_COLLECTIONS` 的集合名互校；Mongoose v9 的查询/文档中间件必须写成**同步钩子（无 next 参数）**，否则运行期抛 `next is not a function`。新增带 userId 的模型必须声明 `tenantId` 并 `applyTenantScope(schema)`（**例外**：`user_commit_settings` 为成员级集合，`userId` 为全局成员主键、`tenantId` 仅留档，显式豁免插件，见「Commit 设置与提交身份」段）；唯一索引保留 userId 维度：`{tenantId,userId,name}` / `{tenantId,userId,githubUserId}` / `{tenantId,userId}`。
 - **迁移**：`012-account-user-tenant` 逐 user 幂等拆分三件套（只复制不删除原登录字段）；`013-tenant-id-backfill` 19 集合复制清洗 + 索引（只新增不删除）。**集合名以模型 `model.collection.name` 为单一来源**（如 `issue_workflow_triggers`），由 T-ISO 互校 + `013-...real.test.ts` 真库兜底；历史环境若误建空集合 `issueworkflowtriggers`，确认无数据后可手工 drop。启动后 `services/tenant-self-check.ts` 以带索引 count + `limit(100)` 抽样异步自检，仅告警不阻塞。
 - **计费**：`billing-client` ownerType 使用 `tenant`（ownerId=tenantId；`front_user` 仅兼容期旧调用方）；`startHarness` 下发 `tenantId`（=userId）。
 - **开户**：`POST /internal/users`（Bearer `INTERNAL_API_TOKEN`）创建账户+用户+个人租户+零余额租户计费账户；按 username 幂等（200 既有视图 / 201 新建 / 400 规则 / 409 重名 / 503 计费不可达并回滚）。

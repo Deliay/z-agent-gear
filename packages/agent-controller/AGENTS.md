@@ -282,6 +282,20 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 n
 - 同步链路仍自动 `cancel` 问询，但声明相同的 `CLIENT_CAPABILITIES` 并记录告警（无用户通道的合法降级）。
 - 回归：`capabilities.test.ts`（映射/三档合并/raw 保真）、`bridge.test.ts`（快照、resolved）、`elicitation.integration.test.ts`（真实 SDK + 假 Agent 进程验证 `elicitation/create` 路由）、`socketio-client.test.ts`（旧 payload 零退化）。
 
+## Worktree 级提交人（agent-gear 2.12.0）
+
+- `WorktreeHandler.add(repoPath, worktreePath, branch, committer?)`：`git worktree add` 成功后，若传入
+  `committer {name,email}`，以 `git -C <worktreePath>` 依次执行
+  `git config extensions.worktreeConfig true` → `git config --worktree user.name <name>` →
+  `git config --worktree user.email <email>`；**仅作用于该 worktree**（`.git/worktrees/<name>/config.worktree`），
+  主仓与兄弟 worktree 不受污染。
+- **安全**：name/email 用户可控，拼接进 `execAsync` 前必须 `shellQuote`（单引号包裹 + 内嵌 `'` 转义为
+  `'\''`）；禁止未转义插值。单条命令失败仅 `console.warn`（不打印值），结果仍 `success`。
+- 缺省不写身份（沿用容器级 bot，后者恒为平台 bot）；非法载荷（非字符串/空值）按「未提供」处理。
+- 载荷来源：`git:worktree:add` 可选字段 `committer`（契约 `contracts/agent-session-websocket.md` §3.12）。
+- 版本口径：2.12.0 起提供该能力；cloud-controller harness 门禁与 worker 镜像（`agent-gear@2.12.x`）同步提升，
+  旧 worker 忽略未知字段 → 优雅降级（不写身份、沿用 bot，不报错）。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
