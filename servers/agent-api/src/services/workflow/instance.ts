@@ -16,6 +16,7 @@ import { GITHUB_PR_PROMPT, GITHUB_PR_PROMPT_KEY, SYSTEM_PROMPT_KEYS } from './pr
 import { actorFilter } from '../workspace-context.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
 import { getWorkspaceContext } from '../workspace-context.js';
+import { commitSettingsService } from '../commit-settings-service.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -49,6 +50,11 @@ export interface InstantiateWorkflowInput {
   name: string;
   nodes: InstantiateNodeInput[];
   createWorkflowWorktree?: boolean | null;
+  /**
+   * Worktree 提交人（覆盖创建者解析）：`undefined` = 按创建者实时解析；
+   * 显式 `null` = 不下发（沿用容器级 bot，Issue 触发人无法识别时使用）。
+   */
+  worktreeCommitter?: { name: string; email: string } | null;
 }
 
 /** 工作流实例服务：统一实例化入口 + 实例节点编辑 + 人类节点操作。 */
@@ -150,6 +156,12 @@ class WorkflowInstanceService {
     }
 
     // 5. 创建工作流 Worktree（如果启用）
+    // Worktree 提交人快照：实例化时解析一次（issue 覆盖 > 创建者「提交人」），
+    // 实例级与节点级 Worktree 复用同一快照；两者皆空 = 不下发（沿用容器级 bot）。
+    const worktreeCommitter = await this.resolveWorktreeCommitterSnapshot(
+      userId,
+      input.worktreeCommitter,
+    );
     let workflowWorktreePath: string | undefined;
     let workflowWorktreeBranch: string | undefined;
     if (input.createWorkflowWorktree && workspace.defaultBranch) {
@@ -163,6 +175,7 @@ class WorkflowInstanceService {
           defaultBranch,
         },
         input.name,
+        worktreeCommitter,
       );
       workflowWorktreePath = result.path;
       workflowWorktreeBranch = result.branch;
@@ -218,6 +231,8 @@ class WorkflowInstanceService {
         lastNodeStatus: first ? 'READY' : null,
         workflowWorktreePath,
         workflowWorktreeBranch,
+        worktreeCommitterName: worktreeCommitter?.name ?? null,
+        worktreeCommitterEmail: worktreeCommitter?.email ?? null,
       });
     } catch (err) {
       // 如果创建实例失败且已创建 Worktree，回滚 Worktree
@@ -237,11 +252,29 @@ class WorkflowInstanceService {
     }
   }
 
+  /**
+   * Worktree 提交人快照解析：调用方显式传入优先（issue 触发人），
+   * 未传入（undefined）时按创建者「提交人」实时解析；解析失败降级 null（bot）。
+   */
+  private async resolveWorktreeCommitterSnapshot(
+    userId: string,
+    explicit: { name: string; email: string } | null | undefined,
+  ): Promise<{ name: string; email: string } | null> {
+    if (explicit !== undefined) return explicit;
+    try {
+      return await commitSettingsService.resolveWorktreeCommitter(userId);
+    } catch (err) {
+      console.warn('[workflow-instance] resolve worktree committer failed:', (err as Error).message);
+      return null;
+    }
+  }
+
   /** 创建工作流 Worktree：通过 Redis 发送 git:worktree:add 命令到控制器，使用随机后缀天然去重 */
   private async createWorkflowWorktree(
     controllerId: string,
     workspace: { _id: string; name: string; path: string; defaultBranch?: string },
     workflowName: string,
+    committer?: { name: string; email: string } | null,
   ): Promise<{ path: string; branch: string }> {
     const redis = getRedisClient();
     
@@ -275,6 +308,8 @@ class WorkflowInstanceService {
         repoPath: workspace.path,
         worktreePath: wtPath,
         branch,
+        // 可选：缺省 = 不写 worktree 身份（沿用容器级 bot；旧 worker 忽略未知字段）
+        ...(committer ? { committer } : {}),
       }),
     );
 

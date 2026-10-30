@@ -20,6 +20,7 @@ const h = vi.hoisted(() => ({
   instantiate: vi.fn(),
   completeHumanNode: vi.fn(),
   resolveDefaultBranch: vi.fn(),
+  resolveWorktreeCommitter: vi.fn(),
 }));
 
 vi.mock('../../models/issue-workflow-trigger.js', () => ({
@@ -78,6 +79,9 @@ vi.mock('../workspace-path.js', () => ({
 }));
 vi.mock('../workspace-default-branch.js', () => ({
   resolveWorkspaceDefaultBranch: h.resolveDefaultBranch,
+}));
+vi.mock('../commit-settings-service.js', () => ({
+  commitSettingsService: { resolveWorktreeCommitter: h.resolveWorktreeCommitter },
 }));
 
 import { IssuesTriggerRunner } from './issues-event-handler.js';
@@ -141,6 +145,7 @@ beforeEach(() => {
   h.resolveRepoAccount.mockResolvedValue('acc-1');
   h.comment.mockResolvedValue(99);
   h.resolveDefaultBranch.mockResolvedValue('main');
+  h.resolveWorktreeCommitter.mockResolvedValue(null);
 });
 
 describe('IssuesTriggerRunner PENDING_WORKSPACE', () => {
@@ -506,5 +511,107 @@ describe('IssuesTriggerRunner 强制 Worktree 隔离', () => {
       expect.objectContaining({ _id: TRIGGER_ID }),
       { $set: { status: 'FAILED', failureReason: 'worktree add failed' } },
     );
+  });
+});
+
+describe('IssuesTriggerRunner 触发人身份优先级（T-GH-S3/S4）', () => {
+  const TRIGGER_USER_ID = '507f1f77bcf86cd799439041';
+
+  const pending = (overrides: Record<string, unknown> = {}) =>
+    lean(
+      triggerDoc({
+        status: 'PENDING_INSTANTIATE',
+        workspaceId: WORKSPACE_ID,
+        ...overrides,
+      }),
+    );
+
+  function mockInstantiated() {
+    h.instantiate.mockResolvedValue({
+      _id: INSTANCE_ID,
+      nodes: [{ nodeId: 'human', type: 'HUMAN', status: 'INITIALIZING', dependsOn: [] }],
+    });
+  }
+
+  function instantiateArg(): Record<string, unknown> {
+    return vi.mocked(h.instantiate).mock.calls[0][1] as Record<string, unknown>;
+  }
+
+  it('S3a: triggerUserId 的「提交人」优先（sender 身份不参与）', async () => {
+    h.triggerFindById.mockReturnValue(
+      pending({ triggerUserId: TRIGGER_USER_ID, triggerSenderId: 583231, triggerSenderLogin: 'octocat' }),
+    );
+    h.resolveWorktreeCommitter.mockResolvedValue({ name: 'Deliay', email: 'deliay@example.com' });
+    mockInstantiated();
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.resolveWorktreeCommitter).toHaveBeenCalledWith(TRIGGER_USER_ID);
+    expect(instantiateArg().worktreeCommitter).toEqual({
+      name: 'Deliay',
+      email: 'deliay@example.com',
+    });
+  });
+
+  it('S3b: 触发人未设置提交人 → 回退 sender 的 GitHub 身份（login + noreply）', async () => {
+    h.triggerFindById.mockReturnValue(
+      pending({ triggerUserId: TRIGGER_USER_ID, triggerSenderId: 583231, triggerSenderLogin: 'octocat' }),
+    );
+    h.resolveWorktreeCommitter.mockResolvedValue(null);
+    mockInstantiated();
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(instantiateArg().worktreeCommitter).toEqual({
+      name: 'octocat',
+      email: '583231+octocat@users.noreply.github.com',
+    });
+  });
+
+  it('S3c: 未匹配平台成员但有 sender → 直接用 GitHub 身份', async () => {
+    h.triggerFindById.mockReturnValue(
+      pending({ triggerUserId: null, triggerSenderId: 583231, triggerSenderLogin: 'octocat' }),
+    );
+    mockInstantiated();
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.resolveWorktreeCommitter).not.toHaveBeenCalled();
+    expect(instantiateArg().worktreeCommitter).toEqual({
+      name: 'octocat',
+      email: '583231+octocat@users.noreply.github.com',
+    });
+  });
+
+  it('S3d: 触发人不可识别（无 sender）→ null（沿用 bot）', async () => {
+    h.triggerFindById.mockReturnValue(
+      pending({ triggerUserId: null, triggerSenderId: null, triggerSenderLogin: null }),
+    );
+    mockInstantiated();
+
+    await runner.advance(TRIGGER_ID);
+
+    const arg = instantiateArg();
+    expect(arg).toHaveProperty('worktreeCommitter', null);
+    expect(arg.createWorkflowWorktree).toBe(true);
+  });
+
+  it('S4: Issue 触发人覆盖工作流创建者（不解析 trigger.userId 的提交人）', async () => {
+    h.triggerFindById.mockReturnValue(
+      pending({ triggerUserId: TRIGGER_USER_ID, triggerSenderId: 583231, triggerSenderLogin: 'octocat' }),
+    );
+    h.resolveWorktreeCommitter.mockImplementation(async (userId: string) =>
+      userId === TRIGGER_USER_ID ? { name: 'trigger-user', email: 'trigger@example.com' } : null,
+    );
+    mockInstantiated();
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.resolveWorktreeCommitter).toHaveBeenCalledTimes(1);
+    expect(h.resolveWorktreeCommitter).not.toHaveBeenCalledWith(USER_ID);
+    expect(instantiateArg().worktreeCommitter).toEqual({
+      name: 'trigger-user',
+      email: 'trigger@example.com',
+    });
   });
 });
