@@ -101,12 +101,18 @@ async function resolveOwner(row: Record<string, unknown>): Promise<string> {
 
   const workspace = await mongoose.connection
     .collection('workspaces')
-    .findOne({ _id: workspaceId }, { projection: { tenantId: 1, type: 1 } });
+    .findOne({ _id: workspaceId }, { projection: { tenantId: 1 } });
   if (!workspace) return fallbackOwner;
 
+  const tenantId = workspace.tenantId ? String(workspace.tenantId) : '';
+  if (!tenantId) return fallbackOwner;
+  const tenant = await mongoose.connection
+    .collection('tenants')
+    .findOne({ _id: toObjectId(tenantId) ?? tenantId }, { projection: { type: 1 } });
+
   // personal 租户 `_id` 复用 owner userId，故 owner = tenantId
-  if (workspace.type === 'personal') return workspace.tenantId ? String(workspace.tenantId) : fallbackOwner;
-  // team 租户 → 行内 userId（最近编辑人）
+  if (tenant?.type === 'personal') return tenantId;
+  // team 租户 → 行内 userId（最近编辑人）；未知租户类型保守沿用行内 userId
   return fallbackOwner;
 }
 
@@ -125,8 +131,8 @@ function pickKeeper(rows: Array<Record<string, unknown>>): Record<string, unknow
 /**
  * 步骤 2：归属重键（`workspaceId` 键 → `userId` 键）。
  *
- * - `type='personal'` 的工作区 → owner = 工作区 tenantId（= 个人 owner userId）；
- * - `type='team'` → owner = 行内 `userId`（最近编辑人）；
+ * - 所属租户 `type='personal'` → owner = 工作区 tenantId（= 个人 owner userId）；
+ * - 所属租户 `type='team'` → owner = 行内 `userId`（最近编辑人）；
  * - `workspaceId` 为空的旧式行 owner 不变；
  * - 同 owner 多行碰撞 → 保留最新非 unset 行，其余删除并计数。
  */

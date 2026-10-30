@@ -180,18 +180,16 @@ describe('workspace-isolation 矩阵（T-WS，真库）', () => {
   it('user_commit_settings 为成员级：无 workspaceId 维度、不挂 workspace-scope（T-WS 矩阵例外）', async () => {
     expect(UserCommitSetting.schema.path('workspaceId')).toBeUndefined();
     const collection = mongoose.connection.collection('user_commit_settings');
-    const tenantId = new mongoose.Types.ObjectId(TENANT);
     await collection.insertMany([
       { userId: 'member-a', tenantId: String(TENANT), committerType: 'custom', customName: 'A', customEmail: 'a@example.com' },
       { userId: 'member-b', tenantId: String(TENANT), committerType: 'unset', customName: null, customEmail: null },
     ]);
     const count = () =>
       runWithWorkspace(devA, async () =>
-        UserCommitSetting.countDocuments({ tenantId }),
+        UserCommitSetting.countDocuments({ tenantId: TENANT }),
       );
     // 任意工作区上下文都看到同一份（成员级，不随工作区过滤）
     expect(await count()).toBe(2);
-    expect(tenantId).toBeTruthy();
   });
 
   it('工作流域字段名与项目工作区语义零冲突', () => {

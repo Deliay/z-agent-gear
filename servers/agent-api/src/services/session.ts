@@ -415,7 +415,8 @@ export class SessionService {
     }
   }
 
-  /** 云电脑停止/终态：该主机下所有非 ENDED 会话批量结束（只读，消息保留）。 */  async endByController(controllerId: string, userId: string): Promise<number> {
+  /** 云电脑停止/终态：该主机下所有非 ENDED 会话批量结束（只读，消息保留）。 */
+  async endByController(controllerId: string, userId: string): Promise<number> {
     const result = await Session.updateMany(
       { controllerId, ...actorFilter(userId), status: { $ne: 'ended' } },
       { $set: { status: 'ended', endedAt: new Date() } },

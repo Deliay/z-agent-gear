@@ -452,7 +452,8 @@ export class IssuesTriggerRunner {
     return null;
   }
 
-  /** PENDING_HUMAN_NODE：回评（一次补偿）→ 轮询首个人类节点 → 自动完成。 */  private async advanceHumanNode(trigger: Doc): Promise<void> {
+  /** PENDING_HUMAN_NODE：回评（一次补偿）→ 轮询首个人类节点 → 自动完成。 */
+  private async advanceHumanNode(trigger: Doc): Promise<void> {
     const instanceId = trigger.workflowInstanceId ? String(trigger.workflowInstanceId) : '';
     if (!instanceId) {
       await this.fail(trigger._id, 'workflow interrupted');

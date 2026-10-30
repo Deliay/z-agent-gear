@@ -66,8 +66,9 @@ async function seed(): Promise<Fixture> {
   const teamWorkspaceId = new mongoose.Types.ObjectId();
   const personalWorkspaceId = new mongoose.Types.ObjectId();
   await db().collection('workspaces').insertMany([
-    { _id: personalWorkspaceId, name: '全局工作区', type: 'personal', tenantId: personalA },
-    { _id: teamWorkspaceId, name: '全局工作区', type: 'team', tenantId: team },
+    // workspaces.type 只有 global/normal；personal/team 是「租户」类型，归属重键按租户判定
+    { _id: personalWorkspaceId, name: '全局工作区', type: 'global', tenantId: personalA },
+    { _id: teamWorkspaceId, name: '全局工作区', type: 'global', tenantId: team },
   ]);
 
   const aliceAccountId = new mongoose.Types.ObjectId();
@@ -207,6 +208,26 @@ describe('migration 019 commit settings per member', () => {
     await migration.rekeyOwners();
     const row = await settings().findOne({});
     expect(row?.userId).toBe(String(f.carol));
+  });
+
+  it('T-MIG-CS3c: personal 租户行按租户归属（行内 userId 非 owner 时改写为 tenantId）', async () => {
+    const f = await seed();
+    const editor = new mongoose.Types.ObjectId();
+    await settings().insertOne({
+      userId: String(editor),
+      tenantId: String(f.personalA),
+      workspaceId: String(f.personalWorkspaceId),
+      committerType: 'custom',
+      customName: 'Alice Personal',
+      customEmail: 'alice-personal@example.com',
+    });
+
+    const result = await migration.rekeyOwners();
+    expect(result.rekeyed).toBe(1);
+
+    const row = await settings().findOne({ customName: 'Alice Personal' });
+    // personal 租户 _id 复用 owner userId：owner = tenantId = alice
+    expect(row?.userId).toBe(String(f.personalA));
   });
 
   it('T-MIG-CS4: 同 owner 碰撞合并（保留最新非 unset，其余删除并计数）', async () => {
