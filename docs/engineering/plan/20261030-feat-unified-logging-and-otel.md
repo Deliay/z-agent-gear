@@ -14,7 +14,7 @@ type: Permanent
 
 **版本说明**：
 
-- v1.0（2026-10-30）首版。对应 PRD v1.0 / 提案 v1.0（审核通过、无附加修改意见）。§3 计划期裁决以**当前需求总分支代码事实**为准（2026-10-30，`b5178e37`）：重点校正 ① `console.*` 调用点实测 **636** 处（提案 663）；② cloud-controller / admin-api billing 存在 **91 处 variadic 结构 logger 调用**（`(msg, err)` 形态），提案只提到 17 处 console，若直接注入 pino 会**静默丢弃错误对象**（F3/F5）；③ 既有测试的 `spyOn(console)` 实测 **139 处 / 57 个文件**，其中 **18 个文件为断言型**（提案 §8.4 只列 7 个，F6）；④ 提案称 `contracts/agent-session-websocket.md` 「已约定 `_meta.traceparent` 保留」——**不成立**（F7）；⑤ `scripts/` 目录在仓库中**不存在**（F8）；⑥ 新增「服务名/版本由 `package.json` 自解析，实现零 per-package 定制」的 vendor 口径（D2）。
+- v1.0（2026-10-30）首版。对应 PRD v1.0 / 提案 v1.0（审核通过、无附加修改意见）。§3 计划期裁决以**当前需求总分支代码事实**为准（2026-10-30，`b5178e37`）：重点校正 ① `console.*` 调用点实测 **636** 处（提案 663）；② cloud-controller / admin-api billing 存在 **91 处 variadic 结构 logger 调用**（`(msg, err)` 形态），提案只提到 17 处 console，若直接注入 pino 会**静默丢弃错误对象**（F3/F5）；③ 既有测试的 `spyOn(console)` 实测 **139 处 / 59 个文件**，其中 **18 个文件为断言型**（提案 §8.4 只列 7 个，F6）；④ 提案称 `contracts/agent-session-websocket.md` 「已约定 `_meta.traceparent` 保留」——**不成立**（F7）；⑤ `scripts/` 目录在仓库中**不存在**（F8）；⑥ 新增「服务名/版本由 `package.json` 自解析，实现零 per-package 定制」的 vendor 口径（D2）。
 
 ## 1. 实现顺序
 
@@ -144,7 +144,7 @@ bash deploy/images/worker/entrypoint.test.sh
 | F3 | §1.1 「仅 `servers/cloud-controller/src/logger.ts`（`LOG_LEVEL` + console sink，52 行）」+ §5.2.10「cloud-controller 17 处就地替换；删除 `src/logger.ts`」 | 除 17 处 `console.*` 外，cloud-controller 另有 **60 处 `this.logger.<level>?.(msg, err)` variadic 调用**（8 个文件：`index.ts` 8、`socketio-gateway.ts` 14、`status-sync.ts` 11、`container-service.ts` 8、`socket-diagnostics.ts` 7、`workload-dispatcher.ts` 7、`billing-event-publisher.ts` 5，另 `config/index.ts` 仅 import 类型）。`createLogger(level, sink)` 是**阈值过滤 + 透传 variadic** 工厂，`Logger.foo(...args: unknown[])`。pino 的 `logger.warn('msg', err)` 会把 `err` 当作插值参数**静默丢弃** | **必须同批迁移这 60 处**：签名改为 pino 原生 `logger.<level>({ ...fields, ...(err ? { err } : {}) }, 'msg')`；`Logger`/`LoggerSink` 接口删除，统一为 `ObservabilityLogger = Pick<PinoLogger,'debug'\|'info'\|'warn'\|'error'>`；`createLogger` 与 `parseLogLevel` 从 `servers/cloud-controller/src/logger.ts` 移入共享模块（`parseLogLevel` 语义保持：非法值回落 `info`，`config.logLevel` 类型沿用）。**只替换 console 会让错误对象在 cloud-controller 全量丢失**，这是本计划最高优先级的返工点 |
 | F4 | §2.3 模块表 + §5.2.2 「`Logger` 结构化接口不变」（针对 admin-api billing） | `Logger` 结构接口在 **5 处**重复声明（`cloud-controller/src/logger.ts:11`、`socketio-gateway.ts:35`、`container-service.ts:51`、`workload-dispatcher.ts:17`、`status-sync.ts:8`）+ agent-api `cloud-host-workload-service.ts:32`；另有 `MqLogger`（admin-api `billing/mq/connection.ts:3`）与 `LoggerSink`。`console` 作为默认 logger 注入共 **18 处**：admin-api 11（`index.ts:210,221`、`billing/mq/{publisher:52,runtime:39,consumers:180,255,connection:19}`、`billing/{scheduler:22,settlement-tick:36,reconciliation:75}`、`routes/billing-openai.ts:323`）、agent-api 1（`cloud-host-workload-service.ts:110`）、cloud-controller 6（`logger.ts:40`、`index.ts:59`、`socketio-gateway.ts:177`、`container-service.ts:184`、`billing-event-publisher.ts:269,399`） | 18 处默认值全部替换为真实 logger（`logger.child({ component })`）；6 处重复接口删除，改为 `ObservationLogger` 单一导出类型；`MqLogger` 保留名字（外部注入面）但类型改为 pino 子集。**测试中已有注入 fake logger 的调用面保持可用**（fake 只需实现 4 个方法） |
 | F5 | §5.2.10「billing 的 `logger: console` 注入改为真实 logger（保留 `Logger` 结构化接口不变）」 | admin-api billing 的 `MqLogger` 调用面 **31 处 / 7 文件**（`reconciliation.ts` 8、`mq/consumers.ts` 8、`mq/publisher.ts` 4、`mq/runtime.ts` 4、`settlement-tick.ts` 4、`scheduler.ts` 2、`mq/connection.ts` 1），全部 variadic `(msg, err)` 形态 | 与 F3 同口径：**签名改 pino 原生**，`MqLogger` 类型改为 `Pick<PinoLogger,'debug'\|'info'\|'warn'\|'error'>`。不保留「结构接口不变 + 内部适配」的双口径，避免长期并存两套调用形态 |
-| F6 | §8.4「需要同步修改的既有测试（已知清单）」列 7 个文件 | `vi.spyOn(console, ...)` 实测 **139 处 / 57 个测试文件**。分两类：**断言型（捕获 console 输出做 expect）18 个文件**：`controller-api/{acp-session-manager,socketio,session-command,harness-login-manager,permission-manager,git-browser,elicitation-manager}.test.ts`、`agent-api/{workflow/instance,session,elicitation-subscriber,tenant-self-check,workflow/pr-event-handler,workflow/pr-handler-registry}.test.ts`、`admin-api/services/auth.test.ts`、`agent-gear/{tests/socketio-client,tests/acp-bridge,tests/acp-spawner,src/gateway,src/acp/bridge}.test.ts`；**静音型（仅 `mockImplementation(()=>{})` 不 assert）约 39 个文件**，集中在 `admin-api/src/migrations/*.test.ts` | **断言型 18 个文件必须迁移**到 `createTestLogger()` 的 `records`（断言结构化字段而非拼接字符串）；**静音型可保留**（`console` 不再被调用后 spy 自然空转，不触发 no-console 守卫），但**推荐**在同一次改动中清理（避免留下误导性 spy）。迁移后**不得降低断言强度**：原断言 `stringContaining('Controller not found')` 改为断言 `msg`/`component` 字段 |
+| F6 | §8.4「需要同步修改的既有测试（已知清单）」列 7 个文件 | `vi.spyOn(console, ...)` 实测 **139 处 / 59 个测试文件**（其中 admin-api 迁移测试占 18 个）。分两类：**断言型（捕获 console 输出做 expect）18 个文件**：`controller-api/{acp-session-manager,socketio,session-command,harness-login-manager,permission-manager,git-browser,elicitation-manager}.test.ts`、`agent-api/{workflow/instance,session,elicitation-subscriber,tenant-self-check,workflow/pr-event-handler,workflow/pr-handler-registry}.test.ts`、`admin-api/services/auth.test.ts`、`agent-gear/{tests/socketio-client,tests/acp-bridge,tests/acp-spawner,src/gateway,src/acp/bridge}.test.ts`；**静音型（仅 `mockImplementation(()=>{})` 不 assert）约 41 个文件**，集中在 `admin-api/src/migrations/*.test.ts` | **断言型 18 个文件必须迁移**到 `createTestLogger()` 的 `records`（断言结构化字段而非拼接字符串）；**静音型可保留**（`console` 不再被调用后 spy 自然空转，不触发 no-console 守卫），但**推荐**在同一次改动中清理（避免留下误导性 spy）。迁移后**不得降低断言强度**：原断言 `stringContaining('Controller not found')` 改为断言 `msg`/`component` 字段 |
 | F7 | §3.2.4「`contracts/agent-session-websocket.md` 已约定 `_meta.traceparent/tracestate/baggage` 保留给 W3C Trace Context」 | `contracts/` 全目录 grep `_meta\|traceparent` 只命中 `agent-session-websocket.md:193`，且该处 `_meta` 是 **ACP 协议自身字段**（说明 raw 快照 16 KiB 上限），与 W3C 无关；`cloud-controller-websocket.md` 无 `_meta` 字样 | 提案「已约定」**不成立**。Phase 1 在 `contracts/observability.md` 与 `agent-session-websocket.md` **新增**「`_meta` 字段为 W3C Trace Context 保留位，本期**不写入** ACP payload」的显式声明（与决策 D12 一致）；`cloud-controller-websocket.md` 新增「worker 事件 `_meta.traceparent` 可选」附录 |
 | F8 | §5.2.1「脚本 `scripts/sync-observability.mjs`」；§7 项目结构含 `scripts/` | 仓库**没有** `scripts/` 顶层目录（`ls: cannot access 'scripts/'`）；**没有根 `package.json` / workspace**（每个包独立 `package-lock.json`）；`.github/workflows/publish-agent-gear.yml` 的 paths 仅 `packages/agent-controller/**` | 新建 `scripts/` 顶层目录；`packages/observability/` **不提供 `package.json`**（避免被误当可安装包/触发发布），只含 `README.md` + `src/`；同步脚本用纯 Node ESM（`.mjs`，无第三方依赖）。已核对：新增目录不会触发任何 workflow（publish 的 paths 已限定） |
 | F9 | §5.2.2/§5.2.4 示例中 `SERVICE_VERSION`、`./index-logger.js` 未说明来源 | 两类构建形态并存：**admin-api / cloud-controller** 走 `tsc`→`dist`（`node dist/index.js`，`rootDir: src`、`outDir: dist`）；**agent-api / controller-api** 镜像内直接 `node src/index.ts` + 编排注入 `NODE_OPTIONS=--import tsx`（`servers/agent-api/Dockerfile:17`、`servers/controller-api/Dockerfile:17`）。五个包 `tsconfig` 均 `resolveJsonModule: true` 但 `rootDir: ./src`，`import '../../package.json'` 会因超出 `rootDir` 编译失败 | **服务名与版本统一由 `createRequire(import.meta.url)('../../package.json')` 解析**：`src/observability/logger.ts` 与 `dist/observability/logger.js` 的 `../../` 均指向包根（层级一致，已核对）。`service = OTEL_SERVICE_NAME ?? pkg.name`（五个包名恰为 `admin-api`/`agent-api`/`controller-api`/`cloud-controller`/`agent-gear`，与提案字段表完全一致），`serviceVersion = pkg.version`。**因此不需要 per-package `index-logger.ts`**（裁决 D2） |
@@ -289,7 +289,7 @@ graph LR
 | `src/index.ts` | 修改 | 首行 register import；`app.use(httpContext())` 紧随 `cors()`（:61 后）；10 处 console；`:210`/`:221` 的 `logger: console` → `logger.child({ component: 'billing-mq' })` |
 | `src/services/auth.ts` | 修改 | **唯一审计例外**：`logger.warn({ bootstrapAdminPassword: password, userId }, '初始管理员密码（仅首次初始化输出一次，请立即修改；审计例外）')`；7 处 console 其余按映射表替换 |
 | `src/services/billing/**`（7 文件 31 处） | 修改 | `MqLogger` 类型改 pino 子集；调用全部改原生签名；11 处 `?? console`/`= console` 删除（`index.ts` 2 + `billing/*` 7 + `routes/billing-openai.ts` 1 + `reconciliation.ts` 1） |
-| `src/migrations/**`（17 文件） | 修改 | console 全部替换为 `child({ component: 'migration/NNN' })`；`runner.ts` 5 处 |
+| `src/migrations/**`（19 个迁移文件 + `runner.ts`） | 修改 | console 全部替换为 `child({ component: 'migration/NNN' })`；`runner.ts` 5 处 |
 | `src/graphql/resolvers/{tenant,cloud-container,cloud-workload}.ts` | 修改 | 9 + 3 + 3 处 console；resolver 内 `runWithLogContext({ userId, tenantId })`（已有上下文则不覆盖） |
 | `src/routes/internal-billing.ts` / `billing-openai.ts` | 修改 | 9 + 1 处 console |
 | RabbitMQ 消费/发布 | 修改 | amqplib 自动埋点已覆盖；仅补「消费循环每批一个 span」（`messaging.batch.message_count`），不逐消息 |
@@ -307,7 +307,7 @@ graph LR
 | `src/services/{session,cloud-host-github-service,cloud-host-tools}.ts` | 修改 | 39 处发布点接入 `publishJson`（agent-api 共 39）；`session.ts:778` 逐条发布但**不开 span** |
 | `src/services/workflow/**`（orchestrator、instance、issues-event-handler、pr-event-handler、pr-check-run-sync、tool-handlers 等） | 修改 | 约 30 处 console；**节点推进**每节点一个 span（`workflow.node.advance`，属性 `workflowInstanceId`/`nodeId`），事件回调入口一个 span |
 | `src/services/workflow/issues-event-handler.ts`（trigger runner） | 修改 | 每轮扫描一个 span（属性 `candidateCount`） |
-| `src/migrations/**`（15 文件） | 修改 | console 替换 + `component: 'migration/NNN'` |
+| `src/migrations/**`（21 个迁移文件 + `runner.ts`） | 修改 | console 替换 + `component: 'migration/NNN'` |
 | `src/routes/**`（session-stream 等） | 修改 | SSE 连接建立/断开各一条日志（D8）；SSE 首帧不产生 span |
 
 **完成判据**：agent-api `npm test` 全绿；`/graphql` 一次请求在日志中出现 `requestId` + `trace_id`，且 admin-api 侧（billing 调用）日志同 `trace_id`；`grep console` 为 0。
@@ -374,7 +374,7 @@ graph LR
 |------|------|
 | 新增单测 | T-OBS1~T-OBS22（分布见 §5） |
 | 既有断言型 spy 迁移 | 18 个文件（F6 清单）：全部改 `createTestLogger()` + 断言 `records` 结构化字段 |
-| 既有静音型 spy | 39 个文件：可保留；**推荐**清理为注入 `createTestLogger().logger`（清理后测试更快且不再误导） |
+| 既有静音型 spy | 41 个文件：可保留；**推荐**清理为注入 `createTestLogger().logger`（清理后测试更快且不再误导） |
 | `tests/api` 横切 | T-OBS19：四服务 `/health` 与 GraphQL 响应带 `x-request-id`；入站合法值沿用、非法值重生成；错误响应 join 后不含 token/password 明文 |
 | `tests/e2e` 冒烟 | T-OBS20：compose 启动后四服务首屏日志可 `JSON.parse`；一次 GraphQL 请求的 `trace_id` 在 agent-api 与 admin-api 日志中同时出现 |
 | 覆盖率 | `observability/*.ts` ≥ 90%（各包 `vitest.config.ts` 的 `exclude` 只排除 `index.ts`/`*.test.ts`，`register.ts` 随 index 被排除，其余必须覆盖） |
@@ -460,7 +460,7 @@ graph LR
 
 **Phase 11 测试收口**
 - [ ] T-OBS1~T-OBS22 全绿；`observability/*.ts` 覆盖率 ≥ 90%
-- [ ] 139 处 console spy 处理完毕（18 个断言型必改，39 个静音型已清理或保留且不失效）
+- [ ] 139 处 console spy 处理完毕（18 个断言型必改，41 个静音型已清理或保留且不失效）
 - [ ] `tests/api` 全量通过（含 T-OBS19 与既有端点零回归）
 - [ ] `tests/e2e` 冒烟通过（T-OBS20）
 - [ ] 性能对照：p99 增幅 ≤ 5%（PRD 4.1）
@@ -548,7 +548,7 @@ graph LR
 | `packages/agent-controller/tests/acp-spawner.test.ts:80,89` | `consoleLogSpy` 断言两处 | 断言 `component:'acp-spawner'` + `msg` |
 | `packages/agent-controller/src/gateway.test.ts:242`、`src/acp/bridge.test.ts:146,211` | `warnSpy` 断言 | 断言字段 |
 
-**静音型（约 39 个文件，可保留）**：`servers/admin-api/src/migrations/*.test.ts`（17 个）、`servers/cloud-controller/src/{migrations/*.test.ts,routes/internal-api.test.ts,services/billing-events.test.ts}`（5 个）、`servers/agent-api/src/**` 其余 spyOn（约 10 个）、`servers/controller-api/src/services/{gateway-relay,elicitation-manager}.test.ts` 其余、`packages/agent-controller/tests/commands/*.test.ts`（4 个）。建议在触碰该文件时顺手清理。
+**静音型（约 41 个文件，可保留）**：`servers/admin-api/src/migrations/*.test.ts`（18 个）、`servers/cloud-controller/src/{migrations/*,routes/internal-api.test.ts,services/billing-events.test.ts}`（4 个）、`servers/agent-api/src/**` 与 `servers/controller-api/src/**` 中除上述断言型外的 spyOn，以及 `packages/agent-controller` 剩余的 spyOn 文件。建议在触碰该文件时顺手清理。
 
 ### E. AGENTS.md / 索引更新清单
 
@@ -576,7 +576,7 @@ graph LR
 | `console` 作为 logger | `grep -rnE "\?\? console\b\|=\s*console\b\|:\s*console\b"` | 18 处（admin-api 11 / agent-api 1 / cloud-controller 6） |
 | 结构 logger 调用 | `grep -cE "logger[^ ]*\.(debug\|info\|warn\|error)"` | cloud-controller 60（8 文件）；admin-api billing 31（7 文件） |
 | 重复 `Logger` 接口 | `grep -rn "interface Logger"` | 6 处（含 agent-api 1 处） |
-| console spy | `grep -rn "spyOn(console" --include=*.test.ts` | 139 处 / 57 文件 |
+| console spy | `grep -rn "spyOn(console" --include=*.test.ts` | 139 处 / 59 文件 |
 | `_meta` 契约现状 | `grep -rn "_meta\|traceparent" contracts/` | 仅 `agent-session-websocket.md:193`（ACP 自有字段） |
 | `scripts/` | `ls scripts/` | 不存在 |
 | 根 workspace | `ls package.json` | 不存在（各包独立 lock） |
