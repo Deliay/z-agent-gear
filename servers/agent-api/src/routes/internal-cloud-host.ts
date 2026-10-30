@@ -169,7 +169,7 @@ internalCloudHostRouter.post(
  *
  * - 双鉴权与 `github-credential` 完全一致（`INTERNAL_API_TOKEN` 或本机 Controller key）；
  * - **永不 404**：任何无法下发有效身份的场景一律 `200 {"mode":"unset"}`（鉴权失败仍 401/403）；
- * - 响应按裁决 4 缺省字段：`unset` 仅返回 mode，`co_author` 才含 coAuthor*。
+ * - **恒 bot**：云电脑自身身份无视成员个人设置，恒为平台 bot（保留 `mode` 包络兼容 2.11.x）。
  */
 internalCloudHostRouter.post(
   '/:controllerId/commit-identity',
@@ -184,7 +184,7 @@ internalCloudHostRouter.post(
         return;
       }
 
-      const identity = await commitSettingsService.resolveCommitIdentity(controllerId);
+      const identity = await commitSettingsService.resolveCloudHostIdentity();
       res.json(identity);
     } catch {
       // 任何解析异常按「未设置」兜底，不阻塞容器启动 / 周期同步。

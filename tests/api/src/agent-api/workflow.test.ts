@@ -3159,6 +3159,77 @@ describe('Workflow Optimization Features (A35-A44)', () => {
   }, 30_000);
 
   // ---------------------------------------------------------------------------
+  // T-WF-API1/2: worktree committer 快照与下发（实例 + 节点复用快照）
+  // ---------------------------------------------------------------------------
+
+  it('T-WF-API1/2: 实例 Worktree 下发创建者提交人，节点 Worktree 复用实例快照（成员中途改设置不生效）', async () => {
+    const updateSetting = (name: string, email: string) =>
+      gqlRequest(
+        `mutation UpdateCommitSettings($input: CommitSettingsInput!) { updateCommitSettings(input: $input) { committerType customName customEmail } }`,
+        { input: { committerType: 'CUSTOM', customName: name, customEmail: email } },
+        token,
+      );
+
+    const saved = await updateSetting('WF Committer', 'wf-committer@example.com');
+    expect((await saved.json()).errors).toBeUndefined();
+
+    const captured: Array<{ name: string; email: string } | undefined> = [];
+    fake.client.on('git:worktree:add', (data: { requestId: string; worktreePath: string; committer?: { name: string; email: string } }) => {
+      captured.push(data.committer);
+      fake.client.emit('git:worktree:add:result', {
+        requestId: data.requestId,
+        success: true,
+        worktreePath: data.worktreePath.replace(/^~\//, `${FAKE_CONTROLLER_HOME}/`),
+      });
+    });
+
+    const tplId = await createSimpleTemplate(token, `wf-cm-${Date.now()}`, true); // requiresWorktree=true
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-cm-cfg-${Date.now()}`);
+
+    const instRes = await gqlRequest(
+      INSTANTIATE_WORKFLOW_WITH_WORKTREE,
+      {
+        input: {
+          source: 'CONFIGURED',
+          configuredWorkflowId: cfgId,
+          controllerId: fake.controllerId,
+          workspaceId,
+          name: `wf-cm-实例-${Date.now()}`,
+          nodes: simpleTemplateInput('_').nodes.map((n) => ({
+            ...n,
+            requiresWorktree: n.nodeKey === 'exec' ? true : n.requiresWorktree,
+            agentConfig: n.nodeKey === 'exec' ? { acpServerType: 'opencode', initNewWorktree: true } : null,
+          })),
+          createWorkflowWorktree: true,
+        },
+      },
+      token,
+    );
+    const instBody = await instRes.json();
+    expect(instBody.errors).toBeUndefined();
+    const inst = instBody.data.instantiateWorkflow;
+    expect(captured[0]).toEqual({ name: 'WF Committer', email: 'wf-committer@example.com' });
+
+    // 成员中途改设置：已建实例不受影响（快照语义）
+    const changed = await updateSetting('Changed Committer', 'changed@example.com');
+    expect((await changed.json()).errors).toBeUndefined();
+
+    const inputNode = inst.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    const startEvent = waitForEvent<StartEventData>(fake.client, 'acp:start', 10000);
+    const completeRes = await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId: inst.id, nodeId: inputNode.id, input: '测试' }, token);
+    expect((await completeRes.json()).errors).toBeUndefined();
+    const startData = await startEvent;
+
+    // 节点级 Worktree 复用实例快照，不下发改变后的设置
+    expect(captured[captured.length - 1]).toEqual({ name: 'WF Committer', email: 'wf-committer@example.com' });
+
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId, sessionId: startData.sessionId, success: true, externalSessionId: `ext_wfcm_${Date.now()}`,
+    });
+    await sleep(500);
+  }, 30_000);
+
+  // ---------------------------------------------------------------------------
   // A49: A36 补充 - 非 Git 工作区时 createWorkflowWorktree 不生效
   // ---------------------------------------------------------------------------
 

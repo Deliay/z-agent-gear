@@ -13,6 +13,8 @@ export interface IssuesEventPayload {
   body?: string;
   issueUrl: string;
   author?: string;
+  /** 事件触发人（`labeled` 的 sender = 加触发标签者）；缺失/非法时省略（老 payload 兼容） */
+  sender?: { id: number; login: string };
   /** 当前标签名（原始大小写；匹配时归一小写） */
   labels: string[];
 }
@@ -99,6 +101,21 @@ export function parseGithubIssuesEvent(raw: Buffer | string): IssuesEventPayload
     author = optionalString(issue.user.login, 'issue.user.login', 256);
   }
 
+  // 触发人（加标签者）：缺失或字段非法 → 省略，不影响事件受理（老 payload 兼容）。
+  let sender: { id: number; login: string } | undefined;
+  if (isRecord(parsed.sender)) {
+    const rawSender = parsed.sender;
+    const login =
+      typeof rawSender.login === 'string' && rawSender.login.trim()
+        ? rawSender.login.trim().slice(0, 256)
+        : undefined;
+    const id =
+      typeof rawSender.id === 'number' && Number.isInteger(rawSender.id) && rawSender.id > 0
+        ? rawSender.id
+        : undefined;
+    if (login && id !== undefined) sender = { id, login };
+  }
+
   if (!isRecord(parsed.repository)) throw new GithubWebhookPayloadError('repository');
   const repoFullName = requireFullName(parsed.repository.full_name);
 
@@ -111,6 +128,7 @@ export function parseGithubIssuesEvent(raw: Buffer | string): IssuesEventPayload
     ...(body !== undefined ? { body } : {}),
     issueUrl,
     ...(author ? { author } : {}),
+    ...(sender ? { sender } : {}),
     labels,
   };
 }

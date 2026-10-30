@@ -297,6 +297,8 @@ interface GitWorktreeAddPayload {
   repoPath: string;
   worktreePath: string;
   branch: string;
+  /** 可选：Worktree 级提交人；缺省 = 不写身份（沿用容器级 bot），旧 worker 忽略该字段。 */
+  committer?: { name: string; email: string };
 }
 
 interface GitWorktreeRemovePayload {
@@ -1349,7 +1351,7 @@ export function connectToServer(
   });
 
   socket.on('git:worktree:add', async (data: GitWorktreeAddPayload) => {
-    const result = await worktreeHandler.add(data.repoPath, data.worktreePath, data.branch);
+    const result = await worktreeHandler.add(data.repoPath, data.worktreePath, data.branch, data.committer);
     if (result.success) {
       fsHandler.registerAllowedPath(data.worktreePath);
     }

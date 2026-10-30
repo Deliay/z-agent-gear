@@ -52,10 +52,9 @@ const CONTROLLER_KEYS = `
 
 const COMMIT_SETTINGS = `
   query CommitSettings {
-    commitSettings { committerMode committerType customName customEmail }
+    commitSettings { committerType customName customEmail }
   }
 `;
-
 const UPDATE_COMMIT_SETTINGS = `
   mutation UpdateCommitSettings($input: CommitSettingsInput!) {
     updateCommitSettings(input: $input) { committerMode committerType customName customEmail }
@@ -498,11 +497,10 @@ describe('多租户一期：T-MT 系列', () => {
   });
 
   it('T-MT2h: user_commit_settings 按用户隔离（B 看不到 A 的提交人设置）', async () => {
-    const updated = await gql<{ updateCommitSettings: { committerMode: string; committerType: string; customName: string | null } }>(
+    const updated = await gql<{ updateCommitSettings: { committerType: string; customName: string | null } }>(
       UPDATE_COMMIT_SETTINGS,
       {
         input: {
-          committerMode: 'HUMAN_ONLY',
           committerType: 'CUSTOM',
           customName: 'MT User A',
           customEmail: 'mt-a@example.com',
@@ -512,18 +510,21 @@ describe('多租户一期：T-MT 系列', () => {
     );
     expect(updated.errors).toBeUndefined();
     expect(updated.data!.updateCommitSettings).toMatchObject({
-      committerMode: 'HUMAN_ONLY',
       committerType: 'CUSTOM',
       customName: 'MT User A',
     });
 
-    const other = await gql<{ commitSettings: { committerMode: string; committerType: string } }>(
+    const other = await gql<{ commitSettings: { committerType: string; customName: string | null } }>(
       COMMIT_SETTINGS,
       undefined,
       userB.token,
     );
     expect(other.errors).toBeUndefined();
-    expect(other.data!.commitSettings).toMatchObject({ committerMode: 'UNSET', committerType: 'UNSET' });
+    expect(other.data!.commitSettings).toEqual({
+      committerType: 'UNSET',
+      customName: null,
+      customEmail: null,
+    });
   });
 
   it('T-MT3: A 的列表仍能看到自己创建的数据（行为回归）', async () => {
