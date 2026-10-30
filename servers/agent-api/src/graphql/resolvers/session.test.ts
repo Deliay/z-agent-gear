@@ -59,6 +59,7 @@ import { sessionService } from '../../services/session.js';
 import { modelService } from '../../services/model.js';
 import { Controller } from '../../models/controller.js';
 import { CloudHost } from '../../models/cloud-host.js';
+import { runWithWorkspace } from '../../services/workspace-context.js';
 import type { AuthContext } from './auth.js';
 
 function createContext(): AuthContext {
@@ -198,6 +199,31 @@ describe('sessionResolvers.Session cloud host read-only fields', () => {
     const anon = { currentUser: null } as never;
     await expect(sessionResolvers.Session.controllerType(parent, {}, anon)).resolves.toBeNull();
     await expect(sessionResolvers.Session.cloudHost(parent, {}, anon)).resolves.toBeNull();
+  });
+
+  it('T-SR-TEAM: 工作区上下文内不再按 userId 过滤（团队租户可查看他人创建的控制器）', async () => {
+    vi.mocked(Controller.findOne).mockReturnValue(chain({ type: 'cloud' }) as never);
+    vi.mocked(CloudHost.findOne).mockReturnValue(
+      chain({ _id: 'cloud-1', status: 'RUNNING', deletedAt: null }) as never,
+    );
+
+    await runWithWorkspace(
+      {
+        id: 'ws-team',
+        tenantId: 'tenant-team',
+        type: 'global',
+        role: 'admin',
+        readOnly: false,
+        globalWorkspaceId: 'ws-team',
+      },
+      async () => {
+        await sessionResolvers.Session.controllerType(parent, {}, context);
+        await sessionResolvers.Session.cloudHost(parent, {}, context);
+      },
+    );
+
+    expect(Controller.findOne).toHaveBeenCalledWith({ _id: 'ctrl-1' });
+    expect(CloudHost.findOne).toHaveBeenCalledWith({ controllerId: 'ctrl-1' });
   });
 });
 

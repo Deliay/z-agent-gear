@@ -1,4 +1,5 @@
 import { GraphQLError } from 'graphql';
+import mongoose from 'mongoose';
 import { User } from '../models/user.js';
 import { Workspace } from '../models/workspace.js';
 import { TenantMember } from '../models/tenant-member.js';
@@ -47,12 +48,50 @@ export async function authenticateUser(request: Request): Promise<AuthenticatedU
 }
 
 /**
- * 解析 `x-workspace-id`（多租户二期，裁决 1）：
+ * 按工作区 id 解析请求上下文（多租户二期，裁决 1）：
  * - Workspace.findById → 取 tenantmembers.role → 可访问性校验
  *   （admin 直通全部工作区；global 需租户成员；normal 需 workspacemembers 成员）；
  * - `readOnly = type==='global' && role==='developer'`；
- * - 缺省/缺头回退「个人租户全局工作区」（role=admin、readOnly=false），与一期完全等价；
  * - 非法/不可达 id 一律 `workspace not found`（不泄露存在性）。
+ *
+ * 供 GraphQL 的 `x-workspace-id` 与 SSE（EventSource 不能设请求头）共用，保证两侧口径一致。
+ */
+export async function resolveWorkspaceContext(
+  user: AuthenticatedUser,
+  workspaceId: string,
+): Promise<WorkspaceContext> {
+  if (!mongoose.isValidObjectId(workspaceId)) throw new GraphQLError(WORKSPACE_NOT_FOUND);
+  const workspace = await Workspace.findById(workspaceId).lean();
+  if (!workspace) throw new GraphQLError(WORKSPACE_NOT_FOUND);
+  const tenantId = String(workspace.tenantId);
+  const membership = await TenantMember.findOne({ tenantId, userId: user.id }).lean();
+  if (!membership) throw new GraphQLError(WORKSPACE_NOT_FOUND);
+  const role = (membership.role as TenantRole) ?? 'developer';
+  const type = workspace.type === 'global' ? 'global' : 'normal';
+  if (role !== 'admin' && type === 'normal') {
+    const join = await WorkspaceMember.findOne({ workspaceId: workspace._id, userId: user.id }).lean();
+    if (!join) throw new GraphQLError(WORKSPACE_NOT_FOUND);
+  }
+  const globalWorkspace = await Workspace.findOne({ tenantId, type: 'global' })
+    .select('_id')
+    .lean();
+  return {
+    id: String(workspace._id),
+    tenantId,
+    type,
+    role,
+    readOnly: type === 'global' && role === 'developer',
+    globalWorkspaceId: globalWorkspace
+      ? String(globalWorkspace._id)
+      : type === 'global'
+        ? String(workspace._id)
+        : '',
+  };
+}
+
+/**
+ * 解析 `x-workspace-id`（多租户二期，裁决 1）；缺省/缺头回退「个人租户全局工作区」
+ * （role=admin、readOnly=false），与一期完全等价。
  */
 export async function resolveWorkspaceAccess(
   request: Request,
@@ -62,32 +101,7 @@ export async function resolveWorkspaceAccess(
   const headerId = typeof raw === 'string' ? raw.trim() : '';
 
   if (headerId) {
-    const workspace = await Workspace.findById(headerId).lean();
-    if (!workspace) throw new GraphQLError(WORKSPACE_NOT_FOUND);
-    const tenantId = String(workspace.tenantId);
-    const membership = await TenantMember.findOne({ tenantId, userId: user.id }).lean();
-    if (!membership) throw new GraphQLError(WORKSPACE_NOT_FOUND);
-    const role = (membership.role as TenantRole) ?? 'developer';
-    const type = workspace.type === 'global' ? 'global' : 'normal';
-    if (role !== 'admin' && type === 'normal') {
-      const join = await WorkspaceMember.findOne({ workspaceId: workspace._id, userId: user.id }).lean();
-      if (!join) throw new GraphQLError(WORKSPACE_NOT_FOUND);
-    }
-    const globalWorkspace = await Workspace.findOne({ tenantId, type: 'global' })
-      .select('_id')
-      .lean();
-    return {
-      id: String(workspace._id),
-      tenantId,
-      type,
-      role,
-      readOnly: type === 'global' && role === 'developer',
-      globalWorkspaceId: globalWorkspace
-        ? String(globalWorkspace._id)
-        : type === 'global'
-          ? String(workspace._id)
-          : '',
-    };
+    return resolveWorkspaceContext(user, headerId);
   }
 
   // 缺省回退：个人租户（users.tenantId）全局工作区；缺数据（半迁移）时返回 undefined 保持一期行为。

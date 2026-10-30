@@ -18,7 +18,7 @@ vi.mock('../services/cloud-host-service.js', () => ({
 }));
 
 vi.mock('../models/controller.js', () => ({
-  Controller: { findOne: vi.fn() },
+  Controller: { findOne: vi.fn(), findById: vi.fn() },
 }));
 
 vi.mock('../models/cloud-host.js', () => ({
@@ -43,6 +43,7 @@ vi.mock('../services/commit-settings-service.js', () => ({
 
 import { internalCloudHostRouter } from './internal-cloud-host.js';
 import { cloudHostService } from '../services/cloud-host-service.js';
+import { Controller } from '../models/controller.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
 import { githubService } from '../services/github.js';
@@ -57,6 +58,9 @@ describe('internal cloud host routes', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.mocked(Controller.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(null),
+    } as never);
     const app = express();
     app.use(express.json());
     app.use('/internal/cloud-hosts', internalCloudHostRouter);
