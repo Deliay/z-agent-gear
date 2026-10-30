@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { adminGql, ensureAdminLogin } from './helpers.js';
 import { createFrontUser, type FrontUser } from '../support/front-users.js';
@@ -56,7 +56,8 @@ const RECHARGE = `
 const INVOICES = `
   query Invoices($id: ID!) {
     adminBillingInvoices(accountId: $id, page: 1, pageSize: 20) {
-      id seq type amount balanceAfter items { productId quantity unitPrice amount meteringRef segment }
+      id seq type amount balanceAfter refType refId description
+      items { productId quantity unitPrice amount meteringRef segment }
     }
   }
 `;
@@ -371,4 +372,253 @@ describe('Admin Billing API', () => {
       }
     },
   );
+
+  /**
+   * API-AB1 / API-AB2：中断调用 20/80 拆分计价（Issue #355）。
+   *
+   * 注入方式（实现计划裁决 10）：直写 `billingoutbox`（producer=admin-api、published=false）
+   * 驱动真实 outbox → RabbitMQ → 计量 → 出账管线，再经 `adminBillingInvoices` /
+   * `adminBillingApiCalls` 断言明细与金额。依赖（MONGODB_URI / RabbitMQ）缺失时显式失败，
+   * 不允许静默 skip。
+   */
+  describe('中断调用计费口径（API-AB1 / API-AB2）', () => {
+    async function mongoDb(): Promise<mongoose.mongo.Db> {
+      const uri = process.env.MONGODB_URI;
+      if (!uri) throw new Error('API-AB1/API-AB2 需要 MONGODB_URI（Aspire 共享 Mongo）');
+      if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+      const db = mongoose.connection.db;
+      if (!db) throw new Error('MongoDB 连接未就绪');
+      return db;
+    }
+
+    async function adminAccountId(): Promise<string> {
+      const accounts = await adminGql<{
+        adminBillingAccounts: Array<{ id: string; ownerType: string; ownerName: string }>;
+      }>(ACCOUNTS, { keyword: null }, token);
+      expect(accounts.errors).toBeUndefined();
+      const account = accounts.data!.adminBillingAccounts[0];
+      if (!account) throw new Error('未找到管理员计费账户（请先执行 T-B31 或登录后台生成 Key）');
+      return account.id;
+    }
+
+    async function seedModelPrice(modelId: string): Promise<void> {
+      const db = await mongoDb();
+      await db.collection('productprices').updateOne(
+        { productId: `model.${modelId}.token` },
+        {
+          $set: {
+            productId: `model.${modelId}.token`,
+            productName: modelId,
+            pricingModel: 'per_token',
+            unitPrice: 0,
+            rates: { inputPerMillion: 100, cachedInputPerMillion: 50, outputPerMillion: 200 },
+            isBillable: true,
+            effectiveFrom: new Date(0),
+            updatedAt: new Date(),
+          },
+          $setOnInsert: { createdAt: new Date() },
+        },
+        { upsert: true },
+      );
+    }
+
+    async function seedCallAndEvent(input: {
+      accountId: string;
+      eventType: 'model_call.aborted' | 'model_call.completed';
+      requestId: string;
+      modelId: string;
+      payload: Record<string, unknown>;
+    }): Promise<void> {
+      const db = await mongoDb();
+      await db.collection('billingapicalls').updateOne(
+        { requestId: input.requestId },
+        {
+          $set: {
+            requestId: input.requestId,
+            accountId: new mongoose.Types.ObjectId(input.accountId),
+            apiKeyId: new mongoose.Types.ObjectId(),
+            cloudHostId: null,
+            billable: true,
+            modelId: input.modelId,
+            modelName: input.modelId,
+            inputTokens: 0,
+            cachedInputTokens: 0,
+            outputTokens: 0,
+            cost: 0,
+            status: 'started',
+            estimated: false,
+            startedAt: new Date(),
+            finishedAt: null,
+            invoiceSeq: null,
+          },
+          $setOnInsert: { createdAt: new Date() },
+        },
+        { upsert: true },
+      );
+      const eventId = `${input.eventType}:${input.requestId}`;
+      const occurredAt = new Date().toISOString();
+      await db.collection('billingoutbox').insertOne({
+        eventId,
+        producer: 'admin-api',
+        eventType: input.eventType,
+        routingKey: input.eventType,
+        payload: {
+          eventId,
+          eventType: input.eventType,
+          occurredAt,
+          accountId: input.accountId,
+          resourceId: input.requestId,
+          payload: { modelId: input.modelId, ...input.payload },
+        },
+        published: false,
+        attempts: 0,
+        lastError: null,
+        claimedAt: null,
+        claimedBy: null,
+        failed: false,
+        repairOf: null,
+        createdAt: new Date(),
+        publishedAt: null,
+      });
+    }
+
+    interface InvoiceWire {
+      refId: string | null;
+      description: string;
+      amount: number;
+      items: Array<{ productId: string; quantity: number; unitPrice: number; amount: number; segment: string | null }>;
+    }
+
+    async function waitForInvoice(accountId: string, requestId: string): Promise<InvoiceWire> {
+      let found: InvoiceWire | undefined;
+      await vi.waitFor(
+        async () => {
+          const invoices = await adminGql<{ adminBillingInvoices: InvoiceWire[] }>(
+            INVOICES,
+            { id: accountId },
+            token,
+          );
+          expect(invoices.errors).toBeUndefined();
+          found = invoices.data!.adminBillingInvoices.find(
+            (invoice) => invoice.refId === requestId,
+          );
+          expect(found).toBeDefined();
+        },
+        { timeout: 40_000, interval: 1000 },
+      );
+      return found!;
+    }
+
+    it('API-AB1: 中断调用明细两段输入（20%/80%）+ 输出全价，描述注明中断与折算口径', async () => {
+      const accountId = await adminAccountId();
+      const stamp = Date.now();
+      const modelId = `api-ab-${stamp}`;
+      const requestId = `api-ab-1-${stamp}`;
+      await seedModelPrice(modelId);
+      await seedCallAndEvent({
+        accountId,
+        eventType: 'model_call.aborted',
+        requestId,
+        modelId,
+        payload: {
+          inputTokens: 1_000_000,
+          cachedInputTokens: 100_000,
+          outputTokens: 1_000_000,
+          estimated: false,
+          reason: 'client_aborted',
+        },
+      });
+
+      const invoice = await waitForInvoice(accountId, requestId);
+      const bySegment = new Map(invoice.items.map((item) => [item.segment, item]));
+      expect([...bySegment.keys()]).toEqual(['input:aborted', 'cached_input:aborted', 'output:aborted']);
+      expect(bySegment.get('input:aborted')?.quantity).toBe(200_000);
+      expect(bySegment.get('cached_input:aborted')?.quantity).toBe(800_000);
+      expect(bySegment.get('output:aborted')?.quantity).toBe(1_000_000);
+      expect(
+        (bySegment.get('input:aborted')?.quantity ?? 0) +
+          (bySegment.get('cached_input:aborted')?.quantity ?? 0),
+      ).toBe(1_000_000);
+      // 折后金额 260 分 < 全价口径 295 分
+      expect(invoice.amount).toBe(-260);
+      expect(invoice.description).toContain('中断');
+      expect(invoice.description).toContain('20% 未缓存 + 80% 缓存');
+
+      // 回写调用记录：三段实际用量 + 折后 cost
+      await vi.waitFor(
+        async () => {
+          const calls = await adminGql<{
+            adminBillingApiCalls: Array<{
+              requestId: string;
+              status: string;
+              cost: number;
+              inputTokens: number;
+              cachedInputTokens: number;
+              outputTokens: number;
+            }>;
+          }>(API_CALLS, { id: accountId }, token);
+          expect(calls.errors).toBeUndefined();
+          const call = calls.data!.adminBillingApiCalls.find((row) => row.requestId === requestId);
+          expect(call).toBeDefined();
+          expect(call!.status).toBe('aborted');
+          expect(call!.cost).toBe(2.6);
+          expect(call!.inputTokens).toBe(1_000_000);
+          expect(call!.cachedInputTokens).toBe(100_000);
+          expect(call!.outputTokens).toBe(1_000_000);
+        },
+        { timeout: 20_000, interval: 500 },
+      );
+    });
+
+    it('API-AB2: 正常调用金额回归（三段实际用量计价，零改动）', async () => {
+      const accountId = await adminAccountId();
+      const stamp = Date.now();
+      const modelId = `api-ab-done-${stamp}`;
+      const requestId = `api-ab-2-${stamp}`;
+      await seedModelPrice(modelId);
+      await seedCallAndEvent({
+        accountId,
+        eventType: 'model_call.completed',
+        requestId,
+        modelId,
+        payload: {
+          inputTokens: 1_000_000,
+          cachedInputTokens: 100_000,
+          outputTokens: 1_000_000,
+        },
+      });
+
+      const invoice = await waitForInvoice(accountId, requestId);
+      expect(invoice.items.map((item) => item.segment)).toEqual([
+        'input',
+        'cached_input',
+        'output',
+      ]);
+      expect(invoice.items.map((item) => item.quantity)).toEqual([900_000, 100_000, 1_000_000]);
+      expect(invoice.amount).toBe(-295);
+      expect(invoice.description).not.toContain('20% 未缓存 + 80% 缓存');
+
+      await vi.waitFor(
+        async () => {
+          const calls = await adminGql<{
+            adminBillingApiCalls: Array<{
+              requestId: string;
+              status: string;
+              cost: number;
+              inputTokens: number;
+              cachedInputTokens: number;
+              outputTokens: number;
+            }>;
+          }>(API_CALLS, { id: accountId }, token);
+          const call = calls.data!.adminBillingApiCalls.find((row) => row.requestId === requestId);
+          expect(call).toBeDefined();
+          expect(call!.status).toBe('completed');
+          expect(call!.cost).toBe(2.95);
+          expect(call!.inputTokens).toBe(1_000_000);
+          expect(call!.cachedInputTokens).toBe(100_000);
+        },
+        { timeout: 20_000, interval: 500 },
+      );
+    });
+  });
 });
