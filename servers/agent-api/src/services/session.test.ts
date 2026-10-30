@@ -336,19 +336,37 @@ describe('SessionService', () => {
         vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
       }
 
-      function addPayload(): { committer?: { name: string; email: string } } | undefined {
+      function addPayload():
+        | {
+            committer?: {
+              name: string;
+              email: string;
+              coAuthorName?: string;
+              coAuthorEmail?: string;
+            };
+          }
+        | undefined {
         return mockRedis.publish.mock.calls
           .map((c) => JSON.parse(String(c[1])))
           .find((p: { type?: string }) => p.type === 'git:worktree:add') as
-          | { committer?: { name: string; email: string } }
+          | {
+              committer?: {
+                name: string;
+                email: string;
+                coAuthorName?: string;
+                coAuthorEmail?: string;
+              };
+            }
           | undefined;
       }
 
-      it('C3a: 未显式传入 → 按会话创建者实时解析并随 git:worktree:add 下发', async () => {
+      it('C3a: 未显式传入 → 按会话创建者实时解析并随 git:worktree:add 下发（含共同作者）', async () => {
         mockWorktreeDeps();
         vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue({
           name: 'Deliay',
           email: 'deliay@example.com',
+          coAuthorName: 'zag-bot[bot]',
+          coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
         });
 
         await sessionService.create('user-1', {
@@ -360,7 +378,12 @@ describe('SessionService', () => {
         });
 
         expect(commitSettingsService.resolveWorktreeCommitter).toHaveBeenCalledWith('user-1');
-        expect(addPayload()?.committer).toEqual({ name: 'Deliay', email: 'deliay@example.com' });
+        expect(addPayload()?.committer).toEqual({
+          name: 'Deliay',
+          email: 'deliay@example.com',
+          coAuthorName: 'zag-bot[bot]',
+          coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+        });
       });
 
       it('C3b: 调用方显式传入（工作流节点复用实例快照）优先，不再查会话创建者', async () => {

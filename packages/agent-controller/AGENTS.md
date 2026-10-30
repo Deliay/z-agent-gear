@@ -282,13 +282,18 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 n
 - 同步链路仍自动 `cancel` 问询，但声明相同的 `CLIENT_CAPABILITIES` 并记录告警（无用户通道的合法降级）。
 - 回归：`capabilities.test.ts`（映射/三档合并/raw 保真）、`bridge.test.ts`（快照、resolved）、`elicitation.integration.test.ts`（真实 SDK + 假 Agent 进程验证 `elicitation/create` 路由）、`socketio-client.test.ts`（旧 payload 零退化）。
 
-## Worktree 级提交人（agent-gear 2.12.0）
+## Worktree 级提交人（agent-gear 2.12.0；共同作者 2.13.0）
 
 - `WorktreeHandler.add(repoPath, worktreePath, branch, committer?)`：`git worktree add` 成功后，若传入
   `committer {name,email}`，以 `git -C <worktreePath>` 依次执行
   `git config extensions.worktreeConfig true` → `git config --worktree user.name <name>` →
   `git config --worktree user.email <email>`；**仅作用于该 worktree**（`.git/worktrees/<name>/config.worktree`），
   主仓与兄弟 worktree 不受污染。
+- **共同作者（2.13.0）**：`committer.coAuthorName/coAuthorEmail` 成对合法时，
+  `git rev-parse --path-format=absolute --git-common-dir` → 写 `<common>/zag-hooks/prepare-commit-msg`
+  （`# zag-managed`，0755，内容固定不含用户数据）→ `--worktree core.hooksPath` +
+  `--worktree zag.coAuthorName/Email`。hook 从 worktree 生效配置读取 trailer，`grep -qF` exact-trailer
+  幂等（重复提交 / `--amend` 不叠加），无配置直接放行；任一步失败仅告警，不阻断 worktree 创建。
 - **安全**：name/email 用户可控，拼接进 `execAsync` 前必须 `shellQuote`（单引号包裹 + 内嵌 `'` 转义为
   `'\''`）；禁止未转义插值。单条命令失败仅 `console.warn`（不打印值），结果仍 `success`。
 - 缺省不写身份（沿用容器级 bot，后者恒为平台 bot）；非法载荷（非字符串/空值）按「未提供」处理。

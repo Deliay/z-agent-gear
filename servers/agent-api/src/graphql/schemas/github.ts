@@ -40,7 +40,7 @@ export const githubTypeDefs = `#graphql
   # 成员独立、无共享/继承：每个成员一份设置，任何工作区下均为同一份。
   # 从未保存返回 committerType=UNSET 的默认值；服务端权威校验白名单仅一条：
   #   invalid custom committer
-  # 归一规则：UNSET 清空 customName / customEmail。
+  # 归一规则：UNSET 清空 customName / customEmail，且 commitWithBot 归一 false。
   enum CommitterType {
     CUSTOM
     UNSET
@@ -51,12 +51,16 @@ export const githubTypeDefs = `#graphql
     committerType: CommitterType!
     customName: String
     customEmail: String
+    # 与 bot 共同提交：仅 CUSTOM 时可为 true；UNSET 恒 false
+    commitWithBot: Boolean!
   }
 
   input CommitSettingsInput {
     committerType: CommitterType!
     customName: String
     customEmail: String
+    # 缺省 false；committerType=UNSET 时服务端归一 false
+    commitWithBot: Boolean
   }
 
   extend type Query {

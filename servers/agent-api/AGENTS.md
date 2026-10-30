@@ -103,8 +103,8 @@ npm run start   # Start production server
 
 - 数据：`models/user-commit-setting.ts`（集合 `user_commit_settings`，`userId` String 唯一键
   `uniq_user_commit_setting`）；**成员独立、无共享/继承**，任何工作区下同一份设置。
-  字段仅 `userId / tenantId（留档）/ committerType(custom|unset) / customName / customEmail`；
-  `committerMode` / `githubAccountId` / `workspaceId` 已下线。
+  字段仅 `userId / tenantId（留档）/ committerType(custom|unset) / customName / customEmail /
+  commitWithBot`（布尔，默认 false，仅 custom 生效）；`committerMode` / `githubAccountId` / `workspaceId` 已下线。
 - **作用域插件豁免（返工修正）**：该集合**既不挂 `applyWorkspaceScope` 也不挂 `applyTenantScope`**。
   `applyTenantScope` 会在查询编译期把 `tenantId` 注入为当前 ALS 工作区租户，导致同一成员
   「团队工作区保存 / 个人工作区读取」互相不可见、二次保存撞 `uniq_user_commit_setting` 后回读落空
@@ -128,16 +128,20 @@ npm run start   # Start production server
 - `personalGithubAccounts`：`User.accountId` → 同账户 users → personal 租户 id（`_id` 复用 userId）
   → `GitHubAccount` 按 `tenantId ∈ personal` 且 `workspaceId ∈ {null, 本租户全局工作区}` 过滤
   （排除普通工作区副本）；实现为 `githubService.getPersonalAccounts`（直查 collection，绕 workspace-scope）。
-- `commit-settings-service`：`getCommitSettings/updateCommitSettings`（userId upsert）、
-  `resolveWorktreeCommitter(userId) → {name,email}|null`（custom 且合法才返回）、
-  `resolveCloudHostIdentity()` = **恒 bot**（`resolveAppBotIdentity` → `{mode:'agent_only'}`；
+- `commit-settings-service`：`getCommitSettings/updateCommitSettings`（userId upsert，`UNSET` 归一
+  `commitWithBot=false`）、`resolveWorktreeCommitter(userId) → {name,email,coAuthorName?,coAuthorEmail?}|null`
+  （custom 且合法才返回；`commitWithBot=true` 时解析 `resolveAppBotIdentity` 追加 bot 身份，失败降级为
+  仅成员署名）、`resolveCloudHostIdentity()` = **恒 bot**（`resolveAppBotIdentity` → `{mode:'agent_only'}`；
   bot 失败 `{mode:'unset'}`）。`mode` 包络仅为兼容 2.11.x 容器 `consume()`，不再有 co_author/human_only。
 - 内部端点：`POST /internal/cloud-hosts/:controllerId/commit-identity` 与 `github-credential` 双鉴权一致
-  （`INTERNAL_API_TOKEN` 或本机 Controller key，401/403），**永不 404**，恒 200；**无视个人设置恒 bot**。
-- 下发链：`git:worktree:add` 可选 `committer {name,email}`；`workflow/instance.ts` 实例化时解析一次并落
-  `WorkflowInstance.worktreeCommitterName/Email` 快照（issue 触发人覆盖 > 创建者设置），实例级与节点级
+  （`INTERNAL_API_TOKEN` 或本机 Controller key，401/403），**永不 404**，恒 200；**有效主机无视个人设置恒 bot**；
+  主机不存在 / 已软删返回 `{mode:'unset'}` 且不解析 bot（无主机的容器不写身份）。
+- 下发链：`git:worktree:add` 可选 `committer {name,email,coAuthorName?,coAuthorEmail?}`；
+  `workflow/instance.ts` 实例化时解析一次并落 `WorkflowInstance.worktreeCommitterName/Email` +
+  `worktreeCoAuthorName/Email` 快照（issue 触发人覆盖 > 创建者设置），实例级与节点级
   worktree（`orchestrator.startNodeSession → session.create`）复用同一快照；独立会话在 `session.create` 内
-  实时解析创建者设置。缺省不写身份 = 沿用容器级 bot；旧 worker（<2.12.0）忽略未知字段优雅降级。
+  实时解析创建者设置。缺省不写身份 = 沿用容器级 bot；旧 worker（<2.12.0）忽略未知字段优雅降级，
+  <2.13.0 忽略 `coAuthor*`（仅缺失共同作者 trailer）。
 - Issue 触发人：`github-issues-webhook-payload` 解析 `sender {id,login}` → `IssueWorkflowTrigger`
   落 `triggerSenderId/triggerSenderLogin/triggerUserId`（`GitHubAccount.githubUserId` 匹配）；
   `IssuesTriggerRunner.createInstance` 身份优先级「触发人提交人 → sender 的 GitHub 身份

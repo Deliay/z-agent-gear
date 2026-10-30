@@ -33,6 +33,8 @@ const userCommitSettingSchema = new mongoose.Schema(
     },
     customName: { type: String, default: null, maxlength: 100 },
     customEmail: { type: String, default: null, maxlength: 254 },
+    /** 与 bot 共同提交：仅 `committerType=custom` 时生效（UNSET 归一 false）。 */
+    commitWithBot: { type: Boolean, default: false },
   },
   { collection: 'user_commit_settings', timestamps: true },
 );

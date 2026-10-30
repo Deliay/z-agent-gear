@@ -82,8 +82,16 @@ export class SessionCommandService {
             branch?: string;
             message?: string;
             mcpEndpoint?: { token: string; serverNames: string[] };
-            /** Worktree 级提交人（可选；缺省不下发，worker 沿用容器级 bot）。仅此白名单字段，不开放任意 git 命令。 */
-            committer?: { name: string; email: string };
+            /**
+             * Worktree 级提交人（可选；缺省不下发，worker 沿用容器级 bot）。仅此白名单字段，不开放任意 git 命令。
+             * `coAuthorName/coAuthorEmail` 成对出现时由 worker 追加共同作者 trailer。
+             */
+            committer?: {
+              name: string;
+              email: string;
+              coAuthorName?: string;
+              coAuthorEmail?: string;
+            };
           };
 
           if (command.type === 'acp:start' && command.sessionId && command.controllerId && command.serverType) {

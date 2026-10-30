@@ -65,10 +65,15 @@ beforeEach(() => {
 });
 
 describe('commit settings service', () => {
-  it('T-CS-P1: 成员级默认值为 UNSET', async () => {
+  it('T-CS-P1: 成员级默认值为 UNSET 且 commitWithBot=false', async () => {
     mockSetting(null);
     const view = await service().getCommitSettings(USER_ID);
-    expect(view).toEqual({ committerType: 'UNSET', customName: null, customEmail: null });
+    expect(view).toEqual({
+      committerType: 'UNSET',
+      customName: null,
+      customEmail: null,
+      commitWithBot: false,
+    });
     expect(h.settingFindOne).toHaveBeenCalledWith({ userId: USER_ID });
   });
 
@@ -84,6 +89,60 @@ describe('commit settings service', () => {
       committerType: 'CUSTOM',
       customName: 'Alice',
       customEmail: 'alice@example.com',
+      commitWithBot: false,
+    });
+  });
+
+  it('T-CB1: 已保存 commitWithBot=true 时回显 true，UNSET 时归一 false', async () => {
+    mockSetting({
+      userId: USER_ID,
+      committerType: 'custom',
+      customName: 'Alice',
+      customEmail: 'alice@example.com',
+      commitWithBot: true,
+    });
+    await expect(service().getCommitSettings(USER_ID)).resolves.toMatchObject({ commitWithBot: true });
+
+    mockSetting({
+      userId: USER_ID,
+      committerType: 'unset',
+      customName: null,
+      customEmail: null,
+      commitWithBot: true,
+    });
+    await expect(service().getCommitSettings(USER_ID)).resolves.toMatchObject({ commitWithBot: false });
+  });
+
+  it('T-CB2: 保存 commitWithBot 落库；UNSET 归一 false', async () => {
+    h.settingFindOneAndUpdate.mockReturnValue(
+      lean({
+        userId: USER_ID,
+        committerType: 'custom',
+        customName: 'Alice',
+        customEmail: 'a@b.com',
+        commitWithBot: true,
+      }),
+    );
+    const view = await service().updateCommitSettings(USER_ID, {
+      committerType: 'CUSTOM',
+      customName: 'Alice',
+      customEmail: 'a@b.com',
+      commitWithBot: true,
+    });
+    expect(view.commitWithBot).toBe(true);
+    expect(h.settingFindOneAndUpdate.mock.calls[0][1].$set).toMatchObject({ commitWithBot: true });
+
+    h.settingFindOneAndUpdate.mockReturnValue(
+      lean({ userId: USER_ID, committerType: 'unset', customName: null, customEmail: null }),
+    );
+    const unsetView = await service().updateCommitSettings(USER_ID, {
+      committerType: 'UNSET',
+      commitWithBot: true,
+    });
+    expect(unsetView.commitWithBot).toBe(false);
+    expect(h.settingFindOneAndUpdate.mock.calls[1][1].$set).toMatchObject({
+      committerType: 'unset',
+      commitWithBot: false,
     });
   });
 
@@ -134,7 +193,12 @@ describe('commit settings service', () => {
       lean({ userId: USER_ID, committerType: 'unset', customName: null, customEmail: null }),
     );
     const unsetView = await service().updateCommitSettings(USER_ID, { committerType: 'UNSET' });
-    expect(unsetView).toEqual({ committerType: 'UNSET', customName: null, customEmail: null });
+    expect(unsetView).toEqual({
+      committerType: 'UNSET',
+      customName: null,
+      customEmail: null,
+      commitWithBot: false,
+    });
     const unsetUpdate = h.settingFindOneAndUpdate.mock.calls[1][1];
     expect(unsetUpdate.$set).toMatchObject({
       committerType: 'unset',
@@ -186,6 +250,60 @@ describe('commit settings service', () => {
     await expect(svc.resolveWorktreeCommitter(USER_ID)).resolves.toBeNull();
   });
 
+  it('T-CB4: commitWithBot=true 时解析 bot 并追加共同作者', async () => {
+    const svc = service();
+    h.resolveAppBotIdentity.mockResolvedValue(BOT);
+    mockSetting({
+      userId: USER_ID,
+      committerType: 'custom',
+      customName: 'Alice',
+      customEmail: 'a@b.com',
+      commitWithBot: true,
+    });
+
+    await expect(svc.resolveWorktreeCommitter(USER_ID)).resolves.toEqual({
+      name: 'Alice',
+      email: 'a@b.com',
+      coAuthorName: BOT.name,
+      coAuthorEmail: BOT.email,
+    });
+    expect(h.resolveAppBotIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-CB5: commitWithBot=true 但 bot 不可用时降级为仅成员署名', async () => {
+    const svc = service();
+    h.resolveAppBotIdentity.mockResolvedValue(null);
+    mockSetting({
+      userId: USER_ID,
+      committerType: 'custom',
+      customName: 'Alice',
+      customEmail: 'a@b.com',
+      commitWithBot: true,
+    });
+
+    await expect(svc.resolveWorktreeCommitter(USER_ID)).resolves.toEqual({
+      name: 'Alice',
+      email: 'a@b.com',
+    });
+  });
+
+  it('T-CB6: commitWithBot=false 不解析 bot', async () => {
+    const svc = service();
+    mockSetting({
+      userId: USER_ID,
+      committerType: 'custom',
+      customName: 'Alice',
+      customEmail: 'a@b.com',
+      commitWithBot: false,
+    });
+
+    await expect(svc.resolveWorktreeCommitter(USER_ID)).resolves.toEqual({
+      name: 'Alice',
+      email: 'a@b.com',
+    });
+    expect(h.resolveAppBotIdentity).not.toHaveBeenCalled();
+  });
+
   it('T-CS-P5: 成员独立隔离（A/B 各自点查互不影响）', async () => {
     const svc = service();
     h.settingFindOne.mockImplementation((filter: { userId: string }) =>
@@ -199,7 +317,12 @@ describe('commit settings service', () => {
     const a = await svc.getCommitSettings(USER_ID);
     const b = await svc.getCommitSettings(OTHER_USER_ID);
     expect(a.committerType).toBe('CUSTOM');
-    expect(b).toEqual({ committerType: 'UNSET', customName: null, customEmail: null });
+    expect(b).toEqual({
+      committerType: 'UNSET',
+      customName: null,
+      customEmail: null,
+      commitWithBot: false,
+    });
     expect(h.settingFindOne).toHaveBeenNthCalledWith(1, { userId: USER_ID });
     expect(h.settingFindOne).toHaveBeenNthCalledWith(2, { userId: OTHER_USER_ID });
   });

@@ -8,10 +8,13 @@ vi.mock('fs', () => ({
   mkdirSync: vi.fn(),
   rmSync: vi.fn(),
   existsSync: vi.fn(() => true),
+  writeFileSync: vi.fn(),
+  chmodSync: vi.fn(),
 }));
 
 import { exec } from 'child_process';
-import { WorktreeHandler } from './worktree-handler.js';
+import { writeFileSync } from 'fs';
+import { WorktreeHandler, renderCoAuthorHook } from './worktree-handler.js';
 
 type ExecCallback = (err: Error | null, stdout: string, stderr: string) => void;
 
@@ -169,6 +172,101 @@ describe('WorktreeHandler', () => {
       expect(nameArg.endsWith("'")).toBe(true);
       expect(nameArg).not.toContain('`');
       expect(nameArg).not.toContain('$(');
+    });
+
+    it('T-WTC5: 共同作者存在时写 hook、worktree 级 hooksPath 与 bot 身份', async () => {
+      const commands: string[] = [];
+      (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+        const command = args[0] as string;
+        commands.push(command);
+        const cb = getCallback(args);
+        if (cb) {
+          if (command.includes('rev-parse')) cb(null, '/repo/.git\n', '');
+          else cb(null, '', '');
+        }
+        return { on: vi.fn() };
+      });
+
+      const result = await handler.add('/repo', '/wt', 'feat/branch', {
+        name: 'Deliay',
+        email: 'admin@remiliascarlet.com',
+        coAuthorName: 'zag-bot[bot]',
+        coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+      });
+
+      expect(result.success).toBe(true);
+      expect(commands).toContain("git -C '/wt' rev-parse --path-format=absolute --git-common-dir");
+      expect(commands).toContain("git -C '/wt' config --worktree core.hooksPath '/repo/.git/zag-hooks'");
+      expect(commands).toContain(
+        "git -C '/wt' config --worktree zag.coAuthorName 'zag-bot[bot]'",
+      );
+      expect(commands).toContain(
+        "git -C '/wt' config --worktree zag.coAuthorEmail '123456+zag-bot[bot]@users.noreply.github.com'",
+      );
+      expect(writeFileSync).toHaveBeenCalledWith(
+        '/repo/.git/zag-hooks/prepare-commit-msg',
+        renderCoAuthorHook(),
+        { mode: 0o755 },
+      );
+    });
+
+    it('T-WTC6: 共同作者只有一半或含换行时视为未提供，不写 hook', async () => {
+      const commands: string[] = [];
+      mockExecRecorder(commands);
+
+      await handler.add('/repo', '/wt', 'feat/branch', {
+        name: 'Deliay',
+        email: 'admin@remiliascarlet.com',
+        coAuthorName: 'zag-bot[bot]',
+      });
+      await handler.add('/repo', '/wt2', 'feat/branch2', {
+        name: 'Deliay',
+        email: 'admin@remiliascarlet.com',
+        coAuthorName: 'zag-bot[bot]',
+        coAuthorEmail: 'bot@example.com\ninjected',
+      });
+
+      expect(commands.some((command) => command.includes('rev-parse'))).toBe(false);
+      expect(commands.some((command) => command.includes('zag.coAuthor'))).toBe(false);
+      expect(writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('T-WTC7: hook 内容带受管标记、exact-trailer 幂等与 interpret-trailers 兜底', () => {
+      const hook = renderCoAuthorHook();
+      expect(hook).toContain('# zag-managed');
+      expect(hook).toContain('grep -qF "$TRAILER" "$MSG"');
+      expect(hook).toContain('git interpret-trailers --in-place --trailer "$TRAILER" "$MSG"');
+      expect(hook).not.toContain('zag-bot');
+    });
+
+    it('T-WTC8: hook 写入失败只告警，worktree 创建仍成功', async () => {
+      const commands: string[] = [];
+      (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+        const command = args[0] as string;
+        commands.push(command);
+        const cb = getCallback(args);
+        if (cb) {
+          if (command.includes('rev-parse')) cb(null, '/repo/.git\n', '');
+          else cb(null, '', '');
+        }
+        return { on: vi.fn() };
+      });
+      vi.mocked(writeFileSync).mockImplementationOnce(() => {
+        throw new Error('EACCES');
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const result = await handler.add('/repo', '/wt', 'feat/branch', {
+        name: 'Deliay',
+        email: 'admin@remiliascarlet.com',
+        coAuthorName: 'zag-bot[bot]',
+        coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+      });
+
+      expect(result.success).toBe(true);
+      expect(warnSpy).toHaveBeenCalled();
+      expect(commands.some((command) => command.includes('zag.coAuthor'))).toBe(false);
+      warnSpy.mockRestore();
     });
 
     it('T-WTC4: 单条身份命令失败只告警，不阻断 worktree 创建结果', async () => {

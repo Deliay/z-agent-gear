@@ -11,6 +11,7 @@ export interface CommitSettingsInput {
   committerType: string;
   customName?: string | null;
   customEmail?: string | null;
+  commitWithBot?: boolean | null;
 }
 
 /** GraphQL 输出（大写枚举）。 */
@@ -18,6 +19,16 @@ export interface CommitSettingsView {
   committerType: Uppercase<CommitterType>;
   customName: string | null;
   customEmail: string | null;
+  /** 仅 `committerType=custom` 时可为 true；UNSET 恒 false。 */
+  commitWithBot: boolean;
+}
+
+/** Worktree 提交人（可选共同作者：平台 bot）。 */
+export interface ResolvedWorktreeCommitter {
+  name: string;
+  email: string;
+  coAuthorName?: string;
+  coAuthorEmail?: string;
 }
 
 /**
@@ -64,14 +75,17 @@ interface SettingShape {
   committerType?: string;
   customName?: string | null;
   customEmail?: string | null;
+  commitWithBot?: boolean | null;
 }
 
 function toView(setting: SettingShape | null | undefined): CommitSettingsView {
   const type = toDbType(setting?.committerType) ?? 'unset';
+  const isCustom = type === 'custom';
   return {
     committerType: type.toUpperCase() as Uppercase<CommitterType>,
-    customName: type === 'custom' ? (setting?.customName ?? null) : null,
-    customEmail: type === 'custom' ? (setting?.customEmail ?? null) : null,
+    customName: isCustom ? (setting?.customName ?? null) : null,
+    customEmail: isCustom ? (setting?.customEmail ?? null) : null,
+    commitWithBot: isCustom ? setting?.commitWithBot === true : false,
   };
 }
 
@@ -79,6 +93,7 @@ interface NormalizedSetting {
   committerType: CommitterType;
   customName: string | null;
   customEmail: string | null;
+  commitWithBot: boolean;
 }
 
 /**
@@ -115,6 +130,7 @@ export class CommitSettingsService {
           committerType: normalized.committerType,
           customName: normalized.customName,
           customEmail: normalized.customEmail,
+          commitWithBot: normalized.commitWithBot,
         },
       },
       { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
@@ -130,13 +146,28 @@ export class CommitSettingsService {
 
   /**
    * Worktree 提交人解析：`custom` 且校验通过 → `{name,email}`，否则 null（= 沿用容器级 bot）。
+   * `commitWithBot=true` 时追加平台 bot 为共同作者；bot 解析失败降级为仅成员署名。
    */
-  async resolveWorktreeCommitter(userId: string): Promise<{ name: string; email: string } | null> {
+  async resolveWorktreeCommitter(userId: string): Promise<ResolvedWorktreeCommitter | null> {
     const setting = (await UserCommitSetting.findOne({ userId }).lean()) as SettingShape | null;
     if (!setting) return null;
     if (toDbType(setting.committerType) !== 'custom') return null;
     const custom = isValidCustomCommitter(setting.customName, setting.customEmail);
-    return custom.ok ? { name: custom.name, email: custom.email } : null;
+    if (!custom.ok) return null;
+
+    const committer: ResolvedWorktreeCommitter = { name: custom.name, email: custom.email };
+    if (setting.commitWithBot !== true) return committer;
+
+    const bot = await githubService.resolveAppBotIdentity();
+    if (!bot) {
+      console.warn('[CommitSettings] bot identity unavailable, co-author skipped');
+      return committer;
+    }
+    return {
+      ...committer,
+      coAuthorName: bot.name,
+      coAuthorEmail: bot.email,
+    };
   }
 
   /**
@@ -169,12 +200,17 @@ export class CommitSettingsService {
     if (!type) throw new Error(COMMIT_SETTINGS_ERRORS.invalidCustomCommitter);
 
     if (type === 'unset') {
-      return { committerType: 'unset', customName: null, customEmail: null };
+      return { committerType: 'unset', customName: null, customEmail: null, commitWithBot: false };
     }
 
     const custom = isValidCustomCommitter(input.customName, input.customEmail);
     if (!custom.ok) throw new Error(COMMIT_SETTINGS_ERRORS.invalidCustomCommitter);
-    return { committerType: 'custom', customName: custom.name, customEmail: custom.email };
+    return {
+      committerType: 'custom',
+      customName: custom.name,
+      customEmail: custom.email,
+      commitWithBot: input.commitWithBot === true,
+    };
   }
 }
 
