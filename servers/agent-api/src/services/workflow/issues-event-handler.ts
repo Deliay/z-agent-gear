@@ -3,6 +3,7 @@ import { config } from '../../config/index.js';
 import { CloudHostIssuesLinkage } from '../../models/cloud-host-issues-linkage.js';
 import { CloudHostSetupOperation } from '../../models/cloud-host-setup-operation.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
+import { Controller } from '../../models/controller.js';
 import { ControllerWorkspace } from '../../models/controller-workspace.js';
 import { IssueWorkflowTrigger } from '../../models/issue-workflow-trigger.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
@@ -12,6 +13,8 @@ import { sanitizeOperationError } from '../cloud-host-workload-service.js';
 import { controllerWorkspaceService } from '../controller-workspace.js';
 import { githubService } from '../github.js';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { runWithWorkspace, type WorkspaceContext } from '../workspace-context.js';
+import { workspaceService } from '../workspace-service.js';
 import { normalizeWorkspacePrefix, resolveClonePath } from '../workspace-path.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
 import type { IssuesEventPayload } from './github-issues-webhook-payload.js';
@@ -93,6 +96,8 @@ export async function handleIssuesEvent(event: IssuesEventPayload): Promise<Issu
     try {
       const trigger = await IssueWorkflowTrigger.create({
         userId: linkage.userId as mongoose.Types.ObjectId,
+        // 显式继承联动配置的租户：事件入口无 ALS 上下文，省略会被写成 `tenantId = userId`
+        tenantId: linkage.tenantId as mongoose.Types.ObjectId,
         controllerId: linkage.controllerId as mongoose.Types.ObjectId,
         linkageId: linkage._id as mongoose.Types.ObjectId,
         configuredWorkflowId: linkage.configuredWorkflowId as mongoose.Types.ObjectId,
@@ -192,10 +197,31 @@ export class IssuesTriggerRunner {
       if (!trigger) return;
       const status = String(trigger.status ?? '');
       if (status === 'COMPLETED' || status === 'FAILED') return;
-      if (status === 'PENDING_WORKSPACE') return this.prepareWorkspace(trigger);
-      if (status === 'PENDING_INSTANTIATE') return this.instantiateWorkflow(trigger);
-      if (status === 'PENDING_HUMAN_NODE') return this.advanceHumanNode(trigger);
+      const workspace = await this.resolveWorkspace(trigger);
+      await runWithWorkspace(workspace, async () => {
+        if (status === 'PENDING_WORKSPACE') return this.prepareWorkspace(trigger);
+        if (status === 'PENDING_INSTANTIATE') return this.instantiateWorkflow(trigger);
+        if (status === 'PENDING_HUMAN_NODE') return this.advanceHumanNode(trigger);
+      });
     });
+  }
+
+  /**
+   * 触发记录所属租户工作区上下文（控制器创建时已落 `workspaceId`）。
+   *
+   * 事件入口与后台轮询都没有 ALS 上下文；团队租户下若不显式建立，所有带 `userId` 的查询
+   * 会被 `tenant-scope` 注入 `tenantId = userId`，导致云电脑/工作区/配置工作流全部查不到。
+   */
+  private async resolveWorkspace(trigger: Doc): Promise<WorkspaceContext | undefined> {
+    try {
+      const controllerId = trigger.controllerId;
+      if (!controllerId || !mongoose.isValidObjectId(controllerId)) return undefined;
+      const controller = await Controller.findById(controllerId).select('workspaceId').lean();
+      if (!controller?.workspaceId) return undefined;
+      return await workspaceService.systemWorkspaceContext(String(controller.workspaceId));
+    } catch {
+      return undefined;
+    }
   }
 
   private async fail(triggerId: unknown, reason: string): Promise<void> {
