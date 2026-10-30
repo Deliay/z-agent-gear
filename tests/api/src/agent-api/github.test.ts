@@ -190,6 +190,16 @@ describe('GitHub Binding API', () => {
       const res = await gqlRequest(COMMIT_SETTINGS, undefined, token);
       const body = await res.json();
       expect(body.data.commitSettings).toEqual(saved.data.updateCommitSettings);
+
+      // 落库口径（返工回归）：tenantId = 成员归属租户；单成员仅一行，跨工作区上下文同一份
+      const mongo = await mongoDb();
+      if (mongo) {
+        const rows = await mongo.collection('user_commit_settings').find({ userId }).toArray();
+        expect(rows).toHaveLength(1);
+        expect(rows[0].tenantId).toBe(userId);
+        expect(rows[0].workspaceId).toBeUndefined();
+        expect(rows[0].committerMode).toBeUndefined();
+      }
     });
 
     it('T-CS-API3: 白名单 invalid custom committer 逐字 + 校验矩阵', async () => {

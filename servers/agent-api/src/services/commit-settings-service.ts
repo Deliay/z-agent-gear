@@ -5,7 +5,6 @@ import {
 } from '../models/user-commit-setting.js';
 import { User } from '../models/user.js';
 import { githubService } from './github.js';
-import { getWorkspaceContext } from './workspace-context.js';
 
 /** GraphQL 输入（大写枚举）；兼容外部调用直接传小写字面量。 */
 export interface CommitSettingsInput {
@@ -86,6 +85,8 @@ interface NormalizedSetting {
  * 成员级提交人设置 CRUD + Worktree 提交人解析 + 云电脑身份下发。
  *
  * - 成员独立、无共享/继承：键为 `userId`（唯一），任何工作区下均为同一份设置；
+ *   读写均以 `userId` 点查、**不读取 ALS 工作区上下文**（模型不挂作用域插件）；
+ *   `tenantId` 仅留档为成员归属租户（`users.tenantId`），不作业务过滤；
  * - 校验白名单仅 `invalid custom committer`：`custom` 需 trim 后 name ∈ (0,100]、
  *   email ≤254、无 `\n\r\0`、邮箱正则；`unset` 清空 custom 字段；
  * - `resolveWorktreeCommitter(userId)`：点查设置 → `custom` 且合法 → `{name,email}`，否则 null；
@@ -152,10 +153,12 @@ export class CommitSettingsService {
     return { mode: 'agent_only', name: bot.name, email: bot.email };
   }
 
-  /** 成员所属租户（留档）：优先请求工作区上下文，其次成员归属，最后回退 userId。 */
+  /**
+   * 成员所属租户（留档）：**恒取成员归属租户**（`users.tenantId`），
+   * 不读取 ALS 工作区上下文——否则同一成员的设置在「保存时工作区租户」与「读取时工作区租户」
+   * 之间被判为不同记录（与迁移 019 cleanFields 的刷新口径保持一致）。
+   */
   private async resolveTenantId(userId: string): Promise<string> {
-    const context = getWorkspaceContext();
-    if (context?.tenantId) return context.tenantId;
     const user = await User.findById(userId).select('tenantId').lean();
     const tenantId = (user as { tenantId?: unknown } | null)?.tenantId;
     return tenantId ? String(tenantId) : userId;

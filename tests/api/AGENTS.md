@@ -124,8 +124,9 @@ npm test
 
 | 测试 | 描述 |
 |------|------|
+| T-CS-R1~R4（`services/commit-settings-service.real.test.ts`，真库） | 跨工作区上下文成员级：团队保存→个人读取同一份；个人保存→团队二次保存覆盖不撞键不静默丢失；团队保存→无 ALS 解析 `resolveWorktreeCommitter` 正确；迁移 019 存量行在团队上下文可读且署名逐字一致 |
 | T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回 `{committerType:'UNSET',customName:null,customEmail:null}` |
-| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人（trim 归一） |
+| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人（trim 归一）；落库断言 `tenantId`=成员归属租户、单行、无 `workspaceId`/`committerMode` 残留 |
 | T-CS-API3 | 白名单仅 `invalid custom committer` 逐字 + 矩阵（空名 / 非法邮箱 / 换行 / >100）；`GITHUB_ACCOUNT` 已在 GraphQL 枚举层拒绝 |
 | T-CS-API4 | 成员级隔离：A 保存后 B 仍为 UNSET，B 保存不影响 A |
 | T-CS-API5 | `personalGithubAccounts` 仅返回个人租户绑定帐号（排除普通工作区副本） |
@@ -187,7 +188,7 @@ npm test
 | T-WS-API2 非法/不可达 | 非法 id / 非成员团队全局 / 非成员普通工作区均 `workspace not found`（不泄露存在性） |
 | T-WS-API3 工作区 CRUD | developer 创建拒绝 `not a tenant admin`；重名 `workspace name already exists`；改名生效；global 改名/删除/加成员 `global workspace is immutable`；非本租户成员 `user is not a tenant member`；空工作区删除返回 true；写入资源（供应商/会话等）后删除 `workspace is not empty`（Commit 设置已成员级，不再计入工作区资源） |
 | T-WS-API4 共享读/写口径 | 普通工作区 `providers`/`models` 含团队全局工作区共享资源（workspaceId=全局）；普通上下文删除全局供应商不生效；admin 在全局上下文删除后普通工作区不可见 |
-| T-WS-API5 Commit 成员级一致 | 默认 UNSET；普通工作区保存后团队全局读同一份（无三段继承）；developer 设置独立于 admin |
+| T-WS-API5 Commit 成员级一致（跨上下文回归） | 默认 UNSET；团队工作区保存后团队全局与**个人工作区（缺省 x-workspace-id）**读到同一份（无三段继承）；落库 `tenantId`=成员归属租户（非保存上下文租户）、单成员单行；developer 设置独立于 admin |
 | T-WS-API6 developer 全局只读 | 团队全局上下文写共享资源（provider）被插件拦截 `global workspace is read-only`；创建工作区仍 `not a tenant admin` |
 | T-WS-API7 personal 拒绝 | personal 租户全局上下文 `createTenantWorkspace` → `personal tenant cannot create workspaces` |
 | T-WS-API8 租户成员管理 | `searchAccounts` admin 可搜（结果为 username/name/userId 最小集）、developer `not a tenant admin`；`addTenantMember` 指定/缺省 role、重复幂等不覆盖；`changeTenantMemberRole` 生效；加入工作区后 `removeTenantMember` 立即失去团队/工作区访问并级联清理 workspacemembers，资源保留 |

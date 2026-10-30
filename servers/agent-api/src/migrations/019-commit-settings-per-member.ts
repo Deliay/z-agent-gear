@@ -106,9 +106,12 @@ async function resolveOwner(row: Record<string, unknown>): Promise<string> {
 
   const tenantId = workspace.tenantId ? String(workspace.tenantId) : '';
   if (!tenantId) return fallbackOwner;
-  const tenant = await mongoose.connection
-    .collection('tenants')
-    .findOne({ _id: toObjectId(tenantId) ?? tenantId }, { projection: { type: 1 } });
+  const tenantObjectId = toObjectId(tenantId);
+  const tenant = tenantObjectId
+    ? await mongoose.connection
+        .collection('tenants')
+        .findOne({ _id: tenantObjectId }, { projection: { type: 1 } })
+    : null;
 
   // personal 租户 `_id` 复用 owner userId，故 owner = tenantId
   if (tenant?.type === 'personal') return tenantId;

@@ -1723,6 +1723,17 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
     expect(inGlobal.errors).toBeUndefined();
     expect(inGlobal.data.commitSettings).toMatchObject({ customName: 'Member Committer' });
 
+    // 跨上下文（本次返工回归）：团队成员在团队工作区保存后，
+    // 切回个人工作区（缺省 x-workspace-id → 个人租户全局工作区）必须读到同一份。
+    // 旧实现按 ALS 工作区租户注入 tenantId，此处会返回 UNSET（设置静默丢失）。
+    const personalView = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token);
+    expect(personalView.errors).toBeUndefined();
+    expect(personalView.data.commitSettings).toEqual({
+      committerType: 'CUSTOM',
+      customName: 'Member Committer',
+      customEmail: 'member@example.com',
+    });
+
     // 成员独立：developer 的设置不受 admin 影响
     const devView = await gqlCtx(COMMIT_SETTINGS, undefined, developer.token, normalWorkspaceId);
     expect(devView.errors).toBeUndefined();
@@ -1731,6 +1742,16 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
       customName: null,
       customEmail: null,
     });
+
+    // 落库口径：tenantId = 成员归属租户（personal，= userId），而非保存上下文租户（team）
+    if (process.env.MONGODB_URI) {
+      if (mongoose.connection.readyState === 0) await mongoose.connect(process.env.MONGODB_URI);
+      const row = await mongoose.connection.db!
+        .collection('user_commit_settings')
+        .findOne({ userId: admin.userId });
+      expect(row?.tenantId).toBe(admin.userId);
+      expect(await mongoose.connection.db!.collection('user_commit_settings').countDocuments({ userId: admin.userId })).toBe(1);
+    }
   });
 
   it('T-WS-API6: developer 在团队全局工作区只读（global workspace is read-only）', async () => {
