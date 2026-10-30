@@ -1,5 +1,5 @@
 ---
-description: 规范化日志与全链路可观测性实现计划：契约先行（新增 contracts/observability.md + 4 份通道契约增补）、单源 vendored 观测模块（6+1 文件 + 同步脚本 + sha256 一致性测试 + 每包 no-console 不变量）、pino 单行 JSON 日志与 pino 原生调用签名统一（含 cloud-controller 60 处 / admin-api billing 31 处 variadic 结构 logger 迁移、18 处 `console` 注入替换）、OTel NodeSDK 以入口首个 import 启动（未配置 endpoint 完全不启动）、W3C traceparent 经 HTTP/Socket.IO/Redis 封套/Job env 四通道传播、cloud-controller 试点与 Job `OTEL_*`+`ZAG_INIT_TRACEPARENT` 注入、entrypoint.sh JSON 化、controller-api/admin-api/agent-api 16x+ 处 console 全量替换与自动埋点、agent-gear 2.12.0 精简手动埋点、前端 dev-gated 收口、Aspire collector 与 compose/k8s 编排、T-OBS1~T-OBS22 测试矩阵与 139 处既有 console spy 迁移（18 个断言型文件必改）
+description: 规范化日志与全链路可观测性实现计划：契约先行（新增 contracts/observability.md + 4 份通道契约增补）、单源 vendored 观测模块（6+1 文件 + 同步脚本 + sha256 一致性测试 + 每包 no-console 不变量）、pino 单行 JSON 日志与 pino 原生调用签名统一（含 cloud-controller 60 处 / admin-api billing 31 处 variadic 结构 logger 迁移、18 处 `console` 注入替换）、OTel NodeSDK 以入口首个 import 启动（未配置 endpoint 完全不启动）、W3C traceparent 经 HTTP/Socket.IO/Redis 封套/Job env 四通道传播、cloud-controller 试点与 Job `OTEL_*`+`ZAG_INIT_TRACEPARENT` 注入、entrypoint.sh JSON 化、controller-api/admin-api/agent-api 16x+ 处 console 全量替换与自动埋点、agent-gear 2.13.0 精简手动埋点、前端 dev-gated 收口、Aspire collector 与 compose/k8s 编排、T-OBS1~T-OBS22 测试矩阵与 139 处既有 console spy 迁移（18 个断言型文件必改）
 type: Permanent
 ---
 
@@ -10,10 +10,11 @@ type: Permanent
 **需求总分支（feat-branch）**: `feat/unified-logging-otel`（基于 `main@375d070e`，需求总 PR [#378](https://github.com/Deliay/z-agent-gear/pull/378)）
 **计划提交分支**: `feat/unified-logging-otel`（本文件随需求总分支提交）
 **创建日期**: 2026-10-30
-**计划版本**: v1.0
+**计划版本**: v1.1
 
 **版本说明**：
 
+- v1.1（2026-10-30）复核校正（需求推进至代码实现节点后的方案再走查）：① agent-gear 版本目标 **2.12.0 → 2.13.0** —— `main` 已发布 2.12.0（`526916f9`，同步引入 `MIN_HARNESS_WORKER_VERSION=2.12.0` 门禁与 Dockerfile 预装 pin `agent-gear@2.12.x`），版本号顺延（本计划 R4「不提升门禁」口径不变）；② worker Dockerfile 预装 pin 随发布版本对齐（`2.12.x → 2.13.x`，仓库惯例）补入 Phase 7 任务表（容器内自更新 `npm install -g agent-gear` 语义不变，pin 仅决定预装基线）；③ 登记基线漂移：`main` 在 `375d070e` 之后新增 console 调用（agent-api +5、agent-gear +1，`src` 内合计 631 → 636），Phase 2 红灯清单与验收计数以合并 `main` 后实测为准。其余结论与 v1.0 一致。
 - v1.0（2026-10-30）首版。对应 PRD v1.0 / 提案 v1.0（审核通过、无附加修改意见）。§3 计划期裁决以**当前需求总分支代码事实**为准（2026-10-30，`b5178e37`）：重点校正 ① `console.*` 调用点实测 **636** 处（提案 663）；② cloud-controller / admin-api billing 存在 **91 处 variadic 结构 logger 调用**（`(msg, err)` 形态），提案只提到 17 处 console，若直接注入 pino 会**静默丢弃错误对象**（F3/F5）；③ 既有测试的 `spyOn(console)` 实测 **139 处 / 59 个文件**，其中 **18 个文件为断言型**（提案 §8.4 只列 7 个，F6）；④ 提案称 `contracts/agent-session-websocket.md` 「已约定 `_meta.traceparent` 保留」——**不成立**（F7）；⑤ `scripts/` 目录在仓库中**不存在**（F8）；⑥ 新增「服务名/版本由 `package.json` 自解析，实现零 per-package 定制」的 vendor 口径（D2）。
 
 ## 1. 实现顺序
@@ -31,7 +32,7 @@ flowchart TD
     P4["Phase 4 controller-api<br/>175 处 console + socketio/session-command 结构化<br/>httpContext + Socket.IO 握手/_meta<br/>Redis publishJson 20 处 / 订阅 24 处"] --> P11
     P5["Phase 5 admin-api<br/>112 处 console + billing 31 处 variadic logger<br/>httpContext + migration/seed 结构化<br/>RabbitMQ 消费循环 span"] --> P11
     P6["Phase 6 agent-api<br/>175 处 console<br/>httpContext（在 GraphQL 鉴权 ALS 外层）<br/>Redis 发布 39 处 / 订阅 30 处<br/>SSE 生命周期 + 工作流引擎节点 span"] --> P11
-    P7["Phase 7 agent-gear 2.12.0<br/>131 处 console（CLI 用户可见输出保留）<br/>精简 OTel（无 auto-instrumentations）<br/>socket auth.traceparent + startup link"] --> P11
+    P7["Phase 7 agent-gear 2.13.0<br/>131 处 console（CLI 用户可见输出保留）<br/>精简 OTel（无 auto-instrumentations）<br/>socket auth.traceparent + startup link"] --> P11
     P3 --> P8
     P2 --> P8
     P8["Phase 8 前端收口<br/>agent-web 19 处 / admin-web 2 处<br/>src/lib/logger.ts（DEV 门控）<br/>vite.config 2 处登记例外"] --> P11
@@ -312,11 +313,12 @@ graph LR
 
 **完成判据**：agent-api `npm test` 全绿；`/graphql` 一次请求在日志中出现 `requestId` + `trace_id`，且 admin-api 侧（billing 调用）日志同 `trace_id`；`grep console` 为 0。
 
-### 4.7 Phase 7 agent-gear 2.12.0
+### 4.7 Phase 7 agent-gear 2.13.0
 
 | 路径 | 动作 | 要点 |
 |------|------|------|
-| `package.json` | 修改 | 版本 `2.11.1 → 2.12.0`；新增 `pino` + 精简 OTel 依赖（D7）；**不加** `auto-instrumentations-node` |
+| `package.json` | 修改 | 版本 `2.11.1 → 2.13.0`（main 已发布 2.12.0，版本顺延，见版本说明 v1.1）；新增 `pino` + 精简 OTel 依赖（D7）；**不加** `auto-instrumentations-node` |
+| `deploy/images/worker/Dockerfile` | 修改 | 预装 pin `agent-gear@2.12.x → 2.13.x`（与发布版本对齐，仓库惯例）；容器内自更新（`npm install -g agent-gear`）语义不变，pin 仅决定预装基线 |
 | `src/index.ts` | 修改 | 首行 `import './observability/register.js'`（在 `commander` 之前）；6 处 console 替换；`startup` span 以 `links` 关联 `ZAG_INIT_TRACEPARENT` |
 | `src/observability/register.ts`（生成物） | — | 读取 `OTEL_*` + `ZAG_INIT_TRACEPARENT`；**服务名解析依赖 `package.json` name = `agent-gear`**（F9 已核对） |
 | `src/socketio-client.ts` | 修改 | **64 处** console（单文件最多）按连接/事件/重连分 child；`io(url, { auth: { token, traceparent } })` 注入当前 span；重连时新 span 重新注入；`upgrade agent-controller` 提示保留为用户可见语义（走 `logger.error` 但 `msg` 保持可读） |
@@ -326,7 +328,7 @@ graph LR
 | `src/cloud-host/supervisor.ts` | 修改 | 保活/重启循环每轮一个 span（属性 `attempt`），不逐进程事件 |
 | `tests/**` + `src/*.test.ts` | 修改 | 5 个断言型文件（F6）迁移到 `createTestLogger()` |
 
-**完成判据**：agent-gear `npm test` 全绿；`npm pack` 体积增量 < 1 MB（精简依赖）；`--version` 输出 `2.12.0`；容器内 `agent-gear` 启动日志为 JSON 且 `service: 'agent-gear'`。
+**完成判据**：agent-gear `npm test` 全绿；`npm pack` 体积增量 < 1 MB（精简依赖）；`--version` 输出 `2.13.0`；容器内 `agent-gear` 启动日志为 JSON 且 `service: 'agent-gear'`。
 
 ### 4.8 Phase 8 前端收口
 
@@ -439,13 +441,13 @@ graph LR
 **Phase 2 单源模块**
 - [ ] `node scripts/sync-observability.mjs --check` 通过，5 包 7 文件全等
 - [ ] T-OBS1~T-OBS6、T-OBS9~T-OBS11、T-OBS21 全绿
-- [ ] 5 包 `no-console.test.ts` 已落地（此时预期红，红灯清单与 §3.1 F1 的 631 一致）
+- [ ] 5 包 `no-console.test.ts` 已落地（此时预期红，红灯清单与 §3.1 F1 的 631 一致；v1.1：合并 `main` 后以实测为准，见版本说明漂移登记）
 
 **Phase 3-8 运行时迁移**
-- [ ] 631 处 `src` 内 console 归零（守卫硬门禁全绿）
+- [ ] 631 处 `src` 内 console 归零（守卫硬门禁全绿；v1.1：基线 631，合并 `main` 后以实测为准）
 - [ ] 91 处 variadic 结构 logger 调用全部改原生签名（cloud-controller 60 / admin-api billing 31）
 - [ ] 18 处 `console` 默认注入替换为真实 logger
-- [ ] agent-gear `2.12.0` 发布可用，精简依赖体积增量 < 1 MB
+- [ ] agent-gear `2.13.0` 发布可用，精简依赖体积增量 < 1 MB
 - [ ] 前端生产构建默认静默
 
 **Phase 9 编排**
@@ -561,7 +563,7 @@ graph LR
 | `servers/agent-api/AGENTS.md` | 新增「日志与可观测性」 |
 | `servers/controller-api/AGENTS.md` | 新增「日志与可观测性」 |
 | `servers/cloud-controller/AGENTS.md` | 新增「日志与可观测性」（含 Job env） |
-| `packages/agent-controller/AGENTS.md` | 新增「日志与可观测性（2.12.0）」 |
+| `packages/agent-controller/AGENTS.md` | 新增「日志与可观测性（2.13.0）」 |
 | `apps/agent-web/AGENTS.md`、`apps/admin-web/AGENTS.md` | 新增「日志出口」 |
 | `aspire/AgentGear.AppHost/AGENTS.md` | Managed Resources 增 `otel-collector` |
 | `tests/api/AGENTS.md`、`tests/e2e/AGENTS.md` | 新增 T-OBS 清单与 `OTEL_*` 说明 |
@@ -586,7 +588,7 @@ graph LR
 | `containerId` 可得性 | `container-service.ts:325,362` | `created.id` 在调用点可得，`buildHarnessJobEnv` 需新增入参 |
 | Redis 发布/订阅 | `grep -rc "\.publish("`、`subscribe\(`/`on\('message'` | agent-api 39/30、controller-api 20/24；cloud-controller 2 与 admin-api 4 为 RabbitMQ（两包无 `ioredis`） |
 | CI 门禁 | `.github/workflows/build-agent-api-image.yml:32-33` | `npm ci && npm test`（每服务目录独立） |
-| package 版本 | `packages/agent-controller/package.json` | `agent-gear@2.11.1` → 本期 `2.12.0` |
+| package 版本 | `packages/agent-controller/package.json` | `agent-gear@2.11.1` → 本期 `2.13.0`（v1.1：原定 2.12.0 已被 main `526916f9` 占用，顺延） |
 | 发布 workflow 触发面 | `.github/workflows/publish-agent-gear.yml:7-10` | paths 仅 `packages/agent-controller/**`（新增目录不触发） |
 
 ### G. 相关文档
