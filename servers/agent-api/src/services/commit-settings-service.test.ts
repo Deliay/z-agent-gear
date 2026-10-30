@@ -43,6 +43,7 @@ const ACCOUNT_ID = '507f1f77bcf86cd799439012';
 const OTHER_ACCOUNT_ID = '507f1f77bcf86cd799439013';
 const CONTROLLER_ID = '507f1f77bcf86cd799439014';
 const HOST_ID = '507f1f77bcf86cd799439015';
+const TENANT_ID = '507f1f77bcf86cd799439016';
 
 function lean<T>(value: T) {
   return { lean: vi.fn().mockResolvedValue(value) } as never;
@@ -53,6 +54,7 @@ function hostDoc(overrides: Record<string, unknown> = {}) {
     _id: HOST_ID,
     controllerId: CONTROLLER_ID,
     userId: USER_ID,
+    tenantId: TENANT_ID,
     deletedAt: null,
     ...overrides,
   };
@@ -416,6 +418,11 @@ describe('CommitSettingsService.resolveCommitIdentity', () => {
       mode: 'agent_only',
       name: BOT.name,
       email: BOT.email,
+    });
+    // 团队租户：绑定按 controllerId + tenantId 查找，不叠加 userId
+    expect(CloudHostGithubBinding.findOne).toHaveBeenCalledWith({
+      controllerId: CONTROLLER_ID,
+      tenantId: TENANT_ID,
     });
 
     mockBinding(null);

@@ -216,7 +216,7 @@ export class CommitSettingsService {
 
     // 仅Agent：身份 = bot，不依赖用户提交人字段（校验层允许 agent_only + UNSET 提交人）。
     if (mode === 'agent_only') {
-      if (!(await this.hasGithubWorkload(String(host._id), controllerId, userId))) {
+      if (!(await this.hasGithubWorkload(String(host._id), controllerId, host.tenantId ? String(host.tenantId) : undefined))) {
         return { mode: 'unset' };
       }
       const bot = await this.resolveBotIdentity(controllerId);
@@ -410,9 +410,14 @@ export class CommitSettingsService {
   private async hasGithubWorkload(
     hostId: string,
     controllerId: string,
-    userId: string,
+    tenantId?: string,
   ): Promise<boolean> {
-    const binding = await CloudHostGithubBinding.findOne({ controllerId, userId }).lean();
+    // 云主机绑定以 controllerId 为边界，并显式叠加租户隔离；不能再用 userId
+    // （团队租户 tenantId != userId，且 binding.userId 是 Git 设置发起者）。
+    const binding = await CloudHostGithubBinding.findOne({
+      controllerId,
+      ...(tenantId ? { tenantId } : {}),
+    }).lean();
     if (binding) return true;
 
     const container = await CloudContainer.findOne({ hostId }).sort({ createdAt: -1 }).lean();
