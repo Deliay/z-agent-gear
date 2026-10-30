@@ -123,6 +123,7 @@ describe('commit settings 成员级跨工作区（真库，T-CS-R*）', () => {
       committerType: 'CUSTOM',
       customName: 'Alice',
       customEmail: 'alice@example.com',
+      commitWithBot: false,
     });
 
     const personalView = await runWithWorkspace(f.personalContext, () =>
@@ -159,6 +160,7 @@ describe('commit settings 成员级跨工作区（真库，T-CS-R*）', () => {
       committerType: 'CUSTOM',
       customName: 'Second',
       customEmail: 'second@example.com',
+      commitWithBot: false,
     });
 
     expect(await UserCommitSetting.countDocuments({ userId: f.userId })).toBe(1);
@@ -206,6 +208,7 @@ describe('commit settings 成员级跨工作区（真库，T-CS-R*）', () => {
       committerType: 'CUSTOM',
       customName: 'alice-gh',
       customEmail: '1001+alice-gh@users.noreply.github.com',
+      commitWithBot: false,
     });
 
     const personalView = await runWithWorkspace(f.personalContext, () =>

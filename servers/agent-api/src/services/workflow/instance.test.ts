@@ -470,7 +470,14 @@ describe('WorkflowInstanceService.instantiate', () => {
         .mocked(mockRedis.publish)
         .mock.calls.map(([, payload]) => JSON.parse(payload as string))
         .find((p: { type?: string }) => p.type === 'git:worktree:add') as
-        | { committer?: { name: string; email: string } }
+        | {
+            committer?: {
+              name: string;
+              email: string;
+              coAuthorName?: string;
+              coAuthorEmail?: string;
+            };
+          }
         | undefined;
     }
 
@@ -489,6 +496,27 @@ describe('WorkflowInstanceService.instantiate', () => {
       expect(created.worktreeCommitterName).toBe('Deliay');
       expect(created.worktreeCommitterEmail).toBe('deliay@example.com');
       expect(findAddCall()?.committer).toEqual(committer);
+    });
+
+    it('C1a2: 共同作者随实例快照落库并下发', async () => {
+      const withCoAuthor = {
+        ...committer,
+        coAuthorName: 'zag-bot[bot]',
+        coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+      };
+      vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue(withCoAuthor);
+      vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+      mockWorktreeRedis();
+
+      await workflowInstanceService.instantiate(
+        'user-1',
+        instantiateInput({ createWorkflowWorktree: true }) as never,
+      );
+
+      const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as Record<string, unknown>;
+      expect(created.worktreeCoAuthorName).toBe('zag-bot[bot]');
+      expect(created.worktreeCoAuthorEmail).toBe('123456+zag-bot[bot]@users.noreply.github.com');
+      expect(findAddCall()?.committer).toEqual(withCoAuthor);
     });
 
     it('C1b: 创建者未设置提交人 → 快照 null 且 worktree 载荷不带 committer（沿用 bot）', async () => {

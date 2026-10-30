@@ -156,7 +156,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 > 仅前端交互与文案；`commitSettings` / `updateCommitSettings` / `personalGithubAccounts` 经 `page.route` mock，
 > 不依赖真实 GitHub 与云容器。区块为 `#git-section`（标题「Git」+ 提示「仅对云电脑环境生效」），
-> 提交人为成员级二选一（自定义 / 未设置），样式对齐 `settings-github-binding.spec.ts`。
+> 提交人为成员级二选一（自定义 / 未设置），并有「与 bot 共同提交」勾选项（仅自定义可用），样式对齐 `settings-github-binding.spec.ts`。
 
 | 测试 | 描述 |
 |------|------|
@@ -165,6 +165,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-GIT2b | 无个人绑定时弹窗空态「先到『GitHub 绑定』绑定帐号」，不渲染帐号列表 |
 | E2E-GIT3 | 自定义校验：空用户名 / 非法邮箱 / 双空 → 提示「提交人用户名或邮箱格式不正确」且保存禁用，不发起 `updateCommitSettings` |
 | E2E-GIT4 | 存量等价回显：`commitSettings` 返回 custom 的 login + noreply 邮箱 → 表单回显一致，直接保存提交值与回显值相同（刷新后仍一致） |
+| E2E-CB1 | 「与 bot 共同提交」默认不勾选；未设置提交人时置灰并提示「设置提交人后可勾选」；自定义勾选后保存 `commitWithBot=true`，刷新后回显勾选 |
 
 ### Settings LLM E2E (`settings-llm.spec.ts`)
 

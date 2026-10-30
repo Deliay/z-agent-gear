@@ -97,6 +97,27 @@ describe('WorktreeService', () => {
       });
     });
 
+    it('T-CB-C2: should pass committer co-author fields through to controller socket', async () => {
+      const service = new WorktreeService();
+      service.start(mockIO as never);
+
+      const committer = {
+        name: 'Deliay',
+        email: 'admin@remiliascarlet.com',
+        coAuthorName: 'zag-bot[bot]',
+        coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+      };
+      await service.handleAdd('req-1', 'ctrl-1', '/repo', '/wt', 'feat/branch', committer);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('git:worktree:add', {
+        requestId: 'req-1',
+        repoPath: '/repo',
+        worktreePath: '/wt',
+        branch: 'feat/branch',
+        committer,
+      });
+    });
+
     it('should omit committer key when committer is undefined', async () => {
       const service = new WorktreeService();
       service.start(mockIO as never);

@@ -150,6 +150,7 @@ flowchart LR
 - [[draft/20261028-multi-tenant-phase2.md]] — 多租户二期（Team 类型租户：后台创建、成员须为已存在账户；租户角色两级：管理员=管理租户全部资源/全部工作区可见/可建工作区/按帐号名搜索添加成员/变更角色，开发=不可建工作区/读写删除所在普通工作区资源/全局工作区只读，last-admin 保护、personal 唯一成员恒管理员；默认「全局工作区」不可删除/改名/无成员列表，仅管理员可创建普通工作区（0..n 成员）；普通工作区可用全局工作区模型/Github 绑定，Commit 设置三段继承；团队消费计入团队租户）
 - [[draft/20261028-mongodb-workload.md]] — 增加工作负载「MongoDB」（原生 apt 经内网源安装 MongoDB 8.0：工作负载目录新增预制标准工作负载、安装成功以 mongod --version 硬校验且不拉起实例、幂等可重复、失败可恢复）
 - [[draft/20261028-playwright-workload.md]] — 增加工作负载「Playwright」（新增「Playwright」预制工作负载：安装测试工具与内置浏览器 Chromium/Firefox/WebKit、浏览器下载走内网 playwright-proxy 且下载地址可按次调整、三入口安装与幂等可用保障）
+- [[draft/20261031-commit-with-bot-coauthor.md]] — Commit 与 bot 共同提交（设置页「Git」区块新增「与 bot 共同提交」勾选项：仅提交人为自定义时可用，勾选后 Worktree 提交以成员为主作者、平台 bot 为共同作者；云电脑自身提交仍为 bot 单独署名，旧版本云电脑与 bot 不可用时优雅降级）
 
 ### 实现中文档（`shipping/`）
 

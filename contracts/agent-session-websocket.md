@@ -1223,16 +1223,17 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 | `repoPath` | `string` | 是 | 原始 Git 仓库绝对路径 |
 | `worktreePath` | `string` | 是 | Worktree 目标目录绝对路径 |
 | `branch` | `string` | 是 | 分支名称（如 `example-repo/test-branch`） |
-| `committer` | `{ name: string; email: string }` | 否 | Worktree 级提交人（可选）。缺省 = 不写 Worktree 身份，沿用容器级 bot |
+| `committer` | `{ name: string; email: string; coAuthorName?: string; coAuthorEmail?: string }` | 否 | Worktree 级提交人（可选）。缺省 = 不写 Worktree 身份，沿用容器级 bot。`coAuthorName/coAuthorEmail` 成对出现时，后续提交自动追加 `Co-authored-by` trailer |
 
 **客户端行为：**
 
 1. 创建 Worktree 目标目录（如目标目录不存在）
 2. 执行 `git worktree add -b <branch> <worktreePath> <repoPath>`
 3. 若 `committer` 存在：依次执行 `git config extensions.worktreeConfig true`、`git config --worktree user.name <name>`、`git config --worktree user.email <email>`（值做 shell 转义；单条失败告警不阻断，仅作用于该 Worktree）
-4. 回复 `git:worktree:add:result`
+4. 若 `coAuthorName/coAuthorEmail` 成对存在：在 `<git-common-dir>/zag-hooks/` 写受管 `prepare-commit-msg` hook，并 `git config --worktree core.hooksPath <hookDir>`、`--worktree zag.coAuthorName/Email <bot 身份>`；hook 从 worktree 配置读取 trailer，已存在则跳过（幂等），失败仅告警
+5. 回复 `git:worktree:add:result`
 
-> 降级说明：旧版本控制器（< 2.12.0）忽略未知字段 `committer`，Worktree 身份静默缺失并沿用容器级 bot，不返回错误。
+> 降级说明：旧版本控制器（< 2.12.0）忽略未知字段 `committer`，Worktree 身份静默缺失并沿用容器级 bot，不返回错误；< 2.13.0 忽略 `coAuthor*`，仅缺失共同作者 trailer。
 
 ### 3.13 `git:worktree:add:result`（Controller → Server）
 
@@ -1523,11 +1524,16 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
   "repoPath": "string",
   "worktreePath": "string",
   "branch": "string",
-  "committer": { "name": "string", "email": "string" }
+  "committer": {
+    "name": "string",
+    "email": "string",
+    "coAuthorName": "string?",
+    "coAuthorEmail": "string?"
+  }
 }
 ```
 
-> `committer` 为可选字段（缺省 = 不写 Worktree 身份、沿用容器级 bot）；旧版本控制器忽略未知字段 `committer` → 优雅降级，不报错。
+> `committer` 为可选字段（缺省 = 不写 Worktree 身份、沿用容器级 bot）；`coAuthor*` 成对出现时启用共同作者 trailer。旧版本控制器忽略未知字段 `committer`/`coAuthor*` → 优雅降级，不报错。
 
 **服务端行为：**
 

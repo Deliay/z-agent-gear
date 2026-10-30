@@ -12,7 +12,10 @@ import { mcpEndpointService } from './mcp-endpoint.js';
 import { ensureCloudHostToolsServer, CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
 import { actorFilter } from './workspace-context.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
-import { commitSettingsService } from './commit-settings-service.js';
+import {
+  commitSettingsService,
+  type ResolvedWorktreeCommitter,
+} from './commit-settings-service.js';
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 
@@ -155,7 +158,7 @@ export class SessionService {
      * Worktree 提交人：`undefined` = 按会话创建者实时解析；显式 `null` = 不下发（bot）；
      * 工作流节点场景由调用方显式传入实例快照（复用同一身份）。
      */
-    worktreeCommitter?: { name: string; email: string } | null;
+    worktreeCommitter?: ResolvedWorktreeCommitter | null;
     /** 内部编排：允许在云电脑 STARTING 窗口创建默认会话（ready 回调原子写 RUNNING+defaultSessionId） */
     allowStartingCloudHost?: boolean;
   }): Promise<Record<string, unknown>> {
@@ -406,7 +409,7 @@ export class SessionService {
   /** Worktree 提交人实时解析（独立会话）：失败降级 null（沿用容器级 bot），不阻断建会话。 */
   private async resolveWorktreeCommitter(
     userId: string,
-  ): Promise<{ name: string; email: string } | null> {
+  ): Promise<ResolvedWorktreeCommitter | null> {
     try {
       return await commitSettingsService.resolveWorktreeCommitter(userId);
     } catch (err) {

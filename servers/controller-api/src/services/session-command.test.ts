@@ -708,6 +708,41 @@ describe('SessionCommandService', () => {
       });
     });
 
+    it('T-CB-C1: should pass committer co-author fields through to worktreeService.handleAdd', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      const committer = {
+        name: 'Deliay',
+        email: 'admin@remiliascarlet.com',
+        coAuthorName: 'zag-bot[bot]',
+        coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+      };
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'git:worktree:add',
+        requestId: 'req-1',
+        controllerId: 'ctrl-1',
+        repoPath: '/repo',
+        worktreePath: '/wt',
+        branch: 'feat/branch',
+        committer,
+      }));
+
+      await vi.waitFor(() => {
+        expect(worktreeService.handleAdd).toHaveBeenCalledWith(
+          'req-1',
+          'ctrl-1',
+          '/repo',
+          '/wt',
+          'feat/branch',
+          committer,
+        );
+      });
+    });
+
     it('should not invent a committer channel: unknown extra fields are not forwarded', async () => {
       const mockRedis = createMockRedis();
       vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);

@@ -16,7 +16,10 @@ import { GITHUB_PR_PROMPT, GITHUB_PR_PROMPT_KEY, SYSTEM_PROMPT_KEYS } from './pr
 import { actorFilter } from '../workspace-context.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
 import { getWorkspaceContext } from '../workspace-context.js';
-import { commitSettingsService } from '../commit-settings-service.js';
+import {
+  commitSettingsService,
+  type ResolvedWorktreeCommitter,
+} from '../commit-settings-service.js';
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -54,7 +57,7 @@ export interface InstantiateWorkflowInput {
    * Worktree 提交人（覆盖创建者解析）：`undefined` = 按创建者实时解析；
    * 显式 `null` = 不下发（沿用容器级 bot，Issue 触发人无法识别时使用）。
    */
-  worktreeCommitter?: { name: string; email: string } | null;
+  worktreeCommitter?: ResolvedWorktreeCommitter | null;
 }
 
 /** 工作流实例服务：统一实例化入口 + 实例节点编辑 + 人类节点操作。 */
@@ -233,6 +236,8 @@ class WorkflowInstanceService {
         workflowWorktreeBranch,
         worktreeCommitterName: worktreeCommitter?.name ?? null,
         worktreeCommitterEmail: worktreeCommitter?.email ?? null,
+        worktreeCoAuthorName: worktreeCommitter?.coAuthorName ?? null,
+        worktreeCoAuthorEmail: worktreeCommitter?.coAuthorEmail ?? null,
       });
     } catch (err) {
       // 如果创建实例失败且已创建 Worktree，回滚 Worktree
@@ -258,8 +263,8 @@ class WorkflowInstanceService {
    */
   private async resolveWorktreeCommitterSnapshot(
     userId: string,
-    explicit: { name: string; email: string } | null | undefined,
-  ): Promise<{ name: string; email: string } | null> {
+    explicit: ResolvedWorktreeCommitter | null | undefined,
+  ): Promise<ResolvedWorktreeCommitter | null> {
     if (explicit !== undefined) return explicit;
     try {
       return await commitSettingsService.resolveWorktreeCommitter(userId);
@@ -274,7 +279,7 @@ class WorkflowInstanceService {
     controllerId: string,
     workspace: { _id: string; name: string; path: string; defaultBranch?: string },
     workflowName: string,
-    committer?: { name: string; email: string } | null,
+    committer?: ResolvedWorktreeCommitter | null,
   ): Promise<{ path: string; branch: string }> {
     const redis = getRedisClient();
     

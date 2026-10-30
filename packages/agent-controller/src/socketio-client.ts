@@ -297,8 +297,16 @@ interface GitWorktreeAddPayload {
   repoPath: string;
   worktreePath: string;
   branch: string;
-  /** 可选：Worktree 级提交人；缺省 = 不写身份（沿用容器级 bot），旧 worker 忽略该字段。 */
-  committer?: { name: string; email: string };
+  /**
+   * 可选：Worktree 级提交人；缺省 = 不写身份（沿用容器级 bot），旧 worker 忽略该字段。
+   * `coAuthorName/coAuthorEmail` 成对出现时追加共同作者 trailer。
+   */
+  committer?: {
+    name: string;
+    email: string;
+    coAuthorName?: string;
+    coAuthorEmail?: string;
+  };
 }
 
 interface GitWorktreeRemovePayload {

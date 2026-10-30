@@ -52,12 +52,12 @@ const CONTROLLER_KEYS = `
 
 const COMMIT_SETTINGS = `
   query CommitSettings {
-    commitSettings { committerType customName customEmail }
+    commitSettings { committerType customName customEmail commitWithBot }
   }
 `;
 const UPDATE_COMMIT_SETTINGS = `
   mutation UpdateCommitSettings($input: CommitSettingsInput!) {
-    updateCommitSettings(input: $input) { committerMode committerType customName customEmail }
+    updateCommitSettings(input: $input) { committerType customName customEmail commitWithBot }
   }
 `;
 
@@ -524,6 +524,7 @@ describe('多租户一期：T-MT 系列', () => {
       committerType: 'UNSET',
       customName: null,
       customEmail: null,
+      commitWithBot: false,
     });
   });
 

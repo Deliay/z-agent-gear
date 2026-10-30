@@ -11,7 +11,10 @@ import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { cloudHostGithubService } from '../cloud-host-github-service.js';
 import { cloudHostService } from '../cloud-host-service.js';
 import { sanitizeOperationError } from '../cloud-host-workload-service.js';
-import { commitSettingsService } from '../commit-settings-service.js';
+import {
+  commitSettingsService,
+  type ResolvedWorktreeCommitter,
+} from '../commit-settings-service.js';
 import { controllerWorkspaceService } from '../controller-workspace.js';
 import { githubService } from '../github.js';
 import { KeyedMutex } from '../keyed-mutex.js';
@@ -457,7 +460,7 @@ export class IssuesTriggerRunner {
    */
   private async resolveTriggerWorktreeCommitter(
     trigger: Doc,
-  ): Promise<{ name: string; email: string } | null> {
+  ): Promise<ResolvedWorktreeCommitter | null> {
     const triggerUserId = trigger.triggerUserId ? String(trigger.triggerUserId) : '';
     if (triggerUserId && mongoose.isValidObjectId(triggerUserId)) {
       try {

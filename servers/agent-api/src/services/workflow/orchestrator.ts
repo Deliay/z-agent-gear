@@ -196,10 +196,21 @@ class WorkflowOrchestrator {
     const snapshot = instance as WorkflowInstanceDoc & {
       worktreeCommitterName?: string | null;
       worktreeCommitterEmail?: string | null;
+      worktreeCoAuthorName?: string | null;
+      worktreeCoAuthorEmail?: string | null;
     };
     const worktreeCommitter =
       snapshot.worktreeCommitterName && snapshot.worktreeCommitterEmail
-        ? { name: snapshot.worktreeCommitterName, email: snapshot.worktreeCommitterEmail }
+        ? {
+            name: snapshot.worktreeCommitterName,
+            email: snapshot.worktreeCommitterEmail,
+            ...(snapshot.worktreeCoAuthorName && snapshot.worktreeCoAuthorEmail
+              ? {
+                  coAuthorName: snapshot.worktreeCoAuthorName,
+                  coAuthorEmail: snapshot.worktreeCoAuthorEmail,
+                }
+              : {}),
+          }
         : null;
 
     const session = await sessionService.create(instance.userId.toString(), {

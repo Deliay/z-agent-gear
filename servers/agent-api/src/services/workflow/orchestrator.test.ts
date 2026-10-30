@@ -308,6 +308,8 @@ describe('WorkflowOrchestrator', () => {
     type WithCommitter = ReturnType<typeof makeInstance> & {
       worktreeCommitterName?: string | null;
       worktreeCommitterEmail?: string | null;
+      worktreeCoAuthorName?: string | null;
+      worktreeCoAuthorEmail?: string | null;
     };
 
     function aiInstance(): WithCommitter {
@@ -328,6 +330,28 @@ describe('WorkflowOrchestrator', () => {
         'user-1',
         expect.objectContaining({
           worktreeCommitter: { name: 'Deliay', email: 'deliay@example.com' },
+        }),
+      );
+    });
+
+    it('C2a2: 快照含共同作者时一并传入节点级 worktree', async () => {
+      const instance = aiInstance();
+      instance.worktreeCommitterName = 'Deliay';
+      instance.worktreeCommitterEmail = 'deliay@example.com';
+      instance.worktreeCoAuthorName = 'zag-bot[bot]';
+      instance.worktreeCoAuthorEmail = '123456+zag-bot[bot]@users.noreply.github.com';
+
+      await workflowOrchestrator.startNodeSession(instance, instance.nodes[1]);
+
+      expect(sessionService.create).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          worktreeCommitter: {
+            name: 'Deliay',
+            email: 'deliay@example.com',
+            coAuthorName: 'zag-bot[bot]',
+            coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+          },
         }),
       );
     });

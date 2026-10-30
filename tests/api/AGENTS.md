@@ -125,8 +125,9 @@ npm test
 | 测试 | 描述 |
 |------|------|
 | T-CS-R1~R4（`services/commit-settings-service.real.test.ts`，真库） | 跨工作区上下文成员级：团队保存→个人读取同一份；个人保存→团队二次保存覆盖不撞键不静默丢失；团队保存→无 ALS 解析 `resolveWorktreeCommitter` 正确；迁移 019 存量行在团队上下文可读且署名逐字一致 |
-| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回 `{committerType:'UNSET',customName:null,customEmail:null}` |
+| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回 `{committerType:'UNSET',customName:null,customEmail:null,commitWithBot:false}` |
 | T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人（trim 归一）；落库断言 `tenantId`=成员归属租户、单行、无 `workspaceId`/`committerMode` 残留 |
+| T-CB-API2 | `commitWithBot` 保存 / 回读为 `true`；`committerType=UNSET` 时归一 `false` |
 | T-CS-API3 | 白名单仅 `invalid custom committer` 逐字 + 矩阵（空名 / 非法邮箱 / 换行 / >100）；`GITHUB_ACCOUNT` 已在 GraphQL 枚举层拒绝 |
 | T-CS-API4 | 成员级隔离：A 保存后 B 仍为 UNSET，B 保存不影响 A |
 | T-CS-API5 | `personalGithubAccounts` 仅返回个人租户绑定帐号（排除普通工作区副本） |
