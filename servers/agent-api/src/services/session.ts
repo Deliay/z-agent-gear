@@ -12,6 +12,7 @@ import { mcpEndpointService } from './mcp-endpoint.js';
 import { ensureCloudHostToolsServer, CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
 import { actorFilter } from './workspace-context.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
+import { commitSettingsService } from './commit-settings-service.js';
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 
@@ -150,6 +151,11 @@ export class SessionService {
     /** 初始工作模式/模型（工作流节点配置，harness 会话启动时应用） */
     modeId?: string;
     modelId?: string;
+    /**
+     * Worktree 提交人：`undefined` = 按会话创建者实时解析；显式 `null` = 不下发（bot）；
+     * 工作流节点场景由调用方显式传入实例快照（复用同一身份）。
+     */
+    worktreeCommitter?: { name: string; email: string } | null;
     /** 内部编排：允许在云电脑 STARTING 窗口创建默认会话（ready 回调原子写 RUNNING+defaultSessionId） */
     allowStartingCloudHost?: boolean;
   }): Promise<Record<string, unknown>> {
@@ -255,6 +261,12 @@ export class SessionService {
       const wtPath = path.join(worktreeDir, safeName, `${input.worktreeBranchSuffix}-${uniqueSuffix}`);
 
       const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      // Worktree 提交人：调用方显式传入优先（工作流节点复用实例快照）；
+      // 未传时按会话创建者实时解析；解析失败降级 null（沿用容器级 bot）。
+      const worktreeCommitter =
+        input.worktreeCommitter !== undefined
+          ? input.worktreeCommitter
+          : await this.resolveWorktreeCommitter(userId);
       await redis.publish('session:command', JSON.stringify({
         type: 'git:worktree:add',
         requestId,
@@ -262,6 +274,7 @@ export class SessionService {
         repoPath: workspace.path,
         worktreePath: wtPath,
         branch,
+        ...(worktreeCommitter ? { committer: worktreeCommitter } : {}),
       }));
 
       let added = false;
@@ -388,6 +401,18 @@ export class SessionService {
     }));
 
     return this.mapSession(session.toObject());
+  }
+
+  /** Worktree 提交人实时解析（独立会话）：失败降级 null（沿用容器级 bot），不阻断建会话。 */
+  private async resolveWorktreeCommitter(
+    userId: string,
+  ): Promise<{ name: string; email: string } | null> {
+    try {
+      return await commitSettingsService.resolveWorktreeCommitter(userId);
+    } catch (err) {
+      console.warn('[session] resolve worktree committer failed:', (err as Error).message);
+      return null;
+    }
   }
 
   /** 云电脑停止/终态：该主机下所有非 ENDED 会话批量结束（只读，消息保留）。 */

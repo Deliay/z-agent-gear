@@ -191,6 +191,17 @@ class WorkflowOrchestrator {
     const instanceSlug = slugify(instance.name) || instance._id.toString();
     const stageSlug = slugify(node.stage) || 'stage';
 
+    // 节点级 Worktree 复用实例初始化时的提交人快照（成员中途改设置不影响已建 Worktree）；
+    // 快照缺失显式传 null，避免 session.create 回退到会话创建者的实时解析。
+    const snapshot = instance as WorkflowInstanceDoc & {
+      worktreeCommitterName?: string | null;
+      worktreeCommitterEmail?: string | null;
+    };
+    const worktreeCommitter =
+      snapshot.worktreeCommitterName && snapshot.worktreeCommitterEmail
+        ? { name: snapshot.worktreeCommitterName, email: snapshot.worktreeCommitterEmail }
+        : null;
+
     const session = await sessionService.create(instance.userId.toString(), {
       controllerId: instance.controllerId.toString(),
       acpServerType: agentConfig.acpServerType,
@@ -198,6 +209,7 @@ class WorkflowOrchestrator {
       enableWorktree,
       worktreeBranchSuffix: enableWorktree ? `${instanceSlug}/${stageSlug}` : undefined,
       existingWorktreePath,
+      worktreeCommitter,
       workflowInstanceId: instance._id.toString(),
       workflowNodeId: node.nodeId,
       resourceWorkspaceId: instance.resourceWorkspaceId

@@ -22,8 +22,21 @@ export class WorktreeService {
     socket.emit(event, payload);
   }
 
-  async handleAdd(requestId: string, controllerId: string, repoPath: string, worktreePath: string, branch: string): Promise<void> {
-    await this.emitToController(controllerId, 'git:worktree:add', { requestId, repoPath, worktreePath, branch });
+  async handleAdd(
+    requestId: string,
+    controllerId: string,
+    repoPath: string,
+    worktreePath: string,
+    branch: string,
+    committer?: { name: string; email: string },
+  ): Promise<void> {
+    await this.emitToController(controllerId, 'git:worktree:add', {
+      requestId,
+      repoPath,
+      worktreePath,
+      branch,
+      ...(committer ? { committer } : {}),
+    });
   }
 
   async handleRemove(requestId: string, controllerId: string, repoPath: string, worktreePath: string, force?: boolean): Promise<void> {

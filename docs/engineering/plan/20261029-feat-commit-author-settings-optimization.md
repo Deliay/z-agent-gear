@@ -6,17 +6,18 @@ type: Permanent
 # Commit 作者设置优化 - 实现计划
 
 **关联 Proposal**: `docs/engineering/proposals/20261029-feat-commit-author-settings-optimization.md`（v1.0）
-**关联 PRD**: `docs/product/draft/20261029-commit-author-settings-optimization.md`（v1.0）
+**关联 PRD**: `docs/product/shipping/20261029-commit-author-settings-optimization.md`（v1.0）
 **需求来源**: GitHub Issue Deliay/z-agent-gear#368
 **需求总分支（feat-branch）**: `feat/commit-author-settings-optimization`（需求总 PR #374）
 **实现分支**: `feat/commit-author-settings-optimization-impl`（基于需求总分支拉起）
 **创建日期**: 2026-10-30
-**计划版本**: v1.0
+**计划版本**: v1.1
 
 **上游评审结论（PR #374）**：Deliay 于 2026-10-30T04:39:52Z APPROVED 产品文档与技术提案，评审无正文、无 inline comment、无 issue comment、无修改要求，按原计划推进本实现计划。若后续复审提出修改，在对应 Phase 中落实并回评。
 
 **版本说明**：
 
+- v1.1（返工）：AI 代码审核阻断问题修复——`user_commit_settings` 豁免 `applyTenantScope`、读写一律 `userId` 点查、`tenantId` 恒取成员归属租户；补 `commit-settings-service.real.test.ts` 真库跨上下文用例（T-CS-R1~R4）与 tests/api 跨上下文回归（T-WS-API5 扩展）。
 - v1.0 首版：与 PRD v1.0 / 提案 v1.0 对齐，把提案 §5.2 的 7 个实现点拆成 9 个 Phase；给出「上游文档 × 代码现状差异」5 条与「计划期裁决」8 条，收敛提案留白但会阻塞实现的口径（迁移编号、runner 文件落点、`applyTenantScope` 去留、`personalGithubAccounts` 的 workspaceId 维度、worktree user 写入的转义与幂等口径、committer 载荷缺省语义、旧 worker 降级边界、迁移 019 碰撞合并细则）。
 - 不改变 PRD 产品口径；契约以提案 §3.1 为准（`CommitterMode` / `GITHUB_ACCOUNT` / `source` / `readOnly` 整体下线，`personalGithubAccounts` 新增）。本特性为「重写 + 迁移」型，非纯增量——`user_commit_settings` 键与语义变更、UI 区块替换、下发口径变化，既有 Commit 相关断言需按新口径改写（基线更新清单见各 Phase），但**本地控制器链路与非 Commit 域零改动、既有非 Commit 用例必须零失败**。
 
@@ -112,7 +113,7 @@ flowchart TD
    - **索引切换**：先 `ensureIndex(user_commit_settings, {userId:1}, {unique:true, name:'uniq_user_commit_setting'})`，后 `dropIndexSafe(..., 'uniq_workspace_commit_setting')`（及 Mongoose `autoIndex` 默认名 `userId_1`/`workspaceId_1`）。
    - **幂等**：`_migrations` 已执行记录 + 各步过滤（`committerType:'github_account'` 残留计数 0、`workspaceId` 残留计数 0）保障可重入。
 2. **触发人身份优先级落点（覆盖 D2）**：`IssuesTriggerRunner.createInstance`（`issues-event-handler.ts`）内解析 `worktreeCommitter`：`triggerUserId` 的「提交人」（`resolveWorktreeCommitter(triggerUserId)`）→ sender 的 GitHub 身份（`<triggerSenderId>+<triggerSenderLogin>@users.noreply.github.com`）→ `null`（= bot）。结果写 `WorkflowInstance.worktreeCommitterName/Email` 并随 `instantiate(..., worktreeCommitter)` 透传。
-3. **`user_commit_settings` 去留插件（覆盖 D3）**：移除 `applyWorkspaceScope` 与三段继承（`resolveEffectiveSetting` 删除）；保留 `applyTenantScope` 以满足多租户隔离不变量（T-ISO 矩阵）。`commit-settings-service` 点查以 `userId` 唯一键命中，`resolveWorktreeCommitter(userId)` **不读取 ALS 工作区上下文**；`tenantId` 由写入/插件补齐留档，不作业务过滤条件（区别于旧「按 workspaceId 三段过滤」）。新增唯一键 `uniq_user_commit_setting`（`{userId:1}`）。
+3. **`user_commit_settings` 去留插件（覆盖 D3，v1.1 返工修正）**：移除 `applyWorkspaceScope` 与三段继承（`resolveEffectiveSetting` 删除）；**并同时移除 `applyTenantScope`**（v1.0 原拟保留）——ALS 注入会按「当前工作区租户」过滤/戳值，导致同一成员跨工作区读写不可见、二次保存撞唯一索引后回读落空而静默丢失、Issue 链路（无 ALS）解析不到。该集合 `userId` 为全局成员主键、`tenantId` 仅留档（恒写 `users.tenantId`，与迁移 019 `cleanFields` 一致），T-ISO 矩阵对该集合显式豁免并断言「不注入 tenantId」。`commit-settings-service` 点查以 `userId` 唯一键命中，`resolveWorktreeCommitter(userId)` **不读取 ALS 工作区上下文**；`tenantId` 由写入/插件补齐留档，不作业务过滤条件（区别于旧「按 workspaceId 三段过滤」）。新增唯一键 `uniq_user_commit_setting`（`{userId:1}`）。
 4. **`personalGithubAccounts` 口径（覆盖 D4）**：`User.findById(me)` 取 `accountId` → `User.find({accountId})` 得同账户全部 userId → 各自 personal 租户 id（= userId，`tenants.type='personal'`）→ `GitHubAccount.find({ tenantId: { $in: personalTenantIds }, workspaceId: { $in: [null, globalWorkspaceId] } })`（导入弹窗仅取「个人租户绑定」帐号，排除普通工作区副本）。导入填充：`customName=githubLogin`、`customEmail=<githubUserId>+<githubLogin>@users.noreply.github.com`（可编辑）。
 5. **worktree user 写入转义与幂等（覆盖 D5）**：`WorktreeHandler.add(repoPath, worktreePath, branch, committer?)` 在 `git worktree add` 成功后，若 `committer` 存在，以 `git -C <worktreePath>` 依次执行三条命令；name/email 值做 **shell 转义**（值含 `'`/`"`/`$`/空格 不破坏命令、不注入），沿用 `commit-identity.ts` 值安全口径（单引号包裹 + 内嵌 `'` 转义），并对 `git config` 值做引号包裹。`extensions.worktreeConfig true` 幂等（重复 set 同值无副作用）；单条失败 `console.warn` 不阻断（结果仍 `success`，身份缺失可接受）。
 6. **committer 载荷缺省语义**：`git:worktree:add` 的 `committer` **可选**；缺省 = 不写 worktree 身份（沿用容器级 bot）。旧 worker（<2.12.0）忽略未知字段 → 优雅降级（不写身份、沿用 bot，不报错）。契约 `agent-session-websocket.md` §3.12 同步增补该可选字段 + 降级说明。
@@ -321,7 +322,7 @@ cd tests/api && npm test -- github workflow-issues multi-tenant
 | `tests/api/AGENTS.md` | 修改 | `github.test.ts`/`workflow-issues.test.ts` 新增 describe 段与用例编号 |
 | `tests/e2e/AGENTS.md` | 修改 | 新增 `settings-git.spec.ts` 场景说明 |
 | `docs/engineering/AGENTS.md` | 修改 | 实现计划索引登记本文件（随需求总 PR 提交） |
-| `docs/product/draft/20261029-commit-author-settings-optimization.md` | 修改 | 生命周期 `draft/` → `shipping/`（实现中），随实现 PR 移动 |
+| `docs/product/shipping/20261029-commit-author-settings-optimization.md` | 修改 | 生命周期 `draft/` → `shipping/`（实现中），随实现 PR 移动 |
 
 ### PR 收口
 

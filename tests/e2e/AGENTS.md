@@ -137,10 +137,10 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-WS3 工作区管理仅 admin | admin 在 `/workspaces` 可新建工作区并即时出现在列表；developer 直达该页显示「仅租户管理员可访问工作区管理（开发角色无入口）」且无新建按钮 |
 | E2E-WS4 租户成员管理 | admin 在 `/tenants/:id/members` 搜索帐号并添加（默认开发）→ 尝试移除唯一管理员提示「至少保留一名管理员」→ 变更角色为管理员；developer 直达显示无权限提示 |
 | E2E-WS5 个人用户零感知 | 仅个人租户用户登录后无 `workspace-switcher`、无工作区管理入口 |
-| E2E-WS6 developer 全局只读 | developer 选择团队全局工作区后，设置页 `workspace-context-banner` 展示「全局工作区 / 只读」与「编辑入口已隐藏」，Commit 设置提示不可修改 |
-| E2E-WS2b 改名 / 非空删除 / 成员 | 工作区行「改名」→ 重命名后列表即时更新；「成员」弹窗添加 developer（列表出现 `@username`）→ 移除后消失；写入本工作区 Commit 设置后「删除」被拒并提示「工作区非空（仍持有资源），无法删除」，工作区保留 |
+| E2E-WS6 developer 全局只读 | developer 选择团队全局工作区后，设置页 `workspace-context-banner` 展示「全局工作区 / 只读」与「编辑入口已隐藏」；Commit 设置已为成员级，`#git-section` 仍可见且「保存 Git 设置」可用（旧文案「不可修改 Commit 设置」不再出现） |
+| E2E-WS2b 改名 / 非空删除 / 成员 | 工作区行「改名」→ 重命名后列表即时更新；「成员」弹窗添加 developer（列表出现 `@username`）→ 移除后消失；在本工作区创建供应商后「删除」被拒并提示「工作区非空（仍持有资源），无法删除」，工作区保留（Commit 设置已非工作区资源，不再用于构造非空） |
 | E2E-WS3b 资源来源徽标 | 团队全局工作区创建的供应商在普通工作区设置页展示 `resource-source-badge`「全局工作区」；本工作区创建的供应商展示「本工作区」 |
-| E2E-WS4b Commit 三态 | 普通工作区设置页 `commit-settings-source`：双未设置 →「未设置」；仅全局设置 →「继承自全局工作区」；本工作区设置 →「本工作区」 |
+| E2E-WS4b 成员级 Commit 设置一致 | 在普通工作区保存自定义提交人 → 设置页回显；切到团队全局工作区仍回显同一份成员设置（无「继承自全局工作区/本工作区」三段语义，`commit-settings-source` 已下线） |
 
 ### 后台 team 租户 E2E (`admin-team-tenant.spec.ts` E2E-TT)
 
@@ -152,17 +152,19 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-TT2 成员协作可见资源 | 后台 API 建 team + owner(admin)/member(developer) → owner 在团队全局创建普通工作区、把 member 加入并创建供应商（mock LLM 校验连通性）→ member 登录后切换器含该工作区，设置页可见 owner 创建的供应商且徽标「本工作区」 |
 | E2E-TT3 团队计费口径 | 后台为 team 租户充值 10 credits → owner 在团队全局「我的费用」看到「可用余额 10.00」；切回个人工作区显示 0.00（个人余额不受团队扣费影响）。最小断言：真实创建云电脑扣费依赖 HARNESS_ENABLED，已由 tests/api T-B2 / cloud-host-charges / cloud-host-billing-quote 覆盖 |
 
-### Settings Commit 作者 E2E (`settings-commit-author.spec.ts`)
+### Settings Git E2E (`settings-git.spec.ts`)
 
-> 仅前端交互与文案；`commitSettings` / `updateCommitSettings` / `githubAccounts` 经 `page.route` mock，
-> 不依赖真实 GitHub 与云容器。容器内真实提交身份由 `agent-controller` 单测与人工验收覆盖。
+> 仅前端交互与文案；`commitSettings` / `updateCommitSettings` / `personalGithubAccounts` 经 `page.route` mock，
+> 不依赖真实 GitHub 与云容器。区块为 `#git-section`（标题「Git」+ 提示「仅对云电脑环境生效」），
+> 提交人为成员级二选一（自定义 / 未设置），样式对齐 `settings-github-binding.spec.ts`。
 
 | 测试 | 描述 |
 |------|------|
-| E2E-1 | 「GitHub 绑定」下方出现「Commit 设置」与常驻提示「设置只对云容器环境生效」；四模式 / 三提交人可切换并保存成功 toast |
-| E2E-2 | Co-Author / 仅人类 + 提交人未设置 → 禁用保存并提示「请先设置提交人」；自定义空用户名 / 非法邮箱拦截 |
-| E2E-3 | 提交人条件渲染：Github帐号下拉（org 不出现）、未绑定引导「请先绑定 Github 帐号」、自定义用户名 + 邮箱输入 |
-| E2E-4 | 双未设置保存 / 刷新回显一致（未设置零回归） |
+| E2E-GIT1 | 「Git」区块与云电脑提示可见；`提交人` 自定义/未设置可切换并保存成功 toast「对成员的会话/工作流 Worktree 生效」；页面不再出现「Commit 设置」与「提交人模式」 |
+| E2E-GIT2 | 「导入Github帐号信息」弹窗列出 `personalGithubAccounts`（头像 + 帐号名）→ 选择后回填用户名=login、邮箱=`<githubUserId>+<login>@users.noreply.github.com`，可继续编辑并保存 |
+| E2E-GIT2b | 无个人绑定时弹窗空态「先到『GitHub 绑定』绑定帐号」，不渲染帐号列表 |
+| E2E-GIT3 | 自定义校验：空用户名 / 非法邮箱 / 双空 → 提示「提交人用户名或邮箱格式不正确」且保存禁用，不发起 `updateCommitSettings` |
+| E2E-GIT4 | 存量等价回显：`commitSettings` 返回 custom 的 login + noreply 邮箱 → 表单回显一致，直接保存提交值与回显值相同（刷新后仍一致） |
 
 ### Settings LLM E2E (`settings-llm.spec.ts`)
 

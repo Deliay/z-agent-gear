@@ -391,8 +391,8 @@ export async function parseHarnessRequest(
     harnessTypes: [...new Set(harnessTypes as string[])],
     controllerKeyId,
     containerApiKeyId,
-    // C-4 / A7：落库下限恒为 MIN_HARNESS_WORKER_VERSION（2.10.0）；按类型常量为能力引入历史，
-    // 与 2.10.0 取 max 后不再改变落库值，注册门禁按落库值生效。
+    // C-4 / A7：落库下限恒为 MIN_HARNESS_WORKER_VERSION（2.12.0，worktree committer 能力）；
+    // 按类型常量为能力引入历史，与 2.12.0 取 max 后不再改变落库值，注册门禁按落库值生效。
     agentGearMinVersion: maxWorkerVersion(
       maxWorkerVersion(agentGearMinVersion, harnessMinVersion(harnessTypes as string[])),
       MIN_HARNESS_WORKER_VERSION,

@@ -66,6 +66,12 @@ vi.mock('./mcp-endpoint.js', () => ({
   },
 }));
 
+vi.mock('./commit-settings-service.js', () => ({
+  commitSettingsService: {
+    resolveWorktreeCommitter: vi.fn(),
+  },
+}));
+
 import { sessionService, resolveInitialMcpServerIds } from './session.js';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
@@ -75,6 +81,7 @@ import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
+import { commitSettingsService } from './commit-settings-service.js';
 
 const mockRedis = {
   set: vi.fn(),
@@ -124,6 +131,7 @@ describe('SessionService', () => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
     vi.mocked(Session.updateOne).mockResolvedValue({ acknowledged: true } as never);
+    vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue(null);
   });
 
   describe('findAllByUser', () => {
@@ -313,8 +321,104 @@ describe('SessionService', () => {
       expect(result.cwd).toBe('/worktrees/my-project/feat-123-abc12345');
     });
 
-    it('should throw on worktree add failure (non-retryable error)', async () => {
-      vi.mocked(Controller.findOne).mockReturnValue({
+    describe('T-WF-C3 独立会话 worktree 提交人', () => {
+      function mockWorktreeDeps() {
+        vi.mocked(Controller.findOne).mockReturnValue({
+          lean: vi.fn().mockResolvedValue({ name: 'my-server', worktreeDir: '/worktrees' }),
+        } as never);
+        vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+          lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+        } as never);
+        mockRedis.publish.mockResolvedValue(1);
+        mockRedis.get
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce(JSON.stringify({ success: true, worktreePath: '/worktrees/my-project/feat-1-abc12345' }));
+        vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+      }
+
+      function addPayload(): { committer?: { name: string; email: string } } | undefined {
+        return mockRedis.publish.mock.calls
+          .map((c) => JSON.parse(String(c[1])))
+          .find((p: { type?: string }) => p.type === 'git:worktree:add') as
+          | { committer?: { name: string; email: string } }
+          | undefined;
+      }
+
+      it('C3a: 未显式传入 → 按会话创建者实时解析并随 git:worktree:add 下发', async () => {
+        mockWorktreeDeps();
+        vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue({
+          name: 'Deliay',
+          email: 'deliay@example.com',
+        });
+
+        await sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          enableWorktree: true,
+          worktreeBranchSuffix: 'feat-1',
+        });
+
+        expect(commitSettingsService.resolveWorktreeCommitter).toHaveBeenCalledWith('user-1');
+        expect(addPayload()?.committer).toEqual({ name: 'Deliay', email: 'deliay@example.com' });
+      });
+
+      it('C3b: 调用方显式传入（工作流节点复用实例快照）优先，不再查会话创建者', async () => {
+        mockWorktreeDeps();
+        const snapshot = { name: 'snapshot', email: 'snapshot@example.com' };
+
+        await sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          enableWorktree: true,
+          worktreeBranchSuffix: 'feat-1',
+          worktreeCommitter: snapshot,
+        });
+
+        expect(commitSettingsService.resolveWorktreeCommitter).not.toHaveBeenCalled();
+        expect(addPayload()?.committer).toEqual(snapshot);
+      });
+
+      it('C3c: 显式 null → 不下发 committer（沿用容器级 bot）', async () => {
+        mockWorktreeDeps();
+
+        await sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          enableWorktree: true,
+          worktreeBranchSuffix: 'feat-1',
+          worktreeCommitter: null,
+        });
+
+        expect(commitSettingsService.resolveWorktreeCommitter).not.toHaveBeenCalled();
+        expect(addPayload()).toBeTruthy();
+        expect(addPayload()).not.toHaveProperty('committer');
+      });
+
+      it('C3d: 非 worktree 会话不解析提交人、不发 git:worktree:add', async () => {
+        vi.mocked(Controller.findOne).mockReturnValue({
+          lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+        } as never);
+        vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+          lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+        } as never);
+        vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+        await sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+        });
+
+        expect(commitSettingsService.resolveWorktreeCommitter).not.toHaveBeenCalled();
+        const types = mockRedis.publish.mock.calls.map((c) => JSON.parse(String(c[1])).type);
+        expect(types).not.toContain('git:worktree:add');
+      });
+    });
+
+    it('should throw on worktree add failure (non-retryable error)', async () => {      vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
       } as never);
       vi.mocked(ControllerWorkspace.findOne).mockReturnValue({

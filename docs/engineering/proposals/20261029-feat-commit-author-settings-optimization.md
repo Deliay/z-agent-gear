@@ -6,7 +6,7 @@ type: Permanent
 # Commit 作者设置优化 - 技术提案
 
 **功能名称**: Commit 作者设置优化（成员独立提交人、「Git」区块与提交身份下发）
-**关联 PRD**: `docs/product/draft/20261029-commit-author-settings-optimization.md`
+**关联 PRD**: `docs/product/shipping/20261029-commit-author-settings-optimization.md`
 **技术提案版本**: v1.0
 **创建日期**: 2026-10-29
 **作者**: ZeroAsh Agent
@@ -463,7 +463,7 @@ TDD（红-绿-重构）先行；单测随模块 `*.test.ts` 共置。
 
 ## 10. 相关文档
 
-- 关联 PRD：`docs/product/draft/20261029-commit-author-settings-optimization.md`
+- 关联 PRD：`docs/product/shipping/20261029-commit-author-settings-optimization.md`
 - 前序提案：`docs/engineering/proposals/20261027-feat-commit-author-settings.md`（本提案取代其模式/共享/下发口径）
 - 多租户二期：`docs/engineering/proposals/20261028-feat-multi-tenant-phase2.md`（「Commit 三段继承」被取代）
 - Issue 联动：`docs/engineering/proposals/20261025-feat-github-issues-workflow.md`、`20261026-fix-issues-workflow-force-worktree.md`
