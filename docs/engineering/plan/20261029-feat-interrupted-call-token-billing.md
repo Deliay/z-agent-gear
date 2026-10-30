@@ -327,7 +327,44 @@ cd tests/api && npx vitest run src/admin-api/billing.test.ts src/admin-api/billi
 | tests/api 无中断用例、真实上游不可控 | 裁决 10：outbox 注入驱动真实管线，确定性复现出账口径；依赖缺失显式失败不静默 skip |
 | 逃费风险（折算只降不升） | 输出全价、中断照常出账（幂等键不变）；预检保守上界不变（裁决 9）；T-AB3 断言金额>0 |
 
-## 相关文档
+## 实现记录
+
+### v1.0（2026-10-30，实现分支 `impl/interrupted-call-token-billing`）
+
+| Phase | 变更文件 | 结果 |
+|-------|---------|------|
+| 1 契约口径 | `contracts/billing-openai.openapi.yaml`、`billing.graphql`、`admin-billing.graphql`、`billing-events.asyncapi.yaml` | 仅描述/注释变更，零结构变更；`billing.graphql` 与 `admin-billing.graphql` 的 `segment` / `BillingApiCall` 注释逐字一致 |
+| 2 拆分唯一源 | 新增 `services/billing/usage-split.ts`、`usage-split.test.ts` | `ABORTED_INPUT_CACHED_RATIO = 0.8`、`splitAbortedInput` 纯函数；T-AB1 5 条用例绿灯 |
+| 3 计量固化 | `services/billing/metering.ts`、`metering.test.ts` | aborted 记录 `dims.aborted` + `billedInputNonCachedTokens` / `billedInputCachedTokens`；completed 不写；T-AB2 3 条用例绿灯 |
+| 4 出账口径 | `services/billing/billing-service.ts`、`billing-flow.test.ts`、`pricing.test.ts` | 定价入参替换 `cachedInputTokens`、回写保持 `dims` 实际三段、描述按是否拆分分支；T-AB3/4/6/7/8 绿灯 |
+| 5 网关成本 | `routes/billing-openai.ts`、`billing-openai.test.ts` | 抽出 `finalizeCost(status, usage, pricing)`：aborted 走 `splitAbortedInput`，completed 口径不变；T-AB5 单测 + 端到端断言绿灯 |
+| 6 前端标签 | `apps/agent-web/src/lib/billing-format.ts`、`apps/admin-web/src/lib/billing-format.ts`（同构）+ 各端 `__tests__/billing-format.test.ts`、`BillingPage.test.tsx` | `segmentLabel` 剥离 `:aborted` 后按基础段名 + 「（中断）」；T-FE1/T-FE2 绿灯 |
+| 7 API 收口 | `tests/api/src/admin-api/billing.test.ts`（API-AB1/API-AB2）、本计划文档 | 直写 `billingoutbox`（producer=admin-api、published=false）驱动真实管线；`INVOICES` 查询补 `refId` / `description` |
+
+**实现期偏离/补充说明**：
+
+1. 前端测试落位遵循项目既有惯例 `src/lib/__tests__/billing-format.test.ts`（而非 `src/lib/billing-format.test.ts`），两端逐字同构。
+2. 网关成本直算抽为 `finalizeCost` 具名导出函数（原为 `finalize` 内联表达式），便于「aborted 拆分 / completed 零回归」双向单测；行为与提案一致。
+3. `handleModelCallEvent` 未改写 `usage` 对象本身，只用 `pricingUsage` 作为 `priceModel` 入参，因此回写天然保持 `dims` 实际三段（裁决 2）。
+4. 本地自测：`servers/admin-api` 全量 772 passed（`MONGOMS_SYSTEM_BINARY=/usr/bin/mongod`，含 T-AB1~8）、`tsc --noEmit` 通过；`apps/agent-web` 全量 953 passed + build 通过；`apps/admin-web` 全量 266 passed + build + lint 通过。`apps/agent-web` 的 `npm run lint` 有 2 处**既有**报错（`IssuesLinkageDialog.tsx` 的 `react-refresh/only-export-components`，本期未触碰该文件）。
+5. API-AB1/API-AB2 需 `aspire start` 全栈（MongoDB + RabbitMQ + admin-api）与 `MONGODB_URI`，依赖缺失时不静默跳过而是显式失败（裁决 10）。
+
+### v1.1（2026-10-30，返工：API 测试实跑 + 单位修正）
+
+评审打回两项阻断问题，均已修复：
+
+1. **账单金额断言单位修正（Wire 契约统一为 credits）**：`adminBillingInvoices` / `adminBillingApiCalls` 经 `mappers.ts` 的 `centsToCredits`（÷100）输出，API-AB1/API-AB2 原按「分」断言必挂。已改为 `invoice.amount = -2.6 / -2.95`、`call.cost = 2.6 / 2.95`（credits 口径），并补「明细金额之和 = 整单金额绝对值」断言（明细为正数、消费账单为负数，统一 credits）。
+2. **API-AB1/API-AB2 真实管线实测通过**：`aspire start` 全栈（MongoDB + RabbitMQ + Redis + admin-api + agent-api）实跑
+   `npx vitest run src/admin-api/billing.test.ts src/admin-api/billing-gateway.test.ts`
+   → **2 files / 16 tests passed**（含 API-AB1：中断明细两段输入 20%/80% + 输出全价、折后金额 2.6 credits、描述折算口径、回写实际用量；API-AB2：正常调用 2.95 credits 回归）。
+   实测中同时修正用例自身两处缺陷：`API_CALLS` 查询补选 `inputTokens/cachedInputTokens/outputTokens`（原选择集不含该三段，断言恒为 undefined）；两个用例显式设置 60s 超时（覆盖真实 outbox→MQ 管线等待）。
+3. **非阻断建议采纳**：`usage-split.test.ts` T-AB1 补「两段与精确 20%/80% 偏差 ≤ 0.5 token」断言，与注释口径一致。
+
+> 环境提示（不影响仓库代码）：本机 `/usr/local/bin/docker` 包装脚本会改写 `docker create --name <name>` 的容器名导致 Aspire 容器 `FailedToStart`；实跑时将 `PATH` 指向 `/usr/bin/docker` 绕过。
+
+
+---
+
 
 - 关联 PRD：`docs/product/draft/20261029-interrupted-call-token-billing.md`（v1.0）
 - 关联 Proposal：`docs/engineering/proposals/20261029-feat-interrupted-call-token-billing.md`（v1.0）

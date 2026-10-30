@@ -718,9 +718,23 @@ export class BillingService {
       const aborted = event.eventType === 'model_call.aborted';
       const abortReason =
         typeof payload.reason === 'string' && payload.reason.length > 0 ? payload.reason : '调用中断';
-      const priced = await this.prices.priceModel(modelId, usage, event.occurredAt);
+      // 中断输入计价口径：计量层已把「20% 未缓存 + 80% 缓存」固化进 dims（事实的一部分）。
+      // 存在时仅替换定价入参的 cachedInputTokens（priceModel 内 nonCached = input − cached
+      // 自然得到 20% 段）；存量记录（无拆分字段）回落旧行为 —— 金额与历史一致（不追溯）。
+      const billedInputCachedTokens = dims?.dims?.billedInputCachedTokens;
+      const billedInputNonCachedTokens = dims?.dims?.billedInputNonCachedTokens;
+      const splitApplied =
+        aborted &&
+        typeof billedInputCachedTokens === 'number' &&
+        typeof billedInputNonCachedTokens === 'number';
+      const pricingUsage = splitApplied
+        ? { ...usage, cachedInputTokens: billedInputCachedTokens }
+        : usage;
+      const priced = await this.prices.priceModel(modelId, pricingUsage, event.occurredAt);
       const description = aborted
-        ? `模型调用（中断：${abortReason}${estimated ? '，估算' : ''}） ${modelId}`
+        ? splitApplied
+          ? `模型调用（中断：${abortReason}，输入按 20% 未缓存 + 80% 缓存计价${estimated ? '，估算' : ''}） ${modelId}`
+          : `模型调用（中断：${abortReason}${estimated ? '，估算' : ''}） ${modelId}`
         : `${estimated ? '模型调用（估算）' : '模型调用'} ${modelId}`;
 
       let invoice: InvoiceResult | null = null;

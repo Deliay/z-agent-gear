@@ -46,9 +46,20 @@ export function itemFormula(item: ReceiptItemLike): string {
 
 export function segmentLabel(segment?: string | null): string {
   if (!segment) return '';
-  if (segment.includes('aborted')) return '中断';
-  if (segment === 'input') return '输入';
-  if (segment === 'cached_input') return '缓存输入';
-  if (segment === 'output') return '输出';
-  return segment;
+  // 中断调用的三段明细带 `:aborted` 后缀；剥离后缀按基础段名展示，避免两段输入同名为「中断」。
+  const abortedSuffix = ':aborted';
+  const aborted = segment.endsWith(abortedSuffix);
+  const base = aborted ? segment.slice(0, -abortedSuffix.length) : segment;
+  const label =
+    base === 'input'
+      ? '输入'
+      : base === 'cached_input'
+        ? '缓存输入'
+        : base === 'output'
+          ? '输出'
+          : base === 'aborted'
+            ? '中断'
+            : base;
+  if (aborted) return `${label}（中断）`;
+  return label;
 }

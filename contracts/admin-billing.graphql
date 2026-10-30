@@ -99,7 +99,7 @@ type InvoiceItem {
   unitPrice: Float! # 计价时点单价快照（credits / 单位，已换算展示单位）
   amount: Float!
   meteringRef: ID # 回溯计量事实
-  segment: String # input | cached_input | output（中断调用带 :aborted 后缀）
+  segment: String # input | cached_input | output（中断调用带 :aborted 后缀：input:aborted=20% 未缓存、cached_input:aborted=80% 缓存、output:aborted=输出全价）
 }
 
 type BillingReceipt {
@@ -169,10 +169,10 @@ type BillingApiCall {
   billable: Boolean! # false 表示自定义模型代转发（不计费，仅审计）
   modelId: String!
   modelName: String!
-  inputTokens: Int!
-  cachedInputTokens: Int!
-  outputTokens: Int!
-  cost: Float!
+  inputTokens: Int! # 实际用量
+  cachedInputTokens: Int! # 实际用量
+  outputTokens: Int! # 实际用量
+  cost: Float! # 按计价口径折算后的出账金额（中断调用为 20/80 拆分折后金额）
   status: String! # started | completed | aborted | failed
   estimated: Boolean!
   invoiceSeq: Int

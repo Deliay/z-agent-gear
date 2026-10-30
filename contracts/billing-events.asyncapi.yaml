@@ -221,6 +221,10 @@ components:
               enum: [model_call.completed, model_call.aborted]
             payload:
               type: object
+              description: |
+                事件载荷保持**实际用量**（事实）。`model_call.aborted` 的输入 token 在计量/定价侧
+                按「20% 未缓存 + 80% 缓存」拆分计价（输出全价），拆分结果固化在计量记录 `dims`，
+                不改写本载荷中的 `inputTokens` / `cachedInputTokens` / `outputTokens`。
               required: [modelId]
               properties:
                 modelId:

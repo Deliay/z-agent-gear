@@ -1040,6 +1040,262 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     expect(abortedInvoice?.amount).toBeGreaterThan(0);
   });
 
+  describe('中断调用 20/80 拆分计价（T-AB3/T-AB4/T-AB6/T-AB7）', () => {
+    async function seedPrice(): Promise<void> {
+      await ProductPrice.create({
+        productId: 'model.m-ab.token',
+        productName: 'm-ab',
+        pricingModel: 'per_token',
+        rates: { inputPerMillion: 100, cachedInputPerMillion: 50, outputPerMillion: 200 },
+        isBillable: true,
+        effectiveFrom: new Date(0),
+      });
+    }
+
+    async function seedCall(
+      requestId: string,
+      accountId: string,
+      overrides: Record<string, unknown> = {},
+    ): Promise<void> {
+      await BillingApiCall.create({
+        requestId,
+        accountId,
+        apiKeyId: new mongoose.Types.ObjectId(),
+        modelId: 'm-ab',
+        modelName: 'm-ab',
+        startedAt: new Date(T0),
+        ...overrides,
+      });
+    }
+
+    it('T-AB3: aborted 三段明细按 20/80 拆分、回写事实用量、cost 为折后金额', async () => {
+      const nowValue = { value: T0 };
+      const { billing } = setup(nowValue);
+      const account = await createAccount(100);
+      await seedPrice();
+      await seedCall('req-ab', account.id);
+
+      const eventPayload = {
+        modelId: 'm-ab',
+        inputTokens: 1_000_000,
+        cachedInputTokens: 100_000, // 实际缓存用量与 20/80 口径无关
+        outputTokens: 1_000_000,
+      };
+      const event = {
+        eventId: 'model_call.aborted:req-ab',
+        eventType: 'model_call.aborted',
+        occurredAt: new Date(T0),
+        accountId: account.id,
+        resourceId: 'req-ab',
+        payload: { ...eventPayload, reason: 'client_aborted' },
+      };
+      await eventIngestService.ingest(event);
+      const result = await billing.handleModelCallEvent(event);
+      expect(result?.amount).toBe(260);
+
+      const invoice = await BillingInvoice.findOne({ idempotentKey: 'invoice:model:req-ab' });
+      const items = invoice?.items ?? [];
+      expect(items.map((item) => item.segment)).toEqual([
+        'input:aborted',
+        'cached_input:aborted',
+        'output:aborted',
+      ]);
+      const bySegment = new Map(items.map((item) => [item.segment, item]));
+      // 20% 未缓存段 / 80% 缓存段 / 输出全价
+      expect(bySegment.get('input:aborted')?.quantity).toBe(200_000);
+      expect(bySegment.get('cached_input:aborted')?.quantity).toBe(800_000);
+      expect(bySegment.get('output:aborted')?.quantity).toBe(1_000_000);
+      expect(
+        (bySegment.get('input:aborted')?.quantity ?? 0) +
+          (bySegment.get('cached_input:aborted')?.quantity ?? 0),
+      ).toBe(eventPayload.inputTokens);
+      // 折后金额低于「按实际缓存用量全价」口径
+      const fullPriceCents = 295;
+      expect(invoice?.amount).toBe(-260);
+      expect(Math.abs(invoice?.amount ?? 0)).toBeLessThan(fullPriceCents);
+      // 描述注明中断原因与折算口径
+      expect(invoice?.description).toContain('中断');
+      expect(invoice?.description).toContain('client_aborted');
+      expect(invoice?.description).toContain('20% 未缓存 + 80% 缓存');
+
+      // 回写 BillingApiCall：token 三段保持实际用量，cost 为折后金额
+      const call = await BillingApiCall.findOne({ requestId: 'req-ab' });
+      expect(call).toMatchObject({
+        inputTokens: 1_000_000,
+        cachedInputTokens: 100_000,
+        outputTokens: 1_000_000,
+        cost: 260,
+        status: 'aborted',
+      });
+    });
+
+    it('T-AB4: 正常完成调用计价与回写零回归', async () => {
+      const nowValue = { value: T0 };
+      const { billing } = setup(nowValue);
+      const account = await createAccount(100);
+      await seedPrice();
+      await seedCall('req-done', account.id);
+
+      const event = {
+        eventId: 'model_call.completed:req-done',
+        eventType: 'model_call.completed',
+        occurredAt: new Date(T0),
+        accountId: account.id,
+        resourceId: 'req-done',
+        payload: {
+          modelId: 'm-ab',
+          inputTokens: 1_000_000,
+          cachedInputTokens: 100_000,
+          outputTokens: 1_000_000,
+        },
+      };
+      await eventIngestService.ingest(event);
+      const result = await billing.handleModelCallEvent(event);
+      // 900k × 100 + 100k × 50 + 1M × 200 = 295000000 / 1e6 → 295 分
+      expect(result?.amount).toBe(295);
+
+      const invoice = await BillingInvoice.findOne({ idempotentKey: 'invoice:model:req-done' });
+      expect(invoice?.items.map((item) => item.segment)).toEqual([
+        'input',
+        'cached_input',
+        'output',
+      ]);
+      expect(invoice?.items.map((item) => item.quantity)).toEqual([900_000, 100_000, 1_000_000]);
+      expect(invoice?.description).not.toContain('20% 未缓存 + 80% 缓存');
+
+      const call = await BillingApiCall.findOne({ requestId: 'req-done' });
+      expect(call).toMatchObject({
+        inputTokens: 1_000_000,
+        cachedInputTokens: 100_000,
+        outputTokens: 1_000_000,
+        cost: 295,
+        status: 'completed',
+      });
+      // completed 记录的 dims 不带拆分字段
+      const metered = await MeteringRecord.findOne({ eventId: event.eventId }).lean();
+      expect((metered?.dims as Record<string, unknown>).billedInputCachedTokens).toBeUndefined();
+    });
+
+    it('T-AB6: estimated × aborted 叠加——估算输入同样按 20/80 拆分且保留估算标注', async () => {
+      const nowValue = { value: T0 };
+      const { billing } = setup(nowValue);
+      const account = await createAccount(100);
+      await seedPrice();
+      await seedCall('req-est-ab', account.id);
+
+      const event = {
+        eventId: 'model_call.aborted:req-est-ab',
+        eventType: 'model_call.aborted',
+        occurredAt: new Date(T0),
+        accountId: account.id,
+        resourceId: 'req-est-ab',
+        payload: {
+          modelId: 'm-ab',
+          estimated: true,
+          estimatedInputTokens: 1_000_000,
+          estimatedOutputTokens: 1_000_000,
+          reason: 'upstream_error',
+        },
+      };
+      await eventIngestService.ingest(event);
+      await billing.handleModelCallEvent(event);
+
+      const invoice = await BillingInvoice.findOne({ idempotentKey: 'invoice:model:req-est-ab' });
+      expect(invoice?.description).toContain('中断');
+      expect(invoice?.description).toContain('估算');
+      expect(invoice?.description).toContain('20% 未缓存 + 80% 缓存');
+      const bySegment = new Map((invoice?.items ?? []).map((item) => [item.segment, item]));
+      expect(bySegment.get('input:aborted')?.quantity).toBe(200_000);
+      expect(bySegment.get('cached_input:aborted')?.quantity).toBe(800_000);
+
+      const call = await BillingApiCall.findOne({ requestId: 'req-est-ab' });
+      expect(call?.estimated).toBe(true);
+      expect(call?.inputTokens).toBe(1_000_000);
+    });
+
+    it('T-AB7: isBillable:false 不出账；存量 dims 无拆分字段回落旧口径且不虚标折算', async () => {
+      const nowValue = { value: T0 };
+      const { billing } = setup(nowValue);
+      const account = await createAccount(100);
+      await seedPrice();
+
+      // 非计费模型：不产生账单，回写 cost=0
+      await seedCall('req-free', account.id);
+      await eventIngestService.ingest({
+        eventId: 'model_call.aborted:req-free',
+        eventType: 'model_call.aborted',
+        occurredAt: new Date(T0),
+        accountId: account.id,
+        resourceId: 'req-free',
+        payload: { modelId: 'm-ab', inputTokens: 1000, outputTokens: 500 },
+      });
+      await ProductPrice.updateOne(
+        { productId: 'model.m-ab.token' },
+        { $set: { isBillable: false } },
+      );
+      const freeInvoice = await billing.handleModelCallEvent({
+        eventId: 'model_call.aborted:req-free',
+        eventType: 'model_call.aborted',
+        occurredAt: new Date(T0),
+        accountId: account.id,
+        resourceId: 'req-free',
+        payload: { modelId: 'm-ab', inputTokens: 1000, outputTokens: 500 },
+      });
+      expect(freeInvoice).toBeNull();
+      expect(await BillingInvoice.countDocuments({ idempotentKey: 'invoice:model:req-free' })).toBe(0);
+      const freeCall = await BillingApiCall.findOne({ requestId: 'req-free' });
+      expect(freeCall?.cost).toBe(0);
+      expect(freeCall?.status).toBe('aborted');
+
+      // 存量记录（无 billedInput* 拆分字段）重放：按实际 cachedInputTokens 旧口径
+      await ProductPrice.updateOne(
+        { productId: 'model.m-ab.token' },
+        { $set: { isBillable: true } },
+      );
+      await seedCall('req-legacy', account.id);
+      const legacyEvent = {
+        eventId: 'model_call.aborted:req-legacy',
+        eventType: 'model_call.aborted',
+        occurredAt: new Date(T0),
+        accountId: account.id,
+        resourceId: 'req-legacy',
+        payload: { modelId: 'm-ab', inputTokens: 1_000_000, cachedInputTokens: 100_000, outputTokens: 1_000_000 },
+      };
+      await eventIngestService.ingest(legacyEvent);
+      // 模拟拆分上线前的存量计量：事件已计量 + dims 无拆分字段（不重建，走回落分支）
+      await BillingEvent.updateOne({ eventId: legacyEvent.eventId }, { $set: { metered: true } });
+      await MeteringRecord.create({
+        eventId: legacyEvent.eventId,
+        accountId: account.id,
+        resourceType: 'model',
+        resourceId: 'req-legacy',
+        productId: 'model.m-ab.token',
+        quantity: 2_000_000,
+        dims: {
+          modelId: 'm-ab',
+          inputTokens: 1_000_000,
+          cachedInputTokens: 100_000,
+          outputTokens: 1_000_000,
+          estimated: false,
+        },
+        windowFrom: new Date(T0),
+        windowTo: new Date(T0),
+        estimated: false,
+        invoiced: false,
+      });
+      await billing.handleModelCallEvent(legacyEvent);
+      const legacyInvoice = await BillingInvoice.findOne({
+        idempotentKey: 'invoice:model:req-legacy',
+      });
+      // 旧口径（实际缓存段 100k）：295 分
+      expect(legacyInvoice?.amount).toBe(-295);
+      expect(legacyInvoice?.description).toContain('中断');
+      expect(legacyInvoice?.description).not.toContain('20% 未缓存 + 80% 缓存');
+      const legacyCall = await BillingApiCall.findOne({ requestId: 'req-legacy' });
+      expect(legacyCall?.cost).toBe(295);
+    });
+  });
+
   it('T-B3: 调价后新消费取新档，历史账单单价快照不变', async () => {
     const nowValue = { value: T0 };
     const { billing } = setup(nowValue);
