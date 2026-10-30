@@ -27,7 +27,13 @@ vi.mock('./instance.js', () => ({
   },
 }));
 
+const ws = vi.hoisted(() => ({ systemWorkspaceContext: vi.fn() }));
+vi.mock('../workspace-service.js', () => ({
+  workspaceService: ws,
+}));
+
 import { handlePullRequestEvent } from './pr-event-handler.js';
+import { getWorkspaceContext } from '../workspace-context.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { workflowInstanceService } from './instance.js';
@@ -94,6 +100,7 @@ describe('handlePullRequestEvent', () => {
     vi.mocked(workflowInstanceService.removeSystemAdditionalPrompt).mockResolvedValue(undefined as never);
     vi.mocked(workflowInstanceService.completeHumanNode).mockResolvedValue({} as never);
     vi.mocked(workflowInstanceService.rejectNode).mockResolvedValue({} as never);
+    ws.systemWorkspaceContext.mockResolvedValue(undefined);
   });
 
   it('NO_HANDLER', async () => {
@@ -183,6 +190,43 @@ describe('handlePullRequestEvent', () => {
       vi.mocked(workflowInstanceService.setSystemAdditionalPrompt).mock.invocationCallOrder[0],
     ).toBeLessThan(vi.mocked(workflowInstanceService.completeHumanNode).mock.invocationCallOrder[0]);
     expect(prHandlerRegistry.markEventHandled).toHaveBeenCalledWith('h1', 'evt-1', expect.any(Date));
+  });
+
+  it('T-EVT-TEAM: 团队租户实例在系统工作区上下文中完成节点', async () => {
+    loadInstance(
+      instance(
+        [node('n1', 'AI', 'DONE'), node('n2', 'HUMAN', 'RUNNING', ['n1'])],
+        { resourceWorkspaceId: oid('ws-team') },
+      ),
+    );
+    ws.systemWorkspaceContext.mockResolvedValue({
+      id: 'ws-team',
+      tenantId: 'team-1',
+      type: 'normal',
+      role: 'admin',
+      readOnly: false,
+      globalWorkspaceId: 'ws-global',
+    });
+
+    let seen: ReturnType<typeof getWorkspaceContext> | undefined;
+    vi.mocked(workflowInstanceService.completeHumanNode).mockImplementation(async () => {
+      seen = getWorkspaceContext();
+      return {} as never;
+    });
+
+    const result = await handlePullRequestEvent(event('approved'));
+
+    expect(result.handled).toBe(true);
+    expect(ws.systemWorkspaceContext).toHaveBeenCalledWith('ws-team');
+    expect(seen?.tenantId).toBe('team-1');
+    expect(seen?.role).toBe('admin');
+    // 打回分支同样在上下文内
+    vi.mocked(workflowInstanceService.rejectNode).mockImplementation(async () => {
+      seen = getWorkspaceContext();
+      return {} as never;
+    });
+    await handlePullRequestEvent(event('changes_requested'));
+    expect(seen?.tenantId).toBe('team-1');
   });
 
   it.each(['changes_requested', 'rejected', 'dismissed'])('%s → 打回并携带 A.3 文案', async (state) => {

@@ -10,6 +10,8 @@ const h = vi.hoisted(() => ({
   opUpdateOne: vi.fn(),
   workflowFindOne: vi.fn(),
   workspaceFindOne: vi.fn(),
+  controllerFindById: vi.fn(),
+  systemWorkspaceContext: vi.fn(),
   instanceFindById: vi.fn(),
   findHost: vi.fn(),
   defaultWorkspace: vi.fn(),
@@ -44,6 +46,12 @@ vi.mock('../../models/configured-workflow.js', () => ({
 }));
 vi.mock('../../models/controller-workspace.js', () => ({
   ControllerWorkspace: { findOne: h.workspaceFindOne },
+}));
+vi.mock('../../models/controller.js', () => ({
+  Controller: { findById: h.controllerFindById },
+}));
+vi.mock('../workspace-service.js', () => ({
+  workspaceService: { systemWorkspaceContext: h.systemWorkspaceContext },
 }));
 vi.mock('../../models/workflow-instance.js', () => ({
   WorkflowInstance: { findById: h.instanceFindById },
@@ -140,6 +148,8 @@ beforeEach(() => {
     }),
   );
   h.workspaceFindOne.mockReturnValue(lean(null));
+  h.controllerFindById.mockReturnValue({ select: () => lean({ workspaceId: null }) });
+  h.systemWorkspaceContext.mockResolvedValue(undefined);
   h.findHost.mockResolvedValue({ status: 'RUNNING', userId: USER_ID });
   h.defaultWorkspace.mockResolvedValue('/home/worker/workspace');
   h.resolveRepoAccount.mockResolvedValue('acc-1');
@@ -511,6 +521,44 @@ describe('IssuesTriggerRunner 强制 Worktree 隔离', () => {
       expect.objectContaining({ _id: TRIGGER_ID }),
       { $set: { status: 'FAILED', failureReason: 'worktree add failed' } },
     );
+  });
+});
+
+describe('IssuesTriggerRunner 团队租户工作区上下文', () => {
+  it('T-ISS-CTX: 按控制器工作区建立上下文后再推进（团队租户 tenantId 不再是 userId）', async () => {
+    const { getWorkspaceContext } = await import('../workspace-context.js');
+    const ctx = {
+      id: WORKSPACE_ID,
+      tenantId: 'team-1',
+      type: 'global',
+      role: 'admin',
+      readOnly: false,
+      globalWorkspaceId: WORKSPACE_ID,
+    } as const;
+    h.triggerFindById.mockReturnValue(
+      lean(
+        triggerDoc({
+          status: 'PENDING_HUMAN_NODE',
+          workflowInstanceId: INSTANCE_ID,
+          humanNodeId: 'h1',
+        }),
+      ),
+    );
+    h.instanceFindById.mockReturnValue(lean(instanceDoc([{ nodeId: 'h1', status: 'RUNNING' }])));
+    h.controllerFindById.mockReturnValue({ select: () => lean({ workspaceId: WORKSPACE_ID }) });
+    h.systemWorkspaceContext.mockResolvedValue(ctx);
+
+    let seen: ReturnType<typeof getWorkspaceContext> | undefined;
+    h.completeHumanNode.mockImplementation(async () => {
+      seen = getWorkspaceContext();
+      return {};
+    });
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.systemWorkspaceContext).toHaveBeenCalledWith(WORKSPACE_ID);
+    expect(seen?.tenantId).toBe('team-1');
+    expect(seen?.role).toBe('admin');
   });
 });
 
