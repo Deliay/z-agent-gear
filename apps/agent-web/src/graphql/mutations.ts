@@ -371,12 +371,11 @@ export const UNBIND_GITHUB_ACCOUNT = gql`
   }
 `
 
+/** 保存当前成员的提交人设置（仅 committerType / customName / customEmail） */
 export const UPDATE_COMMIT_SETTINGS = gql`
   mutation UpdateCommitSettings($input: CommitSettingsInput!) {
     updateCommitSettings(input: $input) {
-      committerMode
       committerType
-      githubAccountId
       customName
       customEmail
     }

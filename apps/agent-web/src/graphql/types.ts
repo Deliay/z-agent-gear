@@ -882,39 +882,41 @@ export interface UnbindGitHubAccountMutation {
   unbindGitHubAccount: boolean
 }
 
-export type CommitterModeValue = 'AGENT_ONLY' | 'CO_AUTHOR' | 'HUMAN_ONLY' | 'UNSET'
+/** 提交人类型：仅自定义 / 未设置（GITHUB_ACCOUNT 已移除） */
+export type CommitterType = 'CUSTOM' | 'UNSET'
 
-export type CommitterTypeValue = 'GITHUB_ACCOUNT' | 'CUSTOM' | 'UNSET'
-
-/** Commit 设置生效值来源（多租户二期三段继承） */
-export type CommitSettingsSourceValue = 'WORKSPACE' | 'GLOBAL' | 'UNSET'
-
-export interface CommitSettingsData {
-  committerMode: CommitterModeValue
-  committerType: CommitterTypeValue
-  githubAccountId: string | null
+/** 成员级提交人设置（仅对云容器环境生效，成员独立、无共享/继承） */
+export interface CommitSettings {
+  committerType: CommitterType
+  /** committerType = CUSTOM 时为自定义用户名/邮箱，其余为 null */
   customName: string | null
   customEmail: string | null
-  /** 本工作区 / 继承自全局工作区 / 未设置 */
-  source?: CommitSettingsSourceValue
-  /** 当前上下文是否只读（全局工作区 + developer） */
-  readOnly?: boolean
 }
 
-export interface CommitSettingsInputData {
-  committerMode: CommitterModeValue
-  committerType: CommitterTypeValue
-  githubAccountId?: string | null
+export interface CommitSettingsInput {
+  committerType: CommitterType
   customName?: string | null
   customEmail?: string | null
 }
 
+/** 「导入Github帐号信息」弹窗条目（Query.personalGithubAccounts） */
+export interface PersonalGithubAccount {
+  id: string
+  githubUserId: number
+  githubLogin: string
+  githubAvatarUrl?: string | null
+}
+
+export interface GetPersonalGithubAccountsQuery {
+  personalGithubAccounts: PersonalGithubAccount[]
+}
+
 export interface GetCommitSettingsQuery {
-  commitSettings: CommitSettingsData
+  commitSettings: CommitSettings
 }
 
 export interface UpdateCommitSettingsMutation {
-  updateCommitSettings: CommitSettingsData
+  updateCommitSettings: CommitSettings
 }
 
 export interface RefreshGitHubInstallationsMutation {

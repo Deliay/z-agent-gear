@@ -38,56 +38,35 @@ type GitHubAppUrl {
 }
 
 # ---------------------------------------------------------------------------
-# Commit 设置（仅对云容器环境生效；本地控制器不受影响）
+# Commit 设置（成员级提交人设置；仅对云容器环境生效，本地控制器不受影响）
 #
-# 从未保存返回 committerMode=UNSET + committerType=UNSET 的默认值。
+# 成员独立、无共享/继承：每个成员一份设置，任何工作区下均为同一份。
+# 从未保存返回 committerType=UNSET 的默认值。
 # 服务端权威校验失败时返回以下白名单错误文案（前端原样映射，不改写）：
-#   - committer is required for the selected mode
-#   - invalid github account
 #   - invalid custom committer
-# 归一规则按 committerType 清理冗余字段（committerMode=UNSET 不清空提交人）：
-#   - UNSET            → githubAccountId / customName / customEmail 置空
-#   - GITHUB_ACCOUNT   → customName / customEmail 置空
-#   - CUSTOM           → githubAccountId 置空
+# 归一规则：UNSET 清空 customName / customEmail；CUSTOM 必须提供合法用户名与邮箱。
+#
+# 下发口径（与工作区设置无关）：
+#   - 云电脑自身（非 Worktree）= 平台 bot（无视本设置）
+#   - 勾选 Worktree 的会话/工作流 = 创建者的本设置
+#   - Issue 拉起的工作流 = 触发人的本设置（未设置回退其 GitHub 身份，再回退 bot）
 # ---------------------------------------------------------------------------
 
-enum CommitterMode {
-  AGENT_ONLY
-  CO_AUTHOR
-  HUMAN_ONLY
-  UNSET
-}
-
 enum CommitterType {
-  GITHUB_ACCOUNT
   CUSTOM
   UNSET
 }
 
+"""成员级提交人设置"""
 type CommitSettings {
-  committerMode: CommitterMode!
   committerType: CommitterType!
-  # committerType = GITHUB_ACCOUNT 时为所选已绑定非 org 帐号 id，其余为 null
-  githubAccountId: ID
   # committerType = CUSTOM 时为自定义用户名/邮箱（对应 git user/email），其余为 null
   customName: String
   customEmail: String
-  # 生效值来源（多租户二期新增）：本工作区已设置 / 继承自全局工作区 / 两级均未设置
-  source: CommitSettingsSource!
-  # 当前上下文是否只读（全局工作区且 developer 角色）
-  readOnly: Boolean!
-}
-
-enum CommitSettingsSource {
-  WORKSPACE # 本工作区已设置
-  GLOBAL # 继承自全局工作区
-  UNSET # 两级均未设置（行为与升级前一致）
 }
 
 input CommitSettingsInput {
-  committerMode: CommitterMode!
   committerType: CommitterType!
-  githubAccountId: ID
   customName: String
   customEmail: String
 }
@@ -95,13 +74,15 @@ input CommitSettingsInput {
 extend type Query {
   githubAccounts: [GitHubAccount!]!
   githubAppUrl: GitHubAppUrl!
-  """当前工作区的生效 Commit 设置（仅对云容器环境生效）；继承链 本工作区 → 全局工作区 → 未设置，source 透出来源"""
+  """当前成员的提交人设置（仅对云容器环境生效）；从未保存返回 UNSET 默认值"""
   commitSettings: CommitSettings!
+  """当前账户对应的个人租户绑定的全部 GitHub 帐号（「导入Github帐号信息」弹窗数据源）"""
+  personalGithubAccounts: [GitHubAccount!]!
 }
 
 extend type Mutation {
   unbindGitHubAccount(accountId: ID!): Boolean!
   refreshGitHubInstallations(accountId: ID!): GitHubAccount!
-  """保存 Commit 设置；非法组合返回白名单错误文案"""
+  """保存当前成员的提交人设置；非法输入返回白名单错误文案"""
   updateCommitSettings(input: CommitSettingsInput!): CommitSettings!
 }

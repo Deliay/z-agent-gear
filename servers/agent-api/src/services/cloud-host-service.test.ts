@@ -389,7 +389,7 @@ describe('CloudHostService', () => {
         userId: 'user-1',
         tenantId: 'user-1',
         billingAccountId: 'account-1',
-        agentGearMinVersion: '2.10.0',
+        agentGearMinVersion: '2.12.0',
         // 容器 TTL 仍作为留档下发；模型 Key 不再与其绑定有效期。
         expiresAt: expect.any(Date),
       });
@@ -495,37 +495,37 @@ describe('CloudHostService', () => {
       expect(CloudHost.deleteOne).toHaveBeenCalled();
     });
 
-    it('T-HL-API9: 仅 KIMI_CODE 时 agentGearMinVersion=2.10.0', async () => {
+    it('T-HL-API9: 仅 KIMI_CODE 时 agentGearMinVersion=2.12.0', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'kimi-cloud', harnessTypes: ['KIMI_CODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.harnessTypes).toEqual(['kimi_code']);
-      expect(payload.agentGearMinVersion).toBe('2.10.0');
+      expect(payload.agentGearMinVersion).toBe('2.12.0');
     });
 
-    it('T-HL-API9b: 多选取按类型最大值（opencode+kimi_code → 2.10.0）', async () => {
+    it('T-HL-API9b: 多选取按类型最大值（opencode+kimi_code → 2.12.0）', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'multi', harnessTypes: ['OPENCODE', 'KIMI_CODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
-      expect(payload.agentGearMinVersion).toBe('2.10.0');
+      expect(payload.agentGearMinVersion).toBe('2.12.0');
     });
 
-    it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.11.0，混合取最大', async () => {
+    it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.12.0，混合取最大', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'deepseek-cloud', harnessTypes: ['DEEPSEEK_HARNESS'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.harnessTypes).toEqual(['deepseek_harness']);
-      expect(payload.agentGearMinVersion).toBe('2.11.0');
+      expect(payload.agentGearMinVersion).toBe('2.12.0');
 
       await service.create('user-1', {
         name: 'deepseek-mixed',
         harnessTypes: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'],
       });
       const mixedPayload = vi.mocked(cloudControllerClient.startHarness).mock.calls[1][0];
-      expect(mixedPayload.agentGearMinVersion).toBe('2.11.0');
+      expect(mixedPayload.agentGearMinVersion).toBe('2.12.0');
     });
 
     it('T-CW1: never creates a default workspace at create time', async () => {
