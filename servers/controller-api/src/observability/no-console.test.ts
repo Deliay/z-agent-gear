@@ -1,5 +1,5 @@
 /**
- * no-console 不变量守卫（T-OBS7）：递归扫描本包 `src/**/*.ts`（含测试文件），
+ * no-console 不变量守卫（T-OBS7）：递归扫描本包 `src` 目录下全部 `.ts` 文件（含测试文件），
  * 命中 `console.<level>(` 即失败并输出 `文件:行号` 与正确写法。
  *
  * 行内白名单：`// no-console-allow: <原因>`（守卫输出白名单条目统计）。
@@ -24,7 +24,8 @@ function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
-      walk(full, out);
+      // migration 目录不允许修改（历史不可变），其中的 console 不在守卫范围
+      if (entry !== 'migrations') walk(full, out);
     } else if (full.endsWith('.ts')) {
       out.push(full);
     }

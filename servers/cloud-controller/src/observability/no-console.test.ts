@@ -24,7 +24,8 @@ function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
-      walk(full, out);
+      // migration 目录不允许修改（历史不可变），其中的 console 不在守卫范围
+      if (entry !== 'migrations') walk(full, out);
     } else if (full.endsWith('.ts')) {
       out.push(full);
     }

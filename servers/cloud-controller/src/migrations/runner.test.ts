@@ -21,6 +21,8 @@ function executedLean(names: string[]) {
 describe('runMigrations (cloud_controller_migrations)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
     (Migrations.create as any).mockResolvedValue({});
     (Migrations.deleteOne as any).mockResolvedValue({ deletedCount: 1 });
     (Migrations.deleteMany as any).mockResolvedValue({ deletedCount: 0 });

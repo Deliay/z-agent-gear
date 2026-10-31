@@ -1,10 +1,7 @@
 import mongoose from 'mongoose';
 import { CloudContainer } from '../models/cloud-container.js';
-import { logger as rootLogger } from '../observability/logger.js';
 
 export const name = '001-cloudcontainers-tenant-id-backfill';
-
-const log = rootLogger.child({ component: 'migration/001' });
 
 /**
  * 001-cloudcontainers-tenant-id-backfill：为存量容器回填租户归属（多租户一期）。
@@ -32,9 +29,11 @@ export async function run(): Promise<void> {
     // Mongoose v9：聚合管线更新必须显式声明 updatePipeline。
     { updatePipeline: true },
   );
-  log.info({ modifiedCount: result.modifiedCount }, 'backfilled cloudcontainers.tenantId');
+  console.log(
+    `[Migration 001] backfilled cloudcontainers.tenantId: ${result.modifiedCount} document(s)`,
+  );
 
   const collection = mongoose.connection.collection('cloudcontainers');
   await collection.createIndex({ tenantId: 1 });
-  log.info('Ensured index { tenantId: 1 } on cloudcontainers');
+  console.log('[Migration 001] Ensured index { tenantId: 1 } on cloudcontainers');
 }
