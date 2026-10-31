@@ -61,6 +61,7 @@ import { sessionService } from './session.js';
 import { lookupKey } from './key-cache.js';
 import { getRedisClient } from '../middleware/redis.js';
 import bcrypt from 'bcryptjs';
+import { createTestLogger } from '../observability/testing.js';
 
 function createMockSocket() {
   const handlers: Record<string, (...args: unknown[]) => void> = {};
@@ -464,49 +465,49 @@ describe('SocketIO Service', () => {
 
   describe('disconnect', () => {
     it('logs connection handshake so anonymous sources can be traced', async () => {
-      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const testLog = createTestLogger('socketio');
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      createSocketIOServer(mockIO as never);
+      createSocketIOServer(mockIO as never, testLog.logger);
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
-      expect(log).toHaveBeenCalledWith(
-        expect.stringContaining('[socket] connected id=socket-123 address=127.0.0.1'),
-      );
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        component: 'socketio',
+        event: 'connected',
+        socketId: 'socket-123',
+        address: '127.0.0.1',
+      }));
 
       mockSocket._trigger('disconnect', 'transport close');
 
       await vi.waitFor(() => {
-        expect(log).toHaveBeenCalledWith(
-          expect.stringContaining(
-            '[socket] disconnected id=socket-123 address=127.0.0.1 ns=/ key=- authenticated=false reason=transport close',
-          ),
-        );
+        expect(testLog.records).toContainEqual(expect.objectContaining({
+          component: 'socketio',
+          event: 'disconnected',
+          socketId: 'socket-123',
+          reason: 'transport close',
+          authenticated: false,
+        }));
       });
-
-      log.mockRestore();
     });
 
     it('does not print undefined for anonymous disconnect', async () => {
-      const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const testLog = createTestLogger('socketio');
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
-      createSocketIOServer(mockIO as never);
+      createSocketIOServer(mockIO as never, testLog.logger);
       const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
       connectionHandler(mockSocket);
 
       mockSocket._trigger('disconnect', 'client namespace disconnect');
 
       await vi.waitFor(() => {
-        const lines = log.mock.calls.map((call) => String(call[0]));
-        expect(lines.some((line) => line.includes('[socket] disconnected'))).toBe(true);
-        expect(lines.join('\n')).not.toContain('undefined');
+        expect(testLog.records.some((r) => r.event === 'disconnected')).toBe(true);
+        expect(JSON.stringify(testLog.records)).not.toContain('undefined');
       });
-
-      log.mockRestore();
     });
 
     it('should remove session when authenticated', async () => {
@@ -604,10 +605,15 @@ describe('SocketIO Service', () => {
       });
 
       await vi.waitFor(() => {
-        expect(mockRedis.publish).toHaveBeenCalledWith('session:status', JSON.stringify({
+        expect(mockRedis.publish).toHaveBeenCalled();
+        const call = vi.mocked(mockRedis.publish).mock.calls.at(-1)! as [string, string];
+        expect(call[0]).toBe('session:status');
+        const body = JSON.parse(call[1]) as Record<string, unknown>;
+        expect(body).toMatchObject({
           sessionId: 'sess-1',
           protocolVersionMismatch: { expectedVersion: 1, agentVersion: 2 },
-        }));
+        });
+        expect(body).toHaveProperty('_meta');
       });
     });
   });

@@ -1,5 +1,8 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 
 interface ElicitationRequestData {
   requestId: string;
@@ -55,6 +58,11 @@ export class ElicitationManager {
   private pendingRequests = new Map<string, PendingRequest>();
   private io: SocketIOServer | null = null;
   private subscriber: ReturnType<typeof getRedisClient> | null = null;
+  private readonly logger: ObservationLogger;
+
+  constructor(logger: ObservationLogger = rootLogger.child({ component: 'elicitation-manager' })) {
+    this.logger = logger;
+  }
 
   start(io: SocketIOServer): void {
     this.io = io;
@@ -67,7 +75,7 @@ export class ElicitationManager {
 
     this.subscriber.subscribe(ELICITATION_RESPONSE_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to elicitation response channel:', err);
+        this.logger.error({ err, channel: ELICITATION_RESPONSE_CHANNEL }, 'failed to subscribe to channel');
         return;
       }
     });
@@ -76,10 +84,16 @@ export class ElicitationManager {
       if (channel !== ELICITATION_RESPONSE_CHANNEL) return;
 
       try {
-        const data = JSON.parse(message) as ElicitationResponseData;
-        await this.handleElicitationResponse(data);
+        const data = JSON.parse(message) as ElicitationResponseData & { _meta?: { traceparent?: string } };
+        const parent = extractTraceparent(data._meta);
+        await withSpan(
+          `${ELICITATION_RESPONSE_CHANNEL} handle`,
+          { 'messaging.system': 'redis', 'messaging.destination.name': channel, requestId: data.requestId },
+          () => this.handleElicitationResponse(data),
+          { parent },
+        );
       } catch (err) {
-        console.error('Error handling elicitation response:', err);
+        this.logger.error({ err, channel }, 'error handling elicitation response');
       }
     });
   }
@@ -107,7 +121,10 @@ export class ElicitationManager {
       || typeof message !== 'string' || message.length > MESSAGE_MAX_LENGTH
       || !validSchema || !validUrl || !validNullableId(toolCallId) || !validNullableId(elicitationId)
     ) {
-      console.warn('[Elicitation] dropped invalid elicitation request: requestId=%j sessionId=%j mode=%j schemaBytes=%d', requestId, sessionId, mode, schemaBytes);
+      this.logger.warn(
+        { requestId, sessionId, mode, schemaBytes },
+        'dropped invalid elicitation request',
+      );
       return;
     }
 
@@ -127,8 +144,7 @@ export class ElicitationManager {
       timeout,
     });
 
-    const redis = getRedisClient();
-    await redis.publish(ELICITATION_REQUEST_CHANNEL, JSON.stringify({
+    await publish(ELICITATION_REQUEST_CHANNEL, {
       requestId,
       controllerId: socket.data.controllerId,
       sessionId,
@@ -139,7 +155,7 @@ export class ElicitationManager {
       requestedSchema,
       elicitationId,
       url,
-    }));
+    });
   }
 
   async handleElicitationResponse(data: ElicitationResponseData): Promise<void> {
@@ -147,7 +163,7 @@ export class ElicitationManager {
     const pending = this.pendingRequests.get(requestId);
 
     if (!pending) {
-      console.warn(`Elicitation request ${requestId} not found or already responded`);
+      this.logger.warn({ requestId }, 'elicitation request not found or already responded');
       return;
     }
 
@@ -163,12 +179,11 @@ export class ElicitationManager {
   }
 
   async handleElicitationComplete(socket: Socket, data: ElicitationCompleteData): Promise<void> {
-    const redis = getRedisClient();
-    await redis.publish(ELICITATION_COMPLETE_CHANNEL, JSON.stringify({
+    await publish(ELICITATION_COMPLETE_CHANNEL, {
       sessionId: data.sessionId,
       elicitationId: data.elicitationId,
       userId: socket.data.userId,
-    }));
+    });
   }
 
   /**
@@ -184,11 +199,11 @@ export class ElicitationManager {
       || data.sessionId.length === 0
       || data.sessionId.length > SESSION_ID_MAX_LENGTH
     ) {
-      console.warn('[Elicitation] dropped resolved event with invalid sessionId');
+      this.logger.warn({ sessionId: data?.sessionId }, 'dropped resolved event with invalid sessionId');
       return;
     }
     if (!RESOLVED_REASONS.has(data.reason)) {
-      console.warn('[Elicitation] dropped resolved event with unknown reason=%j', data.reason);
+      this.logger.warn({ reason: data.reason }, 'dropped resolved event with unknown reason');
       return;
     }
 
@@ -201,15 +216,14 @@ export class ElicitationManager {
       ? data.detail.slice(0, DETAIL_MAX_LENGTH)
       : undefined;
 
-    const redis = getRedisClient();
-    await redis.publish(ELICITATION_RESOLVED_CHANNEL, JSON.stringify({
+    await publish(ELICITATION_RESOLVED_CHANNEL, {
       requestId,
       sessionId: data.sessionId,
       reason: data.reason,
       ...(detail !== undefined ? { detail } : {}),
       controllerId: socket.data.controllerId,
       userId: socket.data.userId,
-    }));
+    });
   }
 
   private handleTimeout(requestId: string): void {
@@ -222,16 +236,16 @@ export class ElicitationManager {
     // 2) 落 resolved(timeout)：60s 是唯一用户可见超时口径，待办据此收敛为 expired
     // 3) 仍回发 acp:elicitation:response{cancel} 给 controller（既有行为）
     void Promise.resolve()
-      .then(() => getRedisClient().publish(ELICITATION_RESOLVED_CHANNEL, JSON.stringify({
+      .then(() => publish(ELICITATION_RESOLVED_CHANNEL, {
         requestId,
         sessionId: pending.sessionId,
         userId: pending.userId,
         controllerId: pending.controllerId,
         reason: 'timeout',
         detail: 'controller-api timeout (60s)',
-      })))
+      }))
       .catch((err: unknown) => {
-        console.error('Failed to publish elicitation resolved (timeout):', err);
+        this.logger.error({ err, requestId }, 'failed to publish elicitation resolved (timeout)');
       });
 
     if (this.io) {

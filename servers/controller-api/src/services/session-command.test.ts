@@ -76,6 +76,7 @@ import { acpSessionSyncService } from './acp-session-sync.js';
 import { Controller } from '../models/controller.js';
 import { worktreeService} from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
+import { createTestLogger } from '../observability/testing.js';
 
 function createMockRedis() {
   const messageHandlers: ((channel: string, message: string) => void)[] = [];
@@ -605,9 +606,8 @@ describe('SessionCommandService', () => {
       vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
       vi.mocked(acpSessionManager.setModel).mockResolvedValue(false);
 
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-      const service = new SessionCommandService();
+      const testLog = createTestLogger();
+      const service = new SessionCommandService(testLog.logger);
       service.start(createMockIO() as never);
 
       mockRedis._emitMessage('session:command', JSON.stringify({
@@ -618,12 +618,12 @@ describe('SessionCommandService', () => {
 
       await vi.waitFor(() => {
         expect(acpSessionManager.setModel).toHaveBeenCalledWith('sess-1', 'model-2');
-        expect(consoleSpy).toHaveBeenCalledWith(
-          'ACP set-model failed: session sess-1 not found in active sessions',
-        );
+        expect(testLog.records).toContainEqual(expect.objectContaining({
+          level: 'error',
+          sessionId: 'sess-1',
+          msg: 'ACP set-model failed',
+        }));
       });
-
-      consoleSpy.mockRestore();
     });
   });
 

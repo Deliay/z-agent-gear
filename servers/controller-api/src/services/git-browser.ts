@@ -2,6 +2,7 @@ import { getRedisClient } from '../middleware/redis.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 
 interface GitCheckResult {
   isGitRepo: boolean;
@@ -18,6 +19,11 @@ interface GitInitResult {
 
 export class GitBrowserService {
   private io: SocketIOServer | null = null;
+  private readonly logger: ObservationLogger;
+
+  constructor(logger: ObservationLogger = rootLogger.child({ component: 'git-browser' })) {
+    this.logger = logger;
+  }
 
   start(io: SocketIOServer): void {
     this.io = io;
@@ -26,24 +32,24 @@ export class GitBrowserService {
   async check(requestId: string, controllerId: string, path: string): Promise<void> {
     if (!this.io) return;
     const controller = await Controller.findById(controllerId).lean();
-    if (!controller) { console.error(`Controller not found for git:check: ${controllerId}`); return; }
+    if (!controller) { this.logger.error({ controllerId, requestId, op: 'git:check' }, 'controller not found'); return; }
     const keyId = controller.keyId.toString();
     const socketId = await sessionService.getSocketId(keyId);
-    if (!socketId) { console.error(`Controller offline for git:check: ${controllerId}`); return; }
+    if (!socketId) { this.logger.error({ controllerId, requestId, op: 'git:check' }, 'controller offline'); return; }
     const socket = this.io.sockets.sockets.get(socketId);
-    if (!socket) { console.error(`Socket not found for git:check: ${controllerId}`); return; }
+    if (!socket) { this.logger.error({ controllerId, socketId, requestId, op: 'git:check' }, 'socket not found'); return; }
     socket.emit('git:check', { requestId, path });
   }
 
   async init(requestId: string, controllerId: string, path: string): Promise<void> {
     if (!this.io) return;
     const controller = await Controller.findById(controllerId).lean();
-    if (!controller) { console.error(`Controller not found for git:init: ${controllerId}`); return; }
+    if (!controller) { this.logger.error({ controllerId, requestId, op: 'git:init' }, 'controller not found'); return; }
     const keyId = controller.keyId.toString();
     const socketId = await sessionService.getSocketId(keyId);
-    if (!socketId) { console.error(`Controller offline for git:init: ${controllerId}`); return; }
+    if (!socketId) { this.logger.error({ controllerId, requestId, op: 'git:init' }, 'controller offline'); return; }
     const socket = this.io.sockets.sockets.get(socketId);
-    if (!socket) { console.error(`Socket not found for git:init: ${controllerId}`); return; }
+    if (!socket) { this.logger.error({ controllerId, socketId, requestId, op: 'git:init' }, 'socket not found'); return; }
     socket.emit('git:init', { requestId, path });
   }
 

@@ -28,6 +28,7 @@ import { HarnessLoginRegistry } from './harness-login-registry.js';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 
 const mockRedis = {
   publish: vi.fn(),
@@ -86,11 +87,13 @@ function mockAcpMessageDoc() {
 
 describe('ACPSessionManager', () => {
   let manager: ACPSessionManager;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
-    manager = new ACPSessionManager();
+    testLog = createTestLogger();
+    manager = new ACPSessionManager(undefined, testLog.logger);
   });
 
   describe('startSession', () => {
@@ -1310,11 +1313,13 @@ describe('ACPSessionManager', () => {
 
 describe('ACPSessionManager - capability snapshot 落库', () => {
   let manager: ACPSessionManager;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
-    manager = new ACPSessionManager();
+    testLog = createTestLogger();
+    manager = new ACPSessionManager(undefined, testLog.logger);
   });
 
   const capabilities = {
@@ -1354,7 +1359,6 @@ describe('ACPSessionManager - capability snapshot 落库', () => {
   });
 
   it('T-S1b: 超限快照落库前截断 raw，保留 features（体积防护）', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const socket = createMockSocket();
     vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
     vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
@@ -1390,11 +1394,12 @@ describe('ACPSessionManager - capability snapshot 落库', () => {
     expect(stored.features).toEqual(capabilities.features);
     expect(stored.raw).toMatchObject({ truncated: true });
     expect(stored.raw?.originalBytes).toBeGreaterThan(64 * 1024);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('agentCapabilities snapshot too large'),
-      expect.any(Number),
-      expect.any(Number),
-    );
+    expect(testLog.records).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      msg: expect.stringContaining('agentCapabilities snapshot too large'),
+      bytes: expect.any(Number),
+      maxBytes: expect.any(Number),
+    }));
   });
 
   it('T-S2: 旧 payload 不带 capabilities 时不写 agentCapabilities（零退化）', async () => {
@@ -1524,11 +1529,13 @@ describe('ACPSessionManager 登录超时守卫 (T-HLM8)', () => {
 
 describe('ACPSessionManager.handleInitialConfigResult (acp:initial-config:result)', () => {
   let manager: ACPSessionManager;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
-    manager = new ACPSessionManager();
+    testLog = createTestLogger();
+    manager = new ACPSessionManager(undefined, testLog.logger);
   });
 
   it('任一 status 为 failed：写 initialConfigError 并随 session:status extra 下发', async () => {
@@ -1606,20 +1613,18 @@ describe('ACPSessionManager.handleInitialConfigResult (acp:initial-config:result
   });
 
   it('缺失/空 sessionId：丢弃并 console.warn，不触库不发布', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
     await manager.handleInitialConfigResult({ modeStatus: 'failed' } as never);
     await manager.handleInitialConfigResult({ sessionId: '', modeStatus: 'failed' });
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid sessionId'));
+    expect(testLog.records).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      msg: expect.stringContaining('invalid sessionId'),
+    }));
     expect(Session.findByIdAndUpdate).not.toHaveBeenCalled();
     expect(mockRedis.publish).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
   });
 
   it('status 为契约外取值：丢弃并 console.warn，不触库不发布', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
     await manager.handleInitialConfigResult({
       sessionId: 'sess-1',
       modeStatus: 'pending' as never,
@@ -1629,13 +1634,12 @@ describe('ACPSessionManager.handleInitialConfigResult (acp:initial-config:result
       modelStatus: 'ok' as never,
     });
 
-    expect(warnSpy).toHaveBeenCalledTimes(2);
-    for (const call of warnSpy.mock.calls) {
-      expect(String(call[0])).toContain('invalid status');
-    }
+    const invalidStatusWarns = testLog.records.filter(
+      (r) => r.level === 'warn' && String(r.msg).includes('invalid status'),
+    );
+    expect(invalidStatusWarns).toHaveLength(2);
     expect(Session.findByIdAndUpdate).not.toHaveBeenCalled();
     expect(mockRedis.publish).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
   });
 
   it('error 超长时截断到 200 字符后落库', async () => {

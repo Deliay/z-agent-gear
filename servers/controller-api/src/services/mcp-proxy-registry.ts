@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { McpServer } from '../models/mcp-server.js';
 import { McpProxyKey } from '../models/mcp-proxy-key.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { withSpan } from '../observability/trace.js';
 
 const OWNER_TTL_SECONDS = 45;
 
@@ -71,6 +72,18 @@ export class McpProxyRegistry {
 
   setupNamespace(): void {
     const nsp = this.io.of('/mcp-proxy');
+
+    // T-OBS13：`/mcp-proxy` 握手提取 `auth.traceparent`（可选）作服务端 span parent（与 cloud-controller socketio-gateway 同型）。
+    nsp.use((socket: Socket, next: () => void) => {
+      const raw = socket.handshake.auth?.traceparent;
+      const traceparent = typeof raw === 'string' ? raw : undefined;
+      void withSpan(
+        'socket.handshake',
+        { socketId: socket.id, namespace: nsp.name },
+        () => next(),
+        { parent: traceparent },
+      );
+    });
 
     nsp.on('connection', (socket: Socket) => {
       let proxyId: string | null = null;

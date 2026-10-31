@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { AcpMessage } from '../models/acp-message.js';
 import { Session } from '../models/session.js';
-import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 
 export class AcpPersistenceService {
   async saveMessage(sessionId: string, message: {
@@ -57,19 +57,17 @@ export class AcpPersistenceService {
   }
 
   async publishMessage(sessionId: string, message: Record<string, unknown>): Promise<void> {
-    const redis = getRedisClient();
-    await redis.publish('session:message', JSON.stringify({
+    await publish('session:message', {
       sessionId,
       message,
-    }));
+    });
   }
 
   async publishStatus(sessionId: string, status: string): Promise<void> {
-    const redis = getRedisClient();
-    await redis.publish('session:status', JSON.stringify({
+    await publish('session:status', {
       sessionId,
       status,
-    }));
+    });
   }
 }
 

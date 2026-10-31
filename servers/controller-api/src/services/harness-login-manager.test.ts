@@ -7,6 +7,7 @@ vi.mock('../middleware/redis.js', () => ({
 import { HarnessLoginManager } from './harness-login-manager.js';
 import { HarnessLoginRegistry } from './harness-login-registry.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 
 const mockRedis = {
   publish: vi.fn(),
@@ -39,6 +40,7 @@ describe('HarnessLoginManager', () => {
   let registry: HarnessLoginRegistry;
   let io: { sockets: { sockets: Map<string, unknown> } };
   let socket: ReturnType<typeof createMockSocket>;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -52,7 +54,8 @@ describe('HarnessLoginManager', () => {
     io = { sockets: { sockets: new Map<string, unknown>() } };
     io.sockets.sockets.set(socket.id, socket);
 
-    manager = new HarnessLoginManager({ registry, loginWaitMs: 1_800_000 });
+    testLog = createTestLogger();
+    manager = new HarnessLoginManager({ registry, loginWaitMs: 1_800_000, logger: testLog.logger });
     manager.start(io as never);
   });
 
@@ -63,7 +66,11 @@ describe('HarnessLoginManager', () => {
   function published(channel: string): Array<Record<string, unknown>> {
     return mockRedis.publish.mock.calls
       .filter((call) => call[0] === channel)
-      .map((call) => JSON.parse(call[1] as string) as Record<string, unknown>);
+      .map((call) => {
+        // 剥离顶层 `_meta` 传输封套（publishJson 注入），断言只针对业务载荷。
+        const { _meta: _envelope, ...payload } = JSON.parse(call[1] as string) as Record<string, unknown>;
+        return payload;
+      });
   }
 
   describe('T-HLM1 入站校验', () => {
@@ -82,23 +89,19 @@ describe('HarnessLoginManager', () => {
 
     for (const [name, payload] of invalidCases) {
       it(`丢弃 ${name} 且不发布 Redis`, async () => {
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         await manager.handleLoginRequired(socket as never, payload as never);
         expect(mockRedis.publish).not.toHaveBeenCalled();
         expect(manager.getPendingCount()).toBe(0);
         expect(registry.pendingFor('ctrl-1')).toBeUndefined();
-        expect(warn).toHaveBeenCalled();
-        warn.mockRestore();
+        expect(testLog.records.some((r) => r.level === 'warn')).toBe(true);
       });
     }
 
     it('缺少 socket 归属时丢弃', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const anonymous = { id: 's2', data: {}, emit: vi.fn() };
       await manager.handleLoginRequired(anonymous as never, VALID_REQUIRED as never);
       expect(mockRedis.publish).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
+      expect(testLog.records.some((r) => r.level === 'warn')).toBe(true);
     });
   });
 
@@ -135,14 +138,12 @@ describe('HarnessLoginManager', () => {
 
   describe('T-HLM3 required 幂等', () => {
     it('同 controller 不同 requestId 只发布一次并告警', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       await manager.handleLoginRequired(socket as never, VALID_REQUIRED as never);
       await manager.handleLoginRequired(socket as never, { ...VALID_REQUIRED, requestId: 'req-2' });
 
       expect(published('harness:login:required')).toHaveLength(1);
       expect(registry.pendingFor('ctrl-1')?.requestId).toBe('req-1');
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
+      expect(testLog.records.some((r) => r.level === 'warn')).toBe(true);
     });
   });
 
@@ -188,7 +189,6 @@ describe('HarnessLoginManager', () => {
     });
 
     it('非属主 socket 上报 succeeded/failed 不清理、不发布（P2-4）', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       await manager.handleLoginRequired(socket as never, VALID_REQUIRED as never);
       const intruder = createMockSocket('socket-other');
 
@@ -198,20 +198,17 @@ describe('HarnessLoginManager', () => {
       expect(manager.getPendingCount()).toBe(1);
       expect(registry.pendingFor('ctrl-1')?.requestId).toBe('req-1');
       expect(published('harness:login:resolved')).toEqual([]);
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
+      expect(testLog.records.some((r) => r.level === 'warn')).toBe(true);
     });
 
     it('未知 requestId / 未知 reason 丢弃且不发布', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       await manager.handleLoginSucceeded(socket as never, { requestId: 'nope' });
       await manager.handleLoginRequired(socket as never, VALID_REQUIRED as never);
       await manager.handleLoginFailed(socket as never, { requestId: 'req-1', reason: 'weird' as never });
 
       expect(published('harness:login:resolved')).toHaveLength(0);
       expect(registry.pendingFor('ctrl-1')?.requestId).toBe('req-1');
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
+      expect(testLog.records.some((r) => r.level === 'warn')).toBe(true);
     });
   });
 
@@ -226,21 +223,17 @@ describe('HarnessLoginManager', () => {
     });
 
     it('socket 不在时丢弃并告警', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       await manager.handleLoginRequired(socket as never, VALID_REQUIRED as never);
       io.sockets.sockets.delete(socket.id);
 
       manager.handleCancel({ requestId: 'req-1' });
       expect(socket.emit).not.toHaveBeenCalled();
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
+      expect(testLog.records.some((r) => r.level === 'warn')).toBe(true);
     });
 
     it('未知 requestId 丢弃并告警', () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       manager.handleCancel({ requestId: 'nope' });
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
+      expect(testLog.records.some((r) => r.level === 'warn')).toBe(true);
     });
   });
 

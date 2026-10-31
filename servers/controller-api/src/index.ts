@@ -1,8 +1,11 @@
+import './observability/register.js';
 import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import mongoose from 'mongoose';
+import { logger as rootLogger } from './observability/logger.js';
+import { httpContext } from './observability/http-context.js';
 import { config } from './config/index.js';
 import { getRedisClient, closeRedis } from './middleware/redis.js';
 import { createSocketIOServer } from './services/socketio.js';
@@ -24,10 +27,13 @@ import { createMcpProxyRouter } from './routes/mcp-proxy.js';
 import { McpProxyRegistry } from './services/mcp-proxy-registry.js';
 import { McpForwardConsumer } from './services/mcp-forward-consumer.js';
 
+const logger = rootLogger.child({ component: 'controller-api' });
+
 const app = express();
 const httpServer = createServer(app);
 
 app.use(cors());
+app.use(httpContext());
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
@@ -54,7 +60,7 @@ const disconnectTimer = new DisconnectTimer();
 async function start() {
   try {
     await mongoose.connect(config.mongodbUri);
-    console.log('Connected to MongoDB');
+    logger.info('connected to MongoDB');
 
     // Clean up orphan sessions (stuck in 'connecting' from previous lifecycle)
     await Session.updateMany(
@@ -62,11 +68,11 @@ async function start() {
       { status: 'ended', endedAt: new Date() },
     );
   } catch (err) {
-    console.warn('MongoDB not available, starting without database:', (err as Error).message);
+    logger.warn({ err }, 'MongoDB not available, starting without database');
   }
 
   getRedisClient();
-  console.log('Connected to Redis');
+  logger.info('connected to Redis');
 
   mcpForwardConsumer.start();
 
@@ -85,12 +91,12 @@ async function start() {
   disconnectTimer.start();
 
   httpServer.listen(config.port, () => {
-    console.log(`Controller API running at http://localhost:${config.port}`);
+    logger.info({ port: config.port }, 'controller API listening');
   });
 }
 
 async function gracefulShutdown() {
-  console.log('Shutting down...');
+  logger.info('shutting down');
   heartbeatService.stop();
   permissionManager.stop();
   elicitationManager.stop();
@@ -107,6 +113,6 @@ process.on('SIGTERM', gracefulShutdown);
 process.on('SIGINT', gracefulShutdown);
 
 start().catch((e) => {
-  console.error(e);
+  logger.error({ err: e }, 'controller API failed to start');
   process.exit(1);
 });
