@@ -466,8 +466,10 @@ export class ContainerService {
       const headers = process.env.OTEL_EXPORTER_OTLP_HEADERS;
       if (headers) env.OTEL_EXPORTER_OTLP_HEADERS = headers;
       env.OTEL_SERVICE_NAME = 'agent-gear';
-      env.OTEL_TRACES_SAMPLER = process.env.OTEL_TRACES_SAMPLER ?? 'parentbased_traceidratio';
-      env.OTEL_TRACES_SAMPLER_ARG = process.env.OTEL_TRACES_SAMPLER_ARG ?? '1.0';
+      const sampler = (process.env.OTEL_TRACES_SAMPLER ?? '').trim();
+      env.OTEL_TRACES_SAMPLER = sampler === '' ? 'parentbased_traceidratio' : sampler;
+      const samplerArg = (process.env.OTEL_TRACES_SAMPLER_ARG ?? '').trim();
+      env.OTEL_TRACES_SAMPLER_ARG = samplerArg === '' ? '1.0' : samplerArg;
       env.OTEL_RESOURCE_ATTRIBUTES = [
         `zag.container.id=${containerId}`,
         `zag.cloud.host.id=${options.hostId ?? ''}`,

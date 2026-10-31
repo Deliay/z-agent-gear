@@ -26,20 +26,26 @@ services:
       - "6379"
     networks:
       - "aspire"
+  otel-collector:
+    image: "otel/opentelemetry-collector-contrib:latest"
+    expose:
+      - "4317"
+      - "4318"
+    volumes:
+      - type: "bind"
+        target: "/etc/otelcol-contrib/config.yaml"
+        source: "${OTEL_COLLECTOR_BINDMOUNT_0}"
+        read_only: true
+    networks:
+      - "aspire"
+    restart: "unless-stopped"
   rabbitmq:
-    image: "${RABBITMQ_IMAGE:-registry.cn-hangzhou.aliyuncs.com/zero-tools/rabbitmq:3-management}"
+    image: "registry.cn-hangzhou.aliyuncs.com/zero-tools/rabbitmq:3-management"
     environment:
-      RABBITMQ_DEFAULT_USER: "zag"
+      RABBITMQ_DEFAULT_USER: "guest"
       RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD}"
-    healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
     expose:
       - "5672"
-      - "15672"
     volumes:
       - type: "volume"
         target: "/var/lib/rabbitmq"
@@ -47,12 +53,24 @@ services:
         read_only: false
     networks:
       - "aspire"
-    restart: "unless-stopped"
+    healthcheck:
+      test:
+        - "CMD"
+        - "rabbitmq-diagnostics"
+        - "-q"
+        - "ping"
+      interval: "10s"
+      timeout: "5s"
+      retries: 10
+      start_period: "20s"
   controller-api:
     image: "${CONTROLLER_API_IMAGE}"
     environment:
       NODE_ENV: "production"
       NODE_OPTIONS: "--import tsx"
+      LOG_LEVEL: "${LOG_LEVEL}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_ENDPOINT}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_SAMPLE_ARG}"
       PORT: "8001"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
@@ -77,6 +95,9 @@ services:
     environment:
       NODE_ENV: "production"
       NODE_OPTIONS: "--import tsx"
+      LOG_LEVEL: "${LOG_LEVEL}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_ENDPOINT}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_SAMPLE_ARG}"
       CORS_ORIGIN: "${CORS_ORIGIN}"
       JWT_SECRET: "${JWT_SECRET}"
       MCP_ENDPOINT_JWT_SECRET: "${MCP_JWT_SECRET}"
@@ -85,6 +106,9 @@ services:
       GITHUB_SETUP_URL: "${GITHUB_SETUP_URL}"
       GITHUB_APP_PRIVATE_KEY: "${GITHUB_APP_PRIVATE_KEY}"
       GITHUB_TOKEN_ENCRYPTION_KEY: "${GITHUB_TOKEN_ENCRYPTION_KEY}"
+      GITHUB_API_BASE: "${GITHUB_API_BASE}"
+      EVENT_CALLBACK_TOKEN: "${EVENT_CALLBACK_TOKEN}"
+      GITHUB_WEBHOOK_SECRET: "${GITHUB_WEBHOOK_SECRET}"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
       MONGODB_PORT: "27017"
@@ -98,17 +122,15 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
       REDIS_URI: "redis://:${REDIS_PASSWORD}@redis:6379"
-      FRONTEND_URL: "${FRONTEND_URL}"
-      ADMIN_API_URL: "http://admin-api:8002"
-      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
-      # 前台云电脑（harness）：publish 默认关闭；打开前请把 CONTROLLER_API_PUBLIC_WS_ENDPOINT
-      # 改为集群内可达的 controller-api 地址（worker 在 K8s 内运行）。
-      HARNESS_ENABLED: "${HARNESS_ENABLED}"
-      HARNESS_CONTAINER_TTL_SECONDS: "86400"
       CLOUD_CONTROLLER_URL: "http://cloud-controller:8003"
       CONTROLLER_API_PUBLIC_WS_ENDPOINT: "http://controller-api:8001"
       CLOUD_HOST_MODEL_BASE_URL: "http://admin-api:8002/v1"
       CLOUD_HOST_DEFAULT_WORKSPACE: "/home/worker/workspace"
+      HARNESS_CONTAINER_TTL_SECONDS: "86400"
+      FRONTEND_URL: "${FRONTEND_URL}"
+      ADMIN_API_URL: "http://admin-api:8002"
+      INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
+      HARNESS_ENABLED: "${HARNESS_ENABLED}"
       PORT: "8000"
     ports:
       - "8000:8000"
@@ -120,16 +142,17 @@ services:
     environment:
       NODE_ENV: "production"
       INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
+      LOG_LEVEL: "${LOG_LEVEL}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_ENDPOINT}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_SAMPLE_ARG}"
       K8S_NAMESPACE: "zag-cloud"
       WORKER_IMAGE: "${WORKER_IMAGE}"
       PUBLIC_WS_ENDPOINT: "${PUBLIC_WS_ENDPOINT}"
-      K8S_ENABLED: "true"
-      AGENT_API_URL: "http://agent-api:8000"
-      AGENT_API_TIMEOUT_MS: "5000"
-      ADMIN_API_URL: "http://admin-api:8002"
+      WORKLOAD_INIT_TIMEOUT_MS: "300000"
+      WORKLOAD_POST_BUDGET_MS: "90000"
+      WORKLOAD_LOG_MAX_BYTES: "262144"
       JOB_EPHEMERAL_STORAGE: "10Gi"
-      RABBITMQ_URL: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
-      ConnectionStrings__rabbitmq: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+      K8S_ENABLED: "true"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
       MONGODB_PORT: "27017"
@@ -138,14 +161,23 @@ services:
       MONGODB_AUTHENTICATIONDATABASE: "admin"
       MONGODB_AUTHENTICATIONMECHANISM: "SCRAM-SHA-256"
       MONGODB_URI: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      ConnectionStrings__rabbitmq: "amqp://guest:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+      RABBITMQ_HOST: "rabbitmq"
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USERNAME: "guest"
+      RABBITMQ_PASSWORD: "${RABBITMQ_PASSWORD}"
+      RABBITMQ_URI: "amqp://guest:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+      AGENT_API_URL: "http://agent-api:8000"
+      AGENT_API_TIMEOUT_MS: "5000"
+      ADMIN_API_URL: "http://admin-api:8002"
       PORT: "8003"
+    ports:
+      - "8003:8003"
     depends_on:
       rabbitmq:
         condition: "service_healthy"
       mongodb:
         condition: "service_started"
-    ports:
-      - "8003:8003"
     networks:
       - "aspire"
     restart: "unless-stopped"
@@ -154,14 +186,16 @@ services:
     environment:
       NODE_ENV: "production"
       ADMIN_JWT_SECRET: "${ADMIN_JWT_SECRET}"
+      LOG_LEVEL: "${LOG_LEVEL}"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_ENDPOINT}"
+      OTEL_TRACES_SAMPLER_ARG: "${OTEL_SAMPLE_ARG}"
       CREDENTIAL_ENCRYPTION_KEY: "${CREDENTIAL_ENCRYPTION_KEY}"
       ADMIN_INITIAL_PASSWORD: "${ADMIN_INITIAL_PASSWORD}"
       CORS_ORIGIN: "${CORS_ORIGIN}"
       CLOUD_CONTROLLER_URL: "http://cloud-controller:8003"
       INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
       AGENT_API_URL: "http://agent-api:8000"
-      RABBITMQ_URL: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
-      ConnectionStrings__rabbitmq: "amqp://zag:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+      CLOUD_CONTROLLER_DESTROY_TIMEOUT_MS: "180000"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
       MONGODB_PORT: "27017"
@@ -170,14 +204,20 @@ services:
       MONGODB_AUTHENTICATIONDATABASE: "admin"
       MONGODB_AUTHENTICATIONMECHANISM: "SCRAM-SHA-256"
       MONGODB_URI: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
+      ConnectionStrings__rabbitmq: "amqp://guest:${RABBITMQ_PASSWORD}@rabbitmq:5672"
+      RABBITMQ_HOST: "rabbitmq"
+      RABBITMQ_PORT: "5672"
+      RABBITMQ_USERNAME: "guest"
+      RABBITMQ_PASSWORD: "${RABBITMQ_PASSWORD}"
+      RABBITMQ_URI: "amqp://guest:${RABBITMQ_PASSWORD}@rabbitmq:5672"
       PORT: "8002"
+    ports:
+      - "8002:8002"
     depends_on:
       rabbitmq:
         condition: "service_healthy"
       mongodb:
         condition: "service_started"
-    ports:
-      - "8002:8002"
     networks:
       - "aspire"
     restart: "unless-stopped"
