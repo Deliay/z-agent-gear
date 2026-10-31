@@ -13,6 +13,8 @@ import type { K8sJobManager } from './k8s-job-manager.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import type { TokenService } from './token-service.js';
 import { SecretStore, type HarnessSecrets } from './secret-store.js';
+import { type ObservationLogger } from '../observability/logger.js';
+import { injectTraceparent, withSpan } from '../observability/trace.js';
 
 export class ContainerNotFoundError extends Error {
   constructor(public readonly containerId: string) {
@@ -46,11 +48,6 @@ export interface ContainerServiceConfig {
   shutdownGraceMs: number;
   /** agent-api 内部地址（harness Job env `ZAG_AGENT_API_ENDPOINT`；缺失则仅告警）。 */
   agentApiUrl?: string;
-}
-
-interface Logger {
-  error?: (...args: unknown[]) => void;
-  warn?: (...args: unknown[]) => void;
 }
 
 /** 允许被生命周期转移覆写的状态（非终态）。 */
@@ -181,7 +178,7 @@ export class ContainerService {
     private readonly tokenService: TokenService,
     private readonly jobManager: K8sJobManager,
     private readonly cfg: ContainerServiceConfig,
-    private readonly logger: Logger = console,
+    private readonly logger: ObservationLogger,
     private readonly hooks: ContainerServiceHooks = {},
     private readonly secretStore: SecretStore = new SecretStore(),
   ) {}
@@ -216,7 +213,10 @@ export class ContainerService {
           lastError = err;
         }
       }
-      this.logger.error?.(`[billing] ${name} hook failed for ${container.id}`, lastError);
+      this.logger.error(
+        { component: 'billing', hook: name, containerId: container.id, err: lastError },
+        'billing hook failed',
+      );
     })();
     this.billingHookTasks.add(task);
     void task.finally(() => this.billingHookTasks.delete(task));
@@ -228,7 +228,10 @@ export class ContainerService {
     const pending = [...this.billingHookTasks];
     const timeout = new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        this.logger.warn?.(`[billing] drain hooks timeout with ${this.billingHookTasks.size} pending`);
+        this.logger.warn(
+          { component: 'billing', pending: this.billingHookTasks.size },
+          'drain hooks timeout',
+        );
         resolve();
       }, timeoutMs);
       timer.unref?.();
@@ -253,7 +256,7 @@ export class ContainerService {
       try {
         await handler(containerId, reason);
       } catch (err) {
-        this.logger.warn?.(`shutdown handler failed for ${containerId}`, err);
+        this.logger.warn({ containerId, err }, 'shutdown handler failed');
       }
     }
   }
@@ -281,7 +284,7 @@ export class ContainerService {
     try {
       exists = (await this.jobManager.getJob(name)) !== null;
     } catch (err) {
-      this.logger.error?.(`Failed to check job ${name}`, err);
+      this.logger.error({ jobName: name, err }, 'Failed to check job');
       return 'failed';
     }
     if (!exists) return 'absent';
@@ -289,7 +292,7 @@ export class ContainerService {
       await this.jobManager.deleteJob(name);
       return 'deleted';
     } catch (err) {
-      this.logger.error?.(`Failed to delete residual job ${name}`, err);
+      this.logger.error({ jobName: name, err }, 'Failed to delete residual job');
       return 'failed';
     }
   }
@@ -354,13 +357,30 @@ export class ContainerService {
         const token = await this.tokenService.issue(created.id);
 
         try {
-          await this.jobManager.createJob({
-            jobName: name,
-            containerId: created.id,
-            token,
-            // 最长运行时间无限制（不设置 activeDeadlineSeconds）；expiresAt 仅落库留存。
-            ...(purpose === 'harness' ? { env: this.buildHarnessJobEnv(options) } : {}),
-          });
+          await withSpan(
+            'container.start',
+            {
+              'zag.container.purpose': purpose,
+              ...(options.hostId ? { 'zag.cloud.host.id': options.hostId } : {}),
+              ...(options.userId ? { 'zag.user.id': options.userId } : {}),
+              ...(options.tenantId ? { 'zag.tenant.id': options.tenantId } : {}),
+              ...(options.workspaceId ? { 'zag.workspace.id': options.workspaceId } : {}),
+            },
+            async (span) => {
+              // span 内取创建链路 traceparent，随 Job env 注入容器（无活跃 span 时不注入）
+              const carrier: { traceparent?: string } = injectTraceparent({});
+              await this.jobManager.createJob({
+                jobName: name,
+                containerId: created.id,
+                token,
+                // 最长运行时间无限制（不设置 activeDeadlineSeconds）；expiresAt 仅落库留存。
+                ...(purpose === 'harness'
+                  ? { env: this.buildHarnessJobEnv(options, created.id, carrier.traceparent) }
+                  : {}),
+              });
+              span.setAttribute('zag.container.id', created.id);
+            },
+          );
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           // R7：统一走 markFailed（含终态钩子一致性），不再裸写 failed。
@@ -401,11 +421,23 @@ export class ContainerService {
   }
 
   /**
-   * harness Job env（契约 A.2.2）：`ZAG_SERVER_ENDPOINT`/`ZAG_CONTROLLER_KEY` 由 job manager
-   * 固定注入；此处仅返回追加项。模型 Key/BaseURL/模型列表**不进入 Job env**（只走
+   * harness Job env（契约 A.2.2 + observability.md §8）：`ZAG_SERVER_ENDPOINT`/`ZAG_CONTROLLER_KEY`
+   * 由 job manager 固定注入；此处仅返回追加项。模型 Key/BaseURL/模型列表**不进入 Job env**（只走
    * `workload:run.env`），避免容器环境变量长期暴露模型凭据。
+   *
+   * 注入顺序：先 9 项业务 env，再追加观测 env（F12/T-OBS15）：
+   * - 已配置采集端（`OTEL_EXPORTER_OTLP_ENDPOINT` 非空且 `OTEL_SDK_DISABLED !== 'true'`）：
+   *   `OTEL_*` 透传 + `OTEL_RESOURCE_ATTRIBUTES`（容器/宿主/用户/租户/工作区五维），
+   *   且仅当 `traceparent` 非空（`container.start` span 存在）时注入 `ZAG_INIT_TRACEPARENT`；
+   * - 否则仅注入 `OTEL_SDK_DISABLED=true`（容器内 SDK 完全不启动）。
+   *
+   * `OTEL_EXPORTER_OTLP_HEADERS` 仅经 env 传递，**禁止出现在任何日志输出**。
    */
-  private buildHarnessJobEnv(options: StartHarnessOptions): Record<string, string> {
+  private buildHarnessJobEnv(
+    options: StartHarnessOptions,
+    containerId: string,
+    traceparent: string | undefined,
+  ): Record<string, string> {
     const env: Record<string, string> = {};
     const secrets = options.secrets;
     if (secrets?.hostEndpoint) env.ZAG_HOST_ENDPOINT = secrets.hostEndpoint;
@@ -421,9 +453,32 @@ export class ContainerService {
     if (this.cfg.agentApiUrl) {
       env.ZAG_AGENT_API_ENDPOINT = this.cfg.agentApiUrl.replace(/\/+$/, '');
     } else {
-      this.logger.warn?.(
-        '[harness] AGENT_API_URL 未配置：Github 凭据申请不可用（Git 项目设置会失败）',
+      this.logger.warn(
+        { component: 'harness' },
+        'AGENT_API_URL 未配置：Github 凭据申请不可用（Git 项目设置会失败）',
       );
+    }
+
+    const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    if (endpoint && endpoint.trim().length > 0 && process.env.OTEL_SDK_DISABLED !== 'true') {
+      env.OTEL_EXPORTER_OTLP_ENDPOINT = endpoint;
+      env.OTEL_EXPORTER_OTLP_PROTOCOL = 'http/protobuf';
+      const headers = process.env.OTEL_EXPORTER_OTLP_HEADERS;
+      if (headers) env.OTEL_EXPORTER_OTLP_HEADERS = headers;
+      env.OTEL_SERVICE_NAME = 'agent-gear';
+      env.OTEL_TRACES_SAMPLER = process.env.OTEL_TRACES_SAMPLER ?? 'parentbased_traceidratio';
+      env.OTEL_TRACES_SAMPLER_ARG = process.env.OTEL_TRACES_SAMPLER_ARG ?? '1.0';
+      env.OTEL_RESOURCE_ATTRIBUTES = [
+        `zag.container.id=${containerId}`,
+        `zag.cloud.host.id=${options.hostId ?? ''}`,
+        `zag.user.id=${options.userId ?? ''}`,
+        `zag.tenant.id=${options.tenantId ?? ''}`,
+        `zag.workspace.id=${options.workspaceId ?? ''}`,
+      ].join(',');
+      // 仅在 `container.start` span 存在时注入（SDK 关闭/无 span 不注入，避免容器内建出无效 link）
+      if (traceparent) env.ZAG_INIT_TRACEPARENT = traceparent;
+    } else {
+      env.OTEL_SDK_DISABLED = 'true';
     }
     return env;
   }
@@ -432,7 +487,7 @@ export class ContainerService {
     try {
       await this.jobManager.deleteJob(name);
     } catch (err) {
-      this.logger.error?.(`Failed to reclaim orphaned job ${name}`, err);
+      this.logger.error({ jobName: name, err }, 'Failed to reclaim orphaned job');
     }
   }
 
@@ -658,7 +713,7 @@ export class ContainerService {
       await this.jobManager.deleteJob(container.name);
       deletedJob = true;
     } catch (err) {
-      this.logger.error?.(`Failed to delete job ${container.name}`, err);
+      this.logger.error({ jobName: container.name, err }, 'Failed to delete job');
     }
 
     // Job 删除失败时显式告警，便于运维发现残留 Job（不静默）

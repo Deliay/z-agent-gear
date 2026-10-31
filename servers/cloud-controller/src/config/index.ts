@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { parseLogLevel, type LogLevel } from '../logger.js';
+import { parseLogLevel, type LogLevel } from '../observability/logger.js';
 
 dotenv.config();
 

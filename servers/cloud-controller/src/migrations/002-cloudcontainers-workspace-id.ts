@@ -1,7 +1,10 @@
 import mongoose from 'mongoose';
+import { logger as rootLogger } from '../observability/logger.js';
 import { resolveGlobalWorkspaceId } from '../services/workspace-resolver.js';
 
 export const name = '002-cloudcontainers-workspace-id';
+
+const log = rootLogger.child({ component: 'migration/002' });
 
 /** 缺失 `workspaceId`（字段不存在或为 null）的容器行。 */
 const MISSING_WORKSPACE_ID: mongoose.mongo.Filter<mongoose.mongo.Document> = {
@@ -53,33 +56,34 @@ export async function run(): Promise<void> {
     try {
       workspaceId = await resolveGlobalWorkspaceId(tenantId);
     } catch (err) {
-      console.warn(
-        `[Migration 002] 解析全局工作区异常（tenantId=${tenantId}）：${
-          err instanceof Error ? err.message : String(err)
-        }`,
+      log.warn(
+        { tenantId, err: err instanceof Error ? err : new Error(String(err)) },
+        '解析全局工作区异常',
       );
     }
 
     if (workspaceId) {
       const result = await collection.updateMany(filter, { $set: { workspaceId } });
       backfilled += result.modifiedCount;
-      console.log(
-        `[Migration 002] cloudcontainers.workspaceId ← ${workspaceId} (tenantId=${tenantId}, ${result.modifiedCount} document(s))`,
+      log.info(
+        { tenantId, workspaceId, modifiedCount: result.modifiedCount },
+        'backfilled cloudcontainers.workspaceId',
       );
     } else {
       const result = await collection.updateMany(filter, { $set: { workspaceId: null } });
       unresolved += result.modifiedCount;
-      console.warn(
-        `[Migration 002] 无法解析全局工作区，置 workspaceId=null (tenantId=${tenantId}, ${result.modifiedCount} document(s))`,
+      log.warn(
+        { tenantId, modifiedCount: result.modifiedCount },
+        '无法解析全局工作区，置 workspaceId=null',
       );
     }
   }
 
-  console.log(
-    `[Migration 002] backfilled cloudcontainers.workspaceId: ${backfilled} document(s), ` +
-      `unresolved: ${unresolved}, skipped(no tenantId): ${skipped}`,
+  log.info(
+    { backfilled, unresolved, skipped },
+    'backfilled cloudcontainers.workspaceId summary',
   );
 
   await collection.createIndex({ workspaceId: 1 });
-  console.log('[Migration 002] Ensured index { workspaceId: 1 } on cloudcontainers');
+  log.info('Ensured index { workspaceId: 1 } on cloudcontainers');
 }

@@ -11,11 +11,16 @@ import { K8sJobManager } from './k8s-job-manager.js';
 import { TokenService } from './token-service.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
 import type { CloudContainerEntity } from '../repositories/container-repository.js';
+import { createTestLogger } from '../observability/testing.js';
+
+/** relay 注入的静默 logger（本文件无日志断言，仅满足必填注入面，不打 console）。 */
+const relayLog = createTestLogger('billing-outbox');
 
 function setupService(hooks: {
   onReady?: (container: CloudContainerEntity) => void;
   onDestroyed?: (container: CloudContainerEntity) => void;
 }) {
+  const log = createTestLogger('billing-events');
   const repo = new InMemoryContainerRepository();
   const client = new InMemoryK8sClient();
   const tokenService = new TokenService(repo);
@@ -35,7 +40,7 @@ function setupService(hooks: {
       connectTimeoutMs: 300000,
       shutdownGraceMs: 0,
     },
-    console,
+    log.logger,
     hooks,
   );
   return { repo, service };
@@ -78,7 +83,7 @@ describe('cloud-controller 计费源头', () => {
       },
       close: async () => {},
     };
-    const publisher = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000 });
+    const publisher = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000, logger: relayLog.logger });
     await publisher.enqueue({
       eventId: 'container.ready:ord',
       eventType: 'container.ready',
@@ -116,7 +121,7 @@ describe('cloud-controller 计费源头', () => {
       },
       close: async () => {},
     };
-    const publisher = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000 });
+    const publisher = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000, logger: relayLog.logger });
     await publisher.enqueue({
       eventId: 'container.ready:reject',
       eventType: 'container.ready',
@@ -168,7 +173,7 @@ describe('cloud-controller 计费源头', () => {
       },
       close: async () => {},
     };
-    const publisher = new BillingEventPublisher({ repository: repo, transport, intervalMs: 10000 });
+    const publisher = new BillingEventPublisher({ repository: repo, transport, intervalMs: 10000, logger: relayLog.logger });
     await publisher.enqueue({
       eventId: 'container.ready:c1',
       eventType: 'container.ready',
@@ -305,8 +310,8 @@ describe('cloud-controller 计费源头', () => {
       },
       close: async () => {},
     };
-    const p1 = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000 });
-    const p2 = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000 });
+    const p1 = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000, logger: relayLog.logger });
+    const p2 = new BillingEventPublisher({ repository: repo, transport, intervalMs: 100000, logger: relayLog.logger });
     await p1.enqueue({
       eventId: 'container.destroyed:c1',
       eventType: 'container.destroyed',

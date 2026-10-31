@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { Server as SocketIOServer } from 'socket.io';
-import type { Logger } from '../logger.js';
+import { type ObservationLogger } from '../observability/logger.js';
 
 /**
  * Socket.IO 传输层诊断日志。
@@ -20,7 +20,7 @@ import type { Logger } from '../logger.js';
 export interface SocketDiagnosticsOptions {
   httpServer: HttpServer;
   io: SocketIOServer;
-  logger: Logger;
+  logger: ObservationLogger;
   /** 服务端 engine path（`ENGINE_PATH`，形如 `/socket.io/`）。 */
   enginePath: string;
 }
@@ -38,12 +38,17 @@ function headerValue(req: IncomingMessage, name: string): string {
   return raw ?? '-';
 }
 
-function requestLine(req: IncomingMessage): string {
-  return (
-    `method=${req.method} url=${req.url ?? '-'} host=${req.headers.host ?? '-'} ` +
-    `xfp=${headerValue(req, 'x-forwarded-proto')} xff=${headerValue(req, 'x-forwarded-for')} ` +
-    `ua=${headerValue(req, 'user-agent')} remote=${req.socket?.remoteAddress ?? '-'}`
-  );
+/** 请求识别字段（原 `requestLine` 拼接串的结构化形态，变量一律进字段）。 */
+function requestFields(req: IncomingMessage): Record<string, unknown> {
+  return {
+    method: req.method,
+    url: req.url ?? '-',
+    host: req.headers.host ?? '-',
+    xForwardedProto: headerValue(req, 'x-forwarded-proto'),
+    xForwardedFor: headerValue(req, 'x-forwarded-for'),
+    userAgent: headerValue(req, 'user-agent'),
+    remoteAddress: req.socket?.remoteAddress ?? '-',
+  };
 }
 
 function safeJson(value: unknown): string {
@@ -69,15 +74,32 @@ export function wireSocketDiagnostics({
   httpServer.on('upgrade', (req: IncomingMessage, socket: Duplex, _head: Buffer) => {
     const path = (req.url ?? '').split('?')[0] ?? '';
     if (isEnginePath(path)) {
-      logger.info(`[ws] upgrade accepted path=${path} ${requestLine(req)}`);
+      logger.info(
+        {
+          component: 'socket-diagnostics',
+          event: 'ws-upgrade-accepted',
+          path,
+          ...requestFields(req),
+        },
+        'ws upgrade accepted',
+      );
     } else {
       logger.warn(
-        `[ws] upgrade path mismatch: got "${path}", expected "${normalizedEnginePath}" — ` +
-          `Ingress 必须放行 engine path（"/worker" 是 namespace，不是 URL 路径）。${requestLine(req)}`,
+        {
+          component: 'socket-diagnostics',
+          event: 'ws-upgrade-path-mismatch',
+          path,
+          expectedPath: normalizedEnginePath,
+          ...requestFields(req),
+        },
+        'upgrade path mismatch — Ingress 必须放行 engine path（"/worker" 是 namespace，不是 URL 路径）',
       );
     }
     socket.on('error', (err: Error) => {
-      logger.warn(`[ws] upgrade socket error path=${path}: ${err.message}`);
+      logger.warn(
+        { component: 'socket-diagnostics', event: 'upgrade-socket-error', path, err },
+        'upgrade socket error',
+      );
     });
   });
 
@@ -86,14 +108,38 @@ export function wireSocketDiagnostics({
     const path = (req.url ?? '').split('?')[0] ?? '';
     res.on('finish', () => {
       if (isEnginePath(path)) {
-        logger.info(`[ws] http ${req.method} ${path} -> ${res.statusCode} ${requestLine(req)}`);
+        logger.info(
+          {
+            component: 'socket-diagnostics',
+            event: 'http-request',
+            path,
+            statusCode: res.statusCode,
+            ...requestFields(req),
+          },
+          'engine path http request',
+        );
       } else if (path === '/worker' || path.startsWith('/worker/')) {
         logger.warn(
-          `[ws] http request to "${path}" -> ${res.statusCode}: "/worker" 是 Socket.IO namespace，` +
-            `不是 URL 路径；Ingress 应放行 "${normalizedEnginePath}"。`,
+          {
+            component: 'socket-diagnostics',
+            event: 'worker-path-request',
+            path,
+            statusCode: res.statusCode,
+            expectedPath: normalizedEnginePath,
+          },
+          '"/worker" 是 Socket.IO namespace，不是 URL 路径；Ingress 应放行 engine path',
         );
       } else {
-        logger.debug(`[http] ${req.method} ${path} -> ${res.statusCode}`);
+        logger.debug(
+          {
+            component: 'socket-diagnostics',
+            event: 'http-request',
+            method: req.method,
+            path,
+            statusCode: res.statusCode,
+          },
+          'http request',
+        );
       }
     });
   });
@@ -101,8 +147,15 @@ export function wireSocketDiagnostics({
   // 3) engine 层错误：协议版本 / CORS / 传输握手失败等。
   io.engine.on('connection_error', (err: EngineConnectionError) => {
     logger.warn(
-      `[ws] engine connection_error code=${err.code} message="${err.message}" ` +
-        `context=${safeJson(err.context)}${err.req ? ` ${requestLine(err.req)}` : ''}`,
+      {
+        component: 'socket-diagnostics',
+        event: 'engine-connection-error',
+        code: err.code,
+        err: { message: err.message, code: err.code },
+        context: safeJson(err.context),
+        ...(err.req ? requestFields(err.req) : {}),
+      },
+      'engine connection_error',
     );
   });
 }

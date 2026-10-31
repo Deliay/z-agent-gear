@@ -27,7 +27,18 @@ CHILD_PID=""
 SCAN_PID=""
 shutting_down=0
 
-log() { echo "[worker] $*"; }
+# 单行 JSON 日志（契约 contracts/observability.md / 裁决 D6）：纯 printf + sed 转义，
+# 不引 jq/python。字段与 pino 对齐；service 固定 zag-worker，serviceVersion 取
+# ZAG_WORKER_VERSION（缺省 unknown）。控制字符直接剔除保证单行可解析。
+json_escape() { printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+log() {
+  local esc time
+  esc=$(json_escape "$*")
+  time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"level":"info","time":"%s","service":"zag-worker","serviceVersion":"%s","env":"%s","hostname":"%s","pid":%s,"component":"worker-entrypoint","msg":"%s"}\n' \
+    "$time" "${ZAG_WORKER_VERSION:-unknown}" "${NODE_ENV:-development}" "$(hostname 2>/dev/null || echo unknown)" "$$" "$esc"
+}
 
 # 以 worker 身份执行：setpriv 降权 + 显式构造环境（root 环境无 nodejs）。
 run_as_worker() {

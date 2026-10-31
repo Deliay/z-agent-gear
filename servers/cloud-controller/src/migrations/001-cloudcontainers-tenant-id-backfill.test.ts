@@ -12,7 +12,6 @@ let createIndex: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(console, 'log').mockImplementation(() => {});
   createIndex = vi.fn().mockResolvedValue('tenantId_1');
   vi.spyOn(mongoose.connection, 'collection').mockReturnValue({ createIndex } as never);
   (CloudContainer.updateMany as any).mockResolvedValue({ modifiedCount: 0 });

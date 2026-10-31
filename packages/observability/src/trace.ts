@@ -100,9 +100,12 @@ export function withSpan<T>(
       if (err instanceof Error) span.recordException(err);
       const status: SpanStatus = { code: SpanStatusCode.ERROR };
       span.setStatus(status);
-    } else if (span.status?.code !== SpanStatusCode.ERROR) {
-      // 不覆盖调用方已置的 ERROR 状态（如 httpContext 对 5xx 的标注）
-      span.setStatus({ code: SpanStatusCode.OK });
+    } else {
+      const current = (span as { status?: { code?: number } }).status;
+      if (current?.code !== SpanStatusCode.ERROR) {
+        // 不覆盖调用方已置的 ERROR 状态（如 httpContext 对 5xx 的标注）
+        span.setStatus({ code: SpanStatusCode.OK });
+      }
     }
     span.end();
   };

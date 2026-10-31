@@ -1,4 +1,7 @@
 import type { Server as SocketIOServer, Socket } from 'socket.io';
+import { runWithLogContext } from '../observability/log-context.js';
+import { type ObservationLogger } from '../observability/logger.js';
+import { injectTraceparent, withSpan } from '../observability/trace.js';
 import type { ContainerService } from './container-service.js';
 import type { HeartbeatTracker } from './heartbeat-tracker.js';
 import type { TokenService } from './token-service.js';
@@ -32,12 +35,6 @@ export const DEFAULT_HANDSHAKE_RATE_MAX_ENTRIES = 10_000;
 /** containerId 前缀允许的形状（问题 60：限速键由未认证对端任意铸造，须先校验形状/长度）。 */
 export const CONTAINER_ID_PREFIX_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
-interface Logger {
-  info?: (...args: unknown[]) => void;
-  warn?: (...args: unknown[]) => void;
-  error?: (...args: unknown[]) => void;
-}
-
 interface RegisterPayload {
   key?: string;
   hostname?: string;
@@ -64,7 +61,8 @@ export interface WorkerGatewayDeps {
   handshakeRateLimit?: HandshakeRateLimitOptions;
   /** 工作负载编排器（缺省时退化为既有行为：register → online）。 */
   workloadDispatcher?: WorkloadDispatcher;
-  logger?: Logger;
+  /** 结构化日志（pino 调用面，必填注入；contracts/observability.md §2）。 */
+  logger: ObservationLogger;
 }
 
 /** 网关对外暴露的桥接句柄：供 dispatcher 注入 emitToContainer/isConnected（避免循环依赖）。 */
@@ -151,6 +149,23 @@ function handshakeToken(socket: Socket): string | undefined {
 }
 
 /**
+ * 服务端下发报文统一注入顶层 `_meta`（契约 cloud-controller-websocket.md 附录 B）：
+ * payload 为普通对象时 `{ ...payload, _meta: { ...(已有 _meta 对象), ...injectTraceparent({}) } }`；
+ * 无活跃 span 时 `_meta` 为空对象（不注入无效 traceparent）。非普通对象原样返回。
+ * 旧 worker 忽略未知字段，既有 payload 字段不受影响。
+ */
+function withTraceMeta<T>(payload: T): T {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const record = payload as Record<string, unknown>;
+  const existing = record._meta;
+  const meta =
+    existing && typeof existing === 'object' && !Array.isArray(existing)
+      ? (existing as Record<string, unknown>)
+      : {};
+  return { ...record, _meta: { ...meta, ...injectTraceparent({}) } } as T;
+}
+
+/**
  * 从原始 token 字符串（`<containerId>.<secret>`）解析 containerId 前缀，**不运行 bcrypt**。
  * 用作限速键；token 缺失 / 分隔符位置非法 / 前缀不符合 `CONTAINER_ID_PREFIX_PATTERN` 时返回
  * undefined，调用方回退到 peer IP（问题 60：避免未认证对端用任意字符串铸造限速键）。
@@ -174,7 +189,7 @@ export function registerWorkerGateway(
   io: SocketIOServer,
   deps: WorkerGatewayDeps,
 ): WorkerGatewayHandle {
-  const logger = deps.logger ?? console;
+  const logger = deps.logger;
   const nsp = io.of(WORKER_NAMESPACE);
   const windowMs = deps.handshakeRateLimit?.windowMs ?? DEFAULT_HANDSHAKE_RATE_WINDOW_MS;
   // 主桶按 containerId（token 前缀）计数，回退 peer IP；IP 桶为更高上限的兜底。
@@ -191,8 +206,9 @@ export function registerWorkerGateway(
   /** containerId → 当前活跃 socketId 集合（支持重连/多连接）。 */
   const activeSockets = new Map<string, Set<string>>();
 
+  /** 下发事件到 containerId 房间：统一注入顶层 `_meta.traceparent`（T-OBS13）。 */
   const emitToContainer = (containerId: string, event: string, payload: unknown): void => {
-    nsp.to(containerId).emit(event, payload);
+    nsp.to(containerId).emit(event, withTraceMeta(payload));
   };
   const isConnected = (containerId: string): boolean => (activeSockets.get(containerId)?.size ?? 0) > 0;
 
@@ -204,40 +220,75 @@ export function registerWorkerGateway(
     const sourceIp = socket.handshake.address;
     const containerId = containerIdFromToken(token);
     const key = containerId ? `container:${containerId}` : `ip:${sourceIp}`;
-    logger.info?.(
-      `[worker] handshake attempt id=${socket.id} namespace=${nsp.name} ` +
-        `transport=${socket.conn.transport.name} from=${sourceIp} token=${token ? 'present' : 'MISSING'}`,
-    );
-    // 问题 60：先判 per-IP 兜底桶（其键空间亦为有界），IP 超限时直接拒绝，
-    // 不再调用 keyLimiter（避免被拒请求为未认证对端铸造新的 key 条目）。
-    if (!ipLimiter.allow(`ip:${sourceIp}`) || !keyLimiter.allow(key)) {
-      logger.warn?.(`[worker] handshake rate limited key=${key} from ${sourceIp}`);
-      next(new Error('RATE_LIMITED'));
-      return;
-    }
-
-    // 一次性 token 优先取自握手 auth（问题 11：token 不放入 URL/access log），兼容遗留 query。
-    void deps.tokenService
-      .verify(token)
-      .then((container) => {
-        if (!container) {
-          logger.warn?.(
-            `[worker] handshake rejected from ${socket.handshake.address}: INVALID_TOKEN ` +
-              `(token ${token ? 'present but invalid/expired' : 'missing'})`,
+    // T-OBS13：握手链路传播——客户端可在握手 auth 携带 W3C traceparent（非法/缺失自动忽略）。
+    const traceparent = firstString(socket.handshake.auth?.traceparent);
+    void withSpan(
+      'socket.handshake',
+      {
+        socketId: socket.id,
+        namespace: nsp.name,
+        transport: socket.conn.transport.name,
+        from: sourceIp,
+        tokenPresent: Boolean(token),
+      },
+      async () => {
+        logger.info(
+          {
+            event: 'handshake_attempt',
+            socketId: socket.id,
+            namespace: nsp.name,
+            transport: socket.conn.transport.name,
+            from: sourceIp,
+            tokenPresent: Boolean(token),
+          },
+          'handshake attempt',
+        );
+        // 问题 60：先判 per-IP 兜底桶（其键空间亦为有界），IP 超限时直接拒绝，
+        // 不再调用 keyLimiter（避免被拒请求为未认证对端铸造新的 key 条目）。
+        if (!ipLimiter.allow(`ip:${sourceIp}`) || !keyLimiter.allow(key)) {
+          logger.warn(
+            { event: 'handshake_rate_limited', key, from: sourceIp },
+            'handshake rate limited',
           );
-          next(new Error('INVALID_TOKEN'));
+          next(new Error('RATE_LIMITED'));
           return;
         }
-        logger.info?.(
-          `[worker] handshake accepted id=${socket.id} containerId=${container.id} from=${sourceIp}`,
-        );
-        socket.data.containerId = container.id;
-        next();
-      })
-      .catch((err) => {
-        logger.error?.('[worker] handshake error', err);
-        next(new Error('INVALID_TOKEN'));
-      });
+
+        // 一次性 token 优先取自握手 auth（问题 11：token 不放入 URL/access log），兼容遗留 query。
+        try {
+          const container = await deps.tokenService.verify(token);
+          if (!container) {
+            logger.warn(
+              {
+                event: 'handshake_rejected',
+                socketId: socket.id,
+                from: socket.handshake.address,
+                reason: 'INVALID_TOKEN',
+                tokenPresent: Boolean(token),
+              },
+              'handshake rejected',
+            );
+            next(new Error('INVALID_TOKEN'));
+            return;
+          }
+          logger.info(
+            {
+              event: 'handshake_accepted',
+              socketId: socket.id,
+              containerId: container.id,
+              from: sourceIp,
+            },
+            'handshake accepted',
+          );
+          socket.data.containerId = container.id;
+          next();
+        } catch (err) {
+          logger.error({ err }, 'handshake error');
+          next(new Error('INVALID_TOKEN'));
+        }
+      },
+      { parent: traceparent },
+    );
   });
 
   // 销毁流程：先下发并等待 post 脚本批次（若有），再向绑定到 containerId room 的在线容器发送 shutdown。
@@ -245,7 +296,7 @@ export function registerWorkerGateway(
     if (deps.workloadDispatcher) {
       await deps.workloadDispatcher.runPostBatch(containerId);
     }
-    nsp.to(containerId).emit('shutdown', { reason: reason ?? '强制销毁' });
+    emitToContainer(containerId, 'shutdown', { reason: reason ?? '强制销毁' });
   });
 
   nsp.on('connection', (socket: Socket) => {
@@ -254,148 +305,195 @@ export function registerWorkerGateway(
     const sockets = activeSockets.get(containerId) ?? new Set<string>();
     sockets.add(socket.id);
     activeSockets.set(containerId, sockets);
-    logger.info?.(
-      `[worker] connected id=${socket.id} containerId=${containerId} ` +
-        `transport=${socket.conn.transport.name} from=${socket.handshake.address}`,
+    logger.info(
+      {
+        event: 'connected',
+        socketId: socket.id,
+        containerId,
+        transport: socket.conn.transport.name,
+        from: socket.handshake.address,
+      },
+      'connected',
     );
 
     socket.on('register', async (payload: RegisterPayload = {}) => {
-      // key 字段被忽略（由握手 token 替代）。
-      // 版本门禁必须先于全部注册副作用（心跳计时 / 初始化查询下发 / online / connectedAt）：
-      // 先读取容器 purpose，再按 purpose 选择门禁（harness 逐容器 agentGearMinVersion，恒 ≥2.12.0 / 普通 2.2.0，契约 §3.4）。
-      // 读取本身只读、无副作用；历史记录缺少 purpose 时按 idle 处理。
-      // 读取失败（DB 抖动）按注册失败处理，避免 async handler 产生未捕获 rejection。
-      let record: Awaited<ReturnType<ContainerService['getById']>>;
-      try {
-        record = await deps.containerService.getById(containerId);
-      } catch (err) {
-        logger.error?.('[worker] register purpose lookup error', err);
-        socket.emit('error', { code: 'REGISTER_FAILED', message: '注册失败' });
-        socket.disconnect(true);
-        return;
-      }
-      const purpose = record?.purpose ?? 'idle';
-      const isHarness = purpose === 'harness';
-      // C-4：harness 使用落库的 max(常量, 请求值)；历史记录缺省回退常量。
-      const minimumVersion = isHarness
-        ? (record?.agentGearMinVersion ?? MIN_HARNESS_WORKER_VERSION)
-        : MIN_WORKER_VERSION;
-      const versionSupport = isSupportedWorkerVersion(payload?.version, minimumVersion);
-      if (!versionSupport.supported) {
-        const currentVersion = sanitizeVersionForLog(payload?.version);
-        logger.warn?.(
-          `[worker] register rejected containerId=${containerId}: VERSION_MISMATCH ` +
-            `(purpose=${purpose}, agent-gear version=${currentVersion}, minimum=${minimumVersion}, ` +
-            `supported major=${SUPPORTED_MAJOR}) reason=${versionSupport.reason}`,
-        );
-        socket.emit('error', {
-          code: 'VERSION_MISMATCH',
-          message:
-            `agent-gear 版本不兼容，当前版本 ${currentVersion}，最低版本 ${minimumVersion}` +
-            `（supported major: ${SUPPORTED_MAJOR}）`,
-          currentVersion,
-          minimumVersion,
-          supportedMajor: SUPPORTED_MAJOR,
-        });
-        socket.disconnect(true);
-        return;
-      }
-
-      // 契约 §2.2：hostname 为必填字段。
-      const hostname = typeof payload?.hostname === 'string' ? payload.hostname.trim() : '';
-      if (!hostname) {
-        logger.warn?.(
-          `[worker] register rejected containerId=${containerId}: INVALID_PAYLOAD (missing hostname)`,
-        );
-        socket.emit('error', {
-          code: 'INVALID_PAYLOAD',
-          message: '缺少必填字段 hostname',
-        });
-        socket.disconnect(true);
-        return;
-      }
-
-      try {
-        socket.data.registered = true;
-        socket.data.hostname = hostname;
-        deps.heartbeatTracker.record(containerId);
-
-        // 有初始化脚本 → 先回 registered，再由 dispatcher 下发 workload:run（契约 §3 生命周期）；
-        // 无初始化脚本 → 维持现状（register 接受即 online）。
-        const willInitialize = deps.workloadDispatcher
-          ? await deps.workloadDispatcher.hasInitScripts(containerId)
-          : false;
-        if (!willInitialize) {
-          await deps.containerService.markOnline(containerId);
+      // 事件回调不跨 AsyncLocalStorage 自动延续，入口显式建立 containerId 日志上下文（T-OBS13）。
+      await runWithLogContext({ containerId }, async () => {
+        // key 字段被忽略（由握手 token 替代）。
+        // 版本门禁必须先于全部注册副作用（心跳计时 / 初始化查询下发 / online / connectedAt）：
+        // 先读取容器 purpose，再按 purpose 选择门禁（harness 逐容器 agentGearMinVersion，恒 ≥2.12.0 / 普通 2.2.0，契约 §3.4）。
+        // 读取本身只读、无副作用；历史记录缺少 purpose 时按 idle 处理。
+        // 读取失败（DB 抖动）按注册失败处理，避免 async handler 产生未捕获 rejection。
+        let record: Awaited<ReturnType<ContainerService['getById']>>;
+        try {
+          record = await deps.containerService.getById(containerId);
+        } catch (err) {
+          logger.error({ err }, 'register purpose lookup error');
+          socket.emit('error', withTraceMeta({ code: 'REGISTER_FAILED', message: '注册失败' }));
+          socket.disconnect(true);
+          return;
         }
-        socket.emit('registered', { controllerId: containerId, initializing: willInitialize });
-        if (willInitialize && deps.workloadDispatcher) {
-          const result = await deps.workloadDispatcher.startInit(containerId);
-          // 仅有占位/已删除项时 startInit 返回 initializing=false：仍须按现状上线。
-          // 必须失败（requiredFailure）时容器已被强制注销，**不得** markOnline（裁决 10）。
-          // harness 环境缺失（failed）时容器已判 failed，同样不得 online（T-CC13）。
-          if (!result.initializing && !result.requiredFailure && !result.failed) {
+        const purpose = record?.purpose ?? 'idle';
+        const isHarness = purpose === 'harness';
+        // C-4：harness 使用落库的 max(常量, 请求值)；历史记录缺省回退常量。
+        const minimumVersion = isHarness
+          ? (record?.agentGearMinVersion ?? MIN_HARNESS_WORKER_VERSION)
+          : MIN_WORKER_VERSION;
+        const versionSupport = isSupportedWorkerVersion(payload?.version, minimumVersion);
+        if (!versionSupport.supported) {
+          const currentVersion = sanitizeVersionForLog(payload?.version);
+          logger.warn(
+            {
+              event: 'register_rejected',
+              socketId: socket.id,
+              containerId,
+              reason: 'VERSION_MISMATCH',
+              purpose,
+              currentVersion,
+              minimumVersion,
+              supportedMajor: SUPPORTED_MAJOR,
+              versionReason: versionSupport.reason,
+            },
+            'register rejected',
+          );
+          socket.emit('error', withTraceMeta({
+            code: 'VERSION_MISMATCH',
+            message:
+              `agent-gear 版本不兼容，当前版本 ${currentVersion}，最低版本 ${minimumVersion}` +
+              `（supported major: ${SUPPORTED_MAJOR}）`,
+            currentVersion,
+            minimumVersion,
+            supportedMajor: SUPPORTED_MAJOR,
+          }));
+          socket.disconnect(true);
+          return;
+        }
+
+        // 契约 §2.2：hostname 为必填字段。
+        const hostname = typeof payload?.hostname === 'string' ? payload.hostname.trim() : '';
+        if (!hostname) {
+          logger.warn(
+            {
+              event: 'register_rejected',
+              socketId: socket.id,
+              containerId,
+              reason: 'INVALID_PAYLOAD',
+              missingField: 'hostname',
+            },
+            'register rejected',
+          );
+          socket.emit('error', withTraceMeta({
+            code: 'INVALID_PAYLOAD',
+            message: '缺少必填字段 hostname',
+          }));
+          socket.disconnect(true);
+          return;
+        }
+
+        try {
+          socket.data.registered = true;
+          socket.data.hostname = hostname;
+          deps.heartbeatTracker.record(containerId);
+
+          // 有初始化脚本 → 先回 registered，再由 dispatcher 下发 workload:run（契约 §3 生命周期）；
+          // 无初始化脚本 → 维持现状（register 接受即 online）。
+          const willInitialize = deps.workloadDispatcher
+            ? await deps.workloadDispatcher.hasInitScripts(containerId)
+            : false;
+          if (!willInitialize) {
             await deps.containerService.markOnline(containerId);
           }
-        }
+          socket.emit('registered', withTraceMeta({ controllerId: containerId, initializing: willInitialize }));
+          if (willInitialize && deps.workloadDispatcher) {
+            const result = await deps.workloadDispatcher.startInit(containerId);
+            // 仅有占位/已删除项时 startInit 返回 initializing=false：仍须按现状上线。
+            // 必须失败（requiredFailure）时容器已被强制注销，**不得** markOnline（裁决 10）。
+            // harness 环境缺失（failed）时容器已判 failed，同样不得 online（T-CC13）。
+            if (!result.initializing && !result.requiredFailure && !result.failed) {
+              await deps.containerService.markOnline(containerId);
+            }
+          }
 
-        logger.info?.(
-          `[worker] registered containerId=${containerId} hostname=${hostname} ` +
-            `version=${payload?.version ?? 'unknown'} platform=${payload?.platform ?? 'unknown'} ` +
-            `initializing=${willInitialize}`,
-        );
-      } catch (err) {
-        logger.error?.('[worker] register error', err);
-        socket.emit('error', { code: 'REGISTER_FAILED', message: '注册失败' });
-        socket.disconnect(true);
-      }
+          logger.info(
+            {
+              event: 'registered',
+              socketId: socket.id,
+              containerId,
+              hostname,
+              version: payload?.version ?? 'unknown',
+              platform: payload?.platform ?? 'unknown',
+              initializing: willInitialize,
+            },
+            'registered',
+          );
+        } catch (err) {
+          logger.error({ err }, 'register error');
+          socket.emit('error', withTraceMeta({ code: 'REGISTER_FAILED', message: '注册失败' }));
+          socket.disconnect(true);
+        }
+      });
     });
 
     socket.on('heartbeat', () => {
-      if (!socket.data.registered) return;
-      deps.heartbeatTracker.record(containerId);
+      runWithLogContext({ containerId }, () => {
+        if (!socket.data.registered) return;
+        deps.heartbeatTracker.record(containerId);
+      });
     });
 
     socket.on('workload:result', (payload: unknown) => {
-      if (!socket.data.registered || !deps.workloadDispatcher) return;
-      void deps.workloadDispatcher
-        .handleResult(containerId, payload as Record<string, unknown>)
-        .catch((err) => {
-          logger.error?.('[worker] workload:result handling error', err);
-        });
+      runWithLogContext({ containerId }, () => {
+        if (!socket.data.registered || !deps.workloadDispatcher) return;
+        void deps.workloadDispatcher
+          .handleResult(containerId, payload as Record<string, unknown>)
+          .catch((err) => {
+            logger.error({ err }, 'workload:result handling error');
+          });
+      });
     });
 
     socket.on('unregister', () => {
-      socket.emit('unregistered', {});
-      socket.disconnect(true);
+      runWithLogContext({ containerId }, () => {
+        socket.emit('unregistered', withTraceMeta({}));
+        socket.disconnect(true);
+      });
     });
 
     socket.on('disconnect', (reason: string) => {
-      const set = activeSockets.get(containerId);
-      set?.delete(socket.id);
-      const remaining = set?.size ?? 0;
-      logger.info?.(
-        `[worker] disconnected id=${socket.id} containerId=${containerId} reason=${reason} ` +
-          `registered=${socket.data.registered === true} remainingSockets=${remaining}`,
-      );
-      // 同一 containerId 仍有活跃 socket（多连接/重连窗口）时不判定离线。
-      if (remaining > 0) return;
-      activeSockets.delete(containerId);
+      runWithLogContext({ containerId }, () => {
+        const set = activeSockets.get(containerId);
+        set?.delete(socket.id);
+        const remaining = set?.size ?? 0;
+        logger.info(
+          {
+            event: 'disconnected',
+            socketId: socket.id,
+            containerId,
+            reason,
+            registered: socket.data.registered === true,
+            remainingSockets: remaining,
+          },
+          'disconnected',
+        );
+        // 同一 containerId 仍有活跃 socket（多连接/重连窗口）时不判定离线。
+        if (remaining > 0) return;
+        activeSockets.delete(containerId);
 
-      deps.heartbeatTracker.remove(containerId);
-      if (!socket.data.registered) return;
-      void deps.containerService
-        .getById(containerId)
-        .then((record) => {
-          // initializing 期间掉线保持状态等待重连（不退回 connecting，由看门狗收口）。
-          if (record && record.status === 'online') {
-            return deps.containerService.markConnecting(containerId);
-          }
-          return undefined;
-        })
-        .catch((err) => {
-          logger.error?.('[worker] disconnect handling error', err);
-        });
+        deps.heartbeatTracker.remove(containerId);
+        if (!socket.data.registered) return;
+        void deps.containerService
+          .getById(containerId)
+          .then((record) => {
+            // initializing 期间掉线保持状态等待重连（不退回 connecting，由看门狗收口）。
+            if (record && record.status === 'online') {
+              return deps.containerService.markConnecting(containerId);
+            }
+            return undefined;
+          })
+          .catch((err) => {
+            logger.error({ err }, 'disconnect handling error');
+          });
+      });
     });
   });
 
