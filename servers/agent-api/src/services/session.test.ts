@@ -72,7 +72,19 @@ vi.mock('./commit-settings-service.js', () => ({
   },
 }));
 
-import { sessionService, resolveInitialMcpServerIds } from './session.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把
+ * session 日志写入内存 sink，断言 `records` 的结构化字段。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { sessionService, resolveInitialMcpServerIds } = await import('./session.js');
+childSpy.mockRestore();
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
@@ -1030,15 +1042,13 @@ describe('SessionService', () => {
       // Stub waitForStopAck to immediately return false (simulating timeout)
       const origWait = (sessionService as any).waitForStopAck.bind(sessionService);
       (sessionService as any).waitForStopAck = async () => false;
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      testLog.reset();
 
       await sessionService.delete('sess-1', 'user-1');
 
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('ACP stop ack timeout'),
-        expect.objectContaining({ sessionId: 'sess-1' }),
-      );
-      warnSpy.mockRestore();
+      const rec = testLog.records.find((r) => r.level === 'warn' && String(r.msg).includes('ACP stop ack timeout'));
+      expect(rec).toBeDefined();
+      expect(rec?.sessionId).toBe('sess-1');
       (sessionService as any).waitForStopAck = origWait;
     });
 

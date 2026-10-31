@@ -1,5 +1,6 @@
 import { Controller } from '../models/controller.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 import { actorFilter } from './workspace-context.js';
 
 export class FolderBrowserService {
@@ -16,12 +17,12 @@ export class FolderBrowserService {
     const redis = getRedisClient();
     const requestId = `fs_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'fs:browse',
       requestId,
       controllerId,
       path: path || null,
-    }));
+    });
 
     for (let i = 0; i < 20; i++) {
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -48,11 +49,11 @@ export class FolderBrowserService {
     const redis = getRedisClient();
     const requestId = `fs_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'fs:home',
       requestId,
       controllerId,
-    }));
+    });
 
     for (let i = 0; i < 20; i++) {
       await new Promise((resolve) => setTimeout(resolve, 500));

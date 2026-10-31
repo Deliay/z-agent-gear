@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { Session } from '../../models/session.js';
 import { CloudContainer } from '../../models/cloud-container.js';
 import { CloudHost } from '../../models/cloud-host.js';
@@ -62,12 +63,18 @@ export const cloudHostResolvers = {
           if (item.productId === 'container.minute') perMinuteCredits = item.unitPrice;
         }
       } else {
-        console.warn('[cloud-host] billing quote price fallback:', prices.reason);
+        rootLogger.warn(
+          { component: 'cloud-host', event: 'price-fallback', reason: prices.reason },
+          'billing quote price fallback',
+        );
       }
       if (account.status === 'fulfilled') {
         availableBalance = account.value.availableBalance;
       } else {
-        console.warn('[cloud-host] billing quote balance unavailable:', account.reason);
+        rootLogger.warn(
+          { component: 'cloud-host', event: 'balance-unavailable', reason: account.reason },
+          'billing quote balance unavailable',
+        );
       }
       return { createCredits, perMinuteCredits, availableBalance };
     },

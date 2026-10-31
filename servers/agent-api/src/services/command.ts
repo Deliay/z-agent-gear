@@ -1,11 +1,10 @@
-import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 
 const COMMAND_CHANNEL = 'controller:command';
 
 export class CommandService {
   async sendShutdown(keyId: string): Promise<void> {
-    const redis = getRedisClient();
-    await redis.publish(COMMAND_CHANNEL, JSON.stringify({ type: 'shutdown', keyId }));
+    await publish(COMMAND_CHANNEL, { type: 'shutdown', keyId });
   }
 }
 

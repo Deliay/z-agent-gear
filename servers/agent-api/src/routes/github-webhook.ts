@@ -1,6 +1,7 @@
 import express, { type Request, type Response } from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import {
   parseGithubReviewEvent,
   GithubWebhookPayloadError,
@@ -10,6 +11,8 @@ import { parseGithubIssuesEvent } from '../services/workflow/github-issues-webho
 import { handleIssuesEvent } from '../services/workflow/issues-event-handler.js';
 
 export const githubWebhookRouter = express.Router();
+
+const logger = rootLogger.child({ component: 'github-webhook' });
 
 function timingSafeEquals(actual: string, expected: string): boolean {
   if (!actual || !expected) return false;
@@ -47,7 +50,7 @@ githubWebhookRouter.post(
     }
 
     if (!isAuthorized(req)) {
-      console.warn('[github-webhook] unauthorized');
+      logger.warn({ event: 'unauthorized' }, 'unauthorized github webhook');
       res.status(401).json({ error: 'unauthorized' });
       return;
     }
@@ -69,7 +72,7 @@ githubWebhookRouter.post(
       try {
         res.json(await handleIssuesEvent(issuesEvent));
       } catch (err) {
-        console.error('[github-webhook] issues handler failed:', (err as Error).message);
+        logger.error({ err, event: 'issues' }, 'issues handler failed');
         res.json({ handled: false, reason: 'HANDLER_FAILED', results: [] });
       }
       return;
@@ -100,7 +103,7 @@ githubWebhookRouter.post(
       res.json(response);
     } catch (err) {
       // 保持 200：5xx 会触发 GitHub 指数退避重投风暴，幂等位可安全消化重投
-      console.error('[github-webhook] handler failed:', (err as Error).message);
+      logger.error({ err, event: 'pr' }, 'PR event handler failed');
       res.json({ handled: false, reason: 'HANDLER_FAILED', results: [] });
     }
   },

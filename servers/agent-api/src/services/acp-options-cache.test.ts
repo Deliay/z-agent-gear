@@ -16,10 +16,21 @@ vi.mock('../models/controller.js', () => ({
 }));
 
 import { Controller } from '../models/controller.js';
-import {
-  invalidateAcpOptionsForController,
-  invalidateAcpOptionsForUser,
-} from './acp-options-cache.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把
+ * acp-options-cache 告警写入内存 sink，断言 `records` 的结构化字段。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { invalidateAcpOptionsForController, invalidateAcpOptionsForUser } = await import(
+  './acp-options-cache.js'
+);
+childSpy.mockRestore();
 
 function chainControllers(ids: string[]) {
   return {
@@ -30,7 +41,7 @@ function chainControllers(ids: string[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  testLog.reset();
   redisMock.del.mockResolvedValue(1 as never);
 });
 
@@ -75,7 +86,7 @@ describe('invalidateAcpOptionsForController', () => {
   it('swallows Redis failures (best effort) and returns 0', async () => {
     redisMock.scan.mockRejectedValue(new Error('redis down'));
     await expect(invalidateAcpOptionsForController('ctrl-1')).resolves.toBe(0);
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((r) => r.level === 'warn')).toBe(true);
   });
 });
 
@@ -111,7 +122,7 @@ describe('invalidateAcpOptionsForUser', () => {
       throw new Error('db down');
     });
     await expect(invalidateAcpOptionsForUser('user-1')).resolves.toBe(0);
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((r) => r.level === 'warn')).toBe(true);
   });
 
   it('returns 0 when the user has no controllers', async () => {

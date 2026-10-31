@@ -240,7 +240,6 @@ describe('syncNodeStatus', () => {
     vi.mocked(updateCheckRun).mockRejectedValueOnce(
       new GitHubChecksError('INVALID_PAYLOAD', 'rejected'),
     );
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await syncNodeStatus(makeInstance(), makeNode({ status: 'DONE' }));
 
@@ -254,7 +253,6 @@ describe('syncNodeStatus', () => {
       expect.objectContaining({ commitSha: 'sha-new', checkRunId: 2002 }),
     );
     expect(prHandlerRegistry.markSyncError).not.toHaveBeenCalled();
-    warn.mockRestore();
   });
 
   it('无旧 check-run 时直接 create', async () => {
@@ -301,12 +299,10 @@ describe('syncNodeStatus', () => {
   it('403 失败记白名单文案且不抛出', async () => {
     vi.mocked(prHandlerRegistry.findByNode).mockResolvedValue(handlerRow() as never);
     vi.mocked(createCheckRun).mockRejectedValue(new GitHubChecksError('FORBIDDEN', 'forbidden'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await expect(syncNodeStatus(makeInstance(), makeNode())).resolves.toBeUndefined();
 
     expect(prHandlerRegistry.markSyncError).toHaveBeenCalledWith('h1', '检查项写入权限不足');
-    warn.mockRestore();
   });
 
   it('仓库未授权同样收敛为权限文案', async () => {
@@ -314,12 +310,10 @@ describe('syncNodeStatus', () => {
     vi.mocked(githubService.createRepoScopedTokenForUser).mockRejectedValue(
       new Error('repository is not authorized'),
     );
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await syncNodeStatus(makeInstance(), makeNode());
 
     expect(prHandlerRegistry.markSyncError).toHaveBeenCalledWith('h1', '检查项写入权限不足');
-    warn.mockRestore();
   });
 });
 
@@ -472,12 +466,10 @@ describe('syncTodoPanel', () => {
 
   it('PATCH 失败记白名单文案且不抛出', async () => {
     vi.mocked(updateCheckRun).mockRejectedValue(new GitHubChecksError('RATE_LIMITED', 'rate'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await expect(syncTodoPanel(snapshot(), entries)).resolves.toBeUndefined();
 
     expect(prHandlerRegistry.markSyncError).toHaveBeenCalledWith('h1', 'GitHub 限流，稍后自动重试');
-    warn.mockRestore();
   });
 });
 

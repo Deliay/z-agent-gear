@@ -2,12 +2,15 @@ import { Router, type Request, type Response } from 'express';
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { Account } from '../models/account.js';
 import { Tenant } from '../models/tenant.js';
 import { User } from '../models/user.js';
 import { assertUsernamePasswordRules, hashPassword, verifyPassword } from '../services/auth.js';
 import { billingClient } from '../services/billing-client.js';
 import { workspaceService } from '../services/workspace-service.js';
+
+const logger = rootLogger.child({ component: 'internal-users' });
 
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
@@ -177,7 +180,7 @@ internalUsersRouter.post('/', async (req: Request, res: Response) => {
     });
   } catch (err) {
     await rollback();
-    console.error('[internal-users] provision failed:', (err as Error).message);
+    logger.error({ event: 'provision-failed', err }, 'user provision failed');
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });

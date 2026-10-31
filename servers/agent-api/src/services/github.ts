@@ -1,4 +1,5 @@
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
@@ -58,6 +59,8 @@ interface RepoTokenCacheEntry {
 }
 const repoTokenCache = new Map<string, RepoTokenCacheEntry>();
 const TOKEN_EXPIRY_MARGIN_MS = 5 * 60 * 1000;
+
+const logger = rootLogger.child({ component: 'github' });
 
 /** 测试用：清空 token 缓存（生产代码不调用） */
 export function resetRepoTokenCache(): void {
@@ -828,7 +831,7 @@ export class GitHubService {
     } catch (error) {
       const reason = error instanceof Error ? error.message : 'unknown error';
       // 只记录状态 / 结构错误，绝不记录 JWT 或身份之外的响应内容。
-      console.warn(`[GitHub] app bot identity unavailable: ${reason}`);
+      logger.warn({ event: 'bot-identity-unavailable', reason }, 'app bot identity unavailable');
       await writeBotIdentityCache(null);
       return null;
     }

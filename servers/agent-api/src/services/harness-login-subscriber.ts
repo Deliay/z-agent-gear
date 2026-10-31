@@ -1,10 +1,14 @@
 import type { Redis } from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { todoService, type ElicitationResolution } from './todo-service.js';
 import { sessionSSEService } from './session-sse.js';
 
 const HARNESS_LOGIN_REQUIRED_CHANNEL = 'harness:login:required';
 const HARNESS_LOGIN_RESOLVED_CHANNEL = 'harness:login:resolved';
+
+const logger = rootLogger.child({ component: 'harness-login-subscriber' });
 
 interface HarnessLoginRequiredData {
   requestId: string;
@@ -17,6 +21,7 @@ interface HarnessLoginRequiredData {
   userCode: string;
   expiresInSeconds?: number;
   receivedAt?: number | string;
+  _meta?: unknown;
 }
 
 type HarnessLoginResult = 'succeeded' | 'failed' | 'cancelled' | 'expired';
@@ -28,6 +33,7 @@ interface HarnessLoginResolvedData {
   result: HarnessLoginResult;
   account?: string;
   error?: string;
+  _meta?: unknown;
 }
 
 /**
@@ -55,22 +61,38 @@ export class HarnessLoginSubscriberService {
       HARNESS_LOGIN_RESOLVED_CHANNEL,
       (err) => {
         if (err) {
-          console.error('Failed to subscribe to harness login channels:', err);
+          logger.error({ err }, 'failed to subscribe to harness login channels');
           return;
         }
-        console.log('Subscribed to harness:login:required and harness:login:resolved channels');
+        logger.info({}, 'subscribed to harness:login:required and harness:login:resolved channels');
       },
     );
 
     this.subscriber.on('message', async (channel: string, message: string) => {
       try {
         if (channel === HARNESS_LOGIN_REQUIRED_CHANNEL) {
-          await this.handleRequired(JSON.parse(message) as HarnessLoginRequiredData);
+          const data = JSON.parse(message) as HarnessLoginRequiredData;
+          await withSpan(
+            `${HARNESS_LOGIN_REQUIRED_CHANNEL} handle`,
+            { 'messaging.destination.name': channel, requestId: data.requestId },
+            async () => {
+              await this.handleRequired(data);
+            },
+            { parent: extractTraceparent(data._meta) },
+          );
         } else if (channel === HARNESS_LOGIN_RESOLVED_CHANNEL) {
-          await this.handleResolved(JSON.parse(message) as HarnessLoginResolvedData);
+          const data = JSON.parse(message) as HarnessLoginResolvedData;
+          await withSpan(
+            `${HARNESS_LOGIN_RESOLVED_CHANNEL} handle`,
+            { 'messaging.destination.name': channel, requestId: data.requestId, result: data.result },
+            async () => {
+              await this.handleResolved(data);
+            },
+            { parent: extractTraceparent(data._meta) },
+          );
         }
       } catch (err) {
-        console.error('Error handling harness login message:', err);
+        logger.error({ err, channel }, 'error handling harness login message');
       }
     });
   }
@@ -78,12 +100,15 @@ export class HarnessLoginSubscriberService {
   private async handleRequired(data: HarnessLoginRequiredData): Promise<void> {
     // 租户隔离：缺 userId 的 required 无法安全落库/下发，直接丢弃并告警
     if (!data.userId || !data.requestId) {
-      console.warn('[HarnessLogin] required event without userId/requestId, skip:', data.requestId ?? 'n/a');
+      logger.warn(
+        { event: 'required-no-target', requestId: data.requestId ?? null },
+        'required event without userId/requestId, skip',
+      );
       return;
     }
 
     const { todo, created } = await todoService.createHarnessLoginTodo(data);
-    console.log('[HarnessLogin] required requestId=%s created=%s', data.requestId, created);
+    logger.debug({ event: 'required', requestId: data.requestId, created }, 'harness login required');
 
     // 幂等：重复 required 不重复推送（todo 已存在）
     if (!created) return;
@@ -110,19 +135,18 @@ export class HarnessLoginSubscriberService {
 
   private async handleResolved(data: HarnessLoginResolvedData): Promise<void> {
     if (!data.userId || !data.requestId) {
-      console.warn(
-        '[HarnessLogin] resolved event without userId/requestId, skip to avoid cross-tenant write:',
-        data.requestId ?? 'n/a',
+      logger.warn(
+        { event: 'resolved-no-target', requestId: data.requestId ?? null },
+        'resolved event without userId/requestId, skip to avoid cross-tenant write',
       );
       return;
     }
 
     const resolution = RESOLUTION_BY_RESULT[data.result];
     if (!resolution) {
-      console.warn(
-        '[HarnessLogin] resolved with unknown result=%j requestId=%s (fallback to failed)',
-        data.result,
-        data.requestId,
+      logger.warn(
+        { event: 'resolved-unknown-result', result: data.result, requestId: data.requestId },
+        'resolved with unknown result (fallback to failed)',
       );
     }
     const finalResolution = resolution ?? 'failed';
@@ -133,7 +157,10 @@ export class HarnessLoginSubscriberService {
     });
     // 已终结（单调守卫）或归属不匹配：正常幂等场景
     if (updated === 0) {
-      console.warn('[HarnessLogin] resolved write skipped (already terminal or tenant mismatch): %s', data.requestId);
+      logger.warn(
+        { event: 'resolved-skipped', requestId: data.requestId },
+        'resolved write skipped (already terminal or tenant mismatch)',
+      );
     }
     await todoService.markTodoAsResponded(data.requestId, data.userId);
 

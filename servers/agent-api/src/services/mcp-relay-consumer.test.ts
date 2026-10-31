@@ -64,10 +64,9 @@ describe('McpRelayConsumer', () => {
       token: 'tok',
       body: expect.objectContaining({ method: 'tools/call' }),
     });
-    expect(baseRedis.publish).toHaveBeenCalledWith(
-      'mcp:relay:response:req-1',
-      JSON.stringify({ requestId: 'req-1', status: 200, body: { jsonrpc: '2.0', id: 1, result: {} } }),
-    );
+    expect(baseRedis.publish).toHaveBeenCalledWith('mcp:relay:response:req-1', expect.any(String));
+    const { _meta, ...relayBody } = JSON.parse(baseRedis.publish.mock.calls[0][1]);
+    expect(relayBody).toEqual({ requestId: 'req-1', status: 200, body: { jsonrpc: '2.0', id: 1, result: {} } });
   });
 
   it('T-A2: dispatch 抛非预期异常时 publish {status:502, body:FORWARD_ERROR}，进程不崩', async () => {

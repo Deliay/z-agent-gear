@@ -1,5 +1,7 @@
 import { Controller } from '../../models/controller.js';
 import { getRedisClient } from '../../middleware/redis.js';
+import { publish } from '../../middleware/publish.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { actorFilter } from '../workspace-context.js';
 
 /**
@@ -25,14 +27,11 @@ export async function getAvailableServerTypes(controllerId: string, userId: stri
     // 控制器在线：发送 acp:check 命令触发 controller-api 探测并回写缓存
     // acp:check 超时 10s，轮询上限 12s（含余量）
     try {
-      await redis.publish(
-        'session:command',
-        JSON.stringify({
-          type: 'acp:check',
-          requestId: `cap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-          controllerId,
-        }),
-      );
+      await publish('session:command', {
+        type: 'acp:check',
+        requestId: `cap_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        controllerId,
+      });
       // 轮询最终缓存 key：acpCapabilityDetector 探测完成后会写入此 key
       for (let i = 0; i < 12; i++) {
         await new Promise((r) => setTimeout(r, 1000));
@@ -43,7 +42,7 @@ export async function getAvailableServerTypes(controllerId: string, userId: stri
         }
       }
     } catch (err) {
-      console.error(`回源查询控制器能力失败（${controllerId}）：`, err);
+      rootLogger.error({ component: 'workflow-capability', controllerId, err }, '回源查询控制器能力失败');
     }
   }
 

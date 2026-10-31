@@ -4,8 +4,12 @@ import { User } from '../models/user.js';
 import { verifyToken } from '../services/auth.js';
 import { Gateway } from '../models/gateway.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
+import { logger as rootLogger } from '../observability/logger.js';
 
 const router = Router();
+
+const logger = rootLogger.child({ component: 'gateway-proxy' });
 
 const COMMAND_CHANNEL = 'port-forward:command';
 const RESPONSE_CHANNEL = 'port-forward:response';
@@ -14,7 +18,7 @@ const PROXY_TIMEOUT_MS = 30_000;
 const gatewayResponseSubscriber = (() => {
   const sub = getRedisClient().duplicate();
   sub.subscribe(RESPONSE_CHANNEL).catch((err: Error) => {
-    console.error(`Failed to subscribe to ${RESPONSE_CHANNEL}:`, err.message);
+    logger.error({ err, channel: RESPONSE_CHANNEL }, 'failed to subscribe to gateway response channel');
   });
   return sub;
 })();
@@ -62,7 +66,6 @@ router.all('/gateway/:controllerId/:name/{*path}', async (req: Request, res: Res
 
   const port = record.port;
   const requestId = crypto.randomUUID();
-  const redis = getRedisClient();
 
   const bodyChunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -70,7 +73,7 @@ router.all('/gateway/:controllerId/:name/{*path}', async (req: Request, res: Res
   }
   const body = bodyChunks.length > 0 ? Buffer.concat(bodyChunks).toString('base64') : undefined;
 
-  const command = JSON.stringify({
+  const command: Record<string, unknown> = {
     type: 'proxy:request',
     requestId,
     controllerId,
@@ -79,7 +82,7 @@ router.all('/gateway/:controllerId/:name/{*path}', async (req: Request, res: Res
     method: req.method,
     headers: req.headers,
     body,
-  });
+  };
 
   const responsePromise = new Promise<{ status: number; headers: Record<string, string>; body: string } | null>((resolve) => {
     const timeout = setTimeout(() => resolve(null), PROXY_TIMEOUT_MS);
@@ -102,7 +105,7 @@ router.all('/gateway/:controllerId/:name/{*path}', async (req: Request, res: Res
     timeout.unref?.();
   });
 
-  await redis.publish(COMMAND_CHANNEL, command);
+  await publish(COMMAND_CHANNEL, command);
   const proxyResponse = await responsePromise;
 
   if (!proxyResponse) {

@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { githubService } from '../services/github.js';
 
@@ -58,7 +59,7 @@ export async function handleGithubSetup(req: Request, res: Response): Promise<vo
 
     res.redirect(`${config.frontendUrl}/settings?binding=success`);
   } catch (error) {
-    console.error('GitHub setup error:', error);
+    rootLogger.error({ component: 'github-route', err: error }, 'GitHub setup error');
     res.redirect(`${config.frontendUrl}/settings?binding=error&message=internal_error`);
   }
 }

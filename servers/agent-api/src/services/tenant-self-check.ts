@@ -1,7 +1,10 @@
 import mongoose from 'mongoose';
 import { TENANT_ID_COLLECTIONS } from '../migrations/013-tenant-id-backfill.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { Tenant } from '../models/tenant.js';
 import { User } from '../models/user.js';
+
+const logger = rootLogger.child({ component: 'tenant-self-check' });
 
 /** 抽样上限（自检耗时不随数据量线性增长：带索引计数 + 限量抽样）。 */
 export const SAMPLE_SIZE = 100;
@@ -20,7 +23,7 @@ export interface TenantSelfCheckResult {
  * - `users` 缺 account / 缺 tenantId：带索引 countDocuments；
  * - 抽样 100 行校验 `tenantId == userId`、`name` 存在、租户文档存在；
  * - 19 个集合「缺 tenantId」行数（countDocuments）；
- * - 异常仅 console.warn，不抛出（不阻塞服务就绪）。
+ * - 异常仅告警，不抛出（不阻塞服务就绪）。
  */
 export async function runTenantSelfCheck(): Promise<TenantSelfCheckResult> {
   const started = Date.now();
@@ -71,14 +74,14 @@ export async function runTenantSelfCheck(): Promise<TenantSelfCheckResult> {
 
     const elapsedMs = Date.now() - started;
     if (warnings.length > 0) {
-      console.warn(`[TenantSelfCheck] ${warnings.length} warning(s) (${elapsedMs}ms): ${warnings.join('; ')}`);
+      logger.warn({ warningCount: warnings.length, elapsedMs, warnings }, 'tenant self-check found warnings');
     } else {
-      console.log(`[TenantSelfCheck] ok (${elapsedMs}ms, sampled ${sample.length} users)`);
+      logger.info({ elapsedMs, sampled: sample.length }, 'tenant self-check ok');
     }
     return { warnings, elapsedMs, sampled: sample.length, collections };
   } catch (err) {
     const elapsedMs = Date.now() - started;
-    console.warn('[TenantSelfCheck] skipped:', (err as Error).message);
+    logger.warn({ err }, 'tenant self-check skipped');
     return { warnings: [`self-check failed: ${(err as Error).message}`], elapsedMs, sampled: 0, collections: {} };
   }
 }
@@ -87,7 +90,7 @@ export async function runTenantSelfCheck(): Promise<TenantSelfCheckResult> {
 export function scheduleTenantSelfCheck(): void {
   setImmediate(() => {
     void runTenantSelfCheck().catch((err) => {
-      console.warn('[TenantSelfCheck] failed:', (err as Error).message);
+      logger.warn({ err }, 'tenant self-check failed');
     });
   });
 }
