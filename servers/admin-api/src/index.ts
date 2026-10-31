@@ -1,9 +1,12 @@
+import './observability/register.js';
 import express from 'express';
 import cors from 'cors';
 import { createYoga } from 'graphql-yoga';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import mongoose from 'mongoose';
 import { config, assertRuntimeConfig } from './config/index.js';
+import { logger as rootLogger } from './observability/logger.js';
+import { httpContext } from './observability/http-context.js';
 import { typeDefs } from './graphql/schemas/index.js';
 import { resolvers } from './graphql/resolvers/index.js';
 import { authenticateAdmin } from './middleware/auth.js';
@@ -55,10 +58,14 @@ import * as migration015PresetPlaywright from './migrations/015-preset-playwrigh
 import * as migration016PresetMongo from './migrations/016-preset-mongodb.js';
 import { CloudHost } from './models/cloud-host.js';
 
+const logger = rootLogger.child({ component: 'admin-api' });
+
 const app = express();
 
 // 生产环境未显式配置 CORS_ORIGIN 时 config.corsOrigin 为空串：origin:false 仅允许同源，不再默认放开 `*`
 app.use(cors({ origin: config.corsOrigin || false }));
+// 请求级可观测性：requestId 归一化 + traceparent 提取 + SERVER span + 访问日志（契约 §5.2/§5.4）
+app.use(httpContext());
 // 计费网关会转发较大的请求体（如批量事件），放宽 body 上限至 128MB
 app.use(express.json({ limit: '128mb' }));
 
@@ -80,10 +87,16 @@ app.use('/graphql', yoga);
 // 费用中心：OpenAI 兼容计费网关（API Key 鉴权）与 agent-api 内部 REST
 const outboxPublisher = new AdminOutboxPublisher(
   config.rabbitmqUrl,
-  console,
+  logger.child({ component: 'billing-outbox' }),
   config.outboxRelayIntervalMs,
 );
-app.use('/v1', createBillingOpenAiRouter({ publisher: outboxPublisher }));
+app.use(
+  '/v1',
+  createBillingOpenAiRouter({
+    publisher: outboxPublisher,
+    logger: logger.child({ component: 'billing-gateway' }),
+  }),
+);
 app.use('/internal/billing', createInternalBillingRouter());
 
 app.get('/health', (_req, res) => {
@@ -96,11 +109,11 @@ async function connectWithRetry(attempts = 10, delayMs = 2000): Promise<void> {
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       await mongoose.connect(config.mongodbUri);
-      console.log('Connected to MongoDB');
+      logger.info('connected to MongoDB');
       return;
     } catch (err) {
       lastError = err;
-      console.warn(`[admin-api] MongoDB connect attempt ${attempt}/${attempts} failed:`, (err as Error).message);
+      logger.warn({ err, attempt, attempts }, 'MongoDB connect attempt failed');
       if (attempt < attempts) {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
@@ -156,12 +169,12 @@ async function start() {
       migration016PresetMongo,
     ]);
   } catch (err) {
-    console.error('[admin-api] runMigrations failed (non-fatal):', err);
+    logger.error({ err }, 'runMigrations failed (non-fatal)');
   }
 
   // 管理员种子失败必须让启动失败：否则服务「健康」但无法登录，且不会再补种
-  await seedAdmin();
-  console.log('Admin seed ensured');
+  await seedAdmin(logger.child({ component: 'auth' }));
+  logger.info('admin seed ensured');
 
   // ===== 费用中心初始化 =====
   const billingModels = [
@@ -185,19 +198,19 @@ async function start() {
   try {
     await Promise.all(billingModels.map((model) => model.syncIndexes()));
   } catch (err) {
-    console.warn('[admin-api] billing syncIndexes failed (non-fatal):', (err as Error).message);
+    logger.warn({ err }, 'billing syncIndexes failed (non-fatal)');
   }
   // 只读模型（cloudhosts 归 agent-api 所有）：只补建声明索引，绝不使用 syncIndexes——
   // syncIndexes 会删除 schema 未声明的索引，误删 agent-api 的所有索引。
   try {
     await CloudHost.createIndexes();
   } catch (err) {
-    console.warn('[admin-api] cloudhosts createIndexes failed (non-fatal):', (err as Error).message);
+    logger.warn({ err }, 'cloudhosts createIndexes failed (non-fatal)');
   }
   try {
     await pricingService.ensureDefaultPrices();
   } catch (err) {
-    console.warn('[admin-api] ensureDefaultPrices failed (non-fatal):', (err as Error).message);
+    logger.warn({ err }, 'ensureDefaultPrices failed (non-fatal)');
   }
 
   // MQ 消费/调度失败不阻断 API 启动（计费事件由 outbox 保留，恢复后补投；运行时自动重连）。
@@ -207,7 +220,7 @@ async function start() {
     url: config.rabbitmqUrl,
     billing: billingRuntime,
     ingest: eventIngestService,
-    logger: console,
+    logger: logger.child({ component: 'billing-mq' }),
   });
   await mqRuntime.start();
 
@@ -216,21 +229,22 @@ async function start() {
     settlementTick: new SettlementTickService(billingRuntime, reservationService, {
       // A-3：stale 终结前复核控制面存活，活容器只补结算不置 SETTLED。
       isAlive: isCloudContainerAlive,
+      logger: logger.child({ component: 'billing-settlement' }),
     }),
     reconciliation: reconciliationRuntime,
-    logger: console,
+    logger: logger.child({ component: 'billing-scheduler' }),
   });
   scheduler.start();
 
   const server = app.listen(config.port, () => {
-    console.log(`Admin API running at http://localhost:${config.port}/graphql`);
+    logger.info({ port: config.port, graphqlPath: '/graphql' }, 'Admin API running');
   });
 
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`[admin-api] ${signal} received, shutting down...`);
+    logger.info({ signal }, 'shutting down');
     server.close();
     await scheduler.stop();
     await mqRuntime.stop();
@@ -242,6 +256,6 @@ async function start() {
 }
 
 start().catch((err) => {
-  console.error('[admin-api] Failed to start:', err);
+  logger.error({ err }, 'failed to start');
   process.exit(1);
 });

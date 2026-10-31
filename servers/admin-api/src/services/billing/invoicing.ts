@@ -1,10 +1,13 @@
 import mongoose from 'mongoose';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { BillingAccount, type IBillingAccount } from '../../models/billing-account.js';
 import {
   BillingInvoice,
   type IBillingInvoice,
 } from '../../models/billing-invoice.js';
 import { rollupService, type RollupService } from './rollup-service.js';
+
+const logger = rootLogger.child({ component: 'billing-invoicing' });
 
 export interface InvoiceItemInput {
   productId: string;
@@ -97,7 +100,7 @@ export class InvoicingService {
         try {
           await this.rollups.recordInvoice(input.accountId, doc);
         } catch (err) {
-          console.warn(`[billing] rollup update failed (non-fatal): ${(err as Error).message}`);
+          logger.warn({ err }, '[billing] rollup update failed (non-fatal)');
         }
         return doc;
       } catch (err) {

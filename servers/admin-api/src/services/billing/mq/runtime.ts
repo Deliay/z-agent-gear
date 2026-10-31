@@ -9,7 +9,7 @@ export interface BillingMqRuntimeOptions {
   url: string;
   billing: BillingService;
   ingest: EventIngestService;
-  logger?: MqLogger;
+  logger: MqLogger;
   /** 重连基础退避（默认 5s，指数增长 + 抖动，上限 60s）。 */
   reconnectDelayMs?: number;
 }
@@ -36,7 +36,7 @@ export class BillingMqRuntime {
   private readonly maxDelayMs = 60_000;
 
   constructor(private readonly options: BillingMqRuntimeOptions) {
-    this.logger = options.logger ?? console;
+    this.logger = options.logger;
     this.baseDelayMs = options.reconnectDelayMs ?? 5000;
   }
 
@@ -74,12 +74,12 @@ export class BillingMqRuntime {
         return;
       }
       channel.on('error', (err) => {
-        this.logger.warn?.('[billing-mq] channel error', (err as Error).message);
+        this.logger.warn({ err }, '[billing-mq] channel error');
       });
       channel.on('close', () => {
         // 仅在仍是「当前 channel」时触发重连，避免替换旧连接时误触发。
         if (this.channel === channel) {
-          this.logger.warn?.('[billing-mq] channel closed, scheduling reconnect');
+          this.logger.warn('[billing-mq] channel closed, scheduling reconnect');
           this.channel = null;
           this.connection = null;
           this.scheduleReconnect();
@@ -134,9 +134,12 @@ export class BillingMqRuntime {
       if (previousConnection && previousConnection !== connection) {
         await previousConnection.close();
       }
-      this.logger.info?.('[billing-mq] consumers started');
+      this.logger.info('[billing-mq] consumers started');
     } catch (err) {
-      this.logger.warn?.('[billing-mq] connect failed, scheduling reconnect', (err as Error).message);
+      this.logger.warn(
+        { err, attempt: this.attempt },
+        '[billing-mq] connect failed, scheduling reconnect',
+      );
       await this.teardown(connection, channel);
       this.scheduleReconnect();
     }

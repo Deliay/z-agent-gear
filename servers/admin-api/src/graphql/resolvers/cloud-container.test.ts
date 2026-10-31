@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GraphQLError } from 'graphql';
-import { cloudContainerResolvers } from './cloud-container';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { createTestLogger } from '../../observability/testing.js';
 
 vi.mock('../../services/cloud-controller-client.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/cloud-controller-client.js')>();
@@ -34,6 +35,17 @@ import { findStoredCloudContainers } from '../../models/cloud-container.js';
 import { cloudWorkloadService } from '../../services/cloud-workload.js';
 import { accountService } from '../../services/billing/account-service.js';
 import type { AdminAuthContext } from './auth.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把降级告警写入
+ * 内存 sink，断言 `records` 的结构化字段（`msg`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { cloudContainerResolvers } = await import('./cloud-container.js');
+childSpy.mockRestore();
 
 // 每次调用返回全新 context：loadContainers 在 context 上做请求级 memo，
 // 复用同一对象会使缓存跨用例泄漏（也正因如此，列表与 controlPlane 必须同 context 断言）。
@@ -80,6 +92,7 @@ const storedDoc = {
 describe('cloudContainerResolvers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testLog.reset();
   });
 
   describe('guard (T-IA5)', () => {
@@ -114,7 +127,6 @@ describe('cloudContainerResolvers', () => {
     });
 
     it('T-IA2: degrades to stored Mongo state when the control plane is unreachable', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       (cloudControllerClient.list as any).mockRejectedValue(new ControlPlaneUnavailableError('down'));
       (findStoredCloudContainers as any).mockResolvedValue([storedDoc]);
 
@@ -139,8 +151,11 @@ describe('cloudContainerResolvers', () => {
           installedWorkloads: [],
         },
       ]);
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
+      // 断言型日志迁移：降级告警落 records（结构化字段而非拼接字符串）
+      const warnRecords = testLog.records.filter((record) => record.level === 'warn');
+      expect(warnRecords).toHaveLength(1);
+      expect(warnRecords[0]!.component).toBe('cloud-container');
+      expect(warnRecords[0]!.msg).toContain('降级读取 Mongo 落库状态');
     });
 
     it('does not degrade on non control-plane errors', async () => {
@@ -165,7 +180,6 @@ describe('cloudContainerResolvers', () => {
     });
 
     it('online=false with the offline hint whenever THIS list degraded (same context)', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       // 模拟控制面「可达但变慢」：list 触发超时降级
       (cloudControllerClient.list as any).mockRejectedValue(new ControlPlaneUnavailableError('timeout'));
       (findStoredCloudContainers as any).mockResolvedValue([storedDoc]);
@@ -179,11 +193,9 @@ describe('cloudContainerResolvers', () => {
       // 共享同一次加载：list 与降级读各只发生一次，不存在两套状态
       expect(cloudControllerClient.list).toHaveBeenCalledTimes(1);
       expect(findStoredCloudContainers).toHaveBeenCalledTimes(1);
-      warn.mockRestore();
     });
 
     it('online=false even if controlPlane is resolved before the list field', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       (cloudControllerClient.list as any).mockRejectedValue(new ControlPlaneUnavailableError('timeout'));
       (findStoredCloudContainers as any).mockResolvedValue([storedDoc]);
 
@@ -194,7 +206,6 @@ describe('cloudContainerResolvers', () => {
         message: '控制面离线',
       });
       await expect(Query.adminCloudContainers({}, {}, context)).resolves.toHaveLength(1);
-      warn.mockRestore();
     });
 
     it('rejects anonymous control-plane access', async () => {

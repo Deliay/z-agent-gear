@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { GraphQLError } from 'graphql';
-import { cloudWorkloadResolvers } from './cloud-workload';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { createTestLogger } from '../../observability/testing.js';
 
 vi.mock('../../services/cloud-controller-client.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../services/cloud-controller-client.js')>();
@@ -31,6 +32,17 @@ import {
 } from '../../services/cloud-controller-client.js';
 import { cloudWorkloadService } from '../../services/cloud-workload.js';
 import type { AdminAuthContext } from './auth.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把降级告警写入
+ * 内存 sink，断言 `records` 的结构化字段（`msg`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { cloudWorkloadResolvers } = await import('./cloud-workload.js');
+childSpy.mockRestore();
 
 const good: AdminAuthContext = { currentAdmin: { id: 'a1', username: 'admin', mustChangePassword: false } };
 const locked: AdminAuthContext = { currentAdmin: { id: 'a1', username: 'admin', mustChangePassword: true } };
@@ -77,6 +89,7 @@ const mappedLog = {
 describe('cloudWorkloadResolvers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testLog.reset();
   });
 
   describe('guard (T-W5)', () => {
@@ -213,7 +226,6 @@ describe('cloudWorkloadResolvers', () => {
     });
 
     it('degrades to a direct Mongo read when the control plane is unreachable', async () => {
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
       (cloudControllerClient.listWorkloadLogs as any).mockRejectedValue(
         new ControlPlaneUnavailableError('down'),
       );
@@ -223,8 +235,11 @@ describe('cloudWorkloadResolvers', () => {
 
       expect(cloudWorkloadService.listByContainerLogs).toHaveBeenCalledWith('c1');
       expect(result).toEqual([mappedLog]);
-      expect(warn).toHaveBeenCalled();
-      warn.mockRestore();
+      // 断言型日志迁移：降级告警落 records（结构化字段而非拼接字符串）
+      const warnRecords = testLog.records.filter((record) => record.level === 'warn');
+      expect(warnRecords).toHaveLength(1);
+      expect(warnRecords[0]!.component).toBe('cloud-workload');
+      expect(warnRecords[0]!.msg).toContain('降级直读 Mongo 工作负载日志');
     });
 
     it('does not degrade on non control-plane errors', async () => {

@@ -10,6 +10,9 @@ import { centsToCredits } from './money.js';
 import { PaymentService, paymentService } from './payment.js';
 import { PricingService, pricingService, DEFAULT_CLOUD_HOST_CREATE_CENTS } from './pricing.js';
 import { ReceiptService, receiptService } from './receipt.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+
+const logger = rootLogger.child({ component: 'billing-one-time-charge' });
 
 export const CLOUD_HOST_CREATE_PRODUCT_ID = 'cloud_host.create';
 const DEFAULT_CONTAINER_MINUTE_CENTS = 100;
@@ -99,10 +102,13 @@ export class OneTimeChargeService {
     if (snapshot) return snapshot.unitPrice;
     const fallback = FALLBACK_UNIT_PRICE_CENTS[productId];
     if (fallback === undefined) {
-      console.warn(`[billing] price missing for ${productId}; charging 0`);
+      logger.warn({ productId }, '[billing] price missing; charging 0');
       return 0;
     }
-    console.warn(`[billing] price missing for ${productId}; fallback ${fallback} cents`);
+    logger.warn(
+      { productId, fallbackCents: fallback },
+      '[billing] price missing; using fallback price',
+    );
     return fallback;
   }
 
@@ -321,7 +327,10 @@ export class OneTimeChargeService {
       idempotentKey: this.invoiceKey(input.idempotentKey),
     }).lean();
     if (!payment) {
-      console.warn(`[billing] refund skipped: charge ${input.idempotentKey} not found`);
+      logger.warn(
+        { idempotentKey: input.idempotentKey },
+        '[billing] refund skipped: charge not found',
+      );
       return { invoice: null, receipt: null };
     }
     const accountId = String(payment.accountId);
