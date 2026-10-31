@@ -1,10 +1,8 @@
 import amqp, { type Channel, type ChannelModel, type ConfirmChannel } from 'amqplib';
+import type { ObservationLogger } from '../../../observability/logger.js';
 
-export interface MqLogger {
-  info?: (...args: unknown[]) => void;
-  warn?: (...args: unknown[]) => void;
-  error?: (...args: unknown[]) => void;
-}
+/** 计费 MQ 注入面（外部装配用）：pino 原生四方法子集（调用签名见 contracts/observability.md）。 */
+export type MqLogger = ObservationLogger;
 
 /** RabbitMQ 连接（自动重连：断线后下次取 channel 时重新建立）。
  * 握手超时（默认 10s）：amqplib 仅在建连握手期间应用 socket timeout，
@@ -16,7 +14,7 @@ export class MqConnection {
 
   constructor(
     private readonly url: string,
-    private readonly logger: MqLogger = console,
+    private readonly logger: MqLogger,
     connectTimeoutMs = 10_000,
   ) {
     this.connectTimeoutMs = connectTimeoutMs;
@@ -31,7 +29,7 @@ export class MqConnection {
         this.model = null;
       });
       model.on('error', (err) => {
-        this.logger.warn?.('[billing-mq] connection error', (err as Error).message);
+        this.logger.warn({ err }, '[billing-mq] connection error');
       });
       this.model = model;
       return model;

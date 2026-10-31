@@ -1,4 +1,6 @@
 import { GraphQLError } from 'graphql';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { runWithLogContext } from '../../observability/log-context.js';
 import {
   cloudControllerClient,
   mapCloudContainer,
@@ -15,6 +17,8 @@ import type { AdminAuthContext } from './auth.js';
 
 /** 控制面离线提示文案；经 CloudContainerControlPlane.message 下发给前端。 */
 const CONTROL_PLANE_OFFLINE_HINT = '控制面离线';
+
+const logger = rootLogger.child({ component: 'cloud-container' });
 
 function isControlPlaneUnavailable(err: unknown): boolean {
   return (
@@ -64,7 +68,10 @@ function loadContainers(context: CloudContainerContext): Promise<ContainersLoad>
     } catch (err) {
       if (!isControlPlaneUnavailable(err)) throw toGraphQLError(err);
       // 列表读操作降级：控制面不可达时直读 Mongo 落库状态（裁决 12），仅只读、不双写
-      console.warn(`[admin-api] cloud-controller 不可达，降级读取 Mongo 落库状态（${CONTROL_PLANE_OFFLINE_HINT}）`);
+      logger.warn(
+        { hint: CONTROL_PLANE_OFFLINE_HINT },
+        'cloud-controller 不可达，降级读取 Mongo 落库状态',
+      );
       const docs = await findStoredCloudContainers();
       return { containers: docs.map((doc) => mapCloudContainer(doc)), degraded: true };
     }
@@ -101,7 +108,10 @@ export const cloudContainerResolvers = {
   Query: {
     adminCloudContainers: async (_parent: unknown, _args: unknown, context: AdminAuthContext) => {
       assertAdmin(context);
-      return (await loadContainers(context)).containers;
+      // 日志上下文（userId）经 mixin 自动注入；已有键不覆盖（契约 §5.3）
+      return runWithLogContext({ userId: context.currentAdmin!.id }, async () =>
+        (await loadContainers(context)).containers,
+      );
     },
     adminCloudContainerControlPlane: async (
       _parent: unknown,
@@ -109,9 +119,11 @@ export const cloudContainerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      // 与列表共用同一次加载：online 直接由「本次是否降级」决定，避免与降级事件脱钩
-      const { degraded } = await loadContainers(context);
-      return { online: !degraded, message: degraded ? CONTROL_PLANE_OFFLINE_HINT : null };
+      return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
+        // 与列表共用同一次加载：online 直接由「本次是否降级」决定，避免与降级事件脱钩
+        const { degraded } = await loadContainers(context);
+        return { online: !degraded, message: degraded ? CONTROL_PLANE_OFFLINE_HINT : null };
+      });
     },
   },
   Mutation: {
@@ -126,6 +138,7 @@ export const cloudContainerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
       // 本期仅支持 IDLE（裁决 10）；契约字段保留供后续迭代
       if (args.purpose !== 'IDLE') {
         throw new GraphQLError('该任务类型暂未开放');
@@ -203,6 +216,7 @@ export const cloudContainerResolvers = {
       } catch (err) {
         throw toGraphQLError(err);
       }
+      });
     },
     adminDestroyCloudContainer: async (
       _parent: unknown,
@@ -210,11 +224,13 @@ export const cloudContainerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      try {
-        return await cloudControllerClient.destroy(args.id);
-      } catch (err) {
-        throw toGraphQLError(err);
-      }
+      return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
+        try {
+          return await cloudControllerClient.destroy(args.id);
+        } catch (err) {
+          throw toGraphQLError(err);
+        }
+      });
     },
   },
   CloudContainer: {

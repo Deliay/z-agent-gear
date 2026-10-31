@@ -11,14 +11,10 @@ import {
   type WorkloadLogPhase,
   type WorkloadLogStatus,
 } from '../models/cloud-workload-log.js';
+import { type ObservationLogger } from '../observability/logger.js';
+import { withSpan } from '../observability/trace.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import type { HarnessSecrets, HarnessSecretStore } from './secret-store.js';
-
-interface Logger {
-  info?: (...args: unknown[]) => void;
-  warn?: (...args: unknown[]) => void;
-  error?: (...args: unknown[]) => void;
-}
 
 export const WORKLOAD_RUN_EVENT = 'workload:run';
 
@@ -130,7 +126,7 @@ export interface WorkloadDispatcherDeps {
   now?: () => number;
   /** 云电脑运行期 secret（仅 harness 使用；缺失时 init 失败，见 T-CC13）。 */
   secretStore?: HarnessSecretStore;
-  logger?: Logger;
+  logger: ObservationLogger;
 }
 
 /** RUNNING 记录的宽限：超过 `timeoutMs + 30s` 由看门狗标 TIMEOUT（裁决 10）。 */
@@ -401,8 +397,14 @@ export class WorkloadDispatcher {
     // 云电脑：secret/模型配置缺失时不向 worker 下发半套环境，直接判失败（不 online，T-CC13）。
     const runEnv = this.resolveRunEnv(container);
     if (!runEnv.ok) {
-      this.deps.logger?.warn?.(
-        `[workload] harness env unavailable containerId=${containerId} (init aborted)`,
+      this.deps.logger.warn(
+        {
+          component: 'workload-dispatcher',
+          event: 'harness-env-unavailable',
+          containerId,
+          phase: 'init',
+        },
+        'harness env unavailable (init aborted)',
       );
       await this.markRemainingInitTimeout(containerId, now, HARNESS_ENV_MISSING_LOG);
       await this.deps.containerService.markFailed(containerId, HARNESS_ENV_MISSING_REASON);
@@ -550,18 +552,29 @@ export class WorkloadDispatcher {
     try {
       await this.deps.forceDestroy(containerId, reason);
     } catch (err) {
-      this.deps.logger?.error?.(
-        `[workload] forceDestroy failed containerId=${containerId} reason=${reason}`,
-        err,
+      this.deps.logger.error(
+        {
+          component: 'workload-dispatcher',
+          event: 'force-destroy-failed',
+          containerId,
+          reason,
+          err,
+        },
+        'forceDestroy failed',
       );
       try {
         // 阻断项 4b：兜底改走 `markFailed`（统一终态钩子，CAS 命中时补投 destroyed），
         // 不再用裸 `repo.update` 写终态，避免 `billingStartedAt` 非空却漏投 destroyed 导致计费悬空。
         await this.deps.containerService.markFailed(containerId, reason);
       } catch (fallbackErr) {
-        this.deps.logger?.error?.(
-          `[workload] mustFailure fallback mark failed failed containerId=${containerId}`,
-          fallbackErr,
+        this.deps.logger.error(
+          {
+            component: 'workload-dispatcher',
+            event: 'must-failure-fallback-failed',
+            containerId,
+            err: fallbackErr,
+          },
+          'mustFailure fallback markFailed failed',
         );
       }
     }
@@ -606,20 +619,35 @@ export class WorkloadDispatcher {
   ): Promise<RequiredFailure | null> {
     const logId = typeof payload?.logId === 'string' ? payload.logId : '';
     if (!logId) {
-      this.deps.logger?.warn?.(`[workload] result missing logId containerId=${containerId}`);
+      this.deps.logger.warn(
+        { component: 'workload-dispatcher', event: 'result-missing-logid', containerId },
+        'workload result missing logId',
+      );
       return null;
     }
     const record = await this.deps.workloadLogRepository.findById(logId);
     if (!record) {
-      this.deps.logger?.warn?.(
-        `[workload] result for unknown logId=${logId} containerId=${containerId}`,
+      this.deps.logger.warn(
+        {
+          component: 'workload-dispatcher',
+          event: 'result-unknown-logid',
+          containerId,
+          logId,
+        },
+        'workload result for unknown logId',
       );
       return null;
     }
     if (record.containerId !== containerId) {
-      this.deps.logger?.warn?.(
-        `[workload] result logId=${logId} does not belong to containerId=${containerId} ` +
-          `(actual=${record.containerId})`,
+      this.deps.logger.warn(
+        {
+          component: 'workload-dispatcher',
+          event: 'result-container-mismatch',
+          containerId,
+          logId,
+          actualContainerId: record.containerId,
+        },
+        'workload result does not belong to container',
       );
       return null;
     }
@@ -862,8 +890,14 @@ export class WorkloadDispatcher {
     const runEnv = this.resolveRunEnv(container);
     if (!runEnv.ok) {
       // post 批次不阻断销毁：仅跳过 env 并告警（不含 secret 内容）。
-      this.deps.logger?.warn?.(
-        `[workload] harness env unavailable containerId=${containerId} (post batch without env)`,
+      this.deps.logger.warn(
+        {
+          component: 'workload-dispatcher',
+          event: 'harness-env-unavailable',
+          containerId,
+          phase: 'post',
+        },
+        'harness env unavailable (post batch without env)',
       );
     }
     // 仍持有容器互斥锁：先注册 waiter 再 emit，杜绝「结果先到、waiter 未注册」的窗口。
@@ -1026,7 +1060,14 @@ export class WorkloadDispatcher {
     if (githubAuth === true) payload.githubAuth = true;
     // 仅 harness 携带 env；普通容器保持报文形状不变（无 env 键）。
     if (env) payload.env = env;
-    this.deps.emitToContainer(containerId, WORKLOAD_RUN_EVENT, payload);
+    // 每次 `workload:run` 批次下发一个 span（高频通道不逐条开 span，F11）。
+    withSpan(
+      'workload.dispatch',
+      { 'messaging.batch.message_count': logs.length, phase },
+      () => {
+        this.deps.emitToContainer(containerId, WORKLOAD_RUN_EVENT, payload);
+      },
+    );
   }
 
   private addWaiter(containerId: string, waiter: () => void): void {

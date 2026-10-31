@@ -2,6 +2,7 @@ import { exec, type ExecException } from 'child_process';
 import { mkdirSync, rmSync, existsSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
+import { logger as rootLogger, type ObservationLogger } from './observability/logger.js';
 
 function expandTilde(p: string): string {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
@@ -81,6 +82,12 @@ export interface GitCommitResult {
 }
 
 export class WorktreeHandler {
+  private log: ObservationLogger;
+
+  constructor(logger?: ObservationLogger) {
+    this.log = logger ?? rootLogger.child({ component: 'worktree-handler' });
+  }
+
   async add(
     repoPath: string,
     worktreePath: string,
@@ -131,7 +138,7 @@ export class WorktreeHandler {
         await execAsync(command);
       } catch (err) {
         // 不输出 name/email 值（用户数据），仅记录失败步骤与原因
-        console.warn(`[WorktreeHandler] 写入 worktree 提交人配置失败（忽略）：${(err as Error).message}`);
+        this.log.warn({ err }, '写入 worktree 提交人配置失败（忽略）');
       }
     }
   }

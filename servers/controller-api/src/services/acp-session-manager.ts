@@ -4,6 +4,8 @@ import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 import { harnessLoginRegistry, type HarnessLoginRegistry } from './harness-login-registry.js';
 
 // acp:initial-config:result 入参上限（controller payload 不可信）
@@ -39,9 +41,14 @@ interface PendingRequest {
 
 export class ACPSessionManager {
   private registry: HarnessLoginRegistry;
+  private readonly logger: ObservationLogger;
 
-  constructor(registry: HarnessLoginRegistry = harnessLoginRegistry) {
+  constructor(
+    registry: HarnessLoginRegistry = harnessLoginRegistry,
+    logger: ObservationLogger = rootLogger.child({ component: 'acp-session-manager' }),
+  ) {
     this.registry = registry;
+    this.logger = logger;
   }
   private sessions = new Map<string, ACPSession>();
   private socketToSessions = new Map<string, Set<string>>();
@@ -78,10 +85,9 @@ export class ACPSessionManager {
       if (json === undefined) return snapshot;
       const bytes = Buffer.byteLength(json, 'utf8');
       if (bytes <= AGENT_CAPABILITIES_MAX_BYTES) return snapshot;
-      console.warn(
-        '[ACP] agentCapabilities snapshot too large (%d bytes > %d), truncating raw',
-        bytes,
-        AGENT_CAPABILITIES_MAX_BYTES,
+      this.logger.warn(
+        { bytes, maxBytes: AGENT_CAPABILITIES_MAX_BYTES },
+        'agentCapabilities snapshot too large, truncating raw',
       );
       return {
         ...(snapshot as Record<string, unknown>),
@@ -128,7 +134,7 @@ export class ACPSessionManager {
       // Send acp:start to controller
       const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       
-      console.log(`[ACP session] Starting session ${sessionId}: requestId=${requestId} controllerId=${controllerId} serverType=${serverType} cwd=${cwd}`);
+      this.logger.info({ sessionId, requestId, controllerId, serverType, cwd }, 'starting ACP session');
       
       const startPayload: Record<string, unknown> = {
         requestId,
@@ -153,7 +159,7 @@ export class ACPSessionManager {
       // Use dispatcher to wait for result (supports concurrent starts on same socket)
       const payload = await this.registerPendingRequest(controllerSocket, requestId, sessionId, statusAtStart, 30000);
       
-      console.log(`[ACP session] Received acp:start:result for session ${sessionId}: requestId=${requestId} success=${payload.success} error=${payload.error}`);
+      this.logger.info({ sessionId, requestId, success: payload.success, error: payload.error }, 'received acp:start:result');
       
       if (payload.success) {
         // Store session mapping
@@ -226,18 +232,18 @@ export class ACPSessionManager {
           );
         }
 
-        console.log(`[ACP session] Session ${sessionId} is now idling`);
+        this.logger.info({ sessionId }, 'session is now idling');
         return { success: true, externalSessionId: payload.externalSessionId };
       } else {
         // Controller explicitly reported failure — keep session with 'ended' status
         this.unregisterRelayOwner(sessionId);
         await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
         await this.publishStatus(sessionId, 'ended');
-        console.log(`[ACP session] Session ${sessionId} ended by controller: ${payload.error}`);
+        this.logger.info({ sessionId, error: payload.error }, 'session ended by controller');
         return { success: false, error: payload.error };
       }
     } catch (error) {
-      console.error(`[ACP session] Error starting session ${sessionId}:`, error);
+      this.logger.error({ sessionId, err: error }, 'error starting session');
       await this.cleanupFailedSession(sessionId, statusAtStart);
       return { success: false, error: (error as Error).message };
     } finally {
@@ -250,7 +256,7 @@ export class ACPSessionManager {
     this.unregisterRelayOwner(sessionId);
     // Only delete sessions that never successfully connected
     if (previousStatus === 'creating' || previousStatus === 'connecting') {
-      console.log(`[ACP] Removing failed session ${sessionId} (was ${previousStatus})`);
+      this.logger.info({ sessionId, previousStatus }, 'removing failed session');
       await AcpMessage.deleteMany({ sessionId });
       await Session.findByIdAndDelete(sessionId);
       await this.publishStatus(sessionId, 'removed');
@@ -316,6 +322,8 @@ export class ACPSessionManager {
   }
 
   private async processControllerMessage(sessionId: string, message: SessionUpdate): Promise<void> {
+    // 高频 chunk（agent_message_chunk 等）只 debug 记录，禁止逐条开 span（F11）。
+    this.logger.debug({ sessionId, sessionUpdate: message.sessionUpdate }, 'processing controller message');
     // Handle config_option_update - full configOptions is the single source of truth
     if (message.sessionUpdate === 'config_option_update') {
       const update = message as Record<string, unknown>;
@@ -425,13 +433,16 @@ export class ACPSessionManager {
       || data.sessionId.length === 0
       || data.sessionId.length > INITIAL_CONFIG_SESSION_ID_MAX_LENGTH
     ) {
-      console.warn('[ACP session] dropped initial-config result with invalid sessionId');
+      this.logger.warn({ sessionId: data.sessionId }, 'dropped initial-config result with invalid sessionId');
       return;
     }
     const validStatus = (value: unknown): boolean =>
       value === undefined || INITIAL_CONFIG_STATUSES.has(value as string);
     if (!validStatus(data.modeStatus) || !validStatus(data.modelStatus)) {
-      console.warn('[ACP session] dropped initial-config result with invalid status: modeStatus=%j modelStatus=%j', data.modeStatus, data.modelStatus);
+      this.logger.warn(
+        { modeStatus: data.modeStatus, modelStatus: data.modelStatus },
+        'dropped initial-config result with invalid status',
+      );
       return;
     }
 
@@ -674,7 +685,7 @@ export class ACPSessionManager {
         return { success: false, error: payload.error || 'ACP resume failed' };
       }
     } catch (error) {
-      console.error(`[ACP session] Error resuming session ${sessionId}:`, error);
+      this.logger.error({ sessionId, err: error }, 'error resuming session');
       this.unregisterRelayOwner(sessionId);
       await Session.findByIdAndUpdate(sessionId, { status: 'ended', endedAt: new Date() });
       await this.publishStatus(sessionId, 'ended', 'ACP_RESUME_FAILED');
@@ -712,12 +723,12 @@ export class ACPSessionManager {
       // 会话尚未进入 active map（start/resume 进行中）：入队等待补发，不再静默丢弃
       const queue = this.pendingInputs.get(sessionId) ?? [];
       if (queue.length >= 100) {
-        console.warn(`[ACP session] Pending input queue for session ${sessionId} is full (100), dropping message`);
+        this.logger.warn({ sessionId, queueSize: queue.length }, 'pending input queue is full, dropping message');
         return false;
       }
       queue.push(message);
       this.pendingInputs.set(sessionId, queue);
-      console.log(`[ACP session] Session ${sessionId} not active yet, queued input message (queue size=${queue.length})`);
+      this.logger.debug({ sessionId, queueSize: queue.length }, 'session not active yet, queued input message');
       return true;
     }
 
@@ -739,7 +750,7 @@ export class ACPSessionManager {
     const queue = this.pendingInputs.get(sessionId);
     if (!queue || queue.length === 0) return;
     this.pendingInputs.delete(sessionId);
-    console.log(`[ACP session] Flushing ${queue.length} queued input message(s) for session ${sessionId}`);
+    this.logger.info({ sessionId, count: queue.length }, 'flushing queued input messages');
     for (const message of queue) {
       this.forwardToController(sessionId, message);
     }
@@ -897,15 +908,13 @@ export class ACPSessionManager {
   }
 
   private async publishMessage(sessionId: string, message: Record<string, unknown>): Promise<void> {
-    const redis = getRedisClient();
-    await redis.publish('session:message', JSON.stringify({
+    await publish('session:message', {
       sessionId,
       message,
-    }));
+    });
   }
 
   private async publishStatus(sessionId: string, status: string, error?: string, extra?: Record<string, unknown>): Promise<void> {
-    const redis = getRedisClient();
     const payload: Record<string, unknown> = { sessionId, status };
     if (error) payload.error = error;
     if (extra) {
@@ -918,7 +927,7 @@ export class ACPSessionManager {
       if (extra.promptCompleted === true) payload.promptCompleted = true;
       if (extra.initialConfigError) payload.initialConfigError = extra.initialConfigError;
     }
-    await redis.publish('session:status', JSON.stringify(payload));
+    await publish('session:status', payload);
   }
 
   /**
@@ -938,10 +947,10 @@ export class ACPSessionManager {
       if (pending) {
         clearTimeout(pending.timeout);
         dispatcher.delete(payload.requestId);
-        console.log(`[ACP session] Dispatcher resolved start result: requestId=${payload.requestId} sessionId=${pending.sessionId} success=${payload.success}`);
+        this.logger.info({ requestId: payload.requestId, sessionId: pending.sessionId, success: payload.success }, 'dispatcher resolved start result');
         pending.resolve(payload);
       } else {
-        console.log(`[ACP session] Dispatcher: unknown requestId=${payload.requestId} (ignoring)`);
+        this.logger.warn({ requestId: payload.requestId }, 'dispatcher: unknown requestId (ignoring)');
         this.reapLateResultOrphan(socket, payload);
       }
     });
@@ -951,10 +960,10 @@ export class ACPSessionManager {
       if (pending) {
         clearTimeout(pending.timeout);
         dispatcher.delete(payload.requestId);
-        console.log(`[ACP session] Dispatcher resolved resume result: requestId=${payload.requestId} sessionId=${pending.sessionId} success=${payload.success}`);
+        this.logger.info({ requestId: payload.requestId, sessionId: pending.sessionId, success: payload.success }, 'dispatcher resolved resume result');
         pending.resolve(payload);
       } else {
-        console.log(`[ACP session] Dispatcher: unknown requestId=${payload.requestId} (ignoring)`);
+        this.logger.warn({ requestId: payload.requestId }, 'dispatcher: unknown requestId (ignoring)');
         this.reapLateResultOrphan(socket, payload);
       }
     });
@@ -963,7 +972,7 @@ export class ACPSessionManager {
       // Fail all pending requests for this socket
       for (const [requestId, pending] of dispatcher) {
         clearTimeout(pending.timeout);
-        console.log(`[ACP session] Socket disconnected, failing pending request: requestId=${requestId} sessionId=${pending.sessionId}`);
+        this.logger.info({ requestId, sessionId: pending.sessionId }, 'socket disconnected, failing pending request');
         this.cleanupFailedSession(pending.sessionId, pending.statusAtStart);
         pending.resolve({ success: false, error: 'Controller socket disconnected' });
       }
@@ -981,7 +990,7 @@ export class ACPSessionManager {
   private reapLateResultOrphan(socket: Socket, payload: { sessionId: string; success: boolean }): void {
     if (!payload.success) return;
     if (this.sessions.has(payload.sessionId) || this.startingSessions.has(payload.sessionId)) return;
-    console.log(`[ACP session] Late successful start/resume result for session ${payload.sessionId} with no active session, reaping orphan process`);
+    this.logger.warn({ sessionId: payload.sessionId }, 'late successful start/resume result with no active session, reaping orphan process');
     socket.emit('acp:stop', { sessionId: payload.sessionId });
   }
 
@@ -1038,9 +1047,9 @@ export class ACPSessionManager {
         );
         return;
       }
-      console.log(`[ACP session] Login guard deadline exceeded for session ${pending.sessionId} requestId=${pending.requestId}, forcing settle`);
+      this.logger.warn({ sessionId: pending.sessionId, requestId: pending.requestId }, 'login guard deadline exceeded, forcing settle');
     } else {
-      console.log(`[ACP session] TIMEOUT after ${timeoutMs}ms for session ${pending.sessionId} requestId=${pending.requestId}`);
+      this.logger.warn({ sessionId: pending.sessionId, requestId: pending.requestId, timeoutMs }, 'ACP start timeout');
     }
 
     dispatcher.delete(pending.requestId);
@@ -1059,7 +1068,7 @@ export class ACPSessionManager {
       // 避免把「启动中」误判为「controller 离线」而只写 pending（在线时永不补做，进程泄漏）
       const inFlight = this.startingSessions.get(sessionId);
       if (inFlight) {
-        console.log(`[ACP session] stop requested while start/resume in-flight for session ${sessionId}, waiting for it to settle`);
+        this.logger.info({ sessionId }, 'stop requested while start/resume in-flight, waiting for it to settle');
         await inFlight;
         session = this.sessions.get(sessionId);
       }
@@ -1068,7 +1077,7 @@ export class ACPSessionManager {
       // Controller 离线（无活跃映射）：记录 pending，待 controller 重连后 reconcile 补做
       const doc = await Session.findById(sessionId).lean();
       if (doc?.controllerId) {
-        console.log(`[ACP session] Session ${sessionId} not active (controller offline), recording stop as pending`);
+        this.logger.info({ sessionId, controllerId: doc.controllerId }, 'session not active (controller offline), recording stop as pending');
         const redis = getRedisClient();
         await redis.lpush(`acp:stop:pending:${doc.controllerId}`, sessionId);
         await redis.expire(`acp:stop:pending:${doc.controllerId}`, 86400);
@@ -1102,7 +1111,7 @@ export class ACPSessionManager {
     const onStopped = (payload: { sessionId: string; reason: string; killed?: boolean }) => {
       if (payload.sessionId === sessionId) {
         ackReceived = true;
-        console.log(`[ACP session] Received acp:stopped ack for session ${sessionId}: reason=${payload.reason} killed=${payload.killed ?? false}`);
+        this.logger.info({ sessionId, reason: payload.reason, killed: payload.killed ?? false }, 'received acp:stopped ack');
       }
     };
     // 用 on + 手动移除：once 会被同 socket 其他 session 的 acp:stopped 消耗，
@@ -1127,14 +1136,14 @@ export class ACPSessionManager {
         setTimeout(() => clearInterval(poll), STOP_ACK_TIMEOUT_MS + 100);
       });
       if (ackReceived) break;
-      console.log(`[ACP session] acp:stop ack timeout for session ${sessionId}, attempt ${attempt + 1}/${STOP_MAX_RETRIES + 1}`);
+      this.logger.info({ sessionId, attempt: attempt + 1, maxAttempts: STOP_MAX_RETRIES + 1 }, 'acp:stop ack timeout');
     }
 
     controllerSocket.off('acp:stopped', onStopped);
 
     if (!ackReceived) {
       // Controller may be offline — record for pending reconciliation
-      console.log(`[ACP session] acp:stop ack not received for session ${sessionId}, recording as pending`);
+      this.logger.warn({ sessionId, controllerId: session.controllerId }, 'acp:stop ack not received, recording as pending');
       const redis = getRedisClient();
       await redis.lpush(`acp:stop:pending:${session.controllerId}`, sessionId);
       await redis.expire(`acp:stop:pending:${session.controllerId}`, 86400);
@@ -1169,13 +1178,13 @@ export class ACPSessionManager {
         await redis.del(pendingKey);
       }
 
-      console.log(`[ACP session] Sending acp:reconcile to controller ${controllerId}: active=${activeSessionIds.size} pendingKill=${pendingKillSessionIds.length}`);
+      this.logger.info({ controllerId, active: activeSessionIds.size, pendingKill: pendingKillSessionIds.length }, 'sending acp:reconcile to controller');
       controllerSocket.emit('acp:reconcile', {
         activeSessionIds: [...activeSessionIds],
         pendingKillSessionIds,
       });
     } catch (error) {
-      console.error(`[ACP session] Failed to reconcile controller ${controllerId}:`, error);
+      this.logger.error({ controllerId, err: error }, 'failed to reconcile controller');
     }
   }
 }

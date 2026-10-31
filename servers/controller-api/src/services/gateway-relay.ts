@@ -1,8 +1,11 @@
 import crypto from 'node:crypto';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import type { Server as SocketIOServer, Socket } from 'socket.io';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 
 const COMMAND_CHANNEL = 'port-forward:command';
 const RESPONSE_CHANNEL = 'port-forward:response';
@@ -27,6 +30,11 @@ export class GatewayRelayService {
   private io: SocketIOServer | null = null;
   private tunnels: Map<string, TunnelInfo> = new Map();
   private proxyRequests: Map<string, ProxyRequestContext> = new Map();
+  private readonly logger: ObservationLogger;
+
+  constructor(logger: ObservationLogger = rootLogger.child({ component: 'gateway-relay' })) {
+    this.logger = logger;
+  }
 
   start(io: SocketIOServer): void {
     this.io = io;
@@ -40,7 +48,7 @@ export class GatewayRelayService {
 
     subscriber.subscribe(COMMAND_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to gateway command channel:', err);
+        this.logger.error({ err, channel: COMMAND_CHANNEL }, 'failed to subscribe to channel');
         return;
       }
     });
@@ -49,29 +57,36 @@ export class GatewayRelayService {
       if (channel !== COMMAND_CHANNEL) return;
 
       try {
-        const command = JSON.parse(message) as { type: string } & Record<string, unknown>;
-
-        switch (command.type) {
-          case 'tunnel:create':
-            await this.handleTunnelCreate(command.controllerId as string, command.port as number);
-            break;
-          case 'tunnel:close':
-            this.handleTunnelClose(command.tunnelId as string);
-            break;
-          case 'proxy:request':
-            await this.handleProxyRequest(command as unknown as {
-              requestId: string;
-              controllerId: string;
-              port: number;
-              path: string;
-              method: string;
-              headers: Record<string, string>;
-              body?: string;
-            });
-            break;
-        }
+        const command = JSON.parse(message) as { type: string; _meta?: { traceparent?: string } } & Record<string, unknown>;
+        const parent = extractTraceparent(command._meta);
+        await withSpan(
+          `${COMMAND_CHANNEL} handle`,
+          { 'messaging.system': 'redis', 'messaging.destination.name': channel, commandType: command.type },
+          async () => {
+            switch (command.type) {
+              case 'tunnel:create':
+                await this.handleTunnelCreate(command.controllerId as string, command.port as number);
+                break;
+              case 'tunnel:close':
+                this.handleTunnelClose(command.tunnelId as string);
+                break;
+              case 'proxy:request':
+                await this.handleProxyRequest(command as unknown as {
+                  requestId: string;
+                  controllerId: string;
+                  port: number;
+                  path: string;
+                  method: string;
+                  headers: Record<string, string>;
+                  body?: string;
+                });
+                break;
+            }
+          },
+          { parent },
+        );
       } catch (err) {
-        console.error('Failed to process gateway command:', err);
+        this.logger.error({ err, channel }, 'failed to process gateway command');
       }
     });
   }
@@ -82,7 +97,7 @@ export class GatewayRelayService {
 
     subscriber.subscribe(RESPONSE_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to gateway response channel:', err);
+        this.logger.error({ err, channel: RESPONSE_CHANNEL }, 'failed to subscribe to channel');
         return;
       }
     });
@@ -97,7 +112,7 @@ export class GatewayRelayService {
     const tunnelId = `${controllerId}:${port}:${crypto.randomUUID()}`;
     const socket = await this.findControllerSocket(controllerId);
     if (!socket) {
-      console.error(`Controller offline: ${controllerId}`);
+      this.logger.error({ controllerId, port }, 'controller offline');
       return;
     }
     this.tunnels.set(tunnelId, { controllerId, port, socketId: socket.id });
@@ -124,7 +139,7 @@ export class GatewayRelayService {
     }
 
     if (!tunnelId) {
-      console.error(`No tunnel found for controller ${controllerId} port ${port}`);
+      this.logger.error({ controllerId, port, requestId }, 'no tunnel found for controller');
       await this.publishResponse(requestId, 502, {}, 'No tunnel available');
       return;
     }
@@ -132,7 +147,7 @@ export class GatewayRelayService {
     const tunnel = this.tunnels.get(tunnelId)!;
     const socket = this.io?.sockets.sockets.get(tunnel.socketId);
     if (!socket) {
-      console.error(`Socket not found for tunnel ${tunnelId}`);
+      this.logger.error({ tunnelId, requestId }, 'socket not found for tunnel');
       this.tunnels.delete(tunnelId);
       await this.publishResponse(requestId, 502, {}, 'Controller socket not found');
       return;
@@ -237,7 +252,7 @@ export class GatewayRelayService {
 
   handleTunnelCreated(tunnelId: string, success: boolean, error?: string): void {
     if (!success) {
-      console.error(`Tunnel creation failed for ${tunnelId}: ${error}`);
+      this.logger.error({ tunnelId, error }, 'tunnel creation failed');
       this.tunnels.delete(tunnelId);
     }
   }
@@ -259,7 +274,7 @@ export class GatewayRelayService {
   }
 
   handleTunnelError(tunnelId: string, error: string): void {
-    console.error(`Tunnel error for ${tunnelId}: ${error}`);
+    this.logger.error({ tunnelId, error }, 'tunnel error');
     this.handleTunnelClose(tunnelId);
   }
 
@@ -269,9 +284,7 @@ export class GatewayRelayService {
     headers: Record<string, string>,
     body: string,
   ): Promise<void> {
-    const redis = getRedisClient();
-    const response = JSON.stringify({ requestId, statusCode, headers, body });
-    await redis.publish(RESPONSE_CHANNEL, response);
+    await publish(RESPONSE_CHANNEL, { requestId, statusCode, headers, body });
   }
 
   private async findControllerSocket(controllerId: string): Promise<Socket | null> {

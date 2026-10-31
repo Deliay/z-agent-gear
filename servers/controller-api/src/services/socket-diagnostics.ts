@@ -1,11 +1,12 @@
 /**
- * Socket.IO 连接诊断日志。
+ * Socket.IO 连接诊断字段（结构化）。
  *
  * 目的：匿名连接（未 register 即断开）此前只能看到 `disconnecting undefined [id]`，
- * 无法定位来源。这里统一输出握手信息（IP / Origin / UA / query / auth 键名）与断开原因。
+ * 无法定位来源。这里统一产出握手信息（IP / Origin / UA / query / auth 键名）与断开原因
+ * 的结构化字段，供 `logger` 输出（`component: 'socketio'`）。
  *
  * 安全边界：任何可能携带凭据的字段（key/token/secret/password/authorization/cookie）
- * 只输出键名或 `***`，绝不输出原始值。
+ * 只输出键名或 `***`，绝不输出原始值；缺失字段直接省略（不输出 `undefined`）。
  */
 const SENSITIVE_NAME_PATTERN = /token|key|secret|password|authorization|cookie/i;
 const MAX_FIELD_LENGTH = 160;
@@ -64,7 +65,61 @@ function formatUnknown(value: unknown): string {
   }
 }
 
-/** 一行描述“谁连上来了”，用于定位刷屏连接的来源。 */
+/** 握手来源结构化字段，用于定位刷屏连接的来源（缺失字段省略，不产生 `undefined`）。 */
+export function connectionFields(socket: DiagnosticSocket): Record<string, unknown> {
+  const handshake = socket.handshake ?? {};
+  const headers = handshake.headers ?? {};
+  const query = handshake.query ?? {};
+  const auth = handshake.auth ?? {};
+
+  const fields: Record<string, unknown> = {
+    event: 'connected',
+    socketId: socket.id,
+    ns: socket.nsp?.name ?? '/',
+  };
+  if (handshake.address !== undefined) fields.address = handshake.address;
+
+  const transport = redactLogValue('transport', query.transport);
+  if (transport) fields.transport = truncate(transport);
+
+  const origin = headerValue(headers, 'origin');
+  if (origin) fields.origin = truncate(origin);
+
+  const userAgent = headerValue(headers, 'user-agent');
+  if (userAgent) fields.userAgent = truncate(userAgent);
+
+  const forwardedFor = headerValue(headers, 'x-forwarded-for');
+  if (forwardedFor) fields.forwardedFor = truncate(forwardedFor);
+
+  fields.authKeys = Object.keys(auth);
+  const redacted = redactQuery(query);
+  if (Object.keys(redacted).length > 0) fields.query = redacted;
+  return fields;
+}
+
+/** 断开事件结构化字段，匿名断开不再输出 `undefined`。 */
+export function disconnectFields(
+  socket: DiagnosticSocket,
+  reason: string,
+  description?: unknown,
+): Record<string, unknown> {
+  const keyId = socket.data?.keyId;
+  const fields: Record<string, unknown> = {
+    event: 'disconnected',
+    socketId: socket.id,
+    ns: socket.nsp?.name ?? '/',
+    authenticated: Boolean(keyId),
+    reason,
+  };
+  if (socket.handshake?.address !== undefined) fields.address = socket.handshake.address;
+  if (keyId) fields.keyId = String(keyId);
+  if (description !== undefined && description !== null) {
+    fields.description = truncate(formatUnknown(description));
+  }
+  return fields;
+}
+
+/** 一行描述“谁连上来了”（人类可读诊断串；结构化日志请用 `connectionFields`）。 */
 export function describeConnection(socket: DiagnosticSocket): string {
   const handshake = socket.handshake ?? {};
   const headers = handshake.headers ?? {};
@@ -94,7 +149,7 @@ export function describeConnection(socket: DiagnosticSocket): string {
   return parts.join(' ');
 }
 
-/** 一行描述断开事件，匿名断开不再输出 `undefined`。 */
+/** 一行描述断开事件，匿名断开不再输出 `undefined`（结构化日志请用 `disconnectFields`）。 */
 export function describeDisconnect(
   socket: DiagnosticSocket,
   reason: string,

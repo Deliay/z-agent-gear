@@ -20,8 +20,12 @@ import {
   resolveUsageFallback,
 } from './billing-openai.js';
 import { tokenCostCents } from '../services/billing/money.js';
+import { createTestLogger } from '../observability/testing.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../services/billing/testing/mongo.js';
 import type { BillingEventMessage } from '../services/billing/mq/publisher.js';
+
+/** 静音 logger（无断言路径注入）。 */
+const silentLogger = createTestLogger('billing-gateway').logger;
 
 interface PublisherMock {
   enqueue: ReturnType<typeof vi.fn>;
@@ -247,7 +251,7 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
     };
     const app = express();
     app.use(express.json());
-    app.use('/v1', createBillingOpenAiRouter({ publisher, logger: { warn: vi.fn() } }));
+    app.use('/v1', createBillingOpenAiRouter({ publisher, logger: silentLogger }));
     await new Promise<void>((resolve) => {
       gateway = app.listen(0, '127.0.0.1', () => {
         gatewayUrl = `http://127.0.0.1:${(gateway.address() as AddressInfo).port}`;

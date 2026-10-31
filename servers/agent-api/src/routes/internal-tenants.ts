@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { Account } from '../models/account.js';
 import { Tenant } from '../models/tenant.js';
 import { User } from '../models/user.js';
@@ -9,6 +10,8 @@ import { TenantMember } from '../models/tenant-member.js';
 import { billingClient } from '../services/billing-client.js';
 import { workspaceService } from '../services/workspace-service.js';
 import { tenantMemberService } from '../services/tenant-member-service.js';
+
+const logger = rootLogger.child({ component: 'internal-tenants' });
 
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
@@ -83,7 +86,7 @@ internalTenantsRouter.post('/', async (req: Request, res: Response) => {
     for (const id of createdTenantId.reverse()) {
       await Tenant.deleteOne({ _id: id }).catch(() => undefined);
     }
-    console.error('[internal-tenants] create failed:', (err as Error).message);
+    logger.error({ event: 'create-failed', err }, 'tenant create failed');
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
@@ -155,7 +158,7 @@ internalTenantsRouter.post('/:tenantId/members', async (req: Request, res: Respo
     else if (message === 'invalid tenant role') res.status(400).json({ error: 'INVALID_ROLE' });
     else if (message === 'already a member') res.status(409).json({ error: 'ALREADY_MEMBER' });
     else {
-      console.error('[internal-tenants] add member failed:', message);
+      logger.error({ event: 'add-member-failed', err }, 'add tenant member failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   }
@@ -195,7 +198,7 @@ internalTenantsRouter.delete('/:tenantId/members/:userId', async (req: Request, 
     else if (message === 'personal tenant is immutable')
       res.status(400).json({ error: 'PERSONAL_TENANT_IMMUTABLE' });
     else {
-      console.error('[internal-tenants] remove member failed:', message);
+      logger.error({ event: 'remove-member-failed', err }, 'remove tenant member failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   }

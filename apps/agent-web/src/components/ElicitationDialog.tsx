@@ -11,6 +11,7 @@ import { Input } from './ui/input';
 import { Label } from './ui/label';
 import { Checkbox } from './ui/checkbox';
 import { RESPOND_ELICITATION } from '../graphql/mutations';
+import { logger } from '../lib/logger';
 import {
   clearElicitationDraft,
   getElicitationDraft,
@@ -160,7 +161,7 @@ export function ElicitationDialog({ open, onOpenChange, todo, stale = false, onR
       onResponded?.();
       onOpenChange(false);
     } catch (error) {
-      console.error('Error responding to elicitation:', error);
+      logger.error({ err: error }, 'Error responding to elicitation');
     } finally {
       setResponding(false);
     }

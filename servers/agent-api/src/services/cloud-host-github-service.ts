@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { CloudContainer } from '../models/cloud-container.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
@@ -374,9 +375,9 @@ export class CloudHostGithubService {
         { _id: op.hostId, workspaceId: null },
         { $set: { workspaceId: workspace.id } },
       ).catch((err) => {
-        console.warn(
-          '[cloud-host-github] backfill workspaceId failed:',
-          (err as Error).message,
+        rootLogger.warn(
+          { component: 'cloud-host-github', event: 'backfill-workspace-id-failed', err },
+          'backfill workspaceId failed',
         );
       });
     }
@@ -405,9 +406,9 @@ export class CloudHostGithubService {
           { _id: op.hostId, defaultSessionId: null },
           { $set: { defaultSessionId: session.id } },
         ).catch((err) => {
-          console.warn(
-            '[cloud-host-github] backfill defaultSessionId failed:',
-            (err as Error).message,
+          rootLogger.warn(
+            { component: 'cloud-host-github', event: 'backfill-default-session-id-failed', err },
+            'backfill defaultSessionId failed',
           );
         });
       }

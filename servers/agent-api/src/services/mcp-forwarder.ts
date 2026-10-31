@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import type { Redis } from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 
 const REQUEST_CHANNEL = 'mcp:forward:request';
 const RESPONSE_CHANNEL = 'mcp:forward:response';
@@ -73,8 +74,7 @@ export class McpForwarder {
       timeout.unref?.();
 
       subscriber.on('message', onMessage);
-      const redis = getRedisClient();
-      redis.publish(REQUEST_CHANNEL, JSON.stringify({ requestId, ...msg }));
+      void publish(REQUEST_CHANNEL, { requestId, ...msg } as Record<string, unknown>);
     });
   }
 }

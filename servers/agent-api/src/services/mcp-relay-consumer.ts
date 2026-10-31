@@ -1,8 +1,12 @@
 import type { Redis } from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { dispatch } from './mcp-dispatch.js';
 
 const RELAY_REQUEST_CHANNEL = 'mcp:relay:request';
+
+const logger = rootLogger.child({ component: 'mcp-relay-consumer' });
 
 interface RelayRequestMessage {
   requestId?: string;
@@ -25,7 +29,7 @@ export class McpRelayConsumer {
 
     this.subscriber = getRedisClient().duplicate();
     this.subscriber.subscribe(RELAY_REQUEST_CHANNEL).catch((err: Error) => {
-      console.error(`Failed to subscribe to ${RELAY_REQUEST_CHANNEL}:`, err.message);
+      logger.error({ err, channel: RELAY_REQUEST_CHANNEL }, 'failed to subscribe to MCP relay request channel');
     });
 
     this.subscriber.on('message', async (_channel: string, message: string) => {
@@ -37,7 +41,11 @@ export class McpRelayConsumer {
       }
       if (!parsed.requestId || !parsed.sessionId || !parsed.token) return;
 
-      console.log(`[MCP relay] request requestId=${parsed.requestId} session=${parsed.sessionId} server=${parsed.serverName ?? '-'} method=${(parsed.body as { method?: string })?.method ?? '?'}`);
+      const method = (parsed.body as { method?: string })?.method ?? '?';
+      logger.debug(
+        { event: 'request', requestId: parsed.requestId, sessionId: parsed.sessionId, serverName: parsed.serverName ?? null, method },
+        'MCP relay request',
+      );
       let result: { status: number; body: unknown };
       try {
         result = await dispatch({
@@ -47,21 +55,28 @@ export class McpRelayConsumer {
           body: parsed.body,
         });
       } catch (err) {
-        console.error(`[MCP relay] dispatch failed: requestId=${parsed.requestId} session=${parsed.sessionId}: ${(err as Error).message}`);
+        logger.error(
+          { event: 'dispatch-failed', requestId: parsed.requestId, sessionId: parsed.sessionId, err },
+          'MCP relay dispatch failed',
+        );
         result = {
           status: 502,
           body: { jsonrpc: '2.0', id: null, error: { code: 'FORWARD_ERROR', message: (err as Error).message } },
         };
       }
-      console.log(`[MCP relay] dispatch result requestId=${parsed.requestId} status=${result.status} body=${JSON.stringify(result.body)?.slice(0, 300)}`);
+      logger.debug(
+        { event: 'dispatch-result', requestId: parsed.requestId, status: result.status, body: JSON.stringify(result.body)?.slice(0, 300) },
+        'MCP relay dispatch result',
+      );
 
       try {
-        await getRedisClient().publish(
-          `mcp:relay:response:${parsed.requestId}`,
-          JSON.stringify({ requestId: parsed.requestId, status: result.status, body: result.body }),
-        );
+        await publish(`mcp:relay:response:${parsed.requestId}`, {
+          requestId: parsed.requestId,
+          status: result.status,
+          body: result.body,
+        });
       } catch (err) {
-        console.error(`[MCP relay] failed to publish response: requestId=${parsed.requestId}: ${(err as Error).message}`);
+        logger.error({ event: 'publish-failed', requestId: parsed.requestId, err }, 'failed to publish MCP relay response');
       }
     });
   }

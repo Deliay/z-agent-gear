@@ -98,16 +98,16 @@ describe('McpRelayService', () => {
       body: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
     });
 
-    expect(mockRedis.publish).toHaveBeenCalledWith(
-      'mcp:relay:request',
-      JSON.stringify({
-        requestId: 'mcpreq_1',
-        sessionId: 'sess-1',
-        serverName: 'server-1',
-        token: 'token-1',
-        body: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
-      }),
-    );
+    expect(mockRedis.publish).toHaveBeenCalled();
+    const relayCall = mockRedis.publish.mock.calls.at(-1)! as [string, string];
+    expect(relayCall[0]).toBe('mcp:relay:request');
+    expect(JSON.parse(relayCall[1])).toMatchObject({
+      requestId: 'mcpreq_1',
+      sessionId: 'sess-1',
+      serverName: 'server-1',
+      token: 'token-1',
+      body: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    });
     expect(subscribers[0].sub.subscribe).toHaveBeenCalledWith('mcp:relay:response:mcpreq_1');
 
     triggerOn(0, 'mcp:relay:response:mcpreq_1', JSON.stringify({

@@ -1,4 +1,5 @@
 import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { workflowEngine, type TransitionPayload, type WorkflowInstanceDoc, type WorkflowNodeDoc } from './engine.js';
 import { getArtifactKeys, getValue, listKeys, removeKey } from './blackboard.js';
 import { prHandlerRegistry, normalizePullRequestId, PullRequestIdError } from './pr-handler-registry.js';
@@ -413,7 +414,7 @@ export async function callWorkflowTool(
       });
       // 绑定即同步：fire-and-forget，失败只记 lastSyncError，不影响工具返回
       void syncNodeStatus(instance, node).catch((err: unknown) => {
-        console.warn('[workflow] first check-run sync failed:', (err as Error)?.message);
+        rootLogger.warn({ component: 'workflow-tool-handlers', err }, 'first check-run sync failed');
       });
       return {
         registered: true,

@@ -1,11 +1,17 @@
 import { Session } from '../models/session.js';
-import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 
 const SCAN_INTERVAL_MS = 60_000;
 const TIMEOUT_MS = 5 * 60_000;
 
 export class DisconnectTimer {
   private timer: ReturnType<typeof setInterval> | null = null;
+  private readonly logger: ObservationLogger;
+
+  constructor(logger: ObservationLogger = rootLogger.child({ component: 'disconnect-timer' })) {
+    this.logger = logger;
+  }
 
   start(): void {
     this.timer = setInterval(() => { void this.scan(); }, SCAN_INTERVAL_MS);
@@ -33,12 +39,10 @@ export class DisconnectTimer {
       { status: 'ended', endedAt: new Date() },
     );
 
-    const redis = getRedisClient();
     for (const id of ids) {
-      const payload = JSON.stringify({ sessionId: String(id), status: 'ended' });
-      await redis.publish('session:status', payload);
+      await publish('session:status', { sessionId: String(id), status: 'ended' });
     }
 
-    console.log(`[DisconnectTimer] ${ids.length} session(s) timed out → ended`);
+    this.logger.info({ count: ids.length }, 'sessions timed out → ended');
   }
 }

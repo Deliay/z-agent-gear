@@ -1,5 +1,6 @@
 import type { Redis } from 'ioredis';
 import { getRedisClient } from '../../middleware/redis.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import {
@@ -11,6 +12,8 @@ import {
 import type { WorkflowInstanceDoc } from './engine.js';
 
 const SESSION_MESSAGE_CHANNEL = 'session:message';
+
+const logger = rootLogger.child({ component: 'pr-check-run-subscriber' });
 
 /**
  * todo panel（ACP plan）中央订阅：把工作流节点会话的任务清单投影到 check-run 子项。
@@ -32,7 +35,7 @@ export class PrCheckRunSubscriber {
     this.subscriber = subscriber;
 
     subscriber.subscribe(SESSION_MESSAGE_CHANNEL).catch((err: Error) => {
-      console.error(`Failed to subscribe to ${SESSION_MESSAGE_CHANNEL}:`, err.message);
+      logger.error({ err, channel: SESSION_MESSAGE_CHANNEL }, 'failed to subscribe to session message channel');
     });
 
     subscriber.on('message', (channel: string, message: string) => {
@@ -63,7 +66,7 @@ export class PrCheckRunSubscriber {
 
     const entries = parseTodoEntries(message.content);
     if (!entries) {
-      console.warn('[pr-check-run] ignored invalid plan payload');
+      logger.warn({ event: 'invalid-plan', sessionId }, 'ignored invalid plan payload');
       return;
     }
     await this.syncForSession(sessionId, entries);
@@ -91,7 +94,7 @@ export class PrCheckRunSubscriber {
 
       await syncTodoPanel(snapshot, entries);
     } catch (err) {
-      console.warn('[pr-check-run] todo sync failed:', (err as Error)?.message);
+      logger.warn({ event: 'sync-failed', sessionId, err }, 'todo sync failed');
     }
   }
 }

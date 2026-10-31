@@ -5,6 +5,7 @@ import {
 } from '../models/user-commit-setting.js';
 import { User } from '../models/user.js';
 import { githubService } from './github.js';
+import { logger as rootLogger } from '../observability/logger.js';
 
 /** GraphQL 输入（大写枚举）；兼容外部调用直接传小写字面量。 */
 export interface CommitSettingsInput {
@@ -147,7 +148,10 @@ export class CommitSettingsService {
   async resolveCloudHostIdentity(): Promise<CommitIdentityResponse> {
     const bot = await githubService.resolveAppBotIdentity();
     if (!bot) {
-      console.warn('[CommitSettings] bot identity unavailable, falling back to unset');
+      rootLogger.warn(
+        { component: 'commit-settings', event: 'bot-identity-unavailable' },
+        'bot identity unavailable, falling back to unset',
+      );
       return { mode: 'unset' };
     }
     return { mode: 'agent_only', name: bot.name, email: bot.email };

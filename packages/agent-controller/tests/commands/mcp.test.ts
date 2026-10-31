@@ -38,6 +38,10 @@ describe('mcp command', () => {
     expect(mockRl.on).toHaveBeenCalledWith('line', expect.any(Function));
     expect(mockRl.on).toHaveBeenCalledWith('close', expect.any(Function));
 
+    // R3：代理端点进度为用户可见输出（保持纯文本 stdout，非 JSON）
+    expect(consoleSpy).toHaveBeenCalledWith('Starting MCP proxy for endpoint: http://localhost:3002/mcp/session-1');
+    expect(String(consoleSpy.mock.calls[0][0])).not.toMatch(/^\s*\{/);
+
     consoleSpy.mockRestore();
   });
 });

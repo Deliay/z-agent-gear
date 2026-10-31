@@ -1,5 +1,6 @@
 import amqp, { type ChannelModel, type ConfirmChannel } from 'amqplib';
 import { BillingOutbox } from '../models/billing-outbox.js';
+import { type ObservationLogger } from '../observability/logger.js';
 
 /** 计费事件统一入口 exchange（topic，durable）。 */
 export const BILLING_EXCHANGE = 'zag.billing.events';
@@ -266,7 +267,7 @@ export class RabbitMqTransport implements EventTransport {
 
   constructor(
     private readonly url: string,
-    private readonly logger: { warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void } = console,
+    private readonly logger: ObservationLogger,
   ) {}
 
   private async ensureChannel(): Promise<ConfirmChannel> {
@@ -284,7 +285,10 @@ export class RabbitMqTransport implements EventTransport {
         }
       });
       connection.on('error', (err) => {
-        this.logger.warn?.('[billing-outbox] rabbitmq connection error', err.message);
+        this.logger.warn(
+          { component: 'billing-outbox', event: 'rabbitmq-connection-error', err },
+          'rabbitmq connection error',
+        );
       });
       const channel = await connection.createConfirmChannel();
       channel.on('close', () => {
@@ -292,7 +296,10 @@ export class RabbitMqTransport implements EventTransport {
       });
       // D1：channel 级 error 若不消费会被 amqplib 升级为 frameError 撕裂整条连接；此处仅告警。
       channel.on('error', (err) => {
-        this.logger.warn?.('[billing-outbox] rabbitmq channel error', err.message);
+        this.logger.warn(
+          { component: 'billing-outbox', event: 'rabbitmq-channel-error', err },
+          'rabbitmq channel error',
+        );
       });
       await channel.assertExchange(BILLING_EXCHANGE, 'topic', { durable: true });
       await channel.assertExchange(BILLING_INTERNAL_EXCHANGE, 'direct', { durable: true });
@@ -365,7 +372,7 @@ export interface BillingEventPublisherOptions {
   transport?: EventTransport;
   intervalMs?: number;
   producer?: OutboxProducer;
-  logger?: { warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void };
+  logger: ObservationLogger;
 }
 
 /**
@@ -377,7 +384,7 @@ export class BillingEventPublisher {
   private readonly transport: EventTransport;
   private readonly intervalMs: number;
   private readonly producer: OutboxProducer;
-  private readonly logger: NonNullable<BillingEventPublisherOptions['logger']>;
+  private readonly logger: ObservationLogger;
   private timer: NodeJS.Timeout | null = null;
   private relaying = false;
   private readonly instanceId = `${process.pid}-${Math.random().toString(16).slice(2, 8)}`;
@@ -389,14 +396,15 @@ export class BillingEventPublisher {
   /** R11-3：判活标志，避免重复 start 双循环、stop 后在途 run 续排定时器。 */
   private started = false;
 
-  constructor(options: BillingEventPublisherOptions = {}) {
+  constructor(options: BillingEventPublisherOptions) {
     this.producer = options.producer ?? 'cloud-controller';
     this.repository = options.repository ?? new MongoOutboxRepository(this.producer);
+    this.logger = options.logger;
     this.transport = options.transport ?? new RabbitMqTransport(
       process.env.RABBITMQ_URL || 'amqp://guest:guest@localhost:5672',
+      this.logger,
     );
     this.intervalMs = options.intervalMs ?? 2000;
-    this.logger = options.logger ?? console;
   }
 
   async enqueue(event: BillingEventMessage): Promise<void> {
@@ -429,14 +437,23 @@ export class BillingEventPublisher {
           published += 1;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          this.logger.warn?.(`[billing-outbox] publish failed for ${record.eventId}: ${message}`);
+          this.logger.warn(
+            { component: 'billing-outbox', event: 'publish-failed', eventId: record.eventId, err },
+            'publish failed',
+          );
           this.roundFailed = true;
           if (isMessageLevelRejection(err)) {
             await this.repository.markFailed(record.eventId, message, this.maxAttempts);
           } else {
             // R10-3：传输级失败不消耗 attempts，只释放认领并进入 relay 退避。
-            this.logger.warn?.(
-              `[billing-outbox] transport failure, keeping ${record.eventId} attempts=${record.attempts}`,
+            this.logger.warn(
+              {
+                component: 'billing-outbox',
+                event: 'transport-failure',
+                eventId: record.eventId,
+                attempts: record.attempts,
+              },
+              'transport failure, attempts preserved',
             );
           }
           // R-1：**不要继续发布后续行**。单条失败后 continue 会让 broker 恢复后「后一条先发」，
@@ -472,7 +489,10 @@ export class BillingEventPublisher {
         await this.relayOnce();
       } catch (err) {
         this.roundFailed = true;
-        this.logger.warn?.('[billing-outbox] relay failed', (err as Error).message);
+        this.logger.warn(
+          { component: 'billing-outbox', event: 'relay-failed', err },
+          'relay failed',
+        );
       }
       // stop() 可能在 relay 期间发生：此时不得续排定时器。
       if (!this.started) return;

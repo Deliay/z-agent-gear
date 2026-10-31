@@ -71,7 +71,6 @@ describe('AcpSessionBridge - Elicitation wire format (ACP spec)', () => {
   }
 
   it('should advertise elicitation capabilities in initialize on the wire', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
     setup('form');
 
     await bridge!.start();
@@ -83,7 +82,6 @@ describe('AcpSessionBridge - Elicitation wire format (ACP spec)', () => {
   }, 15000);
 
   it('should forward form elicitation and respond with spec-compliant payload', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
     const socket = setup('form');
 
     await bridge!.start();
@@ -120,7 +118,6 @@ describe('AcpSessionBridge - Elicitation wire format (ACP spec)', () => {
   }, 20000);
 
   it('should forward url elicitation and relay the completion notification', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
     const socket = setup('url');
 
     await bridge!.start();

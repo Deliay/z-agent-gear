@@ -4,6 +4,7 @@ import { Controller } from '../models/controller.js';
 import { actorFilter } from './workspace-context.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 import { sessionService } from './session.js';
 
 // 非 ended 的会话可能仍有存活（或即将拉起）的 ACP 进程：
@@ -59,14 +60,13 @@ export class SessionImportService {
 
     // Publish list-sessions command via Redis Pub/Sub
     const requestId = `list_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const redis = getRedisClient();
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:list-sessions',
       requestId,
       controllerId,
       serverType: acpServerType,
       cwd,
-    }));
+    });
 
     // Poll Redis cache for result
     const result = await this.pollRedisCache<{ success: boolean; sessions?: HistorySessionInfo[]; error?: string }>(
@@ -125,8 +125,7 @@ export class SessionImportService {
     let syncError: string | null = null;
     if (syncAgent && record.externalSessionId) {
       const requestId = `delete_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const redis = getRedisClient();
-      await redis.publish('session:command', JSON.stringify({
+      await publish('session:command', {
         type: 'acp:delete-history-session',
         requestId,
         controllerId: record.controllerId,
@@ -134,7 +133,7 @@ export class SessionImportService {
         externalSessionId: record.externalSessionId,
         serverType: record.acpServerType ?? 'opencode',
         cwd: record.cwd,
-      }));
+      });
 
       const result = await this.pollRedisCache<{ success: boolean; supported?: boolean; error?: string }>(
         `acp:delete-session:${requestId}`,
@@ -231,15 +230,14 @@ export class SessionImportService {
     acpServerType: string = 'opencode',
   ): Promise<{ title?: string | null; messages: HistoryMessage[] }> {
     const requestId = `load_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const redis = getRedisClient();
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:load-session',
       requestId,
       controllerId,
       serverType: acpServerType,
       sessionId: acpSessionId,
       cwd,
-    }));
+    });
 
     const result = await this.pollRedisCache<{
       success: boolean;

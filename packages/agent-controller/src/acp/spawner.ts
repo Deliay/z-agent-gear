@@ -2,12 +2,15 @@ import { spawn, execFileSync, execFile, type ChildProcess, type SpawnOptions } f
 import { Writable, Readable } from 'node:stream';
 import { existsSync, mkdirSync } from 'fs';
 import { platform } from 'os';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 
 export interface AcpProcessOptions {
   sessionId: string;
   cwd: string;
   command?: string;
   args?: string[];
+  /** 注入 logger（测试用）；缺省进程级单例，`component: 'acp-spawner'` + `sessionId` 字段化。 */
+  logger?: ObservationLogger;
 }
 
 export class AcpSpawner {
@@ -16,6 +19,7 @@ export class AcpSpawner {
   private cwd: string;
   private command: string;
   private args: string[];
+  private log: ObservationLogger;
   private resolveClosed: (() => void) | null = null;
   private _closed: Promise<void>;
 
@@ -24,12 +28,16 @@ export class AcpSpawner {
     this.cwd = options.cwd;
     this.command = options.command ?? 'opencode';
     this.args = options.args ?? ['acp'];
+    this.log = options.logger ?? rootLogger.child({ component: 'acp-spawner', sessionId: options.sessionId });
     this._closed = new Promise((resolve) => { this.resolveClosed = resolve; });
   }
 
   start(): void {
     const cmd = this.resolveCommand();
-    console.log(`Starting ACP server: session=${this.sessionId} cmd=${cmd} args=${JSON.stringify(this.args)} cwd=${this.cwd}`);
+    this.log.info(
+      { event: 'acp_spawn', command: cmd, args: this.args, cwd: this.cwd },
+      'starting ACP server',
+    );
     mkdirSync(this.cwd, { recursive: true });
 
     const spawnOptions: SpawnOptions = {
@@ -50,17 +58,20 @@ export class AcpSpawner {
     this.process = spawn(cmd, this.args, spawnOptions);
 
     this.process.stderr?.on('data', (data: Buffer) => {
-      console.error(`ACP stderr (session=${this.sessionId}): ${data.toString()}`);
+      this.log.error({ event: 'acp_stderr', stderr: data.toString() }, 'acp server stderr');
     });
 
     this.process.on('exit', (code, signal) => {
-      console.log(`ACP process exited: session=${this.sessionId} code=${code} signal=${signal} cmd=${cmd} args=${JSON.stringify(this.args)}`);
+      this.log.info(
+        { event: 'acp_exit', exitCode: code, signal, command: cmd, args: this.args },
+        'acp process exited',
+      );
       this.process = null;
       this.resolveClosed?.();
     });
 
     this.process.on('error', (error) => {
-      console.error(`ACP process error (session=${this.sessionId}, cmd=${cmd}):`, error);
+      this.log.error({ event: 'acp_process_error', command: cmd, err: error }, 'acp process error');
       // spawn 失败同样视为进程终止：必须 resolve closed，让 bridge 收敛 pending，避免 65s 迟到 timeout
       this.process = null;
       this.resolveClosed?.();

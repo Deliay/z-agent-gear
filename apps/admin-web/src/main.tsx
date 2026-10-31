@@ -4,6 +4,7 @@ import { ApolloProvider } from '@apollo/client/react'
 import { createApolloClient } from './lib/apollo'
 import { resolveAdminApiBase } from './lib/api-base'
 import { renderBootstrapFallback } from './lib/bootstrap'
+import { logger } from './lib/logger'
 import './index.css'
 import App from './App.tsx'
 
@@ -21,7 +22,7 @@ async function bootstrap() {
       </StrictMode>,
     )
   } catch (error) {
-    console.error('admin-web bootstrap failed', error)
+    logger.error({ err: error }, 'admin-web bootstrap failed')
     renderBootstrapFallback(root)
   }
 }

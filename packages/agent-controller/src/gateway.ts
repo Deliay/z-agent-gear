@@ -1,5 +1,6 @@
 import net from 'node:net';
 import type { Socket } from 'socket.io-client';
+import { logger as rootLogger, type ObservationLogger } from './observability/logger.js';
 
 interface Tunnel {
   id: string;
@@ -17,6 +18,11 @@ const HTTP_RESPONSE_COLLECT_MS = 100;
 export class GatewayManager {
   private tunnels: Map<string, Tunnel> = new Map();
   private reconnectTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
+  private log: ObservationLogger;
+
+  constructor(logger?: ObservationLogger) {
+    this.log = logger ?? rootLogger.child({ component: 'gateway' });
+  }
 
   async createTunnel(tunnelId: string, port: number, serverSocket: Socket): Promise<void> {
     this.tunnels.set(tunnelId, { id: tunnelId, port, localSocket: null, serverSocket, responseBuffer: [] });
@@ -32,7 +38,7 @@ export class GatewayManager {
 
     return new Promise<void>((resolve) => {
       const onError = (err: Error) => {
-        console.error(`Gateway tunnel error: tunnelId=${tunnelId} error=${err.message}`);
+        this.log.error({ event: 'gateway_tunnel_error', tunnelId, err }, 'gateway tunnel error');
         localSocket.destroy();
         this.scheduleReconnect(tunnelId);
         resolve();
@@ -44,7 +50,7 @@ export class GatewayManager {
         localSocket.removeListener('error', onError);
 
         tunnel.localSocket = localSocket;
-        console.log(`Gateway tunnel connected: tunnelId=${tunnelId} port=${tunnel.port}`);
+        this.log.info({ event: 'gateway_tunnel_connected', tunnelId, port: tunnel.port }, 'gateway tunnel connected');
 
         if (isInitial) {
           tunnel.serverSocket.emit('port-forward:created', { tunnelId, success: true });
@@ -64,13 +70,13 @@ export class GatewayManager {
         });
 
         localSocket.on('close', () => {
-          console.log(`Gateway local socket closed: tunnelId=${tunnelId}`);
+          this.log.info({ event: 'gateway_local_socket_closed', tunnelId }, 'gateway local socket closed');
           tunnel.localSocket = null;
           this.scheduleReconnect(tunnelId);
         });
 
         localSocket.on('error', (err: Error) => {
-          console.error(`Gateway local socket error: tunnelId=${tunnelId} error=${err.message}`);
+          this.log.error({ event: 'gateway_local_socket_error', tunnelId, err }, 'gateway local socket error');
           tunnel.serverSocket.emit('port-forward:error', { tunnelId, error: err.message });
         });
 
@@ -100,7 +106,8 @@ export class GatewayManager {
   private scheduleReconnect(tunnelId: string): void {
     if (!this.tunnels.has(tunnelId) || this.reconnectTimers.has(tunnelId)) return;
 
-    console.log(`Gateway scheduling reconnection: tunnelId=${tunnelId}`);
+    // 3s 周期重连属轮询类高频事件 → debug（R6 日志量控制）
+    this.log.debug({ event: 'gateway_reconnect_scheduled', tunnelId }, 'gateway scheduling reconnection');
     const timer = setTimeout(() => {
       this.reconnectTimers.delete(tunnelId);
       this.connect(tunnelId, false);
@@ -112,7 +119,7 @@ export class GatewayManager {
   handleTunnelData(tunnelId: string, data: string): void {
     const tunnel = this.tunnels.get(tunnelId);
     if (!tunnel) {
-      console.warn(`Gateway data for unknown tunnel: tunnelId=${tunnelId}`);
+      this.log.warn({ event: 'gateway_unknown_tunnel', tunnelId }, 'gateway data for unknown tunnel');
       return;
     }
 
@@ -156,7 +163,7 @@ export class GatewayManager {
     const tunnel = this.tunnels.get(tunnelId);
     if (!tunnel) return;
 
-    console.log(`Gateway closing tunnel: tunnelId=${tunnelId}`);
+    this.log.info({ event: 'gateway_tunnel_close', tunnelId }, 'gateway closing tunnel');
 
     const timer = this.reconnectTimers.get(tunnelId);
     if (timer) {
@@ -173,7 +180,7 @@ export class GatewayManager {
   }
 
   closeAll(): void {
-    console.log(`Gateway closing all tunnels: count=${this.tunnels.size}`);
+    this.log.info({ event: 'gateway_close_all', count: this.tunnels.size }, 'gateway closing all tunnels');
 
     for (const [tunnelId, tunnel] of [...this.tunnels]) {
       const timer = this.reconnectTimers.get(tunnelId);

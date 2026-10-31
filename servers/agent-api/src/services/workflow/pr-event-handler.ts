@@ -1,4 +1,6 @@
 import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { withSpan } from '../../observability/trace.js';
 import type { EventCallbackPayload } from './pr-event-payload.js';
 import {
   normalizePullRequestId,
@@ -14,6 +16,8 @@ import {
   buildReviewRejectedPrompt,
   GITHUB_PR_REVIEW_PROMPT_KEY,
 } from './pr-prompts.js';
+
+const logger = rootLogger.child({ component: 'pr-event-handler' });
 
 /** 忽略原因（与 contracts/event-callback.openapi.yaml 一致） */
 export type EventIgnoreReason =
@@ -146,7 +150,7 @@ async function unregister(instanceId: string, reason: 'ARCHIVED' | 'DELETED' | '
   try {
     await prHandlerRegistry.unregisterByInstance(instanceId, reason);
   } catch (err) {
-    console.warn('[pr-event] unregister failed:', (err as Error).message);
+    logger.warn({ event: 'unregister-failed', err }, 'unregister failed');
   }
 }
 
@@ -230,9 +234,9 @@ async function processHandler(
         await workflowInstanceService
           .removeSystemAdditionalPrompt(instanceId, GITHUB_PR_REVIEW_PROMPT_KEY)
           .catch((rollbackErr) => {
-            console.warn(
-              '[pr-event] rollback github-pr-review prompt failed:',
-              (rollbackErr as Error).message,
+            logger.warn(
+              { event: 'rollback-prompt-failed', err: rollbackErr },
+              'rollback github-pr-review prompt failed',
             );
           });
         throw err;
@@ -242,7 +246,7 @@ async function processHandler(
     await prHandlerRegistry
       .markEventHandled(String(handler._id), event.eventId, new Date())
       .catch((err) => {
-        console.warn('[pr-event] markEventHandled failed:', (err as Error).message);
+        logger.warn({ event: 'mark-event-handled-failed', err }, 'markEventHandled failed');
       });
     return {
       ...base,
@@ -268,7 +272,7 @@ async function processHandler(
     await prHandlerRegistry
       .markEventHandled(String(handler._id), event.eventId, new Date())
       .catch((err) => {
-        console.warn('[pr-event] markEventHandled failed:', (err as Error).message);
+        logger.warn({ event: 'mark-event-handled-failed', err }, 'markEventHandled failed');
       });
     return { ...base, action: 'REJECT_HUMAN_NODE' };
   }
@@ -278,6 +282,19 @@ async function processHandler(
 
 /** 事件入口：判定链 + per-instance 串行化；任何分支都不抛 500 */
 export async function handlePullRequestEvent(
+  event: EventCallbackPayload,
+): Promise<EventHandleResponse> {
+  return withSpan(
+    'pr-event handle',
+    {
+      eventId: event.eventId,
+      'pull_request.id': event.payload?.pullRequestId ?? null,
+    },
+    () => handlePullRequestEventInner(event),
+  );
+}
+
+async function handlePullRequestEventInner(
   event: EventCallbackPayload,
 ): Promise<EventHandleResponse> {
   let pullRequestId: string;
@@ -307,9 +324,9 @@ export async function handlePullRequestEvent(
       );
       results.push(result);
     } catch (err) {
-      console.warn(
-        `[pr-event] handler failed (instance=${instanceId}, node=${handler.nodeId}):`,
-        (err as Error).message,
+      logger.warn(
+        { event: 'handler-failed', instanceId, nodeId: handler.nodeId, err },
+        'PR event handler failed',
       );
       results.push({
         workflowInstanceId: instanceId,

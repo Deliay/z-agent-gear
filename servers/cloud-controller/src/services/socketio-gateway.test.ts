@@ -9,7 +9,8 @@ import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sJobManager } from './k8s-job-manager.js';
 import { StatusSyncService } from './status-sync.js';
 import { TokenService } from './token-service.js';
-import { ENGINE_PATH, registerWorkerGateway, SlidingWindowRateLimiter, containerIdFromToken } from './socketio-gateway.js';
+import { ENGINE_PATH, registerWorkerGateway, SlidingWindowRateLimiter, containerIdFromToken, type WorkerGatewayHandle } from './socketio-gateway.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 import { WorkloadDispatcher } from './workload-dispatcher.js';
 import { SecretStore } from './secret-store.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
@@ -32,6 +33,8 @@ let workloadRepository: InMemoryWorkloadRepository;
 let workloadLogRepository: InMemoryWorkloadLogRepository;
 let dispatcher: WorkloadDispatcher;
 let secretStore: SecretStore;
+let testLog: TestLogger;
+let gatewayHandle: WorkerGatewayHandle;
 
 function mkWorkload(
   id: string,
@@ -58,9 +61,9 @@ function waitFor<T = unknown>(socket: ClientSocket, event: string, timeout = 300
   });
 }
 
-async function connectWith(token?: string): Promise<ClientSocket> {
+async function connectWith(token?: string, extraAuth: Record<string, unknown> = {}): Promise<ClientSocket> {
   const socket = ioClient(`${baseUrl}/worker`, {
-    auth: token ? { token } : {},
+    auth: token ? { ...extraAuth, token } : { ...extraAuth },
     transports: ['websocket'],
     reconnection: false,
   });
@@ -78,9 +81,9 @@ async function connectWith(token?: string): Promise<ClientSocket> {
   return socket;
 }
 
-async function connectError(token?: string): Promise<string> {
+async function connectError(token?: string, extraAuth: Record<string, unknown> = {}): Promise<string> {
   const socket = ioClient(`${baseUrl}/worker`, {
-    auth: token ? { token } : {},
+    auth: token ? { ...extraAuth, token } : { ...extraAuth },
     transports: ['websocket'],
     reconnection: false,
   });
@@ -147,6 +150,26 @@ async function waitForCondition(
   throw new Error('condition not met in time');
 }
 
+const TRACEPARENT_RE = /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/;
+
+/**
+ * 断言报文顶层 `_meta` 形态（契约 cloud-controller-websocket.md 附录 B）：
+ * 必须是普通对象（不得为 undefined/null/字符串/数字/数组）；`traceparent` 若存在必须是合法 W3C 串；
+ * 除调用方声明的透传键外不得出现其他键（允许为空对象或仅缺 traceparent）。
+ */
+function expectValidMeta(meta: unknown, passthroughKeys: string[] = []): void {
+  expect(meta).toBeTypeOf('object');
+  expect(meta).not.toBeNull();
+  expect(Array.isArray(meta)).toBe(false);
+  for (const [key, value] of Object.entries(meta as Record<string, unknown>)) {
+    if (key === 'traceparent') {
+      expect(value).toMatch(TRACEPARENT_RE);
+    } else {
+      expect(passthroughKeys).toContain(key);
+    }
+  }
+}
+
 beforeAll(async () => {
   repo = new InMemoryContainerRepository();
   client = new InMemoryK8sClient();
@@ -205,14 +228,17 @@ beforeAll(async () => {
     secretStore,
   });
 
+  testLog = createTestLogger();
   const gateway = registerWorkerGateway(io, {
     tokenService,
     containerService: service,
     heartbeatTracker,
     workloadDispatcher: dispatcher,
+    logger: testLog.logger,
   });
   gatewayBridge.emitToContainer = gateway.emitToContainer;
   gatewayBridge.isConnected = gateway.isConnected;
+  gatewayHandle = gateway;
 
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   const address = httpServer.address() as AddressInfo;
@@ -295,9 +321,13 @@ describe('worker Socket.IO gateway', () => {
     socket.emit('register', { hostname: 'worker-3', version: OK_VERSION });
     await waitFor(socket, 'registered');
 
-    const shutdown = waitFor<{ reason: string }>(socket, 'shutdown');
+    const shutdown = waitFor<{ reason: string; _meta?: unknown }>(socket, 'shutdown');
     await service.destroy(container.id);
-    expect((await shutdown).reason).toBe('强制销毁');
+    const shutdownPayload = await shutdown;
+    expect(shutdownPayload.reason).toBe('强制销毁');
+    // T-OBS13：shutdown 经 emitToContainer 下发，报文携带顶层 _meta（traceparent 或空对象）
+    expect(shutdownPayload).toHaveProperty('_meta');
+    expectValidMeta(shutdownPayload._meta);
 
     socket.close();
   });
@@ -511,6 +541,7 @@ describe('worker Socket.IO gateway', () => {
       containerService: rateService,
       heartbeatTracker: new HeartbeatTracker(),
       handshakeRateLimit: { windowMs: 60000, max: 2 },
+      logger: createTestLogger().logger,
     });
     await new Promise<void>((resolve) => rateServer.listen(0, resolve));
     const port = (rateServer.address() as AddressInfo).port;
@@ -586,6 +617,7 @@ describe('worker Socket.IO gateway', () => {
       heartbeatTracker: new HeartbeatTracker(),
       // per-container 上限 2；per-IP 上限放宽（模拟共享 Ingress IP 下多容器重连）。
       handshakeRateLimit: { windowMs: 60000, max: 2, ipMax: 50 },
+      logger: createTestLogger().logger,
     });
     await new Promise<void>((resolve) => rateServer.listen(0, resolve));
     const port = (rateServer.address() as AddressInfo).port;
@@ -970,5 +1002,84 @@ describe('worker Socket.IO gateway', () => {
     expect((await registered).initializing).toBe(false);
     expect((await repo.findById(container.id))?.status).toBe('online');
     socket.close();
+  });
+
+  it('T-OBS13: 服务端报文携带顶层 _meta（traceparent 或空对象）且不破坏既有 payload 字段', async () => {
+    testLog.reset();
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+
+    // socket.emit('registered') 报文带 _meta，既有字段保留
+    socket.emit('register', { hostname: 'worker-meta', version: OK_VERSION });
+    const registered = await waitFor<{
+      controllerId: string;
+      initializing: boolean;
+      _meta?: unknown;
+    }>(socket, 'registered');
+    expect(registered.controllerId).toBe(container.id);
+    expect(registered.initializing).toBe(false);
+    expect(registered).toHaveProperty('_meta');
+    expectValidMeta(registered._meta);
+
+    // emitToContainer 统一注入 _meta：payload 字段不受影响
+    const custom = waitFor<{ foo: string; _meta?: unknown }>(socket, 'custom:event');
+    gatewayHandle.emitToContainer(container.id, 'custom:event', { foo: 'bar' });
+    const customPayload = await custom;
+    expect(customPayload.foo).toBe('bar');
+    expect(customPayload).toHaveProperty('_meta');
+    expectValidMeta(customPayload._meta);
+
+    // 已有 _meta 对象合并保留（不覆盖其他键），traceparent 不注入无效值
+    const merged = waitFor<{ _meta?: unknown }>(socket, 'custom:meta');
+    gatewayHandle.emitToContainer(container.id, 'custom:meta', {
+      foo: 'baz',
+      _meta: { customKey: 1 },
+    });
+    const mergedPayload = await merged;
+    expect((mergedPayload as { foo?: string }).foo).toBe('baz');
+    expectValidMeta(mergedPayload._meta, ['customKey']);
+    expect((mergedPayload._meta as Record<string, unknown>).customKey).toBe(1);
+
+    // socket.emit('unregistered') 同样带顶层 _meta
+    const unregistered = waitFor<{ _meta?: unknown }>(socket, 'unregistered');
+    socket.emit('unregister');
+    expectValidMeta((await unregistered)._meta);
+
+    // 结构化日志：msg 为固定短语，变量进字段（原 `[worker] connected id=…` 拼接串迁移）
+    const attempt = testLog.records.find((record) => record.msg === 'handshake attempt');
+    expect(attempt).toMatchObject({ level: 'info', event: 'handshake_attempt', tokenPresent: true });
+    expect(typeof attempt?.socketId).toBe('string');
+    const connected = testLog.records.find((record) => record.msg === 'connected');
+    expect(connected).toMatchObject({
+      level: 'info',
+      event: 'connected',
+      containerId: container.id,
+    });
+    expect(typeof connected?.socketId).toBe('string');
+    expect(
+      testLog.records.some((record) => record.msg === 'registered' && record.containerId === container.id),
+    ).toBe(true);
+  });
+
+  it('T-OBS13: 握手携带 auth.traceparent（合法/非法）均不报错，缺失行为不变', async () => {
+    testLog.reset();
+    const validTraceparent = `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`;
+
+    // 合法 traceparent 与非法 traceparent（一律忽略、不得报错）均正常完成注册
+    for (const traceparent of [validTraceparent, 'not-a-traceparent']) {
+      const { container, token } = await newContainer();
+      const socket = await connectWith(token, { traceparent });
+      socket.emit('register', { hostname: 'worker-tp', version: OK_VERSION });
+      const registered = await waitFor<{ controllerId: string }>(socket, 'registered');
+      expect(registered.controllerId).toBe(container.id);
+      expect((await repo.findById(container.id))?.status).toBe('online');
+      socket.close();
+    }
+
+    // 非法/合法 traceparent 均不得绕过鉴权（缺失 token 仍 INVALID_TOKEN）
+    expect(await connectError(undefined, { traceparent: validTraceparent })).toBe('INVALID_TOKEN');
+
+    // 不报错：握手链路无 error 级日志
+    expect(testLog.records.filter((record) => record.level === 'error')).toEqual([]);
   });
 });

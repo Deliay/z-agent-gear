@@ -1,5 +1,8 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { harnessLoginRegistry, type HarnessLoginRegistry } from './harness-login-registry.js';
 
 /** 上行 `harness:login:required`（controller payload 不可信，逐字段校验）。 */
@@ -71,6 +74,7 @@ export interface HarnessLoginManagerOptions {
   registry?: HarnessLoginRegistry;
   loginWaitMs?: number;
   now?: () => number;
+  logger?: ObservationLogger;
 }
 
 /**
@@ -86,11 +90,13 @@ export class HarnessLoginManager {
   private readonly registry: HarnessLoginRegistry;
   private readonly loginWaitMs: number;
   private readonly now: () => number;
+  private readonly logger: ObservationLogger;
 
   constructor(options: HarnessLoginManagerOptions = {}) {
     this.registry = options.registry ?? harnessLoginRegistry;
     this.loginWaitMs = options.loginWaitMs ?? resolveLoginWaitMs();
     this.now = options.now ?? Date.now;
+    this.logger = options.logger ?? rootLogger.child({ component: 'harness-login-manager' });
   }
 
   start(io: SocketIOServer): void {
@@ -104,23 +110,30 @@ export class HarnessLoginManager {
 
     this.subscriber.subscribe(CANCEL_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to harness login cancel channel:', err);
+        this.logger.error({ err, channel: CANCEL_CHANNEL }, 'failed to subscribe to channel');
       }
     });
 
     this.subscriber.on('message', (channel: string, message: string) => {
       if (channel !== CANCEL_CHANNEL) return;
       try {
-        this.handleCancel(JSON.parse(message) as HarnessLoginCancelData);
+        const data = JSON.parse(message) as HarnessLoginCancelData & { _meta?: { traceparent?: string } };
+        const parent = extractTraceparent(data._meta);
+        void withSpan(
+          `${CANCEL_CHANNEL} handle`,
+          { 'messaging.system': 'redis', 'messaging.destination.name': channel, requestId: data.requestId },
+          () => this.handleCancel(data),
+          { parent },
+        );
       } catch (err) {
-        console.error('Error handling harness login cancel:', err);
+        this.logger.error({ err, channel }, 'error handling harness login cancel');
       }
     });
   }
 
   async handleLoginRequired(socket: Socket, data: HarnessLoginRequiredData): Promise<void> {
     if (!data || typeof data !== 'object') {
-      console.warn('[HarnessLogin] dropped required event with invalid payload');
+      this.logger.warn('dropped required event with invalid payload');
       return;
     }
 
@@ -140,9 +153,14 @@ export class HarnessLoginManager {
       || typeof userCode !== 'string' || userCode.length === 0 || userCode.length > USER_CODE_MAX_LENGTH
       || !validExpires || !validAccount
     ) {
-      console.warn(
-        '[HarnessLogin] dropped invalid required event: requestId=%j serverType=%j trigger=%j urlLength=%d',
-        requestId, serverType, trigger, typeof url === 'string' ? url.length : -1,
+      this.logger.warn(
+        {
+          requestId,
+          serverType,
+          trigger,
+          urlLength: typeof url === 'string' ? url.length : -1,
+        },
+        'dropped invalid required event',
       );
       return;
     }
@@ -151,7 +169,7 @@ export class HarnessLoginManager {
     const userId = socket.data.userId;
     if (typeof controllerId !== 'string' || controllerId.length === 0
       || typeof userId !== 'string' || userId.length === 0) {
-      console.warn('[HarnessLogin] dropped required event without socket identity');
+      this.logger.warn('dropped required event without socket identity');
       return;
     }
 
@@ -160,9 +178,13 @@ export class HarnessLoginManager {
     const existing = this.registry.pendingFor(controllerId);
     if (existing) {
       if (existing.requestId !== requestId) {
-        console.warn(
-          '[HarnessLogin] ignored duplicated required for controller %s (pending=%s incoming=%s)',
-          controllerId, existing.requestId, requestId,
+        this.logger.warn(
+          {
+            controllerId,
+            pendingRequestId: existing.requestId,
+            incomingRequestId: requestId,
+          },
+          'ignored duplicated required for controller',
         );
       }
       return;
@@ -179,8 +201,7 @@ export class HarnessLoginManager {
     });
     this.registry.mark(controllerId, requestId, deadlineMs);
 
-    const redis = getRedisClient();
-    await redis.publish(REQUIRED_CHANNEL, JSON.stringify({
+    await publish(REQUIRED_CHANNEL, {
       requestId,
       controllerId,
       userId,
@@ -190,7 +211,7 @@ export class HarnessLoginManager {
       userCode,
       expiresInSeconds,
       receivedAt: new Date(this.now()).toISOString(),
-    }));
+    });
   }
 
   async handleLoginSucceeded(socket: Socket, data: HarnessLoginSucceededData): Promise<void> {
@@ -204,20 +225,20 @@ export class HarnessLoginManager {
     const key = `acp:options:${pending.controllerId}:${KIMI_SERVER_TYPE}`;
     await redis.del(key);
 
-    await redis.publish(RESOLVED_CHANNEL, JSON.stringify({
+    await publish(RESOLVED_CHANNEL, {
       requestId: pending.requestId,
       controllerId: pending.controllerId,
       userId: pending.userId,
       result: 'succeeded',
       ...(account ? { account } : {}),
-    }));
+    });
   }
 
   async handleLoginFailed(socket: Socket, data: HarnessLoginFailedData): Promise<void> {
     const requestId = typeof data?.requestId === 'string' ? data.requestId : '';
     const reason = data?.reason;
     if (!FAILED_REASONS.has(reason)) {
-      console.warn('[HarnessLogin] dropped failed event with unknown reason=%j', reason);
+      this.logger.warn({ reason }, 'dropped failed event with unknown reason');
       return;
     }
 
@@ -227,27 +248,27 @@ export class HarnessLoginManager {
     const error = typeof data.error === 'string' ? data.error.slice(0, ERROR_MAX_LENGTH) : undefined;
     const result = reason === 'cancelled' ? 'cancelled' : reason === 'timeout' ? 'expired' : 'failed';
 
-    await getRedisClient().publish(RESOLVED_CHANNEL, JSON.stringify({
+    await publish(RESOLVED_CHANNEL, {
       requestId: pending.requestId,
       controllerId: pending.controllerId,
       userId: pending.userId,
       result,
       ...(error ? { error } : {}),
-    }));
+    });
   }
 
   /** 从 pending/注册表移除并返回；归属不符或未命中时告警并返回 null。 */
   private takePending(socket: Socket, requestId: string, phase: string): PendingLogin | null {
     const pending = requestId ? this.pendingRequests.get(requestId) : undefined;
     if (!pending) {
-      console.warn(`[HarnessLogin] dropped ${phase} event for unknown requestId=%j`, requestId);
+      this.logger.warn({ phase, requestId }, 'dropped event for unknown requestId');
       return null;
     }
     // 先校验归属再清理：非属主 socket 携带他人 requestId 不得清掉进行中的登录与超时守卫。
     if (pending.socketId !== socket.id) {
-      console.warn(
-        '[HarnessLogin] %s event from non-owner socket (expected=%s actual=%s)',
-        phase, pending.socketId, socket.id,
+      this.logger.warn(
+        { phase, expectedSocketId: pending.socketId, actualSocketId: socket.id },
+        'event from non-owner socket',
       );
       return null;
     }
@@ -261,13 +282,13 @@ export class HarnessLoginManager {
     const requestId = typeof data?.requestId === 'string' ? data.requestId : '';
     const pending = requestId ? this.pendingRequests.get(requestId) : undefined;
     if (!pending) {
-      console.warn('[HarnessLogin] cancel for unknown requestId=%j (dropped)', requestId);
+      this.logger.warn({ requestId }, 'cancel for unknown requestId (dropped)');
       return;
     }
 
     const socket = this.io?.sockets.sockets.get(pending.socketId);
     if (!socket) {
-      console.warn('[HarnessLogin] cancel target socket %s not connected (dropped)', pending.socketId);
+      this.logger.warn({ socketId: pending.socketId, requestId }, 'cancel target socket not connected (dropped)');
       return;
     }
     socket.emit(CANCEL_CHANNEL, { requestId: pending.requestId });
@@ -280,15 +301,15 @@ export class HarnessLoginManager {
       this.pendingRequests.delete(requestId);
       this.registry.clear(pending.controllerId);
       void Promise.resolve()
-        .then(() => getRedisClient().publish(RESOLVED_CHANNEL, JSON.stringify({
+        .then(() => publish(RESOLVED_CHANNEL, {
           requestId: pending.requestId,
           controllerId: pending.controllerId,
           userId: pending.userId,
           result: 'failed',
           error: 'controller disconnected',
-        })))
+        }))
         .catch((err: unknown) => {
-          console.error('Failed to publish harness login resolved (disconnect):', err);
+          this.logger.error({ err, requestId }, 'failed to publish harness login resolved (disconnect)');
         });
     }
   }

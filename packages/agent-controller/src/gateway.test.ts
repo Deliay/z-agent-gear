@@ -8,6 +8,7 @@ vi.mock('node:net', () => ({
 
 import net from 'node:net';
 import { GatewayManager } from './gateway.js';
+import { createTestLogger, type TestLogger } from './observability/testing.js';
 
 function createMockLocalSocket() {
   const handlers = new Map<string, Function>();
@@ -39,10 +40,12 @@ function createMockServerSocket() {
 
 describe('GatewayManager', () => {
   let gatewayManager: GatewayManager;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    gatewayManager = new GatewayManager();
+    testLog = createTestLogger('gateway');
+    gatewayManager = new GatewayManager(testLog.logger);
   });
 
   describe('createTunnel', () => {
@@ -237,12 +240,14 @@ describe('GatewayManager', () => {
     });
 
     it('should log warning and ignore for unknown tunnelId', () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       gatewayManager.handleTunnelData('unknown-tunnel', 'data');
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('unknown tunnel'),
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({
+          level: 'warn',
+          msg: expect.stringContaining('unknown tunnel'),
+          tunnelId: 'unknown-tunnel',
+        }),
       );
-      warnSpy.mockRestore();
     });
   });
 

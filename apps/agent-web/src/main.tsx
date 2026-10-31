@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { ApolloProvider } from '@apollo/client/react'
 import { createApolloClient } from './lib/apollo'
 import { resolveApiBase } from './lib/api-base'
+import { logger } from './lib/logger'
 import './index.css'
 import App from './App.tsx'
 
@@ -28,7 +29,7 @@ async function bootstrap() {
     apiBase = await resolveApiBase()
   } catch (error) {
     // 解析异常（如隐私模式/沙箱下 sessionStorage 不可用）时降级，避免白屏。
-    console.error('[bootstrap] resolveApiBase failed, falling back to env', error)
+    logger.error({ err: error }, '[bootstrap] resolveApiBase failed, falling back to env')
     apiBase = import.meta.env.VITE_API_URL || ''
   }
 

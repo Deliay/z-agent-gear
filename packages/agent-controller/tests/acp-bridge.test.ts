@@ -27,6 +27,7 @@ vi.mock('@agentclientprotocol/sdk', () => ({
 }));
 
 import { AcpSessionBridge, extractConfigOptions } from '../../src/acp/bridge.js';
+import { createTestLogger, type TestLogger } from '../../src/observability/testing.js';
 
 class MockAcpSpawner {
   start = vi.fn();
@@ -48,11 +49,12 @@ function mc() { return mockConnInstance; }
 describe('AcpSessionBridge', () => {
   let mockSocket: ReturnType<typeof createMockSocket>;
   let mockSpawner: MockAcpSpawner;
+  let testLog: TestLogger;
 
   function createBridge() {
     return new AcpSessionBridge(
       mockSocket as never,
-      { sessionId: 'sess-1', cwd: '/home/user' },
+      { sessionId: 'sess-1', cwd: '/home/user', logger: testLog.logger },
       mockSpawner as never,
     );
   }
@@ -64,6 +66,7 @@ describe('AcpSessionBridge', () => {
 
     mockSocket = createMockSocket();
     mockSpawner = new MockAcpSpawner();
+    testLog = createTestLogger('acp-bridge');
   });
 
   afterEach(() => {
@@ -624,10 +627,15 @@ describe('AcpSessionBridge', () => {
 
     it('handleElicitationResponse 未知 requestId 打 warn 不抛错', () => {
       const bridge = createBridge();
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       expect(() => bridge.handleElicitationResponse('elic_unknown', 'cancel')).not.toThrow();
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('elic_unknown'));
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({
+          level: 'warn',
+          msg: 'elicitation request not found',
+          elicitationId: 'elic_unknown',
+        }),
+      );
     });
   });
 

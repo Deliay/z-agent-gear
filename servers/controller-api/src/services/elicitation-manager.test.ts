@@ -6,6 +6,7 @@ vi.mock('../middleware/redis.js', () => ({
 
 import { ElicitationManager } from './elicitation-manager.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 
 const mockRedis = {
   publish: vi.fn(),
@@ -46,9 +47,11 @@ afterEach(() => {
 
 describe('ElicitationManager', () => {
   let manager: ElicitationManager;
+  let testLog: TestLogger;
 
   beforeEach(() => {
-    manager = new ElicitationManager();
+    testLog = createTestLogger();
+    manager = new ElicitationManager(testLog.logger);
     manager.start(mockIo as never);
   });
 
@@ -118,12 +121,13 @@ describe('ElicitationManager', () => {
     });
 
     it('should warn when requestId not found', async () => {
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
       await manager.handleElicitationResponse({ requestId: 'non-existent', action: 'cancel' });
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('not found'));
-      consoleSpy.mockRestore();
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        requestId: 'non-existent',
+        msg: expect.stringContaining('not found'),
+      }));
     });
   });
 
@@ -210,7 +214,6 @@ describe('ElicitationManager', () => {
     });
 
     it('T-S6b: 契约外 reason 丢弃并告警（不静默归并）', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockRedis.publish.mockClear();
 
       await manager.handleElicitationResolved(mockSocket as never, {
@@ -219,11 +222,14 @@ describe('ElicitationManager', () => {
       });
 
       expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unknown reason'), 'protocol_drift');
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        reason: 'protocol_drift',
+        msg: expect.stringContaining('unknown reason'),
+      }));
     });
 
     it('T-S6c: 缺 sessionId 丢弃并告警', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockRedis.publish.mockClear();
 
       await manager.handleElicitationResolved(mockSocket as never, {
@@ -232,7 +238,10 @@ describe('ElicitationManager', () => {
       });
 
       expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid sessionId'));
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        msg: expect.stringContaining('invalid sessionId'),
+      }));
     });
 
     it('T-S6d: requestId/detail 超长时截断到 200 字符', async () => {
@@ -265,12 +274,11 @@ describe('ElicitationManager', () => {
       expect(payload).not.toHaveProperty('detail');
       expect(payload).not.toHaveProperty('evil');
       expect(Object.keys(payload).sort()).toEqual(
-        ['controllerId', 'reason', 'requestId', 'sessionId', 'userId'].sort(),
+        ['_meta', 'controllerId', 'reason', 'requestId', 'sessionId', 'userId'].sort(),
       );
     });
 
     it('T-S6f: 超长 sessionId 丢弃（不进入 Redis）', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockRedis.publish.mockClear();
 
       await manager.handleElicitationResolved(mockSocket as never, {
@@ -279,7 +287,10 @@ describe('ElicitationManager', () => {
       });
 
       expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid sessionId'));
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        msg: expect.stringContaining('invalid sessionId'),
+      }));
     });
   });
 
@@ -329,7 +340,6 @@ describe('ElicitationManager', () => {
     });
 
     it('T-S11: 非 http(s) url / 超大 schema / 非法 toolCallId 均拒绝入 pending', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockRedis.publish.mockClear();
 
       await manager.handleElicitationRequest(mockSocket as never, {
@@ -347,14 +357,13 @@ describe('ElicitationManager', () => {
 
       expect(manager.getPendingRequestCount()).toBe(0);
       expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:request', expect.anything());
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('invalid elicitation request'),
-        expect.anything(), expect.anything(), expect.anything(), expect.anything(),
-      );
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        msg: expect.stringContaining('invalid elicitation request'),
+      }));
     });
 
     it('T-S10: 非法 mode / 空 sessionId 的请求不入 pending、不发 Redis', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       mockRedis.publish.mockClear();
 
       await manager.handleElicitationRequest(mockSocket as never, {
@@ -366,7 +375,10 @@ describe('ElicitationManager', () => {
 
       expect(manager.getPendingRequestCount()).toBe(0);
       expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:request', expect.anything());
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid elicitation request'), expect.anything(), expect.anything(), expect.anything(), expect.anything());
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        msg: expect.stringContaining('invalid elicitation request'),
+      }));
     });
   });
 

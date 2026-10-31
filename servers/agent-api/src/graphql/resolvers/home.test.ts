@@ -111,7 +111,6 @@ describe('home resolvers', () => {
   });
 
   it('单分支失败降级为空值，其余信息流正常', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.mocked(workflowInstanceService.list).mockRejectedValue(new Error('mongo 挂了'));
 
     const result = await homeResolvers.Query.homeOverview({}, {}, ctx);
@@ -136,7 +135,6 @@ describe('home resolvers', () => {
     expect(gatewayService.findAllByController).toHaveBeenCalledWith('ctrl-1', 'user-1');
 
     vi.mocked(gatewayService.findAllByController).mockRejectedValue(new Error('relay timeout'));
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     const degraded = await homeResolvers.Controller.gateways({ id: 'ctrl-1' }, {}, ctx);
     expect(degraded).toEqual({ gateways: [], total: 0, limit: 0 });
   });
@@ -152,7 +150,6 @@ describe('home resolvers', () => {
     expect(worktreeService.list).toHaveBeenCalledWith('ctrl-1', 'ws-1', 'user-1');
 
     vi.mocked(worktreeService.list).mockRejectedValue(new Error('relay timeout'));
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     const degraded = await homeResolvers.ControllerWorkspace.worktrees(
       { id: 'ws-1', controllerId: 'ctrl-1' },
       {},

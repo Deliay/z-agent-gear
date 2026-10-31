@@ -13,6 +13,7 @@ vi.mock('@agentclientprotocol/sdk', async (importOriginal) => {
 
 import { AcpSessionBridge } from '../../src/acp/bridge.js';
 import { AcpSpawner } from '../../src/acp/spawner.js';
+import { createTestLogger, type TestLogger } from '../../src/observability/testing.js';
 
 const FAKE_AGENT = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-acp-agent.mjs');
 
@@ -23,6 +24,7 @@ describe('AcpSessionBridge - MCP wire format (ACP spec)', () => {
   let workdir: string;
   let captureFile: string;
   let bridge: AcpSessionBridge | null = null;
+  let testLog: TestLogger;
 
   afterEach(async () => {
     delete process.env.CAPTURE_FILE;
@@ -38,11 +40,13 @@ describe('AcpSessionBridge - MCP wire format (ACP spec)', () => {
     workdir = mkdtempSync(join(tmpdir(), 'acp-wire-'));
     captureFile = join(workdir, 'capture.jsonl');
     process.env.CAPTURE_FILE = captureFile;
+    testLog = createTestLogger('acp-bridge');
     const spawner = new AcpSpawner({
       sessionId: 'sess-wire',
       cwd: workdir,
       command: process.execPath,
       args: [FAKE_AGENT],
+      logger: createTestLogger('acp-spawner').logger,
     });
     const socket = { emit: vi.fn(), on: vi.fn(), off: vi.fn() };
     bridge = new AcpSessionBridge(socket as never, {
@@ -53,6 +57,7 @@ describe('AcpSessionBridge - MCP wire format (ACP spec)', () => {
         serverNames: ['fluentui-mcp', 'fs-mcp'],
       },
       mcpPort: 41234,
+      logger: testLog.logger,
     }, spawner);
     return socket;
   }
@@ -62,7 +67,6 @@ describe('AcpSessionBridge - MCP wire format (ACP spec)', () => {
   }
 
   it('should send session/new with spec-compliant mcpServers on the wire', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     setup();
 
     await bridge!.start();
@@ -89,15 +93,14 @@ describe('AcpSessionBridge - MCP wire format (ACP spec)', () => {
     expect(captured[0].params.cwd).toBe(workdir);
 
     // The MCP handoff must be visible in logs, without leaking the token
-    const logLines = logSpy.mock.calls.map((c) => String(c[0]));
-    const mcpLog = logLines.find((l) => l.includes('passing MCP servers via session/new'));
+    const mcpLog = testLog.records.find((r) => r.event === 'mcp_servers_passed');
     expect(mcpLog).toBeDefined();
-    expect(mcpLog).toContain('fluentui-mcp(type=http, url=http://127.0.0.1:41234/mcp/sess-wire/fluentui-mcp, headers=Authorization)');
-    expect(mcpLog).not.toContain('wire-token');
+    expect(mcpLog).toEqual(expect.objectContaining({ component: 'acp-bridge', method: 'session/new' }));
+    expect(String(mcpLog?.servers)).toContain('fluentui-mcp(type=http, url=http://127.0.0.1:41234/mcp/sess-wire/fluentui-mcp, headers=Authorization)');
+    expect(JSON.stringify(mcpLog)).not.toContain('wire-token');
   }, 15000);
 
   it('should send session/resume with spec-compliant mcpServers on the wire', async () => {
-    vi.spyOn(console, 'log').mockImplementation(() => {});
     setup();
 
     await bridge!.resume('ext-session-1');

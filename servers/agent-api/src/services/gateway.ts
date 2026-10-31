@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { Gateway } from '../models/gateway.js';
 import { Controller } from '../models/controller.js';
 import { actorFilter } from './workspace-context.js';
-import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 
 const COMMAND_CHANNEL = 'port-forward:command';
 
@@ -44,12 +44,11 @@ export class GatewayService {
 
     const doc = await Gateway.create({ controllerId, userId, name, port, status: 'active' });
 
-    const redis = getRedisClient();
-    await redis.publish(COMMAND_CHANNEL, JSON.stringify({
+    await publish(COMMAND_CHANNEL, {
       type: 'tunnel:create',
       controllerId,
       port,
-    }));
+    });
 
     return this.mapGateway(doc.toObject());
   }
@@ -60,13 +59,11 @@ export class GatewayService {
       return false;
     }
 
-    const redis = getRedisClient();
-    await redis.publish(COMMAND_CHANNEL, JSON.stringify({
+    await publish(COMMAND_CHANNEL, {
       type: 'tunnel:close',
       controllerId,
       port: result.port,
-    }));
-
+    });
     return true;
   }
 

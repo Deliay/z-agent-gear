@@ -1,4 +1,5 @@
 import { GraphQLError } from 'graphql';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { modelService } from '../../services/model.js';
 import { providerService } from '../../services/provider.js';
 import { invalidateAcpOptionsForUser } from '../../services/acp-options-cache.js';
@@ -10,7 +11,7 @@ async function invalidateAcpOptionsBestEffort(userId: string): Promise<void> {
   try {
     await invalidateAcpOptionsForUser(userId);
   } catch (err) {
-    console.warn('[model] invalidate acp options failed:', (err as Error).message);
+    rootLogger.warn({ component: 'model', err }, 'invalidate acp options failed');
   }
 }
 

@@ -1,6 +1,6 @@
 import { GraphQLError } from 'graphql';
 import { todoService } from '../../services/todo-service.js';
-import { getRedisClient } from '../../middleware/redis.js';
+import { publish } from '../../middleware/publish.js';
 import type { AuthContext } from './auth.js';
 
 export const todoResolvers = {
@@ -59,11 +59,10 @@ export const todoResolvers = {
         throw new GraphQLError('Todo item not found or already handled');
       }
 
-      const redis = getRedisClient();
-      await redis.publish('permission:response', JSON.stringify({
+      await publish('permission:response', {
         requestId: args.requestId,
         outcome: { outcome: args.outcome, optionId: args.optionId },
-      }));
+      });
 
       await todoService.markTodoAsResponded(args.requestId, context.currentUser.id);
 
@@ -88,12 +87,11 @@ export const todoResolvers = {
         throw new GraphQLError('Todo item not found or already handled');
       }
 
-      const redis = getRedisClient();
-      await redis.publish('elicitation:response', JSON.stringify({
+      await publish('elicitation:response', {
         requestId: args.requestId,
         action: args.action,
         ...(args.action === 'accept' && args.values ? { content: args.values } : {}),
-      }));
+      });
 
       await todoService.markTodoAsResponded(args.requestId, context.currentUser.id);
 
@@ -128,8 +126,7 @@ export const todoResolvers = {
         throw new GraphQLError('Todo item not found or already handled');
       }
 
-      const redis = getRedisClient();
-      await redis.publish('harness:login:cancel', JSON.stringify({ requestId: args.requestId }));
+      await publish('harness:login:cancel', { requestId: args.requestId });
 
       await todoService.markTodoAsResponded(args.requestId, context.currentUser.id);
       // 近似终态（controller 稍后回 resolved 再覆盖为同一终态；单调守卫保证不倒退）

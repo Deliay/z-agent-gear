@@ -8,7 +8,7 @@ interface McpProxyOptions {
 export async function startMcpProxy(options: McpProxyOptions): Promise<void> {
   const { endpoint, token } = options;
 
-  console.log(`Starting MCP proxy for endpoint: ${endpoint}`);
+  console.log(`Starting MCP proxy for endpoint: ${endpoint}`); // no-console-allow: CLI 用户可见输出（进度：代理端点）
 
   const rl = readline.createInterface({ input: process.stdin });
 

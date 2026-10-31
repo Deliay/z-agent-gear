@@ -24,6 +24,7 @@ import { GatewayRelayService } from './gateway-relay.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 
 function createMockSocket(id = 'socket-123') {
   return { emit: vi.fn(), id };
@@ -59,6 +60,7 @@ describe('GatewayRelayService', () => {
   let mockSocket: ReturnType<typeof createMockSocket>;
   let mockIO: ReturnType<typeof createMockIO>;
   let mockRedis: ReturnType<typeof createMockRedis>;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -78,7 +80,8 @@ describe('GatewayRelayService', () => {
     } as never);
     vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-123');
 
-    service = new GatewayRelayService();
+    testLog = createTestLogger();
+    service = new GatewayRelayService(testLog.logger);
   });
 
   describe('start', () => {
@@ -199,15 +202,17 @@ describe('GatewayRelayService', () => {
       service.handleTunnelData('tunnel-1', data);
 
       await vi.waitFor(() => {
-        expect(mockRedis.publish).toHaveBeenCalledWith(
-          'port-forward:response',
-          JSON.stringify({
-            requestId: 'req-1',
-            statusCode: 200,
-            headers: { 'content-type': 'text/plain', 'content-length': '5' },
-            body: Buffer.from('hello').toString('base64'),
-          }),
-        );
+        expect(mockRedis.publish).toHaveBeenCalled();
+        const call = mockRedis.publish.mock.calls.at(-1)! as [string, string];
+        expect(call[0]).toBe('port-forward:response');
+        const body = JSON.parse(call[1]) as Record<string, unknown>;
+        expect(body).toMatchObject({
+          requestId: 'req-1',
+          statusCode: 200,
+          headers: { 'content-type': 'text/plain', 'content-length': '5' },
+          body: Buffer.from('hello').toString('base64'),
+        });
+        expect(body).toHaveProperty('_meta');
       });
 
       expect((service as any).proxyRequests.has('req-1')).toBe(false);
@@ -272,7 +277,6 @@ describe('GatewayRelayService', () => {
     });
 
     it('should log error when controller is offline', async () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       vi.mocked(Controller.findById).mockReturnValue({
         lean: vi.fn().mockResolvedValue(null),
       } as never);
@@ -281,10 +285,12 @@ describe('GatewayRelayService', () => {
 
       await (service as any).handleTunnelCreate('ctrl-offline', 8080);
 
-      expect(consoleSpy).toHaveBeenCalledWith('Controller offline: ctrl-offline');
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'error',
+        controllerId: 'ctrl-offline',
+        msg: 'controller offline',
+      }));
       expect(mockSocket.emit).not.toHaveBeenCalled();
-
-      consoleSpy.mockRestore();
     });
   });
 
@@ -301,15 +307,16 @@ describe('GatewayRelayService', () => {
         headers: {},
       });
 
-      expect(mockRedis.publish).toHaveBeenCalledWith(
-        'port-forward:response',
-        JSON.stringify({
-          requestId: 'req-1',
-          statusCode: 502,
-          headers: {},
-          body: 'No tunnel available',
-        }),
-      );
+      const call = mockRedis.publish.mock.calls.at(-1)! as [string, string];
+      expect(call[0]).toBe('port-forward:response');
+      const body = JSON.parse(call[1]) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        requestId: 'req-1',
+        statusCode: 502,
+        headers: {},
+        body: 'No tunnel available',
+      });
+      expect(body).toHaveProperty('_meta');
     });
   });
 });

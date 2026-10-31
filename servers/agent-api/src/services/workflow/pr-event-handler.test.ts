@@ -32,7 +32,19 @@ vi.mock('../workspace-service.js', () => ({
   workspaceService: ws,
 }));
 
-import { handlePullRequestEvent } from './pr-event-handler.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { createTestLogger } from '../../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把
+ * pr-event-handler 告警写入内存 sink，断言 `records` 的结构化字段。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { handlePullRequestEvent } = await import('./pr-event-handler.js');
+childSpy.mockRestore();
 import { getWorkspaceContext } from '../workspace-context.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
@@ -92,6 +104,7 @@ function loadInstance(value: unknown) {
 describe('handlePullRequestEvent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testLog.reset();
     vi.mocked(prHandlerRegistry.findByPullRequestId).mockResolvedValue([handler()] as never);
     vi.mocked(prHandlerRegistry.findById).mockResolvedValue(handler() as never);
     vi.mocked(prHandlerRegistry.markEventHandled).mockResolvedValue(undefined as never);
@@ -239,12 +252,11 @@ describe('handlePullRequestEvent', () => {
 
   it('HANDLER_FAILED（驱动异常被捕获）', async () => {
     vi.mocked(workflowInstanceService.completeHumanNode).mockRejectedValue(new Error('boom'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const result = await handlePullRequestEvent(event('approved'));
     expect(result.handled).toBe(false);
     expect(result.results[0].reason).toBe('HANDLER_FAILED');
     expect(result.results[0].registeredNodeId).toBe('n1');
-    expect(warn).toHaveBeenCalled();
+    expect(testLog.records.some((r) => r.level === 'warn' && String(r.msg).includes('handler failed'))).toBe(true);
     // C-3：流转失败回滚已写入的系统提示词
     expect(workflowInstanceService.removeSystemAdditionalPrompt).toHaveBeenCalledWith(
       'inst-1',

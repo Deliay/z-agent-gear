@@ -12,6 +12,7 @@ import { creditCheckService } from '../services/billing/credit-check.js';
 import { decrypt } from '../services/crypto.js';
 import { tokenCostCents } from '../services/billing/money.js';
 import type { BillingEventMessage } from '../services/billing/mq/publisher.js';
+import type { MqLogger } from '../services/billing/mq/connection.js';
 
 interface PublisherLike {
   enqueue(event: BillingEventMessage): Promise<void>;
@@ -19,7 +20,7 @@ interface PublisherLike {
 
 export interface BillingOpenAiRouterDeps {
   publisher: PublisherLike;
-  logger?: { warn?: (...args: unknown[]) => void };
+  logger: MqLogger;
 }
 
 export interface ModelPricingCents {
@@ -320,7 +321,7 @@ function toModelEntry(model: {
 /** OpenAI 兼容计费网关：Key 鉴权 → 预扣费检查 → 转发 → 用量事件（outbox）。 */
 export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router {
   const router = Router();
-  const logger = deps.logger ?? console;
+  const logger = deps.logger;
 
   /** 批量查询供应商启用状态；列表与调用（404）口径共用。 */
   const enabledProviderIdSet = async (
@@ -606,13 +607,14 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       try {
         await writeFinalize();
       } catch (err) {
-        logger.warn?.(`[billing-gateway] finalize failed (retrying): ${(err as Error).message}`);
+        logger.warn({ err }, '[billing-gateway] finalize failed (retrying)');
         try {
           await writeFinalize();
         } catch (retryErr) {
           // 不翻转状态、不换 eventType 重投；仅告警，由对账/重放兜底。
-          logger.warn?.(
-            `[billing-gateway] finalize retry failed for ${requestId}: ${(retryErr as Error).message}`,
+          logger.warn(
+            { err: retryErr, requestId },
+            '[billing-gateway] finalize retry failed',
           );
           // P3-④：落账彻底失败的兜底——best-effort 标记 `failed`（区别于 completed/aborted），
           // 避免记录永久停留 `started`；该尝试失败则放弃（对账可见）。
@@ -629,7 +631,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
       apiKey = decrypt(provider.encryptedCredential);
     } catch (err) {
       // C2：供应商凭据解密失败只记服务端日志，对外固定文案，避免内部错误信息泄漏。
-      logger.warn?.(`[billing-gateway] provider credential error: ${(err as Error).message}`);
+      logger.warn({ err }, '[billing-gateway] provider credential error');
       toApiError(res, 500, 'server_error', 'provider_credential_error', '模型服务配置异常，请联系管理员');
       return;
     }
@@ -760,7 +762,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         if (!res.writableEnded) res.end();
         return;
       }
-      logger.warn?.(`[billing-gateway] upstream call failed: ${(err as Error).message}`);
+      logger.warn({ err }, '[billing-gateway] upstream call failed');
       // 上游报错/超时同样按「中断」计费并标注，不得伪装成 completed
       aborted = true;
       abortReason = 'upstream_error';

@@ -84,8 +84,6 @@ describe('cloud-host reconnect backoff (C-3)', () => {
     fake.socket.disconnect.mockClear();
     fake.socket.connect.mockClear();
     fake.socket.close.mockClear();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers();
   });
 
@@ -191,8 +189,6 @@ describe('idle-path exit codes (contract §3.7)', () => {
     fake.socket.emit.mockClear();
     fake.socket.disconnect.mockClear();
     fake.socket.close.mockClear();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
       throw new Error(`exit:${code}`);
     }) as never);
@@ -290,8 +286,6 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
     fake.handlers.clear();
     fakeBridges.instances.length = 0;
     fake.socket.emit.mockClear();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
   afterEach(() => {

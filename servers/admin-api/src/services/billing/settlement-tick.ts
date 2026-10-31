@@ -2,12 +2,13 @@ import { config } from '../../config/index.js';
 import { BillingReservation } from '../../models/billing-reservation.js';
 import type { BillingService } from './billing-service.js';
 import type { ReservationService } from './reservation.js';
+import type { MqLogger } from './mq/connection.js';
 import { documentId } from './id.js';
 
 export interface SettlementTickOptions {
   cycleMs?: number;
   now?: () => number;
-  logger?: { warn?: (...args: unknown[]) => void };
+  logger: MqLogger;
   /**
    * A-3：控制面存活探测。stale 判定只能在「确认容器已不存在」时终结预留；
    * 容器仍存活时只补结算周期，绝不置 SETTLED（否则活容器进入免费运行状态）。
@@ -23,17 +24,17 @@ export interface SettlementTickOptions {
 export class SettlementTickService {
   private readonly cycleMs: number;
   private readonly now: () => number;
-  private readonly logger: NonNullable<SettlementTickOptions['logger']>;
+  private readonly logger: MqLogger;
   private readonly isAlive?: (resourceId: string) => Promise<boolean>;
 
   constructor(
     private readonly billing: BillingService,
     private readonly reservations: ReservationService,
-    options: SettlementTickOptions = {},
+    options: SettlementTickOptions,
   ) {
     this.cycleMs = options.cycleMs ?? config.billingCycleSeconds * 1000;
     this.now = options.now ?? (() => Date.now());
-    this.logger = options.logger ?? console;
+    this.logger = options.logger;
     this.isAlive = options.isAlive;
   }
 
@@ -53,8 +54,9 @@ export class SettlementTickService {
           const result = await this.billing.handleSettlementCycle(reservationId, lastSeq + 1);
           if (result.settled) settled += 1;
         } catch (err) {
-          this.logger.warn?.(
-            `[billing-settlement] cycle sweep failed for ${reservationId}: ${(err as Error).message}`,
+          this.logger.warn(
+            { err, reservationId },
+            '[billing-settlement] cycle sweep failed',
           );
         }
         // 补结算后回读最新预留（expectedEndAt/lastSettleAt 已推进）。
@@ -70,15 +72,17 @@ export class SettlementTickService {
       if (this.isAlive) {
         try {
           if (await this.isAlive(fresh.resourceId)) {
-            this.logger.warn?.(
-              `[billing-settlement] reservation ${reservationId} exceeded stale window but container is alive; skip finalize`,
+            this.logger.warn(
+              { reservationId, resourceId: fresh.resourceId },
+              '[billing-settlement] reservation exceeded stale window but container is alive; skip finalize',
             );
             continue;
           }
         } catch (err) {
           // 探测失败不等于容器消失：保守跳过，等待下一轮/资源对账。
-          this.logger.warn?.(
-            `[billing-settlement] liveness probe failed for ${reservationId}: ${(err as Error).message}`,
+          this.logger.warn(
+            { err, reservationId, resourceId: fresh.resourceId },
+            '[billing-settlement] liveness probe failed',
           );
           continue;
         }
@@ -90,8 +94,9 @@ export class SettlementTickService {
           occurredAt: new Date(tickNow),
         });
       } catch (err) {
-        this.logger.warn?.(
-          `[billing-settlement] stale reservation finalize failed for ${reservationId}: ${(err as Error).message}`,
+        this.logger.warn(
+          { err, reservationId, resourceId: fresh.resourceId },
+          '[billing-settlement] stale reservation finalize failed',
         );
       }
     }

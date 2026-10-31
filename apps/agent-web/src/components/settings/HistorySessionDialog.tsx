@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { LIST_HISTORY_SESSIONS } from '../../graphql/queries';
 import { IMPORT_HISTORY_SESSIONS } from '../../graphql/mutations';
+import { logger } from '@/lib/logger';
 import type { ListHistorySessionsQuery, HistorySessionInfoData, ImportSessionResultData, ImportHistorySessionsMutation } from '../../graphql/types';
 import {
   Dialog,
@@ -115,7 +116,7 @@ export default function HistorySessionDialog({
 
       await refetch();
     } catch (err) {
-      console.error('Import failed:', err);
+      logger.error({ err }, 'Import failed');
     } finally {
       setImporting(false);
     }

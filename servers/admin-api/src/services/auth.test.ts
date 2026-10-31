@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { AdminUser } from '../models/admin-user.js';
 import { config } from '../config/index.js';
+import { createTestLogger } from '../observability/testing.js';
 import {
   seedAdmin,
   login,
@@ -43,9 +44,9 @@ describe('AuthService', () => {
       (AdminUser.countDocuments as any).mockResolvedValue(0);
       const create = vi.fn().mockResolvedValue({});
       (AdminUser.create as any) = create;
-      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const testLog = createTestLogger('auth');
 
-      await seedAdmin();
+      await seedAdmin(testLog.logger);
 
       expect(create).toHaveBeenCalledTimes(1);
       const arg = create.mock.calls[0][0];
@@ -56,11 +57,22 @@ describe('AuthService', () => {
       // 硬编码默认口令已移除（问题 4）
       expect(await verifyPassword(LEGACY_DEFAULT_PASSWORD, arg.passwordHash)).toBe(false);
 
-      // 问题 47：来自 env 的初始口令也必须一次性输出，运维可获取
-      const banner = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
-      expect(banner).toContain('初始密码');
-      expect(banner).toContain(STRONG_PASSWORD);
-      logSpy.mockRestore();
+      // 问题 47 / T-OBS3b：来自 env 的初始口令也必须一次性输出（唯一审计例外），运维可获取
+      const audit = testLog.records.find((record) => record.msg.includes('审计例外'));
+      expect(audit).toBeDefined();
+      expect(audit!.level).toBe('warn');
+      expect(audit!.bootstrapAdminPassword).toBe(STRONG_PASSWORD);
+      // 种子信息记录保留用户名/来源/强制改密标记（结构化字段，不再拼接 banner）
+      const seeded = testLog.records.find((record) => record.msg.includes('已种入管理员初始口令'));
+      expect(seeded).toBeDefined();
+      expect(seeded!.username).toBe('admin');
+      expect(seeded!.mustChangePassword).toBe(true);
+      // 审计例外仅 bootstrapAdminPassword 一个键：其余记录不得出现明文口令
+      expect(JSON.stringify(testLog.records.filter((record) => record !== audit))).not.toContain(
+        STRONG_PASSWORD,
+      );
+      // 来源标注保留（运维定位随机生成 vs env 注入）
+      expect(JSON.stringify(testLog.records)).toContain('ADMIN_INITIAL_PASSWORD');
     });
 
     it('T-A1 (问题 4): generates a random password and prints it once when unset', async () => {
@@ -68,18 +80,21 @@ describe('AuthService', () => {
       (AdminUser.countDocuments as any).mockResolvedValue(0);
       const create = vi.fn().mockResolvedValue({});
       (AdminUser.create as any) = create;
-      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const testLog = createTestLogger('auth');
 
-      await seedAdmin();
+      await seedAdmin(testLog.logger);
 
       const arg = create.mock.calls[0][0];
       expect(arg.mustChangePassword).toBe(true);
       expect(await verifyPassword(LEGACY_DEFAULT_PASSWORD, arg.passwordHash)).toBe(false);
 
-      const banner = logSpy.mock.calls.map((c) => String(c[0])).join('\n');
-      expect(banner).toContain('ADMIN_INITIAL_PASSWORD');
-      expect(banner).toContain('初始密码');
-      logSpy.mockRestore();
+      // T-OBS3b：审计例外记录明文可见，且恰好一条（仅首次初始化输出一次）
+      const audits = testLog.records.filter((record) => record.msg.includes('审计例外'));
+      expect(audits).toHaveLength(1);
+      const password = String(audits[0]!.bootstrapAdminPassword ?? '');
+      expect(password.length).toBeGreaterThanOrEqual(20);
+      expect(await verifyPassword(password, arg.passwordHash)).toBe(true);
+      expect(JSON.stringify(testLog.records)).toContain('ADMIN_INITIAL_PASSWORD');
     });
   });
 

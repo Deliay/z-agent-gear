@@ -5,7 +5,11 @@ import { BillingAccount } from '../../models/billing-account.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import { accountService } from './account-service.js';
 import { ReconciliationService } from './reconciliation.js';
+import { createTestLogger } from '../../observability/testing.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from './testing/mongo.js';
+
+/** 静音 logger（无断言路径注入）。 */
+const silentLogger = createTestLogger('billing-recon').logger;
 
 describe('ReconciliationService（三线对账）', () => {
   beforeAll(async () => {
@@ -35,6 +39,7 @@ describe('ReconciliationService（三线对账）', () => {
     const billing = { handleContainerDestroyed: vi.fn() };
     const recon = new ReconciliationService(billing as never, { list: vi.fn() } as never, {
       accounts: accountService,
+      logger: silentLogger,
       listContainers: async () => [],
     });
     const [report] = await recon.run('funds');
@@ -58,6 +63,7 @@ describe('ReconciliationService（三线对账）', () => {
       receivedAt: new Date(Date.now() - 10 * 60_000),
     });
     const recon = new ReconciliationService({} as never, { list: vi.fn() } as never, {
+      logger: silentLogger,
       listContainers: async () => [],
     });
     const [report] = await recon.run('metering');
@@ -70,6 +76,7 @@ describe('ReconciliationService（三线对账）', () => {
     const billing = { handleContainerDestroyed: vi.fn() };
     const reservations = { findByResource: vi.fn().mockResolvedValue(null), list: vi.fn() };
     const recon = new ReconciliationService(billing as never, reservations as never, {
+      logger: silentLogger,
       listContainers: async () => [
         {
           id: 'c-evt-1',
@@ -93,7 +100,7 @@ describe('ReconciliationService（三线对账）', () => {
     const recon = new ReconciliationService(
       {} as never,
       { findByResource: vi.fn().mockResolvedValue(null), list: vi.fn() } as never,
-      { listContainers: async () => [] },
+      { listContainers: async () => [], logger: silentLogger },
     );
     const [report] = await recon.run('events');
     expect(report.errorCount).toBe(0);
@@ -114,6 +121,7 @@ describe('ReconciliationService（三线对账）', () => {
       ]),
     };
     const recon = new ReconciliationService(billing as never, reservations as never, {
+      logger: silentLogger,
       listContainers: async () => [{ id: 'c-alive', status: 'online' }],
     });
     const [report] = await recon.run('resources');
@@ -150,7 +158,7 @@ describe('ReconciliationService（三线对账）', () => {
     const recon = new ReconciliationService(
       {} as never,
       { findByResource: vi.fn().mockResolvedValue(null), list: vi.fn() } as never,
-      { listContainers: async () => [] },
+      { listContainers: async () => [], logger: silentLogger },
     );
     const [report] = await recon.run('rollups');
     expect(report.line).toBe('rollups');
@@ -191,7 +199,7 @@ describe('ReconciliationService（三线对账）', () => {
     const recon = new ReconciliationService(
       {} as never,
       { findByResource: vi.fn().mockResolvedValue(null), list: vi.fn() } as never,
-      { now: () => now.getTime(), listContainers: async () => [] },
+      { now: () => now.getTime(), listContainers: async () => [], logger: silentLogger },
     );
     const [report] = await recon.run('rollups');
     expect(report.line).toBe('rollups');
@@ -226,6 +234,7 @@ describe('ReconciliationService（三线对账）', () => {
 
     const reservations = { findByResource: vi.fn().mockResolvedValue(null), list: vi.fn() };
     const recon = new ReconciliationService({} as never, reservations as never, {
+      logger: silentLogger,
       listContainers: async () => [
         { id: 'c-iso', status: 'exited', billingAccountId: 'a1', billingStartedAt: startedAt, exitedAt },
       ],
@@ -272,6 +281,7 @@ describe('ReconciliationService（三线对账）', () => {
     const make = () =>
       new ReconciliationService({} as never, reservations as never, {
         now: () => nowValue.value,
+        logger: silentLogger,
         listContainers: async () => [
           { id: 'c-dlq', status: 'exited', billingAccountId: 'a1', billingStartedAt: startedAt, exitedAt },
         ],
@@ -319,6 +329,7 @@ describe('ReconciliationService（三线对账）', () => {
     const make = () =>
       new ReconciliationService({} as never, reservations as never, {
         now: () => nowValue.value,
+        logger: silentLogger,
         listContainers: async () => [
           {
             id: 'c-failed',
@@ -361,6 +372,7 @@ describe('ReconciliationService（三线对账）', () => {
     });
     const reservations = { findByResource: vi.fn().mockResolvedValue(null), list: vi.fn() };
     const recon = new ReconciliationService({} as never, reservations as never, {
+      logger: silentLogger,
       listContainers: async () => [
         { id: 'c-flight', status: 'online', billingAccountId: 'a1', billingStartedAt: startedAt },
       ],
@@ -390,7 +402,7 @@ describe('ReconciliationService（三线对账）', () => {
     const recon = new ReconciliationService(
       { handleContainerDestroyed: vi.fn() } as never,
       { list: vi.fn() } as never,
-      { listContainers: async () => [] },
+      { listContainers: async () => [], logger: silentLogger },
     );
     const [report] = await recon.run('apiCalls');
     expect(report.line).toBe('apiCalls');
@@ -436,7 +448,7 @@ describe('ReconciliationService（三线对账）', () => {
     const recon = new ReconciliationService(
       { handleContainerDestroyed: vi.fn() } as never,
       { list: vi.fn() } as never,
-      { listContainers: async () => [] },
+      { listContainers: async () => [], logger: silentLogger },
     );
     const [report] = await recon.run('apiCalls');
     expect(report.line).toBe('apiCalls');
@@ -479,7 +491,7 @@ describe('ReconciliationService（三线对账）', () => {
     const recon = new ReconciliationService(
       { handleContainerDestroyed: vi.fn() } as never,
       { list: vi.fn() } as never,
-      { listContainers: async () => [] },
+      { listContainers: async () => [], logger: silentLogger },
     );
     const [report] = await recon.run('containerInvoices');
     expect(report.line).toBe('containerInvoices');
@@ -548,7 +560,7 @@ describe('ReconciliationService（三线对账）', () => {
     const recon = new ReconciliationService(
       { handleContainerDestroyed: vi.fn() } as never,
       { list: vi.fn() } as never,
-      { listContainers: async () => [] },
+      { listContainers: async () => [], logger: silentLogger },
     );
     const [report] = await recon.run('containerInvoices');
     expect(report.errors).toContainEqual(
@@ -574,6 +586,7 @@ describe('ReconciliationService（三线对账）', () => {
       ]),
     };
     const missing = new ReconciliationService(billing as never, reservations as never, {
+      logger: silentLogger,
       listContainers: async () => [],
     });
     const [missingReport] = await missing.run('resources');
@@ -582,6 +595,7 @@ describe('ReconciliationService（三线对账）', () => {
 
     billing.handleContainerDestroyed.mockClear();
     const failed = new ReconciliationService(billing as never, reservations as never, {
+      logger: silentLogger,
       listContainers: async () => {
         throw new Error('down');
       },
@@ -618,7 +632,7 @@ describe('ReconciliationService（三线对账）', () => {
     const recon = new ReconciliationService(
       { handleContainerDestroyed: vi.fn() } as never,
       { list: vi.fn() } as never,
-      { listContainers: async () => [] },
+      { listContainers: async () => [], logger: silentLogger },
     );
     const [report] = await recon.run('cloud-host-keys');
     expect(report.checkedCount).toBe(1);
@@ -685,7 +699,7 @@ describe('ReconciliationService（三线对账）', () => {
     const recon = new ReconciliationService(
       { handleContainerDestroyed: vi.fn() } as never,
       { list: vi.fn() } as never,
-      { listContainers: async () => [] },
+      { listContainers: async () => [], logger: silentLogger },
     );
     const [report] = await recon.run('cloud-host-keys');
     expect(report.line).toBe('cloud-host-keys');

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { githubService } from '../github.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import {
@@ -21,6 +22,8 @@ import {
   type CheckRunOutput,
   type CheckRunStatus,
 } from './github-checks-client.js';
+
+const logger = rootLogger.child({ component: 'pr-check-run-sync' });
 
 /**
  * 工作流节点状态 / 任务清单 → GitHub Check Runs 的只读投影。
@@ -257,7 +260,7 @@ function buildExpiredOutput(snapshot: PrSyncSnapshot, newSha: string): CheckRunO
 async function recordError(snapshot: PrSyncSnapshot, err: unknown): Promise<void> {
   const message = syncErrorMessage(err);
   const detail = err instanceof GitHubChecksError ? err.code : (err as Error)?.message;
-  console.warn(`[pr-check-run] sync failed for ${snapshot.pullRequestId}: ${detail}`);
+  logger.warn({ event: 'sync-failed', pullRequestId: snapshot.pullRequestId, detail }, 'check-run sync failed');
   try {
     await prHandlerRegistry.markSyncError(snapshot.handlerId, message);
   } catch {
@@ -283,7 +286,7 @@ export async function syncNodeStatus(
     );
   } catch (err) {
     if (snapshot) await recordError(snapshot, err);
-    else console.warn('[pr-check-run] status sync failed:', (err as Error)?.message);
+    else logger.warn({ event: 'status-sync-failed', err }, 'status sync failed');
   }
 }
 
@@ -295,8 +298,9 @@ async function syncNodeStatusUnlocked(snapshot: PrSyncSnapshot): Promise<void> {
 
     // PR 已关闭/合并：停止同步，不写失败文案（PRD 3.5）
     if (head.state !== 'open' || head.merged) {
-      console.info(
-        `[pr-check-run] skip sync: PR ${snapshot.pullRequestId} is ${head.merged ? 'merged' : head.state}`,
+      logger.info(
+        { event: 'skip-sync', pullRequestId: snapshot.pullRequestId, state: head.merged ? 'merged' : head.state },
+        'skip sync: PR not open',
       );
       await prHandlerRegistry.markSyncError(snapshot.handlerId, null);
       return;
@@ -333,8 +337,9 @@ async function syncNodeStatusUnlocked(snapshot: PrSyncSnapshot): Promise<void> {
             output: buildExpiredOutput(snapshot, head.sha),
           });
         } catch (err) {
-          console.warn(
-            `[pr-check-run] mark stale output failed for ${snapshot.pullRequestId}: ${(err as Error)?.message}`,
+          logger.warn(
+            { event: 'mark-stale-failed', pullRequestId: snapshot.pullRequestId, err },
+            'mark stale output failed',
           );
         }
         clearTodoThrottleForCheckRun(snapshot.lastCheckRunId);

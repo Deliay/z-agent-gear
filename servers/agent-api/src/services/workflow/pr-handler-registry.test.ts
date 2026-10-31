@@ -14,9 +14,23 @@ vi.mock('./engine.js', () => ({
   workflowEngine: { registerHooks: vi.fn() },
 }));
 
-import { prHandlerRegistry, normalizePullRequestId, PullRequestIdError } from './pr-handler-registry.js';
 import { WorkflowPrHandler } from '../../models/workflow-pr-handler.js';
 import { workflowEngine } from './engine.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { createTestLogger } from '../../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把
+ * pr-handler-registry 告警写入内存 sink，断言 `records` 的结构化字段。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { prHandlerRegistry, normalizePullRequestId, PullRequestIdError } = await import(
+  './pr-handler-registry.js'
+);
+childSpy.mockRestore();
 
 function lean(result: unknown) {
   return { lean: vi.fn().mockResolvedValue(result) };
@@ -71,6 +85,7 @@ describe('normalizePullRequestId', () => {
 describe('prHandlerRegistry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testLog.reset();
     vi.mocked(WorkflowPrHandler.deleteMany).mockResolvedValue({ deletedCount: 0 } as never);
   });
 
@@ -131,9 +146,8 @@ describe('prHandlerRegistry', () => {
     vi.mocked(WorkflowPrHandler.find).mockReturnValue({
       lean: vi.fn().mockRejectedValue(new Error('mongo down')),
     } as never);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     await expect(prHandlerRegistry.rebuild()).resolves.toBe(0);
-    expect(warn).toHaveBeenCalled();
+    expect(testLog.records.some((r) => r.level === 'warn' && String(r.msg).includes('rebuild failed'))).toBe(true);
   });
 
   it('findByNode 命中/未命中', async () => {

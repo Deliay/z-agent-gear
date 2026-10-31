@@ -1,11 +1,15 @@
 import type { Redis } from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { todoService } from './todo-service.js';
 import { sessionSSEService } from './session-sse.js';
 
 const ELICITATION_REQUEST_CHANNEL = 'elicitation:request';
 const ELICITATION_COMPLETE_CHANNEL = 'elicitation:complete';
 const ELICITATION_RESOLVED_CHANNEL = 'elicitation:resolved';
+
+const logger = rootLogger.child({ component: 'elicitation-subscriber' });
 
 interface ElicitationRequestData {
   requestId: string;
@@ -18,12 +22,14 @@ interface ElicitationRequestData {
   requestedSchema?: { title?: string } & Record<string, unknown>;
   elicitationId?: string;
   url?: string;
+  _meta?: unknown;
 }
 
 interface ElicitationCompleteData {
   sessionId: string;
   elicitationId: string;
   userId: string;
+  _meta?: unknown;
 }
 
 interface ElicitationResolvedData {
@@ -32,6 +38,7 @@ interface ElicitationResolvedData {
   reason: 'unsupported_mode' | 'timeout' | 'cancelled';
   detail?: string;
   userId?: string;
+  _meta?: unknown;
 }
 
 /**
@@ -59,34 +66,58 @@ export class ElicitationSubscriberService {
       ELICITATION_RESOLVED_CHANNEL,
       (err) => {
         if (err) {
-          console.error('Failed to subscribe to elicitation channels:', err);
+          logger.error({ err }, 'failed to subscribe to elicitation channels');
           return;
         }
-        console.log('Subscribed to elicitation:request, elicitation:complete and elicitation:resolved channels');
+        logger.info({}, 'subscribed to elicitation:request, elicitation:complete and elicitation:resolved channels');
       },
     );
 
     this.subscriber.on('message', async (channel: string, message: string) => {
       try {
         if (channel === ELICITATION_REQUEST_CHANNEL) {
-          await this.handleElicitationRequest(JSON.parse(message) as ElicitationRequestData);
+          const data = JSON.parse(message) as ElicitationRequestData;
+          await withSpan(
+            `${ELICITATION_REQUEST_CHANNEL} handle`,
+            { 'messaging.destination.name': channel, requestId: data.requestId, sessionId: data.sessionId },
+            async () => {
+              await this.handleElicitationRequest(data);
+            },
+            { parent: extractTraceparent(data._meta) },
+          );
         } else if (channel === ELICITATION_COMPLETE_CHANNEL) {
-          await this.handleElicitationComplete(JSON.parse(message) as ElicitationCompleteData);
+          const data = JSON.parse(message) as ElicitationCompleteData;
+          await withSpan(
+            `${ELICITATION_COMPLETE_CHANNEL} handle`,
+            { 'messaging.destination.name': channel, elicitationId: data.elicitationId, sessionId: data.sessionId },
+            async () => {
+              await this.handleElicitationComplete(data);
+            },
+            { parent: extractTraceparent(data._meta) },
+          );
         } else if (channel === ELICITATION_RESOLVED_CHANNEL) {
-          await this.handleElicitationResolved(JSON.parse(message) as ElicitationResolvedData);
+          const data = JSON.parse(message) as ElicitationResolvedData;
+          await withSpan(
+            `${ELICITATION_RESOLVED_CHANNEL} handle`,
+            { 'messaging.destination.name': channel, reason: data.reason, requestId: data.requestId ?? null },
+            async () => {
+              await this.handleElicitationResolved(data);
+            },
+            { parent: extractTraceparent(data._meta) },
+          );
         }
       } catch (err) {
-        console.error('Error handling elicitation message:', err);
+        logger.error({ err, channel }, 'error handling elicitation message');
       }
     });
   }
 
   private async handleElicitationRequest(data: ElicitationRequestData): Promise<void> {
-    console.log('Received elicitation request:', data.requestId);
+    logger.debug({ event: 'received', requestId: data.requestId }, 'received elicitation request');
 
     // Create todo item
     const todo = await todoService.createElicitationTodo(data);
-    console.log('Created todo:', todo._id);
+    logger.debug({ event: 'todo-created', requestId: data.requestId, todoId: String(todo._id) }, 'created elicitation todo');
 
     // Push SSE notification to user
     sessionSSEService.pushToUser(data.userId, {
@@ -107,7 +138,7 @@ export class ElicitationSubscriberService {
   }
 
   private async handleElicitationComplete(data: ElicitationCompleteData): Promise<void> {
-    console.log('Received elicitation complete:', data.elicitationId);
+    logger.debug({ event: 'complete-received', elicitationId: data.elicitationId }, 'received elicitation complete');
 
     // Mark the matching elicitation todo as read（按 userId 限定归属）
     await todoService.markElicitationCompleted(data.elicitationId, data.userId);
@@ -125,29 +156,33 @@ export class ElicitationSubscriberService {
     const resolution = RESOLUTION_BY_REASON[data.reason];
     if (!resolution) {
       // 运行时校验：契约外 reason 不静默归并，收敛为 failed 并告警
-      console.warn(
-        '[Elicitation] resolved with unknown reason=%j requestId=%s (fallback to failed)',
-        data.reason,
-        data.requestId ?? 'n/a',
+      logger.warn(
+        { event: 'unknown-reason', reason: data.reason, requestId: data.requestId ?? null },
+        'resolved with unknown reason (fallback to failed)',
       );
     }
     const finalResolution = resolution ?? 'failed';
 
-    console.log('[Elicitation] resolved reason=%s requestId=%s', data.reason, data.requestId ?? 'n/a');
+    logger.info(
+      { event: 'resolved', reason: data.reason, requestId: data.requestId ?? null },
+      'elicitation resolved',
+    );
 
     // 租户隔离：没有归属用户的事件无法安全定位待办，拒绝写入并告警
     if (!data.userId) {
-      console.warn(
-        '[Elicitation] resolved event without userId, skip to avoid cross-tenant write: reason=%s requestId=%s',
-        data.reason,
-        data.requestId ?? 'n/a',
+      logger.warn(
+        { event: 'resolved-no-user', reason: data.reason, requestId: data.requestId ?? null },
+        'resolved event without userId, skip to avoid cross-tenant write',
       );
       return;
     }
 
     // requestId 缺失（旧 controller / unsupported_mode 早期事件）时按 sessionId 兜底收敛
     if (!data.requestId && !data.sessionId) {
-      console.warn('[Elicitation] resolved event without requestId and sessionId, nothing to converge');
+      logger.warn(
+        { event: 'resolved-no-target', reason: data.reason },
+        'resolved event without requestId and sessionId, nothing to converge',
+      );
       return;
     }
 
@@ -157,10 +192,9 @@ export class ElicitationSubscriberService {
     });
     if (updated === 0) {
       // 已终结（单调守卫）或归属不匹配：正常幂等场景，仅留痕便于排查
-      console.warn(
-        '[Elicitation] resolved write skipped (already terminal or tenant mismatch): reason=%s requestId=%s',
-        data.reason,
-        data.requestId ?? 'n/a',
+      logger.warn(
+        { event: 'resolved-skipped', reason: data.reason, requestId: data.requestId ?? null },
+        'resolved write skipped (already terminal or tenant mismatch)',
       );
     }
   }

@@ -127,6 +127,21 @@ npm run test:coverage
 
 本项目采用测试驱动开发（TDD）模式，遵循红-绿-重构循环。详细指南参考 [TDD Skill](../../.agents/skills/tdd/SKILL.md)。
 
+## 日志与可观测性
+
+- **日志形态**：pino 单行 JSON（`packages/observability` vendored 副本 `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。
+- **span 清单**（另有 `httpContext()` 的 HTTP SERVER span）：
+  - `container.start` — 创建 Job 全程（`container-service.ts`）；span 内 `injectTraceparent()` 取 traceparent 注入 Job env `ZAG_INIT_TRACEPARENT`（SDK 关闭时为空 → 不注入）；
+  - `socket.handshake` — `/worker` namespace 握手 middleware（`socketio-gateway.ts`，提取 `auth.traceparent`，`containerId` 写入日志上下文）；
+  - `status.sync.tick` — 状态对账**每轮一个 span**（属性记 `checked`/`changed` 条数，不逐容器开 span）；
+  - `workload.dispatch` — `workload:run` **批次一个 span**（属性 `workload.count`，不逐条脚本开 span）。
+- **Socket.IO 握手 / `_meta` 封套位置**：worker 事件报文顶层 `_meta: { traceparent? }` 与云电脑 Job env 注入表见 [`contracts/cloud-controller-websocket.md`](../../contracts/cloud-controller-websocket.md) **附录 B**（B.1 `_meta` 可选字段 / B.2 Job env 注入表）；`emitToContainer()` 统一注入 `_meta.traceparent`，消费者必须容忍 `_meta` 缺失。agent-gear 侧握手 `auth.traceparent` 见 `contracts/agent-session-websocket.md` §7。
+- **env 变量**：`LOG_LEVEL`（默认 `info`，排 worker 回连设 `debug`）/ `LOG_PRETTY`（仅非生产生效）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 不启用导出、零外发**）/ `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS`（仅经 env 传递，**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` / `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORT_TIMEOUT_MS`，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。harness Job 注入的 `OTEL_*` + `ZAG_INIT_TRACEPARENT` 由 `buildHarnessJobEnv` 生成（附录 B.2）。
+- **排障**：
+  - `LOG_LEVEL=debug npm run dev`（或部署 env）看逐请求/逐事件日志；`LOG_PRETTY=1` 非生产看人类可读输出。
+  - `OTEL_SDK_DISABLED=true` 可在不回滚的情况下关闭追踪导出（日志不受影响）。
+  - JSON 单行日志可直接 `grep`：按级别 `grep '"level":"error"'`、按组件 `grep '"component":"…"'`、按链路 `grep '"trace_id":"<trace-id>"'` 串起一次请求的全链路（配合 `kubectl -n zag-cloud logs deploy/cloud-controller`）。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

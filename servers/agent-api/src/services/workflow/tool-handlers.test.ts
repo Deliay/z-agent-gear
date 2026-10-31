@@ -402,13 +402,11 @@ describe('linkPullRequest 工具', () => {
   it('首同步抛错不影响工具结果', async () => {
     loadInstance();
     vi.mocked(syncNodeStatus).mockRejectedValueOnce(new Error('github down'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await expect(
       callWorkflowTool(SCOPE, 'linkPullRequest', { pullRequestId: 'Deliay/z-agent-gear#264' }),
     ).resolves.toMatchObject({ registered: true });
 
-    warn.mockRestore();
   });
 
   it('显式 workflowId/nodeId 与作用域不一致时拒绝', async () => {

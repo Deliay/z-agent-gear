@@ -1,4 +1,5 @@
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 
 /**
  * 计费账户 owner 类型（admin-api `BILLING_OWNER_TYPES` 的前台子集）：
@@ -150,9 +151,9 @@ function logBillingFailure(
   path: string,
   detail: string,
 ): void {
-  const line = `[billing-client] ${method} ${billingPath(path)} failed: ${detail}`;
-  if (level === 'error') console.error(line);
-  else console.warn(line);
+  const fields = { component: 'billing-client', method, path: billingPath(path), detail };
+  if (level === 'error') rootLogger.error(fields, 'billing request failed');
+  else rootLogger.warn(fields, 'billing request failed');
 }
 
 /**

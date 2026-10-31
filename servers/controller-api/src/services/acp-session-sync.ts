@@ -1,5 +1,6 @@
 import type { Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 
 interface SessionInfo {
   sessionId: string;
@@ -42,6 +43,12 @@ interface LoadAccumulator {
 }
 
 export class AcpSessionSyncService {
+  private readonly logger: ObservationLogger;
+
+  constructor(logger: ObservationLogger = rootLogger.child({ component: 'acp-session-sync' })) {
+    this.logger = logger;
+  }
+
   private pendingLists = new Map<string, {
     resolve: (result: ListResult) => void;
     timeout: NodeJS.Timeout;
@@ -169,7 +176,7 @@ export class AcpSessionSyncService {
           pending.resolve(acc.result);
         }
         this.cacheLoadResult(requestId, acc.result).catch((err) => {
-          console.error(`cacheLoadResult error for ${requestId}:`, err);
+          this.logger.error({ err, requestId }, 'cacheLoadResult error');
         });
       }
       return;
@@ -204,7 +211,7 @@ export class AcpSessionSyncService {
     }
 
     this.cacheLoadResult(requestId, acc.result).catch((err) => {
-      console.error(`cacheLoadResult error for ${requestId}:`, err);
+      this.logger.error({ err, requestId }, 'cacheLoadResult error');
     });
   }
 

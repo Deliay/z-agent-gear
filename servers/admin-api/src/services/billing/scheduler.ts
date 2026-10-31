@@ -2,24 +2,25 @@ import { config } from '../../config/index.js';
 import type { AdminOutboxPublisher } from './mq/publisher.js';
 import type { ReconciliationService } from './reconciliation.js';
 import type { SettlementTickService } from './settlement-tick.js';
+import type { MqLogger } from './mq/connection.js';
 
 export interface BillingSchedulerOptions {
   publisher: AdminOutboxPublisher;
   settlementTick: SettlementTickService;
   reconciliation: ReconciliationService;
-  logger?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void };
+  logger: MqLogger;
 }
 
 /** 统一注册周期任务：outbox relay、reservation 兜底扫描、每日对账 cron。 */
 export class BillingScheduler {
   private readonly timers: NodeJS.Timeout[] = [];
-  private readonly logger: NonNullable<BillingSchedulerOptions['logger']>;
+  private readonly logger: MqLogger;
   /** 上次**成功**执行每日对账的时间（R10-11：错过 cron 分钟后按间隔补跑）。 */
   private lastReconAt: number | null = null;
   private reconRunning = false;
 
   constructor(private readonly options: BillingSchedulerOptions) {
-    this.logger = options.logger ?? console;
+    this.logger = options.logger;
   }
 
   start(): void {
@@ -28,7 +29,7 @@ export class BillingScheduler {
     // 结算兜底扫描：间隔 = 一个计费周期
     const scanTimer = setInterval(() => {
       void this.options.settlementTick.tick().catch((err) => {
-        this.logger.warn?.('[billing-scheduler] settlement sweep failed', (err as Error).message);
+        this.logger.warn({ err }, '[billing-scheduler] settlement sweep failed');
       });
     }, Math.max(5000, config.billingCycleSeconds * 1000));
     scanTimer.unref?.();
@@ -50,7 +51,7 @@ export class BillingScheduler {
         })
         .catch((err) => {
           // 失败不更新 lastReconAt：下一分钟继续补跑。
-          this.logger.warn?.('[billing-scheduler] reconciliation failed', (err as Error).message);
+          this.logger.warn({ err }, '[billing-scheduler] reconciliation failed');
         })
         .finally(() => {
           this.reconRunning = false;

@@ -4,6 +4,7 @@ import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { Controller } from '../models/controller.js';
 import { actorFilter } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 
 const MAX_WORKSPACES = 10;
 
@@ -153,12 +154,12 @@ export class ControllerWorkspaceService {
 
     const requestId = `git_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'git:check',
       requestId,
       controllerId,
       path: workspace.path,
-    }));
+    });
 
     for (let i = 0; i < 60; i++) {
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -190,13 +191,13 @@ export class ControllerWorkspaceService {
     const redis = getRedisClient();
     const requestId = `mkdir_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'fs:mkdir',
       requestId,
       controllerId,
       parentPath,
       folderName,
-    }));
+    });
 
     for (let i = 0; i < 30; i++) {
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -232,12 +233,12 @@ export class ControllerWorkspaceService {
     const redis = getRedisClient();
     const requestId = `git_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'git:init',
       requestId,
       controllerId,
       path: workspace.path,
-    }));
+    });
 
     for (let i = 0; i < 60; i++) {
       await new Promise((resolve) => setTimeout(resolve, 500));

@@ -1,6 +1,9 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'process-registry' });
 
 const REGISTRY_DIR = join(homedir(), '.zag');
 const REGISTRY_FILE = join(REGISTRY_DIR, 'processes.json');
@@ -131,7 +134,7 @@ export class ProcessRegistry {
     } catch (err) {
       // Persistence is best-effort: a flush failure must never crash the
       // controller (this can be called from timer callbacks).
-      console.warn(`[ProcessRegistry] flush failed: ${(err as Error).message}`);
+      log.warn({ err }, 'process registry flush failed');
     }
   }
 }

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { logger as rootLogger } from '../observability/logger.js';
 import { Account } from '../models/account.js';
 import { User } from '../models/user.js';
 import { Tenant } from '../models/tenant.js';
@@ -63,8 +64,9 @@ function toView(doc: Record<string, unknown>): WorkspaceView {
 }
 
 function audit(action: string, operator: string, tenantId: string, target: string, role?: string): void {
-  console.log(
-    `[audit] action=${action} operator=${operator} tenant=${tenantId} target=${target} role=${role ?? '-'}`,
+  rootLogger.info(
+    { component: 'audit', action, operator, tenantId, target, role: role ?? null },
+    'workspace audit',
   );
 }
 

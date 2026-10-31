@@ -53,6 +53,7 @@ function createTestContext() {
   const io = {
     of: vi.fn().mockReturnValue({
       on: vi.fn(),
+      use: vi.fn(),
     }),
   };
 
