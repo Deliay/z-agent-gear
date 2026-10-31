@@ -30,6 +30,7 @@ import type {
   SessionConfigOptionData,
 } from '../../graphql/types';
 import { getApiBase } from '../../lib/api-base';
+import { logger } from '../../lib/logger';
 import SessionHeader from './SessionHeader';
 import MessageList from './MessageList';
 import InputBox from './InputBox';
@@ -167,8 +168,8 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           type: 'text',
         },
       });
-    } catch {
-      console.error('Failed to send message:');
+    } catch (err) {
+      logger.error({ err }, 'Failed to send message');
       setSending(false);
     }
   }, [id, sendMessage]);
@@ -269,7 +270,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     };
 
     eventSource.onerror = () => {
-      console.error('SSE connection error');
+      logger.error('SSE connection error');
       setSseLoading(false);
       setSseError(true);
     };
@@ -317,7 +318,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     try {
       await cancelGeneration({ variables: { sessionId: id } });
     } catch (error) {
-      console.error('Failed to cancel generation:', error);
+      logger.error({ err: error }, 'Failed to cancel generation');
     }
   };
 
@@ -328,7 +329,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
       await closeSession({ variables: { id } });
       setStatus('ended');
     } catch (error) {
-      console.error('Failed to close session:', error);
+      logger.error({ err: error }, 'Failed to close session');
     } finally {
       setClosing(false);
     }
@@ -355,7 +356,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
       }
       onDeleted?.();
     } catch (error) {
-      console.error('Failed to delete session:', error);
+      logger.error({ err: error }, 'Failed to delete session');
     } finally {
       setDeleting(false);
     }
@@ -417,7 +418,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         toast.error('设置配置项失败，请稍后重试');
       }
     } catch (error) {
-      console.error('Failed to set config option:', error);
+      logger.error({ err: error }, 'Failed to set config option');
       toast.error('设置配置项失败，请稍后重试');
     }
   };
@@ -456,7 +457,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         });
       }
     } catch (error) {
-      console.error('Failed to load more messages:', error);
+      logger.error({ err: error }, 'Failed to load more messages');
       toast.error('加载历史消息失败，请重试');
     } finally {
       setLoadingMore(false);
@@ -534,7 +535,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
       downloadThreadMarkdown(`session-${id}-${date}.md`, markdown);
       toast.success(`已导出对话（共 ${fullMessages.length} 条消息）`);
     } catch (error) {
-      console.error('Failed to export thread:', error);
+      logger.error({ err: error }, 'Failed to export thread');
       toast.error('导出失败：无法加载完整历史，请重试');
     }
   };

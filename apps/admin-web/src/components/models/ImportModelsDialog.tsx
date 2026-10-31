@@ -3,6 +3,7 @@ import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { LIST_GLOBAL_PROVIDER_MODELS, ADMIN_MODELS, ADMIN_PROVIDERS } from '@/graphql/queries'
 import { IMPORT_GLOBAL_MODELS } from '@/graphql/mutations'
+import { logger } from '@/lib/logger'
 import type { ImportGlobalModelsMutation, ListGlobalProviderModelsQuery } from '@/graphql/types'
 import {
   Dialog,
@@ -141,7 +142,7 @@ export default function ImportModelsDialog({
     try {
       await refetch()
     } catch (err) {
-      console.warn('[ImportModelsDialog] 刷新模型清单失败（导入结果已按服务端返回展示）', err)
+      logger.warn({ err }, '[ImportModelsDialog] 刷新模型清单失败（导入结果已按服务端返回展示）')
     }
   }
 

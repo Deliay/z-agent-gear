@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import ImportModelsDialog from '../models/ImportModelsDialog'
+import { logger } from '../../lib/logger'
 
 const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
@@ -148,7 +149,7 @@ describe('ImportModelsDialog', () => {
   })
 
   it('T-W18: does not report a successful import as failed when the follow-up refetch rejects (B-1)', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     setup()
     mocks.importModels.mockResolvedValue({ data: { importGlobalModels: [{ id: 'm1' }] } })
     mocks.refetch.mockRejectedValue(new Error('Variable "$providerId" of required type "ID!" was not provided.'))
@@ -162,7 +163,10 @@ describe('ImportModelsDialog', () => {
     expect(screen.getByText('成功导入 1 个模型')).toBeDefined()
     // 导入后本地立即标记已导入并禁选
     expect(screen.getByRole('checkbox', { name: '选择 gpt-4o' })).toHaveAttribute('aria-disabled', 'true')
-    expect(warn).toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ err: expect.any(Error) }),
+      expect.stringContaining('刷新模型清单失败'),
+    )
     warn.mockRestore()
   })
 

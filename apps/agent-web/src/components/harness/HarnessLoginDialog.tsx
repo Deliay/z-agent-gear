@@ -4,6 +4,7 @@ import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog';
 import { RESPOND_HARNESS_LOGIN } from '../../graphql/mutations';
 import { useHarnessLoginDialogState } from '../../stores/harnessLoginDialog';
+import { logger } from '../../lib/logger';
 import type { RespondHarnessLoginMutation } from '../../graphql/types';
 
 function formatRemaining(ms: number): string {
@@ -66,7 +67,7 @@ export function HarnessLoginDialog() {
     try {
       await respondHarnessLogin({ variables: { requestId: request.requestId, action: 'cancel' } });
     } catch (error) {
-      console.error('Error responding to harness login:', error);
+      logger.error({ err: error }, 'Error responding to harness login');
     } finally {
       setCancelling(false);
       close();

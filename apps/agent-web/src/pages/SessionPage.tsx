@@ -8,6 +8,7 @@ import type { GetControllersQuery, CreateSessionMutation } from '../graphql/type
 import SessionView from '../components/session/SessionView';
 import NewSessionDialog from '../components/session/NewSessionDialog';
 import { Button } from '../components/ui/button';
+import { logger } from '../lib/logger';
 
 export default function SessionPage() {
   const { id } = useParams<{ id: string }>();
@@ -50,7 +51,7 @@ export default function SessionPage() {
         navigate(`/sessions/${data.createSession.session.id}`);
       }
     } catch (error) {
-      console.error('Failed to create session:', error);
+      logger.error({ err: error }, 'Failed to create session');
       // C-19：创建失败不能静默
       toast.error(error instanceof Error ? error.message : '创建会话失败，请重试');
     }
