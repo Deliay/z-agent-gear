@@ -59,7 +59,8 @@ function metricsUrl(endpoint: string): string {
 
 function buildSampler(): Sampler {
   const name = (process.env.OTEL_TRACES_SAMPLER ?? 'parentbased_traceidratio').trim();
-  const arg = Number(process.env.OTEL_TRACES_SAMPLER_ARG ?? '1.0');
+  const rawArg = (process.env.OTEL_TRACES_SAMPLER_ARG ?? '').trim();
+  const arg = Number(rawArg === '' ? '1.0' : rawArg);
   const ratio = Number.isFinite(arg) ? Math.min(1, Math.max(0, arg)) : 1.0;
   switch (name) {
     case 'always_on':
