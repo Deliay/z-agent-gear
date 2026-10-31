@@ -18,7 +18,7 @@ vi.mock('../services/cloud-host-service.js', () => ({
 }));
 
 vi.mock('../models/controller.js', () => ({
-  Controller: { findOne: vi.fn() },
+  Controller: { findOne: vi.fn(), findById: vi.fn() },
 }));
 
 vi.mock('../models/cloud-host.js', () => ({
@@ -38,11 +38,12 @@ vi.mock('../services/key-cache.js', () => ({
 }));
 
 vi.mock('../services/commit-settings-service.js', () => ({
-  commitSettingsService: { resolveCommitIdentity: vi.fn() },
+  commitSettingsService: { resolveCloudHostIdentity: vi.fn() },
 }));
 
 import { internalCloudHostRouter } from './internal-cloud-host.js';
 import { cloudHostService } from '../services/cloud-host-service.js';
+import { Controller } from '../models/controller.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
 import { githubService } from '../services/github.js';
@@ -57,6 +58,9 @@ describe('internal cloud host routes', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.mocked(Controller.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(null),
+    } as never);
     const app = express();
     app.use(express.json());
     app.use('/internal/cloud-hosts', internalCloudHostRouter);
@@ -258,11 +262,56 @@ describe('internal cloud host routes', () => {
     const CONTROLLER_ID = '507f1f77bcf86cd799439032';
     const USER_ID = '507f1f77bcf86cd799439033';
 
-    function lean<T>(value: T) {
-      return { lean: vi.fn().mockResolvedValue(value) } as never;
-    }
+    it('T-IC-B1: 恒 bot（无视个人设置）', async () => {
+      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
+        userId: USER_ID,
+      } as never);
+      vi.mocked(commitSettingsService.resolveCloudHostIdentity).mockResolvedValue({
+        mode: 'agent_only',
+        name: 'zag-bot[bot]',
+        email: '123456+zag-bot[bot]@users.noreply.github.com',
+      });
 
-    it('T-IC1: 双鉴权 —— 无凭据 401、错误 Controller key 403、INTERNAL_API_TOKEN 放行', async () => {
+      const response = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        mode: 'agent_only',
+        name: 'zag-bot[bot]',
+        email: '123456+zag-bot[bot]@users.noreply.github.com',
+      });
+      // 不再按 controllerId 解析个人设置（恒 bot）
+      expect(commitSettingsService.resolveCloudHostIdentity).toHaveBeenCalledWith();
+    });
+
+    it('T-IC-B2: bot 失败兜底 { mode: unset }（不含 null 字段）', async () => {
+      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
+        userId: USER_ID,
+      } as never);
+      vi.mocked(commitSettingsService.resolveCloudHostIdentity).mockResolvedValue({
+        mode: 'unset',
+      });
+
+      const response = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body).toEqual({ mode: 'unset' });
+      expect(Object.keys(body)).toEqual(['mode']);
+    });
+
+    it('T-IC-B2b: 解析抛错也按 unset 兜底', async () => {
+      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
+        userId: USER_ID,
+      } as never);
+      vi.mocked(commitSettingsService.resolveCloudHostIdentity).mockRejectedValue(
+        new Error('db down'),
+      );
+
+      const response = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ mode: 'unset' });
+    });
+
+    it('T-IC-B3: 双鉴权与永不 404 不变（无凭据 401、错 key 403、INTERNAL_API_TOKEN 放行、主机缺失仍 200）', async () => {
       const noAuth = await fetch(
         `${baseUrl}/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`,
         { method: 'POST' },
@@ -285,74 +334,14 @@ describe('internal cloud host routes', () => {
       expect(forbidden.status).toBe(403);
       compare.mockRestore();
 
-      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
-        userId: USER_ID,
-      } as never);
-      vi.mocked(commitSettingsService.resolveCommitIdentity).mockResolvedValue({
+      // 主机缺失（服务间 token 鉴权路径）仍 200，永不 404
+      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue(null);
+      vi.mocked(commitSettingsService.resolveCloudHostIdentity).mockResolvedValue({
         mode: 'unset',
       });
       const allowed = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`);
       expect(allowed.status).toBe(200);
-    });
-
-    it('T-IC2: 正常返回 co_author 全字段', async () => {
-      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
-        userId: USER_ID,
-      } as never);
-      vi.mocked(commitSettingsService.resolveCommitIdentity).mockResolvedValue({
-        mode: 'co_author',
-        name: 'octocat',
-        email: '777+octocat@users.noreply.github.com',
-        coAuthorName: 'zag-bot[bot]',
-        coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
-      });
-
-      const response = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`);
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({
-        mode: 'co_author',
-        name: 'octocat',
-        email: '777+octocat@users.noreply.github.com',
-        coAuthorName: 'zag-bot[bot]',
-        coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
-      });
-      expect(commitSettingsService.resolveCommitIdentity).toHaveBeenCalledWith(CONTROLLER_ID);
-    });
-
-    it('T-IC3: 主机不存在（服务间 token 鉴权路径）仍 200 unset，永不 404', async () => {
-      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue(null);
-      vi.mocked(commitSettingsService.resolveCommitIdentity).mockResolvedValue({
-        mode: 'unset',
-      });
-
-      const response = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`);
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ mode: 'unset' });
-    });
-
-    it('T-IC3: 解析抛错也按 unset 兜底', async () => {
-      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
-        userId: USER_ID,
-      } as never);
-      vi.mocked(commitSettingsService.resolveCommitIdentity).mockRejectedValue(
-        new Error('db down'),
-      );
-
-      const response = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`);
-      expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ mode: 'unset' });
-    });
-
-    it('T-IC4: unset 响应不含 null 字段（裁决 4）', async () => {
-      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
-        userId: USER_ID,
-      } as never);
-      vi.mocked(commitSettingsService.resolveCommitIdentity).mockResolvedValue({
-        mode: 'unset',
-      });
-
-      const response = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`);
-      expect(Object.keys((await response.json()) as Record<string, unknown>)).toEqual(['mode']);
+      expect(await allowed.json()).toEqual({ mode: 'unset' });
     });
   });
 });

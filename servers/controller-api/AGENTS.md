@@ -71,6 +71,17 @@ npm run test    # Run tests
 
 详细指南请参考：[TDD Skill](../../.agents/skills/tdd/SKILL.md)
 
+## Worktree 提交人透传（committer）
+
+- `session:command` 白名单中的 `git:worktree:add` 支持可选载荷 `committer {name,email}`：
+  `session-command.ts` 校验后原样透传给 `worktreeService.handleAdd(requestId, controllerId, repoPath, worktreePath, branch, committer?)`，
+  `emitToController('git:worktree:add', {..., committer})` 仅在非空时携带。
+- **白名单不扩张**：committer 只是既有事件的字段扩展，不引入任意 git 命令通道；缺省 = 不下发，
+  worker 沿用容器级 bot 身份。
+- 下游 agent-gear ≥2.12.0 在 worktree 初始化后写 worktree 级 `user.name/user.email`（见
+  `packages/agent-controller/AGENTS.md`）；旧版本 worker 忽略未知字段优雅降级。
+- 契约：`contracts/agent-session-websocket.md` §3.12 + Redis relay 附录。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

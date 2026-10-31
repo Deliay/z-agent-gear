@@ -59,7 +59,7 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（46 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `npm test` | 运行全部常规测试文件（49 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -120,19 +120,22 @@ npm test
 
 > T-CR01（绑定即首同步）的出站断言由 `servers/agent-api/src/services/workflow/tool-handlers.test.ts` 与 `pr-check-run-sync.test.ts` 覆盖（本套件不重复建 PR 工具链）。
 
-### Commit 设置与提交身份 (`agent-api/github.test.ts`)
+### Commit 设置与提交身份（成员级）(`agent-api/github.test.ts`)
 
 | 测试 | 描述 |
 |------|------|
-| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回双 UNSET |
-| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人全字段（trim 归一） |
-| T-CS-API3 | 白名单错误逐字：committer required / invalid github account / invalid custom committer |
-| T-CS-API4 | 归一落库：mode=UNSET 不清提交人、type=UNSET 清空冗余字段 |
-| T-CI-API1 | `POST /internal/cloud-hosts/:id/commit-identity` 无 / 非法凭据 401 |
-| T-CI-API2 | `co_author` 返回提交人 + bot 全字段（需 `GITHUB_API_BASE` 指向 mock-github-server） |
-| T-CI-API3 | 主机不存在 / 未保存设置均 200 `{mode:'unset'}`（永不 404） |
-| T-CI-API4 | 帐号解绑 / 越权降级 unset |
-| T-CI-API5 | unset 响应缺省字段（仅 mode） |
+| T-CS-R1~R4（`services/commit-settings-service.real.test.ts`，真库） | 跨工作区上下文成员级：团队保存→个人读取同一份；个人保存→团队二次保存覆盖不撞键不静默丢失；团队保存→无 ALS 解析 `resolveWorktreeCommitter` 正确；迁移 019 存量行在团队上下文可读且署名逐字一致 |
+| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回 `{committerType:'UNSET',customName:null,customEmail:null}` |
+| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人（trim 归一）；落库断言 `tenantId`=成员归属租户、单行、无 `workspaceId`/`committerMode` 残留 |
+| T-CS-API3 | 白名单仅 `invalid custom committer` 逐字 + 矩阵（空名 / 非法邮箱 / 换行 / >100）；`GITHUB_ACCOUNT` 已在 GraphQL 枚举层拒绝 |
+| T-CS-API4 | 成员级隔离：A 保存后 B 仍为 UNSET，B 保存不影响 A |
+| T-CS-API5 | `personalGithubAccounts` 仅返回个人租户绑定帐号（排除普通工作区副本） |
+| T-IC-API1 | `POST /internal/cloud-hosts/:id/commit-identity` 无 / 非法凭据 401；已鉴权未知主机仍 200（永不 404） |
+| T-IC-API2 | 恒 bot：个人设置为 custom 也不影响云电脑身份（需 `GITHUB_API_BASE`，缺省时断言 `{mode:'unset'}` 降级） |
+| T-IC-API3 | bot 解析失败 → `{mode:'unset'}`（`failNext` 注入） |
+| T-IC-API4 | 响应恒含 `mode` 包络（兼容 2.11.x 容器 consume） |
+| T-WF-API1/2（`workflow.test.ts`） | 实例化落 worktree 提交人快照并随 `git:worktree:add` 下发 `committer`；节点级 Worktree 复用实例快照（成员中途改设置不生效） |
+| T-GH-API1~3（`github-issues-webhook.test.ts`） | Issue 触发人 sender 落库与 `triggerUserId` 匹配；触发人自定义提交人优先；未识别回退 GitHub 身份（需真实云电脑 + `MONGODB_URI`） |
 
 > `tests/api/src/mock-github-server.ts` 提供 `GET /app`（slug）与 `GET /users/{slug}[bot]`（id）mock，
 > 并支持 `failNext` 注入失败（60s 失败 sentinel / 降级路径）。
@@ -183,9 +186,9 @@ npm test
 |------|------|
 | T-WS-API1 缺省上下文 | 无 `x-workspace-id` 回退个人租户全局工作区（`myWorkspaces` 唯一、role=admin、readOnly=false），providers/models 可直接查询（与一期一致）；显式发送个人全局 id 等价 |
 | T-WS-API2 非法/不可达 | 非法 id / 非成员团队全局 / 非成员普通工作区均 `workspace not found`（不泄露存在性） |
-| T-WS-API3 工作区 CRUD | developer 创建拒绝 `not a tenant admin`；重名 `workspace name already exists`；改名生效；global 改名/删除/加成员 `global workspace is immutable`；非本租户成员 `user is not a tenant member`；空工作区删除返回 true；写入资源（commit 设置）后删除 `workspace is not empty` |
+| T-WS-API3 工作区 CRUD | developer 创建拒绝 `not a tenant admin`；重名 `workspace name already exists`；改名生效；global 改名/删除/加成员 `global workspace is immutable`；非本租户成员 `user is not a tenant member`；空工作区删除返回 true；写入资源（供应商/会话等）后删除 `workspace is not empty`（Commit 设置已成员级，不再计入工作区资源） |
 | T-WS-API4 共享读/写口径 | 普通工作区 `providers`/`models` 含团队全局工作区共享资源（workspaceId=全局）；普通上下文删除全局供应商不生效；admin 在全局上下文删除后普通工作区不可见 |
-| T-WS-API5 Commit 三段矩阵 | 本工作区未设 + 全局未设 → `source=UNSET`；全局设 → 普通工作区 `source=GLOBAL`；本工作区设 → `source=WORKSPACE` |
+| T-WS-API5 Commit 成员级一致（跨上下文回归） | 默认 UNSET；团队工作区保存后团队全局与**个人工作区（缺省 x-workspace-id）**读到同一份（无三段继承）；落库 `tenantId`=成员归属租户（非保存上下文租户）、单成员单行；developer 设置独立于 admin |
 | T-WS-API6 developer 全局只读 | 团队全局上下文写共享资源（provider）被插件拦截 `global workspace is read-only`；创建工作区仍 `not a tenant admin` |
 | T-WS-API7 personal 拒绝 | personal 租户全局上下文 `createTenantWorkspace` → `personal tenant cannot create workspaces` |
 | T-WS-API8 租户成员管理 | `searchAccounts` admin 可搜（结果为 username/name/userId 最小集）、developer `not a tenant admin`；`addTenantMember` 指定/缺省 role、重复幂等不覆盖；`changeTenantMemberRole` 生效；加入工作区后 `removeTenantMember` 立即失去团队/工作区访问并级联清理 workspacemembers，资源保留 |
@@ -756,6 +759,7 @@ npm test
 | 文件 | 说明 |
 |------|------|
 | `tests/api/src/admin-api/cloud-host-charges.test.ts` | 内部一次性扣费/退款/报价：401、扣费 5 credits 与账单/收据、余额不足 409 `INSUFFICIENT_BALANCE`（带 `available`）、退款幂等、`price-quote` 5/1（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/admin-api/cloud-host-billing.test.ts` | 云电脑运行 Key：个人租户铸造 → STARTING 拒绝 → RUNNING 放行 → 软删除/过期/撤销失效；**团队租户 `ownerId=tenantId` 铸造 + 网关放行 + userId/其他租户拒绝**（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/cloud-host-billing-quote.test.ts` | `cloudHostBillingQuote` 转发价目（创建 5 credits / 运行 1 credit/分钟；需 `ADMIN_API_URL`） |
 | `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/多台并行/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.10.0` |
 | `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等、未 ready 自动退款留痕、已 ready 不退）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
@@ -771,9 +775,19 @@ npm test
 | T-MB* | 我的费用：账户派生自登录主体、账单/收据/调用记录/汇总、API Key 管理 |
 
 
+## 多租户上线回归（2026-10-30）
+
+| 文件 | 说明 |
+|------|------|
+| `tests/api/src/agent-api/mcp-tenant-upsert.test.ts` | T-MCP-API1：个人租户 ensure 内置 `agent-workflow-admin-tools` → 加入团队租户 → 团队全局工作区再 ensure；断言不再触发 `userId_1_name_1` E11000、两条不同 tenantId 行并存、旧索引不存在（需 agent-api + admin-api + `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/agent-api/github-setup-upsert.test.ts` | T-GHS-API1~3：`githubAppUrl` 取 state → `GET /api/github/setup` 首次/重复绑定均 302 success；断言只落一行（不触发 tenantId code 40）、token 密文落库、installation 仓库清单正确（需 `GITHUB_API_BASE` 指向进程内 mock + `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/agent-api/schema-index-invariants.test.ts` | T-IDX-API1~3：`user_commit_settings` 固定名 workspace 唯一索引存在且默认名/旧索引不残留；`mcpservers` / `githubaccounts` 无无租户维度唯一索引；`githubaccounts` / `user_commit_settings.workspaceId` 无 BSON ObjectId 行（需 `MONGODB_URI`） |
+
+> `GITHUB_API_BASE` 同时用于 `agent-api/github.test.ts`（Check Runs）与本套件；agent-api 的 GitHub App 安装信息/仓库清单/卸载调用均走该 base（生产默认 `https://api.github.com`）。
+
 ## 云主机工作负载 / Github 设置
 
 - `src/agent-api/cloud-host-workload.test.ts`：需要 `MONGODB_URI` + `HARNESS_ENABLED=true`，直插 `controllers/controllerworkspaces/cloudhosts` 造一个在线云主机，覆盖 `cloudHostWorkloads` 归属校验、`cloudHostWorkloadCatalog`（鉴权 + standard 列表 + `installed=false`）、Github 帐号锁定（T-GH-API-L1 首绑落库 / L2 异帐号拒绝 `github account is locked` / L3 同帐号换仓库放行）与 Github setup 输入校验（前缀相对路径/`..`/仓库格式与 `~` 展开矩阵：`~/workspace`/`~`/`~//a` 接受并归一、`~abc` 以「前缀地址必须以 / 或 ~ 开头」拒绝、`~/a/../b` 拒绝，T-GH-API-P1~P4）；不调用真实 GitHub。
 - `src/agent-api/cloud-host.test.ts`：新增创建期 `workloadIds` 用例（T-CH-API-W2/W3/W4：Docker 可创建、超 5 个 → `too many workloads (max 5)`、不存在 ID → `invalid workload`、harness ID → `workload is not installable`）；不传 `workloadIds` 的历史路径由既有创建用例覆盖。
 - `src/admin-api/cloud-workload.test.ts`：`adminCloudWorkloads` 断言 `workloadKind`/`harnessType`（standard → `STANDARD`/null，harness → `HARNESS`/`opencode`，T-ADM-WL-API1）。
-- 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖。
+- 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖；`GET /api/github/setup` 的 upsert 冲突回归由 `tests/api/src/agent-api/github-setup-upsert.test.ts` 覆盖。

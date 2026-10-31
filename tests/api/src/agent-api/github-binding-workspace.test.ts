@@ -38,7 +38,7 @@ const GITHUB_ACCOUNTS = `
 const COMMIT_SETTINGS = `
   query TeamCommitSettings {
     commitSettings {
-      committerMode committerType githubAccountId customName customEmail source readOnly
+      committerType customName customEmail
     }
   }
 `;
@@ -46,7 +46,7 @@ const COMMIT_SETTINGS = `
 const UPDATE_COMMIT_SETTINGS = `
   mutation TeamUpdateCommitSettings($input: CommitSettingsInput!) {
     updateCommitSettings(input: $input) {
-      committerMode committerType githubAccountId source readOnly
+      committerType customName customEmail
     }
   }
 `;
@@ -251,36 +251,23 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
       expect(shared, '普通工作区应读到团队全局工作区的共享 GitHubAccount').toBeDefined();
       expect(shared).toMatchObject({ id: accountId, workspaceId: teamGlobalId, githubLogin });
 
-      // 阻断-B 回归：提交人候选校验与共享读口径一致（全局账号在普通工作区可选）
+      // Commit 设置已改为成员级：与工作区无关，保存后同一份在任意工作区可读
       const saved = await gqlCtx(
         UPDATE_COMMIT_SETTINGS,
-        {
-          input: {
-            committerMode: 'HUMAN_ONLY',
-            committerType: 'GITHUB_ACCOUNT',
-            githubAccountId: accountId,
-          },
-        },
+        { input: { committerType: 'CUSTOM', customName: 'Dev Committer', customEmail: 'dev@example.com' } },
         developer.token,
         normalWorkspaceId,
       );
       expect(saved.errors, JSON.stringify(saved.errors)).toBeUndefined();
-      expect(saved.data.updateCommitSettings).toMatchObject({
-        committerMode: 'HUMAN_ONLY',
-        committerType: 'GITHUB_ACCOUNT',
-        githubAccountId: accountId,
-        source: 'WORKSPACE',
-        readOnly: false,
+      expect(saved.data.updateCommitSettings).toEqual({
+        committerType: 'CUSTOM',
+        customName: 'Dev Committer',
+        customEmail: 'dev@example.com',
       });
 
-      const readback = await gqlCtx(COMMIT_SETTINGS, undefined, developer.token, normalWorkspaceId);
-      expect(readback.errors, JSON.stringify(readback.errors)).toBeUndefined();
-      expect(readback.data.commitSettings).toMatchObject({
-        committerMode: 'HUMAN_ONLY',
-        committerType: 'GITHUB_ACCOUNT',
-        githubAccountId: accountId,
-        source: 'WORKSPACE',
-      });
+      const readbackInGlobal = await gqlCtx(COMMIT_SETTINGS, undefined, developer.token, teamGlobalId);
+      expect(readbackInGlobal.errors, JSON.stringify(readbackInGlobal.errors)).toBeUndefined();
+      expect(readbackInGlobal.data.commitSettings).toMatchObject({ customName: 'Dev Committer' });
     },
   );
 
@@ -323,23 +310,17 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
 
       const settingsView = await gqlCtx(COMMIT_SETTINGS, undefined, developer.token, teamGlobalId);
       expect(settingsView.errors, JSON.stringify(settingsView.errors)).toBeUndefined();
-      expect(settingsView.data.commitSettings.readOnly).toBe(true);
+      expect(settingsView.data.commitSettings).not.toHaveProperty('readOnly');
 
-      // 写 1：updateCommitSettings 在请求链路被拒，resolver 白名单逐字透出只读红线
+      // Commit 设置是成员属性：即使在只读工作区，developer 也可保存自己的提交人
       const settingsWrite = await gqlCtx(
         UPDATE_COMMIT_SETTINGS,
-        {
-          input: {
-            committerMode: 'HUMAN_ONLY',
-            committerType: 'GITHUB_ACCOUNT',
-            githubAccountId: accountId,
-          },
-        },
+        { input: { committerType: 'CUSTOM', customName: 'Readonly Dev', customEmail: 'ro@example.com' } },
         developer.token,
         teamGlobalId,
       );
-      expect(settingsWrite.errors, 'developer 在团队全局工作区写 commit 设置应被拒绝').toBeDefined();
-      expect(settingsWrite.errors?.[0]?.message).toBe('global workspace is read-only');
+      expect(settingsWrite.errors, JSON.stringify(settingsWrite.errors)).toBeUndefined();
+      expect(settingsWrite.data.updateCommitSettings).toMatchObject({ customName: 'Readonly Dev' });
 
       // 写 2：unbindGitHubAccount 原样透出只读红线文案
       const unbind = await gqlCtx(UNBIND_GITHUB_ACCOUNT, { accountId }, developer.token, teamGlobalId);
@@ -360,34 +341,20 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
       }
       const saved = await gqlCtx(
         UPDATE_COMMIT_SETTINGS,
-        {
-          input: {
-            committerMode: 'HUMAN_ONLY',
-            committerType: 'GITHUB_ACCOUNT',
-            githubAccountId: accountId,
-          },
-        },
+        { input: { committerType: 'CUSTOM', customName: 'Admin Committer', customEmail: 'admin@example.com' } },
         admin.token,
         teamGlobalId,
       );
       expect(saved.errors, JSON.stringify(saved.errors)).toBeUndefined();
-      expect(saved.data.updateCommitSettings).toMatchObject({
-        committerMode: 'HUMAN_ONLY',
-        committerType: 'GITHUB_ACCOUNT',
-        githubAccountId: accountId,
-        source: 'WORKSPACE',
-        readOnly: false,
+      expect(saved.data.updateCommitSettings).toEqual({
+        committerType: 'CUSTOM',
+        customName: 'Admin Committer',
+        customEmail: 'admin@example.com',
       });
 
       const readback = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, teamGlobalId);
       expect(readback.errors, JSON.stringify(readback.errors)).toBeUndefined();
-      expect(readback.data.commitSettings).toMatchObject({
-        committerMode: 'HUMAN_ONLY',
-        committerType: 'GITHUB_ACCOUNT',
-        githubAccountId: accountId,
-        source: 'WORKSPACE',
-        readOnly: false,
-      });
+      expect(readback.data.commitSettings).toMatchObject({ customName: 'Admin Committer' });
     },
   );
 

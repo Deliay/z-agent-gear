@@ -8,7 +8,9 @@ import { Workspace } from './../models/workspace.js';
 import { TenantMember } from './../models/tenant-member.js';
 import { WorkspaceMember } from './../models/workspace-member.js';
 import { Session } from './../models/session.js';
+import { WorkflowInstance } from './../models/workflow-instance.js';
 import { workspaceService, WORKSPACE_ERRORS } from './workspace-service.js';
+import { runWithWorkspace } from './workspace-context.js';
 import { tenantMemberService } from './tenant-member-service.js';
 
 let server: MongoMemoryServer;
@@ -121,7 +123,7 @@ describe('WorkspaceService（T-WSP，真库）', () => {
     ).rejects.toThrow(WORKSPACE_ERRORS.globalImmutable);
   });
 
-  it('T-WSP4: 删除保护（11 集合任一持有资源即拒绝）', async () => {
+  it('T-WSP4: 删除保护（10 集合任一持有资源即拒绝；Commit 设置已成员级不再计入）', async () => {
     const tenant = await createTeam('team-d');
     const user = await createUser('dave');
     await TenantMember.create({ tenantId: tenant._id, userId: user._id, role: 'admin' });
@@ -345,4 +347,53 @@ describe('TenantMemberService（T-TM，真库）', () => {
     ).rejects.toThrow(WORKSPACE_ERRORS.alreadyMember);
     spy.mockRestore();
   });
+});
+
+describe('WorkspaceService.systemWorkspaceContext（团队租户，真库）', () => {
+  it('T-WSP-SYS1: 构造 admin/非只读上下文，团队实例查询在上下文内可见', async () => {
+    const team = await createTeam('sys-team');
+    const user = await createUser('sys-user');
+    const global = await Workspace.create({ tenantId: team._id, name: '全局工作区', type: 'global' });
+    const normal = await Workspace.create({ tenantId: team._id, name: '项目', type: 'normal' });
+    const instanceId = new mongoose.Types.ObjectId();
+    await WorkflowInstance.collection.insertOne({
+      _id: instanceId,
+      userId: user._id,
+      tenantId: team._id,
+      controllerId: new mongoose.Types.ObjectId(),
+      workspaceId: new mongoose.Types.ObjectId(),
+      resourceWorkspaceId: normal._id,
+      configuredWorkflowId: new mongoose.Types.ObjectId(),
+      name: 'wf',
+      nodes: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    // 无上下文：tenant-scope 注入 tenantId=userId，团队实例（tenantId=team）查不到
+    expect(await WorkflowInstance.findOne({ _id: instanceId, userId: user._id }).lean()).toBeNull();
+
+    const context = await workspaceService.systemWorkspaceContext(String(normal._id));
+    expect(context).toMatchObject({
+      id: String(normal._id),
+      tenantId: String(team._id),
+      type: 'normal',
+      role: 'admin',
+      readOnly: false,
+      globalWorkspaceId: String(global._id),
+    });
+
+    const found = await runWithWorkspace(
+      context,
+      async () => WorkflowInstance.findOne({ _id: instanceId, userId: user._id }).lean(),
+    );
+    expect(found).not.toBeNull();
+  }, 20_000);
+
+  it('T-WSP-SYS2: 非法/不存在的工作区 id 返回 undefined', async () => {
+    await expect(workspaceService.systemWorkspaceContext('not-an-id')).resolves.toBeUndefined();
+    await expect(
+      workspaceService.systemWorkspaceContext(String(new mongoose.Types.ObjectId())),
+    ).resolves.toBeUndefined();
+  }, 20_000);
 });

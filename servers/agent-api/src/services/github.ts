@@ -46,6 +46,11 @@ export const ISSUES_LINKAGE_LABEL_DESCRIPTION = '由 z-agent-gear 云电脑 Issu
 
 const GITHUB_API = 'https://api.github.com';
 
+/** GitHub REST base：生产默认 api.github.com；测试经 `GITHUB_API_BASE` 指向进程内 mock。 */
+function githubApiBase(): string {
+  return config.githubApiBaseUrl || GITHUB_API;
+}
+
 /** 仓库级 installation token 进程内缓存（不落库、不写日志；到期前 5 分钟作废） */
 interface RepoTokenCacheEntry {
   token: string;
@@ -288,6 +293,79 @@ export class GitHubService {
   }
 
   /**
+   * 个人租户绑定的 GitHub 帐号（「导入Github帐号信息」弹窗数据源）。
+   *
+   * 口径：`User.accountId` → 同账户全部 users → 各自 personal 租户 id（personal 租户 `_id` 复用 userId）
+   * → `GitHubAccount.find({ tenantId ∈ personalTenantIds, workspaceId ∈ {null, 本租户全局工作区} })`，
+   * 排除普通（team）工作区副本，保证弹窗只列「个人租户绑定」帐号。
+   */
+  async getPersonalAccounts(userId: string): Promise<GitHubAccountInfo[]> {
+    if (!mongoose.isValidObjectId(userId)) return [];
+    const me = await User.findById(userId).select('accountId').lean();
+    const accountId = (me as { accountId?: unknown } | null)?.accountId;
+    if (!accountId) return [];
+
+    const sameAccountUsers = await User.find({ accountId }).select('_id').lean();
+    const personalTenantIds = sameAccountUsers.map((user) => String(user._id));
+    if (personalTenantIds.length === 0) return [];
+
+    const globalWorkspaces = await Workspace.find({
+      tenantId: { $in: personalTenantIds },
+      type: 'global',
+    })
+      .select('_id')
+      .lean();
+    const workspaceIds = globalWorkspaces.map((workspace) => String(workspace._id));
+
+    // 绕过 workspace-scope：显式按个人租户 + 全局工作区过滤（个人租户可能不是当前工作区）
+    const accounts = await mongoose.connection
+      .collection('githubaccounts')
+      .find({
+        tenantId: { $in: personalTenantIds },
+        $or: [{ workspaceId: null }, { workspaceId: { $exists: false } }, { workspaceId: { $in: workspaceIds } }],
+      })
+      .toArray();
+
+    const installationsByUser = new Map<number, Array<Record<string, any>>>();
+    for (const account of accounts) {
+      const githubUserId = Number(account.githubUserId);
+      if (!installationsByUser.has(githubUserId)) {
+        installationsByUser.set(
+          githubUserId,
+          await this.installationsForAccount(account as { _id: unknown; githubUserId: number }),
+        );
+      }
+    }
+
+    return accounts.map((account) => ({
+      id: String(account._id),
+      githubUserId: Number(account.githubUserId),
+      githubLogin: String(account.githubLogin),
+      githubAvatarUrl: account.githubAvatarUrl ? String(account.githubAvatarUrl) : undefined,
+      workspaceId: account.workspaceId ? String(account.workspaceId) : '',
+      createdAt:
+        account.createdAt instanceof Date ? account.createdAt.toISOString() : String(account.createdAt),
+      installations: (installationsByUser.get(Number(account.githubUserId)) ?? []).map((i) => ({
+        id: i._id.toString(),
+        installationId: i.installationId,
+        managementUrl:
+          i.accountType === 'Organization'
+            ? `https://github.com/organizations/${i.accountLogin}/settings/installations/${i.installationId}`
+            : `https://github.com/settings/installations/${i.installationId}`,
+        createdAt: i.createdAt instanceof Date ? i.createdAt.toISOString() : String(i.createdAt),
+        repos: (i.repos || []).map((r: Record<string, any>) => ({
+          id: String(r.repoId),
+          repoId: r.repoId,
+          repoName: r.repoName,
+          fullName: r.fullName,
+          private: r.private,
+          permissions: { read: r.permissions?.read ?? false, write: r.permissions?.write ?? false },
+        })),
+      })),
+    }));
+  }
+
+  /**
    * 同账号的其它工作区/租户绑定行（阻断-I）：必须绕过 workspace-scope 读过滤，
    * 否则「最后一个绑定」判定会被当前可见集收窄而误删共享安装数据。
    * 单测无 DB 连接时回退普通查询（mock 友好）。
@@ -503,7 +581,7 @@ export class GitHubService {
 
     const appJwt = this.createAppJwt();
     const response = await fetch(
-      `${config.githubApiBaseUrl || 'https://api.github.com'}/app/installations/${installationId}/access_tokens`,
+      `${githubApiBase()}/app/installations/${installationId}/access_tokens`,
       {
         method: 'POST',
         headers: {
@@ -639,7 +717,7 @@ export class GitHubService {
   private async getInstallationToken(installationId: number): Promise<{ token: string; expiresAt: Date }> {
     const appJwt = this.createAppJwt();
     const response = await fetch(
-      `https://api.github.com/app/installations/${installationId}/access_tokens`,
+      `${githubApiBase()}/app/installations/${installationId}/access_tokens`,
       {
         method: 'POST',
         headers: {
@@ -670,7 +748,7 @@ export class GitHubService {
   private async getInstallationAccount(installationId: number): Promise<{ id: number; login: string; avatar_url: string; type: 'User' | 'Organization' }> {
     const appJwt = this.createAppJwt();
     const response = await fetch(
-      `https://api.github.com/app/installations/${installationId}`,
+      `${githubApiBase()}/app/installations/${installationId}`,
       {
         headers: {
           Authorization: `Bearer ${appJwt}`,
@@ -684,7 +762,7 @@ export class GitHubService {
   }
 
   private async getRepositories(token: string): Promise<any[]> {
-    const response = await fetch('https://api.github.com/installation/repositories', {
+    const response = await fetch(`${githubApiBase()}/installation/repositories`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) throw new Error('Failed to get repositories');
@@ -695,7 +773,7 @@ export class GitHubService {
   private async uninstallApp(installationId: number): Promise<void> {
     const appJwt = this.createAppJwt();
     const response = await fetch(
-      `https://api.github.com/app/installations/${installationId}`,
+      `${githubApiBase()}/app/installations/${installationId}`,
       {
         method: 'DELETE',
         headers: {

@@ -643,7 +643,7 @@ describe('internal management API', () => {
     const stored = await repo.findById(body.id as string);
     expect(JSON.stringify(stored)).not.toContain(secrets.hostKey);
     expect(JSON.stringify(stored)).not.toContain(secrets.modelApiKey);
-    expect(stored?.agentGearMinVersion).toBe('2.10.0');
+    expect(stored?.agentGearMinVersion).toBe('2.12.0');
 
     // Job env 含 harness 变量且模型 Key 不进入 Job env
     const env = k8sClient.getEnv(body.name as string);
@@ -826,15 +826,15 @@ describe('internal management API', () => {
     const lower = await createContainer({ ...base, agentGearMinVersion: '2.1.0' });
     expect(lower.status).toBe(201);
     const lowerBody = (await lower.json()) as { id: string };
-    expect((await repo.findById(lowerBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(lowerBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
-    const higher = await createContainer({ ...base, agentGearMinVersion: '2.10.0' });
+    const higher = await createContainer({ ...base, agentGearMinVersion: '2.13.0' });
     expect(higher.status).toBe(201);
     const higherBody = (await higher.json()) as { id: string };
-    expect((await repo.findById(higherBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(higherBody.id))?.agentGearMinVersion).toBe('2.13.0');
   });
 
-  it('A7: harnessTypes 含 kimi_code → 落库 2.10.0；仅 opencode 维持 2.10.0；非法类型 400', async () => {
+  it('A7: harnessTypes 含 kimi_code → 落库 2.12.0；仅 opencode 亦为 2.12.0；非法类型 400', async () => {
     const base = {
       purpose: 'harness',
       hostId: 'host-kimi',
@@ -858,7 +858,7 @@ describe('internal management API', () => {
     expect(kimi.status).toBe(201);
     const kimiBody = (await kimi.json()) as { id: string; harnessTypes: string[] };
     expect(kimiBody.harnessTypes).toEqual(['kimi_code']);
-    expect((await repo.findById(kimiBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(kimiBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const both = await createContainer({
       ...base,
@@ -867,7 +867,7 @@ describe('internal management API', () => {
     });
     expect(both.status).toBe(201);
     const bothBody = (await both.json()) as { id: string };
-    expect((await repo.findById(bothBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(bothBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const opencode = await createContainer({
       ...base,
@@ -876,7 +876,7 @@ describe('internal management API', () => {
     });
     expect(opencode.status).toBe(201);
     const opencodeBody = (await opencode.json()) as { id: string };
-    expect((await repo.findById(opencodeBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(opencodeBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const bogus = await createContainer({
       ...base,
@@ -887,7 +887,7 @@ describe('internal management API', () => {
     expect(((await bogus.json()) as { error: string }).error).toBe('INVALID_HARNESS');
   });
 
-  it('A7b: harnessTypes 含 deepseek_harness → 落库 2.11.0；混合取最大；白名单外 400', async () => {
+  it('A7b: harnessTypes 含 deepseek_harness → 落库 2.12.0；混合取最大；白名单外 400', async () => {
     const base = {
       purpose: 'harness',
       hostId: 'host-deepseek',
@@ -911,7 +911,7 @@ describe('internal management API', () => {
     expect(deepseek.status).toBe(201);
     const deepseekBody = (await deepseek.json()) as { id: string; harnessTypes: string[] };
     expect(deepseekBody.harnessTypes).toEqual(['deepseek_harness']);
-    expect((await repo.findById(deepseekBody.id))?.agentGearMinVersion).toBe('2.11.0');
+    expect((await repo.findById(deepseekBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const mixed = await createContainer({
       ...base,
@@ -920,7 +920,7 @@ describe('internal management API', () => {
     });
     expect(mixed.status).toBe(201);
     const mixedBody = (await mixed.json()) as { id: string };
-    expect((await repo.findById(mixedBody.id))?.agentGearMinVersion).toBe('2.11.0');
+    expect((await repo.findById(mixedBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const bogus = await createContainer({
       ...base,

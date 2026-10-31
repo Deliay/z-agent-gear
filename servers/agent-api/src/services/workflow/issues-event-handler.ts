@@ -3,15 +3,20 @@ import { config } from '../../config/index.js';
 import { CloudHostIssuesLinkage } from '../../models/cloud-host-issues-linkage.js';
 import { CloudHostSetupOperation } from '../../models/cloud-host-setup-operation.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
+import { Controller } from '../../models/controller.js';
 import { ControllerWorkspace } from '../../models/controller-workspace.js';
+import { GitHubAccount } from '../../models/github-account.js';
 import { IssueWorkflowTrigger } from '../../models/issue-workflow-trigger.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { cloudHostGithubService } from '../cloud-host-github-service.js';
 import { cloudHostService } from '../cloud-host-service.js';
 import { sanitizeOperationError } from '../cloud-host-workload-service.js';
+import { commitSettingsService } from '../commit-settings-service.js';
 import { controllerWorkspaceService } from '../controller-workspace.js';
 import { githubService } from '../github.js';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { runWithWorkspace, type WorkspaceContext } from '../workspace-context.js';
+import { workspaceService } from '../workspace-service.js';
 import { normalizeWorkspacePrefix, resolveClonePath } from '../workspace-path.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
 import type { IssuesEventPayload } from './github-issues-webhook-payload.js';
@@ -61,6 +66,27 @@ function escapeRegExp(value: string): string {
 }
 
 /**
+ * 触发人（GitHub `sender`）→ 平台成员：按 `GitHubAccount.githubUserId` 匹配。
+ * 未绑定/查询失败 → null（不阻断触发记录创建）；只做归属留档，不做鉴权。
+ */
+async function resolveTriggerUserId(
+  sender?: { id: number; login: string },
+): Promise<mongoose.Types.ObjectId | null> {
+  if (!sender) return null;
+  try {
+    const account = (await GitHubAccount.findOne({ githubUserId: sender.id }).lean()) as {
+      userId?: unknown;
+    } | null;
+    const userId = account?.userId;
+    if (!userId || !mongoose.isValidObjectId(userId)) return null;
+    return new mongoose.Types.ObjectId(String(userId));
+  } catch (err) {
+    console.warn('[issues-event] resolve trigger user failed:', (err as Error).message);
+    return null;
+  }
+}
+
+/**
  * issues 事件入口：仓库反查候选配置 → 标签命中 → 逐配置插入触发记录（唯一索引即幂等闸）
  * → 异步推进状态机（webhook 不等待全链路）。
  */
@@ -83,6 +109,8 @@ export async function handleIssuesEvent(event: IssuesEventPayload): Promise<Issu
   }
 
   const results: IssuesEventResult[] = [];
+  // 触发人快照（sender = 加触发标签者）：一次解析，逐配置复用
+  const triggerUserId = await resolveTriggerUserId(event.sender);
   for (const linkage of matched) {
     const base: IssuesEventResult = {
       controllerId: String(linkage.controllerId),
@@ -93,6 +121,8 @@ export async function handleIssuesEvent(event: IssuesEventPayload): Promise<Issu
     try {
       const trigger = await IssueWorkflowTrigger.create({
         userId: linkage.userId as mongoose.Types.ObjectId,
+        // 显式继承联动配置的租户：事件入口无 ALS 上下文，省略会被写成 `tenantId = userId`
+        tenantId: linkage.tenantId as mongoose.Types.ObjectId,
         controllerId: linkage.controllerId as mongoose.Types.ObjectId,
         linkageId: linkage._id as mongoose.Types.ObjectId,
         configuredWorkflowId: linkage.configuredWorkflowId as mongoose.Types.ObjectId,
@@ -104,6 +134,9 @@ export async function handleIssuesEvent(event: IssuesEventPayload): Promise<Issu
         issueUrl: event.issueUrl,
         issueAuthor: event.author ?? null,
         issueBody: event.body ?? null,
+        triggerSenderId: event.sender?.id ?? null,
+        triggerSenderLogin: event.sender?.login ?? null,
+        triggerUserId,
         status: 'PENDING_WORKSPACE',
       });
       results.push({ ...base, action: 'CREATE_TRIGGER' });
@@ -192,10 +225,31 @@ export class IssuesTriggerRunner {
       if (!trigger) return;
       const status = String(trigger.status ?? '');
       if (status === 'COMPLETED' || status === 'FAILED') return;
-      if (status === 'PENDING_WORKSPACE') return this.prepareWorkspace(trigger);
-      if (status === 'PENDING_INSTANTIATE') return this.instantiateWorkflow(trigger);
-      if (status === 'PENDING_HUMAN_NODE') return this.advanceHumanNode(trigger);
+      const workspace = await this.resolveWorkspace(trigger);
+      await runWithWorkspace(workspace, async () => {
+        if (status === 'PENDING_WORKSPACE') return this.prepareWorkspace(trigger);
+        if (status === 'PENDING_INSTANTIATE') return this.instantiateWorkflow(trigger);
+        if (status === 'PENDING_HUMAN_NODE') return this.advanceHumanNode(trigger);
+      });
     });
+  }
+
+  /**
+   * 触发记录所属租户工作区上下文（控制器创建时已落 `workspaceId`）。
+   *
+   * 事件入口与后台轮询都没有 ALS 上下文；团队租户下若不显式建立，所有带 `userId` 的查询
+   * 会被 `tenant-scope` 注入 `tenantId = userId`，导致云电脑/工作区/配置工作流全部查不到。
+   */
+  private async resolveWorkspace(trigger: Doc): Promise<WorkspaceContext | undefined> {
+    try {
+      const controllerId = trigger.controllerId;
+      if (!controllerId || !mongoose.isValidObjectId(controllerId)) return undefined;
+      const controller = await Controller.findById(controllerId).select('workspaceId').lean();
+      if (!controller?.workspaceId) return undefined;
+      return await workspaceService.systemWorkspaceContext(String(controller.workspaceId));
+    } catch {
+      return undefined;
+    }
   }
 
   private async fail(triggerId: unknown, reason: string): Promise<void> {
@@ -367,6 +421,7 @@ export class IssuesTriggerRunner {
     trigger: Doc,
     ctx: { userId: string; controllerId: string; workspaceId: string; configuredWorkflowId: string; nodes: InstantiateNodeInput[] },
   ): Promise<void> {
+    const worktreeCommitter = await this.resolveTriggerWorktreeCommitter(trigger);
     const instance = await workflowInstanceService.instantiate(ctx.userId, {
       source: 'CONFIGURED',
       configuredWorkflowId: ctx.configuredWorkflowId,
@@ -379,6 +434,7 @@ export class IssuesTriggerRunner {
       ),
       nodes: ctx.nodes,
       createWorkflowWorktree: true,
+      worktreeCommitter,
     });
     const instanceId = String(instance._id);
     const humanNodeId = resolveFirstHumanNode(instance.nodes as never);
@@ -393,6 +449,33 @@ export class IssuesTriggerRunner {
       { _id: trigger._id },
       { $set: { workflowInstanceId: instanceId, humanNodeId, status: 'PENDING_HUMAN_NODE' } },
     );
+  }
+
+  /**
+   * Issue 触发人身份优先级：`triggerUserId` 的「提交人」→ sender 的 GitHub 身份
+   *（`login` + `<id>+<login>@users.noreply.github.com`）→ null（沿用容器级 bot）。
+   */
+  private async resolveTriggerWorktreeCommitter(
+    trigger: Doc,
+  ): Promise<{ name: string; email: string } | null> {
+    const triggerUserId = trigger.triggerUserId ? String(trigger.triggerUserId) : '';
+    if (triggerUserId && mongoose.isValidObjectId(triggerUserId)) {
+      try {
+        const committer = await commitSettingsService.resolveWorktreeCommitter(triggerUserId);
+        if (committer) return committer;
+      } catch (err) {
+        console.warn('[issues-trigger] resolve committer failed:', (err as Error).message);
+      }
+    }
+    const senderId = Number(trigger.triggerSenderId ?? 0);
+    const senderLogin = trigger.triggerSenderLogin ? String(trigger.triggerSenderLogin) : '';
+    if (Number.isInteger(senderId) && senderId > 0 && senderLogin) {
+      return {
+        name: senderLogin,
+        email: `${senderId}+${senderLogin}@users.noreply.github.com`,
+      };
+    }
+    return null;
   }
 
   /** PENDING_HUMAN_NODE：回评（一次补偿）→ 轮询首个人类节点 → 自动完成。 */

@@ -155,6 +155,7 @@ flowchart LR
 ### 实现中文档（`shipping/`）
 
 - [[shipping/20261025-cloud-container-unlimited-lifetime.md]] — 云电脑取消最长运行时间限制（云端工作容器不再因到达时间上限被平台强制销毁）
+- [[shipping/20261029-commit-author-settings-optimization.md]] — Commit 作者设置优化（提交人由团队共享改为成员独立并迁入新增「Git」区块、提交人模式下线；「自定义」增加「导入Github帐号信息」弹窗并移除「Github帐号」类型（存量自动转换）；提交身份按上下文下发：云电脑自身=平台 bot、勾选 Worktree 的会话/工作流=创建者、Issue 拉起的工作流=触发人）
 
 ### 已发布文档（`released/`）
 
