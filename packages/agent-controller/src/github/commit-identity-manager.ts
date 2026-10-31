@@ -1,5 +1,7 @@
 import { CommitIdentity, type CommitIdentityMode } from './commit-identity.js';
 import { redactSecrets } from '../workload-executor.js';
+import type { Logger as PinoLogger } from 'pino';
+import { logger as rootLogger } from '../observability/logger.js';
 
 /** 提交身份同步间隔（50 分钟）。 */
 export const REFRESH_INTERVAL_MS = 50 * 60 * 1000;
@@ -29,7 +31,8 @@ export interface CommitIdentityManagerDeps {
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   applier?: CommitIdentityApplier;
-  log?: (message: string) => void;
+  /** 注入 logger（测试用）；缺省进程级单例，`component: 'commit-identity'`。 */
+  log?: PinoLogger;
   /** 定时器注入（测试用）；缺省使用全局 `setTimeout`。 */
   setTimeout?: typeof setTimeout;
   /** 退避等待注入（测试用）；缺省使用 `setTimeout`。 */
@@ -71,7 +74,7 @@ export class CommitIdentityManager {
   private readonly env: NodeJS.ProcessEnv;
   private readonly fetchFn: typeof fetch;
   private readonly applier: CommitIdentityApplier;
-  private readonly log: (message: string) => void;
+  private readonly log: PinoLogger;
   private readonly setTimeoutFn: typeof setTimeout;
   private readonly sleepFn: (ms: number) => Promise<void>;
 
@@ -84,7 +87,8 @@ export class CommitIdentityManager {
     this.env = deps.env ?? process.env;
     this.fetchFn = deps.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
     this.applier = deps.applier ?? new CommitIdentity();
-    this.log = deps.log ?? ((message: string) => console.log(message));
+    // component 固定绑定：无论注入哪路 logger，`[CommitIdentity]` 前缀语义由 component 字段承接
+    this.log = (deps.log ?? rootLogger).child({ component: 'commit-identity' });
     this.setTimeoutFn = deps.setTimeout ?? setTimeout;
     this.sleepFn =
       deps.sleep ??
@@ -106,7 +110,7 @@ export class CommitIdentityManager {
     this.stopped = false;
     const missing = this.missingEnv();
     if (missing.length > 0) {
-      this.log(`[CommitIdentity] disabled: missing environment variable(s): ${missing.join(', ')}`);
+      this.log.warn({ event: 'disabled', missing }, 'commit identity manager disabled: missing environment variables');
       return;
     }
     this.started = true;
@@ -149,9 +153,15 @@ export class CommitIdentityManager {
       const result = await this.request(url, hostKey);
       if (result.kind === 'retryable' && attempt < BACKOFF_MS.length) {
         const delay = BACKOFF_MS[attempt]!;
-        this.log(
-          `[CommitIdentity] 提交身份下发未授权（HTTP ${result.status}），` +
-            `${Math.round(delay / 60_000)} 分钟后重试（${attempt + 1}/${BACKOFF_MS.length}）`,
+        this.log.warn(
+          {
+            event: 'unauthorized_retry',
+            status: result.status,
+            delayMs: delay,
+            attempt: attempt + 1,
+            maxAttempts: BACKOFF_MS.length,
+          },
+          '提交身份下发未授权，稍后重试',
         );
         await this.sleepFn(delay);
         continue;
@@ -223,7 +233,7 @@ export class CommitIdentityManager {
       } catch (error) {
         return { ok: false, error: this.applyError('移除', error, hostKey) };
       }
-      this.log('[CommitIdentity] 托管配置已移除（mode=unset）');
+      this.log.info({ event: 'removed', mode: 'unset' }, '托管配置已移除');
       return { ok: true, mode: 'unset' };
     }
 
@@ -253,7 +263,7 @@ export class CommitIdentityManager {
       }
     }
 
-    this.log(`[CommitIdentity] 提交身份已更新（mode=${mode}）`);
+    this.log.info({ event: 'updated', mode }, '提交身份已更新');
     return { ok: true, mode: mode as CommitIdentityMode };
   }
 

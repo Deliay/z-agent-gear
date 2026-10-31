@@ -31,6 +31,11 @@ vi.mock('@agentclientprotocol/sdk', () => ({
 
 import { AcpSessionBridge } from './bridge.js';
 import { CLIENT_CAPABILITIES, FEATURE_IDS } from './capabilities.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
+import type { ObservationLogger } from '../observability/logger.js';
+
+/** 每个用例独立的内存日志 sink（断言结构化 records，不再 spy console）。 */
+let testLog: TestLogger;
 
 class MockAcpSpawner {
   start = vi.fn();
@@ -58,7 +63,7 @@ describe('AcpSessionBridge - requestPermission', () => {
   function createBridge() {
     return new AcpSessionBridge(
       mockSocket as never,
-      { sessionId: 'sess-1', cwd: '/home/user' },
+      { sessionId: 'sess-1', cwd: '/home/user', logger: testLog.logger },
       mockSpawner as never,
     );
   }
@@ -68,6 +73,7 @@ describe('AcpSessionBridge - requestPermission', () => {
     vi.useFakeTimers();
     mockSocket = createMockSocket();
     mockSpawner = new MockAcpSpawner();
+    testLog = createTestLogger('acp-bridge');
   });
 
   afterEach(() => {
@@ -139,12 +145,16 @@ describe('AcpSessionBridge - requestPermission', () => {
 
   it('should warn and ignore invalid requestId in handlePermissionResponse', () => {
     const bridge = createBridge();
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     bridge.handlePermissionResponse('invalid-id', { outcome: 'selected', optionId: 'opt-1' });
 
-    expect(warnSpy).toHaveBeenCalledWith('Permission request invalid-id not found');
-    warnSpy.mockRestore();
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({
+        level: 'warn',
+        msg: 'permission request not found',
+        requestId: 'invalid-id',
+      }),
+    );
   });
 
   it('should handle cancelled outcome from user', async () => {
@@ -203,13 +213,13 @@ describe('AcpSessionBridge - requestPermission', () => {
     await vi.advanceTimersByTimeAsync(65_000);
     await promise;
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const emitCall = mockSocket.emit.mock.calls.find((c: unknown[]) => c[0] === 'acp:permission');
     const requestId = (emitCall![1] as { requestId: string }).requestId;
 
     bridge.handlePermissionResponse(requestId, { outcome: 'selected', optionId: 'opt-1' });
-    expect(warnSpy).toHaveBeenCalled();
-    warnSpy.mockRestore();
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({ level: 'warn', msg: 'permission request not found', requestId }),
+    );
   });
 });
 
@@ -220,7 +230,7 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
   function createBridge(mcpEndpoint?: { token: string; serverNames: string[] }) {
     return new AcpSessionBridge(
       mockSocket as never,
-      { sessionId: 'sess-1', cwd: '/home/user', mcpEndpoint, mcpPort: 47291 },
+      { sessionId: 'sess-1', cwd: '/home/user', mcpEndpoint, mcpPort: 47291, logger: testLog.logger },
       mockSpawner as never,
     );
   }
@@ -230,6 +240,7 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
     vi.useFakeTimers();
     mockSocket = createMockSocket();
     mockSpawner = new MockAcpSpawner();
+    testLog = createTestLogger('acp-bridge');
   });
 
   afterEach(() => {
@@ -278,7 +289,6 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
   });
 
   it('should fail with a diagnosable error when mcpEndpoint.serverNames is missing', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const bridge = createBridge({
       token: 'tok-1',
       // simulate an upstream payload that drifts from the contract
@@ -294,7 +304,13 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
       error: expect.stringContaining('serverNames'),
     }));
     // the failure must be visible in local logs, not only via socket events
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('serverNames'));
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({
+        level: 'error',
+        msg: 'acp session failed',
+        err: expect.objectContaining({ message: expect.stringContaining('serverNames') }),
+      }),
+    );
     expect(mockSpawner.stop).toHaveBeenCalled();
   });
 
@@ -315,7 +331,6 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
   });
 
   it('should log the MCP servers passed to session/new without leaking the token', async () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const bridge = createBridge({
       token: 'secret-token',
       serverNames: ['fluentui-mcp'],
@@ -323,11 +338,11 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
 
     await bridge.start();
 
-    const logLines = logSpy.mock.calls.map((c) => String(c[0]));
-    const mcpLog = logLines.find((l) => l.includes('passing MCP servers via session/new'));
+    const mcpLog = testLog.records.find((r) => r.event === 'mcp_servers_passed');
     expect(mcpLog).toBeDefined();
-    expect(mcpLog).toContain('fluentui-mcp(type=http, url=http://127.0.0.1:47291/mcp/sess-1/fluentui-mcp');
-    expect(mcpLog).not.toContain('secret-token');
+    expect(mcpLog).toEqual(expect.objectContaining({ component: 'acp-bridge', method: 'session/new' }));
+    expect(String(mcpLog?.servers)).toContain('fluentui-mcp(type=http, url=http://127.0.0.1:47291/mcp/sess-1/fluentui-mcp');
+    expect(JSON.stringify(mcpLog)).not.toContain('secret-token');
   });
 
   it('should warn when passing http MCP servers to an agent without http MCP capability', async () => {
@@ -335,7 +350,6 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
       protocolVersion: 1,
       agentCapabilities: { mcpCapabilities: { http: false, sse: true } },
     });
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bridge = createBridge({
       token: 'tok-1',
       serverNames: ['fluentui-mcp'],
@@ -343,7 +357,9 @@ describe('AcpSessionBridge - mcpEndpoint injection', () => {
 
     await bridge.start();
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('mcpCapabilities.http'));
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({ level: 'warn', msg: expect.stringContaining('mcpCapabilities.http') }),
+    );
     // still passes the servers through — the agent decides
     expect(mockNewSession).toHaveBeenCalledWith(expect.objectContaining({
       mcpServers: [expect.objectContaining({ type: 'http', name: 'fluentui-mcp' })],
@@ -402,9 +418,10 @@ describe('AcpSessionBridge - initial mode/model', () => {
   }
 
   function createBridge(opts: { modeId?: string; modelId?: string } = {}) {
-    const options: { sessionId: string; cwd: string; initialModeId?: string; initialModelId?: string } = {
+    const options: { sessionId: string; cwd: string; initialModeId?: string; initialModelId?: string; logger?: ObservationLogger } = {
       sessionId: 'sess-1',
       cwd: '/home/user',
+      logger: testLog.logger,
     };
     if (opts.modeId) options.initialModeId = opts.modeId;
     if (opts.modelId) options.initialModelId = opts.modelId;
@@ -417,6 +434,7 @@ describe('AcpSessionBridge - initial mode/model', () => {
     vi.useFakeTimers();
     mockSocket = createMockSocket();
     mockSpawner = new MockAcpSpawner();
+    testLog = createTestLogger('acp-bridge');
   });
 
   afterEach(() => {
@@ -527,7 +545,6 @@ describe('AcpSessionBridge - initial mode/model', () => {
   });
 
   it('响应快照 currentValue 与请求值不一致 → 重试一次 → 仍不符 → emit failed', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     mockNewSession.mockResolvedValueOnce({
       sessionId: 'acp-sess-abc',
       configOptions: [modeConfigOption('build')],
@@ -547,7 +564,9 @@ describe('AcpSessionBridge - initial mode/model', () => {
       modeStatus: 'failed',
       error: expect.stringContaining('code'),
     }));
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('requested=code'));
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({ level: 'warn', kind: 'mode', requested: 'code' }),
+    );
   });
 
   it('session/new 无 configOptions：config_option_update 到达后补应用 + 回读确认 + emit applied', async () => {
@@ -588,7 +607,6 @@ describe('AcpSessionBridge - initial mode/model', () => {
   });
 
   it('agent 不暴露 model config-option：挂起超时后 warn 并 emit failed（不阻断会话）', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bridge = createBridge({ modelId: 'gpt-5' });
     const initialized = vi.fn();
     bridge.on('acp:initialized', initialized);
@@ -609,11 +627,12 @@ describe('AcpSessionBridge - initial mode/model', () => {
       modelStatus: 'failed',
       error: expect.any(String),
     }));
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('initial model'));
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({ level: 'warn', event: 'initial_config_timeout', kind: 'model', requested: 'gpt-5' }),
+    );
   });
 
   it('INITIAL_CONFIG_PENDING_TIMEOUT_MS 覆盖默认挂起等待上限', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
     process.env.INITIAL_CONFIG_PENDING_TIMEOUT_MS = '1500';
     const bridge = createBridge({ modelId: 'gpt-5' });
 
@@ -628,7 +647,6 @@ describe('AcpSessionBridge - initial mode/model', () => {
   });
 
   it('apply 抛错（agent 拒绝 model 切换）→ 重试一次仍失败 → warn 并 emit failed', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     mockNewSession.mockResolvedValueOnce({
       sessionId: 'acp-sess-abc',
       configOptions: [modelConfigOption('gpt-4')],
@@ -651,7 +669,9 @@ describe('AcpSessionBridge - initial mode/model', () => {
       modelStatus: 'failed',
       error: expect.stringContaining('model switching is not supported'),
     }));
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('requested=gpt-5'));
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({ level: 'warn', kind: 'model', requested: 'gpt-5' }),
+    );
   });
 
   it('should not apply mode/model when not provided', async () => {
@@ -729,7 +749,7 @@ describe('AcpSessionBridge - capability snapshot', () => {
   function createBridge() {
     return new AcpSessionBridge(
       mockSocket as never,
-      { sessionId: 'sess-1', cwd: '/home/user' },
+      { sessionId: 'sess-1', cwd: '/home/user', logger: testLog.logger },
       mockSpawner as never,
     );
   }
@@ -739,6 +759,7 @@ describe('AcpSessionBridge - capability snapshot', () => {
     vi.useFakeTimers();
     mockSocket = createMockSocket();
     mockSpawner = new MockAcpSpawner();
+    testLog = createTestLogger('acp-bridge');
   });
 
   afterEach(() => {
@@ -810,7 +831,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
   function createBridge() {
     return new AcpSessionBridge(
       mockSocket as never,
-      { sessionId: 'sess-1', cwd: '/home/user' },
+      { sessionId: 'sess-1', cwd: '/home/user', logger: testLog.logger },
       mockSpawner as never,
     );
   }
@@ -820,6 +841,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
     vi.useFakeTimers();
     mockSocket = createMockSocket();
     mockSpawner = new MockAcpSpawner();
+    testLog = createTestLogger('acp-bridge');
   });
 
   afterEach(() => {
@@ -828,7 +850,6 @@ describe('AcpSessionBridge - elicitation observability', () => {
   });
 
   it('T-B3: 未知 elicitation 模式返回 cancel 并发出 resolved(unsupported_mode)', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bridge = createBridge();
 
     const result = await bridge.unstable_createElicitation({ mode: 'custom' } as never);
@@ -841,11 +862,13 @@ describe('AcpSessionBridge - elicitation observability', () => {
       detail: 'custom',
     }));
     expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation', expect.anything());
-    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(testLog.records.filter((r) => r.level === 'warn')).toHaveLength(1);
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({ level: 'warn', event: 'elicitation_unsupported_mode', mode: 'custom' }),
+    );
   });
 
   it('T-B3b: unsupported_mode 的 detail 截断 Agent 可控字符串', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bridge = createBridge();
 
     await bridge.unstable_createElicitation({ mode: 'x'.repeat(500) } as never);
@@ -857,7 +880,6 @@ describe('AcpSessionBridge - elicitation observability', () => {
   });
 
   it('T-B4: 65s 超时返回 cancel 并发出 resolved(timeout)，不残留 pending', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bridge = createBridge();
 
     const promise = bridge.unstable_createElicitation({
@@ -877,10 +899,18 @@ describe('AcpSessionBridge - elicitation observability', () => {
       reason: 'timeout',
       detail: 'bridge timeout (65s)',
     }));
-    expect(warnSpy).toHaveBeenCalled();
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({ level: 'warn', event: 'elicitation_timeout', requestId }),
+    );
 
     bridge.handleElicitationResponse(requestId, 'accept', { answer: 'x' });
-    expect(warnSpy).toHaveBeenCalledWith(`Elicitation request ${requestId} not found`);
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({
+        level: 'warn',
+        msg: 'elicitation request not found',
+        elicitationId: requestId,
+      }),
+    );
   });
 
   it('T-B5: 正常 form 模式只发 acp:elicitation，响应后 65s 内不发 resolved（clearTimeout 生效）', async () => {
@@ -1072,7 +1102,6 @@ describe('AcpSessionBridge - elicitation observability', () => {
   });
 
   it('T-B11: 进程退出（spawner.closed）收敛 pending 并发 cancelled，65s 后不再发 timeout', async () => {
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
     const bridge = createBridge();
     await bridge.start();
 

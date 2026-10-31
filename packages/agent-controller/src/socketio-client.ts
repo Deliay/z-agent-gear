@@ -22,6 +22,8 @@ import { McpRelay } from './mcp/relay.js';
 import { LocalMcpServer } from './mcp/local-server.js';
 import { WorkloadExecutor, type WorkloadRunPayload, collectSecretValues, redactSecrets } from './workload-executor.js';
 import { EXIT_SERVER_SHUTDOWN, resolveShutdownExitCode } from './exit-codes.js';
+import { logger as rootLogger, type ObservationLogger } from './observability/logger.js';
+import { injectTraceparent, withSpan } from './observability/trace.js';
 
 // 版本号唯一事实源为 package.json（register 上报的完整版本；服务端按 MIN_WORKER_VERSION=2.2.0 门禁）。
 // 2.8.0 起 `kimi_code` 使用前登录闸门（`kimi login` stdio 判定 + `harness:login:*` 事件族）；
@@ -149,6 +151,8 @@ export interface ConnectToServerOptions {
    * 清理本地 Key、关闭 socket、退出进程。
    */
   onShutdown?: (payload: ShutdownPayload) => void;
+  /** 注入 logger（测试用）；缺省进程级单例，统一 `component: 'socketio-client'`。 */
+  logger?: ObservationLogger;
 }
 
 interface ErrorPayload {
@@ -422,13 +426,18 @@ export function connectToServer(
     handshakeToken = endpointToken ?? (key || undefined);
   }
   const connectEndpoint = stripTokenFromEndpoint(endpoint);
+  // 日志：缺省进程级单例；测试可注入（断言 records）。
+  const log = options?.logger ?? rootLogger.child({ component: 'socketio-client' });
 
+  // T-OBS13：握手 auth 注入当前活跃 span 的 traceparent（无活跃 span 不注入无效值）。
+  // auth 用函数形态：每次连接尝试（含自动/手动重连）重新求值 → 重连时重新注入。
   const socket = createSocketIOClient(connectEndpoint, {
     transports: ['websocket'],
     reconnection: true,
     reconnectionDelay: 1000,
     reconnectionDelayMax: 60000,
-    auth: handshakeToken ? { token: handshakeToken } : {},
+    auth: (cb: (data: object) => void) =>
+      cb(injectTraceparent(handshakeToken ? { token: handshakeToken } : {})),
   });
 
   const heartbeat = new Heartbeat();
@@ -450,7 +459,7 @@ export function connectToServer(
   // ready promise 保证 acp:start/acp:resume 读取 localServer.port 前服务已 listening（启动只 await 一次）。
   const mcpServerReady = localServer ? localServer.start() : Promise.resolve();
   mcpServerReady.catch((err: Error) => {
-    console.error(`[MCP] failed to start local MCP endpoint: ${err.message}`);
+    log.error({ event: 'mcp_local_start_failed', err }, 'failed to start local MCP endpoint');
   });
 
   // Seed the fs:remove-dir whitelist with cwds of ACP processes that survived
@@ -477,12 +486,21 @@ export function connectToServer(
   const scheduleReconnect = (): void => {
     if (!cloudHostMode || shutdownStarted) return;
     clearReconnectTimer();
-    const delay = cloudHostReconnectDelay(reconnectAttempt);
+    const attempt = reconnectAttempt;
+    const delay = cloudHostReconnectDelay(attempt);
     reconnectAttempt += 1;
-    console.log(`Connection lost; reconnecting in ${delay}ms...`);
+    log.info({ event: 'reconnect_scheduled', attempt, delayMs: delay }, 'connection lost; reconnecting');
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      if (!shutdownStarted) socket.connect();
+      if (shutdownStarted) return;
+      // 云电脑保活/重启循环：每轮一个 span（attrs attempt），不逐 socket/进程事件开 span。
+      withSpan(
+        'cloud-host.reconnect',
+        { attempt, delayMs: delay },
+        () => {
+          socket.connect();
+        },
+      );
     }, delay);
   };
 
@@ -498,7 +516,7 @@ export function connectToServer(
     // 若此处归零会使退避永远停留在 1s（R2-6）。仅在 registered（真正注册成功）后重置。
     // 不直接打印 endpoint：cloud-controller 场景下 endpoint 含一次性 token，避免凭据进入日志
     const { origin, namespace } = parseEndpoint(connectEndpoint);
-    console.log(`Connected to ${origin}${namespace === '/' ? '' : namespace}`);
+    log.info({ event: 'connected', origin, namespace }, 'connected to server');
     const resumeToken = persistConfig ? getResumeTokenFromConfig() : undefined;
     socket.emit('register', {
       key,
@@ -516,23 +534,23 @@ export function connectToServer(
   });
 
   socket.on('registered', (data: RegisteredPayload) => {
-    console.log(`Controller registered: ${data.controllerId}`);
+    log.info({ event: 'registered', controllerId: data.controllerId }, 'controller registered');
     // R2-6：注册成功才重置退避计数（connect 事件早于 register 结果，不能作为成功信号）。
     reconnectAttempt = 0;
     clearReconnectTimer();
     if (data.resumeToken && persistConfig) {
       saveResumeTokenToConfig(data.resumeToken);
-      console.log('Resume token saved to config');
+      log.info({ event: 'resume_token_saved' }, 'resume token saved to config');
     }
     heartbeat.start(() => socket.emit('heartbeat'));
     options?.onRegistered?.(data);
   });
 
   socket.on('error', (data: ErrorPayload) => {
-    console.error(`Server error: ${data.code} - ${data.message}`);
+    log.error({ event: 'server_error', code: data.code, serverMessage: data.message }, 'server error');
     if (data.code === 'INVALID_TOKEN') {
       // token 已失效 = 已被服务端注销：服务端终止语义（退出码 42，入口不保活重启）。
-      console.error('Handshake token is no longer valid; the container has been deregistered.');
+      log.error({ event: 'invalid_token' }, 'Handshake token is no longer valid; the container has been deregistered.');
       socket.disconnect();
       if (options?.onShutdown) {
         notifyShutdown({ reason: `error: ${data.code}` });
@@ -542,8 +560,8 @@ export function connectToServer(
       return;
     }
     if (data.code === 'VERSION_MISMATCH') {
-      console.error('The agent-controller version is not supported by the server.');
-      console.error('Please upgrade agent-controller to 2.x (npm i -g agent-gear@2 or the matching release).');
+      log.error({ event: 'version_mismatch' }, 'The agent-controller version is not supported by the server.');
+      log.error({ event: 'version_mismatch' }, 'Please upgrade agent-controller to 2.x (npm i -g agent-gear@2 or the matching release).');
       socket.disconnect();
       if (options?.onShutdown) {
         notifyShutdown({ reason: `version_mismatch: ${data.message}` });
@@ -553,11 +571,11 @@ export function connectToServer(
       return;
     }
     if (data.code === 'KEY_ALREADY_ONLINE') {
-      console.log('Clearing resume token and retrying connection...');
+      log.info({ event: 'key_already_online' }, 'clearing resume token and retrying connection');
       if (persistConfig) clearResumeTokenFromConfig();
       if (cloudHostMode) {
         // 云电脑模式：disconnect() 会关闭 Socket.IO 自动重连，按指数退避手动重试（C-3）。
-        console.log('Cloud-host mode: retrying connection with backoff...');
+        log.info({ event: 'cloud_host_retry' }, 'cloud-host mode: retrying connection with backoff');
         socket.disconnect();
         scheduleReconnect();
         return;
@@ -575,7 +593,7 @@ export function connectToServer(
   });
 
   socket.on('unregistered', () => {
-    console.log('Unregistered from server');
+    log.info({ event: 'unregistered' }, 'unregistered from server');
     heartbeat.stop();
     if (persistConfig) clearConfigKey();
     if (options?.onShutdown) {
@@ -587,7 +605,7 @@ export function connectToServer(
   });
 
   socket.on('shutdown', (data: ShutdownPayload) => {
-    console.log(`Shutdown requested: ${data.reason}`);
+    log.info({ event: 'shutdown_requested', reason: data.reason }, 'shutdown requested');
     shutdownStarted = true;
     clearReconnectTimer();
     const finishShutdown = (): void => {
@@ -617,11 +635,21 @@ export function connectToServer(
     if (!data || !Array.isArray(data.items)) {
       // payload 可能携带容器 env（含 secret），日志必须脱敏后再输出。
       const secrets = collectSecretValues(process.env, data?.env);
-      console.warn(redactSecrets(`[Workload] workload:run ignored: invalid payload ${safeStringify(data)}`, secrets));
+      log.warn(
+        { event: 'workload_invalid_payload', payload: redactSecrets(safeStringify(data), secrets) },
+        'workload:run ignored: invalid payload',
+      );
       return;
     }
-    const budget = typeof data.budgetMs === 'number' ? ` budgetMs=${data.budgetMs}` : '';
-    console.log(`[Workload] workload:run received: phase=${data.phase} items=${data.items.length}${budget}`);
+    log.info(
+      {
+        event: 'workload_run',
+        phase: data.phase,
+        itemCount: data.items.length,
+        ...(typeof data.budgetMs === 'number' ? { budgetMs: data.budgetMs } : {}),
+      },
+      'workload:run received',
+    );
     const summary: WorkloadBatchSummary = {
       phase: data.phase,
       itemCount: data.items.length,
@@ -649,14 +677,15 @@ export function connectToServer(
       .catch((error: Error) => {
         const secrets = collectSecretValues(process.env, data.env);
         const message = redactSecrets(error.message, secrets);
-        console.error(`[Workload] batch execution failed: ${message}`);
+        // 错误消息可能含 secret（脚本 stderr 泄漏）：只落脱敏后的 message，不落原始 err。
+        log.error({ event: 'workload_batch_failed', err: { message } }, 'workload batch execution failed');
         options?.onWorkloadBatchComplete?.({ ...summary, status: 'failed', error: message });
       });
   });
 
   // ACP events
   socket.on('acp:check', async (data: AcpCheckPayload) => {
-    console.log('ACP check requested');
+    log.info({ event: 'acp_check', requestId: data.requestId }, 'acp check requested');
     const servers = await acpDetector.detect();
     socket.emit('acp:check:result', {
       requestId: data.requestId,
@@ -666,11 +695,19 @@ export function connectToServer(
 
   // 空实例探测：拉起指定工具的临时会话，收集 Mode/模型选项后关闭
   socket.on('acp:probe-options', async (data: AcpProbeOptionsPayload) => {
-    console.log(`[ACP ctrl] acp:probe-options received: requestId=${data.requestId} serverType=${data.serverType}`);
+    log.info({ event: 'acp_probe_options', requestId: data.requestId, serverType: data.serverType }, 'acp:probe-options received');
     try {
       await authGate.ensure(data.serverType, 'probe-options');
       const options = await probeAcpServerOptions(data.serverType);
-      console.log(`[ACP ctrl] probe-options success: serverType=${data.serverType} modes=${options.modes.length} models=${options.availableModels.length}`);
+      log.info(
+        {
+          event: 'acp_probe_options_success',
+          serverType: data.serverType,
+          modeCount: options.modes.length,
+          modelCount: options.availableModels.length,
+        },
+        'probe-options success',
+      );
       socket.emit('acp:probe-options:result', {
         requestId: data.requestId,
         serverType: data.serverType,
@@ -678,7 +715,7 @@ export function connectToServer(
         ...options,
       });
     } catch (error) {
-      console.warn(`[ACP ctrl] probe-options failed: serverType=${data.serverType} error=${(error as Error).message}`);
+      log.warn({ event: 'acp_probe_options_failed', serverType: data.serverType, err: error }, 'probe-options failed');
       socket.emit('acp:probe-options:result', {
         requestId: data.requestId,
         serverType: data.serverType,
@@ -690,7 +727,17 @@ export function connectToServer(
   });
 
   socket.on('acp:start', async (data: AcpStartPayload) => {
-    console.log(`[ACP ctrl] acp:start received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} cwd=${data.cwd} ${describeMcpConfig(data)}`);
+    log.info(
+      {
+        event: 'acp_start',
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        serverType: data.serverType,
+        cwd: data.cwd,
+        mcp: describeMcpConfig(data),
+      },
+      'acp:start received',
+    );
 
     try {
       await authGate.ensure(data.serverType, 'acp:start');
@@ -698,7 +745,10 @@ export function connectToServer(
       // 先停掉旧 bridge，避免同会话双进程、旧 bridge 泄漏
       const existingBridge = acpBridges.get(data.sessionId);
       if (existingBridge) {
-        console.warn(`[ACP ctrl] acp:start for session ${data.sessionId} already has a bridge, stopping the previous one`);
+        log.warn(
+          { event: 'acp_start_replaced', sessionId: data.sessionId },
+          'acp:start for session already has a bridge, stopping the previous one',
+        );
         acpBridges.delete(data.sessionId);
         // silent：同 sessionId 重建时旧 bridge 不得向服务端发 stopped（会删除新会话映射）
         await existingBridge.stop({ silent: true }).catch(() => {});
@@ -789,7 +839,16 @@ export function connectToServer(
         if (payload.sessionId !== data.sessionId) return;
         bridge.off('acp:initialized', onInitialized);
         bridge.off('acp:stopped', onStopped);
-        console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=true externalSessionId=${payload.acpSessionId}`);
+        log.info(
+          {
+            event: 'acp_start_result',
+            requestId: data.requestId,
+            sessionId: data.sessionId,
+            success: true,
+            externalSessionId: payload.acpSessionId,
+          },
+          'emitting acp:start:result',
+        );
         const result = buildAcpInitResult(payload);
         result.requestId = data.requestId;
         result.sessionId = data.sessionId;
@@ -811,7 +870,17 @@ export function connectToServer(
         acpBridges.delete(data.sessionId);
         processRegistry.deregister(data.sessionId);
         mcpRelay.unregisterSession(data.sessionId);
-        console.log(`[ACP ctrl] emitting acp:start:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
+        log.info(
+          {
+            event: 'acp_start_result',
+            requestId: data.requestId,
+            sessionId: data.sessionId,
+            success: false,
+            reason: payload.reason,
+            error: payload.error ?? null,
+          },
+          'emitting acp:start:result',
+        );
         socket.emit('acp:start:result', {
           requestId: data.requestId,
           sessionId: data.sessionId,
@@ -823,10 +892,10 @@ export function connectToServer(
       bridge.on('acp:initialized', onInitialized);
       bridge.on('acp:stopped', onStopped);
 
-      console.log(`[ACP ctrl] calling bridge.start() for session ${data.sessionId}`);
+      log.info({ event: 'acp_bridge_start', sessionId: data.sessionId }, 'calling bridge.start()');
       await bridge.start();
     } catch (error) {
-      console.error(`[ACP ctrl] bridge.start() failed: ${(error as Error).message}`);
+      log.error({ event: 'acp_bridge_start_failed', sessionId: data.sessionId, err: error }, 'bridge.start() failed');
       mcpRelay.unregisterSession(data.sessionId);
       socket.emit('acp:start:result', {
         requestId: data.requestId,
@@ -839,14 +908,28 @@ export function connectToServer(
   });
 
   socket.on('acp:resume', async (data: AcpResumePayload) => {
-    console.log(`[ACP ctrl] acp:resume received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${data.serverType} externalSessionId=${data.externalSessionId} ${describeMcpConfig(data)}`);
+    log.info(
+      {
+        event: 'acp_resume',
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        serverType: data.serverType,
+        externalSessionId: data.externalSessionId,
+        cwd: data.cwd,
+        mcp: describeMcpConfig(data),
+      },
+      'acp:resume received',
+    );
 
     try {
       await authGate.ensure(data.serverType, 'acp:resume');
       // 同 sessionId 重复 resume/start：先停掉旧 bridge（同 acp:start 的防双进程处理）
       const existingBridge = acpBridges.get(data.sessionId);
       if (existingBridge) {
-        console.warn(`[ACP ctrl] acp:resume for session ${data.sessionId} already has a bridge, stopping the previous one`);
+        log.warn(
+          { event: 'acp_resume_replaced', sessionId: data.sessionId },
+          'acp:resume for session already has a bridge, stopping the previous one',
+        );
         acpBridges.delete(data.sessionId);
         // silent：同 sessionId 重建时旧 bridge 不得向服务端发 stopped（会删除新会话映射）
         await existingBridge.stop({ silent: true }).catch(() => {});
@@ -929,7 +1012,17 @@ export function connectToServer(
         acpBridges.delete(data.sessionId);
         processRegistry.deregister(data.sessionId);
         mcpRelay.unregisterSession(data.sessionId);
-        console.log(`[ACP ctrl] emitting acp:resume:result: requestId=${data.requestId} sessionId=${data.sessionId} success=false reason=${payload.reason} error=${payload.error ?? 'n/a'}`);
+        log.info(
+          {
+            event: 'acp_resume_result',
+            requestId: data.requestId,
+            sessionId: data.sessionId,
+            success: false,
+            reason: payload.reason,
+            error: payload.error ?? null,
+          },
+          'emitting acp:resume:result',
+        );
         socket.emit('acp:resume:result', {
           requestId: data.requestId,
           sessionId: data.sessionId,
@@ -943,7 +1036,7 @@ export function connectToServer(
 
       await bridge.resume(data.externalSessionId);
     } catch (error) {
-      console.error(`[ACP ctrl] bridge.resume() failed: ${(error as Error).message}`);
+      log.error({ event: 'acp_bridge_resume_failed', sessionId: data.sessionId, err: error }, 'bridge.resume() failed');
       mcpRelay.unregisterSession(data.sessionId);
       socket.emit('acp:resume:result', {
         requestId: data.requestId,
@@ -958,7 +1051,7 @@ export function connectToServer(
   // harness 登录取消（Server → Controller，契约 §2.38）：requestId 不匹配时忽略
   socket.on('harness:login:cancel', (data: { requestId?: string }) => {
     if (!data || typeof data.requestId !== 'string') {
-      console.warn('[ACP ctrl] harness:login:cancel ignored: invalid payload');
+      log.warn({ event: 'harness_login_cancel_invalid' }, 'harness:login:cancel ignored: invalid payload');
       return;
     }
     authGate.cancel(data.requestId);
@@ -966,7 +1059,10 @@ export function connectToServer(
 
   socket.on('acp:list-sessions', async (data: AcpListSessionsPayload) => {
     const serverType = data.serverType ?? 'opencode';
-    console.log(`[ACP sync] acp:list-sessions received: requestId=${data.requestId} serverType=${serverType} cwd=${data.cwd}`);
+    log.info(
+      { event: 'acp_list_sessions', requestId: data.requestId, serverType, cwd: data.cwd },
+      'acp:list-sessions received',
+    );
     const spawner = createSpawner(serverType, `sync_${Date.now()}`, data.cwd);
     const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
     try {
@@ -986,7 +1082,7 @@ export function connectToServer(
       });
     } catch (error) {
       await bridge.disconnect().catch(() => {});
-      console.error(`[ACP sync] list-sessions failed: ${(error as Error).message}`);
+      log.error({ event: 'acp_list_sessions_failed', requestId: data.requestId, err: error }, 'list-sessions failed');
       socket.emit('acp:list-sessions:result', {
         requestId: data.requestId,
         success: false,
@@ -997,7 +1093,10 @@ export function connectToServer(
 
   socket.on('acp:load-session', async (data: AcpLoadSessionPayload) => {
     const serverType = data.serverType ?? 'opencode';
-    console.log(`[ACP] load-session received: requestId=${data.requestId} sessionId=${data.sessionId} serverType=${serverType} cwd=${data.cwd}`);
+    log.info(
+      { event: 'acp_load_session', requestId: data.requestId, sessionId: data.sessionId, serverType, cwd: data.cwd },
+      'acp:load-session received',
+    );
     const spawner = createSpawner(serverType, `sync_${Date.now()}`, data.cwd);
     const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
     try {
@@ -1076,8 +1175,8 @@ export function connectToServer(
       socket.emit('acp:load-session:complete', { requestId: data.requestId });
     } catch (error) {
       await bridge.disconnect(data.sessionId).catch(() => {});
-      console.error(`[ACP] load-session FAILED: ${(error as Error).message}`);
-      console.log(`[ACP] emitting error result, socket.connected=${socket.connected}`);
+      log.error({ event: 'acp_load_session_failed', requestId: data.requestId, sessionId: data.sessionId, err: error }, 'load-session failed');
+      log.info({ event: 'acp_load_session_error_result', requestId: data.requestId, socketConnected: socket.connected }, 'emitting error result');
       socket.emit('acp:load-session:result', {
         requestId: data.requestId,
         success: false,
@@ -1103,10 +1202,13 @@ export function connectToServer(
 
   socket.on('acp:stop', async (data: AcpStopPayload) => {
     if (!data || typeof data.sessionId !== 'string') {
-      console.warn(`[ACP ctrl] acp:stop ignored: invalid payload ${JSON.stringify(data)}`);
+      log.warn({ event: 'acp_stop_invalid_payload', payload: safeStringify(data) }, 'acp:stop ignored: invalid payload');
       return;
     }
-    console.log(`ACP stop requested for session ${data.sessionId} ackRequired=${data.ackRequired ?? false}`);
+    log.info(
+      { event: 'acp_stop', sessionId: data.sessionId, ackRequired: data.ackRequired ?? false },
+      'acp stop requested',
+    );
     const bridge = acpBridges.get(data.sessionId);
     let killedByRegistry = false;
     if (bridge) {
@@ -1115,7 +1217,10 @@ export function connectToServer(
       // Bridge not found: fallback to registry PID kill
       const entry = processRegistry.get(data.sessionId);
       if (entry) {
-        console.log(`[ACP ctrl] bridge not found for session ${data.sessionId}, killing by PID ${entry.pid}`);
+        log.info(
+          { event: 'acp_stop_fallback_kill', sessionId: data.sessionId, pid: entry.pid },
+          'bridge not found for session, killing by PID',
+        );
         killedByRegistry = true;
         try {
           if (platform() === 'win32') {
@@ -1154,27 +1259,30 @@ export function connectToServer(
   });
 
   socket.on('acp:set-mode', (data: AcpSetModePayload) => {
-    console.log(`[ACP] acp:set-mode received: sessionId=${data.sessionId} modeId=${data.modeId}`);
+    log.info({ event: 'acp_set_mode', sessionId: data.sessionId, modeId: data.modeId }, 'acp:set-mode received');
     const bridge = acpBridges.get(data.sessionId);
     if (bridge) {
       bridge.setMode(data.modeId).catch((err) => {
-        console.error(`[ACP] setMode failed: ${(err as Error).message}`);
+        log.error({ event: 'acp_set_mode_failed', sessionId: data.sessionId, err }, 'setMode failed');
       });
     }
   });
 
   socket.on('acp:set-model', (data: AcpSetModelPayload) => {
-    console.log(`[ACP] acp:set-model received: sessionId=${data.sessionId} modelId=${data.modelId}`);
+    log.info({ event: 'acp_set_model', sessionId: data.sessionId, modelId: data.modelId }, 'acp:set-model received');
     const bridge = acpBridges.get(data.sessionId);
     if (bridge) {
       bridge.setModel(data.modelId).catch((err) => {
-        console.error(`[ACP] setModel failed: ${(err as Error).message}`);
+        log.error({ event: 'acp_set_model_failed', sessionId: data.sessionId, err }, 'setModel failed');
       });
     }
   });
 
   socket.on('acp:set-config-option', (data: AcpSetConfigOptionPayload) => {
-    console.log(`[ACP] acp:set-config-option received: sessionId=${data.sessionId} configId=${data.configId}`);
+    log.info(
+      { event: 'acp_set_config_option', sessionId: data.sessionId, configId: data.configId },
+      'acp:set-config-option received',
+    );
     const bridge = acpBridges.get(data.sessionId);
     if (!bridge) {
       socket.emit('acp:set-config-option:result', {
@@ -1195,7 +1303,10 @@ export function connectToServer(
         });
       },
       (err) => {
-        console.error(`[ACP] setConfigOption failed: ${(err as Error).message}`);
+        log.error(
+          { event: 'acp_set_config_option_failed', sessionId: data.sessionId, configId: data.configId, err },
+          'setConfigOption failed',
+        );
         socket.emit('acp:set-config-option:result', {
           sessionId: data.sessionId,
           success: false,
@@ -1208,7 +1319,16 @@ export function connectToServer(
 
   socket.on('acp:delete-history-session', async (data: AcpDeleteHistorySessionPayload) => {
     const serverType = data.serverType ?? 'opencode';
-    console.log(`[ACP sync] acp:delete-history-session received: sessionId=${data.externalSessionId} cwd=${data.cwd}`);
+    log.info(
+      {
+        event: 'acp_delete_history_session',
+        requestId: data.requestId,
+        sessionId: data.sessionId,
+        externalSessionId: data.externalSessionId,
+        cwd: data.cwd,
+      },
+      'acp:delete-history-session received',
+    );
     const spawner = createSpawner(serverType, `sync_${Date.now()}`, data.cwd);
     const bridge = new AcpSyncBridge({ cwd: data.cwd }, spawner);
     try {
@@ -1234,7 +1354,10 @@ export function connectToServer(
       });
     } catch (error) {
       await bridge.disconnect().catch(() => {});
-      console.error(`[ACP sync] delete-history-session failed: ${(error as Error).message}`);
+      log.error(
+        { event: 'acp_delete_history_session_failed', requestId: data.requestId, sessionId: data.sessionId, err: error },
+        'delete-history-session failed',
+      );
       socket.emit('acp:delete-history-session:result', {
         requestId: data.requestId,
         sessionId: data.sessionId,
@@ -1246,7 +1369,7 @@ export function connectToServer(
   });
 
   socket.on('acp:authenticate', async (data: AcpAuthenticatePayload) => {
-    console.log(`[ACP] acp:authenticate received: sessionId=${data.sessionId} methodId=${data.methodId}`);
+    log.info({ event: 'acp_authenticate', sessionId: data.sessionId, methodId: data.methodId }, 'acp:authenticate received');
     const bridge = acpBridges.get(data.sessionId);
     try {
       if (!bridge) throw new Error('ACP bridge not found for session');
@@ -1256,7 +1379,7 @@ export function connectToServer(
         success: true,
       });
     } catch (error) {
-      console.error(`[ACP] authenticate failed: ${(error as Error).message}`);
+      log.error({ event: 'acp_authenticate_failed', sessionId: data.sessionId, err: error }, 'authenticate failed');
       socket.emit('acp:authenticate:result', {
         sessionId: data.sessionId,
         success: false,
@@ -1266,7 +1389,7 @@ export function connectToServer(
   });
 
   socket.on('acp:logout', async (data: AcpLogoutPayload) => {
-    console.log(`[ACP] acp:logout received: sessionId=${data.sessionId}`);
+    log.info({ event: 'acp_logout', sessionId: data.sessionId }, 'acp:logout received');
     const bridge = acpBridges.get(data.sessionId);
     try {
       if (!bridge) throw new Error('ACP bridge not found for session');
@@ -1276,7 +1399,7 @@ export function connectToServer(
         success: true,
       });
     } catch (error) {
-      console.error(`[ACP] logout failed: ${(error as Error).message}`);
+      log.error({ event: 'acp_logout_failed', sessionId: data.sessionId, err: error }, 'logout failed');
       socket.emit('acp:logout:result', {
         sessionId: data.sessionId,
         success: false,
@@ -1287,7 +1410,7 @@ export function connectToServer(
 
   // File system events
   socket.on('fs:browse', async (data: FsBrowsePayload) => {
-    console.log(`FS browse requested: requestId=${data.requestId} path=${data.path}`);
+    log.info({ event: 'fs_browse', requestId: data.requestId, path: data.path }, 'fs browse requested');
     try {
       const targetPath = data.path || homedir();
 
@@ -1320,13 +1443,13 @@ export function connectToServer(
         });
       socket.emit('fs:browse:result', { requestId: data.requestId, entries: result });
     } catch (error) {
-      console.error(`FS browse error: ${(error as Error).message}`);
+      log.error({ event: 'fs_browse_failed', requestId: data.requestId, err: error }, 'fs browse error');
       socket.emit('fs:browse:result', { requestId: data.requestId, entries: [] });
     }
   });
 
   socket.on('fs:home', async (data: FsHomePayload) => {
-    console.log(`FS home requested: requestId=${data.requestId}`);
+    log.info({ event: 'fs_home', requestId: data.requestId }, 'fs home requested');
     const homePath = homedir();
     socket.emit('fs:home:result', { requestId: data.requestId, path: homePath });
   });
@@ -1375,14 +1498,17 @@ export function connectToServer(
 
   // Worktree list event
   socket.on('git:worktree:list', async (data: { requestId: string; workspacePath: string }) => {
-    console.log(`[ACP ctrl] git:worktree:list received: requestId=${data.requestId} workspacePath=${data.workspacePath}`);
+    log.info(
+      { event: 'git_worktree_list', requestId: data.requestId, workspacePath: data.workspacePath },
+      'git:worktree:list received',
+    );
     const result = await worktreeHandler.list(data.workspacePath);
     socket.emit('git:worktree:list:result', { requestId: data.requestId, ...result });
   });
 
   // FS remove-dir event
   socket.on('fs:remove-dir', async (data: { requestId: string; path: string }) => {
-    console.log(`[ACP ctrl] fs:remove-dir received: requestId=${data.requestId} path=${data.path}`);
+    log.info({ event: 'fs_remove_dir', requestId: data.requestId, path: data.path }, 'fs:remove-dir received');
     const result = await fsHandler.removeDir(data.path);
     if (result.success) {
       fsHandler.unregisterAllowedPath(data.path);
@@ -1393,15 +1519,30 @@ export function connectToServer(
   // Reconnection reconciliation
   socket.on('acp:reconcile', async (data: { activeSessionIds: string[]; pendingKillSessionIds: string[] }) => {
     if (!data || !isStringArray(data.activeSessionIds) || !isStringArray(data.pendingKillSessionIds)) {
-      console.warn(`[ACP ctrl] acp:reconcile ignored: invalid payload ${JSON.stringify(data)}`);
+      log.warn({ event: 'acp_reconcile_invalid_payload', payload: safeStringify(data) }, 'acp:reconcile ignored: invalid payload');
       return;
     }
-    console.log(`[ACP ctrl] acp:reconcile received: active=${data.activeSessionIds.length} pendingKill=${data.pendingKillSessionIds.length}`);
+    log.info(
+      {
+        event: 'acp_reconcile',
+        activeCount: data.activeSessionIds.length,
+        pendingKillCount: data.pendingKillSessionIds.length,
+      },
+      'acp:reconcile received',
+    );
     const registered = processRegistry.listEntries();
     for (const entry of registered) {
       const shouldKill = data.pendingKillSessionIds.includes(entry.sessionId) || !data.activeSessionIds.includes(entry.sessionId);
       if (shouldKill) {
-        console.log(`[ACP ctrl] reconcile: killing session=${entry.sessionId} pid=${entry.pid} (pendingKill=${data.pendingKillSessionIds.includes(entry.sessionId)})`);
+        log.info(
+          {
+            event: 'acp_reconcile_kill',
+            sessionId: entry.sessionId,
+            pid: entry.pid,
+            pendingKill: data.pendingKillSessionIds.includes(entry.sessionId),
+          },
+          'reconcile: killing session',
+        );
         try {
           if (platform() === 'win32') {
             const { execFile } = await import('child_process');
@@ -1434,7 +1575,7 @@ export function connectToServer(
 
   // Port Forward events (event names kept unchanged for backward compatibility)
   socket.on('port-forward:create', async (data: { tunnelId: string; port: number }) => {
-    console.log(`Gateway tunnel create requested: tunnelId=${data.tunnelId} port=${data.port}`);
+    log.info({ event: 'gateway_tunnel_create', tunnelId: data.tunnelId, port: data.port }, 'gateway tunnel create requested');
     await gatewayManager.createTunnel(data.tunnelId, data.port, socket);
   });
 
@@ -1443,7 +1584,7 @@ export function connectToServer(
   });
 
   socket.on('port-forward:close', (data: { tunnelId: string }) => {
-    console.log(`Gateway tunnel close: tunnelId=${data.tunnelId}`);
+    log.info({ event: 'gateway_tunnel_close', tunnelId: data.tunnelId }, 'gateway tunnel close');
     gatewayManager.closeTunnel(data.tunnelId);
   });
 
@@ -1475,7 +1616,7 @@ export function connectToServer(
   });
 
   socket.on('disconnect', (reason) => {
-    console.log(`Disconnected: ${reason}`);
+    log.info({ event: 'disconnected', reason }, 'disconnected');
     heartbeat.stop();
     gatewayManager.closeAll();
     // 断线后 pending 计时器必须就地收敛：socket.io 会缓存断线期间 emit，
@@ -1490,12 +1631,12 @@ export function connectToServer(
 
   socket.on('connect_error', (err) => {
     // 传输层失败时 err.message 往往只有笼统的 "websocket error"，真实原因在 description/context
-    // （如 HTTP 404/502、TLS 失败、协议错误）里——一并打印，避免"看不出为何连不上"。
-    console.error(`Connection error: ${err.message}${describeConnectError(err)}`);
+    // （如 HTTP 404/502、TLS 失败、协议错误）里——一并记录，避免"看不出为何连不上"。
+    log.error({ event: 'connect_error', err, detail: describeConnectError(err) }, 'connection error');
     // 握手鉴权失败（cloud-controller 一次性 token 已失效）：服务端终止语义，退出码 42。
     const code = (err as Error & { data?: { code?: string } }).data?.code;
     if (code === 'INVALID_TOKEN' || err.message.includes('INVALID_TOKEN')) {
-      console.error('Handshake token is no longer valid; the container has been deregistered.');
+      log.error({ event: 'invalid_token' }, 'Handshake token is no longer valid; the container has been deregistered.');
       socket.disconnect();
       if (options?.onShutdown) {
         notifyShutdown({ reason: 'error: INVALID_TOKEN' });

@@ -36,11 +36,13 @@ export function registerHarnessCommands(
     .action(async () => {
       try {
         const result = await (deps.prepare ?? prepareHarness)();
-        console.log(formatPrepareSummary(result));
+        // 摘要为 CLI 结果输出（init 脚本/上游脚本按纯文本解析，R3），不走结构化日志。
+        console.log(formatPrepareSummary(result)); // no-console-allow: CLI 用户可见输出（结果摘要）
       } catch (error) {
         const secrets = collectSecretValues(process.env);
         const message = redactSecrets((error as Error).message, secrets);
-        console.error(`harness prepare failed: ${message}`);
+        // 失败原因为 CLI 结果输出（给使用者的失败结果），不走结构化日志。
+        console.error(`harness prepare failed: ${message}`); // no-console-allow: CLI 用户可见输出（失败结果）
         // 非零退出：不直接 process.exit，便于测试断言 exitCode 与已刷新的日志。
         process.exitCode = 1;
       }

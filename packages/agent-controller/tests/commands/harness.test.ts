@@ -77,9 +77,13 @@ describe('agent-gear harness command (T-AG15)', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBeUndefined();
     const output = vi.mocked(console.log).mock.calls.flat().join(' ');
+    // R3：摘要为用户可见纯文本 stdout（被 init/上游脚本按行解析，非 JSON）
     expect(output).toContain('Harness prepared: types=opencode');
     expect(output).toContain('version=1.2.3');
     expect(output).not.toContain('zag_sk_');
+    for (const call of vi.mocked(console.log).mock.calls) {
+      expect(String(call[0])).not.toMatch(/^\s*\{/);
+    }
   });
 
   it('exits non-zero and redacts secrets when prepare fails', async () => {
@@ -93,8 +97,10 @@ describe('agent-gear harness command (T-AG15)', () => {
 
     expect(process.exitCode).toBe(1);
     const errors = vi.mocked(console.error).mock.calls.flat().join(' ');
+    // R3：失败原因同样为用户可见纯文本（保留原文可读，仅脱敏）
     expect(errors).toContain('harness prepare failed');
     expect(errors).not.toContain('zag_sk_super_secret');
     expect(errors).toContain('***');
+    expect(String(vi.mocked(console.error).mock.calls[0][0])).not.toMatch(/^\s*\{/);
   });
 });

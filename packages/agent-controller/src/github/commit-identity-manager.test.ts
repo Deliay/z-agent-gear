@@ -6,6 +6,7 @@ import {
   type CommitIdentityApplier,
   type CommitIdentityRefreshResult,
 } from './commit-identity-manager.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 
 const HOST_KEY = 'zag_k_1_host_secret';
 const BASE_ENV: NodeJS.ProcessEnv = {
@@ -60,12 +61,12 @@ describe('CommitIdentityManager', () => {
   it('T-CIM1: first refresh posts with the host key and applies the returned identity', async () => {
     const fetchFn = fakeFetch(async () => jsonResponse({ mode: 'co_author', ...CO_AUTHOR }));
     const applier = fakeApplier();
-    const logs: string[] = [];
+    const testLog: TestLogger = createTestLogger();
     const manager = new CommitIdentityManager({
       env: BASE_ENV,
       fetch: fetchFn,
       applier,
-      log: (message) => logs.push(message),
+      log: testLog.logger,
     });
 
     const result = await manager.refreshNow();
@@ -85,11 +86,12 @@ describe('CommitIdentityManager', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
 
     // 日志不含身份值（邮箱 / 姓名）与 host key
-    const output = logs.join('\n');
-    expect(output).toContain('co_author');
-    expect(output).not.toContain('Alice');
-    expect(output).not.toContain('alice@users.noreply.github.com');
-    expect(output).not.toContain(HOST_KEY);
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({ component: 'commit-identity', msg: '提交身份已更新', mode: 'co_author' }),
+    );
+    expect(JSON.stringify(testLog.records)).not.toContain('Alice');
+    expect(JSON.stringify(testLog.records)).not.toContain('alice@users.noreply.github.com');
+    expect(JSON.stringify(testLog.records)).not.toContain(HOST_KEY);
   });
 
   it('T-CIM2: mode=unset removes the managed configuration instead of applying it', async () => {
@@ -99,7 +101,7 @@ describe('CommitIdentityManager', () => {
       env: BASE_ENV,
       fetch: fetchFn,
       applier,
-      log: () => {},
+      log: createTestLogger().logger,
     });
 
     const result = await manager.refreshNow();
@@ -117,7 +119,7 @@ describe('CommitIdentityManager', () => {
       env: BASE_ENV,
       fetch: fetchFn,
       applier,
-      log: () => {},
+      log: createTestLogger().logger,
       setTimeout: scheduler.setTimeoutFn,
     });
 
@@ -144,7 +146,7 @@ describe('CommitIdentityManager', () => {
       env: BASE_ENV,
       fetch: fetchFn,
       applier,
-      log: () => {},
+      log: createTestLogger().logger,
       sleep: async (ms) => {
         delays.push(ms);
       },
@@ -171,7 +173,7 @@ describe('CommitIdentityManager', () => {
       env: BASE_ENV,
       fetch: fetchFn,
       applier,
-      log: () => {},
+      log: createTestLogger().logger,
     });
 
     const first = manager.refreshNow();
@@ -186,20 +188,24 @@ describe('CommitIdentityManager', () => {
 
   it('T-CIM6: missing env disables startup with a warn that only lists variable names', async () => {
     const fetchFn = fakeFetch(async () => jsonResponse({ mode: 'unset' }));
-    const logs: string[] = [];
+    const testLog: TestLogger = createTestLogger();
     const manager = new CommitIdentityManager({
       env: { ZAG_HOST_KEY: 'should-not-appear' },
       fetch: fetchFn,
-      log: (message) => logs.push(message),
+      log: testLog.logger,
     });
 
     manager.start();
 
     expect(fetchFn).not.toHaveBeenCalled();
-    const output = logs.join('\n');
-    expect(output).toContain('ZAG_AGENT_API_ENDPOINT');
-    expect(output).toContain('ZAG_CONTROLLER_ID');
-    expect(output).not.toContain('should-not-appear');
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({
+        component: 'commit-identity',
+        msg: expect.stringContaining('disabled'),
+        missing: expect.arrayContaining(['ZAG_AGENT_API_ENDPOINT', 'ZAG_CONTROLLER_ID']),
+      }),
+    );
+    expect(JSON.stringify(testLog.records)).not.toContain('should-not-appear');
     await expect(manager.refreshNow()).resolves.toEqual({ ok: false, error: 'disabled' });
   });
 
@@ -213,7 +219,7 @@ describe('CommitIdentityManager', () => {
       env: BASE_ENV,
       fetch: invalidJson,
       applier,
-      log: () => {},
+      log: createTestLogger().logger,
     });
     const invalid = await manager.refreshNow();
     expect(invalid.ok).toBe(false);
@@ -224,7 +230,7 @@ describe('CommitIdentityManager', () => {
       env: BASE_ENV,
       fetch: invalidMode,
       applier,
-      log: () => {},
+      log: createTestLogger().logger,
     });
     const modeResult = await modeManager.refreshNow();
     expect(modeResult.ok).toBe(false);
@@ -237,7 +243,7 @@ describe('CommitIdentityManager', () => {
       env: BASE_ENV,
       fetch: network,
       applier,
-      log: () => {},
+      log: createTestLogger().logger,
     });
     const failed = await networkManager.refreshNow();
     expect(failed.ok).toBe(false);
@@ -249,7 +255,7 @@ describe('CommitIdentityManager', () => {
   });
 
   it('T-CIM8: logs and returned errors never contain the host key', async () => {
-    const logs: string[] = [];
+    const testLog: TestLogger = createTestLogger();
     const fetchFn = fakeFetch(async () => jsonResponse({ mode: 'co_author', ...CO_AUTHOR }));
     const applier = fakeApplier();
     applier.apply.mockImplementation(async () => {
@@ -259,14 +265,14 @@ describe('CommitIdentityManager', () => {
       env: BASE_ENV,
       fetch: fetchFn,
       applier,
-      log: (message) => logs.push(message),
+      log: testLog.logger,
     });
 
     const result: CommitIdentityRefreshResult = await manager.refreshNow();
 
     expect(result.ok).toBe(false);
     expect(JSON.stringify(result)).not.toContain(HOST_KEY);
-    expect(logs.join('\n')).not.toContain(HOST_KEY);
-    expect(logs.join('\n')).not.toContain(CO_AUTHOR.coAuthorEmail);
+    expect(JSON.stringify(testLog.records)).not.toContain(HOST_KEY);
+    expect(JSON.stringify(testLog.records)).not.toContain(CO_AUTHOR.coAuthorEmail);
   });
 });

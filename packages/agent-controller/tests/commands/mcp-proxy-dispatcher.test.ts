@@ -23,8 +23,6 @@ describe('createStdioDispatcher', () => {
 
   beforeEach(() => {
     child = createFakeChild();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
   afterEach(() => {

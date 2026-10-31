@@ -6,6 +6,7 @@ import * as os from 'os';
 
 vi.mock('os', () => ({
   platform: vi.fn(() => 'linux'),
+  hostname: vi.fn(() => 'test-host'),
 }));
 
 vi.mock('child_process', () => ({
@@ -22,6 +23,7 @@ vi.mock('fs', async (importOriginal) => {
 import { AcpSpawner } from '../../src/acp/spawner.js';
 import { spawn, execFileSync, execFile } from 'child_process';
 import { existsSync } from 'fs';
+import { createTestLogger, type TestLogger } from '../../src/observability/testing.js';
 
 function createMockChildProcess(): ChildProcess & EventEmitter {
   const proc = new EventEmitter() as ChildProcess & EventEmitter;
@@ -39,7 +41,7 @@ function createMockChildProcess(): ChildProcess & EventEmitter {
 describe('AcpSpawner', () => {
   let spawner: AcpSpawner;
   let mockProcess: ChildProcess & EventEmitter;
-  let consoleErrorSpy: ReturnType<typeof vi.spyOn>;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -47,9 +49,9 @@ describe('AcpSpawner', () => {
     mockProcess = createMockChildProcess();
     vi.mocked(spawn).mockReturnValue(mockProcess as never);
 
-    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    testLog = createTestLogger('acp-spawner');
 
-    spawner = new AcpSpawner({ sessionId: 'sess-1', cwd: '/tmp/project' });
+    spawner = new AcpSpawner({ sessionId: 'sess-1', cwd: '/tmp/project', logger: testLog.logger });
   });
 
   afterEach(() => {
@@ -71,23 +73,41 @@ describe('AcpSpawner', () => {
       spawner.start();
       const stderr = mockProcess.stderr as Readable;
       stderr.emit('data', Buffer.from('some warning\n'));
-      expect(consoleErrorSpy).toHaveBeenCalledWith('ACP stderr (session=sess-1): some warning\n');
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({
+          component: 'acp-spawner',
+          level: 'error',
+          msg: 'acp server stderr',
+          stderr: 'some warning\n',
+        }),
+      );
     });
 
     it('should log resolved command, args and cwd on start', () => {
-      const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       spawner.start();
-      expect(consoleLogSpy).toHaveBeenCalledWith(
-        'Starting ACP server: session=sess-1 cmd=/usr/bin/opencode args=["acp"] cwd=/tmp/project',
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({
+          component: 'acp-spawner',
+          msg: 'starting ACP server',
+          command: '/usr/bin/opencode',
+          args: ['acp'],
+          cwd: '/tmp/project',
+        }),
       );
     });
 
     it('should log exit code, signal and spawn params on process exit', () => {
-      const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       spawner.start();
       mockProcess.emit('exit', 1, null);
-      expect(consoleLogSpy).toHaveBeenCalledWith(
-        'ACP process exited: session=sess-1 code=1 signal=null cmd=/usr/bin/opencode args=["acp"]',
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({
+          component: 'acp-spawner',
+          msg: 'acp process exited',
+          exitCode: 1,
+          signal: null,
+          command: '/usr/bin/opencode',
+          args: ['acp'],
+        }),
       );
     });
 
@@ -95,9 +115,14 @@ describe('AcpSpawner', () => {
       spawner.start();
       const error = new Error('spawn opencode ENOENT');
       mockProcess.emit('error', error);
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        'ACP process error (session=sess-1, cmd=/usr/bin/opencode):',
-        error,
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({
+          component: 'acp-spawner',
+          level: 'error',
+          msg: 'acp process error',
+          command: '/usr/bin/opencode',
+          err: expect.objectContaining({ message: 'spawn opencode ENOENT' }),
+        }),
       );
     });
 

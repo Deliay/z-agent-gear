@@ -5,6 +5,7 @@ import {
   EXPIRY_SKEW_MS,
   BACKOFF_MS,
 } from './credential-manager.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 
 const TOKEN = 'ghs_credential_manager_secret';
 const BASE_ENV: NodeJS.ProcessEnv = {
@@ -60,7 +61,7 @@ describe('GithubCredentialManager', () => {
       env: BASE_ENV,
       fetch: fetchFn,
       writeGhAuth,
-      log: () => {},
+      log: createTestLogger().logger,
     });
 
     const result = await manager.refreshNow();
@@ -86,13 +87,13 @@ describe('GithubCredentialManager', () => {
   it('T-CM2: 404 means no binding: no write, no error log, returns no-binding', async () => {
     const fetchFn = fakeFetch(async () => new Response('', { status: 404 }));
     const writeGhAuth = vi.fn(async () => {});
-    const logs: string[] = [];
+    const testLog: TestLogger = createTestLogger();
 
     const manager = new GithubCredentialManager({
       env: BASE_ENV,
       fetch: fetchFn,
       writeGhAuth,
-      log: (message) => logs.push(message),
+      log: testLog.logger,
     });
 
     const result = await manager.refreshNow();
@@ -100,20 +101,22 @@ describe('GithubCredentialManager', () => {
     expect(result).toEqual({ ok: false, error: 'no-binding' });
     expect(writeGhAuth).not.toHaveBeenCalled();
     expect(fetchFn).toHaveBeenCalledTimes(1);
-    expect(logs.join('\n')).not.toMatch(/error|失败|warn/i);
+    // no-binding 属正常态：无任何告警/错误日志
+    expect(testLog.records.filter((r) => r.level === 'warn' || r.level === 'error')).toEqual([]);
+    expect(JSON.stringify(testLog.records)).not.toMatch(/失败/);
   });
 
   it('T-CM3: 401 retries with 1/2/4 minute backoff and eventually returns a readable error', async () => {
     const fetchFn = fakeFetch(async () => new Response('', { status: 401 }));
     const delays: number[] = [];
-    const logs: string[] = [];
+    const testLog: TestLogger = createTestLogger();
     const writeGhAuth = vi.fn(async () => {});
 
     const manager = new GithubCredentialManager({
       env: BASE_ENV,
       fetch: fetchFn,
       writeGhAuth,
-      log: (message) => logs.push(message),
+      log: testLog.logger,
       sleep: async (ms) => {
         delays.push(ms);
       },
@@ -126,7 +129,7 @@ describe('GithubCredentialManager', () => {
     expect(delays).toEqual([...BACKOFF_MS]);
     expect(fetchFn).toHaveBeenCalledTimes(BACKOFF_MS.length + 1);
     expect(writeGhAuth).not.toHaveBeenCalled();
-    expect(logs.join('\n')).not.toContain(TOKEN);
+    expect(JSON.stringify(testLog.records)).not.toContain(TOKEN);
   });
 
   it('T-CM4: schedules every 50 minutes, or earlier when the token expires within the skew', async () => {
@@ -141,7 +144,7 @@ describe('GithubCredentialManager', () => {
       fetch: fetchFn,
       writeGhAuth: async () => {},
       now: () => now,
-      log: () => {},
+      log: createTestLogger().logger,
       setTimeout: scheduler.setTimeoutFn,
     });
 
@@ -164,7 +167,7 @@ describe('GithubCredentialManager', () => {
       fetch: earlyFetch,
       writeGhAuth: async () => {},
       now: () => now,
-      log: () => {},
+      log: createTestLogger().logger,
       setTimeout: earlyScheduler.setTimeoutFn,
     });
     earlyManager.start();
@@ -189,7 +192,7 @@ describe('GithubCredentialManager', () => {
       fetch: fetchFn,
       writeGhAuth: async () => {},
       now: () => now,
-      log: () => {},
+      log: createTestLogger().logger,
       setTimeout: scheduler.setTimeoutFn,
     });
 
@@ -227,7 +230,7 @@ describe('GithubCredentialManager', () => {
       fetch: fetchFn,
       writeGhAuth,
       now: () => now,
-      log: () => {},
+      log: createTestLogger().logger,
       setTimeout: scheduler.setTimeoutFn,
     });
 
@@ -251,27 +254,28 @@ describe('GithubCredentialManager', () => {
     ];
 
     for (const scenario of scenarios) {
-      const logs: string[] = [];
+      const testLog: TestLogger = createTestLogger();
       const manager = new GithubCredentialManager({
         env: BASE_ENV,
         fetch: fakeFetch(scenario),
         writeGhAuth: async () => {},
-        log: (message) => logs.push(message),
+        log: testLog.logger,
       });
 
       const result = await manager.refreshNow();
 
       expect(result.ok).toBe(false);
-      const joined = logs.join('\n');
-      expect(joined).toContain('[GithubCredential] 凭据续期失败');
-      expect(joined).not.toContain(TOKEN);
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({ component: 'github-credential', msg: '凭据续期失败' }),
+      );
+      expect(JSON.stringify(testLog.records)).not.toContain(TOKEN);
     }
   });
 
   it('T-CM12: 进入近过期区首次立即重试、其后按短间隔退避，并留下不含 token 的告警日志', async () => {
     const t0 = Date.parse('2026-10-22T10:00:00.000Z');
     let now = t0;
-    const logs: string[] = [];
+    const testLog: TestLogger = createTestLogger();
     // 服务端持续返回近过期 token（复现 R1 未修复时的缓存命中）
     const minted = new Date(t0 + 60 * 60 * 1000).toISOString();
     const fetchFn = fakeFetch(async () => jsonResponse({ token: TOKEN, expiresAt: minted }));
@@ -282,7 +286,7 @@ describe('GithubCredentialManager', () => {
       fetch: fetchFn,
       writeGhAuth: async () => {},
       now: () => now,
-      log: (message) => logs.push(message),
+      log: testLog.logger,
       setTimeout: scheduler.setTimeoutFn,
     });
 
@@ -301,9 +305,10 @@ describe('GithubCredentialManager', () => {
     // 服务端仍返回近过期 token → 退到短间隔重试（60s），避免热循环打爆 agent-api
     expect(scheduler.timers[2].delay).toBe(60_000);
 
-    const joined = logs.join('\n');
-    expect(joined).toContain('[GithubCredential] 凭据剩余有效期不足');
-    expect(joined).not.toContain(TOKEN);
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({ component: 'github-credential', msg: '凭据剩余有效期不足' }),
+    );
+    expect(JSON.stringify(testLog.records)).not.toContain(TOKEN);
 
     manager.stop();
   });
@@ -320,7 +325,7 @@ describe('GithubCredentialManager', () => {
       env: BASE_ENV,
       fetch: fetchFn,
       writeGhAuth,
-      log: () => {},
+      log: createTestLogger().logger,
     });
 
     const first = manager.refreshNow();
@@ -335,20 +340,24 @@ describe('GithubCredentialManager', () => {
 
   it('T-CM6: missing env disables startup with a warn that only lists variable names', async () => {
     const fetchFn = fakeFetch(async () => jsonResponse({}));
-    const logs: string[] = [];
+    const testLog: TestLogger = createTestLogger();
     const manager = new GithubCredentialManager({
       env: { ZAG_HOST_KEY: 'should-not-appear' },
       fetch: fetchFn,
-      log: (message) => logs.push(message),
+      log: testLog.logger,
     });
 
     manager.start();
 
     expect(fetchFn).not.toHaveBeenCalled();
-    const output = logs.join('\n');
-    expect(output).toContain('ZAG_AGENT_API_ENDPOINT');
-    expect(output).toContain('ZAG_CONTROLLER_ID');
-    expect(output).not.toContain('should-not-appear');
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({
+        component: 'github-credential',
+        msg: expect.stringContaining('disabled'),
+        missing: expect.arrayContaining(['ZAG_AGENT_API_ENDPOINT', 'ZAG_CONTROLLER_ID']),
+      }),
+    );
+    expect(JSON.stringify(testLog.records)).not.toContain('should-not-appear');
     await expect(manager.refreshNow()).resolves.toEqual({ ok: false, error: 'disabled' });
   });
 
@@ -360,7 +369,7 @@ describe('GithubCredentialManager', () => {
       env: BASE_ENV,
       fetch: invalidJson,
       writeGhAuth: async () => {},
-      log: () => {},
+      log: createTestLogger().logger,
     });
     const invalid = await manager.refreshNow();
     expect(invalid.ok).toBe(false);
@@ -373,7 +382,7 @@ describe('GithubCredentialManager', () => {
       env: BASE_ENV,
       fetch: network,
       writeGhAuth: async () => {},
-      log: () => {},
+      log: createTestLogger().logger,
     });
     const failed = await networkManager.refreshNow();
     expect(failed.ok).toBe(false);
@@ -381,7 +390,7 @@ describe('GithubCredentialManager', () => {
   });
 
   it('T-CM8: logs and returned errors never contain the token', async () => {
-    const logs: string[] = [];
+    const testLog: TestLogger = createTestLogger();
     const fetchFn = fakeFetch(async () => jsonResponse({ token: TOKEN, expiresAt: EXPIRES_AT }));
     const manager = new GithubCredentialManager({
       env: BASE_ENV,
@@ -389,13 +398,13 @@ describe('GithubCredentialManager', () => {
       writeGhAuth: async () => {
         throw new Error(`unable to write ${TOKEN}`);
       },
-      log: (message) => logs.push(message),
+      log: testLog.logger,
     });
 
     const result = await manager.refreshNow();
 
     expect(result.ok).toBe(false);
-    expect(logs.join('\n')).not.toContain(TOKEN);
+    expect(JSON.stringify(testLog.records)).not.toContain(TOKEN);
     // writeGhAuth 的实现负责脱敏；管理器不额外拼接 token
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
