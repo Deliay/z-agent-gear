@@ -87,6 +87,7 @@ npm test
 | `GITHUB_TEST_REPO` | 已绑定 Github 账号的仓库（T-GHIL* 标签同步 / T-GHI* 全链路） | - |
 | `CLOUD_HOST_ISSUES_LABEL` | T-GHI* 全链路使用的联动标签名（需已建配置并同步到仓库） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
+| `OTEL_*` | 可观测性导出（**可选**）：`OTEL_EXPORTER_OTLP_ENDPOINT` 未配置 = OTel SDK 完全不启动、**零外发**，T-OBS 系列不依赖采集端即通过；需验证导出链路时才配置 endpoint（+ `OTEL_EXPORTER_OTLP_HEADERS`，该值禁止出现在任何日志）。完整 env 契约见 `contracts/observability.md` §3 | -（可选） |
 
 > 套件内含共享账号（admin）口令轮换与 `mustChangePassword` 翻转等用例，**禁止多 worker 并行**；默认 vitest 已串行于同一进程内，如需并行务必隔离环境。
 
@@ -774,6 +775,17 @@ npm test
 |------|------|
 | T-MB* | 我的费用：账户派生自登录主体、账单/收据/调用记录/汇总、API Key 管理 |
 
+
+### 日志与可观测性（T-OBS*，`src/observability/`）
+
+| 测试 | 描述 |
+|------|------|
+| T-OBS8 / T-OBS21（`src/observability/vendor-consistency.test.ts`） | vendor 一致性与同步幂等：5 包 7 文件与单源 `packages/observability/src` 内容全等（文件头 `GENERATED ... — DO NOT EDIT` 必须存在）；`node scripts/sync-observability.mjs --check` 重复运行输出一致、退出码 0 |
+| T-OBS19（API 横切，`src/observability/http-crosscut.test.ts`，需 live 服务） | 四服务 `/health` 与 GraphQL 响应带 `x-request-id`；入站合法值（`/^[A-Za-z0-9._:-]{8,128}$/`）沿用、非法值重生成并标注 `requestIdReplaced: true`；错误响应 join 后不含 token/password 明文（以 `INTERNAL_API_TOKEN` / `ADMIN_INITIAL_PASSWORD` 实际值 + 哨兵值断言）。模块加载时探测各服务 `/health`，不可达时对应用例 skip 并输出 `aspire start` 启动指引 |
+| T-OBS22（publishJson 封套巡检，`src/observability/publish-envelope.test.ts`，静态扫描可独立运行） | agent-api / controller-api 发布点全部经 `publishJson`（静态扫描 + 白名单断言：`redis.publish(` 直接调用数为 0，豁免需行内 `// publish-envelope-ok: <原因>`）；报文顶层注入 `_meta.traceparent` 且消费者容忍 `_meta` 缺失（历史报文行为不变） |
+| 全仓验收扫描（`src/observability/invariant-scan.test.ts`，静态扫描可独立运行） | `servers/*/src` console 直出 0 命中、`packages/agent-controller/src` 命中全部带 `// no-console-allow`、`apps/*/src` 仅 `src/lib/logger.ts` 命中；`interface Logger` 重复声明清零；`src/migrations/`（不允许修改）console 保留为已知偏差，仅统计输出 |
+
+> `OTEL_*` 环境变量**可选**：未配置 `OTEL_EXPORTER_OTLP_ENDPOINT` = SDK 完全不启动、零外发，T-OBS 系列在无采集端环境下即通过；字段字典 / 传播规则 / 脱敏名单见 `contracts/observability.md`。
 
 ## 多租户上线回归（2026-10-30）
 

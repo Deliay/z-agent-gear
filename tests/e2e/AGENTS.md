@@ -71,6 +71,7 @@ npx playwright test
 | `GITHUB_API_BASE` | Check Runs 同步展示用例（E2E-CR*）不依赖出站调用；出站行为由 `tests/api` mock GitHub 覆盖 | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC 验签密钥（可选，API 套件 HMAC 用例使用） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 地址（admin-cloud-container 套件相关断言） | `http://localhost:10004` |
+| `OTEL_*` | 可观测性导出（**可选**）：`OTEL_EXPORTER_OTLP_ENDPOINT` 未配置 = SDK 完全不启动、**零外发**，T-OBS20 冒烟不依赖采集端即通过；完整 env 契约见 `contracts/observability.md` §3 | -（可选） |
 
 > 所有套件共享同一套服务与 Mongo：admin 套件会轮换共享管理员（admin）口令、清理全局供应商，因此**必须在 `playwright.config.ts` 中强制 `workers: 1`、`fullyParallel: false` 串行执行**（已写死，勿覆盖为并发），否则用例互相污染：
 
@@ -488,3 +489,13 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 - `src/github-workload.spec.ts`：`HARNESS_ENABLED=true` 时通过 API 创建云主机，验证工作区 Github 图标、设置弹窗默认前缀 `~/workspace`（无默认工作区时预填，预览展开为 `/home/worker/workspace`）、前缀语义文案（最终地址 = `<前缀>/<owner>/<repo>`）、Github 工作负载固定勾选与未绑定账号引导；不调用真实 GitHub，成功 clone/凭据/会话链路依赖单测与部署侧手工验收。
 - `src/cloud-host.spec.ts`：新建云电脑弹窗断言 `cloudHostWorkloadCatalog` 的真实数据（Aspire/Docker/.NET 可见、Aspire 依赖文案、勾选 Docker 出现耗时提示），再提交创建；K8S 关闭时只断言到「启动中」，不做就绪断言。
+
+## 日志与可观测性（T-OBS20，`src/observability.spec.ts`）
+
+| 测试 | 描述 |
+|------|------|
+| T-OBS20 日志 JSON 冒烟 | compose/Aspire 启动后四服务（agent-api / controller-api / admin-api / cloud-controller）首屏日志**每行可 `JSON.parse`**（字段 `level/time/service/msg` 齐备）；一次 GraphQL 请求的 `trace_id` 在 agent-api 与 admin-api 日志中**同时出现**（跨服务链路串通） |
+
+> `OTEL_*` 环境变量**可选**：未配置 `OTEL_EXPORTER_OTLP_ENDPOINT` = SDK 完全不启动、零外发，冒烟仅断言日志 JSON 与 `trace_id` 贯通（日志不受采样/导出影响）；如需验证 span 导出，另行配置 endpoint 并查看 collector 输出。字段字典 / 传播规则见 `contracts/observability.md`。
+
+> 日志获取（任一可用即跑，全部不可得时用例**明确 skip 并输出指引**）：`AGENT_API_LOG_FILE` / `ADMIN_API_LOG_FILE` / `CONTROLLER_API_LOG_FILE` / `CLOUD_CONTROLLER_LOG_FILE`（日志文件路径），或 `OBSERVABILITY_LOG_DIR`（目录下 `<service>.log`），或 `docker compose logs <service>`（`OBS_LOGS_DISABLE_DOCKER=1` 关闭该回落，`COMPOSE_FILE` 指定 compose 文件）。trace 关联用例另需 `INTERNAL_API_TOKEN`（或 `ADMIN_INITIAL_PASSWORD` / `MONGODB_URI` 归一化管理员口令）以构造跨服务请求链。

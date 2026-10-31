@@ -73,3 +73,10 @@ servers/agent-api/
 ### 聚合信息
 
 - **聚合信息应尽早沉淀到持久层**。用户在客户端「现查现配」不可靠（存在时序竞争与窗口限制）；在 agent-api 落库时聚合透传后，前端展示链路自然简化且可测试。
+
+### 日志与可观测性
+
+- **`mixin` 与 AsyncLocalStorage 的生效边界**。日志上下文（`requestId`/`trace_id`/`userId` 等）经 `runWithLogContext` + pino `mixin()` 自动注入，但它只在 AsyncLocalStorage 能延续的异步链内生效：Socket.IO 的 `emit` 回调与事件回调、`setTimeout`/事件发射器跨界处**不会自动延续上下文**，必须在处理器入口显式 `runWithLogContext({ ... })` 再执行业务；`httpContext()` 的访问日志回调（响应回调）同样不是天然在请求上下文中，需手动恢复上下文后再记日志，否则访问日志丢 `requestId`/`trace_id`。
+- **pino 第二参数是插值参数，`logger.warn('msg', err)` 会静默丢错误**。pino 原生签名 `logger.<level>(objOrMsg, msg?)` 的第二参是格式化插值参数，不是附加对象——`logger.warn('msg', err)` 里的 `err` 被当作插值参数消费（无占位符即被丢弃），排障时只剩一条无堆栈的 msg（比不改还差）。错误对象一律进 `err` 字段：`logger.warn({ err }, 'msg')`。全仓迁移判据：grep 逐条确认无「第二参数为 Error/对象」残留的 variadic 调用。
+- **OTel SDK 必须作为入口首个 import**。`src/index.ts`（agent-gear 为 `src/index.ts`）首行 `import './observability/register.js'` 必须先于 express/mongoose/socket.io 等一切依赖加载：Node 模块只被 patch 一次，若 SDK 启动前 express/mongoose 已加载，自动埋点静默失效（手工 span 与日志仍正常，链路缺入口 span 极难察觉）。新增入口/脚本进程同样遵守；测试与 CLI 子命令无需启动 SDK（未配置 `OTEL_EXPORTER_OTLP_ENDPOINT` 时 SDK 完全不启动）。
+- **migration 例外（已知偏差登记）**。`src/migrations/**` 不允许修改（历史不可变），迁移文件保留原 `console` 输出、`no-console` 守卫跳过 `migrations` 目录、新写迁移不强制结构化。这与实现计划 §4.5/§4.6 的迁移条目是已知偏差，以 `common-rules.md`「日志与可观测性规范」的 migration 例外条目为准。
