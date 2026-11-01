@@ -3,6 +3,49 @@ import { Writable, Readable } from 'node:stream';
 import { existsSync, mkdirSync } from 'fs';
 import { platform } from 'os';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
+import { collectSecretValues, redactSecrets, REDACTED } from '../workload-executor.js';
+
+/** B4：ACP 子进程 stderr 单条入日志前的截断上限（脱敏后截断，原文长段不进日志）。 */
+export const STDERR_LOG_MAX_CHARS = 500;
+
+/**
+ * B4 敏感键值对（契约 §6.1 脱敏名单：token/key/password/secret 等 + authorization/cookie）。
+ * 覆盖 `键 = 值` / `键: 值` / JSON `"键":"值"` 形态，仅替换值、保留键名便于排障。
+ */
+const SENSITIVE_KV_RE =
+  /\b(password[_-]?hash|passwords?|passwd|passphrase|pwd|model[_-]?api[_-]?key|api[_-]?key|private[_-]?key|client[_-]?secret|secrets?|access[_-]?token|refresh[_-]?token|id[_-]?token|tokens?|authorization|cookie|key)\b(["']?\s*[=:]\s*)(?:Bearer\s+|Basic\s+)?(?:"[^"]*"|'[^']*'|[^\s"'`,;)\]}]+)/gi;
+
+/** B4 命令行 flag 形态（`--token <值>` / `--api-key=<值>`）。 */
+const SENSITIVE_FLAG_RE =
+  /(--?(?:[A-Za-z0-9]+[-_])*(?:tokens?|keys?|secrets?|passwords?|passwd|credentials?))\b(["']?\s*[= ]\s*)(?:"[^"]*"|'[^']*'|[^\s"'`,;)\]}]+)/gi;
+
+/** B4 形似凭据的串（GitHub/OpenAI/Slack/AWS/JWT/Bearer/zag key 等已知形态）。 */
+const CREDENTIAL_LIKE_RES: RegExp[] = [
+  /\bgh[pousr]_[A-Za-z0-9]{16,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{16,}/g,
+  /\bsk-[A-Za-z0-9_-]{16,}/g,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
+  /\bAKIA[0-9A-Z]{16}\b/g,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/gi,
+  /\bzag_(?:sk|k)_[A-Za-z0-9_-]{6,}/g,
+];
+
+/**
+ * B4：ACP 子进程 stderr 入日志前的脱敏（不得原文入 info/error）。
+ *
+ * 三层防护（先脱敏、后截断见调用方）：
+ * 1. `redactSecrets` 复用 workload-executor 工具：`ZAG_*` secret 精确值替换为 `***`；
+ * 2. 契约 §6.1 名单键值对（token/key/password/secret 等）只留键名；
+ * 3. 形似凭据的串（token 前缀 / JWT / Bearer / zag key）整体替换。
+ */
+export function redactStderrText(text: string, env: NodeJS.ProcessEnv = process.env): string {
+  let out = redactSecrets(text, collectSecretValues(env));
+  out = out.replace(SENSITIVE_KV_RE, (_m, key: string, sep: string) => `${key}${sep}${REDACTED}`);
+  out = out.replace(SENSITIVE_FLAG_RE, (_m, flag: string, sep: string) => `${flag}${sep}${REDACTED}`);
+  for (const re of CREDENTIAL_LIKE_RES) out = out.replace(re, REDACTED);
+  return out;
+}
 
 export interface AcpProcessOptions {
   sessionId: string;
@@ -58,7 +101,17 @@ export class AcpSpawner {
     this.process = spawn(cmd, this.args, spawnOptions);
 
     this.process.stderr?.on('data', (data: Buffer) => {
-      this.log.error({ event: 'acp_stderr', stderr: data.toString() }, 'acp server stderr');
+      // B4：子进程 stderr 不得原文入 info/error —— 先脱敏（secret 值 + 键值对 + 形似凭据串）再截断。
+      const safe = redactStderrText(data.toString());
+      const truncated = safe.length > STDERR_LOG_MAX_CHARS;
+      this.log.error(
+        {
+          event: 'acp_stderr',
+          stderr: truncated ? safe.slice(0, STDERR_LOG_MAX_CHARS) : safe,
+          ...(truncated ? { stderrTruncated: true } : {}),
+        },
+        'acp server stderr',
+      );
     });
 
     this.process.on('exit', (code, signal) => {

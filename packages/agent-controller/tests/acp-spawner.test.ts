@@ -20,7 +20,7 @@ vi.mock('fs', async (importOriginal) => {
   return { ...actual, existsSync: vi.fn(() => false), mkdirSync: vi.fn() };
 });
 
-import { AcpSpawner } from '../../src/acp/spawner.js';
+import { AcpSpawner, redactStderrText, STDERR_LOG_MAX_CHARS } from '../../src/acp/spawner.js';
 import { spawn, execFileSync, execFile } from 'child_process';
 import { existsSync } from 'fs';
 import { createTestLogger, type TestLogger } from '../../src/observability/testing.js';
@@ -130,6 +130,86 @@ describe('AcpSpawner', () => {
       spawner.start();
       mockProcess.emit('exit', 0, null);
       await expect(spawner.closed).resolves.toBeUndefined();
+    });
+  });
+
+  describe('acp stderr 脱敏（B4）', () => {
+    it('B4: 已知 secret 值（process.env）不入日志', () => {
+      process.env.ZAG_HOST_KEY = 'opaque-host-key-value-42';
+      try {
+        spawner.start();
+        const stderr = mockProcess.stderr as Readable;
+        stderr.emit('data', Buffer.from('auth failed: opaque-host-key-value-42\n'));
+        expect(testLog.records).toContainEqual(
+          expect.objectContaining({
+            event: 'acp_stderr',
+            level: 'error',
+            stderr: 'auth failed: ***\n',
+          }),
+        );
+      } finally {
+        delete process.env.ZAG_HOST_KEY;
+      }
+    });
+
+    it('B4: token/key/password/secret 等键值对只留键名与占位符', () => {
+      const raw = 'password: hunter2 token=abc123 apiKey="sk-x" secret: s3cr3t authorization: Bearer abcdef0123456789 key=mapkey\n';
+      spawner.start();
+      (mockProcess.stderr as Readable).emit('data', Buffer.from(raw));
+      const record = testLog.records.find((r) => r.event === 'acp_stderr');
+      expect(record?.stderr).toBe('password: *** token=*** apiKey=*** secret: *** authorization: *** key=***\n');
+    });
+
+    it('B4: 形似凭据的串被替换（ghp_/github_pat_/sk-/JWT/Bearer/zag key）', () => {
+      const parts = [
+        `ghp_${'a'.repeat(20)}`,
+        `github_pat_${'b'.repeat(20)}`,
+        `sk-${'c'.repeat(20)}`,
+        `eyJhbGciOiJIUzI1NiJ9.${'d'.repeat(12)}.${'e'.repeat(12)}`,
+        `Bearer ${'f'.repeat(20)}`,
+        `zag_k_1_${'0'.repeat(48)}`,
+      ];
+      spawner.start();
+      (mockProcess.stderr as Readable).emit('data', Buffer.from(parts.join(' ')));
+      const record = testLog.records.find((r) => r.event === 'acp_stderr');
+      expect(record?.stderr).not.toContain('ghp_');
+      expect(record?.stderr).not.toContain('github_pat_');
+      expect(record?.stderr).not.toContain('sk-');
+      expect(record?.stderr).not.toContain('eyJ');
+      expect(record?.stderr).not.toContain('f'.repeat(20));
+      expect(record?.stderr).not.toContain('zag_k_');
+      expect(record?.stderr).toContain('***');
+    });
+
+    it('B4: 超长 stderr 截断到上限并标记 stderrTruncated', () => {
+      spawner.start();
+      (mockProcess.stderr as Readable).emit('data', Buffer.from('x'.repeat(STDERR_LOG_MAX_CHARS + 100)));
+      const record = testLog.records.find((r) => r.event === 'acp_stderr');
+      expect(record?.stderr).toHaveLength(STDERR_LOG_MAX_CHARS);
+      expect(record?.stderrTruncated).toBe(true);
+    });
+
+    it('B4: 短 stderr 不截断、不带截断标记', () => {
+      spawner.start();
+      (mockProcess.stderr as Readable).emit('data', Buffer.from('some warning\n'));
+      const record = testLog.records.find((r) => r.event === 'acp_stderr');
+      expect(record?.stderr).toBe('some warning\n');
+      expect(record?.stderrTruncated).toBeUndefined();
+    });
+  });
+
+  describe('redactStderrText', () => {
+    it('B4: 无敏感内容原样返回', () => {
+      expect(redactStderrText('some warning\n', {})).toBe('some warning\n');
+    });
+
+    it('B4: 键值对脱敏不误伤相邻普通文本', () => {
+      expect(redactStderrText('retrying in 5s, token expired', {})).toBe('retrying in 5s, token expired');
+    });
+
+    it('B4: 命令行 flag 形态（--token <值>）同样脱敏', () => {
+      expect(redactStderrText('run with --token abcdef123 --api-key=xyz987 done', {}))
+        .toBe('run with --token *** --api-key=*** done');
     });
   });
 
