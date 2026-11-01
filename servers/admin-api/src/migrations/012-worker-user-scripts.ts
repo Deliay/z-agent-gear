@@ -1,3 +1,4 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
 import { DOCKER_SCRIPT_V1 } from './001-preset-workloads.js';
 import { DOCKER_SCRIPT_V2 } from './002-refresh-docker-preset-script.js';
@@ -10,6 +11,8 @@ import { ASPIRE_CLI_PARAM } from './004-aspire-cli-source.js';
 import { HARNESS_OPENCODE_INIT_SCRIPT, HARNESS_OPENCODE_INIT_SCRIPT_V1 } from './006-preset-harness-opencode.js';
 import { HARNESS_KIMI_CODE_INIT_SCRIPT } from './009-preset-harness-kimi-code.js';
 import { HARNESS_DEEPSEEK_INIT_SCRIPT, HARNESS_DEEPSEEK_INIT_SCRIPT_V1 } from './010-preset-harness-deepseek.js';
+
+const log = logger.child({ component: 'migration/012-worker-user-scripts' });
 
 export const name = '012-worker-user-scripts';
 const SUDO = 'SUDO=sudo; command -v sudo >/dev/null || SUDO=\n';
@@ -89,22 +92,22 @@ async function refresh(t: Target): Promise<void> {
   const found = await findWorkload(t.presetKey, t.name);
   if (!found) {
     await CloudWorkload.create({ name: t.name, presetKey: t.presetKey, ...t.create, initScript: t.newScript });
-    console.log(`[Migration 012] ${t.presetKey} created (v2)`);
+    log.info({ presetKey: t.presetKey }, 'workload created (v2)');
     return;
   }
   const doc = found.doc as unknown as MutableWorkload;
   if (found.viaName && !doc.initScript) {
-    console.warn(`[Migration 012] ${t.name} exists without presetKey, skipping`);
+    log.warn({ name: t.name }, 'workload exists without presetKey, skipping');
     return;
   }
   if (doc.initScript === t.newScript) return;
   if (!t.oldScripts.includes(doc.initScript ?? '')) {
-    console.warn(`[Migration 012] ${t.presetKey} script modified by admin, skipping`);
+    log.warn({ presetKey: t.presetKey }, 'script modified by admin, skipping');
     return;
   }
   doc.initScript = t.newScript;
   await doc.save();
-  console.log(`[Migration 012] ${t.presetKey} script refreshed`);
+  log.info({ presetKey: t.presetKey }, 'script refreshed');
 }
 
 async function refreshGithubTargetPath(): Promise<void> {
@@ -120,12 +123,12 @@ async function refreshGithubTargetPath(): Promise<void> {
   } else if (current === '/root/workspace') {
     field.defaultValue = GITHUB_TARGET_PATH_V2;
   } else {
-    console.warn('[Migration 012] github targetPath customized by admin, skipping');
+    log.warn('github targetPath customized by admin, skipping');
     return;
   }
   doc.markModified?.('paramSchema');
   await doc.save();
-  console.log('[Migration 012] github targetPath default refreshed');
+  log.info('github targetPath default refreshed');
 }
 
 export async function run(): Promise<void> {

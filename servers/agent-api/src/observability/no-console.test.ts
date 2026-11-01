@@ -6,7 +6,7 @@
  * 例外口径见 contracts/observability.md / plan §3.1 D7。
  */
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,8 +24,8 @@ function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
-      // migration 目录不允许修改（历史不可变），其中的 console 不在守卫范围
-      if (entry !== 'migrations') walk(full, out);
+      // 守卫覆盖全部 src/**/*.ts（含 migrations）：迁移文件已结构化，任何新增 console 都须红。
+      walk(full, out);
     } else if (full.endsWith('.ts')) {
       out.push(full);
     }
@@ -61,6 +61,18 @@ describe('no-console invariant (T-OBS7)', () => {
     const whitelisted = 'con' + "sole.log('x'); // no-console-allow: 守卫自测样本";
     expect(ALLOW_RE.test(whitelisted)).toBe(true);
     expect(ALLOW_RE.test('const x = 1;')).toBe(false);
+  });
+
+  it('walker 覆盖 migrations 目录（新迁移新增 console 亦须红）', () => {
+    const files = walk(srcDir);
+    const migrationDir = join(srcDir, 'migrations');
+    if (existsSync(migrationDir)) {
+      const migrationFiles = files.filter((f) => f.startsWith(`${migrationDir}/`));
+      expect(
+        migrationFiles.length,
+        'migrations 目录必须被守卫扫描（不得整目录跳过，否则新增 console 静默通过）',
+      ).toBeGreaterThan(0);
+    }
   });
 
   it('本包 src 内无未豁免的 console 直出调用', () => {

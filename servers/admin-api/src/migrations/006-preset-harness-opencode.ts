@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
+
+const log = logger.child({ component: 'migration/006-preset-harness-opencode' });
 
 /**
  * 006-preset-harness-opencode：写入云电脑 harness 运行环境预置项「OpenCode（Harness）」。
@@ -90,14 +93,12 @@ const PRESET_NAME = 'OpenCode（Harness）';
 export async function run(): Promise<void> {
   const byKey = await CloudWorkload.findOne({ presetKey: PRESET_KEY });
   if (byKey) {
-    console.warn(
-      `[Migration 006] preset workload "${PRESET_KEY}" already exists (by presetKey), skipping`,
-    );
+    log.warn({ presetKey: PRESET_KEY }, 'preset workload already exists (by presetKey), skipping');
     return;
   }
   const byName = await CloudWorkload.findOne({ name: PRESET_NAME });
   if (byName) {
-    console.warn(`[Migration 006] workload named "${PRESET_NAME}" already exists, skipping`);
+    log.warn({ name: PRESET_NAME }, 'workload with the same name already exists, skipping');
     return;
   }
 
@@ -112,5 +113,5 @@ export async function run(): Promise<void> {
     workloadKind: 'harness',
     harnessType: 'opencode',
   });
-  console.log(`[Migration 006] preset workload "${PRESET_KEY}" created`);
+  log.info({ presetKey: PRESET_KEY }, 'preset workload created');
 }

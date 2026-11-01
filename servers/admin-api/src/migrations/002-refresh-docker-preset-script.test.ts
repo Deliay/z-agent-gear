@@ -3,6 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/cloud-workload.js', () => ({
   CloudWorkload: { findOne: vi.fn(), create: vi.fn() },
@@ -10,7 +12,17 @@ vi.mock('../models/cloud-workload.js', () => ({
 
 import { CloudWorkload } from '../models/cloud-workload.js';
 import { DOCKER_SCRIPT_V1 } from './001-preset-workloads';
-import * as migration from './002-refresh-docker-preset-script';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./002-refresh-docker-preset-script.js');
+childSpy.mockRestore();
 
 type CreateArg = {
   name: string;
@@ -25,8 +37,7 @@ type CreateArg = {
 describe('migration 002-refresh-docker-preset-script', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    testLog.reset();
     // 默认：预设项与其同名项都不存在
     (CloudWorkload.findOne as any).mockResolvedValue(null);
     (CloudWorkload.create as any).mockImplementation((doc: { name: string }) =>
@@ -89,7 +100,7 @@ describe('migration 002-refresh-docker-preset-script', () => {
     expect(doc.initScript).toBe(custom);
     expect(save).not.toHaveBeenCalled();
     expect(CloudWorkload.create).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('T-MIG8: warns and skips when only an exact-named "Docker" workload exists', async () => {
@@ -104,7 +115,7 @@ describe('migration 002-refresh-docker-preset-script', () => {
     await migration.run();
 
     expect(CloudWorkload.create).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('T-MIG10: DOCKER_SCRIPT_V2 is valid bash, installs dockerd, starts it and verifies', () => {

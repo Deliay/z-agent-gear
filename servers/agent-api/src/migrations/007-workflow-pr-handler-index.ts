@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/007-workflow-pr-handler-index' });
 
 export const name = '007-workflow-pr-handler-index';
 
@@ -17,5 +20,5 @@ export async function run(): Promise<void> {
     { workflowInstanceId: 1, nodeId: 1, pullRequestId: 1 },
     { unique: true, name: 'uniq_workflow_pr_handler' },
   );
-  console.log('[Migration 007] Ensured indexes on workflowprhandlers');
+  log.info('ensured indexes on workflowprhandlers');
 }

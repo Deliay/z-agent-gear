@@ -1,5 +1,8 @@
+import { logger } from '../observability/logger.js';
 import { BillingAccount } from '../models/billing-account.js';
 import { BillingApiKey } from '../models/billing-api-key.js';
+
+const log = logger.child({ component: 'migration/014-billing-owner-tenant' });
 
 /**
  * 014-billing-owner-tenant：前台计费归属 `ownerType: front_user → tenant`。
@@ -35,8 +38,13 @@ export async function run(): Promise<void> {
     );
   }
 
-  console.log(
-    `[Migration 014] billing ownerType front_user -> tenant: accounts ${accounts.modifiedCount ?? 0}/${frontAccountsBefore}, ` +
-      `apiKeys ${apiKeys.modifiedCount ?? 0} (admin_user untouched: ${adminAccountsAfter})`,
+  log.info(
+    {
+      accountsModified: accounts.modifiedCount ?? 0,
+      frontAccountCount: frontAccountsBefore,
+      apiKeysModified: apiKeys.modifiedCount ?? 0,
+      adminAccountCount: adminAccountsAfter,
+    },
+    'billing ownerType front_user -> tenant',
   );
 }
