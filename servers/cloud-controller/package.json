@@ -1,6 +1,7 @@
 {
   "name": "cloud-controller",
   "version": "1.0.0",
+  "packageManager": "pnpm@12.16.1",
   "description": "K8s cloud controller: worker Job lifecycle + Socket.IO worker gateway",
   "main": "dist/index.js",
   "type": "module",

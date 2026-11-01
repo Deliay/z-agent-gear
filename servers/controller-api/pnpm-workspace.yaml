@@ -1,0 +1,7 @@
+allowBuilds:
+  esbuild: true
+  fsevents: true
+  protobufjs: true
+permissions:
+  dotenv:
+    skills: false

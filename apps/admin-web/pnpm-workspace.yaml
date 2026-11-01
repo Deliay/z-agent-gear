@@ -1,0 +1,5 @@
+allowBuilds:
+  fsevents: true
+permissions:
+  "@apollo/client":
+    skills: false
