@@ -469,3 +469,24 @@ describe('节点关联 Pull Request 徽标', () => {
     expect(screen.queryByText('PR')).not.toBeInTheDocument();
   });
 });
+
+describe('节点详情抽屉入口（UI 四期功能点 6）', () => {
+  it('列表视图节点头部提供「详情」按钮并回调节点 id', () => {
+    const onOpenDetail = vi.fn();
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([makeNode()])}
+        onOpenSession={vi.fn()}
+        onOpenDetail={onOpenDetail}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '评审 详情' }));
+    expect(onOpenDetail).toHaveBeenCalledWith('n1');
+  });
+
+  it('未提供 onOpenDetail 时不渲染「详情」按钮（向后兼容）', () => {
+    render(<WorkflowNodeTree instance={makeInstance([makeNode()])} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: '评审 详情' })).not.toBeInTheDocument();
+  });
+});

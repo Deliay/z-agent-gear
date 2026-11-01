@@ -69,6 +69,11 @@ export interface WorkerGatewayDeps {
 export interface WorkerGatewayHandle {
   emitToContainer: (containerId: string, event: string, payload: unknown) => void;
   isConnected: (containerId: string) => boolean;
+  /**
+   * 在线 worker 最近一次 `register` 上报的版本（未经清洗的原始字符串）；未注册/已断开时
+   * 返回 undefined。供 runtime harness 安装的逐类型版本门禁使用（不得回退成「放行」以外的语义）。
+   */
+  getWorkerVersion: (containerId: string) => string | undefined;
 }
 
 /**
@@ -205,12 +210,16 @@ export function registerWorkerGateway(
   );
   /** containerId → 当前活跃 socketId 集合（支持重连/多连接）。 */
   const activeSockets = new Map<string, Set<string>>();
+  /** containerId → 最近一次 register 上报的 agent-gear 版本（runtime harness 版本门禁用）。 */
+  const workerVersions = new Map<string, string>();
 
   /** 下发事件到 containerId 房间：统一注入顶层 `_meta.traceparent`（T-OBS13）。 */
   const emitToContainer = (containerId: string, event: string, payload: unknown): void => {
     nsp.to(containerId).emit(event, withTraceMeta(payload));
   };
   const isConnected = (containerId: string): boolean => (activeSockets.get(containerId)?.size ?? 0) > 0;
+  const getWorkerVersion = (containerId: string): string | undefined =>
+    workerVersions.get(containerId);
 
   nsp.use((socket: Socket, next) => {
     // 问题 59：部署形态下 worker 经 nginx Ingress 回连，TCP 对端是所有 worker 共享的
@@ -393,6 +402,10 @@ export function registerWorkerGateway(
         try {
           socket.data.registered = true;
           socket.data.hostname = hostname;
+          // 记录上报版本：runtime 安装 harness 负载的逐类型版本门禁读取（注册已过基础门禁）。
+          if (typeof payload?.version === 'string' && payload.version) {
+            workerVersions.set(containerId, payload.version);
+          }
           deps.heartbeatTracker.record(containerId);
 
           // 有初始化脚本 → 先回 registered，再由 dispatcher 下发 workload:run（契约 §3 生命周期）；
@@ -480,6 +493,8 @@ export function registerWorkerGateway(
         // 同一 containerId 仍有活跃 socket（多连接/重连窗口）时不判定离线。
         if (remaining > 0) return;
         activeSockets.delete(containerId);
+        // 离线后版本信息不再可信（runtime 门禁按「版本不可得 → 放行 + 告警」处理）。
+        workerVersions.delete(containerId);
 
         deps.heartbeatTracker.remove(containerId);
         if (!socket.data.registered) return;
@@ -499,5 +514,5 @@ export function registerWorkerGateway(
     });
   });
 
-  return { emitToContainer, isConnected };
+  return { emitToContainer, isConnected, getWorkerVersion };
 }

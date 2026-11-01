@@ -1,6 +1,7 @@
 {
   "name": "admin-api",
   "version": "1.0.0",
+  "packageManager": "pnpm@12.16.1",
   "description": "云控制器管理后台 API",
   "main": "dist/index.js",
   "scripts": {

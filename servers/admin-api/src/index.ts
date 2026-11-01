@@ -56,6 +56,8 @@ import * as migration013PresetHarnessDeepseekHeaderMasq from './migrations/013-p
 import * as migration014BillingOwnerTenant from './migrations/014-billing-owner-tenant.js';
 import * as migration015PresetPlaywright from './migrations/015-preset-playwright.js';
 import * as migration016PresetMongo from './migrations/016-preset-mongodb.js';
+// 017：工作负载全局安装 npm → pnpm（open code/kimi/dsh/playwright 脚本字节匹配刷新）
+import * as migration017WorkloadPnpmScripts from './migrations/017-workload-pnpm-scripts.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const logger = rootLogger.child({ component: 'admin-api' });
@@ -167,6 +169,7 @@ async function start() {
       migration014BillingOwnerTenant,
       migration015PresetPlaywright,
       migration016PresetMongo,
+      migration017WorkloadPnpmScripts,
     ]);
   } catch (err) {
     logger.error({ err }, 'runMigrations failed (non-fatal)');

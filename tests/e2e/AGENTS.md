@@ -46,7 +46,7 @@ ADMIN_API_URL=http://localhost:10003/graphql \
 ADMIN_WEB_URL=http://localhost:<admin-web-port> \
 API_URL=http://localhost:10001/graphql \
 CONTROLLER_API_URL=http://localhost:35273 \
-npx playwright test
+pnpm exec playwright test
 ```
 
 > admin 套件（`admin-*.spec.ts`）需要 admin-web 与 admin-api：`aspire start && aspire wait admin-web admin-api agent-api`。
@@ -77,7 +77,7 @@ npx playwright test
 
 ```bash
 ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-uri> \
-  npx playwright test admin-*.spec.ts --workers=1
+  pnpm exec playwright test admin-*.spec.ts --workers=1
 ```
 
 > 注意: 所有端口由 Aspire 动态分配，请在 `aspire describe` 输出中查看实际端口。
@@ -285,6 +285,36 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-CREN8 导出 | 点击导出对话 → download 事件触发、文件名 `session-*.md` 且内容包含会话文本 |
 | E2E-CREN9 长会话导出拉全历史 | 注入 30 条后重载（首帧仅 25 条）→ 导出文件包含全部 30 条，验证分页补历史 |
 
+### Sidebar Phase 4 E2E (`sidebar-phase4.spec.ts`)
+
+> UI 优化四期侧边栏套件：fake controller + GraphQL setup（`phase4-helpers.ts` 统一注册主机/工作区/会话/实例）；分区展开态与宽度持久化走 localStorage。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-UI4S1 折叠分区默认态 | 四分区存在；「工作流」「会话」默认展开、「主机」「网关」默认折叠；点击标题行切换且刷新后保持 |
+| E2E-UI4S2 跨环境聚合 | 两主机的会话/工作流出现在同一「会话」「工作流」列表；条目点击直达对应会话 |
+| E2E-UI4S3 空态收敛 | 无会话/无工作流/无网关时展开后内容区为空，无「无会话」等占位文字 |
+| E2E-UI4S4 拖拽调宽 | 拖动分界线宽度变化且 clamp 在 240–448px；刷新后保持；双击恢复默认 320px |
+| E2E-UI4S5 主机树层级 | 下级缩进为 8px（0.5rem）；设置按钮可点击进入配置页 |
+| E2E-UI4S6 移动端不回归 | 移动视口无 Resizer，且 `scrollWidth - clientWidth ≤ 1` |
+
+### Workflow Graph Phase 4 E2E (`workflow-graph.spec.ts`)
+
+> 工作流图表套件：BLANK 来源实例化三节点图（人类 → 人类 → AI），状态/黑板/追加提示词/PR 关联用 MONGODB_URI 直写构造；动态行与 token 用 fake controller `acp:message` 注入 `SessionUpdate`，完成节点经 `completeCurrentNode` MCP relay。缺少 MONGODB_URI 时整体跳过。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-UI4G1 竖向布局与画布占满 | 默认图表视图节点自上而下（y 坐标单调）；画布高度 ≥ 480px 且占视图区主要高度 |
+| E2E-UI4G2 卡片主题跟随 | 深色主题下节点卡片计算样式背景非纯白；切回浅色即时跟随 |
+| E2E-UI4G3 状态整体配色 | REJECT 与 FAILED 脊色互异；REWORK 徽标带 `animate-pulse`，REJECT 静态 |
+| E2E-UI4G4 连线 | 边 strokeWidth ≥ 2 且 marker-end 箭头存在 |
+| E2E-UI4G5 人类节点就地操作 | 图表卡片输入 → 「完成」→ 节点推进；「打回」填理由 → 上游节点返工 |
+| E2E-UI4G6 人类节点详情抽屉 | 点击节点头部 → 侧边抽屉展示详情；Esc 关闭后回到原视图 |
+| E2E-UI4G7 进行中动态行 | 注入 `agent_thought_chunk`/`tool_call`/`agent_message_chunk` → 动态行分别显示「思考中」/工具调用标题/「总结中」；无消息显示「等待消息」 |
+| E2E-UI4G8 完成态 token | 注入 `usage_update` 后经 MCP 完成节点 → 「已完成 · 消耗 N tokens」 |
+| E2E-UI4G9 资源上图 | 黑板/PR/追加提示词小卡片与所属节点关联；未归属条目进实例资源行；垃圾桶不渲染；图表视图右栏资源树隐藏；点击开抽屉 |
+| E2E-UI4G10 徽标行 | 有 PR/检查项/返工记录的节点徽标可见且 PR 可点；无对应信息不渲染 |
+
 ### Port Forward E2E (`port-forward.spec.ts`)
 
 | 测试 | 描述 |
@@ -473,7 +503,8 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| T-AW2/T-AW3/T-AW4 | 新建入口、名称/harness 必填、无存储参数、选 1 提示「就绪后不会自动创建会话，需先创建或绑定工作区」、提交后 Sidebar 云图标 + 启动中 |
+| T-AW2/T-AW3/T-AW4 | 新建入口、名称必填、harness 可选（0 个可提交，提示「可不选，之后在设置-工作负载中补装」）、无存储参数、选 1 提示「就绪后不会自动创建会话，需先创建或绑定工作区」、提交后 Sidebar 云图标 + 启动中 |
+| T-AW-HARNESS | 创建 0-harness 云电脑成功（`harnessTypes=[]`、不默认建会话）；设置-工作负载展示「云电脑（Harness）」分组与「可选」徽标，运行中未安装可发起安装、无卸载入口（需 `MONGODB_URI` 推进 RUNNING） |
 | E2E-1 | 普通创建不预置默认工作区、不自动建会话；ready 后展示无工作区提示，defaultSessionId/workspaceId 为 null |
 | P10-CH1 | 未选 Github 项目 → 不弹四阶段进度框；ready 后 phase2 语义（无默认工作区/无默认会话，sessions=0） |
 | P10-CH2 | 选 Github 项目 → 四阶段进度；成功后进入项目会话、回填 defaultSessionId、无空默认会话 |

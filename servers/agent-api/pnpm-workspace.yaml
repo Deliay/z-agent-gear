@@ -1,0 +1,8 @@
+allowBuilds:
+  esbuild: true
+  fsevents: true
+  protobufjs: true
+  mongodb-memory-server: false
+permissions:
+  dotenv:
+    skills: false

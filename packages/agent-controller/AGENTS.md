@@ -57,13 +57,13 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.11.0`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.13.0`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
-  注册门禁同步为 `2.11.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
+  注册门禁自 2.11.0 起提升，当前基线 `2.12.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
   OpenCode v2 配置形态 `providers.zag`（`package`/`settings`，替代废弃的 `provider`/`npm`/`options`）；Github 凭据管理器 /
-  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.10.0`——
-  上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
+  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 当前为 `2.12.0`
+  （2.11.0 及更早版本为 `2.10.0`）——上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
   `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
   仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。
 
@@ -201,9 +201,9 @@ init 脚本（admin-api 迁移 006）在安装固定版本 OpenCode 后执行
 
 ```bash
 aspire start     # 启动 Aspire 编排（拉起全部服务）
-npm run build    # Compile TypeScript
-npm run start    # Start production controller
-npm run test     # Run tests
+pnpm run build    # Compile TypeScript
+pnpm run start    # Start production controller
+pnpm run test     # Run tests
 ```
 
 ## Development with Aspire
@@ -222,17 +222,17 @@ aspire start
 #    mutation { createControllerKey(input: { name: "dev", type: local }) { rawKey } }
 
 # 4. 使用生成的 Key 启动 agent-gear
-npm run dev -- --key <rawKey> --server <controller-api-endpoint>
+pnpm run dev -- --key <rawKey> --server <controller-api-endpoint>
 ```
 
 ### 示例
 
 ```bash
 # Aspire 启动后 controller-api 在 4001 端口
-npm run dev -- --key zag_k_1_abc123... --server http://localhost:4001
+pnpm run dev -- --key zag_k_1_abc123... --server http://localhost:4001
 
 # 或使用环境变量
-ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 npm run dev
+ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 pnpm run dev
 ```
 
 ## Config Priority

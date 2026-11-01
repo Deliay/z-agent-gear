@@ -5,9 +5,16 @@
 # - 退出码 42（服务端终止：unregistered / 非失败类 shutdown / INVALID_TOKEN）→ 停止保活、入口 0；
 # - 其余退出（0 / 1 / 信号 / 被误杀）→ 退避 1/2/5/10/30s → 自更新 → 重启；
 # - PID 1 保持 root；agent-gear / npm / node 一律经 run_as_worker() 以 worker 身份执行
-#   （root 环境没有 nodejs），显式构造 HOME/USER/LOGNAME/NVM_DIR/PATH；
+#   （root 环境没有 nodejs），显式构造 HOME/USER/LOGNAME/NVM_DIR/PNPM_HOME/PATH；
 # - stdout/stderr 实时透传；stderr 流式扫描仅记录 VERSION_MISMATCH 标记（0 字节）；
 # - 作为 PID 1 向当前子进程转发 SIGTERM/SIGINT，销毁后不重启、不自更新。
+#
+# pnpm 口径（docs/engineering/plan/20261029-feat-pnpm-workload-and-harness-optional.md）：
+# - 启动时 ensure_pnpm 预装固定版本 pnpm（幂等、失败仅告警不阻断保活；工作负载脚本自带
+#   npm 自举回退兜底存量容器）；
+# - PNPM_HOME 并入 WORKER_PATH，并写 /etc/profile.d/pnpm.sh（登录 shell）与 `pnpm setup`
+#   （交互 shell ~/.bashrc）双入口；agent-gear 预装与自更新统一走 pnpm（`pnpm add -g`），
+#   npm 仅保留为 pnpm 自举通道（存量容器 `npm install -g pnpm@9.15.9`）。
 #
 # 连接参数：
 #   ZAG_SERVER_ENDPOINT / ZAG_CONTROLLER_KEY（cloud-controller /worker）
@@ -21,7 +28,15 @@ WORKER_UID=1000
 WORKER_GID=1000
 WORKER_HOME=/home/worker
 WORKER_NVM_DIR="$WORKER_HOME/.nvm"
-WORKER_PATH="$WORKER_NVM_DIR/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# pnpm 固定版本与全局 bin 目录（决策 1/2）：与迁移 017 脚本内自举回退块同版本。
+PNPM_VERSION="${PNPM_VERSION:-9.15.9}"
+# pnpm 可执行文件（测试可指向不存在的命令，用于验证存量容器自举分支）。
+PNPM_CMD="${ZAG_PNPM_CMD:-pnpm}"
+PNPM_HOME="$WORKER_HOME/.local/share/pnpm"
+# /etc/profile.d 写入目标（登录 shell 全局生效）；仅测试可用环境变量改写到临时目录。
+PNPM_PROFILE_FILE="${ZAG_PNPM_PROFILE_FILE:-/etc/profile.d/pnpm.sh}"
+# 既有顺序不变，仅在 nvm bin 之后追加 PNPM_HOME（pnpm add -g 的全局 bin 落点）。
+WORKER_PATH="$WORKER_NVM_DIR/current/bin:$PNPM_HOME:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 CHILD_PID=""
 SCAN_PID=""
@@ -49,17 +64,43 @@ log() {
 run_as_worker() {
   setpriv --reuid="$WORKER_UID" --regid="$WORKER_GID" --init-groups \
     env HOME="$WORKER_HOME" USER=worker LOGNAME=worker \
-        NVM_DIR="$WORKER_NVM_DIR" PATH="$WORKER_PATH" "$@"
+        NVM_DIR="$WORKER_NVM_DIR" PNPM_HOME="$PNPM_HOME" PATH="$WORKER_PATH" "$@"
 }
 
 # 后台子进程专用：exec 替换当前 shell，保证 PID 1 的转发信号直达子进程本体。
 run_as_worker_exec() {
   exec setpriv --reuid="$WORKER_UID" --regid="$WORKER_GID" --init-groups \
     env HOME="$WORKER_HOME" USER=worker LOGNAME=worker \
-        NVM_DIR="$WORKER_NVM_DIR" PATH="$WORKER_PATH" "$@"
+        NVM_DIR="$WORKER_NVM_DIR" PNPM_HOME="$PNPM_HOME" PATH="$WORKER_PATH" "$@"
 }
 
-# 启动 / 每轮自更新：npm install -g agent-gear（写入 worker 的 per-user nvm 前缀）。
+# 重写 /etc/profile.d/pnpm.sh 的幂等标记块（登录 shell 生效）：先清旧块再追加。
+# 写失败（非 root/只读文件系统）仅告警——交互/登录 shell 接线是双保险之一。
+write_pnpm_profile() {
+  {
+    if [ -f "$PNPM_PROFILE_FILE" ]; then
+      sed -i '/^# >>> pnpm >>>$/,/^# <<< pnpm <<<$/d' "$PNPM_PROFILE_FILE" 2>/dev/null || true
+    fi
+    printf '# >>> pnpm >>>\nexport PNPM_HOME="%s"\ncase ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac\n# <<< pnpm <<<\n' \
+      "$PNPM_HOME" >> "$PNPM_PROFILE_FILE"
+  } 2>/dev/null || log "WARN: cannot write pnpm profile ($PNPM_PROFILE_FILE)"
+}
+
+# 预装固定版本 pnpm（幂等）：优先 `command -v pnpm` 命中即跳过；安装固定版本 pin。
+# 失败仅告警不阻断（工作负载脚本内的自举回退块兜底存量容器）；不受自更新 skip 开关影响。
+ensure_pnpm() {
+  if run_as_worker sh -c "command -v '$PNPM_CMD' >/dev/null 2>&1"; then
+    log "pnpm already installed: $(run_as_worker "$PNPM_CMD" --version 2>/dev/null || echo 'version unknown')"
+  elif run_as_worker npm install -g "pnpm@${PNPM_VERSION}" --no-fund --no-audit; then
+    log "pnpm installed: $(run_as_worker "$PNPM_CMD" --version 2>/dev/null || echo 'version unknown')"
+  else
+    log "WARN: pnpm install failed; workload scripts will fall back to npm bootstrap"
+  fi
+  write_pnpm_profile
+  run_as_worker "$PNPM_CMD" setup >/dev/null 2>&1 || true
+}
+
+# 启动 / 每轮自更新：pnpm add -g agent-gear（写入 PNPM_HOME 全局 bin）。
 # 失败不阻断保活；skip 开关跳过全部自更新。
 update_agent_gear() {
   if [ "${ZAG_SKIP_AGENT_GEAR_UPDATE:-0}" = "1" ]; then
@@ -67,10 +108,10 @@ update_agent_gear() {
     return 0
   fi
   local registry
-  registry=$(run_as_worker npm config get registry 2>/dev/null || echo unknown)
-  log "updating agent-gear via npm (registry=$registry)"
+  registry=$(run_as_worker "$PNPM_CMD" config get registry 2>/dev/null || echo unknown)
+  log "updating agent-gear via pnpm (registry=$registry)"
   local rc=0
-  run_as_worker_exec npm install -g agent-gear --no-fund --no-audit &
+  run_as_worker_exec "$PNPM_CMD" add -g agent-gear &
   CHILD_PID=$!
   wait "$CHILD_PID" || rc=$?
   CHILD_PID=""
@@ -185,6 +226,9 @@ shutdown() {
 main() {
   trap 'shutdown SIGTERM' SIGTERM
   trap 'shutdown SIGINT' SIGINT
+
+  # 先确保 pnpm 就绪（任何工作负载脚本下发前），再进入自更新/保活链路。
+  ensure_pnpm
 
   update_agent_gear
 

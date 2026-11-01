@@ -46,7 +46,7 @@ aspire describe controller-api
 API_URL=http://localhost:10001/graphql \
 ADMIN_API_URL=http://localhost:10003/graphql \
 CONTROLLER_API_URL=http://localhost:35273 \
-npm test
+pnpm test
 ```
 
 > admin 套件（`src/admin-api/**`）与 agent-api scope 回归需要 admin-api 就绪：`aspire start && aspire wait admin-api agent-api && aspire wait controller-api`。
@@ -59,9 +59,9 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（49 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
-| `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
-| `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
+| `pnpm test` | 运行全部常规测试文件（49 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `pnpm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
+| `pnpm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
 > **注意**: `acp-real-*` 测试会启动真实的 agent-controller 进程，共享 PID 文件 `/tmp/agent-controller.pid` 和端口 34519，因此必须串行执行，且需要干净数据库状态。
 
@@ -664,7 +664,7 @@ npm test
 | T-ICC6 兜底展开失败映射 | 仅 `workloadIds` 且展开遇环 / 依赖缺失 / 展开 > 10 → 400 `INVALID_WORKLOAD` |
 | T-ICC7 required 归一与校验 | `required` 缺省/`null` → `false`、`true` 保留并回读；非布尔 → 400 `INVALID_WORKLOAD` |
 | T-ICC8 兜底 required=false | 仅 `workloadIds` 兜底展开的 plan 条目 `required` 一律 `false` |
-| T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（全局基线 2.10.0；kimi/deepseek/opencode 组合均为 2.10.0，需 `MONGODB_URI`） |
+| T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（基线 2.12.0；kimi/deepseek/opencode 及其组合与基线取 max 后均为 2.12.0，需 `MONGODB_URI`） |
 | T-IC-HARNESS3 tenantId | harness 创建落库 `cloudcontainers.tenantId`：显式下发=userId；缺省回退=userId（旧版调用方兼容）；显式空串 → 400 `INVALID_HARNESS`（需 `MONGODB_URI`） |
 | T-IC6 日志 params | 直写 `cloudworkloadlogs.params`/`required` 后按记录返回参数快照与必须标记；历史无 `params` 归一为 `{}`、无 `required` 归一为 `false` |
 
@@ -686,7 +686,8 @@ npm test
 | T-IA 依赖保存 | 正常（按配置顺序、去重）、自依赖 `workload cannot depend on itself`、依赖环 `dependency cycle detected`、依赖不存在 `dependency workload not found`、超 5 `too many dependencies` |
 | T-IA 预制项存在性与幂等 | Docker/Node.js/.NET/Aspire/OpenCode（Harness）/Kimi Code（Harness）/DeepSeek Harness（Harness）/Github/MongoDB/Playwright 共 10 项存在且 `isPreset=true`；Kimi Code `workloadKind=HARNESS`/`harnessType=kimi_code`、`paramSchema=[]`、init 脚本固定 2.3.2 且不含 `harness prepare`；DeepSeek Harness `harnessType=deepseek_harness` 且脚本含 header-masq 插件；Aspire 依赖 `[Docker, .NET]`；Node.js 参数（`version` TEXT 默认 `22`、`package_manager` MULTI_SELECT 默认 `["npm"]`）；MongoDB `workloadKind=STANDARD`/`harnessType=null`/零参数零依赖；Playwright `workloadKind=STANDARD`/`harnessType=null`、依赖 `[Node.js]`；重复查询 ID 集合稳定（迁移不重复写入） |
 | T-IA 预制 MongoDB 原生 apt 安装 | 预制「MongoDB」`workloadKind=STANDARD`/`harnessType=null`/`isPreset=true`、`paramSchema=[]`、`dependsOnWorkloadIds=[]`；`initScript` 含 `command -v mongod` 幂等锚点、内网 Nexus `server-8.0.asc` + `mongodb-apt-proxy`、`apt-get install -y mongodb-org`、结尾 `mongod --version` 硬校验；**不含** `--fork`/`nohup`/`runuser`/`systemctl`/`mongosh`（不拉起实例，返工口径） |
-| T-IA 预制 Playwright 参数化下载 | 预制「Playwright」`paramSchema` 仅 `playwright_download_host`（TEXT 默认 = 内网代理地址 `https://nexus.internal.fffdan.com/repository/playwright-proxy/`）；`dependsOnWorkloadIds` 等于 Node.js 预制项；`initScript` 含 `npm install -g playwright`/`playwright install chromium`/`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST`、`/etc/profile.d/playwright.sh` 与 root/worker `~/.bashrc` 持久化写入、结尾 `playwright --version` 与 `chromium-*` 硬校验，**不含**内置浏览器下载地址（`playwright-proxy` 仅出现在失败指引占位形态） |
+| T-IA 预制 Playwright 参数化下载 | 预制「Playwright」`paramSchema` 仅 `playwright_download_host`（TEXT 默认 = 内网代理地址 `https://nexus.internal.fffdan.com/repository/playwright-proxy/`）；`dependsOnWorkloadIds` 等于 Node.js 预制项；`initScript` 含 `pnpm add -g playwright`/`playwright install chromium`/`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST`、`/etc/profile.d/playwright.sh` 与 root/worker `~/.bashrc` 持久化写入、结尾 `playwright --version` 与 `chromium-*` 硬校验，**不含**内置浏览器下载地址（`playwright-proxy` 仅出现在失败指引占位形态） |
+| T-IA pnpm 脚本口径 | 四条预制脚本（OpenCode / Kimi Code / DeepSeek Harness / Playwright）`initScript` 均含统一 pnpm 自举回退块（`command -v pnpm` + `npm install -g "pnpm@9.15.9"` + `PNPM_HOME`/PATH 前置）与 `pnpm add -g` 安装行；**不含**旧 `npm install -g "@opencode`/`"@moonshot`/`"@deepseek`/`playwright` 安装形态；预制项计数仍为 10 |
 | T-IA 预制 Aspire 代理下载 | 预制「Aspire」`paramSchema` 含 `aspire_cli_url`（TEXT 默认 = 内网缓存代理安装包直链 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`）；`initScript` 含 `curl -fsSL`/`tar -xzf` 直连下载解压，**不含** `install.sh`/`aspire.dev`/`aka.ms`/`ASPIRE_INSTALL_URL`（迁移 004 升级结果，脚本内不内置默认地址）；重复查询预制项 ID 集合稳定 |
 | T-IA 日志 params | 直写 `cloudworkloadlogs.params` 后按执行顺序返回参数快照；历史无 `params` 归一为 `{}` |
 
@@ -763,10 +764,10 @@ npm test
 | `tests/api/src/admin-api/cloud-host-charges.test.ts` | 内部一次性扣费/退款/报价：401、扣费 5 credits 与账单/收据、余额不足 409 `INSUFFICIENT_BALANCE`（带 `available`）、退款幂等、`price-quote` 5/1（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/admin-api/cloud-host-billing.test.ts` | 云电脑运行 Key：个人租户铸造 → STARTING 拒绝 → RUNNING 放行 → 软删除/过期/撤销失效；**团队租户 `ownerId=tenantId` 铸造 + 网关放行 + userId/其他租户拒绝**（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/cloud-host-billing-quote.test.ts` | `cloudHostBillingQuote` 转发价目（创建 5 credits / 运行 1 credit/分钟；需 `ADMIN_API_URL`） |
-| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/多台并行/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.10.0` |
+| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/多台并行/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.12.0`（基线 2.12.0）；DEEPSEEK_HARNESS 创建同为 2.12.0 |
 | `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等、未 ready 自动退款留痕、已 ready 不退）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝（需 `MONGODB_URI`） |
-| `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.10.0`（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
+| `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.12.0`（基线 2.12.0）（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
 
 > `K8S_ENABLED=false` 下无法产生真实 RUNNING 容器；在线、OpenCode ACP、真实默认会话链路由单测 + 真实集群手工验收覆盖，不引入测试后门。
 
@@ -800,7 +801,7 @@ npm test
 
 ## 云主机工作负载 / Github 设置
 
-- `src/agent-api/cloud-host-workload.test.ts`：需要 `MONGODB_URI` + `HARNESS_ENABLED=true`，直插 `controllers/controllerworkspaces/cloudhosts` 造一个在线云主机，覆盖 `cloudHostWorkloads` 归属校验、`cloudHostWorkloadCatalog`（鉴权 + standard 列表 + `installed=false`）、Github 帐号锁定（T-GH-API-L1 首绑落库 / L2 异帐号拒绝 `github account is locked` / L3 同帐号换仓库放行）与 Github setup 输入校验（前缀相对路径/`..`/仓库格式与 `~` 展开矩阵：`~/workspace`/`~`/`~//a` 接受并归一、`~abc` 以「前缀地址必须以 / 或 ~ 开头」拒绝、`~/a/../b` 拒绝，T-GH-API-P1~P4）；不调用真实 GitHub。
+- `src/agent-api/cloud-host-workload.test.ts`：需要 `MONGODB_URI` + `HARNESS_ENABLED=true`，直插 `controllers/controllerworkspaces/cloudhosts` 造一个在线云主机，覆盖 `cloudHostWorkloads` 归属校验、**harness 条目（`workloadKind=HARNESS`、`installed` 标记，T-AH-API1）**、**`installCloudHostWorkload` 放行 harness 且已安装走 SKIPPED 幂等（T-AH-API2）**、`cloudHostWorkloadCatalog`（鉴权 + standard 列表 + `installed=false`）、Github 帐号锁定（T-GH-API-L1 首绑落库 / L2 异帐号拒绝 `github account is locked` / L3 同帐号换仓库放行）与 Github setup 输入校验（前缀相对路径/`..`/仓库格式与 `~` 展开矩阵：`~/workspace`/`~`/`~//a` 接受并归一、`~abc` 以「前缀地址必须以 / 或 ~ 开头」拒绝、`~/a/../b` 拒绝，T-GH-API-P1~P4）；不调用真实 GitHub。
 - `src/agent-api/cloud-host.test.ts`：新增创建期 `workloadIds` 用例（T-CH-API-W2/W3/W4：Docker 可创建、超 5 个 → `too many workloads (max 5)`、不存在 ID → `invalid workload`、harness ID → `workload is not installable`）；不传 `workloadIds` 的历史路径由既有创建用例覆盖。
 - `src/admin-api/cloud-workload.test.ts`：`adminCloudWorkloads` 断言 `workloadKind`/`harnessType`（standard → `STANDARD`/null，harness → `HARNESS`/`opencode`，T-ADM-WL-API1）。
 - 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖；`GET /api/github/setup` 的 upsert 冲突回归由 `tests/api/src/agent-api/github-setup-upsert.test.ts` 覆盖。

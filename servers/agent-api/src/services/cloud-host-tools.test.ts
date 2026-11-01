@@ -130,6 +130,53 @@ describe('cloud-host-tools', () => {
     expect(tools.tools[0].description).toContain('Aspire');
   });
 
+  it('T-AH-MCP: workload_list 含 harness、workload_install 放行 harness（同一 list/createInstallOperation）', async () => {
+    vi.mocked(Session.findOne).mockReturnValue(
+      lean({ _id: SESSION_ID, controllerId: CONTROLLER_ID }),
+    );
+    vi.mocked(Controller.findOne).mockReturnValue(lean({ _id: CONTROLLER_ID, type: 'cloud' }));
+    vi.mocked(CloudHost.findOne).mockReturnValue(
+      lean({ _id: 'host1', controllerId: CONTROLLER_ID }),
+    );
+    const service = makeService({
+      list: vi.fn().mockResolvedValue([
+        { workloadId: 'docker', name: 'Docker', workloadKind: 'STANDARD', installed: true },
+        {
+          workloadId: 'wl-opencode',
+          name: 'OpenCode（Harness）',
+          workloadKind: 'HARNESS',
+          installed: false,
+        },
+      ]),
+    });
+
+    const listResult = await handleCloudHostToolRequest(
+      { userId: USER_ID, sessionId: SESSION_ID },
+      { method: 'tools/call', params: { name: 'workload_list', arguments: {} } },
+      service,
+    );
+    const payload = JSON.parse((listResult.result as any).content[0].text);
+    expect(payload.map((item: any) => item.workloadKind)).toEqual(['STANDARD', 'HARNESS']);
+
+    const installResult = await handleCloudHostToolRequest(
+      { userId: USER_ID, sessionId: SESSION_ID },
+      {
+        method: 'tools/call',
+        params: { name: 'workload_install', arguments: { workloadId: 'wl-opencode' } },
+      },
+      service,
+    );
+    expect(service.createInstallOperation).toHaveBeenCalledWith({
+      userId: USER_ID,
+      controllerId: CONTROLLER_ID,
+      workloadId: 'wl-opencode',
+      params: undefined,
+    });
+    expect(JSON.parse((installResult.result as any).content[0].text)).toMatchObject({
+      status: 'SUCCEEDED',
+    });
+  });
+
   it('T-CHM-L2: workload_install 失败返回 isError 且不含 token', async () => {
     vi.mocked(Session.findOne).mockReturnValue(
       lean({ _id: SESSION_ID, controllerId: CONTROLLER_ID }),

@@ -130,6 +130,7 @@ var otelSampleArg = builder.AddParameter("otel-sample-arg", value: "1.0");
 var logLevel = builder.AddParameter("log-level", value: "info");
 
 var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controller-api", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("LOG_LEVEL", logLevel)
     .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
@@ -145,6 +146,7 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
     });
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("LOG_LEVEL", logLevel)
     .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
@@ -180,6 +182,7 @@ var adminApiUrl = builder.AddParameter("admin-api-url", value: "http://localhost
 // cloud-controller / admin-api 的发布镜像已构建为 dist（见各自 Dockerfile），
 // 运行时不依赖 tsx；NODE_OPTIONS=--import tsx 仅在本地 dev（直跑 TS 源码）时注入。
 var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/cloud-controller", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
     .WithEnvironment("LOG_LEVEL", logLevel)
     .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
@@ -205,6 +208,7 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
 if (rabbitmq is not null) cloudController.WithReference(rabbitmq);
 
 var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("LOG_LEVEL", logLevel)
     .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
@@ -215,6 +219,7 @@ var agentController = builder.AddNodeApp("agent-controller", "../../packages/age
     .ExcludeFromManifest();
 
 var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("ADMIN_JWT_SECRET", adminJwtSecret)
     .WithEnvironment("LOG_LEVEL", logLevel)
     .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
@@ -259,6 +264,7 @@ if (!builder.ExecutionContext.IsPublishMode)
     adminApi.WithEnvironment("NODE_OPTIONS", "--import tsx");
 
     var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
+        .WithPnpm()
         .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"))
         .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
         .WithReference(agentApi)
@@ -275,6 +281,7 @@ if (!builder.ExecutionContext.IsPublishMode)
     adminApi.WithHttpEndpoint(port: 10003, env: "PORT");
     cloudController.WithHttpEndpoint(port: 10004, env: "PORT");
     var adminWeb = builder.AddViteApp("admin-web", "../../apps/admin-web")
+        .WithPnpm()
         .WithEnvironment("VITE_ADMIN_API_URL", adminApi.GetEndpoint("http"));
 }
 else

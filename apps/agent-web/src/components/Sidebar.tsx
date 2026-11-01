@@ -23,8 +23,10 @@ import { getStatusDotColor } from './session/status-colors';
 import WorktreeSidebarGroup from './worktree/WorktreeSidebarGroup';
 import { TodoListPanel } from './TodoListPanel';
 import ThemeToggle from './ThemeToggle';
-import GatewaySection from './GatewaySection';
 import TreeSection from './tree/TreeSection';
+import GatewayItem from './GatewayItem';
+import GatewayDialog from './GatewayDialog';
+import WorkflowInstanceCard from './workflow/WorkflowInstanceCard';
 import {
   Settings,
   Plus,
@@ -35,12 +37,18 @@ import {
   CreditCard,
   GitBranch,
 } from 'lucide-react';
-import { instanceStatusText } from './workflow/WorkflowNodeTreeConstants';
 import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
 import { HOME_OVERVIEW } from '../graphql/home';
 import { CLOUD_HOST_CAPABILITIES } from '../graphql/queries';
 import { useHomeOverview } from '../stores/homeOverview';
 import WorkspaceSwitcher from './WorkspaceSwitcher';
+import {
+  persistSidebarSections,
+  readSidebarSections,
+  sortByUpdatedAtDesc,
+  type SidebarSectionKey,
+  type SidebarSections,
+} from '@/lib/sidebar-prefs';
 
 interface SidebarProps {
   /** 当前用户展示名（登录响应 User.name，迁移后=原用户名） */
@@ -48,15 +56,92 @@ interface SidebarProps {
   mobile?: boolean;
 }
 
+/** 主机选择浮层：聚合分区的新建入口先选主机，再打开对应对话框 */
+function ControllerPicker({
+  controllers,
+  onPick,
+}: {
+  controllers: Array<{ id: string; name?: string | null; hostname?: string | null }>;
+  onPick: (controllerId: string) => void;
+}) {
+  return (
+    <ul
+      role="menu"
+      className="absolute right-0 top-full z-30 mt-1 w-56 rounded-md border bg-popover p-1 text-xs text-popover-foreground shadow-md"
+    >
+      {controllers.map((controller) => (
+        <li key={controller.id}>
+          <button
+            type="button"
+            role="menuitem"
+            className="w-full truncate rounded px-2 py-1 text-left hover:bg-accent"
+            onClick={() => onPick(controller.id)}
+          >
+            {controller.name || controller.hostname}
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** 全宽可折叠分区（类 VSCode）：标题行占满侧边栏，点击切换，右侧 actions */
+function SidebarSection({
+  sectionKey,
+  title,
+  count,
+  actions,
+  expanded,
+  onToggle,
+  children,
+}: {
+  sectionKey: SidebarSectionKey;
+  title: string;
+  count?: number;
+  actions?: React.ReactNode;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="border-b border-sidebar-border/60 py-0.5" data-testid={`sidebar-section-${sectionKey}`}>
+      <div className="flex w-full items-center gap-1 rounded px-2 py-1.5 transition-colors hover:bg-sidebar-accent/60">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={title}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs font-semibold tracking-wide text-muted-foreground hover:text-foreground"
+          onClick={onToggle}
+        >
+          {expanded ? (
+            <ChevronDown className="size-3.5 shrink-0" />
+          ) : (
+            <ChevronRight className="size-3.5 shrink-0" />
+          )}
+          <span className="truncate">{title}</span>
+          {count !== undefined && (
+            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] font-normal">{count}</span>
+          )}
+        </button>
+        {actions && <div className="flex shrink-0 items-center gap-0.5">{actions}</div>}
+      </div>
+      {expanded && <div data-testid={`sidebar-section-content-${sectionKey}`} className="mt-0.5">{children}</div>}
+    </section>
+  );
+}
+
 export default function Sidebar({ name, mobile }: SidebarProps) {
   const navigate = useNavigate();
-  // 改为追踪「已折叠」集合，默认全部展开
+  const [sections, setSections] = useState<SidebarSections>(readSidebarSections);
+  // 主机分区内每个主机默认展开（追踪「已折叠」集合）
   const [collapsedControllers, setCollapsedControllers] = useState<Set<string>>(new Set());
   const [showNewDialog, setShowNewDialog] = useState<{ controllerId?: string } | null>(null);
   const [showNewCloudHost, setShowNewCloudHost] = useState(false);
   const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
   const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
   const [showGithubSetup, setShowGithubSetup] = useState<{ controllerId: string } | null>(null);
+  // 聚合分区的新建入口需要先选择目标主机（工作流实例化 / 网关新增）
+  const [picker, setPicker] = useState<'instantiate' | 'gateway' | null>(null);
 
   // 首页 + 侧边栏统一数据源（由 MainLayout 的 HOME_OVERVIEW 一次加载）
   const { data, refetch } = useHomeOverview();
@@ -77,6 +162,14 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
     ? controllers.find((controller) => controller.id === showGithubSetup.controllerId)
     : undefined;
   const githubSetupHost = githubSetupController?.cloudHost ?? null;
+
+  const toggleSection = (key: SidebarSectionKey) => {
+    setSections((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      persistSidebarSections(next);
+      return next;
+    });
+  };
 
   const handleCloudHostCreated = (cloudHost: { id: string; controllerId?: string }) => {
     setShowNewCloudHost(false);
@@ -174,13 +267,32 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
     });
   };
 
+  const onlineControllers = controllers.filter((controller) => controller.status === 'online');
+  // 网关聚合与既有口径一致：仅在线主机的网关配置行上屏（离线主机不渲染其网关条目）
+  const gatewayRows = onlineControllers.flatMap((controller) =>
+    (controller.gateways?.gateways ?? []).map((gateway) => ({
+      gateway,
+      controllerId: controller.id,
+    })),
+  );
+  const sortedSessions = sortByUpdatedAtDesc(sessions.map((session) => ({ ...session, updatedAt: session.updatedAt ?? '' })));
+  const sortedWorkflows = sortByUpdatedAtDesc(workflowInstances);
+  const sortedArchivedWorkflows = sortByUpdatedAtDesc(archivedWorkflowInstances);
+  const gatewayCount = gatewayRows.length;
+
   return (
     <nav className={`flex flex-col bg-sidebar text-sidebar-foreground ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex-1 overflow-y-auto p-2">
         <WorkspaceSwitcher />
-        <div className="mb-2 flex items-center justify-between gap-2 px-1">
-          <span className="text-xs font-medium text-muted-foreground">主机</span>
-          {capabilities?.enabled && (
+
+        {/* 分区 1：主机（保留现有视图内容：主机 → 工作区 → 会话） */}
+        <SidebarSection
+          sectionKey="hosts"
+          title="主机"
+          count={controllers.length}
+          expanded={sections.hosts}
+          onToggle={() => toggleSection('hosts')}
+          actions={capabilities?.enabled && (
             <button
               type="button"
               aria-label="新建云电脑"
@@ -194,274 +306,316 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
               </span>
             </button>
           )}
-        </div>
-        <ul className="space-y-1">
-          {controllers.map((controller) => {
-            // 默认展开，除非在 collapsedControllers 中
-            const isExpanded = !collapsedControllers.has(controller.id);
-            const isOffline = controller.status !== 'online';
-            const isCloud = controller.type === 'cloud';
-            const cloudHost = controller.cloudHost ?? null;
-            const cloudTerminal = isCloud && isTerminalCloudHost(cloudHost);
-            const cloudHostRunning = isCloud && cloudHost?.status === 'RUNNING' && !cloudHost.deletedAt;
-            // 已销毁/失败的云电脑置灰；普通主机沿用离线置灰规则
-            const dimmed = isCloud ? cloudTerminal : isOffline;
-            const controllerSessions = sessions.filter((s) => s.controllerId === controller.id);
-            const controllerWorkspaces = allWorkspaces.filter(
-              (w) => w.controllerId === controller.id && w.isEnabled,
-            );
-            // 工作流集中列表：按控制器平铺全部实例（不再按工作区拆分组）
-            const controllerInstances = workflowInstances.filter((i) => i.controllerId === controller.id);
-            const controllerArchivedInstances = archivedWorkflowInstances.filter(
-              (i) => i.controllerId === controller.id,
-            );
-            const gateways = controller.gateways?.gateways ?? [];
-            const hasWorkflowInstances =
-              controllerInstances.length + controllerArchivedInstances.length > 0;
+        >
+          <ul className="space-y-0.5">
+            {controllers.map((controller) => {
+              const isExpanded = !collapsedControllers.has(controller.id);
+              const isOffline = controller.status !== 'online';
+              const isCloud = controller.type === 'cloud';
+              const cloudHost = controller.cloudHost ?? null;
+              const cloudTerminal = isCloud && isTerminalCloudHost(cloudHost);
+              const cloudHostRunning = isCloud && cloudHost?.status === 'RUNNING' && !cloudHost.deletedAt;
+              const dimmed = isCloud ? cloudTerminal : isOffline;
+              const controllerSessions = sessions.filter((s) => s.controllerId === controller.id);
+              const controllerWorkspaces = allWorkspaces.filter(
+                (w) => w.controllerId === controller.id && w.isEnabled,
+              );
 
-            return (
-              <li key={controller.id}>
-                <button
-                  type="button"
-                  className={`flex w-full items-center gap-2 rounded px-3 py-2 text-sm transition-colors hover:bg-sidebar-accent ${
-                    dimmed ? 'opacity-50' : ''
-                  }`}
-                  onClick={() => toggleController(controller.id)}
-                >
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${
-                    isCloud && cloudHost
-                      ? cloudHostStatusDotClass(cloudHost.status)
-                      : controller.status === 'online' ? 'bg-success' : 'bg-muted-foreground'
-                  }`} />
-                  <span className="flex min-w-0 flex-1 flex-col text-left">
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      {isCloud && <Cloud className="size-3.5 shrink-0" data-testid="cloud-host-icon" />}
-                      <span className="truncate font-medium">
-                        {controller.name || controller.hostname}
-                      </span>
-                    </span>
-                    {isCloud && cloudHost && (
-                      <>
-                        <span
-                          className="truncate text-xs text-muted-foreground"
-                          title={cloudHost.failureReason || undefined}
-                          data-testid="cloud-host-status"
-                        >
-                          {cloudHostStatusLabel(cloudHost.status)}
-                          {cloudHost.status === 'FAILED' && cloudHost.failureReason
-                            ? ` · ${cloudHost.failureReason}`
-                            : ''}
-                        </span>
-                        {cloudHostRunning
-                          && cloudHost.hasDefaultWorkspace === false
-                          && controllerWorkspaces.length === 0 && (
-                          <span
-                            className="truncate text-xs text-muted-foreground"
-                            data-testid="cloud-host-no-workspace-hint"
-                          >
-                            未创建默认工作区，请先创建或绑定工作区
+              return (
+                <li key={controller.id}>
+                  <div
+                    className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors hover:bg-sidebar-accent ${
+                      dimmed ? 'opacity-50' : ''
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                      onClick={() => toggleController(controller.id)}
+                      aria-expanded={isExpanded}
+                    >
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${
+                        isCloud && cloudHost
+                          ? cloudHostStatusDotClass(cloudHost.status)
+                          : controller.status === 'online' ? 'bg-success' : 'bg-muted-foreground'
+                      }`} />
+                      <span className="flex min-w-0 flex-1 flex-col text-left">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          {isCloud && <Cloud className="size-3.5 shrink-0" data-testid="cloud-host-icon" />}
+                          <span className="truncate font-medium">
+                            {controller.name || controller.hostname}
                           </span>
-                        )}
-                        {cloudHostRunning
-                          && cloudHost.hasDefaultWorkspace !== false
-                          && cloudHost.harnessTypes.length === 1
-                          && !cloudHost.defaultSessionId && (
+                        </span>
+                        {isCloud && cloudHost && (
+                          <>
                             <span
-                              className="truncate text-xs text-destructive"
-                              data-testid="cloud-host-default-session-hint"
+                              className="truncate text-xs text-muted-foreground"
+                              title={cloudHost.failureReason || undefined}
+                              data-testid="cloud-host-status"
                             >
-                              默认会话创建失败，可手动创建会话
+                              {cloudHostStatusLabel(cloudHost.status)}
+                              {cloudHost.status === 'FAILED' && cloudHost.failureReason
+                                ? ` · ${cloudHost.failureReason}`
+                                : ''}
                             </span>
-                          )}
-                      </>
-                    )}
-                  </span>
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(`/settings?controllerId=${controller.id}`);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
+                            {cloudHostRunning
+                              && cloudHost.hasDefaultWorkspace === false
+                              && controllerWorkspaces.length === 0 && (
+                              <span
+                                className="truncate text-xs text-muted-foreground"
+                                data-testid="cloud-host-no-workspace-hint"
+                              >
+                                未创建默认工作区，请先创建或绑定工作区
+                              </span>
+                            )}
+                            {cloudHostRunning
+                              && cloudHost.hasDefaultWorkspace !== false
+                              && cloudHost.harnessTypes.length === 1
+                              && !cloudHost.defaultSessionId && (
+                                <span
+                                  className="truncate text-xs text-destructive"
+                                  data-testid="cloud-host-default-session-hint"
+                                >
+                                  默认会话创建失败，可手动创建会话
+                                </span>
+                              )}
+                          </>
+                        )}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      title={isCloud && !cloudHostRunning ? '云电脑未运行，无法创建会话' : '新建会话'}
+                      aria-label="新建会话"
+                      disabled={isCloud && !cloudHostRunning}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowNewDialog({ controllerId: controller.id });
+                      }}
+                      className={`rounded p-0.5 transition-colors ${
+                        isCloud && !cloudHostRunning
+                          ? 'cursor-not-allowed text-muted-foreground opacity-50'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      <Plus className="size-3.5" />
+                    </button>
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => {
                         e.stopPropagation();
                         navigate(`/settings?controllerId=${controller.id}`);
-                      }
-                    }}
-                    className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                    title="控制器配置"
-                  >
-                    <Settings className="size-3.5" />
-                  </span>
-                </button>
-
-                {isExpanded && (
-                  <div className="mt-1 space-y-1">
-                    {controller.status === 'online' && (
-                      <TreeSection
-                        title="统一网关"
-                        actions={
-                          <button
-                            type="button"
-                            className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                            title="新增网关"
-                            onClick={() => setShowGatewayDialog(controller.id)}
-                          >
-                            <Plus className="size-3" />
-                          </button>
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.stopPropagation();
+                          navigate(`/settings?controllerId=${controller.id}`);
                         }
-                        emptyMessage="无网关暴露"
-                        hasContent={gateways.length > 0}
-                      >
-                        <GatewaySection
-                          controllerId={controller.id}
-                          gateways={gateways}
-                          inline
-                          externalShowDialog={showGatewayDialog === controller.id}
-                          onDialogClose={() => setShowGatewayDialog(null)}
-                        />
-                      </TreeSection>
-                    )}
-
-                    <TreeSection
-                      title="工作流"
-                      actions={
-                        <button
-                          type="button"
-                          className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                          title="实例化工作流"
-                          onClick={() => setShowInstantiateDialog({ controllerId: controller.id })}
-                        >
-                          <Plus className="size-3" />
-                        </button>
-                      }
-                      emptyMessage="无工作流实例"
-                      hasContent={hasWorkflowInstances}
+                      }}
+                      className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                      title="控制器配置"
+                      aria-label={`${controller.name || controller.hostname} 控制器配置`}
                     >
-                      <ControllerWorkflows
-                        instances={controllerInstances}
-                        archivedInstances={controllerArchivedInstances}
-                      />
-                    </TreeSection>
+                      <Settings className="size-3.5" />
+                    </span>
+                  </div>
 
-                    <TreeSection
-                      title="会话"
-                      count={controllerSessions.length}
-                      emptyMessage="无会话"
-                      actions={
-                        isCloud && !cloudHostRunning ? (
-                          <button
-                            type="button"
-                            title="云电脑未运行，无法创建会话"
-                            disabled
-                            className="cursor-not-allowed rounded p-0.5 text-muted-foreground opacity-50"
-                            aria-label="新建会话"
-                          >
-                            <Plus className="size-3" />
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                            title="新建会话"
-                            aria-label="新建会话"
-                            onClick={() => setShowNewDialog({ controllerId: controller.id })}
-                          >
-                            <Plus className="size-3" />
-                          </button>
-                        )
-                      }
-                    >
-                      {controllerSessions.map((session) => {
-                        const wsName = getWorkspaceNameForSession(session);
-                        return (
-                          <li key={session.id}>
-                            <NavLink
-                              to={`/sessions/${session.id}`}
-                              className={({ isActive }) =>
-                                `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-                                  isActive
-                                    ? 'bg-sidebar-accent text-sidebar-foreground'
-                                    : 'text-sidebar-foreground hover:bg-sidebar-accent'
-                                }`
-                              }
-                            >
-                              <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
-                              <div className="min-w-0 flex-1">
-                                <div className="truncate">{session.title || 'New Session'}</div>
-                                <div className="truncate text-xs text-muted-foreground">
-                                  {wsName || <span className="text-muted-foreground/50">未知工作区</span>}
-                                </div>
-                              </div>
-                            </NavLink>
-                          </li>
-                        );
-                      })}
-                    </TreeSection>
-
-                    <TreeSection
-                      title="工作区"
-                      count={controllerWorkspaces.length}
-                      emptyMessage="无工作区"
-                      actions={
-                        cloudHostRunning ? (
-                          <>
-                            <button
-                              type="button"
-                              aria-label="Github 项目设置"
-                              title="Github 项目设置"
-                              onClick={() => setShowGithubSetup({ controllerId: controller.id })}
-                              className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                            >
-                              <GitBranch className="size-3" />
-                            </button>
-                            {cloudHost?.hasDefaultWorkspace === false && (
+                  {isExpanded && (
+                    <div className="mt-0.5 space-y-0.5">
+                      <TreeSection
+                        title="工作区"
+                        count={controllerWorkspaces.length}
+                        hasContent={controllerWorkspaces.length > 0}
+                        level={1}
+                        actions={
+                          cloudHostRunning ? (
+                            <>
                               <button
                                 type="button"
-                                aria-label="新建工作区"
-                                title="新建工作区"
-                                onClick={() => navigate(`/settings?controllerId=${controller.id}`)}
+                                aria-label="Github 项目设置"
+                                title="Github 项目设置"
+                                onClick={() => setShowGithubSetup({ controllerId: controller.id })}
                                 className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
                               >
-                                <Plus className="size-3" />
+                                <GitBranch className="size-3" />
                               </button>
+                              {cloudHost?.hasDefaultWorkspace === false && (
+                                <button
+                                  type="button"
+                                  aria-label="新建工作区"
+                                  title="新建工作区"
+                                  onClick={() => navigate(`/settings?controllerId=${controller.id}`)}
+                                  className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                                >
+                                  <Plus className="size-3" />
+                                </button>
+                              )}
+                            </>
+                          ) : undefined
+                        }
+                      >
+                        {controllerWorkspaces.map((ws) => (
+                          <WorktreeSidebarGroup
+                            key={ws.id}
+                            workspaceId={ws.id}
+                            controllerId={controller.id}
+                            workspaceName={ws.name}
+                            controllers={controllers}
+                            worktrees={ws.worktrees ?? []}
+                            fallbackSessions={controllerSessions.filter(
+                              (s) => {
+                                // worktree 会话：匹配工作区名
+                                if (s.worktreePath && getWorkspaceNameForSession(s) === ws.name) {
+                                  return true;
+                                }
+                                // 落在工作区根目录的会话：cwd 等于工作区路径
+                                if (s.cwd && s.cwd === ws.path) {
+                                  return true;
+                                }
+                                return false;
+                              },
                             )}
-                          </>
-                        ) : undefined
-                      }
-                    >
-                      {controllerWorkspaces.map((ws) => (
-                        <WorktreeSidebarGroup
-                          key={ws.id}
-                          workspaceId={ws.id}
-                          controllerId={controller.id}
-                          workspaceName={ws.name}
-                          controllers={controllers}
-                          worktrees={ws.worktrees ?? []}
-                          fallbackSessions={controllerSessions.filter(
-                            (s) => {
-                              // worktree 会话：匹配工作区名
-                              if (s.worktreePath && getWorkspaceNameForSession(s) === ws.name) {
-                                return true;
-                              }
-                              // 落在工作区根目录的会话：cwd 等于工作区路径
-                              if (s.cwd && s.cwd === ws.path) {
-                                return true;
-                              }
-                              return false;
-                            },
-                          )}
-                          onCreate={handleCreateSession}
-                        />
-                      ))}
-                    </TreeSection>
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+                            onCreate={handleCreateSession}
+                          />
+                        ))}
+                      </TreeSection>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </SidebarSection>
+
+        {/* 分区 2：工作流（跨环境聚合，含已归档分组） */}
+        <SidebarSection
+          sectionKey="workflows"
+          title="工作流"
+          count={sortedWorkflows.length + sortedArchivedWorkflows.length}
+          expanded={sections.workflows}
+          onToggle={() => toggleSection('workflows')}
+          actions={controllers.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                title="实例化工作流"
+                aria-label="实例化工作流"
+                aria-expanded={picker === 'instantiate'}
+                onClick={() => setPicker((prev) => (prev === 'instantiate' ? null : 'instantiate'))}
+              >
+                <Plus className="size-3.5" />
+              </button>
+              {picker === 'instantiate' && (
+                <ControllerPicker
+                  controllers={controllers}
+                  onPick={(controllerId) => {
+                    setPicker(null);
+                    setShowInstantiateDialog({ controllerId });
+                  }}
+                />
+              )}
+            </div>
+          )}
+        >
+          <ul className="space-y-0.5" data-testid="sidebar-workflow-list">
+            {sortedWorkflows.map((instance) => (
+              <WorkflowInstanceCard key={instance.id} instance={instance} />
+            ))}
+            {sortedArchivedWorkflows.length > 0 && (
+              <ArchivedWorkflowGroup instances={sortedArchivedWorkflows} />
+            )}
+          </ul>
+        </SidebarSection>
+
+        {/* 分区 3：会话（跨环境聚合） */}
+        <SidebarSection
+          sectionKey="sessions"
+          title="会话"
+          count={sessions.length}
+          expanded={sections.sessions}
+          onToggle={() => toggleSection('sessions')}
+          actions={
+            <button
+              type="button"
+              className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+              title="新建会话"
+              aria-label="新建会话"
+              onClick={() => setShowNewDialog({})}
+            >
+              <Plus className="size-3.5" />
+            </button>
+          }
+        >
+          <ul className="space-y-0.5" data-testid="sidebar-session-list">
+            {sortedSessions.map((session) => {
+              const wsName = getWorkspaceNameForSession(session);
+              const controller = controllers.find((item) => item.id === session.controllerId);
+              return (
+                <li key={session.id}>
+                  <NavLink
+                    to={`/sessions/${session.id}`}
+                    title={controller ? `${session.title || 'New Session'} · ${controller.name || controller.hostname}` : undefined}
+                    className={({ isActive }) =>
+                      `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+                        isActive
+                          ? 'bg-sidebar-accent text-sidebar-foreground'
+                          : 'text-sidebar-foreground hover:bg-sidebar-accent'
+                      }`
+                    }
+                  >
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate">{session.title || 'New Session'}</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {wsName || <span className="text-muted-foreground/50">未知工作区</span>}
+                      </div>
+                    </div>
+                  </NavLink>
+                </li>
+              );
+            })}
+          </ul>
+        </SidebarSection>
+
+        {/* 分区 4：网关（聚合全部环境） */}
+        <SidebarSection
+          sectionKey="gateways"
+          title="网关"
+          count={gatewayCount}
+          expanded={sections.gateways}
+          onToggle={() => toggleSection('gateways')}
+          actions={onlineControllers.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                title="新增网关"
+                aria-label="新增网关"
+                aria-expanded={picker === 'gateway'}
+                onClick={() => setPicker((prev) => (prev === 'gateway' ? null : 'gateway'))}
+              >
+                <Plus className="size-3.5" />
+              </button>
+              {picker === 'gateway' && (
+                <ControllerPicker
+                  controllers={onlineControllers}
+                  onPick={(controllerId) => {
+                    setPicker(null);
+                    setShowGatewayDialog(controllerId);
+                  }}
+                />
+              )}
+            </div>
+          )}
+        >
+          <ul className="space-y-0.5" data-testid="sidebar-gateway-list">
+            {gatewayRows.map(({ gateway, controllerId }) => (
+              <GatewayItem key={gateway.id} gateway={gateway} controllerId={controllerId} />
+            ))}
+          </ul>
+        </SidebarSection>
       </div>
 
       {showNewCloudHost && capabilities && (
@@ -488,6 +642,13 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
           onOpenChange={() => setShowInstantiateDialog(null)}
           controllerId={showInstantiateDialog.controllerId}
           workspaceId={showInstantiateDialog.workspaceId}
+        />
+      )}
+
+      {showGatewayDialog && (
+        <GatewayDialog
+          controllerId={showGatewayDialog}
+          onClose={() => setShowGatewayDialog(null)}
         />
       )}
 
@@ -563,73 +724,28 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
   );
 }
 
-/** 单个工作流条目：展示名称 + 所属工作区/控制器（未知归属置灰）· 状态 */
-function WorkflowInstanceItem({ instance }: { instance: WorkflowInstanceSummaryData }) {
-  const workspaceName = instance.workspace?.name;
-  const controllerName = instance.controller?.name;
+/** 已归档实例：自折叠分组（沿用聚合列表结构） */
+function ArchivedWorkflowGroup({ instances }: { instances: WorkflowInstanceSummaryData[] }) {
+  const [archivedOpen, setArchivedOpen] = useState(false);
   return (
     <li>
-      <NavLink
-        to={`/workflows/${instance.id}`}
-        className={({ isActive }) =>
-          `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-            isActive
-              ? 'bg-sidebar-accent text-sidebar-foreground'
-              : 'text-sidebar-foreground hover:bg-sidebar-accent'
-          }`
-        }
+      <button
+        type="button"
+        className="flex items-center gap-1 rounded px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+        onClick={() => setArchivedOpen((prev) => !prev)}
+        aria-expanded={archivedOpen}
       >
-        <div className="min-w-0 flex-1">
-          <div className="truncate">{instance.name}</div>
-          <div className="truncate text-xs text-muted-foreground">
-            {workspaceName ?? <span className="text-muted-foreground/50">未知工作区</span>}
-            {' · '}
-            {controllerName ?? <span className="text-muted-foreground/50">未知控制器</span>}
-            {' · '}
-            {instanceStatusText(instance)}
-          </div>
-        </div>
-      </NavLink>
-    </li>
-  );
-}
-
-/** 控制器工作流集中列表：活跃实例平铺 + 归档实例折叠 */
-function ControllerWorkflows({
-  instances,
-  archivedInstances,
-}: {
-  instances: WorkflowInstanceSummaryData[];
-  archivedInstances: WorkflowInstanceSummaryData[];
-}) {
-  const [archivedOpen, setArchivedOpen] = useState(false);
-
-  return (
-    <>
-      {instances.map((instance) => (
-        <WorkflowInstanceItem key={instance.id} instance={instance} />
-      ))}
-      {archivedInstances.length > 0 && (
-        <li>
-          <button
-            type="button"
-            className="flex items-center gap-1 rounded px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => setArchivedOpen((prev) => !prev)}
-            aria-expanded={archivedOpen}
-          >
-            {archivedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-            <Archive className="size-3" />
-            已归档（{archivedInstances.length}）
-          </button>
-          {archivedOpen && (
-            <ul className="ml-4 space-y-1">
-              {archivedInstances.map((instance) => (
-                <WorkflowInstanceItem key={instance.id} instance={instance} />
-              ))}
-            </ul>
-          )}
-        </li>
+        {archivedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+        <Archive className="size-3" />
+        已归档（{instances.length}）
+      </button>
+      {archivedOpen && (
+        <ul className="ml-4 space-y-1">
+          {instances.map((instance) => (
+            <WorkflowInstanceCard key={instance.id} instance={instance} />
+          ))}
+        </ul>
       )}
-    </>
+    </li>
   );
 }

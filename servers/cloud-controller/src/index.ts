@@ -266,9 +266,11 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
   const gatewayBridge: {
     emitToContainer: (containerId: string, event: string, payload: unknown) => void;
     isConnected: (containerId: string) => boolean;
+    getWorkerVersion: (containerId: string) => string | undefined;
   } = {
     emitToContainer: () => {},
     isConnected: () => false,
+    getWorkerVersion: () => undefined,
   };
   const dispatcher = new WorkloadDispatcher({
     containerRepository: repo,
@@ -307,11 +309,17 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
   });
   gatewayBridge.emitToContainer = gateway.emitToContainer;
   gatewayBridge.isConnected = gateway.isConnected;
+  gatewayBridge.getWorkerVersion = gateway.getWorkerVersion;
 
   app.use(
     '/internal',
     internalAuth(config.internalApiToken),
-    createInternalRouter(containerService, { workloadRepository, workloadLogRepository, workloadDispatcher: dispatcher }),
+    createInternalRouter(containerService, {
+      workloadRepository,
+      workloadLogRepository,
+      workloadDispatcher: dispatcher,
+      getWorkerVersion: (containerId) => gatewayBridge.getWorkerVersion(containerId),
+    }),
   );
 
   let started = false;

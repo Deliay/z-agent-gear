@@ -1,13 +1,19 @@
+# syntax=docker/dockerfile:1
 FROM node:24-alpine AS build
 
+ARG PNPM_VERSION=12.16.1
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+    COREPACK_HOME=/usr/local/share/corepack
 WORKDIR /app
-COPY package*.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile --store-dir=/pnpm/store
 COPY . .
 
 ARG VITE_ADMIN_API_URL
 ENV VITE_ADMIN_API_URL=$VITE_ADMIN_API_URL
-RUN npm run build
+RUN pnpm run build
 
 FROM nginx:1.27-alpine AS runtime
 

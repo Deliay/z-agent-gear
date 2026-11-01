@@ -13,11 +13,11 @@
 
 ```bash
 aspire start     # Start all services via Aspire orchestration
-npm run build    # Production build
-npm run preview  # Preview production build
+pnpm run build    # Production build
+pnpm run preview  # Preview production build
 ```
 
-本项目由 Aspire 编排启动，无需单独运行 `npm run dev`。使用 `aspire describe` 查看 agent-web 的 HTTP endpoint。
+本项目由 Aspire 编排启动，无需单独运行 `pnpm run dev`。使用 `aspire describe` 查看 agent-web 的 HTTP endpoint。
 
 ## TDD Workflow
 
@@ -65,7 +65,7 @@ npm run preview  # Preview production build
 - **数据来源**：Sidebar 的云电脑状态来自唯一 `HOME_OVERVIEW.controllers[].cloudHost`（`id/name/status/harnessTypes/defaultSessionId/activeSessionCount/failureReason/deletedAt`）；控制器配置页使用 `GET_CONTROLLERS.controllers[].cloudHost`；能力开关使用 `cloudHostCapabilities`（`enabled`、`supportedHarnesses`）。
 - **入口**：Sidebar 主机列表标题行「新建云电脑」（`aria-label="新建云电脑"`，云 + 号图标）。`cloudHostCapabilities.enabled=false` 时隐藏；**数量无限制**：存在活跃云电脑时入口仍可点击（不再提示「每用户同时最多 1 个云电脑实例」）。
 - **云图标与状态**：`type==='cloud'` 的主机名前置 `Cloud` 图标（`data-testid="cloud-host-icon"`），状态文案固定为 `STARTING 启动中 / RUNNING 运行中 / STOPPING 停止中 / STOPPED 已销毁 / FAILED 失败`（`FAILED` 附带 `failureReason`）。`STOPPED/FAILED` 条目置灰但可进入配置页与历史会话。
-- **新建表单**：名称 trim 后 1~64；Harness 多选且至少 1 个（一期仅 `OPENCODE`）；选 1 个提示「就绪后不会自动创建会话，需先创建或绑定工作区」，多选提示「不自动创建会话」；**不提供「创建默认工作区」勾选**（创建期不预置 `/home/worker/workspace`）；不提供存储/会话导入参数。**预装工作负载（可选）**来自 `cloudHostWorkloadCatalog`（无主机上下文，`installed` 恒 false）：列表展示名称 + `预制` 徽标 + 依赖名称，最多勾选 5 个；勾选任意项提示「勾选运行环境负载会延长首次就绪时间」；**未勾选时不传 `workloadIds`**（保持旧报文形状）；catalog 查询失败展示「负载列表加载失败，可仅创建基础云电脑」且不阻断提交。**Github 项目（可选）**区块复用 `hooks/useGithubProjectForm.ts`（账号/仓库/前缀/最终地址预览）；勾选后提交走 `hooks/useCloudHostProvisioning.ts` 编排：`createCloudHost(createDefaultSession:false)` → `GithubSetupProgressDialog` 轮询 `cloudHost(id)` 至 RUNNING → `setupCloudHostGithubProject(createSession = harnessTypes.length === 1)`；未选项目时请求体不含 `createDefaultSession`（与旧报文一致）。服务端错误文案原样展示（`name is required` / `name is too long` / `harness feature is disabled` / `at least one harness type is required` / `unsupported harness type: x`）；`insufficient balance` 映射为「账户余额不足，请联系管理员充值后重试」，`github account is locked` 映射为「云电脑已绑定其他 Github 帐号，不可修改」；`too many workloads (max 5)` / `invalid workload` / `workload is not installable` / 依赖缺失或成环映射为对应中文提示。
+- **新建表单**：名称 trim 后 1~64；Harness 多选且**可选**（0 个可提交，展示「可不选，之后在设置-工作负载中补装」；`harnessTypes: []` 随创建报文提交）；选 1 个提示「就绪后不会自动创建会话，需先创建或绑定工作区」，多选提示「不自动创建会话」；**不提供「创建默认工作区」勾选**（创建期不预置 `/home/worker/workspace`）；不提供存储/会话导入参数。**预装工作负载（可选）**来自 `cloudHostWorkloadCatalog`（无主机上下文，`installed` 恒 false）：列表展示名称 + `预制` 徽标 + 依赖名称，最多勾选 5 个；勾选任意项提示「勾选运行环境负载会延长首次就绪时间」；**未勾选时不传 `workloadIds`**（保持旧报文形状）；catalog 查询失败展示「负载列表加载失败，可仅创建基础云电脑」且不阻断提交。**Github 项目（可选）**区块复用 `hooks/useGithubProjectForm.ts`（账号/仓库/前缀/最终地址预览）；勾选后提交走 `hooks/useCloudHostProvisioning.ts` 编排：`createCloudHost(createDefaultSession:false)` → `GithubSetupProgressDialog` 轮询 `cloudHost(id)` 至 RUNNING → `setupCloudHostGithubProject(createSession = harnessTypes.length === 1)`；未选项目时请求体不含 `createDefaultSession`（与旧报文一致）。服务端错误文案原样展示（`name is required` / `name is too long` / `harness feature is disabled` / `unsupported harness type: x`）；`insufficient balance` 映射为「账户余额不足，请联系管理员充值后重试」，`github account is locked` 映射为「云电脑已绑定其他 Github 帐号，不可修改」；`too many workloads (max 5)` / `invalid workload` / `workload is not installable` / 依赖缺失或成环映射为对应中文提示。
 - **收费详情**：新建对话框展示「收费详情」区块（`cloudHostBillingQuote`，打开时 `cache-and-network`）：创建花费 {createCredits} credits（一次性）、运行消费 {perMinuteCredits} credit/分钟、余额不足持续 10 分钟强制销毁；`availableBalance < createCredits` 时提示当前余额与充值引导但**不前置禁用**提交；报价查询失败降级为「创建与运行将产生费用，详见账单」。勾选 Github 项目时 `createCloudHost` 报文携带 `githubAccountId`（未勾选保持旧报文形状）。
 - **默认会话**：`HOME_OVERVIEW` 观测到云电脑 `STARTING→RUNNING` 且 `defaultSessionId` 非空时自动进入该会话（每台主机仅一次，首次加载已 `RUNNING` 的旧主机不跳转）；`RUNNING` 且单 Harness 但无 `defaultSessionId` 时 Sidebar 提示「默认会话创建失败，可手动创建会话」。
 - **停止**：打开停止对话框先查 `cloudHostStopImpact`；有活动会话展示「停止云主机会导致所有会话永久丢失，是否继续」与各会话标题/状态摘要，确认后 `stopCloudHost(id, force:true)`；无活动会话直接 `stopCloudHost(id, force:false)`。取消不调用；`stop` 返回空值时退出「停止中」并展示可重试错误。
@@ -76,7 +76,7 @@ npm run preview  # Preview production build
 - **Github 项目设置入口**：仅 `controller.type==='cloud' && cloudHost.status==='RUNNING' && !deletedAt` 时，Sidebar「工作区」TreeSection actions 与云电脑配置页「Github」页签展示 Github 入口（`aria-label="Github 项目设置"`）；「工作负载」页签不再出现该入口，local/STOPPED 不出现。
 - **Github 设置表单**：数据来自 `GET_GITHUB_ACCOUNTS` + `cloudHostWorkloads(controllerId)`；**帐号跟随云电脑**：`cloudHost.githubAccountId` 非空时帐号下拉置灰（说明「帐号跟随云电脑，选定后不可修改」），仓库列表仅该帐号；未锁定时首次设置选定即锁定；锁定帐号不在已绑定列表时展示「该帐号授权已失效、仓库不可用」并保持置灰；账号切换后仓库按 `installations[].repos` 合并并按 `fullName` 去重；Github 预制工作负载默认选中且不可取消；**前缀地址（工作根目录）**有默认工作区时预填 `cloudHost.defaultWorkspace`，无默认工作区（`hasDefaultWorkspace === false`）或新建云电脑流程（未传）预填 `~/workspace`（placeholder `例如：~/workspace`）；支持 `~`/`~/` 开头，前端按与服务端同规则展开为容器主目录 `/home/worker`（`lib/workspace-path.ts`，`~abc` 报「前缀地址必须以 / 或 ~ 开头」），仍拒绝 `..`/反斜杠；实时展示只读预览「最终 clone 地址：`<前缀>/<owner>/<repo>`」（纯展示，容错返回 null）；提交 `targetPath` 为**归一后的前缀**（不是最终目录，服务端负责拼接）；未绑定账号展示「前往设置页绑定 Github 帐号」并禁用确认。
 - **设置进度**：`GithubSetupProgressDialog` 以 `pollInterval: 1500` 轮询 `cloudHostSetupOperation(id)`，默认三步固定为「工作负载设置 → Git 项目设置 → 会话创建」；传入可选 `hostId`（新建云电脑 + 项目编排）时前置「启动云电脑」阶段，同样 1.5s 轮询 `cloudHost(id)`，RUNNING 后回调一次发起 setup，启动 FAILED 展示 `failureReason` + 「重新创建」，setup 请求失败可「重新设置」重试；加载分支只认 `loading && !data`，轮询不卸载内容；失败可 `retryCloudHostSetupOperation`；成功且 `sessionId` 时 refetch `HOME_OVERVIEW` + `GetControllerWorkspacesEnabled` 后导航到会话，session 步骤失败展示「仓库已就绪，请手动创建会话」。旧入口（工作负载安装 / 手动 Git 设置）不传 `hostId`，三阶段与跳转逻辑零回归。界面不展示 token/命令。
-- **工作负载设置区**：云电脑配置页「工作负载」页签列出标准负载（预制/已安装徽标、参数表单 TEXT/SELECT/MULTI_SELECT/BOOLEAN 默认值），按 `workloadKind` 分组（standard 组标题「运行环境 / 工具」，harness 组「云电脑」，空组不渲染），每项展示依赖名称（依赖 ID 映射同列表名称，缺失回退 ID）；仅 RUNNING 可安装，已安装项禁用且**无卸载入口**；安装复用同一进度对话框（单步）。
+- **工作负载设置区**：云电脑配置页「工作负载」页签列出标准负载（预制/已安装徽标、参数表单 TEXT/SELECT/MULTI_SELECT/BOOLEAN 默认值），按 `workloadKind` 分组（standard 组标题「运行环境 / 工具」，harness 组标题「云电脑（Harness）」且条目带「可选」徽标，空组不渲染），每项展示依赖名称（依赖 ID 映射同列表名称，缺失回退 ID）；仅 RUNNING 可安装，已安装项禁用且**无卸载入口**；安装复用同一进度对话框（单步）。
 - **测试入口**：`components/__tests__/Sidebar.test.tsx`、`pages/__tests__/ControllerConfigPage.test.tsx`、`components/cloud-host/__tests__/*`（含 `GithubProjectSetupDialog` / `GithubSetupProgressDialog` / `CloudHostWorkloadsSection`）、`components/session/NewSessionDialog.test.tsx`、`components/session/__tests__/SessionView.cloudHost.test.tsx`、`graphql/__tests__/home.test.ts`（覆盖 T-AW1..15 与 T-AW-G1..G14 关键项）。
 
 ## Git 区块（设置页）
@@ -124,6 +124,23 @@ npm run preview  # Preview production build
 - **滚动跟随**：`MessageList` 以滚动事件的同步几何距离为主判定是否贴底，IntersectionObserver（threshold 0.9）为辅（内容增长期间的 IO 瞬时离底不丢失跟随）；append 仅在贴底时 `auto` 滚底，否则保持视口并显示「回到底部」+ 新消息圆点；初始加载/程序化滚动期间抑制自动 load-more，prepend 位置恢复用单一 `scrollStateRef` 所有权，SSE 整组替换不残留 prepend 状态。组件测试通过 `vitest.setup.ts` 的可控 IntersectionObserver stub 驱动（`(globalThis as any).__triggerIntersection(bool)`）。
 - **计划展示**：`PlanCard`/`PlanFloatingCard` 摘要三态（全部完成 / x/y / N 项任务）由 `plan-summary.ts` 统一，完成条目内容 `line-through`。
 - **测试入口**：`components/session/__tests__/`（tool-call-state / ToolCallCard / ToolCards / ContentBlockRenderer / MessageActions / ScrollToBottomButton / PlanCard / DiffView / AcpCard）、`components/session/markdown/__tests__/`、`src/lib/__tests__/`（diff/ansi/language-from-path/export-thread）、`tests/e2e/src/session-rendering.spec.ts`（E2E-CREN1~8）。
+
+## UI 优化四期（侧边栏与工作流视图）
+
+> 纯前端展示层；计划见 `docs/engineering/plan/20261030-feat-ui-optimization-phase4.md`。
+
+- **侧边栏四分区**：`Sidebar` 顶层为「主机」「工作流」「会话」「网关」四个全宽折叠分区；默认展开工作流/会话、折叠主机/网关，展开态持久化在 `localStorage['sidebar-sections-expanded']`（`lib/sidebar-prefs.ts`）。工作流/会话/网关跨环境聚合（工作流含「已归档（N）」自折叠分组）；网关仅聚合**在线主机**的网关配置行（离线主机不渲染，与既有「UI 层按 status 自行隐藏该区块」口径一致）；主机分区保留「主机 → 工作区 → 会话」树与设置按钮；条目排序 `updatedAt` 倒序 + id tie-break，防轮询跳动。
+- **空态收敛**：`TreeSection` 不再渲染 `emptyMessage` 占位文字（入参保留兼容），无内容时仅保留可展开空容器；层级缩进按 `level * 0.5rem`（≈2 空格）。
+- **拖拽调宽**：`SidebarResizer` 4px 热区（pointer capture），clamp 15–28rem、默认 20rem，`pointerup` 写入 `localStorage['sidebar-width']`，双击恢复默认；`MainLayout` 桌面 grid 列使用 `var(--sidebar-width,20rem)`，移动端不渲染 Resizer（`lib/sidebar-width.ts` 为宽度口径单一来源）。
+- **工作流卡片**：侧边栏条目不显示控制器名，第一行「名称 + 状态徽标」、第二行工作区；控制器名与执行中节点名走 tooltip（`WorkflowInstanceCard`）。
+- **图表视图**：`graph-layout.ts` 以 dagre `rankdir:'TB'`（nodesep 40 / ranksep 70）布局，节点宽 280px、高度分档估算（120–220px）；连线 `strokeWidth:2` + `MarkerType.ArrowClosed`；画布 `h-full min-h-[480px]`，由 `WorkflowInstancePage` 视图区行填充；图表模式隐藏右栏 `BlackboardPanel`/`WorkflowContextPanel`（列表视图零变化）。
+- **节点卡片**：`graph/WorkflowNodeCard.tsx` 自定义节点（状态色左脊 + 名称 + 类型/返工徽标 + Harness/模型 + 进行中动态行 + 完成态 token + PR/检查项徽标 + 资源小卡片 + 人类节点就地操作）；交互元素统一 `nodrag` + `stopPropagation`。
+- **实时动态**：`hooks/useNodeSessionActivity.ts` 复用 `useSessionStream`（不自行创建 EventSource），复用 `group-messages.parseSessionUpdate` 与 `tool-call-state` 的 `mergeToolCallMessages`/`toolCallHeaderTitle` 口径；思考/文本结尾截断常量 `LIVE_ACTIVITY_TAIL_CHARS = 40`；进行中节点建立实时连接，转为 DONE 后关闭连接并保留已捕获的最后动态与用量；**首屏即为 DONE 的 AI 节点**以快照模式短连一次，收到 SSE history（含最后一条 `usage_update`）后立即断开，用于补全刷新后的 token 展示（不长期占用连接）。
+- **资源上图**：`buildResourceOwnership` 纯函数负责归属——黑板 key 前缀 `{nodeId}-{nodeName}-产物-`（与列表视图 `lib/artifact-owners.ts` 同源）、PR 按 `nodeId`、追加提示词仅「恰好一个 RUNNING/REWORK 节点」时归属该节点，否则与无法解析的黑板条目一并进入画布顶部实例资源行；垃圾桶永不渲染；同节点最多 3 个可见小卡片 + 「+N」；小卡片限宽 12rem、标题最多 2 行（`line-clamp-2`）截断。
+- **状态语义色单一来源**：`WorkflowNodeTreeConstants` 的 `NODE_STATUS_VISUAL`（`{spine, tint, badge}`）为唯一来源，`NODE_STATUS_BADGE` 重导出 `badge` 段保持兼容；REJECT 为静态琥珀、REWORK 为琥珀 + `animate-pulse`、FAILED 走 destructive；图表/列表/卡片/MiniMap 全部消费该映射或对应 `NODE_STATUS_COLOR_VAR`，禁止新增固定 hex 色值。
+- **详情抽屉**：`components/ui/sheet.tsx`（Base UI 原语自实现，右侧滑出/全高/遮罩/Esc 关闭）+ `NodeDetailDrawer`（节点/资源两形态）；`WorkflowInstancePage` 提升抽屉状态，图表与列表视图共用；列表视图 `WorkflowNodeTree` 节点头部提供「详情」入口。
+- **共享人类节点操作**：`hooks/useHumanNodeActions.ts` + `HumanNodeActions` 组件，列表/卡片/抽屉三处同源（草稿键 `workflow-node-draft:{instanceId}:{nodeId}`）。
+- **测试入口**：`components/__tests__/Sidebar.test.tsx`（T-UI4-SEC/AGG）、`SidebarResizer.test.tsx`（T-UI4-RES）、`tree/__tests__/TreeSection.test.tsx`（T-UI4-TREE）、`workflow/__tests__/WorkflowInstanceCard.test.tsx`（T-UI4-IC）、`workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-UI4-TC）、`workflow/graph/__tests__/*`（T-UI4-GL/NC/RC）、`workflow/__tests__/NodeDetailDrawer.test.tsx`（T-UI4-SH）、`hooks/useNodeSessionActivity.test.tsx`（T-UI4-NA）、`hooks/useHumanNodeActions.test.tsx`（T-UI4-HA）、`tests/e2e/src/sidebar-phase4.spec.ts`（E2E-UI4S1~S6）与 `tests/e2e/src/workflow-graph.spec.ts`（E2E-UI4G1~G10）。
 
 ## 日志
 

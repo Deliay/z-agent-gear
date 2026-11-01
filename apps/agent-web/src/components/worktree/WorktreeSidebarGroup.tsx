@@ -132,7 +132,7 @@ export default function WorktreeSidebarGroup({
               </div>
 
               {isExpanded && wt.sessions.length > 0 && (
-                <ul className="ml-4 space-y-1">
+                <ul className="mt-0.5 ml-1 space-y-0.5 border-l border-sidebar-border pl-1">
                   {wt.sessions.map((session) => (
                     <li key={session.id}>
                       <NavLink
@@ -224,7 +224,7 @@ export default function WorktreeSidebarGroup({
         </div>
       </li>
       {fallbackSessions.map((session) => (
-        <li key={session.id} className="ml-4">
+        <li key={session.id} className="ml-1 border-l border-sidebar-border pl-1">
           <NavLink
             to={`/sessions/${session.id}`}
             className={({ isActive }) =>

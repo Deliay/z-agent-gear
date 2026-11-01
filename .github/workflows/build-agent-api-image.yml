@@ -14,6 +14,7 @@ permissions:
 
 env:
   IMAGE_NAMESPACE: zero-tools
+  MONGOMS_DOWNLOAD_DIR: ${{ github.workspace }}/.mongodb-binaries
 
 jobs:
   build:
@@ -21,16 +22,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          version: 12.16.1
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: servers/agent-api/package-lock.json
+          cache: pnpm
+          cache-dependency-path: servers/agent-api/pnpm-lock.yaml
+
+      - name: Install
+        working-directory: servers/agent-api
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache mongod binary
+        uses: actions/cache@v4
+        with:
+          path: .mongodb-binaries
+          key: mongoms-${{ runner.os }}-${{ hashFiles('servers/agent-api/pnpm-lock.yaml') }}
+
+      # allowBuilds 显式禁止 mongodb-memory-server 的 install 脚本，这里直接执行脚本预先下载 mongod
+      - name: Pre-download mongod
+        working-directory: servers/agent-api
+        run: node node_modules/mongodb-memory-server/postinstall.js
 
       # 测试门禁：构建前跑单测，避免带红测试推成 latest
-      - name: Install and test
+      - name: Test
         working-directory: servers/agent-api
-        run: npm ci && npm test
+        run: pnpm test
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,9 +67,23 @@ jobs:
         with:
           context: servers/agent-api
           file: servers/agent-api/Dockerfile
+          load: true
+          push: true
           tags: |
             ${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/agent-api:${{ github.sha }}
             ${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/agent-api:latest
-          push: true
           provenance: false
           sbom: false
+
+      # 单项目依赖隔离断言：镜像内只允许存在当前项目依赖
+      - name: Assert single-project dependencies
+        run: |
+          set -e
+          IMAGE="${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/agent-api:${{ github.sha }}"
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+            cd /app &&
+            test ! -d servers &&
+            test ! -d apps &&
+            test ! -d packages &&
+            pnpm list --depth 0 --prod
+          '

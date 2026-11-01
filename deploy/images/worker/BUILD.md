@@ -16,7 +16,7 @@ docker build \
   --build-arg GITHUB_RAW_PROXY=https://nexus.internal.fffdan.com/repository/github-raw-proxy \
   --build-arg NVM_VERSION=v0.40.8 \
   --build-arg NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy \
-  --build-arg NODE_VERSION=22 \
+  --build-arg NODE_VERSION=24 \
   --build-arg NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/ \
   -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 ```
@@ -83,9 +83,9 @@ docker run --rm -it --entrypoint bash \
 逐项核对：
 
 - [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
-- [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
+- [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 24.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
-- [ ] **镜像唯一 npm 全局包**为 `agent-gear`（固定 `2.11.x`）；**不预装** `@agentclientprotocol/claude-agent-acp`（`command -v claude-agent-acp` 应无输出）与 `@agentclientprotocol/codex-acp`（`command -v codex-acp` 应无输出），二者由用户按需安装（agent-controller 仍保留探测与启动能力）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
+- [ ] **镜像唯一预装全局包**为 `agent-gear`（固定 `2.15.x`，通过 `npm install -g pnpm` 自举 pnpm 后由 `pnpm add -g` 安装）；**不预装** `@agentclientprotocol/claude-agent-acp`（`command -v claude-agent-acp` 应无输出）与 `@agentclientprotocol/codex-acp`（`command -v codex-acp` 应无输出），二者由用户按需安装（agent-controller 仍保留探测与启动能力）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
 - [ ] `agent-gear --version` ≥ `2.11.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起，`cordis.patch.yml` 的 insert 受管条目 `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
 
 - [ ] `agent-gear harness --help` 可见 `prepare` 子命令
@@ -291,6 +291,28 @@ ls "$HOME/.cache/ms-playwright" | grep '^chromium-'   # 默认仅 Chromium（Fir
 echo "$PLAYWRIGHT_DOWNLOAD_HOST"                      # 安装时已持久化到用户环境
 ```
 
+pnpm 预装与工作负载安装口径（entrypoint `ensure_pnpm` + 迁移 017 脚本）：
+
+```bash
+# 镜像构建期：npm 仅用于自举 pnpm，agent-gear 由 pnpm 安装
+npm install -g pnpm@9.15.9
+pnpm add -g agent-gear@2.15.x
+# entrypoint 预装（新容器；固定版本 9.15.9）
+pnpm --version                       # 9.15.9
+echo "$PNPM_HOME"                    # /home/worker/.local/share/pnpm
+login_shell_path=$(bash -lc 'echo "$PATH"'); case ":$login_shell_path:" in *":$PNPM_HOME:"*) echo ok ;; *) echo missing ;; esac
+# 交互 shell（pnpm setup 接线）：登录 worker 后
+bash -lc 'command -v pnpm'
+# worker 身份（run_as_worker 口径）可直接使用
+sudo -u worker env HOME=/home/worker PNPM_HOME=/home/worker/.local/share/pnpm \
+  PATH="/home/worker/.nvm/current/bin:/home/worker/.local/share/pnpm:$PATH" pnpm --version
+# 安装来源走内网代理（pnpm 读同一 ~/.npmrc）
+pnpm config get registry             # https://nexus.internal.fffdan.com/repository/npm-proxy/
+# 工作负载脚本安装行统一 `pnpm add -g`（OpenCode/Kimi Code/DeepSeek Harness/Playwright）；
+# 存量容器（无 pnpm）由脚本内自举回退块 `npm install -g pnpm@9.15.9` 兜底
+# 预装失败仅告警：保活/agent-gear 链路正常，工作负载脚本回退块兜底（无阻断）
+```
+
 MongoDB（原生 apt 安装；成功判据仅 `mongod --version`，不拉起实例）：
 
 ```bash
@@ -328,6 +350,10 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 - [ ] **地址已持久化到双用户环境**：root 与 worker 用户登录/交互 shell 均能读到 `PLAYWRIGHT_DOWNLOAD_HOST`（`/etc/profile.d/playwright.sh` + 各自 `~/.bashrc` 标记块）；两用户执行 `playwright install firefox` 补装走内网代理
 - [ ] 清空 `playwright_download_host` 参数（且未提供 `PLAYWRIGHT_DOWNLOAD_HOST`）且 Playwright 尚未安装时：该工作负载**快速失败**并在执行记录中给出含正确地址形态的明确指引（容器仍继续后续初始化并上线）
 - [ ] 下载地址不可达/Chromium 未就绪时该工作负载记录失败与日志，容器仍继续后续初始化并上线
+- [ ] 新容器 `pnpm --version` 为 `9.15.9`；`PNPM_HOME`（`/home/worker/.local/share/pnpm`）经 `WORKER_PATH` 与 `/etc/profile.d/pnpm.sh` 双入口生效
+- [ ] 四个工作负载（OpenCode / Kimi Code / DeepSeek Harness / Playwright）安装行均为 `pnpm add -g`，来源走内网 npm 代理，结尾硬校验通过
+- [ ] 存量容器（镜像无 pnpm）由脚本内自举回退块安装 pnpm 后安装成功
+- [ ] 预装 pnpm 失败仅告警：`agent-gear` 保活/自更新链路正常，工作负载脚本回退块兜底
 - [ ] Playwright 重复执行幂等（已安装直接校验通过、不重复下载）；工具与 Chromium 任一缺失时整体判失败
 
 > **安装来源（重要）**：默认来源由「Docker」工作负载参数 `docker_apt_url` 提供——迁移 003 默认填入内网
@@ -376,7 +402,7 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 
 容器默认 `ENTRYPOINT` 为 `entrypoint.sh`，启动流程：
 
-1. 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
+1. 执行 `pnpm add -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
 2. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
 
 > 云电脑（harness）容器额外注入标准连接凭据：`ZAG_HOST_ENDPOINT` + `ZAG_HOST_KEY`（controller-api），
@@ -390,9 +416,9 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 受监督运行的行为（版本门禁与自恢复，见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
 
 - `cloud-controller` 要求普通 worker 版本 `>=2.2.0` 且 major 为 `2`、harness（云电脑）worker 版本 `>=2.10.0`（含 `deepseek_harness` 的运行 `>=2.11.0`，header-masq 会话标识配置注入）；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
-- 入口对 agent-gear 的 stderr 做流式扫描（实时透传、不落盘完整日志），仅在「非零退出 + 出现 `VERSION_MISMATCH` + 本轮未升级 + 未设置 `ZAG_SKIP_AGENT_GEAR_UPDATE=1`」时执行**一次** `npm install -g agent-gear --no-fund --no-audit`，升级成功后重启并重连。
+- 入口对 agent-gear 的 stderr 做流式扫描（实时透传、不落盘完整日志），仅在「非零退出 + 出现 `VERSION_MISMATCH` + 本轮未升级 + 未设置 `ZAG_SKIP_AGENT_GEAR_UPDATE=1`」时执行**一次** `pnpm add -g agent-gear`，升级成功后重启并重连。
 - 安装失败、升级后仍不匹配、第二次不匹配、普通非零退出、正常退出均不会形成升级/重连循环；失败时容器非零退出，管理员可用既有强制销毁回收。
-- 入口作为 PID 1 向 agent-gear / npm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
+- 入口作为 PID 1 向 agent-gear / pnpm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
 - 启动更新与版本不匹配恢复都受 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 控制（离线/排障出口）。
 
 ## 版本门禁与自升级自验

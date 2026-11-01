@@ -202,7 +202,88 @@ describe('CloudHostWorkloadsSection', () => {
     renderSection()
 
     expect(screen.getByText('运行环境 / 工具')).toBeInTheDocument()
-    expect(screen.queryByText('云电脑')).not.toBeInTheDocument()
+    expect(screen.queryByText('云电脑（Harness）')).not.toBeInTheDocument()
     expect(screen.getByText('依赖：Docker、.NET')).toBeInTheDocument()
+  })
+
+  it('T-WEB1/T-WEB2: harness 分组标题与「可选」徽标并列，安装按钮禁用口径不变', async () => {
+    mockWorkloads([
+      {
+        workloadId: 'wl-opencode',
+        name: 'OpenCode（Harness）',
+        workloadKind: 'HARNESS',
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
+        isPreset: true,
+        installed: true,
+      },
+      {
+        workloadId: 'wl-kimi',
+        name: 'Kimi Code（Harness）',
+        workloadKind: 'HARNESS',
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
+        isPreset: true,
+        installed: false,
+      },
+      {
+        workloadId: 'wl-docker',
+        name: 'Docker',
+        workloadKind: 'STANDARD',
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
+        isPreset: true,
+        installed: false,
+      },
+    ])
+    renderSection()
+
+    expect(screen.getByText('云电脑（Harness）')).toBeInTheDocument()
+    expect(screen.getByText('运行环境 / 工具')).toBeInTheDocument()
+    // harness 条目带「可选」徽标（两条），standard 条目不带
+    expect(screen.getAllByText('可选')).toHaveLength(2)
+    const kimiItem = screen.getByTestId('workload-item-wl-kimi')
+    expect(kimiItem).toHaveTextContent('可选')
+    expect(kimiItem).toHaveTextContent('预制')
+    expect(screen.getByTestId('workload-item-wl-docker')).not.toHaveTextContent('可选')
+
+    // 已安装禁用；未安装且运行中可发起安装；无卸载入口
+    expect(screen.getByRole('button', { name: '安装 OpenCode（Harness）' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '安装 Kimi Code（Harness）' })).not.toBeDisabled()
+    expect(screen.queryByRole('button', { name: /卸载/ })).not.toBeInTheDocument()
+
+    // 非运行态禁用
+    renderSection({ status: 'STOPPED' })
+    expect(screen.getAllByRole('button', { name: '安装 Kimi Code（Harness）' })[1]).toBeDisabled()
+  })
+
+  it('T-WEB2: harness 安装提交走同一 installCloudHostWorkload', async () => {
+    mockWorkloads([
+      {
+        workloadId: 'wl-opencode',
+        name: 'OpenCode（Harness）',
+        workloadKind: 'HARNESS',
+        paramSchema: [],
+        dependsOnWorkloadIds: [],
+        isPreset: true,
+        installed: false,
+      },
+    ])
+    renderSection()
+
+    fireEvent.click(screen.getByRole('button', { name: '安装 OpenCode（Harness）' }))
+    fireEvent.click(screen.getByRole('button', { name: '开始安装' }))
+
+    await waitFor(() => {
+      expect(mockInstallWorkload).toHaveBeenCalledWith({
+        variables: {
+          input: {
+            controllerId: 'ctrl-1',
+            workloadId: 'wl-opencode',
+            params: {},
+          },
+        },
+      })
+    })
   })
 })
