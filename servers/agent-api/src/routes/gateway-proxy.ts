@@ -6,6 +6,7 @@ import { Gateway } from '../models/gateway.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
 import { logger as rootLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 
 const router = Router();
 
@@ -90,11 +91,21 @@ router.all('/gateway/:controllerId/:name/{*path}', async (req: Request, res: Res
     const onMessage = (channel: string, message: string) => {
       if (channel !== RESPONSE_CHANNEL) return;
       try {
-        const data = JSON.parse(message) as { requestId: string; statusCode: number; headers: Record<string, string>; body: string };
+        const data = JSON.parse(message) as { requestId: string; statusCode: number; headers: Record<string, string>; body: string; _meta?: unknown };
         if (data.requestId === requestId) {
           clearTimeout(timeout);
           gatewayResponseSubscriber.off('message', onMessage);
-          resolve({ status: data.statusCode, headers: data.headers, body: data.body });
+          // 回程对称提取（contracts/mcp-forward-redis.md §7）：以回包 `_meta.traceparent` 为父链路
+          // 开 handle span，补齐 dispatch → 回包双向传播；`_meta` 缺失/非法时容忍（回退根链路）。
+          const parent = extractTraceparent(data._meta);
+          void withSpan(
+            `${RESPONSE_CHANNEL} handle`,
+            { 'messaging.destination.name': RESPONSE_CHANNEL, requestId },
+            () => {
+              resolve({ status: data.statusCode, headers: data.headers, body: data.body });
+            },
+            { parent },
+          );
         }
       } catch {
         // ignore parse errors

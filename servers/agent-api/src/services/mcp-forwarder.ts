@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import type { Redis } from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 
 const REQUEST_CHANNEL = 'mcp:forward:request';
 const RESPONSE_CHANNEL = 'mcp:forward:response';
@@ -55,15 +56,26 @@ export class McpForwarder {
             requestId: string;
             response?: unknown;
             error?: { code?: string; message?: string };
+            _meta?: unknown;
           };
           if (data.requestId !== requestId) return;
           clearTimeout(timeout);
           subscriber.off('message', onMessage);
-          if (data.error) {
-            reject(new ForwardError(data.error.code || 'FORWARD_ERROR', data.error.message || 'Forward error'));
-            return;
-          }
-          resolve(data.response);
+          // 回程对称提取（contracts/mcp-forward-redis.md §7）：以回包 `_meta.traceparent` 为父链路
+          // 开 handle span，补齐 forward 请求/回包双向传播；`_meta` 缺失/非法时容忍（回退根链路）。
+          const parent = extractTraceparent(data._meta);
+          void withSpan(
+            `${RESPONSE_CHANNEL} handle`,
+            { 'messaging.destination.name': RESPONSE_CHANNEL, requestId },
+            () => {
+              if (data.error) {
+                reject(new ForwardError(data.error.code || 'FORWARD_ERROR', data.error.message || 'Forward error'));
+                return;
+              }
+              resolve(data.response);
+            },
+            { parent },
+          );
         } catch {}
       };
 

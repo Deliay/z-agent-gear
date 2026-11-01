@@ -64,7 +64,7 @@ export const cloudHostResolvers = {
         }
       } else {
         rootLogger.warn(
-          { component: 'cloud-host', event: 'price-fallback', reason: prices.reason },
+          { component: 'cloud-host', event: 'price-fallback', err: prices.reason },
           'billing quote price fallback',
         );
       }
@@ -72,7 +72,7 @@ export const cloudHostResolvers = {
         availableBalance = account.value.availableBalance;
       } else {
         rootLogger.warn(
-          { component: 'cloud-host', event: 'balance-unavailable', reason: account.reason },
+          { component: 'cloud-host', event: 'balance-unavailable', err: account.reason },
           'billing quote balance unavailable',
         );
       }

@@ -1,5 +1,23 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+const { logRecords } = vi.hoisted(() => ({
+  logRecords: [] as Array<{ level: string; fields: Record<string, unknown>; msg: string }>,
+}));
+
+// 日志内存 sink：断言 B1（错误对象进 err 字段）等结构化字段
+vi.mock('../../observability/logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../observability/logger.js')>();
+  const sink = {
+    debug: (fields: Record<string, unknown>, msg: string) => logRecords.push({ level: 'debug', fields, msg }),
+    info: (fields: Record<string, unknown>, msg: string) => logRecords.push({ level: 'info', fields, msg }),
+    warn: (fields: Record<string, unknown>, msg: string) => logRecords.push({ level: 'warn', fields, msg }),
+    error: (fields: Record<string, unknown>, msg: string) => logRecords.push({ level: 'error', fields, msg }),
+    fatal: (fields: Record<string, unknown>, msg: string) => logRecords.push({ level: 'fatal', fields, msg }),
+    child: () => sink,
+  };
+  return { ...actual, logger: sink };
+});
+
 vi.mock('../github.js', () => ({
   githubService: { createRepoScopedTokenForUser: vi.fn() },
 }));
@@ -130,6 +148,7 @@ function entry(content: string, status: TodoEntry['status']): TodoEntry {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  logRecords.length = 0;
   resetTodoThrottle();
   vi.mocked(githubService.createRepoScopedTokenForUser).mockResolvedValue({
     token: 'ghs_test',
@@ -313,6 +332,36 @@ describe('syncNodeStatus', () => {
 
     await syncNodeStatus(makeInstance(), makeNode());
 
+    expect(prHandlerRegistry.markSyncError).toHaveBeenCalledWith('h1', '检查项写入权限不足');
+  });
+
+  it('T-OBS B1: 非 GitHubChecksError 的同步失败日志保留 err 字段（message/stack 不丢）', async () => {
+    vi.mocked(prHandlerRegistry.findByNode).mockResolvedValue(handlerRow() as never);
+    const boom = new Error('github api exploded');
+    vi.mocked(getPullRequestHead).mockRejectedValue(boom);
+
+    await syncNodeStatus(makeInstance(), makeNode());
+
+    const record = logRecords.find((r) => r.fields.event === 'sync-failed');
+    expect(record).toBeDefined();
+    expect(record!.fields.err).toBe(boom);
+    expect(record!.fields.detail).toBe('github api exploded');
+    expect(prHandlerRegistry.markSyncError).toHaveBeenCalled();
+  });
+
+  it('T-OBS B1: GitHubChecksError 仍只记 code（脱敏语义不变），不落 err', async () => {
+    vi.mocked(prHandlerRegistry.findByNode).mockResolvedValue(handlerRow() as never);
+    vi.mocked(getPullRequestHead).mockRejectedValue(
+      new GitHubChecksError('FORBIDDEN', 'token has no access (response snippet)'),
+    );
+
+    await syncNodeStatus(makeInstance(), makeNode());
+
+    const record = logRecords.find((r) => r.fields.event === 'sync-failed');
+    expect(record).toBeDefined();
+    expect(record!.fields.detail).toBe('FORBIDDEN');
+    expect(record!.fields.err).toBeUndefined();
+    expect(JSON.stringify(record!.fields)).not.toContain('response snippet');
     expect(prHandlerRegistry.markSyncError).toHaveBeenCalledWith('h1', '检查项写入权限不足');
   });
 });

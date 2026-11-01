@@ -260,7 +260,16 @@ function buildExpiredOutput(snapshot: PrSyncSnapshot, newSha: string): CheckRunO
 async function recordError(snapshot: PrSyncSnapshot, err: unknown): Promise<void> {
   const message = syncErrorMessage(err);
   const detail = err instanceof GitHubChecksError ? err.code : (err as Error)?.message;
-  logger.warn({ event: 'sync-failed', pullRequestId: snapshot.pullRequestId, detail }, 'check-run sync failed');
+  // GitHubChecksError 只记 code（脱敏：其 message 可能含上游响应片段）；其余错误进 `err` 字段保留 stack。
+  logger.warn(
+    {
+      event: 'sync-failed',
+      pullRequestId: snapshot.pullRequestId,
+      detail,
+      ...(err instanceof GitHubChecksError ? {} : { err }),
+    },
+    'check-run sync failed',
+  );
   try {
     await prHandlerRegistry.markSyncError(snapshot.handlerId, message);
   } catch {
