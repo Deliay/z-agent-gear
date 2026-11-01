@@ -1,7 +1,10 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
 import { Model } from '../models/model.js';
 import { Provider } from '../models/provider.js';
 import { ModelRenameRecord } from '../models/model-rename-record.js';
+
+const log = logger.child({ component: 'migration/005-model-name-unique-global' });
 
 /**
  * 005-model-name-unique-global：整理存量 `scope = 'global'` 重名模型，并建立
@@ -108,7 +111,11 @@ export async function run(): Promise<void> {
         { _id: model._id as unknown as mongoose.Types.ObjectId, scope: 'global' },
         { $set: { name: newName } },
       );
-      console.log(`[Migration 005] renamed ${model.name} -> ${newName} (model ${String(model._id)})`);
+      // 逐条改名为批次明细（可能成批），级别 debug；汇总在批次末尾一条 info
+      log.debug(
+        { oldName: model.name, newName, modelId: String(model._id) },
+        'global model renamed',
+      );
       renamedCount += 1;
     }
   }
@@ -116,7 +123,7 @@ export async function run(): Promise<void> {
   // fresh 环境集合可能尚不存在，indexes() 会抛 NamespaceNotFound → 视为无索引
   const indexes = await Model.collection.indexes().catch(() => [] as Array<{ name?: string }>);
   if (duplicateGroups.length === 0 && indexes.some((index) => index.name === INDEX_NAME)) {
-    console.log('[Migration 005] no duplicate global model names, index present, skipping');
+    log.info('no duplicate global model names, index present, skipping');
     return;
   }
 
@@ -126,8 +133,8 @@ export async function run(): Promise<void> {
   );
 
   if (renamedCount > 0) {
-    console.log(`[Migration 005] renamed ${renamedCount} duplicate global models (batch ${BATCH_ID})`);
+    log.info({ renamedCount, batchId: BATCH_ID }, 'renamed duplicate global models');
   } else {
-    console.log('[Migration 005] global model name unique index ensured');
+    log.info('global model name unique index ensured');
   }
 }

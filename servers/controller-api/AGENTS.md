@@ -82,6 +82,18 @@ npm run test    # Run tests
   `packages/agent-controller/AGENTS.md`）；旧版本 worker 忽略未知字段优雅降级。
 - 契约：`contracts/agent-session-websocket.md` §3.12 + Redis relay 附录。
 
+## 日志与可观测性
+
+- **日志形态**：pino 单行 JSON（vendored `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。
+- **span 清单**（另有 `httpContext()` 的 HTTP SERVER span、`socket.register` / `socket.disconnect` 连接生命周期 span）：
+  - `messaging.process` — `session-command` 消费入口**每批/每命令一个 span**（属性 `sessionId`，`agent_message_chunk` 逐条只 `debug` 不开 span）；
+  - `socket.handshake` — `/mcp-proxy` namespace 握手（`mcp-proxy-registry.ts`，提取 `auth.traceparent`）；
+  - `heartbeat.tick` — 心跳扫描**每轮一个 span**，不逐事件；
+  - `<channel> handle` — Redis 订阅回调入口一个 span（`command` / `gateway-relay` 的 `<COMMAND_CHANNEL> handle`、`permission-manager` / `elicitation-manager` / `harness-login-manager` / `mcp-forward-consumer` 各频道同型），父上下文取 `extractTraceparent(payload._meta)`。
+- **Socket.IO / Redis `_meta` 封套位置**：Socket.IO 事件报文顶层 `_meta: { traceparent? }` 与握手 `auth.traceparent` 见 [`contracts/agent-session-websocket.md`](../../contracts/agent-session-websocket.md) §7；Redis 频道报文顶层 `_meta` 见 [`contracts/mcp-forward-redis.md`](../../contracts/mcp-forward-redis.md) §7。发布一律经 `publishJson(publish, channel, payload)`（`src/middleware/publish.ts`）注入 `_meta.traceparent`；所有消费者必须容忍 `_meta` 缺失（旧客户端/历史报文行为不变）。
+- **env 变量**：`LOG_LEVEL` / `LOG_PRETTY`（仅非生产）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 零外发**）/ `OTEL_EXPORTER_OTLP_HEADERS`（**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` 等，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。
+- **排障**：`LOG_LEVEL=debug` 看逐事件日志；`OTEL_SDK_DISABLED=true` 关追踪导出（日志不受影响）；JSON 单行日志可直接 `grep`（`grep '"level":"error"'`、`grep '"trace_id":"<trace-id>"'` 串全链路、`grep '"component":"session-command"'` 按组件）。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

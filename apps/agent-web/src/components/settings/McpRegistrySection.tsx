@@ -1,6 +1,7 @@
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_MCP_SERVERS } from '@/graphql/queries';
 import { SET_MCP_SERVER_ENABLED } from '@/graphql/mutations';
+import { logger } from '@/lib/logger';
 import {
   Card,
   CardContent,
@@ -68,7 +69,7 @@ export default function McpRegistrySection() {
         refetchQueries: [{ query: GET_MCP_SERVERS }],
       });
     } catch (error) {
-      console.error('Failed to toggle MCP server:', error);
+      logger.error({ err: error }, 'Failed to toggle MCP server');
     }
   };
 

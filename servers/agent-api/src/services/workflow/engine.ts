@@ -1,4 +1,5 @@
 import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { artifactKey, getArtifactKeys, removeKey, addRejectRecord } from './blackboard.js';
 
@@ -233,10 +234,10 @@ class WorkflowEngine {
       try {
         const pending = this.hooks.onNodesTransitioned?.(instance, changes);
         void Promise.resolve(pending).catch((err: unknown) => {
-          console.warn('[workflow] onNodesTransitioned failed:', (err as Error).message);
+          rootLogger.warn({ component: 'workflow-engine', err }, 'onNodesTransitioned failed');
         });
       } catch (err) {
-        console.warn('[workflow] onNodesTransitioned failed:', (err as Error).message);
+        rootLogger.warn({ component: 'workflow-engine', err }, 'onNodesTransitioned failed');
       }
     }
 

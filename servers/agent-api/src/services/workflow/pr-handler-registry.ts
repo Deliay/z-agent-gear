@@ -1,6 +1,9 @@
 import { WorkflowPrHandler, type PrHandlerUnregisterReason } from '../../models/workflow-pr-handler.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { KeyedMutex } from '../keyed-mutex.js';
 import { workflowEngine } from './engine.js';
+
+const logger = rootLogger.child({ component: 'pr-handler-registry' });
 
 /** PR 标识无法归一化（工具层映射为 INVALID_PARAMS） */
 export class PullRequestIdError extends Error {
@@ -119,7 +122,7 @@ class PrHandlerRegistry {
       for (const row of rows) this.indexOne(row);
       return rows.length;
     } catch (err) {
-      console.warn('[pr-handler] rebuild failed:', (err as Error).message);
+      logger.warn({ event: 'rebuild-failed', err }, 'rebuild failed');
       return 0;
     }
   }
@@ -289,7 +292,7 @@ class PrHandlerRegistry {
       }
     }
     if (count > 0) {
-      console.log(`[pr-handler] unregistered ${count} handler(s) for instance ${instanceId} (${reason})`);
+      logger.info({ event: 'unregistered', count, instanceId, reason }, 'unregistered PR handlers');
     }
     return count;
   }
@@ -306,7 +309,7 @@ class PrHandlerRegistry {
         this.unregisterByInstance(instance._id.toString(), 'WORKFLOW_FINISHED').then(
           () => undefined,
           (err: unknown) => {
-            console.warn('[pr-handler] unregister on finish failed:', (err as Error).message);
+            logger.warn({ event: 'unregister-on-finish-failed', err }, 'unregister on finish failed');
           },
         ),
     });

@@ -12,6 +12,7 @@ vi.mock('fs', () => ({
 
 import { exec } from 'child_process';
 import { WorktreeHandler } from './worktree-handler.js';
+import { createTestLogger, type TestLogger } from './observability/testing.js';
 
 type ExecCallback = (err: Error | null, stdout: string, stderr: string) => void;
 
@@ -57,10 +58,12 @@ function mockExecRecorder(commands: string[], shouldFail?: (command: string) => 
 
 describe('WorktreeHandler', () => {
   let handler: WorktreeHandler;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    handler = new WorktreeHandler();
+    testLog = createTestLogger('worktree-handler');
+    handler = new WorktreeHandler(testLog.logger);
   });
 
   describe('add', () => {
@@ -174,7 +177,6 @@ describe('WorktreeHandler', () => {
     it('T-WTC4: 单条身份命令失败只告警，不阻断 worktree 创建结果', async () => {
       const commands: string[] = [];
       mockExecRecorder(commands, (command) => command.includes('user.name'));
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       const result = await handler.add('/repo', '/wt', 'feat/branch', {
         name: 'Deliay',
@@ -185,8 +187,9 @@ describe('WorktreeHandler', () => {
       expect(result.worktreePath).toBe('/wt');
       expect(commands).toHaveLength(4);
       expect(commands[3]).toContain('user.email');
-      expect(warnSpy).toHaveBeenCalled();
-      warnSpy.mockRestore();
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({ level: 'warn', msg: '写入 worktree 提交人配置失败（忽略）' }),
+      );
     });
   });
 

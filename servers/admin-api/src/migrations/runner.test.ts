@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('./models.js', () => ({
   Migrations: {
@@ -10,7 +12,18 @@ vi.mock('./models.js', () => ({
 }));
 
 import { Migrations } from './models.js';
-import { runMigrations, type Migration } from './runner';
+import type { Migration } from './runner.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，runner 日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`err` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { runMigrations } = await import('./runner.js');
+childSpy.mockRestore();
 
 function executedLean(names: string[]) {
   (Migrations.find as any).mockReturnValue({
@@ -21,6 +34,7 @@ function executedLean(names: string[]) {
 describe('runMigrations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testLog.reset();
     (Migrations.create as any).mockResolvedValue({});
     (Migrations.deleteOne as any).mockResolvedValue({ deletedCount: 1 });
     (Migrations.deleteMany as any).mockResolvedValue({ deletedCount: 0 });
@@ -76,6 +90,9 @@ describe('runMigrations', () => {
 
     expect(failing.run).toHaveBeenCalledTimes(1);
     expect(succeeding.run).toHaveBeenCalledTimes(1);
+    // 逐迁移吞错：错误对象进 err 字段（契约 §2），失败项不阻断后续
+    const errorRecord = testLog.records.find((record) => record.level === 'error');
+    expect(errorRecord?.err).toMatchObject({ message: 'boom' });
     // 失败项不写执行记录，成功项写入
     const recorded = (Migrations.create as any).mock.calls
       .map((call: unknown[]) => call[0] as { name?: string })

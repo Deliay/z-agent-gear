@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { Controller } from '../models/controller.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
@@ -10,6 +11,8 @@ import { cloudHostService } from '../services/cloud-host-service.js';
 import { githubService } from '../services/github.js';
 import { commitSettingsService } from '../services/commit-settings-service.js';
 import { lookupKey } from '../services/key-cache.js';
+
+const logger = rootLogger.child({ component: 'internal-cloud-host' });
 
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
@@ -217,7 +220,7 @@ internalCloudHostRouter.post('/:id/ready', async (req: Request, res: Response) =
     const result = await cloudHostService.handleReady(id);
     res.json(result);
   } catch (err) {
-    console.error('[internal-cloud-host] ready failed', (err as Error).message);
+    logger.error({ event: 'ready-failed', err }, 'cloud host ready failed');
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
@@ -238,7 +241,7 @@ internalCloudHostRouter.post('/:id/terminal', async (req: Request, res: Response
     });
     res.json(result);
   } catch (err) {
-    console.error('[internal-cloud-host] terminal failed', (err as Error).message);
+    logger.error({ event: 'terminal-failed', err }, 'cloud host terminal failed');
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });

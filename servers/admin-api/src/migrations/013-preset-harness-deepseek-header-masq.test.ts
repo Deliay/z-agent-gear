@@ -1,16 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/cloud-workload.js', () => ({
   CloudWorkload: { findOne: vi.fn(), create: vi.fn() },
 }));
 
 import { CloudWorkload } from '../models/cloud-workload.js';
-import * as migration from './013-preset-harness-deepseek-header-masq';
 import {
   HARNESS_DEEPSEEK_INIT_SCRIPT,
   HARNESS_DEEPSEEK_INIT_SCRIPT_V1,
 } from './010-preset-harness-deepseek.js';
 import { HARNESS_DEEPSEEK_SCRIPT_V2 } from './012-worker-user-scripts.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./013-preset-harness-deepseek-header-masq.js');
+childSpy.mockRestore();
 
 const PRESET_KEY = 'harness-deepseek-harness';
 const PRESET_NAME = 'DeepSeek Harness（Harness）';
@@ -24,8 +36,7 @@ const finder = (docs: Record<string, unknown | null>) =>
 describe('migration 013-preset-harness-deepseek-header-masq', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    testLog.reset();
     (CloudWorkload.create as any).mockResolvedValue({ _id: 'created' });
   });
 
@@ -97,7 +108,7 @@ describe('migration 013-preset-harness-deepseek-header-masq', () => {
     await migration.run();
 
     expect(save).not.toHaveBeenCalled();
-    expect(console.warn).not.toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(false);
   });
 
   it('T-MIG13b: 管理员定制脚本告警且不覆盖', async () => {
@@ -110,7 +121,7 @@ describe('migration 013-preset-harness-deepseek-header-masq', () => {
 
     expect(doc.initScript).toBe(custom);
     expect(save).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('T-MIG13c: 预置项缺失时按 V4 创建（harness 元数据齐全）', async () => {
@@ -157,6 +168,6 @@ describe('migration 013-preset-harness-deepseek-header-masq', () => {
     await migration.run();
 
     expect(save).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 });

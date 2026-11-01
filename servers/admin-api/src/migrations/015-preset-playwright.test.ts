@@ -3,13 +3,25 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/cloud-workload.js', () => ({
   CloudWorkload: { findOne: vi.fn(), create: vi.fn() },
 }));
 
 import { CloudWorkload } from '../models/cloud-workload.js';
-import * as migration from './015-preset-playwright';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`msg`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./015-preset-playwright.js');
+childSpy.mockRestore();
 
 type CreateArg = {
   name: string;
@@ -45,8 +57,7 @@ function mockFindOne(byPresetKey: Record<string, unknown>, byName: Record<string
 describe('migration 015-preset-playwright', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    testLog.reset();
     (CloudWorkload.create as any).mockImplementation((doc: { name: string }) =>
       Promise.resolve({ _id: `id-${doc.name}` }),
     );
@@ -91,9 +102,12 @@ describe('migration 015-preset-playwright', () => {
 
     expect(CloudWorkload.create).toHaveBeenCalledTimes(1);
     expect(createdArgs()[0].dependsOnWorkloadIds).toEqual([]);
-    expect(console.warn).toHaveBeenCalledWith(
-      expect.stringContaining('preset workload "nodejs" not found'),
-    );
+    expect(
+      testLog.records.some(
+        (record) =>
+          record.level === 'warn' && record.msg.includes('preset workload "nodejs" not found'),
+      ),
+    ).toBe(true);
   });
 
   it('T-MIG-PW1c: presetKey 未命中时按精确 name 回退解析 Node.js 依赖', async () => {
@@ -119,7 +133,7 @@ describe('migration 015-preset-playwright', () => {
     expect(CloudWorkload.create).not.toHaveBeenCalled();
     expect(existing.initScript).toContain('echo custom');
     expect(existing.save).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('T-MIG-PW3: 仅精确 name 命中即告警跳过、不产生重名项', async () => {
@@ -128,7 +142,7 @@ describe('migration 015-preset-playwright', () => {
     await migration.run();
 
     expect(CloudWorkload.create).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('T-MIG-PW4: 幂等重跑不重复写入', async () => {

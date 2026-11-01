@@ -1,5 +1,7 @@
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { withSpan } from '../../observability/trace.js';
 import { CloudHostIssuesLinkage } from '../../models/cloud-host-issues-linkage.js';
 import { CloudHostSetupOperation } from '../../models/cloud-host-setup-operation.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
@@ -26,6 +28,8 @@ import {
   buildIssueTriggerComment,
   buildTriggerInstanceName,
 } from './issues-prompts.js';
+
+const logger = rootLogger.child({ component: 'issues-event-handler' });
 
 type Doc = Record<string, unknown>;
 
@@ -81,7 +85,7 @@ async function resolveTriggerUserId(
     if (!userId || !mongoose.isValidObjectId(userId)) return null;
     return new mongoose.Types.ObjectId(String(userId));
   } catch (err) {
-    console.warn('[issues-event] resolve trigger user failed:', (err as Error).message);
+    logger.warn({ event: 'resolve-trigger-user-failed', err }, 'resolve trigger user failed');
     return null;
   }
 }
@@ -91,6 +95,18 @@ async function resolveTriggerUserId(
  * → 异步推进状态机（webhook 不等待全链路）。
  */
 export async function handleIssuesEvent(event: IssuesEventPayload): Promise<IssuesHandleResponse> {
+  return withSpan(
+    'issues-event handle',
+    {
+      'issues.repo': event.repoFullName,
+      'issues.number': event.issueNumber,
+      action: (event as { action?: string }).action ?? null,
+    },
+    () => handleIssuesEventInner(event),
+  );
+}
+
+async function handleIssuesEventInner(event: IssuesEventPayload): Promise<IssuesHandleResponse> {
   const repoMatcher = new RegExp(`^${escapeRegExp(event.repoFullName)}$`, 'i');
   const candidates = (await CloudHostIssuesLinkage.find({
     repoFullNames: { $in: [repoMatcher] },
@@ -141,13 +157,13 @@ export async function handleIssuesEvent(event: IssuesEventPayload): Promise<Issu
       });
       results.push({ ...base, action: 'CREATE_TRIGGER' });
       void issuesTriggerRunner.advance(String(trigger._id)).catch((err) => {
-        console.warn('[issues-event] advance failed:', (err as Error).message);
+        logger.warn({ event: 'advance-failed', err }, 'advance failed');
       });
     } catch (err) {
       if (err && typeof err === 'object' && (err as { code?: number }).code === 11000) {
         results.push({ ...base, reason: 'ALREADY_TRIGGERED' });
       } else {
-        console.warn('[issues-event] create trigger failed:', (err as Error).message);
+        logger.warn({ event: 'create-trigger-failed', err }, 'create trigger failed');
         results.push({ ...base, reason: 'HANDLER_FAILED' });
       }
     }
@@ -183,7 +199,7 @@ export class IssuesTriggerRunner {
       void this.scan();
     }, this.pollIntervalMs);
     this.timer.unref?.();
-    console.log('[issues-trigger] runner started');
+    logger.info({ event: 'runner-started' }, 'issues trigger runner started');
   }
 
   stop(): void {
@@ -202,13 +218,15 @@ export class IssuesTriggerRunner {
         .sort({ updatedAt: 1 })
         .limit(50)
         .lean();
-      for (const row of rows) {
-        await this.advance(String(row._id)).catch((err) => {
-          console.warn('[issues-trigger] scan advance failed:', (err as Error).message);
-        });
-      }
+      await withSpan('issues-trigger.scan', { candidateCount: rows.length }, async () => {
+        for (const row of rows) {
+          await this.advance(String(row._id)).catch((err) => {
+            logger.warn({ event: 'scan-advance-failed', err }, 'scan advance failed');
+          });
+        }
+      });
     } catch (err) {
-      console.warn('[issues-trigger] scan failed:', (err as Error).message);
+      logger.warn({ event: 'scan-failed', err }, 'scan failed');
     } finally {
       this.scanning = false;
     }
@@ -464,7 +482,7 @@ export class IssuesTriggerRunner {
         const committer = await commitSettingsService.resolveWorktreeCommitter(triggerUserId);
         if (committer) return committer;
       } catch (err) {
-        console.warn('[issues-trigger] resolve committer failed:', (err as Error).message);
+        logger.warn({ event: 'resolve-committer-failed', err }, 'resolve committer failed');
       }
     }
     const senderId = Number(trigger.triggerSenderId ?? 0);
@@ -556,7 +574,7 @@ export class IssuesTriggerRunner {
         await this.markCompleted(trigger._id, humanNodeId);
         return;
       }
-      console.warn('[issues-trigger] complete human node failed:', (err as Error).message);
+      logger.warn({ event: 'complete-human-node-failed', err }, 'complete human node failed');
       return;
     }
     await this.markCompleted(trigger._id, humanNodeId);

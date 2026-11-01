@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/cloud-workload.js', () => ({
   CloudWorkload: { findOne: vi.fn(), create: vi.fn() },
 }));
 
 import { CloudWorkload } from '../models/cloud-workload.js';
-import * as migration from './011-refresh-harness-prepare-scope';
 import {
   HARNESS_OPENCODE_INIT_SCRIPT,
   HARNESS_OPENCODE_INIT_SCRIPT_V1,
@@ -14,6 +15,17 @@ import {
   HARNESS_DEEPSEEK_INIT_SCRIPT,
   HARNESS_DEEPSEEK_INIT_SCRIPT_V1,
 } from './010-preset-harness-deepseek';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./011-refresh-harness-prepare-scope.js');
+childSpy.mockRestore();
 
 type Doc = {
   presetKey: string;
@@ -35,8 +47,7 @@ function mockFindOne(docs: Record<string, Doc | null>): void {
 describe('migration 011-refresh-harness-prepare-scope', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    testLog.reset();
   });
 
   it('exposes the migration name', () => {
@@ -89,7 +100,7 @@ describe('migration 011-refresh-harness-prepare-scope', () => {
     expect(opencode.initScript).toBe(custom);
     expect(opencode.save).not.toHaveBeenCalled();
     expect(deepseek.save).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('T-MIG11d: 预置项不存在时跳过（由各自 preset 迁移负责创建）', async () => {

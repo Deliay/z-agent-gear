@@ -3,13 +3,25 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/cloud-workload.js', () => ({
   CloudWorkload: { findOne: vi.fn(), create: vi.fn() },
 }));
 
 import { CloudWorkload } from '../models/cloud-workload.js';
-import * as migration from './010-preset-harness-deepseek';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./010-preset-harness-deepseek.js');
+childSpy.mockRestore();
 
 type CreateArg = {
   name: string;
@@ -30,8 +42,7 @@ function createdArgs(): CreateArg[] {
 describe('migration 010-preset-harness-deepseek', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    testLog.reset();
     (CloudWorkload.findOne as any).mockResolvedValue(null);
     (CloudWorkload.create as any).mockImplementation((doc: { name: string }) =>
       Promise.resolve({ _id: `id-${doc.name}` }),

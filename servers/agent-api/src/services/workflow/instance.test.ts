@@ -67,7 +67,20 @@ vi.mock('../commit-settings-service.js', () => ({
   },
 }));
 
-import { workflowInstanceService } from './instance.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { createTestLogger } from '../../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把
+ * workflow-instance 日志写入内存 sink，断言 `records` 的结构化字段。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { workflowInstanceService } = await import('./instance.js');
+childSpy.mockRestore();
+
 import { workflowEngine } from './engine.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { ControllerWorkspace } from '../../models/controller-workspace.js';
@@ -967,13 +980,12 @@ describe('WorkflowInstanceService.deleteInstance', () => {
     vi.mocked(sessionService.delete)
       .mockRejectedValueOnce(new Error('worktree 清理失败'))
       .mockResolvedValueOnce(true as never);
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    testLog.reset();
 
     await expect(workflowInstanceService.deleteInstance('user-1', 'inst-1')).resolves.toBe(true);
 
     expect(sessionService.delete).toHaveBeenCalledTimes(2);
-    expect(errorSpy).toHaveBeenCalled();
-    errorSpy.mockRestore();
+    expect(testLog.records.some((r) => r.level === 'error')).toBe(true);
   });
 
   it('实例不存在、无权限或已删除时拒绝', async () => {

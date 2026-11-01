@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import * as backfill013 from './013-tenant-id-backfill.js';
+
+const log = logger.child({ component: 'migration/014-tenant-id-rebackfill' });
 
 export const name = '014-tenant-id-rebackfill';
 
@@ -13,5 +16,5 @@ export const name = '014-tenant-id-rebackfill';
  */
 export async function run(): Promise<void> {
   await backfill013.run();
-  console.log('[Migration 014] tenantId re-backfill completed (controller-api historical rows)');
+  log.info('tenantId re-backfill completed (controller-api historical rows)');
 }

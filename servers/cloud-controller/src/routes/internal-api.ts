@@ -5,6 +5,7 @@ import {
   SUPPORTED_HARNESS_TYPES,
   type WorkloadPlanEntry,
 } from '../models/cloud-container.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import type { CloudContainerEntity } from '../repositories/container-repository.js';
 import {
   InMemoryWorkloadLogRepository,
@@ -42,6 +43,8 @@ import {
   RuntimeContainerNotFoundError,
   type WorkloadDispatcher,
 } from '../services/workload-dispatcher.js';
+
+const log = rootLogger.child({ component: 'internal-api' });
 
 /** 单次启动可挂载的工作负载上限（契约 A.2.2 / 裁决 12）。 */
 export const MAX_WORKLOAD_IDS = 10;
@@ -253,14 +256,14 @@ async function resolveHarnessWorkspaceId(
   try {
     const resolved = await resolver(tenantId);
     if (resolved) return resolved;
-    console.warn(
-      `[internal-api] harness 请求缺少 workspaceId 且未解析到全局工作区（tenantId=${tenantId}），已置 workspaceId=null`,
+    log.warn(
+      { tenantId },
+      'harness 请求缺少 workspaceId 且未解析到全局工作区，已置 workspaceId=null',
     );
   } catch (err) {
-    console.warn(
-      `[internal-api] harness 请求缺少 workspaceId，解析全局工作区失败（tenantId=${tenantId}）：${
-        err instanceof Error ? err.message : String(err)
-      }，已置 workspaceId=null`,
+    log.warn(
+      { tenantId, err: err instanceof Error ? err : new Error(String(err)) },
+      'harness 请求缺少 workspaceId，解析全局工作区失败，已置 workspaceId=null',
     );
   }
   return null;
@@ -307,9 +310,7 @@ export async function parseHarnessRequest(
   let tenantId: string;
   if (rawTenantId === undefined || rawTenantId === null) {
     tenantId = userId;
-    console.warn(
-      `[internal-api] harness 请求缺少 tenantId（userId=${userId}），已回退 tenantId=userId（一期恒等）`,
-    );
+    log.warn({ userId }, 'harness 请求缺少 tenantId，已回退 tenantId=userId（一期恒等）');
   } else {
     const parsedTenantId = nonEmptyString(rawTenantId);
     if (!parsedTenantId) return null;

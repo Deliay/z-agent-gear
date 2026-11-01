@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
+
+const log = logger.child({ component: 'migration/010-preset-harness-deepseek' });
 
 /**
  * 010-preset-harness-deepseek：写入云电脑 harness 运行环境预置项「DeepSeek Harness（Harness）」。
@@ -98,14 +101,12 @@ agent-gear harness prepare
 export async function run(): Promise<void> {
   const byKey = await CloudWorkload.findOne({ presetKey: PRESET_KEY });
   if (byKey) {
-    console.warn(
-      `[Migration 010] preset workload "${PRESET_KEY}" already exists (by presetKey), skipping`,
-    );
+    log.warn({ presetKey: PRESET_KEY }, 'preset workload already exists (by presetKey), skipping');
     return;
   }
   const byName = await CloudWorkload.findOne({ name: PRESET_NAME });
   if (byName) {
-    console.warn(`[Migration 010] workload named "${PRESET_NAME}" already exists, skipping`);
+    log.warn({ name: PRESET_NAME }, 'workload with the same name already exists, skipping');
     return;
   }
 
@@ -120,5 +121,5 @@ export async function run(): Promise<void> {
     workloadKind: 'harness',
     harnessType: 'deepseek_harness',
   });
-  console.log(`[Migration 010] preset workload "${PRESET_KEY}" created`);
+  log.info({ presetKey: PRESET_KEY }, 'preset workload created');
 }

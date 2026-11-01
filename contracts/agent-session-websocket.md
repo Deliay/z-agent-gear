@@ -1907,3 +1907,21 @@ Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 Ope
 - WebSocket 断开：Socket.IO 自动重连（指数退避）
 - SSE 断开：浏览器 EventSource 自动重连
 - ACP 进程崩溃：通知前端，用户可手动重建 Session
+
+---
+
+## 7. 链路传播（`_meta` 保留位）
+
+本节为 W3C Trace Context 传播约定（详见 [`observability.md`](./observability.md) §4）。
+
+### 7.1 `_meta` 保留位声明
+
+- 事件报文顶层 `_meta` 字段为平台 W3C Trace Context 保留位，**本期不写入 ACP payload**：ACP 协议自身的 `_meta` 字段（如 §2.5 中 raw 快照上限所指的 ACP 字段）与本保留位无关，互不影响。
+- 平台侧事件（`acp:*`、`session:*` 等）如需传播链路，仅使用顶层 `_meta: { traceparent?: string }`，消费者**必须容忍 `_meta` 缺失**；无效 `traceparent` 忽略（视为缺失），不得报错。
+
+### 7.2 握手 `auth.traceparent`（可选）
+
+controller-api Socket.IO 服务端接受握手 `auth.traceparent`（W3C `traceparent`，可选）：
+
+- 控制器（`agent-gear`）在 `io(url, { auth: { token, traceparent } })` 中携带当前活跃 span 的 `traceparent`；重连时重新注入。
+- 服务端在握手 middleware 提取并作为服务端连接 span 的父上下文；缺失 / 非法时按无父上下文处理，不影响鉴权与连接建立。
