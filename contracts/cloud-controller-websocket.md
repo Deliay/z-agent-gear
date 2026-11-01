@@ -61,7 +61,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `hostname` | `string` | 是 | 容器主机名 |
-| `version` | `string` | 是 | `agent-gear` semver 版本号：普通容器须为三段数字且 `>=2.2.0`、major 为 `2`；`purpose=harness` 按逐容器 `agentGearMinVersion`（下限 `>=2.10.0`；含 `deepseek_harness` 的运行 `>=2.11.0`，见 §3.4） |
+| `version` | `string` | 是 | `agent-gear` semver 版本号：普通容器须为三段数字且 `>=2.2.0`、major 为 `2`；`purpose=harness` 按逐容器 `agentGearMinVersion`（下限 `>=2.12.0`；各 harness 类型与 2.12.0 基线取 max 后恒为 `2.12.0`，见 §3.4） |
 | `platform` | `string` | 否 | 容器平台标识（`linux`） |
 | `key` | `string` | 否 | **兼容字段，服务端忽略**。容器鉴权由握手 token 完成（`agent-gear` 现有参数体系仍会发送该字段，不破坏既有握手） |
 | `homeDir` | `string` | 否 | 容器内 `os.homedir()`，服务端忽略 |
@@ -69,7 +69,7 @@
 **服务端行为：**
 
 1. 从握手阶段已鉴权的 socket 上取得 `containerId`（见 §3.1），不读取 `key`。
-2. 读取容器 `purpose`，校验 `version` 完整版本：普通容器 `>=2.2.0`；`purpose=harness` 按逐容器 `agentGearMinVersion`（下限 `>=2.10.0`；含 `deepseek_harness` 的运行 `>=2.11.0`）；major 均须为 `2`（见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
+2. 读取容器 `purpose`，校验 `version` 完整版本：普通容器 `>=2.2.0`；`purpose=harness` 按逐容器 `agentGearMinVersion`（下限 `>=2.12.0`；各 harness 类型与 2.12.0 基线取 max 后恒为 `2.12.0`）；major 均须为 `2`（见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
 3. 查询是否存在待执行初始化脚本（`hasInitScripts`），据此计算 `initializing`。
 4. 将 socket 绑定到 `containerId`；无初始化脚本时容器状态置 `online` 并写入 `connectedAt`。
 5. 回复 `registered`（含可选 `initializing`）。
@@ -328,14 +328,14 @@ Worker                              cloud-controller
   1. **形态**：严格三段数字 `^\d+\.\d+\.\d+$`，每段 1~9 位且无前导零；缺失、前后空白、`v` 前缀、缺段/多段、prerelease/build 后缀、非字符串或超长（> 64 字符）均视为不兼容。
   2. **major**：须等于当前支持的 major（本期 `2`）。
   3. **最低版本**：完整版本须 `>=2.2.0`（按数字段比较，`2.10.0 > 2.2.0`）。
-- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.10.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
-- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.10.0`（worker 用户 + 保活退出码 42 约定自 2.10.0 起），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
+- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.12.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
+- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.12.0`（worker 用户 + 保活退出码 42、Worktree 级提交人写入等能力随基线提升），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
 - **按 `harnessTypes` 细分的最低版本**：`agentGearMinVersion` 落库值 =
   `max(请求值, MIN_HARNESS_WORKER_VERSION, 按 harnessTypes 取最大)`；本期
-  `MIN_HARNESS_VERSION_BY_TYPE = { kimi_code: '2.8.0', deepseek_harness: '2.11.0' }`
+  `MIN_HARNESS_VERSION_BY_TYPE = { kimi_code: '2.8.0', deepseek_harness: '2.12.0' }`
   （`MIN_KIMI_HARNESS_WORKER_VERSION` / `MIN_DEEPSEEK_HARNESS_WORKER_VERSION`），
-  仅 `opencode` 的运行仍为 2.10.0；含 `deepseek_harness` 的运行取 2.11.0（原 2.9.0 口径替换，
-  header-masq 会话标识配置注入自 agent-gear 2.11.0 起）——max 语义自动收编。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
+  以 2.12.0 为底取 max 后 `opencode` / `kimi_code` / `deepseek_harness` 及其组合恒为 2.12.0
+  （`kimi_code` 的 2.8.0 低于基线；`deepseek_harness` 的 2.12.0 与基线同值）——max 语义自动收编。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
 - **支持类型白名单**：`SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code', 'deepseek_harness']`；非白名单类型返回
   `400 INVALID_HARNESS`，不创建 Job。
 - **预置工作负载映射**：`opencode → presetKey 'harness-opencode'`（迁移 006）、
@@ -407,7 +407,7 @@ Content-Type: application/json
   "harnessTypes": ["opencode", "deepseek_harness"],
   "containerApiKeyId": "<运行专用模型 Key ID>",
   "expiresAt": "2026-10-21T00:00:00.000Z",
-  "agentGearMinVersion": "2.11.0",
+  "agentGearMinVersion": "2.12.0",
   "secrets": {
     "hostEndpoint": "wss://<controller-api>",
     "hostKey": "zag_k_1_…",
