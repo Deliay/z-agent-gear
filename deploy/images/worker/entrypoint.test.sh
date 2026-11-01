@@ -43,8 +43,19 @@ if [ "${1:-}" = "config" ]; then
   echo "https://npm.internal.fffdan.com/repository/npm-proxy/"
   exit 0
 fi
-date +%s%N >> "$STUB_DIR/npm_installs"
-case "${STUB_NPM_MODE:-ok}" in fail) exit 1 ;; *) echo "2.10.0" > "$STUB_DIR/version" ;; esac
+# 分桶记录：完整参数（区分 pnpm 自举与 agent-gear 自更新）
+echo "$*" >> "$STUB_DIR/npm_installs"
+case "${STUB_NPM_FAIL_PNPM:-0}" in
+  1) case "$*" in *"pnpm@"*) exit 1 ;; esac ;;
+esac
+case "${STUB_NPM_MODE:-ok}" in fail) exit 1 ;; *) echo "2.13.0" > "$STUB_DIR/version" ;; esac
+exit 0
+STUB
+  cat > "$STUB_DIR/pnpm" <<'STUB'
+#!/usr/bin/env bash
+set -u
+echo "$*" >> "$STUB_DIR/pnpm_invocations"
+if [ "${1:-}" = "--version" ]; then echo "9.15.9"; exit 0; fi
 exit 0
 STUB
   cat > "$STUB_DIR/agent-gear" <<'STUB'
@@ -76,20 +87,25 @@ setup_env() {
   RUN_TMP="$TEST_DIR/run"
   mkdir -p "$STUB_DIR" "$RUN_TMP"
   write_stubs
-  echo "2.10.0" > "$STUB_DIR/version"
+  echo "2.13.0" > "$STUB_DIR/version"
+  # profile.d 落到临时目录（测试非 root，不写 /etc）；默认假定 pnpm 已装（T-EP13 显式移除）
+  mkdir -p "$TEST_DIR/etc/profile.d"
+  export PNPM_PROFILE_PATH="$TEST_DIR/etc/profile.d/pnpm.sh"
+  export ZAG_PNPM_PROFILE_FILE="$PNPM_PROFILE_PATH"
   export STUB_DIR TMPDIR="$RUN_TMP"
   export PATH="$STUB_DIR:$ORIGINAL_PATH"
   export ZAG_SERVER_ENDPOINT="wss://cloud.example.invalid/worker"
   export STUB_RUN_FOREVER=0
   export STUB_NPM_MODE=ok
+  export STUB_NPM_FAIL_PNPM=0
   export STUB_AGENT_EXITS="42"
   unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS STUB_RUN_FOREVER
 }
 
 teardown_env() {
   rm -rf "$TEST_DIR"
-  unset STUB_DIR TMPDIR ZAG_SERVER_ENDPOINT STUB_AGENT_EXITS STUB_NPM_MODE STUB_RUN_FOREVER
-  unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS
+  unset STUB_DIR TMPDIR ZAG_SERVER_ENDPOINT STUB_AGENT_EXITS STUB_NPM_MODE STUB_NPM_FAIL_PNPM STUB_RUN_FOREVER
+  unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS ZAG_PNPM_PROFILE_FILE PNPM_PROFILE_PATH
   export PATH="$ORIGINAL_PATH"
 }
 
@@ -255,6 +271,7 @@ assert_contains "$STUB_DIR/setpriv_args" "--reuid=1000 --regid=1000 --init-group
 assert_contains "$STUB_DIR/setpriv_env" "HOME=/home/worker" "T-EP11 HOME"
 assert_contains "$STUB_DIR/setpriv_env" "USER=worker" "T-EP11 USER"
 assert_contains "$STUB_DIR/setpriv_env" "NVM_DIR=/home/worker/.nvm" "T-EP11 NVM_DIR"
+assert_contains "$STUB_DIR/setpriv_env" "PNPM_HOME=/home/worker/.local/share/pnpm" "T-EP11 PNPM_HOME 注入 worker env"
 assert_contains "$STUB_DIR/setpriv_env" "PATH=/home/worker/.nvm/current/bin" "T-EP11 PATH 以 worker nvm 打头"
 teardown_env
 echo "== T-EP12: 单行 JSON 日志（T-OBS16） =="
@@ -303,6 +320,58 @@ for (const line of lines) {
 }
 console.log("");' "$TEST_DIR/stdout.log")
 if [ -z "$bad_line" ]; then pass "T-EP12 stdout 每行可 JSON.parse 且字段齐备"; else fail "T-EP12 非 JSON 行: $bad_line"; fi
+teardown_env
+
+# 说明：计划/提案中的 T-EP9/T-EP10 编号已被本文件更早的「退出码 42 / 退避」用例占用，
+# pnpm 预装用例顺延为 T-EP13/T-EP14（语义与计划 §Phase 2 一致）。
+echo "== T-EP13: pnpm 预装幂等（已装不重复；缺失恰好装一次；profile.d 幂等） =="
+setup_env
+export STUB_AGENT_EXITS="42"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP13 入口正常退出"
+assert_eq 0 "$(grep -c 'pnpm@' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP13 已装 pnpm 不重复安装"
+assert_contains "$STUB_DIR/pnpm_invocations" "--version" "T-EP13 读取已装 pnpm 版本"
+assert_contains "$STUB_DIR/pnpm_invocations" "setup" "T-EP13 执行 pnpm setup 接线交互 shell"
+assert_eq 1 "$(grep -c '^# >>> pnpm >>>$' "$PNPM_PROFILE_PATH" 2>/dev/null || true)" "T-EP13 profile.d 写入标记块"
+assert_contains "$PNPM_PROFILE_PATH" "export PNPM_HOME=\"/home/worker/.local/share/pnpm\"" "T-EP13 profile.d 注入 PNPM_HOME"
+assert_contains "$PNPM_PROFILE_PATH" 'export PATH="$PNPM_HOME:$PATH"' "T-EP13 profile.d 追加 PATH"
+teardown_env
+
+setup_env
+rm -f "$STUB_DIR/pnpm"
+export STUB_AGENT_EXITS="42"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP13 未装 pnpm 时入口正常退出"
+assert_eq 1 "$(grep -c 'install -g pnpm@9.15.9' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP13 缺失时恰好安装一次固定版本 pnpm"
+# 重跑幂等：标记块不重复追加（重置 stub 计数，避免第二次启动命中第 2 次退出编排）
+rm -f "$STUB_DIR/agent_starts"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP13 重跑入口正常退出"
+assert_eq 1 "$(grep -c '^# >>> pnpm >>>$' "$PNPM_PROFILE_PATH" 2>/dev/null || true)" "T-EP13 profile.d 重跑幂等（标记块不重复）"
+teardown_env
+
+echo "== T-EP14: pnpm 预装失败仅告警、保活链路正常 =="
+setup_env
+rm -f "$STUB_DIR/pnpm"
+export STUB_NPM_FAIL_PNPM=1
+export STUB_AGENT_EXITS="1 42"
+export ZAG_KEEPALIVE_BACKOFF_MS=10
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP14 pnpm 失败不阻断保活"
+assert_contains "$TEST_DIR/stdout.log" "WARN: pnpm install failed" "T-EP14 日志 WARN 容忍 pnpm 失败"
+assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP14 agent-gear 照常拉起并重启"
+assert_eq 2 "$(grep -c 'install -g agent-gear' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP14 agent-gear 自更新不受影响"
+teardown_env
+
+setup_env
+rm -f "$STUB_DIR/pnpm"
+export STUB_NPM_FAIL_PNPM=1
+export ZAG_SKIP_AGENT_GEAR_UPDATE=1
+export STUB_AGENT_EXITS="42"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP14 skip 自更新后仍收敛"
+assert_eq 1 "$(grep -c 'install -g pnpm@9.15.9' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP14 skip 自更新不影响 pnpm 预装尝试"
+assert_contains "$TEST_DIR/stdout.log" "skipping agent-gear update" "T-EP14 自更新按开关跳过"
 teardown_env
 
 echo

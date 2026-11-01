@@ -716,7 +716,7 @@ describe('Admin Cloud Workload API', () => {
     expect(deepseek.harnessType).toBe('deepseek_harness');
     expect(deepseek.paramSchema).toEqual([]);
     expect(deepseek.initScript).toContain(
-      'npm install -g "@deepseek-ai/dsh@${DSH_CLI_VERSION}" "@deepseek-ai/dsh-acp-app@${DSH_ACP_APP_VERSION}"',
+      'pnpm add -g "@deepseek-ai/dsh@${DSH_CLI_VERSION}" "@deepseek-ai/dsh-acp-app@${DSH_ACP_APP_VERSION}"',
     );
     expect(deepseek.initScript).toContain('export DSH_CLI_VERSION="${DSH_CLI_VERSION:-0.2.1-rc.2}"');
     expect(deepseek.initScript).toContain(
@@ -760,7 +760,7 @@ describe('Admin Cloud Workload API', () => {
     });
     expect(playwright.dependsOnWorkloadIds).toEqual([nodejs.id]);
     const playwrightScript = playwright.initScript ?? '';
-    expect(playwrightScript).toContain('npm install -g playwright');
+    expect(playwrightScript).toContain('pnpm add -g playwright');
     expect(playwrightScript).toContain('playwright install chromium');
     expect(playwrightScript).toContain('WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST');
     expect(playwrightScript).toContain('/etc/profile.d/playwright.sh');
@@ -777,6 +777,32 @@ describe('Admin Cloud Workload API', () => {
     for (const workload of all) {
       expect(['STANDARD', 'HARNESS']).toContain(workload.workloadKind);
     }
+
+    // T-IA：工作负载全局安装统一 pnpm（迁移 017）——四条脚本含统一回退块 + pnpm add -g，
+    // 不含旧 npm 全局安装形态（预制计数仍为 10，名称清单不变）。
+    const pnpmWorkloads = [
+      byName.get('OpenCode（Harness）')!,
+      byName.get('Kimi Code（Harness）')!,
+      byName.get('DeepSeek Harness（Harness）')!,
+      byName.get('Playwright')!,
+    ];
+    for (const workload of pnpmWorkloads) {
+      const script = workload.initScript ?? '';
+      expect(script, workload.name).toContain('command -v pnpm >/dev/null 2>&1');
+      expect(script, workload.name).toContain('npm install -g "pnpm@9.15.9"');
+      expect(script, workload.name).toContain('export PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"');
+      expect(script, workload.name).toContain('pnpm add -g');
+      expect(script, workload.name).not.toContain('npm install -g "@opencode');
+      expect(script, workload.name).not.toContain('npm install -g "@moonshot');
+      expect(script, workload.name).not.toContain('npm install -g "@deepseek');
+      expect(script, workload.name).not.toContain('npm install -g playwright');
+    }
+    expect(byName.get('OpenCode（Harness）')!.initScript).toContain(
+      'pnpm add -g "@opencode/cli@${OPENCODE_CLI_VERSION}"',
+    );
+    expect(byName.get('Kimi Code（Harness）')!.initScript).toContain(
+      'pnpm add -g "@moonshot-ai/kimi-code@${KIMI_CODE_CLI_VERSION}"',
+    );
   });
 
   it('T-IA: preset .NET uses the apt-based init script (migration 002 upgrade)', async () => {
