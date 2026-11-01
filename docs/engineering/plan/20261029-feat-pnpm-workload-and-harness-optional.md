@@ -431,6 +431,14 @@ cd tests/e2e && aspire wait agent-web admin-web && npx playwright test cloud-hos
 | 既有测试计数/口径冲突（并行需求） | 预制计数 10 不变（本期零新增）；T-E16/AGENTS.md 口径更新如与并行需求冲突，后合入方按主干实际值 merge 协调 |
 | entrypoint `WORKER_PATH` 变更影响 `run_as_worker` 调用 | 仅追加 `$PNPM_HOME` 目录、既有顺序不变（T-EP 全量回归覆盖） |
 
+## 实现期勘误（实现分支 `feat/pnpm-workload-and-harness-optional-impl`）
+
+1. **entrypoint 用例编号顺延**：计划/提案中的 T-EP9/T-EP10 已被 `entrypoint.test.sh` 既有用例（退出码 42 收敛、退避递增）占用，pnpm 预装用例顺延为 **T-EP13（预装幂等）** 与 **T-EP14（预装失败仅告警）**，语义与本计划 §Phase 2 一致；
+2. **统一 pnpm 回退块补充 PATH 接线**：在计划裁决 4 的回退块基础上追加 `export PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"` 与 `export PATH="$PNPM_HOME:$PATH"`。原因：存量容器（旧镜像、无 entrypoint 预装）自举安装 pnpm 后，`pnpm add -g` 的全局 bin 落 `PNPM_HOME`，若脚本内 PATH 不含该目录，结尾 `--version` 硬校验会误失败（新镜像上为幂等无害操作）；
+3. **创建期 harness plan 双写点**：`required: true → false` 除 `cloud-host-workload-plan.ts` 外，`cloud-host-service.ts` 的 `resolveWorkloadPlan`（harness 预置直出分支）同样收敛为 `required: false`，两处口径一致；
+4. **runtime 版本门禁版本来源**：`socketio-gateway` 记录最近一次 `register` 上报版本并经 `WorkerGatewayHandle.getWorkerVersion` 暴露给 internal-api；断开连接即清除（版本不可得 → 放行 + `warn` 留痕）；
+5. **0-harness 创建校验放宽落点**：`internal-api` 同步放宽 `harnessTypes` 空数组与 harness `workloadPlan` 为空（缺省/空数组均 201），与契约 A.2.2 一致；Phase 5 未显式列出此改动，属 Phase 1 契约放宽的必要实现。
+
 ## 相关文档
 
 - 关联 PRD：`docs/product/draft/20261029-pnpm-workload-and-harness-optional.md`（Issue #369）
