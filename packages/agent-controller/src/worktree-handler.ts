@@ -2,6 +2,7 @@ import { exec, type ExecException } from 'child_process';
 import { chmodSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join, resolve } from 'path';
+import { logger as rootLogger, type ObservationLogger } from './observability/logger.js';
 
 function expandTilde(p: string): string {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
@@ -128,6 +129,12 @@ export interface GitCommitResult {
 }
 
 export class WorktreeHandler {
+  private log: ObservationLogger;
+
+  constructor(logger?: ObservationLogger) {
+    this.log = logger ?? rootLogger.child({ component: 'worktree-handler' });
+  }
+
   async add(
     repoPath: string,
     worktreePath: string,
@@ -164,7 +171,7 @@ export class WorktreeHandler {
    * - `extensions.worktreeConfig true` 落在共享配置（幂等，重复 set 同值无副作用）；
    * - `--worktree user.name/user.email` 落在 `.git/worktrees/<name>/config.worktree`；
    * - name/email 为**用户可控值**，一律经 `shellQuote` 转义后拼接；
-   * - 单条失败仅 `console.warn`，不阻断 worktree 创建（身份缺失可接受）。
+   * - 单条失败仅 `this.log.warn`，不阻断 worktree 创建（身份缺失可接受）。
    */
   private async applyWorktreeCommitter(worktreePath: string, committer: WorktreeCommitter): Promise<void> {
     const pathArg = shellQuote(worktreePath);
@@ -178,7 +185,7 @@ export class WorktreeHandler {
         await execAsync(command);
       } catch (err) {
         // 不输出 name/email 值（用户数据），仅记录失败步骤与原因
-        console.warn(`[WorktreeHandler] 写入 worktree 提交人配置失败（忽略）：${(err as Error).message}`);
+        this.log.warn({ err }, '写入 worktree 提交人配置失败（忽略）');
       }
     }
 
@@ -219,9 +226,8 @@ export class WorktreeHandler {
       writeFileSync(hookPath, renderCoAuthorHook(), { mode: 0o755 });
       chmodSync(hookPath, 0o755);
     } catch (err) {
-      console.warn(
-        `[WorktreeHandler] 写入 worktree 共同作者 hook 失败（忽略）：${(err as Error).message}`,
-      );
+      // 不输出路径/用户数据，仅记录失败原因
+      this.log.warn({ err }, '写入 worktree 共同作者 hook 失败（忽略）');
       return;
     }
 
@@ -235,9 +241,7 @@ export class WorktreeHandler {
         await execAsync(command);
       } catch (err) {
         // 不输出共同作者值（服务端数据），仅记录失败步骤与原因
-        console.warn(
-          `[WorktreeHandler] 写入 worktree 共同作者配置失败（忽略）：${(err as Error).message}`,
-        );
+        this.log.warn({ err }, '写入 worktree 共同作者配置失败（忽略）');
       }
     }
   }

@@ -1,5 +1,7 @@
 import { writeGhAuth } from './gh-config.js';
 import { redactSecrets } from '../workload-executor.js';
+import type { Logger as PinoLogger } from 'pino';
+import { logger as rootLogger } from '../observability/logger.js';
 
 /** 定时续期间隔（50 分钟，覆盖 Github App installation token 约 1 小时有效期）。 */
 export const REFRESH_INTERVAL_MS = 50 * 60 * 1000;
@@ -26,7 +28,8 @@ export interface GithubCredentialManagerDeps {
   fetch?: typeof fetch;
   writeGhAuth?: (token: string) => Promise<void>;
   now?: () => number;
-  log?: (message: string) => void;
+  /** 注入 logger（测试用）；缺省进程级单例，`component: 'github-credential'`。 */
+  log?: PinoLogger;
   /** 定时器注入（测试用）；缺省使用全局 `setTimeout`。 */
   setTimeout?: typeof setTimeout;
   /** 退避等待注入（测试用）；缺省使用 `setTimeout`。 */
@@ -60,7 +63,7 @@ export class GithubCredentialManager {
   private readonly fetchFn: typeof fetch;
   private readonly writeAuth: (token: string) => Promise<void>;
   private readonly now: () => number;
-  private readonly log: (message: string) => void;
+  private readonly log: PinoLogger;
   private readonly setTimeoutFn: typeof setTimeout;
   private readonly sleepFn: (ms: number) => Promise<void>;
 
@@ -77,7 +80,8 @@ export class GithubCredentialManager {
     this.fetchFn = deps.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args));
     this.writeAuth = deps.writeGhAuth ?? ((token: string) => writeGhAuth(token));
     this.now = deps.now ?? (() => Date.now());
-    this.log = deps.log ?? ((message: string) => console.log(message));
+    // component 固定绑定：无论注入哪路 logger，`[GithubCredential]` 前缀语义由 component 字段承接
+    this.log = (deps.log ?? rootLogger).child({ component: 'github-credential' });
     this.setTimeoutFn = deps.setTimeout ?? setTimeout;
     this.sleepFn =
       deps.sleep ??
@@ -99,7 +103,7 @@ export class GithubCredentialManager {
     this.stopped = false;
     const missing = this.missingEnv();
     if (missing.length > 0) {
-      this.log(`[GithubCredential] disabled: missing environment variable(s): ${missing.join(', ')}`);
+      this.log.warn({ event: 'disabled', missing }, 'github credential manager disabled: missing environment variables');
       return;
     }
     this.started = true;
@@ -146,9 +150,15 @@ export class GithubCredentialManager {
       const result = await this.request(url, hostKey);
       if (result.kind === 'retryable' && attempt < BACKOFF_MS.length) {
         const delay = BACKOFF_MS[attempt]!;
-        this.log(
-          `[GithubCredential] 凭据无效（HTTP ${result.status}），${Math.round(delay / 60_000)} 分钟后重试` +
-            `（${attempt + 1}/${BACKOFF_MS.length}）`,
+        this.log.warn(
+          {
+            event: 'credential_invalid_retry',
+            status: result.status,
+            delayMs: delay,
+            attempt: attempt + 1,
+            maxAttempts: BACKOFF_MS.length,
+          },
+          '凭据无效，稍后重试',
         );
         await this.sleepFn(delay);
         continue;
@@ -161,7 +171,7 @@ export class GithubCredentialManager {
       // 非 401/403/404 的失败（5xx / 超时 / 非法 JSON / 写 gh 失败）必须留痕，
       // 否则线上只能看到「凭据没更新」而无任何线索；`disabled`/`no-binding` 属正常态不告警。
       if (!value.ok && value.error && value.error !== 'no-binding' && value.error !== 'disabled') {
-        this.log(`[GithubCredential] 凭据续期失败：${value.error}`);
+        this.log.error({ event: 'renew_failed', error: value.error }, '凭据续期失败');
       }
       return value;
     }
@@ -225,10 +235,9 @@ export class GithubCredentialManager {
       }
 
       this.expiresAt = expiresAt ?? null;
-      this.log(
-        expiresAt
-          ? `[GithubCredential] gh 凭据已更新，有效期至 ${expiresAt.toISOString()}`
-          : '[GithubCredential] gh 凭据已更新',
+      this.log.info(
+        { event: 'credential_updated', ...(expiresAt ? { expiresAt: expiresAt.toISOString() } : {}) },
+        'gh 凭据已更新',
       );
       return { kind: 'result', value: { ok: true, expiresAt } };
     } catch (error) {
@@ -253,9 +262,13 @@ export class GithubCredentialManager {
       if (beforeExpiry <= 0) {
         delay = this.nearExpiryImmediateTaken ? NEAR_EXPIRY_RETRY_MS : 0;
         this.nearExpiryImmediateTaken = true;
-        this.log(
-          `[GithubCredential] 凭据剩余有效期不足（至 ${this.expiresAt.toISOString()}），` +
-            (delay === 0 ? '立即重试' : `${Math.round(delay / 1000)} 秒后重试`),
+        this.log.warn(
+          {
+            event: 'near_expiry',
+            expiresAt: this.expiresAt.toISOString(),
+            delayMs: delay,
+          },
+          '凭据剩余有效期不足',
         );
       } else {
         this.nearExpiryImmediateTaken = false;

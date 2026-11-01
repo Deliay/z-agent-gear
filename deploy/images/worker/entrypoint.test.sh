@@ -257,6 +257,53 @@ assert_contains "$STUB_DIR/setpriv_env" "USER=worker" "T-EP11 USER"
 assert_contains "$STUB_DIR/setpriv_env" "NVM_DIR=/home/worker/.nvm" "T-EP11 NVM_DIR"
 assert_contains "$STUB_DIR/setpriv_env" "PATH=/home/worker/.nvm/current/bin" "T-EP11 PATH 以 worker nvm 打头"
 teardown_env
+echo "== T-EP12: 单行 JSON 日志（T-OBS16） =="
+setup_env
+# 提取 log/json_escape 函数做单元级验证（source 整个 entrypoint 会执行主流程）
+sed -n '/^json_escape()/p; /^log()/,/^}/p' "$ENTRYPOINT" > "$TEST_DIR/logfns.sh"
+assert_json_line() {
+  if printf '%s' "$1" | node -e '
+let d = "";
+process.stdin.on("data", (c) => (d += c)).on("end", () => {
+  const o = JSON.parse(d);
+  for (const k of ["level", "time", "service", "serviceVersion", "env", "hostname", "pid", "component", "msg"]) {
+    if (!(k in o)) { console.error("missing field " + k); process.exit(2); }
+  }
+  if (Number.isNaN(Date.parse(o.time))) process.exit(3);
+});' 2>/dev/null; then pass "$2"; else fail "$2"; fi
+}
+# a. 含引号/反斜杠/控制字符（tab/换行/NUL 邻近控制符）仍可解析
+weird=$(bash -c "source '$TEST_DIR/logfns.sh'; log \"quote=\\\" backslash=\\\\ tab=$(printf '\t') nl=$(printf '\a') end\"")
+assert_json_line "$weird" "T-EP12 含引号/反斜杠/控制字符仍可 JSON.parse"
+case "$weird" in *'quote=\"'*) pass "T-EP12 引号已转义" ;; *) fail "T-EP12 引号未转义: $weird" ;; esac
+case "$weird" in *$'\n'*) fail "T-EP12 输出含裸换行（非单行）" ;; *) pass "T-EP12 单行输出" ;; esac
+# b. 字段口径：service 固定 zag-worker、serviceVersion 取 ZAG_WORKER_VERSION（缺省 unknown）
+v1=$(bash -c "source '$TEST_DIR/logfns.sh'; log hello")
+assert_json_line "$v1" "T-EP12 缺省形态字段齐备"
+case "$v1" in *'"service":"zag-worker"'*) pass "T-EP12 service=zag-worker" ;; *) fail "T-EP12 service 口径: $v1" ;; esac
+case "$v1" in *'"serviceVersion":"unknown"'*) pass "T-EP12 serviceVersion 缺省 unknown" ;; *) fail "T-EP12 serviceVersion 缺省口径: $v1" ;; esac
+v2=$(bash -c "source '$TEST_DIR/logfns.sh'; ZAG_WORKER_VERSION=9.9.9; log hello")
+case "$v2" in *'"serviceVersion":"9.9.9"'*) pass "T-EP12 serviceVersion 取 ZAG_WORKER_VERSION" ;; *) fail "T-EP12 serviceVersion 注入: $v2" ;; esac
+# c. 整个入口的 stdout 每行均可 JSON.parse（退出码/自更新/信号语义由 T-EP0~T-EP11 保障不变）
+setup_env
+export STUB_AGENT_EXITS="1 42"
+export ZAG_KEEPALIVE_BACKOFF_MS=10
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP12 入口收敛退出"
+bad_line=$(node -e '
+const fs = require("fs");
+const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.trim());
+for (const line of lines) {
+  try {
+    const o = JSON.parse(line);
+    for (const k of ["level", "time", "service", "serviceVersion", "env", "hostname", "pid", "component", "msg"]) {
+      if (!(k in o)) { console.log(line); process.exit(0); }
+    }
+  } catch { console.log(line); process.exit(0); }
+}
+console.log("");' "$TEST_DIR/stdout.log")
+if [ -z "$bad_line" ]; then pass "T-EP12 stdout 每行可 JSON.parse 且字段齐备"; else fail "T-EP12 非 JSON 行: $bad_line"; fi
+teardown_env
 
 echo
 echo "passed=$PASS failed=$FAIL"

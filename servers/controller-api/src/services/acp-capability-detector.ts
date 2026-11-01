@@ -1,5 +1,6 @@
 import type { Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 
 interface AcpServerInfo {
   type: string;
@@ -66,7 +67,7 @@ export class ACPCapabilityDetector {
         },
       });
 
-      controllerSocket.emit('acp:check', { requestId });
+      controllerSocket.emit('acp:check', withTraceMeta({ requestId }));
     });
   }
 

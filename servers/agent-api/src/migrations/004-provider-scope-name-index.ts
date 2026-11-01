@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/004-provider-scope-name-index' });
 
 export const name = '004-provider-scope-name-index';
 
@@ -22,5 +25,5 @@ export async function run(): Promise<void> {
   // 旧索引 providers.name_1 不存在时忽略（幂等）
   await collection.dropIndex('name_1').catch(() => {});
 
-  console.log('[Migration 004] Backfilled scope=user and ensured providers compound unique index { scope, name }');
+  log.info('backfilled scope=user and ensured providers compound unique index');
 }

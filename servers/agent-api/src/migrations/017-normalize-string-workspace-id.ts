@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/017-normalize-string-workspace-id' });
 
 export const name = '017-normalize-string-workspace-id';
 
@@ -89,9 +92,10 @@ async function normalizeCollection(collection: Collection, target: Target): Prom
 export async function run(): Promise<void> {
   const results = await normalizeStringWorkspaceIds();
   for (const [collection, result] of Object.entries(results)) {
-    console.log(
-      `[Migration 017] ${collection}: converted ${result.converted}, deduped ${result.deduped}`,
+    log.debug(
+      { collection, converted: result.converted, deduped: result.deduped },
+      'normalized string workspace ids',
     );
   }
-  console.log('[Migration 017] completed');
+  log.info('migration completed');
 }

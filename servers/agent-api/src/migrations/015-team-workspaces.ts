@@ -1,5 +1,8 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
 import { ensureIndex } from './index-utils.js';
+
+const log = logger.child({ component: 'migration/015-team-workspaces' });
 
 export const name = '015-team-workspaces';
 
@@ -128,7 +131,7 @@ export async function run(): Promise<void> {
   for (const workspace of globalWorkspaces) {
     globalByTenant.set(stringifyId(workspace.tenantId), stringifyId(workspace._id));
   }
-  console.log(`[Migration 015] global workspaces: ${globalByTenant.size}`);
+  log.info({ globalWorkspaces: globalByTenant.size }, 'global workspaces counted');
 
   // ---- 步骤 2：tenantmembers 回填 ----
   const adminSeeded = new Set<string>();
@@ -165,7 +168,7 @@ export async function run(): Promise<void> {
       { $set: { role: 'admin', updatedAt: new Date() } },
     );
   }
-  console.log('[Migration 015] tenantmembers backfilled');
+  log.info('tenantmembers backfilled');
 
   // ---- 步骤 3：9 集合工作区维度 backfill ----
   for (const target of WORKSPACE_ID_COLLECTIONS) {
@@ -177,7 +180,7 @@ export async function run(): Promise<void> {
       { tenantId: 1, [target.field]: 1 },
       { name: `tenantId_1_${target.field}_1` },
     );
-    console.log(`[Migration 015] ${target.collection}: backfilled ${backfilled} rows`);
+    log.debug({ collection: target.collection, backfilled }, 'collection workspace backfilled');
   }
 
   // ---- 步骤 4：索引切换（先建新 → 再删旧）----
@@ -186,7 +189,7 @@ export async function run(): Promise<void> {
   // ---- 步骤 5：providers/models 按租户复制 ----
   await copyProvidersAndModels(globalByTenant);
 
-  console.log('[Migration 015] completed');
+  log.info('migration completed');
 }
 
 async function backfillWorkspaceField(
@@ -270,13 +273,13 @@ async function switchIndexes(): Promise<void> {
   );
   await dropIndexSafe(githubAccounts, 'tenantId_1_userId_1_githubUserId_1');
 
-  console.log('[Migration 015] indexes switched');
+  log.info('indexes switched');
 }
 
 async function dropIndexSafe(collection: Collection, indexName: string): Promise<void> {
   try {
     await collection.dropIndex(indexName);
-    console.log(`[Migration 015] dropped index ${indexName}`);
+    log.debug({ indexName }, 'dropped index');
   } catch (err) {
     const message = (err as Error).message ?? '';
     if (!/index not found|ns not found/i.test(message)) {
@@ -302,14 +305,15 @@ async function copyProvidersAndModels(globalByTenant: Map<string, string>): Prom
     : [];
 
   if (sourceProviders.length === 0 && sourceModels.length === 0) {
-    console.log('[Migration 015] providers/models: no shared rows to copy');
+    log.info('providers/models: no shared rows to copy');
     return;
   }
 
   const expectedProviders = sourceProviders.length;
   const expectedModels = sourceModels.length;
-  console.log(
-    `[Migration 015] providers/models copy: providers=${expectedProviders} models=${expectedModels} tenantWorkspaces=${globalByTenant.size}`,
+  log.info(
+    { providers: expectedProviders, models: expectedModels, tenantWorkspaces: globalByTenant.size },
+    'providers/models copy expected counts',
   );
 
   const legacyProviderIds = new Set(sourceProviders.map((p) => stringifyId(p._id)));
@@ -395,7 +399,8 @@ async function copyProvidersAndModels(globalByTenant: Map<string, string>): Prom
   if (originalProviderIds.length > 0) {
     await providers.deleteMany({ _id: { $in: originalProviderIds } });
   }
-  console.log(
-    `[Migration 015] deleted shared rows: providers=${originalProviderIds.length} models=${originalModelIds.length}`,
+  log.info(
+    { providers: originalProviderIds.length, models: originalModelIds.length },
+    'deleted shared rows',
   );
 }

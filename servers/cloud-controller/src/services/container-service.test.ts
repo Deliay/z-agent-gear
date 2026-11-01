@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   ContainerService,
   JobCreationError,
@@ -12,6 +12,9 @@ import { K8sJobManager } from './k8s-job-manager.js';
 import { TokenService } from './token-service.js';
 import { SecretStore, type HarnessSecrets } from './secret-store.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
+import { RecordingExporter } from '../observability/recording-exporter.js';
+import { shutdownTelemetry, startTelemetry } from '../observability/telemetry.js';
 
 function setup(
   overrides: Partial<ContainerServiceConfig> = {},
@@ -27,6 +30,7 @@ function setup(
     publicWsEndpoint: 'cloud.example.com:4003',
   });
   const secretStore = extras.secretStore ?? new SecretStore();
+  const testLog: TestLogger = createTestLogger();
   const service = new ContainerService(
     repo,
     tokenService,
@@ -38,11 +42,11 @@ function setup(
       shutdownGraceMs: 0,
       ...overrides,
     },
-    undefined,
+    testLog.logger,
     extras.hooks ?? {},
     secretStore,
   );
-  return { repo, client, tokenService, jobManager, service, secretStore };
+  return { repo, client, tokenService, jobManager, service, secretStore, testLog };
 }
 
 function harnessSecrets(overrides: Partial<HarnessSecrets> = {}): HarnessSecrets {
@@ -65,6 +69,8 @@ function harnessOptions(overrides: Partial<StartHarnessOptions> = {}): StartHarn
     controllerKeyId: 'ck-1',
     containerApiKeyId: 'ak-1',
     userId: 'user-1',
+    tenantId: 'tenant-1',
+    workspaceId: 'ws-1',
     expiresAt: new Date(Date.now() + 3600_000),
     secrets: harnessSecrets(),
     ...overrides,
@@ -848,5 +854,139 @@ describe('ContainerService workload state machine', () => {
     expect((await repo.findById(legacy.id))?.status).toBe('exited');
     // 历史容器无 secret，删除 secret 幂等无害
     expect(secretStore.get(legacy.id)).toBeNull();
+  });
+});
+
+describe('T-OBS15 Job env 观测注入（F12）', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('未配置采集端 → 仅注入 OTEL_SDK_DISABLED=true（业务 env 不变、顺序先业务后观测）', async () => {
+    vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', '');
+    vi.stubEnv('OTEL_SDK_DISABLED', '');
+    const { client, service } = setup();
+    const created = await service.start('harness', 'ck-1', [], [], harnessOptions());
+
+    const manifest = client.getManifest(created.name)!;
+    expect(manifest.spec.template.spec.containers[0]!.env.map((e) => e.name)).toEqual([
+      'ZAG_SERVER_ENDPOINT',
+      'ZAG_CONTROLLER_KEY',
+      'ZAG_HOST_ENDPOINT',
+      'ZAG_HOST_KEY',
+      'ZAG_HOST_NAME',
+      'ZAG_HARNESS_TYPES',
+      'ZAG_DEFAULT_WORKSPACE',
+      'ZAG_USER_TYPE',
+      'ZAG_USER_ID',
+      'OTEL_SDK_DISABLED',
+    ]);
+    const env = client.getEnv(created.name);
+    expect(env.OTEL_SDK_DISABLED).toBe('true');
+    expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_PROTOCOL).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_HEADERS).toBeUndefined();
+    expect(env.OTEL_SERVICE_NAME).toBeUndefined();
+    expect(env.OTEL_TRACES_SAMPLER).toBeUndefined();
+    expect(env.OTEL_TRACES_SAMPLER_ARG).toBeUndefined();
+    expect(env.OTEL_RESOURCE_ATTRIBUTES).toBeUndefined();
+    expect(env.ZAG_INIT_TRACEPARENT).toBeUndefined();
+  });
+
+  it('配置采集端（SDK 未运行/无活跃 span）→ OTEL_* 透传 + OTEL_RESOURCE_ATTRIBUTES 五维；无 ZAG_INIT_TRACEPARENT；headers 不入日志', async () => {
+    const headersValue = 'x-scope-orgid=secret-token-123';
+    vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://collector:4318');
+    vi.stubEnv('OTEL_EXPORTER_OTLP_HEADERS', headersValue);
+    vi.stubEnv('OTEL_TRACES_SAMPLER', undefined);
+    vi.stubEnv('OTEL_TRACES_SAMPLER_ARG', undefined);
+    vi.stubEnv('OTEL_SDK_DISABLED', '');
+    const { client, service, testLog } = setup();
+    const created = await service.start('harness', 'ck-1', [], [], harnessOptions());
+
+    const env = client.getEnv(created.name);
+    expect(env.OTEL_SDK_DISABLED).toBeUndefined();
+    expect(env.OTEL_EXPORTER_OTLP_ENDPOINT).toBe('http://collector:4318');
+    expect(env.OTEL_EXPORTER_OTLP_PROTOCOL).toBe('http/protobuf');
+    expect(env.OTEL_EXPORTER_OTLP_HEADERS).toBe(headersValue);
+    expect(env.OTEL_SERVICE_NAME).toBe('agent-gear');
+    expect(env.OTEL_TRACES_SAMPLER).toBe('parentbased_traceidratio');
+    expect(env.OTEL_TRACES_SAMPLER_ARG).toBe('1.0');
+    expect(env.OTEL_RESOURCE_ATTRIBUTES).toBe(
+      `zag.container.id=${created.id},zag.cloud.host.id=host-1,zag.user.id=user-1,zag.tenant.id=tenant-1,zag.workspace.id=ws-1`,
+    );
+    // 无活跃 span（SDK 未启动）→ 不注入 ZAG_INIT_TRACEPARENT，避免容器内建出无效 link
+    expect(env.ZAG_INIT_TRACEPARENT).toBeUndefined();
+
+    // OTEL_EXPORTER_OTLP_HEADERS 的值绝不出现在任何日志输出
+    expect(testLog.records.length).toBeGreaterThan(0);
+    expect(JSON.stringify(testLog.records)).not.toContain('secret-token-123');
+  });
+
+  it('OTEL_TRACES_SAMPLER/ARG 可由 env 覆盖；tenantId/workspaceId 缺省回退空串', async () => {
+    vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://collector:4318');
+    vi.stubEnv('OTEL_TRACES_SAMPLER', 'traceidratio');
+    vi.stubEnv('OTEL_TRACES_SAMPLER_ARG', '0.5');
+    vi.stubEnv('OTEL_SDK_DISABLED', '');
+    const { client, service } = setup();
+    const created = await service.start(
+      'harness',
+      'ck-1',
+      [],
+      [],
+      harnessOptions({ tenantId: null, workspaceId: null }),
+    );
+
+    const env = client.getEnv(created.name);
+    expect(env.OTEL_TRACES_SAMPLER).toBe('traceidratio');
+    expect(env.OTEL_TRACES_SAMPLER_ARG).toBe('0.5');
+    expect(env.OTEL_RESOURCE_ATTRIBUTES).toBe(
+      `zag.container.id=${created.id},zag.cloud.host.id=host-1,zag.user.id=user-1,zag.tenant.id=,zag.workspace.id=`,
+    );
+  });
+
+  it('结构化日志按 pino 签名输出（warn/error 带 component/jobName/err 字段，msg 不拼接变量）', async () => {
+    const { client, service, testLog } = setup();
+    // 缺 AGENT_API_URL：buildHarnessJobEnv 记 warn（component=harness）
+    const created = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    await service.markOnline(created.id);
+    client.failDeleteTimes = 100;
+    await service.destroy(created.id);
+
+    const warn = testLog.records.find((r) => r.msg.includes('AGENT_API_URL'));
+    expect(warn?.level).toBe('warn');
+    expect(warn?.component).toBe('harness');
+
+    const error = testLog.records.find((r) => r.msg === 'Failed to delete job');
+    expect(error?.level).toBe('error');
+    expect(error?.jobName).toBe(created.name);
+    expect(error?.err).toBeTruthy();
+  });
+});
+
+describe('T-OBS15 container.start span 与 ZAG_INIT_TRACEPARENT（SDK 运行）', () => {
+  it('注入 ZAG_INIT_TRACEPARENT 且与 container.start span 同 trace；span 属性含容器标识', async () => {
+    vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://127.0.0.1:4318');
+    vi.stubEnv('OTEL_METRICS_ENABLED', 'false');
+    vi.stubEnv('OTEL_SDK_DISABLED', '');
+    const mem = new RecordingExporter();
+    startTelemetry({ traceExporter: mem });
+
+    const { client, service } = setup();
+    const created = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    const env = client.getEnv(created.name);
+    expect(env.ZAG_INIT_TRACEPARENT).toMatch(/^00-[0-9a-f]{32}-[0-9a-f]{16}-01$/);
+
+    await shutdownTelemetry();
+    const span = mem.spans.find((s) => s.name === 'container.start');
+    expect(span).toBeDefined();
+    expect(span!.attributes['zag.container.purpose']).toBe('harness');
+    expect(span!.attributes['zag.container.id']).toBe(created.id);
+    expect(span!.attributes['zag.cloud.host.id']).toBe('host-1');
+    expect(span!.attributes['zag.user.id']).toBe('user-1');
+    expect(span!.attributes['zag.tenant.id']).toBe('tenant-1');
+    expect(span!.attributes['zag.workspace.id']).toBe('ws-1');
+    // 创建链路 traceparent 与 container.start span 同 trace（容器内 startup span 以 link 关联）
+    expect(env.ZAG_INIT_TRACEPARENT).toContain(`-${span!.spanContext().traceId}-`);
+    vi.unstubAllEnvs();
   });
 });

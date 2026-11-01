@@ -46,7 +46,20 @@ vi.mock('./admin-tools.js', () => ({
   ensureAdminToolsServer: vi.fn().mockResolvedValue('mcp-admin-1'),
 }));
 
-import { workflowOrchestrator, WORKFLOW_SYSTEM_PROMPT } from './orchestrator.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { createTestLogger } from '../../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把
+ * workflow-orchestrator 告警写入内存 sink，断言 `records` 的结构化字段。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { workflowOrchestrator, WORKFLOW_SYSTEM_PROMPT } = await import('./orchestrator.js');
+childSpy.mockRestore();
+
 import { workflowEngine, type WorkflowInstanceDoc, type WorkflowNodeDoc } from './engine.js';
 import { sessionService } from '../session.js';
 import { todoService } from '../todo-service.js';
@@ -552,7 +565,7 @@ describe('WorkflowOrchestrator', () => {
     const transition = vi
       .spyOn(workflowEngine, 'transition')
       .mockRejectedValue(new Error('KeyedMutex re-entrant lock detected for key: inst-1'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    testLog.reset();
     try {
       const instance = makeInstance([
         makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
@@ -567,7 +580,7 @@ describe('WorkflowOrchestrator', () => {
 
       await vi.advanceTimersByTimeAsync(800);
       expect(transition).toHaveBeenCalledTimes(4);
-      expect(warn.mock.calls.some((call) => String(call[0]).includes('retry exhausted'))).toBe(true);
+      expect(testLog.records.some((r) => String(r.msg).includes('retry exhausted'))).toBe(true);
       // N-10(b)：超限不得静默丢链，必须创建人工介入待办
       await vi.advanceTimersByTimeAsync(0);
       expect(todoService.createWorkflowInterventionTodo).toHaveBeenCalledWith(
@@ -579,7 +592,6 @@ describe('WorkflowOrchestrator', () => {
         }),
       );
     } finally {
-      warn.mockRestore();
       transition.mockRestore();
       vi.useRealTimers();
     }
@@ -593,7 +605,7 @@ describe('WorkflowOrchestrator', () => {
     ]);
     vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
     vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    testLog.reset();
     // 直通 spy（不替换实现）：统计延迟重试调度次数。R1 fast-fail 形态会重排 3 次（≥3），用例转红。
     const runOutside = vi.spyOn(workflowEngine, 'runOutsideTransitionLock');
 
@@ -632,12 +644,11 @@ describe('WorkflowOrchestrator', () => {
       // ② 调度次数：HEAD 恰 1 次（100ms 等待后成功）；R1 fast-fail 会重排 ≥3 次。
       expect(runOutside).toHaveBeenCalledTimes(1);
       // ③ 扫描 console.warn 全部参数（误抛文本在 call[1]），无重排/误抛。
-      const warnText = warn.mock.calls.flat().map((arg) => String(arg)).join('\n');
+      const warnText = testLog.records.map((r) => JSON.stringify(r)).join('\n');
       expect(warnText).not.toContain('fallback deferred retry failed');
       expect(warnText).not.toContain('still holding');
     } finally {
       runOutside.mockRestore();
-      warn.mockRestore();
       workflowEngine.registerHooks({
         onNodeStart: undefined,
         onNodeRework: undefined,
@@ -659,7 +670,7 @@ describe('WorkflowOrchestrator', () => {
       .spyOn(workflowEngine, 'runOutsideTransitionLock')
       .mockRejectedValueOnce(new Error('runDetached timed out waiting for key: inst-1'))
       .mockImplementation((_id, task) => task());
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    testLog.reset();
     try {
       const instance = makeInstance([
         makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
@@ -671,9 +682,8 @@ describe('WorkflowOrchestrator', () => {
       await vi.advanceTimersByTimeAsync(100); // 第一次 runDetached 失败 → 重排
       await vi.advanceTimersByTimeAsync(200); // 第二次执行成功
       expect(transition).toHaveBeenCalledTimes(2);
-      expect(warn.mock.calls.some((call) => String(call[0]).includes('rescheduling'))).toBe(true);
+      expect(testLog.records.some((r) => String(r.msg).includes('rescheduling'))).toBe(true);
     } finally {
-      warn.mockRestore();
       runOutside.mockRestore();
       transition.mockRestore();
       vi.useRealTimers();
@@ -681,7 +691,7 @@ describe('WorkflowOrchestrator', () => {
   });
 
   it('N-14: 超限时实例/节点不可查也输出结构化告警，不静默跳过', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    testLog.reset();
     try {
       vi.mocked(WorkflowInstance.findOne).mockResolvedValue(null as never);
       await (workflowOrchestrator as unknown as {
@@ -692,11 +702,12 @@ describe('WorkflowOrchestrator', () => {
         ) => Promise<void>;
       }).notifyFallbackExhausted('removed', 'sess-x', 'inst-x');
       expect(
-        warn.mock.calls.some(
-          (call) =>
-            String(call[0]).includes('removed fallback exhausted todo skipped: instance not found') &&
-            String(call[0]).includes('instance=inst-x') &&
-            String(call[0]).includes('session=sess-x'),
+        testLog.records.some(
+          (r) =>
+            r.event === 'fallback-todo-instance-missing' &&
+            r.kind === 'removed' &&
+            r.instanceId === 'inst-x' &&
+            r.sessionId === 'sess-x',
         ),
       ).toBe(true);
 
@@ -713,15 +724,16 @@ describe('WorkflowOrchestrator', () => {
         ) => Promise<void>;
       }).notifyFallbackExhausted('removed', 'sess-x', 'inst-1');
       expect(
-        warn.mock.calls.some(
-          (call) =>
-            String(call[0]).includes('removed fallback exhausted todo skipped: node not found') &&
-            String(call[0]).includes('instance=inst-1') &&
-            String(call[0]).includes('session=sess-x'),
+        testLog.records.some(
+          (r) =>
+            r.event === 'fallback-todo-node-missing' &&
+            r.kind === 'removed' &&
+            r.instanceId === 'inst-1' &&
+            r.sessionId === 'sess-x',
         ),
       ).toBe(true);
     } finally {
-      warn.mockRestore();
+      // assertion migrated to testLog.records
     }
   });
 

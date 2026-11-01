@@ -18,6 +18,7 @@ import {
 import type { ConnectToServerOptions } from '../socketio-client.js';
 import type { GithubCredentialRefreshResult } from '../github/credential-manager.js';
 import type { CommitIdentityRefreshResult } from '../github/commit-identity-manager.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 
 const TMP_BASE = '/tmp/opencode';
 
@@ -56,19 +57,19 @@ function setup(overrides: {
     return (connect.mock.calls.length === 1 ? worker : controller) as unknown as Socket;
   });
   const exit = vi.fn();
-  const logs: string[] = [];
+  const testLog: TestLogger = createTestLogger();
   return {
     worker,
     controller,
     connect,
     exit,
-    logs,
+    testLog,
     deps: {
       env: overrides.env ?? { ...BASE_ENV },
       connect: connect as never,
       makeDir: overrides.makeDir ?? (async () => {}),
       exit,
-      log: (message: string) => logs.push(message),
+      log: testLog.logger,
       installSignalHandlers: false,
       credentialManager: overrides.credentialManager,
       commitIdentityManager: overrides.useDefaultCommitIdentityManager
@@ -301,7 +302,9 @@ describe('startCloudHostSupervisor', () => {
     // 超时后迟到的 initializing registered 不得再次进入等待（不产生幽灵定时器/重复连接）
     workerOptions.onRegistered?.({ controllerId: 'container-1', initializing: true });
     expect(context.connect).toHaveBeenCalledTimes(2);
-    expect(context.logs.join('\n')).toContain('timed out');
+    expect(context.testLog.records).toContainEqual(
+      expect.objectContaining({ level: 'warn', msg: expect.stringContaining('timed out') }),
+    );
   });
 
   it('T-AG4d: connects immediately when the init batch finished before registered', async () => {
@@ -480,11 +483,15 @@ describe('cloud host github credential manager (T-SUP-G)', () => {
     expect(handle.workerSocket).toBe(context.worker);
     expect(context.connect).toHaveBeenCalledTimes(1);
     expect(context.exit).not.toHaveBeenCalled();
-    const output = context.logs.join('\n');
-    expect(output).toContain('disabled');
-    expect(output).toContain('ZAG_AGENT_API_ENDPOINT');
-    expect(output).toContain('ZAG_CONTROLLER_ID');
-    expect(output).not.toContain(BASE_ENV.ZAG_HOST_KEY);
+    // 缺省凭据管理器只 warn 变量名（不泄漏任何值）
+    expect(context.testLog.records).toContainEqual(
+      expect.objectContaining({
+        component: 'github-credential',
+        msg: expect.stringContaining('disabled'),
+        missing: expect.arrayContaining(['ZAG_AGENT_API_ENDPOINT', 'ZAG_CONTROLLER_ID']),
+      }),
+    );
+    expect(JSON.stringify(context.testLog.records)).not.toContain(BASE_ENV.ZAG_HOST_KEY);
   });
 });
 
@@ -520,10 +527,14 @@ describe('cloud host commit identity manager (T-SUP-CI)', () => {
     expect(handle.workerSocket).toBe(context.worker);
     expect(context.connect).toHaveBeenCalledTimes(1);
     expect(context.exit).not.toHaveBeenCalled();
-    const output = context.logs.join('\n');
-    expect(output).toContain('[CommitIdentity] disabled');
-    expect(output).toContain('ZAG_AGENT_API_ENDPOINT');
-    expect(output).toContain('ZAG_CONTROLLER_ID');
-    expect(output).not.toContain(BASE_ENV.ZAG_HOST_KEY);
+    // 缺省提交身份管理器只 warn 变量名（不泄漏任何值）
+    expect(context.testLog.records).toContainEqual(
+      expect.objectContaining({
+        component: 'commit-identity',
+        msg: expect.stringContaining('disabled'),
+        missing: expect.arrayContaining(['ZAG_AGENT_API_ENDPOINT', 'ZAG_CONTROLLER_ID']),
+      }),
+    );
+    expect(JSON.stringify(context.testLog.records)).not.toContain(BASE_ENV.ZAG_HOST_KEY);
   });
 });

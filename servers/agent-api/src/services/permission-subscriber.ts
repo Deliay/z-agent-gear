@@ -1,9 +1,13 @@
 import Redis from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { todoService } from './todo-service.js';
 import { sessionSSEService } from './session-sse.js';
 
 const PERMISSION_REQUEST_CHANNEL = 'permission:request';
+
+const logger = rootLogger.child({ component: 'permission-subscriber' });
 
 interface PermissionRequestData {
   requestId: string;
@@ -18,6 +22,7 @@ interface PermissionRequestData {
     locations?: Array<{ path: string; line?: number }>;
   };
   options: Array<{ optionId: string; name: string; kind: string }>;
+  _meta?: unknown;
 }
 
 let subscriber: Redis | null = null;
@@ -31,10 +36,10 @@ export class PermissionSubscriberService {
 
     subscriber.subscribe(PERMISSION_REQUEST_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to permission request channel:', err);
+        logger.error({ err, channel: PERMISSION_REQUEST_CHANNEL }, 'failed to subscribe to permission request channel');
         return;
       }
-      console.log('Subscribed to permission:request channel');
+      logger.info({ channel: PERMISSION_REQUEST_CHANNEL }, 'subscribed to permission request channel');
     });
 
     subscriber.on('message', async (channel: string, message: string) => {
@@ -42,19 +47,32 @@ export class PermissionSubscriberService {
 
       try {
         const data = JSON.parse(message) as PermissionRequestData;
-        await this.handlePermissionRequest(data);
+        const parent = extractTraceparent(data._meta);
+        await withSpan(
+          'permission:request handle',
+          {
+            'messaging.destination.name': PERMISSION_REQUEST_CHANNEL,
+            requestId: data.requestId,
+            sessionId: data.sessionId,
+            userId: data.userId,
+          },
+          async () => {
+            await this.handlePermissionRequest(data);
+          },
+          { parent },
+        );
       } catch (err) {
-        console.error('Error handling permission request:', err);
+        logger.error({ err }, 'error handling permission request');
       }
     });
   }
 
   private async handlePermissionRequest(data: PermissionRequestData): Promise<void> {
-    console.log('Received permission request:', data.requestId);
-    
+    logger.debug({ event: 'received', requestId: data.requestId, sessionId: data.sessionId }, 'received permission request');
+
     // Create todo item
     const todo = await todoService.createPermissionTodo(data);
-    console.log('Created todo:', todo._id);
+    logger.debug({ event: 'todo-created', requestId: data.requestId, todoId: String(todo._id) }, 'created permission todo');
 
     // Push SSE notification to user
     sessionSSEService.pushToUser(data.userId, {

@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import type { Socket } from 'socket.io-client';
+import type { Logger as PinoLogger } from 'pino';
 import {
   connectToServer,
   parseEndpoint,
@@ -21,6 +22,7 @@ import {
   isServerTerminationReason,
   resolveShutdownExitCode,
 } from '../exit-codes.js';
+import { logger as rootLogger } from '../observability/logger.js';
 
 // 既有导入路径（`cloud-host/supervisor.js`）继续可用；实现统一在 `exit-codes.ts`。
 export {
@@ -139,7 +141,8 @@ export interface CloudHostSupervisorDeps {
   connect?: (endpoint: string, key: string, options?: ConnectToServerOptions) => Socket;
   makeDir?: (path: string) => Promise<void>;
   exit?: (code: number) => void;
-  log?: (message: string) => void;
+  /** 注入 logger（测试用）；缺省进程级单例，`component: 'cloud-host-supervisor'`。 */
+  log?: PinoLogger;
   /** 是否接管 SIGINT/SIGTERM（默认 true；测试关闭以免污染进程）。 */
   installSignalHandlers?: boolean;
   /** 注入 Github 凭据管理器（测试用）；缺省按容器 env 创建。 */
@@ -188,22 +191,24 @@ export async function startCloudHostSupervisor(
   const connect = deps.connect ?? connectToServer;
   const makeDir = deps.makeDir ?? ((path: string) => mkdir(path, { recursive: true }).then(() => undefined));
   const exit = deps.exit ?? ((code: number) => process.exit(code));
-  const log = deps.log ?? ((message: string) => console.log(message));
+  // 管理器等子组件从 base 派生自己的 component child（避免同键嵌套绑定产生重复键）
+  const baseLog = deps.log ?? rootLogger;
+  const log = baseLog.child({ component: 'cloud-host-supervisor' });
 
   // 初始化脚本/工作负载需要在工作区落地前执行，先幂等创建工作区。
   await makeDir(env.workspace);
-  log(`[CloudHost] workspace ready: ${env.workspace}`);
+  log.info({ event: 'workspace_ready', workspace: env.workspace }, 'workspace ready');
 
   // Github 凭据管理器：env 缺失时自身只 warn 并禁用，绝不阻塞云主机上线。
   const credentialManager =
     deps.credentialManager ??
-    new GithubCredentialManager({ env: deps.env ?? process.env, log });
+    new GithubCredentialManager({ env: deps.env ?? process.env, log: baseLog });
   credentialManager.start();
 
   // 提交身份管理器：与凭据管理器完全独立（不依赖 gh 凭据 / Git 项目绑定存在）。
   const commitIdentityManager =
     deps.commitIdentityManager ??
-    new CommitIdentityManager({ env: deps.env ?? process.env, log });
+    new CommitIdentityManager({ env: deps.env ?? process.env, log: baseLog });
   commitIdentityManager.start();
 
   const beforeWorkloadBatch = async (payload: WorkloadRunPayload): Promise<void> => {
@@ -233,7 +238,7 @@ export async function startCloudHostSupervisor(
     shutdownStarted = true;
     clearInitTimer();
     const exitCode = code ?? resolveShutdownExitCode(reason);
-    log(`[CloudHost] shutting down: ${reason} (exit ${exitCode})`);
+    log.info({ event: 'shutdown', reason, exitCode }, 'cloud host shutting down');
     credentialManager.stop();
     commitIdentityManager.stop();
     try {
@@ -255,7 +260,10 @@ export async function startCloudHostSupervisor(
     if (controllerSocket) return;
     clearInitTimer();
     waitingForInit = false;
-    log(`[CloudHost] connecting controller-api: ${describeEndpoint(env.hostEndpoint)}`);
+    log.info(
+      { event: 'connecting_controller', endpoint: describeEndpoint(env.hostEndpoint) },
+      'connecting controller-api',
+    );
     controllerSocket = connect(env.hostEndpoint, env.hostKey, {
       serverName: env.hostName,
       handshakeToken: env.hostKey,
@@ -273,12 +281,12 @@ export async function startCloudHostSupervisor(
     }
     if (waitingForInit) return;
     waitingForInit = true;
-    log(`[CloudHost] waiting for harness initialization (timeout ${env.initWaitMs}ms)`);
+    log.info({ event: 'init_wait', timeoutMs: env.initWaitMs }, 'waiting for harness initialization');
     initWaitTimer = setTimeout(() => {
       initWaitTimer = null;
       // 超时后视为已完成：迟到的 registered(initializing=true) 不得再次进入等待（幽灵定时器）。
       initBatchCompleted = true;
-      log('[CloudHost] harness initialization wait timed out; connecting controller-api anyway');
+      log.warn({ event: 'init_wait_timeout', timeoutMs: env.initWaitMs }, 'harness initialization wait timed out; connecting controller-api anyway');
       connectController();
     }, env.initWaitMs);
   };
@@ -291,7 +299,10 @@ export async function startCloudHostSupervisor(
     persistConfig: false,
     onBeforeWorkloadBatch: beforeWorkloadBatch,
     onRegistered: (payload) => {
-      log(`[CloudHost] worker registered: ${payload.controllerId}${payload.initializing ? ' (initializing)' : ''}`);
+      log.info(
+        { event: 'worker_registered', controllerId: payload.controllerId, initializing: payload.initializing ?? false },
+        'worker registered',
+      );
       if (payload.initializing) {
         waitForInitBatch();
       } else {
@@ -302,14 +313,18 @@ export async function startCloudHostSupervisor(
       if (summary.phase !== 'init') return;
       if (summary.cancelled || summary.status === 'cancelled') {
         // 被新批次/销毁打断：不得视为初始化完成（重连重放 init 时 OpenCode 可能仍在安装）。
-        log('[CloudHost] harness initialization interrupted; waiting for replay');
+        log.info({ event: 'init_interrupted' }, 'harness initialization interrupted; waiting for replay');
         return;
       }
       initBatchCompleted = true;
       if (waitingForInit) {
-        log(
-          `[CloudHost] harness initialization finished (${summary.status}` +
-            `${summary.failedCount ? `, failed=${summary.failedCount}` : ''}); connecting controller-api`,
+        log.info(
+          {
+            event: 'init_finished',
+            status: summary.status,
+            ...(summary.failedCount ? { failedCount: summary.failedCount } : {}),
+          },
+          'harness initialization finished; connecting controller-api',
         );
         connectController();
       }

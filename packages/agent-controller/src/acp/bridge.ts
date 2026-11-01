@@ -7,6 +7,8 @@ import {
   normalizeCapabilities,
   type AgentCapabilitySnapshot,
 } from './capabilities.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
+import { withSpan } from '../observability/trace.js';
 
 const ACP_PROTOCOL_VERSION = 1;
 
@@ -29,6 +31,8 @@ export interface AcpBridgeOptions {
   /** 会话初始化时应用的工作模式/模型（工作流节点配置；不提供则使用 harness 默认） */
   initialModeId?: string;
   initialModelId?: string;
+  /** 注入 logger（测试用）；缺省进程级单例，`component: 'acp-bridge'` + `sessionId` 字段化。 */
+  logger?: ObservationLogger;
 }
 
 interface QueuedInput {
@@ -217,6 +221,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   private socket: Socket;
   private sessionId: string;
   private cwd: string;
+  private log: ObservationLogger;
   private additionalDirectories: string[];
   private mcpServers: AcpBridgeOptions['mcpServers'];
   private mcpEndpoint: AcpBridgeOptions['mcpEndpoint'];
@@ -277,6 +282,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.socket = socket;
     this.sessionId = options.sessionId;
     this.cwd = options.cwd;
+    this.log = options.logger ?? rootLogger.child({ component: 'acp-bridge', sessionId: options.sessionId });
     this.additionalDirectories = options.additionalDirectories ?? [];
     this.mcpServers = options.mcpServers;
     this.mcpEndpoint = options.mcpEndpoint;
@@ -297,12 +303,20 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   // session/new (or session/resume), and warn when the agent did not
   // advertise the required MCP transport capability in initialize.
   private logMcpServersForSession(method: 'session/new' | 'session/resume', servers: acp.McpServer[]): void {
-    console.log(`[ACP bridge] session ${this.sessionId}: passing MCP servers via ${method}: ${describeMcpServersForLog(servers)}`);
+    this.log.info(
+      { event: 'mcp_servers_passed', method, servers: describeMcpServersForLog(servers) },
+      'passing MCP servers to agent',
+    );
     const httpServers = servers.filter((s) => 'url' in s && (s as { type?: string }).type === 'http');
     if (httpServers.length > 0 && this.agentMcpCapabilities && this.agentMcpCapabilities.http === false) {
-      console.warn(
-        `[ACP bridge] session ${this.sessionId}: agent did not advertise mcpCapabilities.http ` +
-        `but ${httpServers.length} http MCP server(s) are being passed: ${httpServers.map((s) => s.name).join(', ')}`,
+      this.log.warn(
+        {
+          event: 'mcp_http_capability_missing',
+          method,
+          httpServerCount: httpServers.length,
+          httpServerNames: httpServers.map((s) => s.name).join(', '),
+        },
+        'agent did not advertise mcpCapabilities.http but http MCP servers are being passed',
       );
     }
   }
@@ -311,7 +325,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     if (this.initializing) return;
     this.initializing = true;
 
-    this.spawner.start();
+    // acp child spawn：一次 spawn 一个 span（进程事件不逐条开 span）
+    withSpan('acp.child.spawn', { sessionId: this.sessionId, cwd: this.cwd }, () => {
+      this.spawner.start();
+    });
     this.subscribeToProcessExit();
     try {
       await this.initConnection();
@@ -341,7 +358,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     if (this.initializing) return;
     this.initializing = true;
 
-    this.spawner.start();
+    // acp child spawn：一次 spawn 一个 span（进程事件不逐条开 span）
+    withSpan('acp.child.spawn', { sessionId: this.sessionId, cwd: this.cwd }, () => {
+      this.spawner.start();
+    });
     this.subscribeToProcessExit();
     try {
       await this.initConnection();
@@ -442,8 +462,11 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.processExitSubscribed = true;
     this.spawner.closed.then(() => {
       if (this.stopped) return;
-      console.warn(`[ACP bridge] session ${this.sessionId}: process exited, settling pending requests`);
-      this.settlePendingRequests('process exited');
+      // acp child exit：进程退出收敛一个 span（不逐进程事件开 span）
+      withSpan('acp.child.exit', { sessionId: this.sessionId }, () => {
+        this.log.warn({ event: 'acp_process_exited' }, 'acp process exited, settling pending requests');
+        this.settlePendingRequests('process exited');
+      });
     }).catch(() => { /* ignore */ });
   }
 
@@ -536,7 +559,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         else await this.setModel(requested);
         const config = findConfigByCategory(this.configOptions, kind);
         if (!config || config.currentValue === requested) {
-          console.log(`[ACP bridge] session ${this.sessionId}: applied initial ${kind}=${requested}`);
+          this.log.info({ event: 'initial_config_applied', kind, requested }, 'applied initial config');
           return null;
         }
         lastError = `agent confirmed "${config.currentValue ?? 'null'}" instead of "${requested}"`;
@@ -544,9 +567,9 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         lastError = (err as Error).message;
       }
     }
-    console.warn(
-      `[ACP bridge] session ${this.sessionId}: failed to apply initial ${kind}: ` +
-      `requested=${requested}, ${lastError}`,
+    this.log.warn(
+      { event: 'initial_config_failed', kind, requested, error: lastError },
+      'failed to apply initial config',
     );
     return `requested "${requested}": ${lastError}`;
   }
@@ -575,9 +598,9 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       for (const kind of this.pendingInitialConfigKinds.splice(0)) {
         const requested = kind === 'mode' ? this.initialModeId : this.initialModelId;
         const error = `agent did not expose a ${kind} config option within ${timeoutMs}ms`;
-        console.warn(
-          `[ACP bridge] session ${this.sessionId}: failed to apply initial ${kind}: ` +
-          `requested=${requested}, ${error}`,
+        this.log.warn(
+          { event: 'initial_config_timeout', kind, requested, error },
+          'failed to apply initial config: config option not exposed',
         );
         this.recordInitialConfigStatus(kind, 'failed', `requested "${requested}": ${error}`);
       }
@@ -705,31 +728,35 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     }
     prompt.push({ type: 'text' as const, text: message.content });
 
-    this.activePrompt = this.connection.prompt({
-      sessionId: this.acpSessionId,
-      prompt,
+    // session.prompt：一条 prompt 一个 span（流式 chunk 不逐条开 span）
+    await withSpan('session.prompt', { sessionId: this.sessionId }, async (span) => {
+      this.activePrompt = this.connection!.prompt({
+        sessionId: this.acpSessionId!,
+        prompt,
+      });
+
+      this.socket.emit('acp:prompt:start', { sessionId: this.sessionId });
+
+      let stopReason = 'end_turn';
+      try {
+        const result = await this.activePrompt;
+        stopReason = result?.stopReason ?? 'end_turn';
+      } catch {
+        stopReason = 'error';
+      } finally {
+        span.setAttribute('acp.stop_reason', stopReason);
+        this.activePrompt = null;
+        if (!this.stopped) {
+          this.socket.emit('acp:prompt:complete', {
+            sessionId: this.sessionId,
+            stopReason,
+          });
+        }
+        if (this.inputQueue.length > 0) {
+          this.processPrompt(this.inputQueue.shift()!);
+        }
+      }
     });
-
-    this.socket.emit('acp:prompt:start', { sessionId: this.sessionId });
-
-    let stopReason = 'end_turn';
-    try {
-      const result = await this.activePrompt;
-      stopReason = result?.stopReason ?? 'end_turn';
-    } catch {
-      stopReason = 'error';
-    } finally {
-      this.activePrompt = null;
-      if (!this.stopped) {
-        this.socket.emit('acp:prompt:complete', {
-          sessionId: this.sessionId,
-          stopReason,
-        });
-      }
-      if (this.inputQueue.length > 0) {
-        this.processPrompt(this.inputQueue.shift()!);
-      }
-    }
   }
 
   private async initConnection(): Promise<void> {
@@ -772,10 +799,15 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.authMethodsRaw = result.authMethods ?? null;
     this.authMethods = toAuthMethods(result.authMethods);
     this.agentMcpCapabilities = result.agentCapabilities?.mcpCapabilities ?? null;
-    console.log(
-      `[ACP bridge] session ${this.sessionId}: agent capabilities: ` +
-      `protocolVersion=${result.protocolVersion ?? 'n/a'} mcp=${JSON.stringify(this.agentMcpCapabilities)} ` +
-      `agent=${this.agentInfo ? `${this.agentInfo.name}@${this.agentInfo.version ?? 'n/a'}` : 'n/a'}`,
+    this.log.info(
+      {
+        event: 'agent_capabilities',
+        protocolVersion: result.protocolVersion ?? null,
+        mcp: this.agentMcpCapabilities,
+        agentName: this.agentInfo?.name ?? null,
+        agentVersion: this.agentInfo?.version ?? null,
+      },
+      'agent capabilities',
     );
     this.supportsAdditionalDirectories =
       result.agentCapabilities?.sessionCapabilities?.additionalDirectories !== undefined &&
@@ -943,7 +975,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   handlePermissionResponse(requestId: string, outcome: acp.RequestPermissionOutcome): void {
     const pending = this.pendingPermissions.get(requestId);
     if (!pending) {
-      console.warn(`Permission request ${requestId} not found`);
+      this.log.warn({ event: 'permission_response_unknown', requestId }, 'permission request not found');
       return;
     }
 
@@ -964,7 +996,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     // 否则「Agent 发起问询但用户从未看到弹窗」无法从日志/待办侧定位。
     if (!acp.CreateElicitationRequest.isForm(params) && !acp.CreateElicitationRequest.isUrl(params)) {
       const mode = (params as { mode?: unknown }).mode ?? 'unknown';
-      console.warn('[ACP bridge] session %s: unsupported elicitation mode=%j', this.sessionId, mode);
+      this.log.warn(
+        { event: 'elicitation_unsupported_mode', mode: String(mode).slice(0, 100) },
+        'unsupported elicitation mode',
+      );
       this.socket.emit('acp:elicitation:resolved', {
         requestId,
         sessionId: this.sessionId,
@@ -979,12 +1014,16 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
 
     return new Promise((resolve) => {
       const timeout = setTimeout(() => {
+        const pending = this.pendingElicitations.get(requestId);
         this.pendingElicitations.delete(requestId);
         this.emit('elicitation:settled', requestId);
-        console.warn(
-          '[ACP bridge] session %s: elicitation %s timed out after 65s, auto-cancelling',
-          this.sessionId,
-          requestId,
+        this.log.warn(
+          {
+            event: 'elicitation_timeout',
+            requestId,
+            ...(pending?.elicitationId ? { elicitationId: pending.elicitationId } : {}),
+          },
+          'elicitation timed out after 65s, auto-cancelling',
         );
         this.socket.emit('acp:elicitation:resolved', {
           requestId,
@@ -1042,7 +1081,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   ): void {
     const pending = this.pendingElicitations.get(requestId);
     if (!pending) {
-      console.warn(`Elicitation request ${requestId} not found`);
+      this.log.warn({ event: 'elicitation_response_unknown', elicitationId: requestId }, 'elicitation request not found');
       return;
     }
 
@@ -1119,7 +1158,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
   }
 
   private emitStopped(reason: string, exitCode?: number, silent = false): void {
-    console.log(`[ACP bridge] session ${this.sessionId} stopped: reason=${reason} exitCode=${exitCode ?? 'n/a'}${silent ? ' (silent)' : ''}`);
+    this.log.info(
+      { event: 'acp_stopped', reason, exitCode: exitCode ?? null, silent },
+      'acp session stopped',
+    );
     this.stopped = true;
     if (this.textChunkTimer) {
       clearTimeout(this.textChunkTimer);
@@ -1135,8 +1177,10 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
 
   private handleError(error: unknown): void {
     const msg = error instanceof Error ? error.message : String(error);
-    const stack = error instanceof Error ? error.stack : undefined;
-    console.error(`[ACP bridge] session ${this.sessionId} failed: ${msg}${stack ? `\n${stack}` : ''}`);
+    this.log.error(
+      { err: error instanceof Error ? error : new Error(msg) },
+      'acp session failed',
+    );
     const wasStopped = this.stopped || this.silentStop;
     this.stopped = true;
     // 进程崩溃同样必须收敛 pending：否则 65s timer 泄漏且迟发 timeout 事件

@@ -77,6 +77,7 @@ describe('FsMkdirService', () => {
         requestId: 'req-1',
         parentPath: '/home/user',
         folderName: 'new-folder',
+        _meta: {},
       });
     });
   });

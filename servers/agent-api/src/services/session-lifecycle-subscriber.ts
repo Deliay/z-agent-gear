@@ -1,8 +1,12 @@
 import type { Redis } from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { sessionService } from './session.js';
 
 const SESSION_STATUS_CHANNEL = 'session:status';
+
+const logger = rootLogger.child({ component: 'session-lifecycle-subscriber' });
 
 /**
  * 会话生命周期事件订阅（工作流编排感知层）。
@@ -20,11 +24,11 @@ export class SessionLifecycleSubscriber {
 
     this.subscriber = getRedisClient().duplicate();
     this.subscriber.subscribe(SESSION_STATUS_CHANNEL).catch((err: Error) => {
-      console.error(`Failed to subscribe to ${SESSION_STATUS_CHANNEL}:`, err.message);
+      logger.error({ err, channel: SESSION_STATUS_CHANNEL }, 'failed to subscribe to session status channel');
     });
 
     this.subscriber.on('message', async (_channel: string, message: string) => {
-      let parsed: { sessionId?: string; status?: string; promptCompleted?: boolean };
+      let parsed: { sessionId?: string; status?: string; promptCompleted?: boolean; _meta?: unknown };
       try {
         parsed = JSON.parse(message);
       } catch {
@@ -32,15 +36,26 @@ export class SessionLifecycleSubscriber {
       }
       if (!parsed.sessionId || !parsed.status) return;
 
-      try {
-        if (parsed.status === 'removed') {
-          await sessionService.notifySessionRemoved(parsed.sessionId);
-        } else if (parsed.status === 'idling' && parsed.promptCompleted === true) {
-          await sessionService.notifySessionIdled(parsed.sessionId);
-        }
-      } catch (err) {
-        console.error(`Failed to handle lifecycle event for session ${parsed.sessionId}:`, (err as Error).message);
-      }
+      const handled = parsed.status === 'removed' || (parsed.status === 'idling' && parsed.promptCompleted === true);
+      if (!handled) return;
+
+      const parent = extractTraceparent(parsed._meta);
+      await withSpan(
+        `${SESSION_STATUS_CHANNEL} handle`,
+        { 'messaging.destination.name': SESSION_STATUS_CHANNEL, sessionId: parsed.sessionId, status: parsed.status },
+        async () => {
+          try {
+            if (parsed.status === 'removed') {
+              await sessionService.notifySessionRemoved(parsed.sessionId as string);
+            } else {
+              await sessionService.notifySessionIdled(parsed.sessionId as string);
+            }
+          } catch (err) {
+            logger.error({ err, sessionId: parsed.sessionId, status: parsed.status }, 'failed to handle lifecycle event');
+          }
+        },
+        { parent },
+      );
     });
   }
 

@@ -6,6 +6,7 @@ vi.mock('../middleware/redis.js', () => ({
 
 import { PermissionManager } from './permission-manager.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 
 const mockRedis = {
   publish: vi.fn(),
@@ -46,9 +47,11 @@ afterEach(() => {
 
 describe('PermissionManager', () => {
   let manager: PermissionManager;
+  let testLog: TestLogger;
 
   beforeEach(() => {
-    manager = new PermissionManager();
+    testLog = createTestLogger();
+    manager = new PermissionManager(testLog.logger);
     manager.start(mockIo as never);
   });
 
@@ -106,22 +109,22 @@ describe('PermissionManager', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:permission:response', {
         requestId: 'req-1',
         outcome: { outcome: 'selected', optionId: 'opt-1' },
+        _meta: {},
       });
       expect(manager.getPendingRequestCount()).toBe(0);
     });
 
     it('should warn when requestId not found', async () => {
-      const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
       await manager.handlePermissionResponse({
         requestId: 'non-existent',
         outcome: { outcome: 'selected' },
       });
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('not found'),
-      );
-      consoleSpy.mockRestore();
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'warn',
+        requestId: 'non-existent',
+        msg: expect.stringContaining('not found'),
+      }));
     });
   });
 
@@ -142,6 +145,7 @@ describe('PermissionManager', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:permission:response', {
         requestId: 'req-1',
         outcome: { outcome: 'cancelled' },
+        _meta: {},
       });
       expect(manager.getPendingRequestCount()).toBe(0);
     });

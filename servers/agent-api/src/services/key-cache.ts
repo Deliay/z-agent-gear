@@ -1,4 +1,5 @@
 import { getRedisClient } from '../middleware/redis.js';
+import { logger as rootLogger } from '../observability/logger.js';
 
 const RAWKEY_PREFIX = 'controller:rawkey:';
 const KEYID_PREFIX = 'controller:keyid:';
@@ -49,7 +50,7 @@ export async function evictKeyById(keyId: string): Promise<boolean> {
     await pipeline.exec();
     return true;
   } catch (err) {
-    console.error(`Failed to evict key ${keyId} from cache:`, err);
+    rootLogger.error({ component: 'key-cache', keyId, err }, 'failed to evict key from cache');
     return false;
   }
 }

@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/013-tenant-id-backfill' });
 
 export const name = '013-tenant-id-backfill';
 
@@ -78,7 +81,7 @@ export async function run(): Promise<void> {
     } else {
       await collection.createIndex({ tenantId: 1 });
     }
-    console.log(`[Migration 013] ${target.collection}: backfilled ${backfilled} rows, index ensured`);
+    log.debug({ collection: target.collection, backfilled }, 'collection backfilled, index ensured');
   }
 }
 

@@ -67,6 +67,18 @@ var redis = builder.AddRedis("redis")
         service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/redis:8.6";
     });
 
+// OTel 采集端（dev 与 compose 共用）：OTLP 4317(gRPC)/4318(HTTP) → debug exporter（dev 直读
+// collector stdout）。配置挂载 aspire/otel-collector/config.yaml（otlphttp 生产导出段为注释态）。
+builder.AddContainer("otel-collector", "otel/opentelemetry-collector-contrib", "latest")
+    .WithBindMount("../otel-collector/config.yaml", "/etc/otelcol-contrib/config.yaml", isReadOnly: true)
+    .WithEndpoint(targetPort: 4317, port: 4317, name: "otlp-grpc", scheme: "http")
+    .WithEndpoint(targetPort: 4318, port: 4318, name: "otlp-http", scheme: "http")
+    .PublishAsDockerComposeService((resource, service) =>
+    {
+        service.Name = "otel-collector";
+        service.Restart = "unless-stopped";
+    });
+
 // 计费事件骨干（费用中心）：topic exchange + 重试/DLQ；本地 dev 与 compose 均复用同一 RabbitMQ。
 // 仅当显式 RABBITMQ_DISABLED=true 时跳过（无镜像的受限环境跑其余服务；MQ 客户端会自行重试并降级）。
 var rabbitmqDisabled = string.Equals(
@@ -109,8 +121,19 @@ var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app
 var githubAppPrivateKeyValue = File.Exists(githubAppPrivateKeyPath) ? File.ReadAllText(githubAppPrivateKeyPath) : "";
 var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret: true, value: githubAppPrivateKeyValue);
 
+// 可观测性（contracts/observability.md）：otel-endpoint 空 = SDK 完全关闭、零外发；
+// 本地 dev 默认指向 otel-collector 的 4318（publish 默认空，由部署方显式配置）。
+var otelEndpoint = builder.AddParameter(
+    "otel-endpoint",
+    value: builder.ExecutionContext.IsPublishMode ? "" : "http://localhost:4318");
+var otelSampleArg = builder.AddParameter("otel-sample-arg", value: "1.0");
+var logLevel = builder.AddParameter("log-level", value: "info");
+
 var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controller-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
@@ -123,6 +146,9 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
     .WithEnvironment("JWT_SECRET", jwtSecret)
     .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret)
@@ -155,6 +181,9 @@ var adminApiUrl = builder.AddParameter("admin-api-url", value: "http://localhost
 // 运行时不依赖 tsx；NODE_OPTIONS=--import tsx 仅在本地 dev（直跑 TS 源码）时注入。
 var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/cloud-controller", "src/index.ts")
     .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("K8S_NAMESPACE", "zag-cloud")
     .WithEnvironment("WORKER_IMAGE", workerImage)
     .WithEnvironment("PUBLIC_WS_ENDPOINT", publicWsEndpoint)
@@ -177,6 +206,9 @@ if (rabbitmq is not null) cloudController.WithReference(rabbitmq);
 
 var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("ZAG_SERVER_ENDPOINT", controllerApi.GetEndpoint("http"))
     .WithExplicitStart()
     .WaitFor(controllerApi)
@@ -184,6 +216,9 @@ var agentController = builder.AddNodeApp("agent-controller", "../../packages/age
 
 var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/index.ts")
     .WithEnvironment("ADMIN_JWT_SECRET", adminJwtSecret)
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("CREDENTIAL_ENCRYPTION_KEY", credentialEncryptionKey)
     .WithEnvironment("ADMIN_INITIAL_PASSWORD", adminInitialPassword)
     .WithEnvironment("CORS_ORIGIN", corsOrigin)

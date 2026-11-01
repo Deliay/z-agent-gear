@@ -41,12 +41,12 @@ interface IssuesLinkageDialogProps {
 }
 
 /** 默认标签名 `start-{工作流名字}`（截断 50） */
-export function defaultLinkageLabel(workflowName: string): string {
+export function defaultLinkageLabel(workflowName: string): string { // eslint-disable-line react-refresh/only-export-components
   return `start-${workflowName}`.trim().slice(0, LABEL_MAX)
 }
 
 /** 标签名前端校验（与服务端同口径：非空、≤50、不含逗号） */
-export function validateLinkageLabel(labelName: string): string | null {
+export function validateLinkageLabel(labelName: string): string | null { // eslint-disable-line react-refresh/only-export-components
   const value = labelName.trim()
   if (!value) return '标签名不能为空'
   if (value.length > LABEL_MAX) return `标签名不能超过 ${LABEL_MAX} 个字符`
