@@ -1,5 +1,5 @@
 ---
-description: 全仓 npm 包管理迁移 pnpm 技术提案：9 个独立 Node 项目统一 pnpm 12.16.1（packageManager 固定 + pnpm import 保版本生成锁文件 + 每项目 allowBuilds），5 个项目 Dockerfile 改 corepack/pnpm store 缓存，7 个 GitHub Actions 改 pnpm/action-setup，agent-controller 发布流程改 pnpm publish 并保持 npmjs.org OIDC 可信发布，Aspire AppHost 的 Node/Vite 资源统一 WithPnpm
+description: 全仓 npm 包管理迁移 pnpm 技术提案：9 个独立 Node 项目统一 pnpm 12.16.1（packageManager 固定 + pnpm import 保版本生成锁文件 + 每项目 allowBuilds），5 个项目 Dockerfile 改 corepack/pnpm store 缓存且保证单项目依赖隔离，worker 镜像改用 npm 自举 pnpm 并由 pnpm 全局安装/自更新 agent-gear（PNPM_HOME 入 PATH），7 个 GitHub Actions 改 pnpm/action-setup，agent-controller 发布流程改 pnpm publish 并保持 npmjs.org OIDC 可信发布，Aspire AppHost 的 Node/Vite 资源统一 WithPnpm
 type: Permanent
 ---
 
@@ -24,7 +24,8 @@ type: Permanent
 | 后端 | `servers/admin-api`、`servers/agent-api`、`servers/controller-api`、`servers/cloud-controller` | 同上 |
 | CLI/发布包 | `packages/agent-controller`（包名 `agent-gear`） | 同上，发布到 npmjs.org |
 | 测试 | `tests/api`、`tests/e2e` | 同上 |
-| 构建 | 5 个项目 Dockerfile | `npm ci` / `npm run build` / `npm ci --omit=dev`，缓存挂载 `/root/.npm` |
+| 构建 | 5 个项目 Dockerfile | `npm ci` / `npm run build` / `npm ci --omit=dev`，缓存挂载 `/root/.npm`；`node:22/24-alpine` 混用 |
+| worker 镜像 | `deploy/images/worker/Dockerfile` | Ubuntu 24.04 + nvm Node 22；`npm install -g agent-gear@2.13.x` |
 | CI | 7 个 workflow | `actions/setup-node` + `cache: npm` + `npm ci` / `npx vitest` |
 | 编排 | `aspire/AgentGear.AppHost/AppHost.cs` | `AddNodeApp` / `AddViteApp`，默认包管理器为 npm |
 | 发布 | `.github/workflows/publish-agent-gear.yml` | npm 11 + OIDC 可信发布到 `registry.npmjs.org` |
@@ -37,10 +38,13 @@ type: Permanent
 2. **版本固定**：所有 `package.json` 增加 `packageManager: "pnpm@12.16.1"`，本地、CI、Docker、Aspire 使用同一 pnpm 版本。
 3. **依赖版本不漂移**：用 `pnpm import` 从现有 `package-lock.json` 生成锁文件，保持当前已安装的精确版本，再删除 `package-lock.json`。
 4. **Dockerfile 可复现**：5 个项目 Dockerfile 改为 corepack 启用 pnpm + `pnpm install --frozen-lockfile` + pnpm store BuildKit 缓存；运行时只装生产依赖。
-5. **CI 统一**：6 个镜像/部署 workflow 改为 `pnpm/action-setup` + `pnpm install --frozen-lockfile` + `pnpm test` / `pnpm run build`。
-6. **npmjs.org 发布不回归**：agent-controller 发布 workflow 改用 `pnpm publish`，继续走 GitHub OIDC 可信发布（无需长期 token），并显式锁定 `registry.npmjs.org`、加版本幂等保护。
-7. **Aspire 使用 pnpm API**：`AppHost.cs` 的 5 个 Node 资源与 2 个 Vite 资源统一追加 `.WithPnpm()`。
-8. **文档同步**：README、各项目 AGENTS.md、admin-web README 的安装/启动命令改为 pnpm。
+5. **后端镜像单项目隔离**：每个后端 Dockerfile 只包含自己项目的 `node_modules`，绝不包含整个仓库或其它项目的依赖；通过 build context、锁文件 importer、镜像内断言三重保证。
+6. **worker 镜像切换 pnpm**：worker 镜像内先 `npm install -g pnpm@9.15.9` 自举 pnpm，再把 `PNPM_HOME` 写入 PATH，用 `pnpm add -g agent-gear` 安装；入口自更新同步改为 `pnpm add -g agent-gear`。npm 仅保留为 pnpm 自举通道。
+7. **CI 统一**：6 个镜像/部署 workflow 改为 `pnpm/action-setup` + `pnpm install --frozen-lockfile` + `pnpm test` / `pnpm run build`。
+8. **npmjs.org 发布不回归**：agent-controller 发布 workflow 改用 `pnpm publish`，继续走 GitHub OIDC 可信发布（无需长期 token），并显式锁定 `registry.npmjs.org`、加版本幂等保护。
+9. **Aspire 使用 pnpm API**：`AppHost.cs` 的 5 个 Node 资源与 2 个 Vite 资源统一追加 `.WithPnpm()`。
+10. **文档同步**：README、各项目 AGENTS.md、admin-web README、worker BUILD.md 的安装/启动命令改为 pnpm。
+11. **所有 Docker 镜像 Node.js 升级到 24**：5 个项目 Dockerfile 的 `node:22-alpine` / `node:24-alpine` 统一为 `node:24-alpine`；worker 镜像 `NODE_VERSION` 默认 22 → 24。
 
 ### 1.3 范围
 
@@ -48,19 +52,20 @@ type: Permanent
 
 - 9 个项目的 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`（仅用于 pnpm 12 的 `allowBuilds` 配置）；
 - `packages/agent-controller/package.json` 增加 `publishConfig`（npmjs registry + public）；
-- 5 个 Dockerfile：`apps/admin-web`、`servers/admin-api`、`servers/agent-api`、`servers/cloud-controller`、`servers/controller-api`；
+- 5 个项目 Dockerfile：`apps/admin-web`、`servers/admin-api`、`servers/agent-api`、`servers/cloud-controller`、`servers/controller-api`；
+- worker 镜像：`deploy/images/worker/Dockerfile`（npm 自举 pnpm + `pnpm add -g agent-gear` + `PNPM_HOME` 入 PATH）、`entrypoint.sh`（自更新改 `pnpm add -g`）、`entrypoint.test.sh`、`BUILD.md`；
 - 7 个 workflow：5 个 `build-*-image.yml`、`deploy-agent-web.yml`、`publish-agent-gear.yml`；
 - `aspire/AgentGear.AppHost/AppHost.cs`：`WithPnpm()`；
+- 所有 Docker 镜像 Node.js 统一到 24：5 个项目 Dockerfile 改 `node:24-alpine`，worker `ARG NODE_VERSION=24` + `BUILD.md` 构建示例；
 - 上述项目的开发文档命令。
 
 **不做**：
 
 - **不建立根 pnpm workspace**（原因见 §6.1 D1）。每个项目仍是独立安装单元，保留现有独立 Docker build context 与独立 workflow 路径过滤。
-- **不改 `deploy/images/worker/Dockerfile` / `entrypoint.sh` 的 npm 全局安装**：它们是 worker 镜像的 CLI 引导链（`npm install -g agent-gear`），不是仓库项目的依赖安装；且已由 `20261029-feat-pnpm-workload-and-harness-optional` 明确保留 npm 作为 pnpm/agent-gear 自举通道。
 - **不改面向用户的安装提示**（`apps/agent-web/src/lib/command-template.ts` 的 `npm install -g agent-gear`）：npm 仍是消费者合法安装方式，且该提示不属于仓库包管理。
-- **不改 Node 版本**：`node:22-alpine` / `node:24-alpine` 保持不变；不升级运行时大版本。
 - **不改业务代码、GraphQL/OpenAPI 契约、数据库 schema**。
 - **不 bump `agent-gear` 版本**：本次只换包管理器，发布内容与版本号无关。
+- **不把 npm 从 worker 镜像彻底删除**：npm 仍是 pnpm 自举通道（`npm install -g pnpm`），但 agent-gear 安装与自更新不再使用 npm。
 
 ## 2. 技术架构
 
@@ -83,9 +88,11 @@ graph TD
     end
 
     subgraph Docker
-        DF[5 个项目 Dockerfile] --> CORE[corepack prepare pnpm]
+        DF[5 个项目 Dockerfile<br/>单项目 context] --> CORE[corepack prepare pnpm]
         CORE --> STORE[(/pnpm/store 缓存)]
         CORE --> DINST[pnpm install --frozen-lockfile / --prod]
+        WDF[worker Dockerfile] --> NBOOT[npm install -g pnpm]
+        NBOOT --> WPNPM[pnpm add -g agent-gear<br/>PNPM_HOME 入 PATH]
     end
 
     NPM --> REG[(registry.npmjs.org)]
@@ -96,6 +103,7 @@ graph TD
 | 层级 | 技术选型 | 说明 |
 |---|---|---|
 | 包管理器 | pnpm `12.16.1` | 所有项目 `packageManager` 固定；pnpm 12 锁文件格式 v9 |
+| Node.js | `24` | 所有 Docker 镜像统一 `node:24-alpine`；worker 镜像 nvm 安装 Node 24 |
 | 锁文件迁移 | `pnpm import` | 从现有 `package-lock.json` 生成 `pnpm-lock.yaml`，保留精确版本 |
 | 构建脚本策略 | `pnpm-workspace.yaml` 的 `allowBuilds` | pnpm 11+ 默认拦截依赖构建脚本；按项目显式 allow/deny |
 | Docker | `corepack` + BuildKit cache mount | `corepack prepare pnpm@12.16.1 --activate`；store 挂载 `/pnpm/store` |
@@ -311,9 +319,73 @@ ENTRYPOINT ["node", "dist/index.js"]
 | `apps/admin-web/Dockerfile` | 构建阶段 pnpm；补 `# syntax`（新增 cache mount）；`pnpm run build`；runtime nginx 不变 |
 | `servers/admin-api/Dockerfile` | build/runtime 双阶段 pnpm；runtime `--prod` |
 | `servers/cloud-controller/Dockerfile` | 同上 |
-| `servers/agent-api/Dockerfile` | build 阶段 pnpm；runtime 仍 `COPY --from=build /app /app`（现有 `node src/index.ts` 方式不变） |
-| `servers/controller-api/Dockerfile` | 同上 |
-| `deploy/images/worker/Dockerfile` | **不改**（见 §1.3） |
+| `servers/agent-api/Dockerfile` | `node:22-alpine` → `node:24-alpine`；build 阶段 pnpm；runtime 仍 `COPY --from=build /app /app`（现有 `node src/index.ts` 方式不变） |
+| `servers/controller-api/Dockerfile` | `node:22-alpine` → `node:24-alpine`；同上 |
+| `deploy/images/worker/Dockerfile` | 改为 `npm install -g pnpm@9.15.9` 自举 + `PNPM_HOME` 入 PATH + `pnpm add -g agent-gear@2.13.x`（见实现点 5.2） |
+
+#### 实现点 5.1：后端镜像单项目依赖隔离（明确保证）
+
+**结论：后端 Dockerfile 只包含当前项目自己的 `node_modules`，不会包含整个仓库或其它项目的依赖。** 保证由三层机制共同成立：
+
+1. **Build context 隔离**：workflow 的 `context` 是项目子目录（如 `servers/admin-api`），Docker 无法访问兄弟目录。Dockerfile 只 `COPY . .` 当前 context。
+2. **锁文件隔离**：每个项目独立 `pnpm-lock.yaml`，`importers` 只有 `.` 一个条目；没有根 `pnpm-workspace.yaml` / 根锁文件，pnpm 不会把其它项目链接进来。
+3. **镜像内断言**：CI 在镜像构建后执行：
+
+```bash
+docker run --rm --entrypoint sh "$IMAGE" -c '
+  cd /app &&
+  test ! -d servers &&
+  test ! -d apps &&
+  test ! -d packages &&
+  pnpm list --depth 0 --prod
+'
+```
+
+期望输出只包含当前服务的直接生产依赖（如 `admin-api` 的 express/graphql/mongoose 等），且不存在 `/app/servers`、`/app/apps`、`/app/packages` 目录。
+
+> 明确信号：**不会出现**"整个 repo 的 node_modules 被塞进一个后端镜像"的情况；每个后端镜像的依赖集合 = 该项目 `package.json` 的直接/传递依赖。当前 9 个项目之间也没有 `file:` / `workspace:` 本地依赖，pnpm 不会跨项目链接。
+
+#### 实现点 5.2：worker 镜像改用 pnpm
+
+worker 镜像不用 corepack、不装项目依赖，只把全局 CLI 安装从 npm 切到 pnpm；npm 仅用于自举 pnpm。
+
+`deploy/images/worker/Dockerfile`：
+
+```dockerfile
+# 4) per-user nvm / Node.js / npm：全部装在 worker 的 home 下（root 环境没有 nodejs）
+ENV NVM_DIR=/home/worker/.nvm \
+    NVM_NODEJS_ORG_MIRROR="$NODEJS_DIST_MIRROR" \
+    NVM_SYMLINK_CURRENT=true \
+    PNPM_HOME=/home/worker/.local/share/pnpm \
+    PATH=/home/worker/.local/share/pnpm:$PATH
+USER worker
+RUN mkdir -p "$NVM_DIR" \
+ && METHOD=script PROFILE=/dev/null \
+    NVM_INSTALL_URL="$NVM_INSTALL_URL" \
+    NVM_SOURCE="$GITHUB_RAW_PROXY/nvm-sh/nvm/$NVM_VERSION/install.sh" \
+    NVM_NODEJS_ORG_MIRROR="$NVM_NODEJS_ORG_MIRROR" \
+    curl -o- "$NVM_INSTALL_URL" | bash \
+ && . "$NVM_DIR/nvm.sh" \
+ && nvm install --default "$NODE_VERSION" \
+ && nvm alias default "$NODE_VERSION" \
+ && ln -sfn "$(dirname "$(dirname "$(nvm which default)")")" "$NVM_DIR/current" \
+ && npm config set registry "$NPM_REGISTRY" \
+ && npm install -g pnpm@9.15.9 \
+ && export PNPM_HOME="$HOME/.local/share/pnpm" \
+ && export PATH="$PNPM_HOME:$PATH" \
+ && pnpm add -g agent-gear@2.13.x \
+ && pnpm store prune \
+ && node -v && npm -v && pnpm -v && agent-gear --version
+```
+
+说明：
+
+- **Node.js 24**：`ARG NODE_VERSION=24`（原 22），`BUILD.md` 的 `--build-arg NODE_VERSION=24` 同步更新。
+- **版本选择**：worker 内 pnpm 固定 `9.15.9`，与既有 `entrypoint.sh#ensure_pnpm`、迁移 017 工作负载脚本的自举版本一致；仓库项目使用 `12.16.1`，两者互不影响。
+- **PATH**：镜像级 `ENV PNPM_HOME` + `PATH`；`entrypoint.sh` 的 `WORKER_PATH` 已包含 `PNPM_HOME`，`run_as_worker` 会显式透传。
+- **自更新**：`entrypoint.sh#update_agent_gear` 从 `npm install -g agent-gear` 改为 `pnpm add -g agent-gear`，registry 日志改 `pnpm config get registry`；`ensure_pnpm` 仍在自更新前执行，缺 pnpm 的存量容器继续用 `npm install -g pnpm@9.15.9` 自举。
+- **测试**：`entrypoint.test.sh` 的自更新断言从 `npm_installs` 改为 `pnpm add -g agent-gear`；`T-EP13/T-EP14` 的 pnpm 自举断言保持 9.15.9。
+- **文档**：`BUILD.md` 的默认启动、自更新、pnpm 预装章节同步更新。
 
 #### 实现点 6：CI workflow（6 个构建/部署）
 
@@ -473,7 +545,7 @@ var adminWeb = builder.AddViteApp("admin-web", "../../apps/admin-web")
 |---|---|---|---|
 | P0 | 从 `main` 切 `feat/pnpm-migration`；本提案 PR 合入 feat 分支 | — | 评审通过 |
 | P1 | 9 个项目加 `packageManager` / `pnpm-workspace.yaml`；`pnpm import` 生成锁文件；删除 `package-lock.json` | P0 | 每项目 `pnpm install --frozen-lockfile` + `pnpm test` |
-| P2 | 5 个 Dockerfile 改 pnpm/corepack/store 缓存 | P1 | 本地或 CI 构建 5 个镜像；admin-api/cloud-controller 冒烟 `/health` |
+| P2 | 5 个项目 Dockerfile 改 pnpm/corepack/store 缓存并统一 `node:24-alpine`；worker Dockerfile/entrypoint 改 Node 24 + npm 自举 pnpm + `pnpm add -g` | P1 | 本地或 CI 构建 6 个镜像；admin-api/cloud-controller 冒烟 `/health`；后端镜像单项目隔离断言；worker 镜像 `pnpm -v` / `agent-gear --version` |
 | P3 | 6 个构建/部署 workflow 改 pnpm | P1 | workflow lint；push 到临时分支触发或 `act`/人工 review |
 | P4 | `publish-agent-gear.yml` 改 pnpm publish + 版本幂等 | P1 | `pnpm pack --dry-run`；npmjs Trusted Publisher 配置核对；可在 fork/测试包上 dry-run |
 | P5 | `AppHost.cs` 追加 `WithPnpm()` | P1 | `dotnet build`；`aspire start` 观察 install 资源使用 pnpm，7 个资源可启动 |
@@ -487,25 +559,29 @@ var adminWeb = builder.AddViteApp("admin-web", "../../apps/admin-web")
 | 决策 | 选项 A | 选项 B | 最终选择 | 原因 |
 |---|---|---|---|---|
 | D1 项目组织 | 根 pnpm workspace（单锁文件） | 每项目独立 pnpm（9 锁文件） | **B** | 保持现有独立 Docker context、workflow path filter、Aspire 子目录资源；避免 Dockerfile 复制全仓 manifest 与发布包被 workspace 耦合 |
-| D2 pnpm 版本 | 10.x LTS | 12.16.1（本机/当前稳定） | **12.16.1** | 与本地验证版本一致；`pnpm/action-setup@v6.1.0` 明确支持 pnpm 12；Node 22/24 均满足 |
-| D3 Docker 引导 | `npm install -g pnpm` | `corepack prepare pnpm@...` | **corepack** | Node 22/24 官方镜像自带 corepack；与 `packageManager` 字段联动；不额外依赖 npm 安装步骤 |
+| D2 pnpm 版本 | 10.x LTS | 12.16.1（本机/当前稳定） | **12.16.1** | 与本地验证版本一致；`pnpm/action-setup@v6.1.0` 明确支持 pnpm 12；Node 24 满足 |
+| D3 Docker 引导 | `npm install -g pnpm` | `corepack prepare pnpm@...` | **B（项目镜像）/ A（worker）** | 项目镜像用 corepack；worker 镜像没有项目 `package.json`，按需求用 `npm install -g pnpm@9.15.9` 自举后把 `PNPM_HOME` 写入 PATH |
 | D4 构建脚本 | 允许全部（`dangerouslyAllowAllBuilds`） | 显式 allowlist + `mongodb-memory-server: false` | **B** | 最小权限；mongodb-memory-server 下载由 CI 显式控制，避免安装阶段隐式联网/失败 |
 | D5 锁文件生成 | `pnpm install` 重新解析 | `pnpm import` 从 npm 锁导入 | **B** | 保持现有精确版本，降低迁移当天依赖漂移风险 |
 | D6 发布认证 | `NPM_TOKEN` 长期 token | GitHub OIDC trusted publishing | **B** | 现有 workflow 已采用 OIDC；pnpm 12 原生支持；无长期密钥 |
 | D7 发布触发 | 改为 tag 触发 | 保留 release 分支 + 版本幂等检查 | **B** | 不改变现有发布习惯；用版本检查消除重复发布失败 |
-| D8 Node 版本 | 统一升到 24 | 保持 22/24 现状 | **B** | 迁移只换包管理器，避免混入运行时升级风险 |
-| D9 worker 镜像 | 同步改 pnpm | 保持 npm 自举 | **B** | 见 §1.3；与既有 pnpm workload 提案口径一致 |
+| D8 Node 版本 | 保持 22/24 现状 | 所有 Docker 镜像统一升级到 24 | **B** | 需求明确要求；Node 24 原生支持 TypeScript type stripping，agent-api/controller-api 的 `node src/index.ts` 不受影响 |
+| D9 worker 镜像 | 保持 npm | 改 pnpm（npm 仅自举） | **B** | 需求明确要求；npm 只保留 `npm install -g pnpm` 引导，agent-gear 安装/自更新统一 `pnpm add -g` |
+| D10 后端镜像依赖范围 | 仓库根 context / 全仓依赖 | 项目子目录 context / 单项目依赖 | **B** | 避免把整个 repo 的 node_modules 打进镜像；用 context + 独立锁文件 + 镜像断言保证 |
+| D11 worker Node 版本 | 保持 22 | 升级到 24 | **B** | 与"所有 Docker 镜像 Node 24"一致；nvm `NODE_VERSION=24` |
 
 ### 6.2 依赖与约束
 
 | 类型 | 内容 | 说明 |
 |---|---|---|
-| 依赖 | Node.js 22.12+ / 24 | pnpm 12 与现有依赖要求；Docker 基础镜像已满足 |
-| 依赖 | corepack（Node 22/24 自带） | Docker/本地固定 pnpm 版本 |
+| 依赖 | Node.js 24 | 所有 Docker 镜像统一 `node:24-alpine`；worker 镜像 nvm 安装 Node 24；pnpm 12 与现有依赖要求均满足 |
+| 依赖 | corepack（Node 24 自带） | Docker/本地固定 pnpm 版本 |
 | 依赖 | `pnpm/action-setup@v6.1.0` | CI 安装 pnpm 12 |
 | 约束 | npmjs Trusted Publisher 已配置 | 仓库 `Deliay/z-agent-gear`，workflow `publish-agent-gear.yml`，允许 publish |
 | 约束 | `agent-gear` 版本号单调递增 | 发布前 bump；workflow 对已发布版本跳过 |
 | 约束 | `mongodb-memory-server` 不执行 postinstall | CI 必须保留显式 mongod 预下载步骤 |
+| 约束 | 后端镜像只允许单项目依赖 | workflow 的 Docker `context` 必须是项目子目录，禁止改为仓库根 |
+| 约束 | worker 内 pnpm 固定 9.15.9 | 与 `entrypoint.sh#ensure_pnpm`、迁移 017 脚本自举版本一致；不跟随项目 pnpm 12.16.1 |
 
 ## 7. 项目结构
 
@@ -534,6 +610,11 @@ z-agent-gear/
 ├── tests/
 │   ├── api/                                    # pnpm 锁文件与配置
 │   └── e2e/                                    # pnpm 锁文件与配置
+├── deploy/images/worker/
+│   ├── Dockerfile                              # npm 自举 pnpm + pnpm add -g agent-gear
+│   ├── entrypoint.sh                           # 自更新改 pnpm add -g
+│   ├── entrypoint.test.sh                      # 断言自更新走 pnpm
+│   └── BUILD.md                                # 文档同步
 ├── aspire/AgentGear.AppHost/AppHost.cs         # + WithPnpm()
 └── .github/workflows/
     ├── build-admin-api-image.yml
@@ -552,7 +633,7 @@ z-agent-gear/
 - 单元测试：沿用各项目现有 `pnpm test`（vitest），不降低现有覆盖率。
 - 构建：9 个项目逐一 `pnpm run build`（无 build 脚本的测试项目除外）。
 - Lint：`apps/admin-web`、`apps/agent-web` 的 `pnpm run lint`。
-- Docker：5 个镜像构建 + 现有冒烟步骤（`/health`、`config.js`）。
+- Docker：5 个项目镜像构建 + 现有冒烟步骤（`/health`、`config.js`）+ 后端单项目依赖断言；worker 镜像 `pnpm -v` / `agent-gear --version` 校验。
 - 发布：`pnpm pack --dry-run` / `npm pack --dry-run` 对比 tarball；`pnpm publish --dry-run --no-git-checks`。
 - 编排：`dotnet build aspire/AgentGear.AppHost`；`aspire start` 后确认 install 资源使用 pnpm，服务健康。
 
@@ -563,8 +644,10 @@ z-agent-gear/
 | 依赖安装 | pnpm `--frozen-lockfile` | 9 个项目干净安装 |
 | 单元测试 | vitest | 各服务/前端/CLI/测试项目 |
 | 构建 | tsc / vite / tsc -b | 7 个可构建项目 |
-| 镜像构建 | docker buildx | 5 个 Dockerfile |
+| 镜像构建 | docker buildx | 5 个项目 Dockerfile + worker Dockerfile |
 | 冒烟 | curl / docker run | admin-api、cloud-controller、admin-web |
+| 单项目隔离 | docker run + `pnpm list` | 后端镜像只含本项目依赖，无 `/app/{servers,apps,packages}` |
+| worker 镜像 | docker run | `pnpm -v`、`agent-gear --version`、PATH 含 `PNPM_HOME` |
 | 发布包 | `pnpm pack` / `npm pack` | `agent-gear` tarball 内容与 bin |
 | 编排 | Aspire | 7 个 Node/Vite 资源 |
 
@@ -592,6 +675,10 @@ pnpm test
 pnpm pack --dry-run
 pnpm publish --dry-run --no-git-checks --access public
 
+# 镜像：Node 24 + 单项目隔离 + worker pnpm
+docker run --rm --entrypoint sh zag/admin-api:pnpm -c 'cd /app && test ! -d servers && pnpm list --depth 0 --prod'
+docker run --rm --entrypoint sh zag/worker:pnpm -lc 'node -v && pnpm -v && agent-gear --version && echo "$PNPM_HOME"'
+
 # Aspire
 dotnet build aspire/AgentGear.AppHost/AgentGear.AppHost.csproj
 aspire start
@@ -606,7 +693,7 @@ aspire start
 | 本地 | 开发/测试 | `corepack enable` + `pnpm install`；Aspire `WithPnpm()` |
 | CI | 镜像构建 | GitHub Actions + pnpm/action-setup + Docker buildx |
 | npmjs | `agent-gear` 发布 | GitHub Actions OIDC trusted publishing |
-| worker 镜像 | 运行时 CLI | 不变：`npm install -g agent-gear@2.13.x`（镜像构建） |
+| worker 镜像 | 运行时 CLI | 改为 Node 24；`npm install -g pnpm@9.15.9` 自举后 `pnpm add -g agent-gear@2.13.x` |
 
 ### 9.2 配置管理
 
@@ -623,12 +710,14 @@ aspire start
 - [ ] 9 个项目均无 `package-lock.json`，均有 `pnpm-lock.yaml` 与 `pnpm-workspace.yaml`
 - [ ] 9 个项目 `pnpm install --frozen-lockfile` 全部通过（干净 clone）
 - [ ] 9 个项目测试通过；前端 lint 通过；7 个可构建项目 build 通过
-- [ ] 5 个 Dockerfile 构建通过；admin-api / cloud-controller `/health` 冒烟通过；admin-web `config.js` 冒烟通过
+- [ ] 5 个项目 Dockerfile 构建通过；所有镜像基础镜像为 `node:24-alpine`（worker 为 Node 24）；admin-api / cloud-controller `/health` 冒烟通过；admin-web `config.js` 冒烟通过
+- [ ] 后端镜像单项目隔离断言通过（无 `/app/{servers,apps,packages}`，`pnpm list` 仅当前项目依赖）
+- [ ] worker 镜像 `pnpm -v` 可用、`agent-gear --version` 正常、PATH 含 `PNPM_HOME`
 - [ ] 7 个 workflow 均使用 pnpm/action-setup，无残留 `npm ci` / `cache: npm`
 - [ ] `publish-agent-gear.yml` 使用 `pnpm publish`，显式 npmjs registry，OIDC 权限保留，重复版本跳过
 - [ ] `pnpm pack` 产物包含 `dist/index.js` 且 `bin.agent-gear` 可用
 - [ ] Aspire `AppHost.cs` 7 个 Node/Vite 资源均 `.WithPnpm()`；`aspire start` 正常
-- [ ] README / AGENTS / admin-web README 无残留 npm 安装/运行命令（worker 与用户安装提示除外）
+- [ ] README / AGENTS / admin-web README 无残留 npm 安装/运行命令（worker 的 `npm install -g pnpm` 自举与用户安装提示除外）
 - [ ] 无业务代码、契约、数据库变更
 
 ## 11. 风险与回滚
@@ -638,7 +727,8 @@ aspire start
 | pnpm 默认拦截构建脚本 | `pnpm install` 失败 | `allowBuilds` 显式 allowlist；`mongodb-memory-server` 由 CI 显式下载 |
 | pnpm isolated node_modules 与个别工具不兼容 | 构建/测试失败 | 先全量验证；必要时在对应 `pnpm-workspace.yaml` 设 `nodeLinker: hoisted`（仅局部兜底） |
 | `pnpm import` 与 npm 解析差异 | 依赖版本/peer 变化 | `pnpm import` 保精确版本；逐项目跑测试与构建；对比 `pnpm why` |
-| corepack 在 Node 25 被移除 | 未来 Docker 构建失败 | 当前固定 node:22/24；升级 Node 25 时改用 `npm install -g pnpm` 引导 |
+| Node 22 → 24 升级 | 个别依赖/原生模块不兼容 | 先全量跑测试与 5 个项目镜像 + worker 镜像冒烟；worker 镜像跑 `agent-gear --version` 与 workload 脚本回归 |
+| corepack 在 Node 25 被移除 | 未来 Docker 构建失败 | 当前固定 node:24；升级 Node 25 时改用 `npm install -g pnpm` 引导 |
 | pnpm 12 `minimumReleaseAge` 默认策略 | 极新依赖安装被拒 | 锁文件版本已稳定；如遇新发布依赖，等待或按需调整策略 |
 | 仓库根 `.npmrc` 指向镜像源 | 发布到错误 registry | `publishConfig.registry` + `NPM_CONFIG_REGISTRY` 双保险 |
 | OIDC 可信发布配置不匹配 | publish 401/404 | 核对 npmjs Trusted Publisher：仓库、workflow 文件名、允许 publish；必要时临时用 `NPM_TOKEN` 回退 |

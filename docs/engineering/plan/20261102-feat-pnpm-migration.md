@@ -1,5 +1,5 @@
 ---
-description: 全仓 npm 迁移 pnpm 实现计划：P1 九项目 packageManager/pnpm import 锁文件/allowBuilds（mms 禁止构建）、P2 五个 Dockerfile corepack+store 缓存、P3 六个构建部署 workflow、P4 agent-gear pnpm publish OIDC、P5 Aspire WithPnpm、P6 文档、P7 验收矩阵
+description: 全仓 npm 迁移 pnpm 实现计划：P1 九项目 packageManager/pnpm import 锁文件/allowBuilds（mms 禁止构建）、P2 五个项目 Dockerfile corepack+store 缓存+单项目依赖隔离+全部 Node 24、worker 镜像 npm 自举 pnpm、P3 六个构建部署 workflow、P4 agent-gear pnpm publish OIDC、P5 Aspire WithPnpm、P6 文档、P7 验收矩阵
 type: Permanent
 ---
 
@@ -35,7 +35,7 @@ flowchart LR
 
 | 条件 | 说明 |
 |---|---|
-| Node.js | 22.12+ / 24；本地推荐 24（与 CI 一致） |
+| Node.js | 24；本地推荐 24（与 CI、Docker 一致） |
 | pnpm | 12.16.1；`corepack enable` 或 `npm install -g pnpm@12.16.1` |
 | Docker | 本地可选；CI 使用 buildx，必须支持 `--mount=type=cache` |
 | npmjs | `agent-gear` 已存在；Trusted Publisher 指向 `Deliay/z-agent-gear` + `publish-agent-gear.yml`，允许 `npm publish` |
@@ -169,7 +169,7 @@ cd packages/agent-controller && pnpm run build
 
 ```dockerfile
 # syntax=docker/dockerfile:1
-FROM node:<22|24>-alpine AS build
+FROM node:24-alpine AS build
 
 ARG PNPM_VERSION=12.16.1
 WORKDIR /app
@@ -180,7 +180,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 COPY . .
 RUN pnpm run build
 
-FROM node:<22|24>-alpine AS runtime
+FROM node:24-alpine AS runtime
 
 ARG PNPM_VERSION=12.16.1
 WORKDIR /app
@@ -202,11 +202,35 @@ ENTRYPOINT ["node", "dist/index.js"]
 | `apps/admin-web/Dockerfile` | build `node:24-alpine`，runtime `nginx:1.27-alpine` | 只需 build 阶段 pnpm；保留 `ARG VITE_ADMIN_API_URL` 与 `pnpm run build`；新增 `# syntax` |
 | `servers/admin-api/Dockerfile` | `node:24-alpine` | build + runtime 双阶段；runtime `--prod`；保留 `EXPOSE 4002` |
 | `servers/cloud-controller/Dockerfile` | `node:24-alpine` | 同上；保留 `EXPOSE 4003` |
-| `servers/agent-api/Dockerfile` | `node:22-alpine` | build 阶段装全量依赖；runtime 沿用 `COPY --from=build /app /app` + `node src/index.ts` |
-| `servers/controller-api/Dockerfile` | `node:22-alpine` | 同 agent-api |
-| `deploy/images/worker/Dockerfile` | — | **不改**（npm 自举链） |
+| `servers/agent-api/Dockerfile` | `node:22-alpine` → `node:24-alpine` | build 阶段装全量依赖；runtime 沿用 `COPY --from=build /app /app` + `node src/index.ts` |
+| `servers/controller-api/Dockerfile` | `node:22-alpine` → `node:24-alpine` | 同 agent-api |
+| `deploy/images/worker/Dockerfile` | Ubuntu 24.04 + nvm Node 24 | `ARG NODE_VERSION=24`；`npm install -g pnpm@9.15.9` 自举；`PNPM_HOME` 入 PATH；`pnpm add -g agent-gear@2.13.x` |
+| `deploy/images/worker/entrypoint.sh` | — | `update_agent_gear` 改 `pnpm add -g agent-gear`；registry 日志改 `pnpm config get registry` |
+| `deploy/images/worker/entrypoint.test.sh` | — | 自更新断言由 `npm_installs` 改为 `pnpm add -g agent-gear` |
+| `deploy/images/worker/BUILD.md` | — | `NODE_VERSION=24`；默认启动/自更新/pnpm 预装章节同步 |
 
-### 4.3 P2 验证
+### 4.3 后端镜像单项目依赖隔离（必须保证）
+
+每个后端镜像只允许包含当前项目依赖，禁止把仓库根或其它项目的 `node_modules` 打进去。落地约束：
+
+1. workflow 的 Docker `context` 保持项目子目录（`servers/admin-api` 等），**不得**改为 `.`。
+2. Dockerfile 只 `COPY` 当前 context 的 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、源码。
+3. 每个项目 `pnpm-lock.yaml` 只有一个 importer `.`；不存在根 workspace 锁文件。
+4. 镜像构建后执行断言：
+
+```bash
+docker run --rm --entrypoint sh "$IMAGE" -c '
+  cd /app &&
+  test ! -d servers &&
+  test ! -d apps &&
+  test ! -d packages &&
+  pnpm list --depth 0 --prod
+'
+```
+
+期望：断言命令退出 0；`pnpm list` 只列当前服务依赖。
+
+### 4.4 P2 验证
 
 ```bash
 # 有 Docker 的机器
@@ -215,6 +239,12 @@ docker build -f servers/admin-api/Dockerfile -t zag/admin-api:pnpm servers/admin
 docker build -f servers/agent-api/Dockerfile -t zag/agent-api:pnpm servers/agent-api
 docker build -f servers/controller-api/Dockerfile -t zag/controller-api:pnpm servers/controller-api
 docker build -f servers/cloud-controller/Dockerfile -t zag/cloud-controller:pnpm servers/cloud-controller
+
+# worker 镜像（内网需按 BUILD.md 注入 mirror/proxy 参数）
+docker build -f deploy/images/worker/Dockerfile -t zag/worker:pnpm deploy/images/worker
+
+# 后端单项目隔离断言（对 4 个后端镜像逐个执行）
+docker run --rm --entrypoint sh zag/admin-api:pnpm -c 'cd /app && test ! -d servers && pnpm list --depth 0 --prod'
 ```
 
 无 Docker 环境时由 P3 的 CI workflow 验证；P7 检查 CI 结果。
@@ -251,13 +281,22 @@ docker build -f servers/cloud-controller/Dockerfile -t zag/cloud-controller:pnpm
 
 | 文件 | 变更 |
 |---|---|
-| `.github/workflows/build-admin-api-image.yml` | 安装/测试改 pnpm；`MONGOMS` 缓存键改 `servers/admin-api/pnpm-lock.yaml`；保留 `node node_modules/mongodb-memory-server/postinstall.js`；注释「npm ci 会清空 node_modules」改为 pnpm 口径 |
+| `.github/workflows/build-admin-api-image.yml` | 安装/测试改 pnpm；`MONGOMS` 缓存键改 `servers/admin-api/pnpm-lock.yaml`；保留 `node node_modules/mongodb-memory-server/postinstall.js`；注释「npm ci 会清空 node_modules」改为 pnpm 口径；镜像构建后加单项目隔离断言 |
 | `.github/workflows/build-admin-web-image.yml` | 安装 + lint + 测试改 pnpm；`cache: pnpm` |
-| `.github/workflows/build-agent-api-image.yml` | 安装 + 测试改 pnpm；`cache: pnpm` |
-| `.github/workflows/build-cloud-controller-image.yml` | 同上 |
-| `.github/workflows/build-controller-api-image.yml` | 同上 |
+| `.github/workflows/build-agent-api-image.yml` | 安装 + 测试改 pnpm；`cache: pnpm`；镜像构建后加单项目隔离断言 |
+| `.github/workflows/build-cloud-controller-image.yml` | 同上；镜像构建后加单项目隔离断言 |
+| `.github/workflows/build-controller-api-image.yml` | 同上；镜像构建后加单项目隔离断言 |
 | `.github/workflows/deploy-agent-web.yml` | 安装 + 构建改 pnpm |
 | `.github/workflows/publish-agent-gear.yml` | 见 P4 |
+
+单项目隔离断言（4 个后端镜像通用）：
+
+```bash
+docker run --rm --entrypoint sh "$IMAGE" -c '
+  cd /app && test ! -d servers && test ! -d apps && test ! -d packages &&
+  pnpm list --depth 0 --prod
+'
+```
 
 ### 5.3 检查
 
@@ -356,10 +395,11 @@ aspire describe
 | `packages/agent-controller/AGENTS.md` | Dev Commands + 发布说明 |
 | `tests/api/AGENTS.md` | 测试命令表 |
 | `tests/e2e/AGENTS.md` | 测试命令表 |
+| `deploy/images/worker/BUILD.md` | `NODE_VERSION=24`；默认启动、自更新、pnpm 预装章节改为 pnpm 口径 |
 
 保留不动的 npm 引用：
 
-- `deploy/images/worker/`（镜像自举与自更新）；
+- `deploy/images/worker/` 中的 `npm install -g pnpm`（仅 pnpm 自举通道；agent-gear 安装/自更新已改 `pnpm add -g`）；
 - `apps/agent-web/src/lib/command-template.ts`（面向用户的安装提示）；
 - `servers/admin-api/src/migrations/*` 中的工作负载脚本（云电脑内 pnpm 工作负载，已由 017 迁移覆盖）。
 
@@ -373,7 +413,10 @@ aspire describe
 | 单元测试 | 每项目 `pnpm test` | 全部通过 |
 | 前端 lint/build | `pnpm run lint && pnpm run build` | 通过 |
 | 后端 build | `pnpm run build` | 通过 |
-| Docker 镜像 | 5 个 Dockerfile | 构建通过；冒烟通过 |
+| Docker 镜像 | 5 个项目 Dockerfile + worker Dockerfile | 构建通过；冒烟通过 |
+| Node 24 | `grep -n 'FROM node:' **/Dockerfile`；worker `node -v` | 全部为 `node:24-alpine`；worker 为 v24 |
+| 单项目隔离 | 后端镜像内 `test ! -d servers && pnpm list --depth 0 --prod` | 通过；只列当前项目依赖 |
+| worker pnpm | `docker run --rm zag/worker:pnpm sh -lc 'pnpm -v && agent-gear --version && echo $PNPM_HOME'` | pnpm 9.15.9；agent-gear 可执行；PATH 含 PNPM_HOME |
 | CI workflow | `grep` + PR 运行 | 无 `npm ci` / `cache: npm` 残留 |
 | 发布包 | `pnpm pack --dry-run` | 包含 dist 与 bin |
 | 发布 dry-run | `pnpm publish --dry-run --no-git-checks` | 通过 |
