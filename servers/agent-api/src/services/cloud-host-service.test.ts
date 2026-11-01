@@ -299,13 +299,26 @@ describe('CloudHostService', () => {
       );
     });
 
-    it('validates harness types', async () => {
-      await expect(service.create('user-1', { name: 'x', harnessTypes: [] })).rejects.toThrow(
-        'at least one harness type is required',
+    it('T-AH3: harnessTypes 允许 0 个；白名单外仍报错、去重保序不变', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'x', harnessTypes: [] });
+      expect(cloudWorkloadReader.findHarnessPreset).not.toHaveBeenCalled();
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ harnessTypes: [] }),
       );
+      expect(cloudControllerClient.startHarness).toHaveBeenCalledWith(
+        expect.objectContaining({ harnessTypes: [], workloadPlan: [] }),
+      );
+
       await expect(
         service.create('user-1', { name: 'x', harnessTypes: ['UNKNOWN'] }),
       ).rejects.toThrow('unsupported harness type: UNKNOWN');
+      await expect(
+        service.create('user-1', {
+          name: 'x',
+          harnessTypes: ['OPENCODE' as never, 'OPENCODE' as never],
+        }),
+      ).resolves.toBeDefined();
     });
 
     it('T-CH-GH1: 非法/非本人 githubAccountId 拒绝，合法则落库透传', async () => {
@@ -389,7 +402,7 @@ describe('CloudHostService', () => {
         userId: 'user-1',
         tenantId: 'user-1',
         billingAccountId: 'account-1',
-        agentGearMinVersion: '2.10.0',
+        agentGearMinVersion: '2.12.0',
         // 容器 TTL 仍作为留档下发；模型 Key 不再与其绑定有效期。
         expiresAt: expect.any(Date),
       });
@@ -404,7 +417,7 @@ describe('CloudHostService', () => {
         vi.mocked(billingClient.createCloudHostApiKey).mock.calls[0][0],
       ).not.toHaveProperty('expiresAt');
       expect(payload.workloadPlan).toEqual([
-        { workloadId: 'preset-1', params: {}, implicit: false, required: true },
+        { workloadId: 'preset-1', params: {}, implicit: false, required: false },
       ]);
       expect(payload.secrets).toMatchObject({
         hostKey: 'zag_k_1_raw',
@@ -495,37 +508,37 @@ describe('CloudHostService', () => {
       expect(CloudHost.deleteOne).toHaveBeenCalled();
     });
 
-    it('T-HL-API9: 仅 KIMI_CODE 时 agentGearMinVersion=2.10.0', async () => {
+    it('T-HL-API9: 仅 KIMI_CODE 时 agentGearMinVersion=2.12.0', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'kimi-cloud', harnessTypes: ['KIMI_CODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.harnessTypes).toEqual(['kimi_code']);
-      expect(payload.agentGearMinVersion).toBe('2.10.0');
+      expect(payload.agentGearMinVersion).toBe('2.12.0');
     });
 
-    it('T-HL-API9b: 多选取按类型最大值（opencode+kimi_code → 2.10.0）', async () => {
+    it('T-HL-API9b: 多选取按类型最大值（opencode+kimi_code → 2.12.0）', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'multi', harnessTypes: ['OPENCODE', 'KIMI_CODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
-      expect(payload.agentGearMinVersion).toBe('2.10.0');
+      expect(payload.agentGearMinVersion).toBe('2.12.0');
     });
 
-    it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.11.0，混合取最大', async () => {
+    it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.12.0，混合取最大', async () => {
       setupCreateSuccess();
       await service.create('user-1', { name: 'deepseek-cloud', harnessTypes: ['DEEPSEEK_HARNESS'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.harnessTypes).toEqual(['deepseek_harness']);
-      expect(payload.agentGearMinVersion).toBe('2.11.0');
+      expect(payload.agentGearMinVersion).toBe('2.12.0');
 
       await service.create('user-1', {
         name: 'deepseek-mixed',
         harnessTypes: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'],
       });
       const mixedPayload = vi.mocked(cloudControllerClient.startHarness).mock.calls[1][0];
-      expect(mixedPayload.agentGearMinVersion).toBe('2.11.0');
+      expect(mixedPayload.agentGearMinVersion).toBe('2.12.0');
     });
 
     it('T-CW1: never creates a default workspace at create time', async () => {
@@ -705,7 +718,7 @@ describe('CloudHostService', () => {
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.workloadPlan).toEqual([
-        { workloadId: 'preset-1', params: {}, implicit: false, required: true },
+        { workloadId: 'preset-1', params: {}, implicit: false, required: false },
       ]);
       expect(catalogMock.listStandard).not.toHaveBeenCalled();
     });
@@ -721,7 +734,7 @@ describe('CloudHostService', () => {
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.workloadPlan).toEqual([
-        { workloadId: 'preset-1', params: {}, implicit: false, required: true },
+        { workloadId: 'preset-1', params: {}, implicit: false, required: false },
         { workloadId: DOCKER_ID, params: {}, implicit: false, required: false },
       ]);
     });

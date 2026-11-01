@@ -5,8 +5,8 @@ import type { CloudWorkloadCatalogItem, WorkloadParamField } from './cloud-workl
  *
  * 与 cloud-controller 的 `resolveFallbackWorkloadPlan` / admin-api 的 `buildWorkloadPlan` 同口径
  * （后序 DFS、依赖先行、去重、环检测、显式优先于隐式、默认参数按类型归一），
- * 但本函数不跨服务 import：agent-api 在创建前一次性算出显式 plan 并随 `startHarness` 下发
- * （cloud-controller 对 harness 请求要求显式非空 workloadPlan）。
+ * 但本函数不跨服务 import：agent-api 在创建前一次性算出显式 plan 并随 `startHarness` 下发。
+ * harness 为可选工作负载：0 个 harness + 0 个 standard 时 plan 为空数组（契约 A.2.2 放宽）。
  */
 
 /** 单次创建可显式勾选的 standard 负载上限（与 `dependsOnWorkloadIds` 上限一致）。 */
@@ -24,7 +24,7 @@ export interface CreateWorkloadPlanEntry {
 }
 
 export interface CreateWorkloadPlanInput {
-  /** harness 预制项（固定安装，required=true）。 */
+  /** harness 预制项（可选工作负载，`required=false`；0 个合法）。 */
   harnessPresets: Array<{ id: string }>;
   /** 创建时显式勾选的 standard 负载 ID（去重后 ≤5）。 */
   selectedIds: string[];
@@ -93,7 +93,7 @@ export function resolveDefaultParams(workload: {
 
 /**
  * 展开创建期 workload plan：
- * - harness presets 在前（`required=true`，与现有硬失败语义一致）；
+ * - harness presets 在前（`required=false`：可选工作负载，安装失败不销毁容器）；
  * - 显式选中项按选择顺序后序 DFS，依赖先行、去重；
  * - `implicit` 由「是否在显式集合中」决定（显式优先于隐式，与 cloud-controller 一致）；
  * - 全部 standard 项 `required=false`（安装失败不阻断容器）。
@@ -119,10 +119,10 @@ export function resolveCreateWorkloadPlan(
   const plan: CreateWorkloadPlanEntry[] = [];
   for (const preset of input.harnessPresets ?? []) {
     const workloadId = String(preset.id);
-    // harness 固定在前，required=true（保持现有硬失败语义）；重复项按已出现去重。
+    // harness 固定在前，required=false（可选工作负载：失败不硬失败）；重复项按已出现去重。
     if (emitted.has(workloadId)) continue;
     emitted.add(workloadId);
-    plan.push({ workloadId, params: {}, implicit: false, required: true });
+    plan.push({ workloadId, params: {}, implicit: false, required: false });
   }
 
   const visit = (item: CloudWorkloadCatalogItem): void => {

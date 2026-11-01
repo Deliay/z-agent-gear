@@ -1,5 +1,8 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
 import { ensureIndex } from './index-utils.js';
+
+const log = logger.child({ component: 'migration/011-user-commit-settings-index' });
 
 export const name = '011-user-commit-settings-index';
 
@@ -15,5 +18,5 @@ export const name = '011-user-commit-settings-index';
 export async function run(): Promise<void> {
   const collection = mongoose.connection.collection('user_commit_settings');
   await ensureIndex(collection, { userId: 1 }, { unique: true, name: 'uniq_user_commit_setting' });
-  console.log('[Migration 011] Ensured unique index uniq_user_commit_setting on user_commit_settings');
+  log.info('ensured unique index uniq_user_commit_setting on user_commit_settings');
 }

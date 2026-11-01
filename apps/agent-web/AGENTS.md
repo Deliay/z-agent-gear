@@ -65,7 +65,7 @@ npm run preview  # Preview production build
 - **数据来源**：Sidebar 的云电脑状态来自唯一 `HOME_OVERVIEW.controllers[].cloudHost`（`id/name/status/harnessTypes/defaultSessionId/activeSessionCount/failureReason/deletedAt`）；控制器配置页使用 `GET_CONTROLLERS.controllers[].cloudHost`；能力开关使用 `cloudHostCapabilities`（`enabled`、`supportedHarnesses`）。
 - **入口**：Sidebar 主机列表标题行「新建云电脑」（`aria-label="新建云电脑"`，云 + 号图标）。`cloudHostCapabilities.enabled=false` 时隐藏；**数量无限制**：存在活跃云电脑时入口仍可点击（不再提示「每用户同时最多 1 个云电脑实例」）。
 - **云图标与状态**：`type==='cloud'` 的主机名前置 `Cloud` 图标（`data-testid="cloud-host-icon"`），状态文案固定为 `STARTING 启动中 / RUNNING 运行中 / STOPPING 停止中 / STOPPED 已销毁 / FAILED 失败`（`FAILED` 附带 `failureReason`）。`STOPPED/FAILED` 条目置灰但可进入配置页与历史会话。
-- **新建表单**：名称 trim 后 1~64；Harness 多选且至少 1 个（一期仅 `OPENCODE`）；选 1 个提示「就绪后不会自动创建会话，需先创建或绑定工作区」，多选提示「不自动创建会话」；**不提供「创建默认工作区」勾选**（创建期不预置 `/home/worker/workspace`）；不提供存储/会话导入参数。**预装工作负载（可选）**来自 `cloudHostWorkloadCatalog`（无主机上下文，`installed` 恒 false）：列表展示名称 + `预制` 徽标 + 依赖名称，最多勾选 5 个；勾选任意项提示「勾选运行环境负载会延长首次就绪时间」；**未勾选时不传 `workloadIds`**（保持旧报文形状）；catalog 查询失败展示「负载列表加载失败，可仅创建基础云电脑」且不阻断提交。**Github 项目（可选）**区块复用 `hooks/useGithubProjectForm.ts`（账号/仓库/前缀/最终地址预览）；勾选后提交走 `hooks/useCloudHostProvisioning.ts` 编排：`createCloudHost(createDefaultSession:false)` → `GithubSetupProgressDialog` 轮询 `cloudHost(id)` 至 RUNNING → `setupCloudHostGithubProject(createSession = harnessTypes.length === 1)`；未选项目时请求体不含 `createDefaultSession`（与旧报文一致）。服务端错误文案原样展示（`name is required` / `name is too long` / `harness feature is disabled` / `at least one harness type is required` / `unsupported harness type: x`）；`insufficient balance` 映射为「账户余额不足，请联系管理员充值后重试」，`github account is locked` 映射为「云电脑已绑定其他 Github 帐号，不可修改」；`too many workloads (max 5)` / `invalid workload` / `workload is not installable` / 依赖缺失或成环映射为对应中文提示。
+- **新建表单**：名称 trim 后 1~64；Harness 多选且**可选**（0 个可提交，展示「可不选，之后在设置-工作负载中补装」；`harnessTypes: []` 随创建报文提交）；选 1 个提示「就绪后不会自动创建会话，需先创建或绑定工作区」，多选提示「不自动创建会话」；**不提供「创建默认工作区」勾选**（创建期不预置 `/home/worker/workspace`）；不提供存储/会话导入参数。**预装工作负载（可选）**来自 `cloudHostWorkloadCatalog`（无主机上下文，`installed` 恒 false）：列表展示名称 + `预制` 徽标 + 依赖名称，最多勾选 5 个；勾选任意项提示「勾选运行环境负载会延长首次就绪时间」；**未勾选时不传 `workloadIds`**（保持旧报文形状）；catalog 查询失败展示「负载列表加载失败，可仅创建基础云电脑」且不阻断提交。**Github 项目（可选）**区块复用 `hooks/useGithubProjectForm.ts`（账号/仓库/前缀/最终地址预览）；勾选后提交走 `hooks/useCloudHostProvisioning.ts` 编排：`createCloudHost(createDefaultSession:false)` → `GithubSetupProgressDialog` 轮询 `cloudHost(id)` 至 RUNNING → `setupCloudHostGithubProject(createSession = harnessTypes.length === 1)`；未选项目时请求体不含 `createDefaultSession`（与旧报文一致）。服务端错误文案原样展示（`name is required` / `name is too long` / `harness feature is disabled` / `unsupported harness type: x`）；`insufficient balance` 映射为「账户余额不足，请联系管理员充值后重试」，`github account is locked` 映射为「云电脑已绑定其他 Github 帐号，不可修改」；`too many workloads (max 5)` / `invalid workload` / `workload is not installable` / 依赖缺失或成环映射为对应中文提示。
 - **收费详情**：新建对话框展示「收费详情」区块（`cloudHostBillingQuote`，打开时 `cache-and-network`）：创建花费 {createCredits} credits（一次性）、运行消费 {perMinuteCredits} credit/分钟、余额不足持续 10 分钟强制销毁；`availableBalance < createCredits` 时提示当前余额与充值引导但**不前置禁用**提交；报价查询失败降级为「创建与运行将产生费用，详见账单」。勾选 Github 项目时 `createCloudHost` 报文携带 `githubAccountId`（未勾选保持旧报文形状）。
 - **默认会话**：`HOME_OVERVIEW` 观测到云电脑 `STARTING→RUNNING` 且 `defaultSessionId` 非空时自动进入该会话（每台主机仅一次，首次加载已 `RUNNING` 的旧主机不跳转）；`RUNNING` 且单 Harness 但无 `defaultSessionId` 时 Sidebar 提示「默认会话创建失败，可手动创建会话」。
 - **停止**：打开停止对话框先查 `cloudHostStopImpact`；有活动会话展示「停止云主机会导致所有会话永久丢失，是否继续」与各会话标题/状态摘要，确认后 `stopCloudHost(id, force:true)`；无活动会话直接 `stopCloudHost(id, force:false)`。取消不调用；`stop` 返回空值时退出「停止中」并展示可重试错误。
@@ -76,29 +76,34 @@ npm run preview  # Preview production build
 - **Github 项目设置入口**：仅 `controller.type==='cloud' && cloudHost.status==='RUNNING' && !deletedAt` 时，Sidebar「工作区」TreeSection actions 与云电脑配置页「Github」页签展示 Github 入口（`aria-label="Github 项目设置"`）；「工作负载」页签不再出现该入口，local/STOPPED 不出现。
 - **Github 设置表单**：数据来自 `GET_GITHUB_ACCOUNTS` + `cloudHostWorkloads(controllerId)`；**帐号跟随云电脑**：`cloudHost.githubAccountId` 非空时帐号下拉置灰（说明「帐号跟随云电脑，选定后不可修改」），仓库列表仅该帐号；未锁定时首次设置选定即锁定；锁定帐号不在已绑定列表时展示「该帐号授权已失效、仓库不可用」并保持置灰；账号切换后仓库按 `installations[].repos` 合并并按 `fullName` 去重；Github 预制工作负载默认选中且不可取消；**前缀地址（工作根目录）**有默认工作区时预填 `cloudHost.defaultWorkspace`，无默认工作区（`hasDefaultWorkspace === false`）或新建云电脑流程（未传）预填 `~/workspace`（placeholder `例如：~/workspace`）；支持 `~`/`~/` 开头，前端按与服务端同规则展开为容器主目录 `/home/worker`（`lib/workspace-path.ts`，`~abc` 报「前缀地址必须以 / 或 ~ 开头」），仍拒绝 `..`/反斜杠；实时展示只读预览「最终 clone 地址：`<前缀>/<owner>/<repo>`」（纯展示，容错返回 null）；提交 `targetPath` 为**归一后的前缀**（不是最终目录，服务端负责拼接）；未绑定账号展示「前往设置页绑定 Github 帐号」并禁用确认。
 - **设置进度**：`GithubSetupProgressDialog` 以 `pollInterval: 1500` 轮询 `cloudHostSetupOperation(id)`，默认三步固定为「工作负载设置 → Git 项目设置 → 会话创建」；传入可选 `hostId`（新建云电脑 + 项目编排）时前置「启动云电脑」阶段，同样 1.5s 轮询 `cloudHost(id)`，RUNNING 后回调一次发起 setup，启动 FAILED 展示 `failureReason` + 「重新创建」，setup 请求失败可「重新设置」重试；加载分支只认 `loading && !data`，轮询不卸载内容；失败可 `retryCloudHostSetupOperation`；成功且 `sessionId` 时 refetch `HOME_OVERVIEW` + `GetControllerWorkspacesEnabled` 后导航到会话，session 步骤失败展示「仓库已就绪，请手动创建会话」。旧入口（工作负载安装 / 手动 Git 设置）不传 `hostId`，三阶段与跳转逻辑零回归。界面不展示 token/命令。
-- **工作负载设置区**：云电脑配置页「工作负载」页签列出标准负载（预制/已安装徽标、参数表单 TEXT/SELECT/MULTI_SELECT/BOOLEAN 默认值），按 `workloadKind` 分组（standard 组标题「运行环境 / 工具」，harness 组「云电脑」，空组不渲染），每项展示依赖名称（依赖 ID 映射同列表名称，缺失回退 ID）；仅 RUNNING 可安装，已安装项禁用且**无卸载入口**；安装复用同一进度对话框（单步）。
+- **工作负载设置区**：云电脑配置页「工作负载」页签列出标准负载（预制/已安装徽标、参数表单 TEXT/SELECT/MULTI_SELECT/BOOLEAN 默认值），按 `workloadKind` 分组（standard 组标题「运行环境 / 工具」，harness 组标题「云电脑（Harness）」且条目带「可选」徽标，空组不渲染），每项展示依赖名称（依赖 ID 映射同列表名称，缺失回退 ID）；仅 RUNNING 可安装，已安装项禁用且**无卸载入口**；安装复用同一进度对话框（单步）。
 - **测试入口**：`components/__tests__/Sidebar.test.tsx`、`pages/__tests__/ControllerConfigPage.test.tsx`、`components/cloud-host/__tests__/*`（含 `GithubProjectSetupDialog` / `GithubSetupProgressDialog` / `CloudHostWorkloadsSection`）、`components/session/NewSessionDialog.test.tsx`、`components/session/__tests__/SessionView.cloudHost.test.tsx`、`graphql/__tests__/home.test.ts`（覆盖 T-AW1..15 与 T-AW-G1..G14 关键项）。
 
-## Commit 设置区块（设置页）
+## Git 区块（设置页）
 
-- 挂载：`pages/SettingsPage.tsx` 的 `#github-section` 内，紧接 `<GithubBindingSection />` 下方
-  渲染 `<CommitSettingsSection />`；标题「Commit 设置」+ 常驻提示「设置只对云容器环境生效」。
-- 数据：`GET_COMMIT_SETTINGS` / `UPDATE_COMMIT_SETTINGS` + `GET_GITHUB_ACCOUNTS`
-  （帐号下拉；`GitHubAccount` 即 OAuth 用户身份，org 不会出现），类型手写于 `graphql/types.ts`。
-- 交互：提交人模式（仅Agent / Co-Author / 仅人类 / 未设置）与提交人（Github帐号 / 自定义 / 未设置）
-  两个单选组；`GITHUB_ACCOUNT` 条件渲染帐号下拉，`CUSTOM` 渲染用户名 + 邮箱输入；
-  无绑定帐号提示「请先绑定 Github 帐号」并禁用保存；已选帐号被解绑提示重新选择。
-- 校验：Co-Author / 仅人类 + 提交人未设置 → 「请先设置提交人」并禁用保存；自定义校验与服务端同源
-  （trim 非空、≤100/≤254、禁换行/NUL、邮箱正则）；前端拦截不替代服务端权威校验。
-- 错误映射（逐字）：`committer is required for the selected mode` →「请先设置提交人」；
-  `invalid github account` →「Github 帐号无效，请重新选择」；
-  `invalid custom committer` →「提交人用户名或邮箱格式不正确」。
-- 保存成功 toast「对云容器环境生效，已运行的云电脑稍后自动更新」；加载分支用 `loading && !data`，
-  后台刷新不覆盖用户编辑（dirty 保护）。
+- 挂载：`pages/SettingsPage.tsx` 的独立 `#git-section`（NAV label「Git」，GitBranch 图标，紧随「GitHub 绑定」组），
+  渲染 `<GitSettingsSection />`。`#github-section` 只保留 `<GithubBindingSection />`（旧「Commit 设置」区块已下线）。
+- 数据：`GET_COMMIT_SETTINGS` / `UPDATE_COMMIT_SETTINGS`（仅 `committerType/customName/customEmail`）+
+  `GET_PERSONAL_GITHUB_ACCOUNTS`（导入弹窗数据源）；类型手写于 `graphql/types.ts`
+  （`CommitterType = 'CUSTOM' | 'UNSET'`，无 CommitterMode / source / readOnly）。
+- 交互：标题「Git」+ 常驻提示「仅对云电脑环境生效」；「提交人」单选组二选一（自定义 / 未设置）；
+  自定义时展示用户名、邮箱与「导入Github帐号信息」按钮（`ImportGithubAccountDialog`）；保存为**成员级**设置，
+  与当前工作区无关（无共享/继承、无只读禁用）。
+- 「与 bot 共同提交」：提交人下方的 checkbox，默认不勾选；仅 `committerType=CUSTOM` 可用，
+  `UNSET` 时置灰并提示「设置提交人后可勾选」；保存随 `commitWithBot` 提交（`UNSET` 归一 `false`）。
+  勾选后 Worktree 提交以成员为主作者、平台 bot 为共同作者（见 agent-api / agent-controller 段）。
+- 导入弹窗：列出 `personalGithubAccounts`（头像 + 帐号名），选择后回填 `customName=githubLogin`、
+  `customEmail=<githubUserId>+<githubLogin>@users.noreply.github.com`（可继续编辑）；空态引导
+  「先到『GitHub 绑定』绑定帐号」。
+- 校验：与服务端同源（trim 后非空且 ≤100、≤254、禁 `\n\r\0`、邮箱正则 `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`），
+  失败文案「提交人用户名或邮箱格式不正确」（服务端白名单 `invalid custom committer` 映射到同一条）；
+  前端拦截不替代服务端权威校验。
+- 保存成功 toast「对成员的会话/工作流 Worktree 生效」；加载分支用 `loading && !data`，后台刷新不覆盖用户编辑（dirty 保护）。
 - 缓存：`GET_COMMIT_SETTINGS` 用 `fetchPolicy: 'cache-and-network'`，保存 mutation 带
-  `refetchQueries: [GET_COMMIT_SETTINGS]`（`CommitSettings` 无 `id`，Apollo 无法归一化 mutation 结果），
-  保证保存后离开设置页再返回不回显旧值；回归见 `CommitSettingsSection.cache.test.tsx`。
-- 测试：`components/settings/__tests__/CommitSettingsSection.test.tsx`。
+  `refetchQueries: [GET_COMMIT_SETTINGS]`（`CommitSettings` 无 `id`，Apollo 无法归一化 mutation 结果）。
+- 测试：`components/settings/__tests__/GitSettingsSection.test.tsx`、
+  `components/settings/__tests__/ImportGithubAccountDialog.test.tsx`；
+  E2E `tests/e2e/src/settings-git.spec.ts`。
 
 ## 多租户一期（注册硬关闭与展示名）
 
@@ -137,6 +142,12 @@ npm run preview  # Preview production build
 - **共享人类节点操作**：`hooks/useHumanNodeActions.ts` + `HumanNodeActions` 组件，列表/卡片/抽屉三处同源（草稿键 `workflow-node-draft:{instanceId}:{nodeId}`）。
 - **测试入口**：`components/__tests__/Sidebar.test.tsx`（T-UI4-SEC/AGG）、`SidebarResizer.test.tsx`（T-UI4-RES）、`tree/__tests__/TreeSection.test.tsx`（T-UI4-TREE）、`workflow/__tests__/WorkflowInstanceCard.test.tsx`（T-UI4-IC）、`workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-UI4-TC）、`workflow/graph/__tests__/*`（T-UI4-GL/NC/RC）、`workflow/__tests__/NodeDetailDrawer.test.tsx`（T-UI4-SH）、`hooks/useNodeSessionActivity.test.tsx`（T-UI4-NA）、`hooks/useHumanNodeActions.test.tsx`（T-UI4-HA）、`tests/e2e/src/sidebar-phase4.spec.ts`（E2E-UI4S1~S6）与 `tests/e2e/src/workflow-graph.spec.ts`（E2E-UI4G1~G10）。
 
+## 日志
+
+- `src/lib/logger.ts` 是全包**唯一 console 出口**：业务代码一律 `logger.debug/info/warn/error(objOrMsg, msg?)`（签名与后端 pino 一致，变量进对象字段、错误进 `err` 字段），禁止直接调用 `console.*`（`vite.config.ts` 的构建期提示为登记例外）。
+- **DEV 或 `VITE_LOG_LEVEL` 门控**：仅当 `import.meta.env.DEV` 或显式设置 `VITE_LOG_LEVEL`（`debug|info|warn|error`，非法值回落 `info`；DEV 缺省 `debug`）时输出；**生产默认静默**（不设置 `VITE_LOG_LEVEL` 即零输出）。
+- 前端日志为开发期排障输出，不适用后端契约的字段要求（见 [`contracts/observability.md`](../../contracts/observability.md) §1）；禁止在前端日志中打印 token/密码等敏感值。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
@@ -158,6 +169,6 @@ npm run preview  # Preview production build
 - **切换器**：`components/WorkspaceSwitcher.tsx` 挂在 `Sidebar` 顶部，按租户分组、按角色过滤；未加入任何 team（仅个人租户）不渲染；切换后 `client.resetStore()` 重拉 `HOME_OVERVIEW` 等活跃查询。管理入口：`/workspaces`（team admin）与 `/tenants/:tenantId/members`（本租户 admin）。
 - **工作区管理页**：`pages/WorkspacePage.tsx` 仅 admin 可操作（developer 展示无权限提示、无入口）；列表展示名称/类型/成员数；创建/改名/删除（`workspace is not empty` 映射「工作区非空，无法删除」）/成员添加移除；全局工作区无改名/删除/成员入口；personal 租户无管理入口。
 - **租户成员管理页**：`pages/TenantMembersPage.tsx` 仅本租户 admin；成员列表（展示名/用户名/角色）、`searchAccounts` 搜索添加并指定角色、变更角色、移除；`last admin cannot be removed/demoted` 映射「至少保留一名管理员」提示；personal 租户无入口。
-- **共享资源来源与只读收敛**：`lib/workspace-source.ts` + `hooks/useResourceSource.ts` 判定本工作区/全局工作区/其他工作区；供应商/模型/GitHub 绑定展示 `ResourceSourceBadge`。普通上下文的全局工作区资源隐藏编辑/删除；全局工作区 + developer（`Workspace.readOnly`）整体只读（隐藏添加/编辑/解绑入口，Commit 设置禁用保存）。旧数据未携带 `workspaceId` 时保持升级前行为（无徽标、可编辑）。
-- **Commit 设置**：`CommitSettingsSection` 展示 `CommitSettings.source`（本工作区/继承自全局工作区/未设置）与 `readOnly`，只读时禁用表单与保存。
-- **测试入口**：`stores/__tests__/workspace.test.tsx`、`components/__tests__/WorkspaceSwitcher.test.tsx`、`pages/__tests__/WorkspacePage.test.tsx`、`pages/__tests__/TenantMembersPage.test.tsx`、`lib/__tests__/workspace-source.test.ts`、`components/settings/__tests__/ProviderSection.readonly.test.tsx`、`CommitSettingsSection.source.test.tsx`。
+- **共享资源来源与只读收敛**：`lib/workspace-source.ts` + `hooks/useResourceSource.ts` 判定本工作区/全局工作区/其他工作区；供应商/模型/GitHub 绑定展示 `ResourceSourceBadge`。普通上下文的全局工作区资源隐藏编辑/删除；全局工作区 + developer（`Workspace.readOnly`）整体只读（隐藏添加/编辑/解绑入口；成员级 Git 提交人设置不受影响）。旧数据未携带 `workspaceId` 时保持升级前行为（无徽标、可编辑）。
+- **Git 区块**：提交人设置为成员级（键 `userId`），无 `source`/`readOnly` 口径，只读工作区不影响保存。
+- **测试入口**：`stores/__tests__/workspace.test.tsx`、`components/__tests__/WorkspaceSwitcher.test.tsx`、`pages/__tests__/WorkspacePage.test.tsx`、`pages/__tests__/TenantMembersPage.test.tsx`、`lib/__tests__/workspace-source.test.ts`、`components/settings/__tests__/ProviderSection.readonly.test.tsx`。

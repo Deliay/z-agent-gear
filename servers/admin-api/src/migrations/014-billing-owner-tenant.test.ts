@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 import { BillingAccount } from '../models/billing-account.js';
 import { BillingApiKey } from '../models/billing-api-key.js';
 import {
@@ -7,7 +9,17 @@ import {
   clearTestDb,
   disconnectTestDb,
 } from '../services/billing/testing/mongo.js';
-import * as migration from './014-billing-owner-tenant';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./014-billing-owner-tenant.js');
+childSpy.mockRestore();
 
 async function seedAccount(
   ownerType: 'front_user' | 'admin_user' | 'tenant',
@@ -50,7 +62,7 @@ describe('migration 014-billing-owner-tenant', () => {
 
   beforeEach(async () => {
     await clearTestDb();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    testLog.reset();
   });
 
   it('exposes the migration name', () => {

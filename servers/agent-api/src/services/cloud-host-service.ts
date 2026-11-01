@@ -1,6 +1,8 @@
 import { GraphQLError } from 'graphql';
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { withSpan } from '../observability/trace.js';
 import { CloudHost, HARNESS_TYPES, type HarnessType } from '../models/cloud-host.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
@@ -29,7 +31,9 @@ import {
   type CreateWorkloadPlanEntry,
 } from './cloud-host-workload-plan.js';
 
-export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.10.0';
+export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.12.0';
+
+const logger = rootLogger.child({ component: 'cloud-host' });
 
 const ACTIVE_STATUSES = ['STARTING', 'RUNNING', 'STOPPING'] as const;
 
@@ -39,15 +43,16 @@ const HARNESS_ACP_TYPES: Record<HarnessType, string> = {
   DEEPSEEK_HARNESS: 'deepseek_harness',
 };
 
-/** 逐 harness 的 agent-gear 最低版本（按 harnessTypes 取最大值，缺省 2.10.0 基线） */
+/** 逐 harness 的 agent-gear 最低版本（按 harnessTypes 取最大值，缺省 2.12.0 基线） */
 export const HARNESS_MIN_AGENT_GEAR_VERSION: Record<HarnessType, string> = {
   OPENCODE: '2.6.0',
   KIMI_CODE: '2.8.0',
   // 2.11.0：`cordis.patch.yml` insert `header-masq`（dsh-header-masq 会话标识请求头注入）
-  DEEPSEEK_HARNESS: '2.11.0',
+  // 2.12.0：Worktree 级提交人写入能力（随基线门禁提升）
+  DEEPSEEK_HARNESS: '2.12.0',
 };
 
-/** 按 harnessTypes 计算 agentGearMinVersion：取各类型要求版本与基线 2.10.0 的最大值 */
+/** 按 harnessTypes 计算 agentGearMinVersion：取各类型要求版本与基线 2.12.0 的最大值 */
 export function resolveAgentGearMinVersion(types: HarnessType[]): string {
   const versions = [CLOUD_HOST_AGENT_GEAR_MIN_VERSION, ...types.map((type) => HARNESS_MIN_AGENT_GEAR_VERSION[type] ?? CLOUD_HOST_AGENT_GEAR_MIN_VERSION)];
   return versions.reduce((max, current) => (compareVersions(current, max) > 0 ? current : max), CLOUD_HOST_AGENT_GEAR_MIN_VERSION);
@@ -104,10 +109,12 @@ function iso(value: unknown): string | null {
   return value instanceof Date ? value.toISOString() : null;
 }
 
+/**
+ * 归一 harness 类型：允许 0 个（harness 为可选工作负载，运行期可在设置-工作负载补装）。
+ * 非数组按空处理；非字符串/白名单外仍报 `unsupported harness type: …`；去重保序。
+ */
 function parseHarnessTypes(raw: string[]): HarnessType[] {
-  if (!Array.isArray(raw) || raw.length === 0) {
-    throw new Error('at least one harness type is required');
-  }
+  if (!Array.isArray(raw) || raw.length === 0) return [];
   const result: HarnessType[] = [];
   for (const value of raw) {
     if (typeof value !== 'string') {
@@ -120,9 +127,6 @@ function parseHarnessTypes(raw: string[]): HarnessType[] {
     if (!result.includes(normalized as HarnessType)) {
       result.push(normalized as HarnessType);
     }
-  }
-  if (result.length === 0) {
-    throw new Error('at least one harness type is required');
   }
   return result;
 }
@@ -250,7 +254,15 @@ export class CloudHostService {
     // 创建期负载展开同样先于落库：非法/超量/依赖环不留半成品
     const workloadPlan = await this.resolveWorkloadPlan(presets, workloadIds);
 
-    return this.userMutex.runExclusive(`user:${userId}`, async () => {
+    const createWc = getWorkspaceContext();
+    return withSpan(
+      'cloudhost.create',
+      {
+        userId,
+        tenantId: createWc?.tenantId ?? userId,
+        workspaceId: createWc?.id ? String(createWc.id) : undefined,
+      },
+      () => this.userMutex.runExclusive(`user:${userId}`, async () => {
       // 多租户二期：计费 owner = 当前工作区所属租户（缺省上下文回退个人租户，与一期等价）
       const workspaceContext = getWorkspaceContext();
       const ownerTenantId = workspaceContext?.tenantId ?? userId;
@@ -406,9 +418,9 @@ export class CloudHostService {
               reason: (err as Error)?.message || 'create failed',
             })
             .catch((refundErr) => {
-              console.warn(
-                '[cloud-host] refund create charge failed:',
-                (refundErr as Error).message,
+              logger.warn(
+                { event: 'refund-create-charge-failed', err: refundErr },
+                'refund create charge failed',
               );
             });
           await this.rollback({
@@ -427,7 +439,8 @@ export class CloudHostService {
         }
         throw err;
       }
-    });
+      }),
+    );
   }
 
   /** 创建失败逆序回滚（best-effort；原始错误优先，回滚失败只记录日志）。 */
@@ -440,7 +453,7 @@ export class CloudHostService {
   }): Promise<void> {
     const tasks: Array<Promise<unknown>> = [
       billingClient.revokeApiKeysByHost(input.cloudHostId).catch((err) => {
-        console.warn('[cloud-host] revoke model key on rollback failed:', (err as Error).message);
+        logger.warn({ event: 'revoke-key-rollback-failed', err }, 'revoke model key on rollback failed');
       }),
     ];
     if (input.workspaceId) {
@@ -460,11 +473,12 @@ export class CloudHostService {
     presets: HarnessPreset[],
     workloadIds: string[],
   ): Promise<CreateWorkloadPlanEntry[]> {
+    // harness 为可选工作负载：安装失败不硬失败销毁容器，可事后在设置-工作负载补装。
     const harnessPlan: CreateWorkloadPlanEntry[] = presets.map((preset) => ({
       workloadId: preset.id,
       params: {},
       implicit: false,
-      required: true,
+      required: false,
     }));
     if (workloadIds.length === 0) return harnessPlan;
 
@@ -527,16 +541,17 @@ export class CloudHostService {
   private async reclaimStartedContainer(cloudHostId: string, containerId: string): Promise<void> {
     await Promise.allSettled([
       Promise.resolve(this.controllerClient.destroyContainer(containerId)).catch((err) => {
-        console.warn('[cloud-host] destroy orphan container failed:', (err as Error).message);
+        logger.warn({ event: 'destroy-orphan-failed', err }, 'destroy orphan container failed');
       }),
       Promise.resolve(billingClient.revokeApiKeysByHost(cloudHostId)).catch((err) => {
-        console.warn('[cloud-host] revoke model key on orphan reclaim failed:', (err as Error).message);
+        logger.warn({ event: 'revoke-key-orphan-failed', err }, 'revoke model key on orphan reclaim failed');
       }),
     ]);
   }
 
   async stop(id: string, userId: string, force?: boolean): Promise<Doc> {
-    return this.hostMutex.runExclusive(`host:${id}`, async () => {
+    return withSpan('cloudhost.destroy', { cloudHostId: id, userId }, () =>
+      this.hostMutex.runExclusive(`host:${id}`, async () => {
       const host = await this.findOwnedHost(id, userId);
       if (host.status === 'STOPPED' || host.status === 'FAILED') {
         return this.mapCloudHost(host as unknown as Doc, await this.countActive(host));
@@ -583,7 +598,7 @@ export class CloudHostService {
       }
 
       await billingClient.revokeApiKeysByHost(id).catch((err) => {
-        console.warn('[cloud-host] revoke model key on stop failed:', (err as Error).message);
+        logger.warn({ event: 'revoke-key-stop-failed', err }, 'revoke model key on stop failed');
       });
 
       const stopped = await CloudHost.findOneAndUpdate(
@@ -601,11 +616,13 @@ export class CloudHostService {
       // A-3：终态 CAS 后再兜一次，回收 CAS 与 Session.create 之间漏网的晚到会话。
       await sessionService.endByController(String(host.controllerId), userId);
       return this.mapCloudHost(latest, 0);
-    });
+      }),
+    );
   }
 
   async delete(id: string, userId: string): Promise<boolean> {
-    return this.hostMutex.runExclusive(`host:${id}`, async () => {
+    return withSpan('cloudhost.destroy', { cloudHostId: id, userId }, () =>
+      this.hostMutex.runExclusive(`host:${id}`, async () => {
       if (!mongoose.isValidObjectId(id)) {
         throw new Error('Cloud host not found');
       }
@@ -617,29 +634,32 @@ export class CloudHostService {
       }
 
       await billingClient.revokeApiKeysByHost(id).catch((err) => {
-        console.warn('[cloud-host] revoke model key on delete failed:', (err as Error).message);
+        logger.warn({ event: 'revoke-key-delete-failed', err }, 'revoke model key on delete failed');
       });
 
       const keyId = String(host.keyId);
       try {
         await evictKeyById(keyId);
       } catch (err) {
-        console.warn('[cloud-host] evict controller key failed:', (err as Error).message);
+        logger.warn({ event: 'evict-controller-key-failed', err }, 'evict controller key failed');
       }
       await ControllerKey.deleteOne({ _id: keyId });
       await controllerService.markCloudHostOffline(String(host.controllerId), userId);
       await CloudHost.updateOne({ _id: id }, { $set: { deletedAt: new Date() } });
       // Issues 联动配置随云电脑销毁失效（标签是否清理由前端销毁确认流程调用 cleanup）
       await cloudHostIssuesLinkageService.deleteByController(String(host.controllerId)).catch((err) => {
-        console.warn('[cloud-host] cascade delete issues linkages failed:', (err as Error).message);
+        logger.warn({ event: 'cascade-delete-linkages-failed', err }, 'cascade delete issues linkages failed');
       });
       return true;
-    });
+      }),
+    );
   }
 
   /** 内部 ready 回调：STARTING→RUNNING；单 harness 自动创建默认会话（幂等，per-host 串行）。 */
   async handleReady(id: string): Promise<Doc | null> {
-    return this.hostMutex.runExclusive(`host:${id}`, () => this.handleReadyLocked(id));
+    return withSpan('cloudhost.start', { cloudHostId: id }, () =>
+      this.hostMutex.runExclusive(`host:${id}`, () => this.handleReadyLocked(id)),
+    );
   }
 
   private async handleReadyLocked(id: string): Promise<Doc | null> {
@@ -668,14 +688,19 @@ export class CloudHostService {
           defaultSessionId = session.id as string;
         } catch (err) {
           // 默认会话失败不影响云电脑可用；前端提示可手动创建
-          console.warn(
-            `[cloud-host] create default session failed for ${id}:`,
-            (err as Error).message,
+          logger.warn(
+            { event: 'create-default-session-failed', cloudHostId: id, err },
+            'create default session failed',
           );
         }
       } else if (harnessTypes.length === 1) {
-        console.info(
-          `[cloud-host] skip default session for ${id}: ${host.workspaceId ? 'createDefaultSession=false' : 'no default workspace'}`,
+        logger.info(
+          {
+            event: 'skip-default-session',
+            cloudHostId: id,
+            reason: host.workspaceId ? 'createDefaultSession=false' : 'no default workspace',
+          },
+          'skip default session',
         );
       }
 
@@ -716,14 +741,19 @@ export class CloudHostService {
         );
         current.defaultSessionId = session.id;
       } catch (err) {
-        console.warn(
-          `[cloud-host] create default session failed for ${id}:`,
-          (err as Error).message,
+        logger.warn(
+          { event: 'create-default-session-failed', cloudHostId: id, err },
+          'create default session failed',
         );
       }
     } else if (harnessTypes.length === 1 && !current.defaultSessionId) {
-      console.info(
-        `[cloud-host] skip default session for ${id}: ${current.workspaceId ? 'createDefaultSession=false' : 'no default workspace'}`,
+      logger.info(
+        {
+          event: 'skip-default-session',
+          cloudHostId: id,
+          reason: current.workspaceId ? 'createDefaultSession=false' : 'no default workspace',
+        },
+        'skip default session',
       );
     }
     const refreshed = (await this.findRawHost(id)) ?? current;
@@ -732,7 +762,9 @@ export class CloudHostService {
 
   /** 内部 terminal 回调：驱动 STOPPED/FAILED + 会话 ENDED + 撤销模型 Key（幂等，per-host 串行）。 */
   async handleTerminal(id: string, input: TerminalCallbackInput): Promise<Doc | null> {
-    return this.hostMutex.runExclusive(`host:${id}`, () => this.handleTerminalLocked(id, input));
+    return withSpan('cloudhost.destroy', { cloudHostId: id }, () =>
+      this.hostMutex.runExclusive(`host:${id}`, () => this.handleTerminalLocked(id, input)),
+    );
   }
 
   private async handleTerminalLocked(
@@ -746,7 +778,7 @@ export class CloudHostService {
       await this.refundUnreadyHost(host, id, 'cloud host terminal before ready (retry)');
       await sessionService.endByController(String(host.controllerId), String(host.userId));
       await billingClient.revokeApiKeysByHost(id).catch((err) => {
-        console.warn('[cloud-host] revoke model key on terminal retry failed:', (err as Error).message);
+        logger.warn({ event: 'revoke-key-terminal-retry-failed', err }, 'revoke model key on terminal retry failed');
       });
       return this.mapCloudHost(host, 0);
     }
@@ -770,7 +802,7 @@ export class CloudHostService {
     await this.refundUnreadyHost(current, id, input.reason ?? 'cloud host terminal before ready');
     await sessionService.endByController(String(current.controllerId), String(current.userId));
     await billingClient.revokeApiKeysByHost(id).catch((err) => {
-      console.warn('[cloud-host] revoke model key on terminal failed:', (err as Error).message);
+      logger.warn({ event: 'revoke-key-terminal-failed', err }, 'revoke model key on terminal failed');
     });
     // A-3：终态 CAS 后再兜一次，确保晚到创建的会话也被结束。
     await sessionService.endByController(String(current.controllerId), String(current.userId));
@@ -787,7 +819,7 @@ export class CloudHostService {
         reason,
       })
       .catch((err) => {
-        console.warn('[cloud-host] refund create charge on terminal failed:', (err as Error).message);
+        logger.warn({ event: 'refund-terminal-failed', err }, 'refund create charge on terminal failed');
       });
   }
 
@@ -876,7 +908,6 @@ const CLOUD_HOST_PUBLIC_ERRORS = new Set([
   'name is too long',
   'insufficient balance',
   'harness feature is disabled',
-  'at least one harness type is required',
   'cloud host is not configured',
   'control plane unavailable',
   'billing service unavailable',

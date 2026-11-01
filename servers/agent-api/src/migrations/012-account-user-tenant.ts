@@ -1,7 +1,10 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
 import { Account } from '../models/account.js';
 import { Tenant } from '../models/tenant.js';
 import { User } from '../models/user.js';
+
+const log = logger.child({ component: 'migration/012-account-user-tenant' });
 
 export const name = '012-account-user-tenant';
 
@@ -55,8 +58,9 @@ export async function run(): Promise<void> {
 
     stats.users += users.length;
     lastId = users[users.length - 1]._id;
-    console.log(
-      `[Migration 012] processed ${stats.users} users (+${stats.accounts} accounts, +${stats.tenants} tenants)`,
+    log.debug(
+      { users: stats.users, accounts: stats.accounts, tenants: stats.tenants },
+      'processed users',
     );
     if (users.length < BATCH_SIZE) break;
   }
@@ -71,8 +75,9 @@ export async function run(): Promise<void> {
     $expr: { $ne: ['$tenantId', '$_id'] },
   } as never);
 
-  console.log(
-    `[Migration 012] verification: noAccount=${noAccount} noTenant=${noTenant} tenantIdMismatch=${mismatched} (scanned ${stats.users})`,
+  log.info(
+    { noAccount, noTenant, tenantIdMismatch: mismatched, scanned: stats.users },
+    'verification completed',
   );
   if (noAccount > 0 || noTenant > 0 || mismatched > 0) {
     throw new Error(
@@ -91,7 +96,7 @@ async function migrateUser(user: UserRow, stats: Migration012Stats): Promise<voi
     let account = username ? await Account.findOne({ username }).lean() : null;
     if (!account) {
       if (!username || !user.passwordHash) {
-        console.warn(`[Migration 012] skip user ${String(userId)}: missing username/passwordHash`);
+        log.warn({ userId: String(userId) }, 'skip user: missing username/passwordHash');
         return;
       }
       account = await Account.create({ username, passwordHash: user.passwordHash });

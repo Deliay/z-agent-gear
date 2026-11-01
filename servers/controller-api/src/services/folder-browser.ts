@@ -1,10 +1,17 @@
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 
 export class FolderBrowserService {
   private io: SocketIOServer | null = null;
+  private readonly logger: ObservationLogger;
+
+  constructor(logger: ObservationLogger = rootLogger.child({ component: 'folder-browser' })) {
+    this.logger = logger;
+  }
 
   start(io: SocketIOServer): void {
     this.io = io;
@@ -15,24 +22,24 @@ export class FolderBrowserService {
 
     const controller = await Controller.findById(controllerId).lean();
     if (!controller) {
-      console.error(`Controller not found for browse: ${controllerId}`);
+      this.logger.error({ controllerId, requestId, op: 'fs:browse' }, 'controller not found');
       return;
     }
 
     const keyId = controller.keyId.toString();
     const socketId = await sessionService.getSocketId(keyId);
     if (!socketId) {
-      console.error(`Controller offline for browse: ${controllerId}`);
+      this.logger.error({ controllerId, requestId, op: 'fs:browse' }, 'controller offline');
       return;
     }
 
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) {
-      console.error(`Socket not found for browse: ${controllerId}`);
+      this.logger.error({ controllerId, socketId, requestId, op: 'fs:browse' }, 'socket not found');
       return;
     }
 
-    socket.emit('fs:browse', { requestId, path: path || null });
+    socket.emit('fs:browse', withTraceMeta({ requestId, path: path || null }));
   }
 
   async getHomeDirectory(requestId: string, controllerId: string): Promise<void> {
@@ -40,24 +47,24 @@ export class FolderBrowserService {
 
     const controller = await Controller.findById(controllerId).lean();
     if (!controller) {
-      console.error(`Controller not found for getHomeDirectory: ${controllerId}`);
+      this.logger.error({ controllerId, requestId, op: 'fs:home' }, 'controller not found');
       return;
     }
 
     const keyId = controller.keyId.toString();
     const socketId = await sessionService.getSocketId(keyId);
     if (!socketId) {
-      console.error(`Controller offline for getHomeDirectory: ${controllerId}`);
+      this.logger.error({ controllerId, requestId, op: 'fs:home' }, 'controller offline');
       return;
     }
 
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) {
-      console.error(`Socket not found for getHomeDirectory: ${controllerId}`);
+      this.logger.error({ controllerId, socketId, requestId, op: 'fs:home' }, 'socket not found');
       return;
     }
 
-    socket.emit('fs:home', { requestId });
+    socket.emit('fs:home', withTraceMeta({ requestId }));
   }
 
   async handleBrowseResult(requestId: string, entries: Array<{ name: string; path: string; isDirectory: boolean }>): Promise<void> {

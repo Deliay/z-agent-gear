@@ -28,6 +28,7 @@ import { HarnessLoginRegistry } from './harness-login-registry.js';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { createTestLogger, type TestLogger } from '../observability/testing.js';
 
 const mockRedis = {
   publish: vi.fn(),
@@ -86,11 +87,13 @@ function mockAcpMessageDoc() {
 
 describe('ACPSessionManager', () => {
   let manager: ACPSessionManager;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
-    manager = new ACPSessionManager();
+    testLog = createTestLogger();
+    manager = new ACPSessionManager(undefined, testLog.logger);
   });
 
   describe('startSession', () => {
@@ -650,7 +653,7 @@ describe('ACPSessionManager', () => {
       // Simulate ack response to avoid timeout
       const stopPromise = manager.stopSession('sess-1', 'user_close');
       await vi.waitFor(() => {
-        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true, _meta: {} });
       });
       // Trigger the ack
       socket._trigger('acp:stopped', { sessionId: 'sess-1', reason: 'user_close' });
@@ -679,7 +682,7 @@ describe('ACPSessionManager', () => {
 
       const stopPromise = manager.stopSession('sess-1', 'user_close');
       await vi.waitFor(() => {
-        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true, _meta: {} });
       });
       // 同 socket 上另一个 session 的 acp:stopped 先到 —— 不得结算/消耗 sess-1 的 ack 等待
       socket._trigger('acp:stopped', { sessionId: 'sess-other', reason: 'user_close' });
@@ -721,7 +724,7 @@ describe('ACPSessionManager', () => {
       socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
       await startPromise;
       await vi.waitFor(() => {
-        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true, _meta: {} });
       });
       socket._trigger('acp:stopped', { sessionId: 'sess-1', reason: 'user_delete' });
       await stopPromise;
@@ -758,7 +761,7 @@ describe('ACPSessionManager', () => {
       socket._trigger('acp:start:result', { requestId: 'req-stale', sessionId: 'sess-ghost', success: true });
 
       // 孤儿收割：通知 controller 停掉该进程
-      expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-ghost' });
+      expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-ghost', _meta: {} });
     });
 
     it('迟到的 failure result → 不收割（进程未拉起）', async () => {
@@ -872,6 +875,7 @@ describe('ACPSessionManager', () => {
       expect(socket.emit).toHaveBeenCalledWith('acp:reconcile', {
         activeSessionIds: ['sess-2'],
         pendingKillSessionIds: ['sess-1'],
+        _meta: {},
       });
       expect(mockRedis.del).toHaveBeenCalledWith('acp:stop:pending:ctrl-1');
     });
@@ -900,6 +904,7 @@ describe('ACPSessionManager', () => {
       expect(socket.emit).toHaveBeenCalledWith('acp:reconcile', {
         activeSessionIds: expect.arrayContaining(['sess-mem', 'sess-db']),
         pendingKillSessionIds: ['sess-kill'],
+        _meta: {},
       });
     });
 
@@ -913,6 +918,7 @@ describe('ACPSessionManager', () => {
       expect(socket.emit).toHaveBeenCalledWith('acp:reconcile', {
         activeSessionIds: [],
         pendingKillSessionIds: [],
+        _meta: {},
       });
       expect(mockRedis.del).not.toHaveBeenCalled();
     });
@@ -1310,11 +1316,13 @@ describe('ACPSessionManager', () => {
 
 describe('ACPSessionManager - capability snapshot 落库', () => {
   let manager: ACPSessionManager;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
-    manager = new ACPSessionManager();
+    testLog = createTestLogger();
+    manager = new ACPSessionManager(undefined, testLog.logger);
   });
 
   const capabilities = {
@@ -1354,7 +1362,6 @@ describe('ACPSessionManager - capability snapshot 落库', () => {
   });
 
   it('T-S1b: 超限快照落库前截断 raw，保留 features（体积防护）', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const socket = createMockSocket();
     vi.mocked(Session.findById).mockReturnValue({ lean: vi.fn().mockResolvedValue({ status: 'creating' }) } as never);
     vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
@@ -1390,11 +1397,12 @@ describe('ACPSessionManager - capability snapshot 落库', () => {
     expect(stored.features).toEqual(capabilities.features);
     expect(stored.raw).toMatchObject({ truncated: true });
     expect(stored.raw?.originalBytes).toBeGreaterThan(64 * 1024);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('agentCapabilities snapshot too large'),
-      expect.any(Number),
-      expect.any(Number),
-    );
+    expect(testLog.records).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      msg: expect.stringContaining('agentCapabilities snapshot too large'),
+      bytes: expect.any(Number),
+      maxBytes: expect.any(Number),
+    }));
   });
 
   it('T-S2: 旧 payload 不带 capabilities 时不写 agentCapabilities（零退化）', async () => {
@@ -1524,11 +1532,13 @@ describe('ACPSessionManager 登录超时守卫 (T-HLM8)', () => {
 
 describe('ACPSessionManager.handleInitialConfigResult (acp:initial-config:result)', () => {
   let manager: ACPSessionManager;
+  let testLog: TestLogger;
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
-    manager = new ACPSessionManager();
+    testLog = createTestLogger();
+    manager = new ACPSessionManager(undefined, testLog.logger);
   });
 
   it('任一 status 为 failed：写 initialConfigError 并随 session:status extra 下发', async () => {
@@ -1606,20 +1616,18 @@ describe('ACPSessionManager.handleInitialConfigResult (acp:initial-config:result
   });
 
   it('缺失/空 sessionId：丢弃并 console.warn，不触库不发布', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
     await manager.handleInitialConfigResult({ modeStatus: 'failed' } as never);
     await manager.handleInitialConfigResult({ sessionId: '', modeStatus: 'failed' });
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('invalid sessionId'));
+    expect(testLog.records).toContainEqual(expect.objectContaining({
+      level: 'warn',
+      msg: expect.stringContaining('invalid sessionId'),
+    }));
     expect(Session.findByIdAndUpdate).not.toHaveBeenCalled();
     expect(mockRedis.publish).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
   });
 
   it('status 为契约外取值：丢弃并 console.warn，不触库不发布', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-
     await manager.handleInitialConfigResult({
       sessionId: 'sess-1',
       modeStatus: 'pending' as never,
@@ -1629,13 +1637,12 @@ describe('ACPSessionManager.handleInitialConfigResult (acp:initial-config:result
       modelStatus: 'ok' as never,
     });
 
-    expect(warnSpy).toHaveBeenCalledTimes(2);
-    for (const call of warnSpy.mock.calls) {
-      expect(String(call[0])).toContain('invalid status');
-    }
+    const invalidStatusWarns = testLog.records.filter(
+      (r) => r.level === 'warn' && String(r.msg).includes('invalid status'),
+    );
+    expect(invalidStatusWarns).toHaveLength(2);
     expect(Session.findByIdAndUpdate).not.toHaveBeenCalled();
     expect(mockRedis.publish).not.toHaveBeenCalled();
-    warnSpy.mockRestore();
   });
 
   it('error 超长时截断到 200 字符后落库', async () => {

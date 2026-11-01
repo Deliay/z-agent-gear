@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import Sidebar from '../Sidebar';
 import { SIDEBAR_SECTIONS_KEY } from '../../lib/sidebar-prefs';
+import { logger } from '../../lib/logger';
 import type { CloudHostData, HomeOverviewData, HomeOverviewControllerData, HomeOverviewWorkspaceData, SessionData } from '../../graphql/types';
 import type { WorkflowInstanceSummaryData } from '../../graphql/workflow';
 
@@ -393,10 +394,15 @@ describe('Sidebar 集成测试', () => {
 
   describe('⑤ 无限渲染循环回归', () => {
     it('render 后正常完成，无 React 报错', () => {
+      // React 渲染错误直接走 console.error（框架通道，不经 logger），保留断言以捕获无限渲染循环；
+      // 业务错误日志统一在 logger 层断言（logger 是包内唯一 console 出口）。
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       renderSidebar();
+      const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
       expect(consoleSpy).not.toHaveBeenCalled();
+      expect(loggerSpy).not.toHaveBeenCalled();
       consoleSpy.mockRestore();
+      loggerSpy.mockRestore();
     });
   });
 

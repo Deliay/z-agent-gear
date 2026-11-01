@@ -15,6 +15,10 @@ export interface CloudWorkloadEntity {
   postScript: string | null;
   paramSchema?: WorkloadParamField[];
   dependsOnWorkloadIds?: string[];
+  /** 负载类别（`standard` / `harness`）；历史夹具缺省按 standard。 */
+  workloadKind?: string | null;
+  /** harness 类型（opencode / kimi_code / deepseek_harness）；standard 为 null。 */
+  harnessType?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -26,6 +30,8 @@ interface RawDoc {
   postScript?: string | null;
   paramSchema?: WorkloadParamField[] | null;
   dependsOnWorkloadIds?: unknown[] | null;
+  workloadKind?: string | null;
+  harnessType?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,6 +50,8 @@ function toEntity(doc: RawDoc): CloudWorkloadEntity {
       defaultValue: field.defaultValue,
     })),
     dependsOnWorkloadIds: (doc.dependsOnWorkloadIds ?? []).map((value) => String(value)),
+    workloadKind: doc.workloadKind ?? 'standard',
+    harnessType: doc.harnessType ?? null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };

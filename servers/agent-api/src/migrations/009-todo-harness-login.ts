@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/009-todo-harness-login' });
 
 export const name = '009-todo-harness-login';
 
@@ -14,5 +17,5 @@ export async function run(): Promise<void> {
     { 'harnessLoginData.requestId': 1 },
     { name: 'harness_login_request_id' },
   );
-  console.log('[Migration 009] Ensured index harness_login_request_id on todoitems');
+  log.info('ensured index harness_login_request_id on todoitems');
 }

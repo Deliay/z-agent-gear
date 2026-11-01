@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
@@ -155,7 +156,10 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
     mcpForwarder
       .request({ serverId: server._id.toString(), sessionId, request: body })
       .catch((err: Error) => {
-        console.warn(`[MCP dispatch] notification forward failed: session=${sessionId} server=${serverName} method=${request.method}: ${err.message}`);
+        rootLogger.warn(
+          { component: 'mcp-dispatch', event: 'notification-forward-failed', sessionId, serverName, method: request.method, err },
+          'MCP notification forward failed',
+        );
       });
     return { status: 202, body: undefined };
   }
@@ -164,7 +168,18 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
     const result = await mcpForwarder.request({ serverId: server._id.toString(), sessionId, request: body });
     return { status: 200, body: result };
   } catch (err) {
-    console.warn(`[MCP dispatch] forward failed: session=${sessionId} server=${serverName} method=${request.method} id=${JSON.stringify(request.id)}: ${(err as Error).message}`);
+    rootLogger.warn(
+      {
+        component: 'mcp-dispatch',
+        event: 'forward-failed',
+        sessionId,
+        serverName,
+        method: request.method,
+        requestId: request.id === undefined || request.id === null ? null : JSON.stringify(request.id),
+        err,
+      },
+      'MCP forward failed',
+    );
     if (err instanceof ForwardError) {
       return { status: 200, body: jsonRpcError(request.id, err.code, err.message) };
     }

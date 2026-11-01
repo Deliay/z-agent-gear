@@ -1,13 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/cloud-workload.js', () => ({
   CloudWorkload: { findOne: vi.fn(), create: vi.fn() },
 }));
 
 import { CloudWorkload } from '../models/cloud-workload.js';
-import * as migration from './012-worker-user-scripts';
 import { HARNESS_OPENCODE_INIT_SCRIPT } from './006-preset-harness-opencode.js';
 import { DOCKER_SCRIPT_V3 } from './003-docker-apt-source.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./012-worker-user-scripts.js');
+childSpy.mockRestore();
 
 const finder = (docs: Record<string, unknown | null>) =>
   (CloudWorkload.findOne as any).mockImplementation((filter: { presetKey?: string; name?: string }) =>
@@ -17,8 +29,7 @@ const finder = (docs: Record<string, unknown | null>) =>
 describe('migration 012-worker-user-scripts', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    testLog.reset();
     (CloudWorkload.create as any).mockResolvedValue({ _id: 'created' });
   });
 
@@ -63,7 +74,7 @@ describe('migration 012-worker-user-scripts', () => {
     await migration.run();
     expect(doc.initScript).toContain('custom');
     expect(save).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('refreshes a stock harness script path to /home/worker/workspace', async () => {

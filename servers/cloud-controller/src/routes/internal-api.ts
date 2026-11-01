@@ -5,6 +5,7 @@ import {
   SUPPORTED_HARNESS_TYPES,
   type WorkloadPlanEntry,
 } from '../models/cloud-container.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import type { CloudContainerEntity } from '../repositories/container-repository.js';
 import {
   InMemoryWorkloadLogRepository,
@@ -26,7 +27,10 @@ import type { HarnessSecrets } from '../services/secret-store.js';
 import { resolveGlobalWorkspaceId } from '../services/workspace-resolver.js';
 import {
   harnessMinVersion,
+  isSupportedWorkerVersion,
   maxWorkerVersion,
+  sanitizeVersionForLog,
+  MIN_HARNESS_VERSION_BY_TYPE,
   MIN_HARNESS_WORKER_VERSION,
 } from '../services/worker-version.js';
 import {
@@ -38,10 +42,13 @@ import {
 import {
   ContainerBusyError,
   ContainerNotOnlineError,
+  HarnessEnvironmentUnavailableError,
   InvalidRuntimeBatchError,
   RuntimeContainerNotFoundError,
   type WorkloadDispatcher,
 } from '../services/workload-dispatcher.js';
+
+const log = rootLogger.child({ component: 'internal-api' });
 
 /** 单次启动可挂载的工作负载上限（契约 A.2.2 / 裁决 12）。 */
 export const MAX_WORKLOAD_IDS = 10;
@@ -150,6 +157,11 @@ export interface InternalRouterDeps {
    * 可注入用于单测（无需真库）。
    */
   resolveGlobalWorkspaceId?: (tenantId: string) => Promise<string | null>;
+  /**
+   * 在线 worker 上报版本读取（socketio-gateway 注册信息）：runtime 安装 harness 负载的
+   * 逐类型版本门禁使用；不可得（未注入/未注册）时放行并告警留痕（契约 A.2.5）。
+   */
+  getWorkerVersion?: (containerId: string) => string | undefined;
 }
 
 /**
@@ -253,14 +265,14 @@ async function resolveHarnessWorkspaceId(
   try {
     const resolved = await resolver(tenantId);
     if (resolved) return resolved;
-    console.warn(
-      `[internal-api] harness 请求缺少 workspaceId 且未解析到全局工作区（tenantId=${tenantId}），已置 workspaceId=null`,
+    log.warn(
+      { tenantId },
+      'harness 请求缺少 workspaceId 且未解析到全局工作区，已置 workspaceId=null',
     );
   } catch (err) {
-    console.warn(
-      `[internal-api] harness 请求缺少 workspaceId，解析全局工作区失败（tenantId=${tenantId}）：${
-        err instanceof Error ? err.message : String(err)
-      }，已置 workspaceId=null`,
+    log.warn(
+      { tenantId, err: err instanceof Error ? err : new Error(String(err)) },
+      'harness 请求缺少 workspaceId，解析全局工作区失败，已置 workspaceId=null',
     );
   }
   return null;
@@ -307,9 +319,7 @@ export async function parseHarnessRequest(
   let tenantId: string;
   if (rawTenantId === undefined || rawTenantId === null) {
     tenantId = userId;
-    console.warn(
-      `[internal-api] harness 请求缺少 tenantId（userId=${userId}），已回退 tenantId=userId（一期恒等）`,
-    );
+    log.warn({ userId }, 'harness 请求缺少 tenantId，已回退 tenantId=userId（一期恒等）');
   } else {
     const parsedTenantId = nonEmptyString(rawTenantId);
     if (!parsedTenantId) return null;
@@ -344,9 +354,9 @@ export async function parseHarnessRequest(
   }
 
   const harnessTypes = body.harnessTypes;
+  // harness 为可选工作负载：允许空数组（0-harness 云电脑）；非空时仍须全部在白名单内。
   if (
     !Array.isArray(harnessTypes) ||
-    harnessTypes.length === 0 ||
     harnessTypes.some(
       (value) =>
         typeof value !== 'string' ||
@@ -391,8 +401,8 @@ export async function parseHarnessRequest(
     harnessTypes: [...new Set(harnessTypes as string[])],
     controllerKeyId,
     containerApiKeyId,
-    // C-4 / A7：落库下限恒为 MIN_HARNESS_WORKER_VERSION（2.10.0）；按类型常量为能力引入历史，
-    // 与 2.10.0 取 max 后不再改变落库值，注册门禁按落库值生效。
+    // C-4 / A7：落库下限恒为 MIN_HARNESS_WORKER_VERSION（2.12.0，worktree committer 能力）；
+    // 按类型常量为能力引入历史，与 2.12.0 取 max 后不再改变落库值，注册门禁按落库值生效。
     agentGearMinVersion: maxWorkerVersion(
       maxWorkerVersion(agentGearMinVersion, harnessMinVersion(harnessTypes as string[])),
       MIN_HARNESS_WORKER_VERSION,
@@ -401,6 +411,64 @@ export async function parseHarnessRequest(
     expiresAt,
     secrets,
   };
+}
+
+/**
+ * runtime 安装 harness 负载的逐类型版本门禁（契约 A.2.5 第 3 条）。
+ *
+ * - 所需版本 = `max(MIN_HARNESS_VERSION_BY_TYPE[harnessType] ?? MIN_HARNESS_WORKER_VERSION,
+ *   MIN_HARNESS_WORKER_VERSION)`（复用 `worker-version.ts` 语义，不新造比较逻辑）；
+ * - 在线 worker 版本不可得（未注入/未注册）→ 放行并 `warn` 留痕；
+ * - 不满足 → 返回可读错误文案（调用方 400 `INVALID_WORKLOAD`）；满足 → `null`。
+ */
+function checkRuntimeHarnessVersionGate(
+  containerId: string,
+  workload: { name: string; workloadKind?: string | null; harnessType?: string | null } | undefined,
+  getWorkerVersion?: (containerId: string) => string | undefined,
+): string | null {
+  if (!workload) return null;
+  const isHarness =
+    String(workload.workloadKind ?? '').toLowerCase() === 'harness' ||
+    Boolean(workload.harnessType);
+  if (!isHarness) return null;
+
+  const harnessType = workload.harnessType ?? '';
+  const required = harnessType
+    ? maxWorkerVersion(
+        MIN_HARNESS_VERSION_BY_TYPE[harnessType] ?? MIN_HARNESS_WORKER_VERSION,
+        MIN_HARNESS_WORKER_VERSION,
+      )
+    : MIN_HARNESS_WORKER_VERSION;
+  const current = getWorkerVersion?.(containerId);
+  if (!current) {
+    log.warn(
+      {
+        component: 'internal-api',
+        event: 'runtime-harness-version-unknown',
+        containerId,
+        harnessType,
+        required,
+      },
+      'worker version unavailable; allowing harness install',
+    );
+    return null;
+  }
+  const support = isSupportedWorkerVersion(current, required);
+  if (support.supported) return null;
+  const currentVersion = sanitizeVersionForLog(current);
+  log.warn(
+    {
+      component: 'internal-api',
+      event: 'runtime-harness-version-rejected',
+      containerId,
+      harnessType,
+      required,
+      currentVersion,
+      reason: support.reason,
+    },
+    'worker version too low for harness install',
+  );
+  return `agent-gear 版本不兼容：安装「${workload.name}」需要 >= ${required}，当前 ${currentVersion}`;
 }
 
 export function createInternalRouter(
@@ -530,14 +598,8 @@ export function createInternalRouter(
       }
     }
 
-    // 契约 A.2.2：harness 的 workloadPlan 必填（缺失/展开为空均 400 INVALID_HARNESS）。
-    if (isHarness && (!hadExplicitPlan || effectivePlan.length === 0)) {
-      res.status(400).json({
-        error: 'INVALID_HARNESS',
-        message: '云电脑参数非法（workloadPlan 为空）',
-      });
-      return;
-    }
+    // 契约 A.2.2（本期放宽）：harness 的 workloadPlan **允许为空**（0 harness + 0 standard
+    // 场景）；无初始化脚本时容器直接 online，后续可在设置-工作负载补装。
 
     const harnessOptions: StartHarnessOptions = harness
       ? {
@@ -609,6 +671,11 @@ export function createInternalRouter(
       return;
     }
     if (err instanceof InvalidRuntimeBatchError) {
+      res.status(400).json({ error: 'INVALID_WORKLOAD', message: err.message });
+      return;
+    }
+    if (err instanceof HarnessEnvironmentUnavailableError) {
+      // 云端环境缺失属可读、可重试（用户可稍后重试或联系管理员），不下发半套配置。
       res.status(400).json({ error: 'INVALID_WORKLOAD', message: err.message });
       return;
     }
@@ -689,6 +756,16 @@ export function createInternalRouter(
         );
       if (entries.length === 0) {
         res.status(400).json({ error: 'INVALID_WORKLOAD', message: '工作负载无初始化脚本' });
+        return;
+      }
+      // 契约 A.2.5：harness 负载安装前逐类型版本门禁（版本不可得 → 放行 + 告警留痕）。
+      const gateError = checkRuntimeHarnessVersionGate(
+        containerId,
+        byId.get(workloadId),
+        deps.getWorkerVersion,
+      );
+      if (gateError) {
+        res.status(400).json({ error: 'INVALID_WORKLOAD', message: gateError });
         return;
       }
       const result = await workloadDispatcher.startRuntimeBatch(containerId, {

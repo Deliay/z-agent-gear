@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/005-cloud-host-active-unique-index' });
 
 export const name = '005-cloud-host-active-unique-index';
 
@@ -22,7 +25,5 @@ export async function run(): Promise<void> {
       },
     },
   );
-  console.log(
-    '[Migration 005] Ensured partial unique index uniq_active_cloud_host_per_user on cloudhosts',
-  );
+  log.info('ensured partial unique index uniq_active_cloud_host_per_user on cloudhosts');
 }

@@ -10,7 +10,19 @@ import { InMemoryContainerRepository } from '../repositories/container-repositor
 import { InMemoryWorkloadRepository } from '../repositories/workload-repository.js';
 import { InMemoryWorkloadLogRepository } from '../repositories/workload-log-repository.js';
 import { internalAuth } from '../middleware/internal-auth.js';
-import { createInternalRouter } from './internal-api.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把 internal-api
+ * 的告警日志写入内存 sink，断言 `records` 的结构化字段（`msg`/`component`/`tenantId` 等）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { createInternalRouter } = await import('./internal-api.js');
+childSpy.mockRestore();
 
 const INTERNAL_TOKEN = 'test-internal-token';
 
@@ -22,6 +34,10 @@ let containerService: ContainerService;
 let workloadLogRepository: InMemoryWorkloadLogRepository;
 let workloadRepository: InMemoryWorkloadRepository;
 let stubWorkspaceResolver: ReturnType<typeof vi.fn>;
+/** runtime harness 版本门禁用：在线 worker 版本读取（可按用例改返回值）。 */
+let getWorkerVersion: ReturnType<typeof vi.fn>;
+/** runtime 路由用桩 dispatcher（不执行真实编排，仅断言入参/门禁）。 */
+let runtimeDispatcher: { startRuntimeBatch: ReturnType<typeof vi.fn> };
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return { Authorization: `Bearer ${INTERNAL_TOKEN}`, ...extra };
@@ -41,6 +57,17 @@ async function createStubContainer(body: Record<string, unknown>): Promise<Respo
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
+  });
+}
+
+/** 以合法 ObjectId 容器 ID 发起 runtime 安装（桩 dispatcher 不校验容器存在）。 */
+const RUNTIME_GATE_CONTAINER_ID = '507f1f77bcf86cd799439099';
+
+async function startRuntimeOnOnlineContainer(workloadId: string): Promise<Response> {
+  return fetch(`${baseUrl}/gate/containers/${RUNTIME_GATE_CONTAINER_ID}/workloads`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ workloadId, source: 'user' }),
   });
 }
 
@@ -80,12 +107,18 @@ beforeAll(async () => {
     runtimeClassName: 'sysbox-runc',
     publicWsEndpoint: 'cloud.example.com:4003',
   });
-  const service = new ContainerService(repo, tokenService, jobManager, {
-    namespace: 'zag-workers',
-    image: 'zero-tools/zag-worker:latest',
-    connectTimeoutMs: 300000,
-    shutdownGraceMs: 0,
-  });
+  const service = new ContainerService(
+    repo,
+    tokenService,
+    jobManager,
+    {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: 300000,
+      shutdownGraceMs: 0,
+    },
+    testLog.logger,
+  );
   containerService = service;
 
   workloadRepository = new InMemoryWorkloadRepository();
@@ -153,6 +186,27 @@ beforeAll(async () => {
     createdAt: new Date(),
     updatedAt: new Date(),
   });
+  // runtime 安装 harness 负载的版本门禁用例（workloadId 须为 ObjectId）。
+  workloadRepository.add({
+    id: '507f1f77bcf86cd7994390a2',
+    name: 'workload-standard-gate',
+    initScript: 'echo standard',
+    postScript: null,
+    workloadKind: 'standard',
+    harnessType: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+  workloadRepository.add({
+    id: '507f1f77bcf86cd7994390a1',
+    name: 'DeepSeek Harness（Harness）',
+    initScript: 'echo harness',
+    postScript: null,
+    workloadKind: 'harness',
+    harnessType: 'deepseek_harness',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
 
   workloadLogRepository = new InMemoryWorkloadLogRepository();
 
@@ -172,6 +226,29 @@ beforeAll(async () => {
       workloadRepository,
       workloadLogRepository,
       resolveGlobalWorkspaceId: stubWorkspaceResolver,
+    }),
+  );
+  // runtime 安装路由（harness 负载）门禁用例：桩 dispatcher + 可注入 worker 版本。
+  getWorkerVersion = vi.fn();
+  runtimeDispatcher = { startRuntimeBatch: vi.fn() };
+  runtimeDispatcher.startRuntimeBatch.mockResolvedValue({
+    batchId: 'runtime-test',
+    items: [
+      {
+        logId: 'log-1',
+        workloadId: '507f1f77bcf86cd7994390a1',
+        workloadName: 'DeepSeek Harness（Harness）',
+      },
+    ],
+  });
+  app.use(
+    '/gate',
+    internalAuth(INTERNAL_TOKEN),
+    createInternalRouter(service, {
+      workloadRepository,
+      workloadLogRepository,
+      workloadDispatcher: runtimeDispatcher as never,
+      getWorkerVersion,
     }),
   );
   httpServer = createServer(app);
@@ -643,7 +720,7 @@ describe('internal management API', () => {
     const stored = await repo.findById(body.id as string);
     expect(JSON.stringify(stored)).not.toContain(secrets.hostKey);
     expect(JSON.stringify(stored)).not.toContain(secrets.modelApiKey);
-    expect(stored?.agentGearMinVersion).toBe('2.10.0');
+    expect(stored?.agentGearMinVersion).toBe('2.12.0');
 
     // Job env 含 harness 变量且模型 Key 不进入 Job env
     const env = k8sClient.getEnv(body.name as string);
@@ -691,38 +768,40 @@ describe('internal management API', () => {
   });
 
   it('T-IC-HARNESS: 缺 tenantId 时回退 tenantId=userId 并 warn（滚动升级兜底）', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      const res = await createContainer({
-        purpose: 'harness',
-        hostId: 'host-tenant-2',
-        refId: 'ck-tenant-2',
-        userId: 'user-tenant-2',
-        hostName: 'pc-tenant-2',
-        harnessTypes: ['opencode'],
-        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
-        agentGearMinVersion: '2.10.0',
-        secrets: {
-          hostEndpoint: 'wss://controller.example.com',
-          hostKey: 'zag_k_1_tenant_legacy',
-          modelApiKey: 'zag_sk_tenant_legacy',
-          modelBaseUrl: 'http://admin-api:8002/v1',
-          modelIds: '["a"]',
-          defaultWorkspace: '/home/worker/workspace',
-        },
-        workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false, required: true }],
-      });
+    testLog.reset();
+    const res = await createContainer({
+      purpose: 'harness',
+      hostId: 'host-tenant-2',
+      refId: 'ck-tenant-2',
+      userId: 'user-tenant-2',
+      hostName: 'pc-tenant-2',
+      harnessTypes: ['opencode'],
+      expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      agentGearMinVersion: '2.10.0',
+      secrets: {
+        hostEndpoint: 'wss://controller.example.com',
+        hostKey: 'zag_k_1_tenant_legacy',
+        modelApiKey: 'zag_sk_tenant_legacy',
+        modelBaseUrl: 'http://admin-api:8002/v1',
+        modelIds: '["a"]',
+        defaultWorkspace: '/home/worker/workspace',
+      },
+      workloadPlan: [{ workloadId: 'wl-a', params: {}, implicit: false, required: true }],
+    });
 
-      expect(res.status).toBe(201);
-      const body = (await res.json()) as { id: string };
-      const stored = await repo.findById(body.id);
-      expect(stored?.tenantId).toBe('user-tenant-2');
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('缺少 tenantId'),
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string };
+    const stored = await repo.findById(body.id);
+    expect(stored?.tenantId).toBe('user-tenant-2');
+    // 断言 warn 的结构化记录（msg 含固定短语 + userId 进字段）
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({
+        level: 'warn',
+        component: 'internal-api',
+        msg: expect.stringContaining('缺少 tenantId'),
+        userId: 'user-tenant-2',
+      }),
+    );
   });
 
   it('T-IC-HARNESS: tenantId 显式非法（空串/非字符串）→ 400 INVALID_HARNESS', async () => {
@@ -779,20 +858,24 @@ describe('internal management API', () => {
   });
 
   it('T-IC-HARNESS2c: 缺失且解析不到 → 落库 null + warn（不阻断创建）', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      stubWorkspaceResolver.mockResolvedValue(null);
-      const res = await createStubContainer(
-        harnessPayload({ tenantId: 'tenant-ws-missing', workspaceId: undefined }),
-      );
-      expect(res.status).toBe(201);
-      const body = (await res.json()) as { id: string };
-      const stored = await repo.findById(body.id);
-      expect(stored?.workspaceId).toBeNull();
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('缺少 workspaceId'));
-    } finally {
-      warnSpy.mockRestore();
-    }
+    testLog.reset();
+    stubWorkspaceResolver.mockResolvedValue(null);
+    const res = await createStubContainer(
+      harnessPayload({ tenantId: 'tenant-ws-missing', workspaceId: undefined }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string };
+    const stored = await repo.findById(body.id);
+    expect(stored?.workspaceId).toBeNull();
+    // 断言 warn 的结构化记录（msg 含固定短语 + tenantId 进字段）
+    expect(testLog.records).toContainEqual(
+      expect.objectContaining({
+        level: 'warn',
+        component: 'internal-api',
+        msg: expect.stringContaining('缺少 workspaceId'),
+        tenantId: 'tenant-ws-missing',
+      }),
+    );
   });
 
   it('T-IC-HARNESS2d: workspaceId 显式非法（空串/非字符串）→ 400 INVALID_HARNESS', async () => {
@@ -826,15 +909,15 @@ describe('internal management API', () => {
     const lower = await createContainer({ ...base, agentGearMinVersion: '2.1.0' });
     expect(lower.status).toBe(201);
     const lowerBody = (await lower.json()) as { id: string };
-    expect((await repo.findById(lowerBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(lowerBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
-    const higher = await createContainer({ ...base, agentGearMinVersion: '2.10.0' });
+    const higher = await createContainer({ ...base, agentGearMinVersion: '2.13.0' });
     expect(higher.status).toBe(201);
     const higherBody = (await higher.json()) as { id: string };
-    expect((await repo.findById(higherBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(higherBody.id))?.agentGearMinVersion).toBe('2.13.0');
   });
 
-  it('A7: harnessTypes 含 kimi_code → 落库 2.10.0；仅 opencode 维持 2.10.0；非法类型 400', async () => {
+  it('A7: harnessTypes 含 kimi_code → 落库 2.12.0；仅 opencode 亦为 2.12.0；非法类型 400', async () => {
     const base = {
       purpose: 'harness',
       hostId: 'host-kimi',
@@ -858,7 +941,7 @@ describe('internal management API', () => {
     expect(kimi.status).toBe(201);
     const kimiBody = (await kimi.json()) as { id: string; harnessTypes: string[] };
     expect(kimiBody.harnessTypes).toEqual(['kimi_code']);
-    expect((await repo.findById(kimiBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(kimiBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const both = await createContainer({
       ...base,
@@ -867,7 +950,7 @@ describe('internal management API', () => {
     });
     expect(both.status).toBe(201);
     const bothBody = (await both.json()) as { id: string };
-    expect((await repo.findById(bothBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(bothBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const opencode = await createContainer({
       ...base,
@@ -876,7 +959,7 @@ describe('internal management API', () => {
     });
     expect(opencode.status).toBe(201);
     const opencodeBody = (await opencode.json()) as { id: string };
-    expect((await repo.findById(opencodeBody.id))?.agentGearMinVersion).toBe('2.10.0');
+    expect((await repo.findById(opencodeBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const bogus = await createContainer({
       ...base,
@@ -887,7 +970,7 @@ describe('internal management API', () => {
     expect(((await bogus.json()) as { error: string }).error).toBe('INVALID_HARNESS');
   });
 
-  it('A7b: harnessTypes 含 deepseek_harness → 落库 2.11.0；混合取最大；白名单外 400', async () => {
+  it('A7b: harnessTypes 含 deepseek_harness → 落库 2.12.0；混合取最大；白名单外 400', async () => {
     const base = {
       purpose: 'harness',
       hostId: 'host-deepseek',
@@ -911,7 +994,7 @@ describe('internal management API', () => {
     expect(deepseek.status).toBe(201);
     const deepseekBody = (await deepseek.json()) as { id: string; harnessTypes: string[] };
     expect(deepseekBody.harnessTypes).toEqual(['deepseek_harness']);
-    expect((await repo.findById(deepseekBody.id))?.agentGearMinVersion).toBe('2.11.0');
+    expect((await repo.findById(deepseekBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const mixed = await createContainer({
       ...base,
@@ -920,7 +1003,7 @@ describe('internal management API', () => {
     });
     expect(mixed.status).toBe(201);
     const mixedBody = (await mixed.json()) as { id: string };
-    expect((await repo.findById(mixedBody.id))?.agentGearMinVersion).toBe('2.11.0');
+    expect((await repo.findById(mixedBody.id))?.agentGearMinVersion).toBe('2.12.0');
 
     const bogus = await createContainer({
       ...base,
@@ -931,7 +1014,7 @@ describe('internal management API', () => {
     expect(((await bogus.json()) as { error: string }).error).toBe('INVALID_HARNESS');
   });
 
-  it('T-CC5: harness 缺字段 / secrets 不完整 / harnessTypes 非法 / workloadPlan 缺失 → 400 INVALID_HARNESS 且不创建 Job', async () => {
+  it('T-CC5: harness 缺字段 / secrets 不完整 / harnessTypes 非法 → 400 INVALID_HARNESS 且不创建 Job', async () => {
     const valid = {
       purpose: 'harness',
       hostId: 'host-invalid',
@@ -958,15 +1041,13 @@ describe('internal management API', () => {
       ['missing refId', { ...valid, refId: undefined }],
       ['missing userId', { ...valid, userId: undefined }],
       ['missing hostName', { ...valid, hostName: undefined }],
-      ['empty harnessTypes', { ...valid, harnessTypes: [] }],
+      ['harnessTypes 非数组', { ...valid, harnessTypes: 'opencode' }],
       ['unsupported harness type', { ...valid, harnessTypes: ['unknown'] }],
       ['invalid expiresAt', { ...valid, expiresAt: 'not-a-date' }],
       ['missing agentGearMinVersion', { ...valid, agentGearMinVersion: undefined }],
       ['invalid agentGearMinVersion', { ...valid, agentGearMinVersion: '2.x' }],
       ['missing secrets', { ...valid, secrets: undefined }],
       ['incomplete secrets', { ...valid, secrets: { ...valid.secrets, hostKey: '' } }],
-      ['missing workloadPlan', { ...valid, workloadPlan: undefined }],
-      ['empty workloadPlan', { ...valid, workloadPlan: [] }],
     ];
 
     for (const [label, body] of cases) {
@@ -979,6 +1060,55 @@ describe('internal management API', () => {
       expect((await repo.findAll()).length, label).toBe(containersBefore);
       expect(k8sClient.createdManifests.length, label).toBe(jobsBefore);
     }
+  });
+
+  it('T-CC-AH: 0-harness + 空 workloadPlan 允许创建（容器直接可上线）', async () => {
+    const res = await createContainer(harnessPayload({ harnessTypes: [], workloadPlan: [] }));
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.harnessTypes).toEqual([]);
+    expect(body.workloadPlan).toEqual([]);
+    expect(body.status).toBe('connecting');
+  });
+
+  it('T-CC-R4: runtime harness 安装逐类型版本门禁（满足/不满足/版本不可得）', async () => {
+    runtimeDispatcher.startRuntimeBatch.mockClear();
+    testLog.reset();
+
+    // 2.11.0 < max(deepseek_harness 2.12.0, 基线 2.12.0) → 400 可读拒绝
+    getWorkerVersion.mockReturnValue('2.11.0');
+    const rejected = await startRuntimeOnOnlineContainer('507f1f77bcf86cd7994390a1');
+    expect(rejected.status).toBe(400);
+    const rejectedBody = (await rejected.json()) as { error: string; message: string };
+    expect(rejectedBody.error).toBe('INVALID_WORKLOAD');
+    expect(rejectedBody.message).toContain('2.12.0');
+    expect(rejectedBody.message).toContain('DeepSeek Harness（Harness）');
+    expect(runtimeDispatcher.startRuntimeBatch).not.toHaveBeenCalled();
+
+    // 2.12.0 满足 → 放行
+    getWorkerVersion.mockReturnValue('2.12.0');
+    const allowed = await startRuntimeOnOnlineContainer('507f1f77bcf86cd7994390a1');
+    expect(allowed.status).toBe(200);
+    expect(runtimeDispatcher.startRuntimeBatch).toHaveBeenCalledTimes(1);
+
+    // 版本不可得 → 放行 + warn 留痕
+    runtimeDispatcher.startRuntimeBatch.mockClear();
+    getWorkerVersion.mockReturnValue(undefined);
+    const unknown = await startRuntimeOnOnlineContainer('507f1f77bcf86cd7994390a1');
+    expect(unknown.status).toBe(200);
+    expect(runtimeDispatcher.startRuntimeBatch).toHaveBeenCalledTimes(1);
+    expect(
+      testLog.records.some(
+        (r) => r.level === 'warn' && r.event === 'runtime-harness-version-unknown',
+      ),
+    ).toBe(true);
+
+    // standard 负载不进门禁（低版本也放行）
+    runtimeDispatcher.startRuntimeBatch.mockClear();
+    getWorkerVersion.mockReturnValue('2.2.0');
+    const standard = await startRuntimeOnOnlineContainer('507f1f77bcf86cd7994390a2');
+    expect(standard.status).toBe(200);
+    expect(runtimeDispatcher.startRuntimeBatch).toHaveBeenCalledTimes(1);
   });
 
   it('T-CC15: GET /containers 支持 hostId/userId 过滤，无参数保持全量', async () => {

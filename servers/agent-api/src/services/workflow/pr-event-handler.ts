@@ -1,4 +1,6 @@
 import { WorkflowInstance } from '../../models/workflow-instance.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { withSpan } from '../../observability/trace.js';
 import type { EventCallbackPayload } from './pr-event-payload.js';
 import {
   normalizePullRequestId,
@@ -7,11 +9,15 @@ import {
 } from './pr-handler-registry.js';
 import { workflowInstanceService } from './instance.js';
 import { KeyedMutex } from '../keyed-mutex.js';
+import { runWithWorkspace } from '../workspace-context.js';
+import { workspaceService } from '../workspace-service.js';
 import {
   buildReviewPassedPrompt,
   buildReviewRejectedPrompt,
   GITHUB_PR_REVIEW_PROMPT_KEY,
 } from './pr-prompts.js';
+
+const logger = rootLogger.child({ component: 'pr-event-handler' });
 
 /** 忽略原因（与 contracts/event-callback.openapi.yaml 一致） */
 export type EventIgnoreReason =
@@ -60,6 +66,8 @@ interface NodeLike {
 interface InstanceLike {
   _id: { toString(): string };
   userId: { toString(): string };
+  /** 租户工作区（多租户二期）；事件回调无 ALS 上下文，须据此构造系统上下文 */
+  resourceWorkspaceId?: { toString(): string } | null;
   nodes: NodeLike[];
   deletedAt?: Date | null;
   archivedAt?: Date | null;
@@ -142,7 +150,7 @@ async function unregister(instanceId: string, reason: 'ARCHIVED' | 'DELETED' | '
   try {
     await prHandlerRegistry.unregisterByInstance(instanceId, reason);
   } catch (err) {
-    console.warn('[pr-event] unregister failed:', (err as Error).message);
+    logger.warn({ event: 'unregister-failed', err }, 'unregister failed');
   }
 }
 
@@ -199,38 +207,46 @@ async function processHandler(
 
   const review = event.payload.reviewState;
   const userId = instance.userId.toString();
+  // 事件回调是系统链路（无 ALS 上下文）：按实例所属工作区构造上下文，
+  // 否则团队租户 tenantId != userId 时 completeHumanNode/rejectNode 会被注入
+  // `tenantId = userId` 而判定「实例不存在」。
+  const workspace = instance.resourceWorkspaceId
+    ? await workspaceService.systemWorkspaceContext(String(instance.resourceWorkspaceId))
+    : undefined;
 
   if (review === 'approved') {
-    await workflowInstanceService.setSystemAdditionalPrompt(
-      instanceId,
-      GITHUB_PR_REVIEW_PROMPT_KEY,
-      buildReviewPassedPrompt({
-        comment: event.payload.comment,
-        // C-4：优先使用登记时的可信 prUrl，事件载荷仅作回退
-        prUrl: handler.prUrl || event.payload.prUrl,
-        reviewer: event.payload.reviewer,
-        submittedAt: event.payload.submittedAt ?? event.occurredAt,
-      }),
-    );
-    try {
-      await workflowInstanceService.completeHumanNode(userId, instanceId, human.nodeId);
-    } catch (err) {
-      // C-3：流转失败时回滚已写入的系统提示词，避免留下与新状态不一致的脏 prompt
-      await workflowInstanceService
-        .removeSystemAdditionalPrompt(instanceId, GITHUB_PR_REVIEW_PROMPT_KEY)
-        .catch((rollbackErr) => {
-          console.warn(
-            '[pr-event] rollback github-pr-review prompt failed:',
-            (rollbackErr as Error).message,
-          );
-        });
-      throw err;
-    }
+    await runWithWorkspace(workspace, async () => {
+      await workflowInstanceService.setSystemAdditionalPrompt(
+        instanceId,
+        GITHUB_PR_REVIEW_PROMPT_KEY,
+        buildReviewPassedPrompt({
+          comment: event.payload.comment,
+          // C-4：优先使用登记时的可信 prUrl，事件载荷仅作回退
+          prUrl: handler.prUrl || event.payload.prUrl,
+          reviewer: event.payload.reviewer,
+          submittedAt: event.payload.submittedAt ?? event.occurredAt,
+        }),
+      );
+      try {
+        await workflowInstanceService.completeHumanNode(userId, instanceId, human.nodeId);
+      } catch (err) {
+        // C-3：流转失败时回滚已写入的系统提示词，避免留下与新状态不一致的脏 prompt
+        await workflowInstanceService
+          .removeSystemAdditionalPrompt(instanceId, GITHUB_PR_REVIEW_PROMPT_KEY)
+          .catch((rollbackErr) => {
+            logger.warn(
+              { event: 'rollback-prompt-failed', err: rollbackErr },
+              'rollback github-pr-review prompt failed',
+            );
+          });
+        throw err;
+      }
+    });
     // C-3：幂等位写入失败不影响已完成的流转（响应仍回报真实动作，仅告警）
     await prHandlerRegistry
       .markEventHandled(String(handler._id), event.eventId, new Date())
       .catch((err) => {
-        console.warn('[pr-event] markEventHandled failed:', (err as Error).message);
+        logger.warn({ event: 'mark-event-handled-failed', err }, 'markEventHandled failed');
       });
     return {
       ...base,
@@ -240,21 +256,23 @@ async function processHandler(
   }
 
   if (REVIEW_REJECT_STATES.has(review)) {
-    await workflowInstanceService.rejectNode(
-      userId,
-      instanceId,
-      human.nodeId,
-      buildReviewRejectedPrompt({
-        comment: event.payload.comment,
-        prUrl: handler.prUrl || event.payload.prUrl,
-        reviewer: event.payload.reviewer,
-        submittedAt: event.payload.submittedAt ?? event.occurredAt,
-      }),
+    await runWithWorkspace(workspace, () =>
+      workflowInstanceService.rejectNode(
+        userId,
+        instanceId,
+        human.nodeId,
+        buildReviewRejectedPrompt({
+          comment: event.payload.comment,
+          prUrl: handler.prUrl || event.payload.prUrl,
+          reviewer: event.payload.reviewer,
+          submittedAt: event.payload.submittedAt ?? event.occurredAt,
+        }),
+      ),
     );
     await prHandlerRegistry
       .markEventHandled(String(handler._id), event.eventId, new Date())
       .catch((err) => {
-        console.warn('[pr-event] markEventHandled failed:', (err as Error).message);
+        logger.warn({ event: 'mark-event-handled-failed', err }, 'markEventHandled failed');
       });
     return { ...base, action: 'REJECT_HUMAN_NODE' };
   }
@@ -264,6 +282,19 @@ async function processHandler(
 
 /** 事件入口：判定链 + per-instance 串行化；任何分支都不抛 500 */
 export async function handlePullRequestEvent(
+  event: EventCallbackPayload,
+): Promise<EventHandleResponse> {
+  return withSpan(
+    'pr-event handle',
+    {
+      eventId: event.eventId,
+      'pull_request.id': event.payload?.pullRequestId ?? null,
+    },
+    () => handlePullRequestEventInner(event),
+  );
+}
+
+async function handlePullRequestEventInner(
   event: EventCallbackPayload,
 ): Promise<EventHandleResponse> {
   let pullRequestId: string;
@@ -293,9 +324,9 @@ export async function handlePullRequestEvent(
       );
       results.push(result);
     } catch (err) {
-      console.warn(
-        `[pr-event] handler failed (instance=${instanceId}, node=${handler.nodeId}):`,
-        (err as Error).message,
+      logger.warn(
+        { event: 'handler-failed', instanceId, nodeId: handler.nodeId, err },
+        'PR event handler failed',
       );
       results.push({
         workflowInstanceId: instanceId,

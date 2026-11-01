@@ -1,4 +1,5 @@
 import { GraphQLError } from 'graphql';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { sessionService } from '../../services/session.js';
@@ -16,7 +17,7 @@ async function degrade<T>(branch: () => Promise<T>, fallback: T, label: string):
   try {
     return await branch();
   } catch (err) {
-    console.error(`homeOverview 分支「${label}」失败，已降级：`, err);
+    rootLogger.error({ component: 'home', branch: label, err }, 'homeOverview branch degraded');
     return fallback;
   }
 }

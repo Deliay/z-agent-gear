@@ -27,7 +27,25 @@ vi.mock('./instance.js', () => ({
   },
 }));
 
-import { handlePullRequestEvent } from './pr-event-handler.js';
+const ws = vi.hoisted(() => ({ systemWorkspaceContext: vi.fn() }));
+vi.mock('../workspace-service.js', () => ({
+  workspaceService: ws,
+}));
+
+import { logger as rootLogger } from '../../observability/logger.js';
+import { createTestLogger } from '../../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把
+ * pr-event-handler 告警写入内存 sink，断言 `records` 的结构化字段。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { handlePullRequestEvent } = await import('./pr-event-handler.js');
+childSpy.mockRestore();
+import { getWorkspaceContext } from '../workspace-context.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { workflowInstanceService } from './instance.js';
@@ -86,6 +104,7 @@ function loadInstance(value: unknown) {
 describe('handlePullRequestEvent', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testLog.reset();
     vi.mocked(prHandlerRegistry.findByPullRequestId).mockResolvedValue([handler()] as never);
     vi.mocked(prHandlerRegistry.findById).mockResolvedValue(handler() as never);
     vi.mocked(prHandlerRegistry.markEventHandled).mockResolvedValue(undefined as never);
@@ -94,6 +113,7 @@ describe('handlePullRequestEvent', () => {
     vi.mocked(workflowInstanceService.removeSystemAdditionalPrompt).mockResolvedValue(undefined as never);
     vi.mocked(workflowInstanceService.completeHumanNode).mockResolvedValue({} as never);
     vi.mocked(workflowInstanceService.rejectNode).mockResolvedValue({} as never);
+    ws.systemWorkspaceContext.mockResolvedValue(undefined);
   });
 
   it('NO_HANDLER', async () => {
@@ -185,6 +205,43 @@ describe('handlePullRequestEvent', () => {
     expect(prHandlerRegistry.markEventHandled).toHaveBeenCalledWith('h1', 'evt-1', expect.any(Date));
   });
 
+  it('T-EVT-TEAM: 团队租户实例在系统工作区上下文中完成节点', async () => {
+    loadInstance(
+      instance(
+        [node('n1', 'AI', 'DONE'), node('n2', 'HUMAN', 'RUNNING', ['n1'])],
+        { resourceWorkspaceId: oid('ws-team') },
+      ),
+    );
+    ws.systemWorkspaceContext.mockResolvedValue({
+      id: 'ws-team',
+      tenantId: 'team-1',
+      type: 'normal',
+      role: 'admin',
+      readOnly: false,
+      globalWorkspaceId: 'ws-global',
+    });
+
+    let seen: ReturnType<typeof getWorkspaceContext> | undefined;
+    vi.mocked(workflowInstanceService.completeHumanNode).mockImplementation(async () => {
+      seen = getWorkspaceContext();
+      return {} as never;
+    });
+
+    const result = await handlePullRequestEvent(event('approved'));
+
+    expect(result.handled).toBe(true);
+    expect(ws.systemWorkspaceContext).toHaveBeenCalledWith('ws-team');
+    expect(seen?.tenantId).toBe('team-1');
+    expect(seen?.role).toBe('admin');
+    // 打回分支同样在上下文内
+    vi.mocked(workflowInstanceService.rejectNode).mockImplementation(async () => {
+      seen = getWorkspaceContext();
+      return {} as never;
+    });
+    await handlePullRequestEvent(event('changes_requested'));
+    expect(seen?.tenantId).toBe('team-1');
+  });
+
   it.each(['changes_requested', 'rejected', 'dismissed'])('%s → 打回并携带 A.3 文案', async (state) => {
     const result = await handlePullRequestEvent(event(state));
     expect(result.results[0].action).toBe('REJECT_HUMAN_NODE');
@@ -195,12 +252,11 @@ describe('handlePullRequestEvent', () => {
 
   it('HANDLER_FAILED（驱动异常被捕获）', async () => {
     vi.mocked(workflowInstanceService.completeHumanNode).mockRejectedValue(new Error('boom'));
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const result = await handlePullRequestEvent(event('approved'));
     expect(result.handled).toBe(false);
     expect(result.results[0].reason).toBe('HANDLER_FAILED');
     expect(result.results[0].registeredNodeId).toBe('n1');
-    expect(warn).toHaveBeenCalled();
+    expect(testLog.records.some((r) => r.level === 'warn' && String(r.msg).includes('handler failed'))).toBe(true);
     // C-3：流转失败回滚已写入的系统提示词
     expect(workflowInstanceService.removeSystemAdditionalPrompt).toHaveBeenCalledWith(
       'inst-1',

@@ -15,6 +15,8 @@ export interface CloudWorkloadCatalogItem {
   dependsOnWorkloadIds: string[];
   isPreset: boolean;
   workloadKind: string;
+  /** harness 类型（opencode / kimi_code / deepseek_harness）；standard 为 null。 */
+  harnessType?: string | null;
   initScript: string | null;
 }
 
@@ -22,6 +24,13 @@ export interface CloudWorkloadCatalogItem {
  * `cloudworkloads` 只读目录（写方 admin-api）：runtime 安装与 Github 预制项查询。
  */
 export class CloudWorkloadCatalog {
+  /** 全量目录（standard + harness）：设置-工作负载与 MCP `workload_list` 使用。 */
+  async listAll(): Promise<CloudWorkloadCatalogItem[]> {
+    const docs = await CloudWorkload.find({}).lean();
+    return docs.map((doc) => this.map(doc as Record<string, unknown>));
+  }
+
+  /** 仅 standard 目录：创建云电脑时的「预装工作负载」勾选使用（harness 走 `harnessTypes`）。 */
   async listStandard(): Promise<CloudWorkloadCatalogItem[]> {
     const docs = await CloudWorkload.find({ workloadKind: 'standard' }).lean();
     return docs.map((doc) => this.map(doc as Record<string, unknown>));
@@ -53,6 +62,7 @@ export class CloudWorkloadCatalog {
         : [],
       isPreset: doc.isPreset === true,
       workloadKind: String(doc.workloadKind ?? 'standard'),
+      harnessType: typeof doc.harnessType === 'string' && doc.harnessType ? doc.harnessType : null,
       initScript: typeof doc.initScript === 'string' ? doc.initScript : null,
     };
   }

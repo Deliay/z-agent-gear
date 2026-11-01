@@ -32,6 +32,7 @@ import { cloudHostService } from '../../services/cloud-host-service.js';
 import { CloudHost } from '../../models/cloud-host.js';
 import { Session } from '../../models/session.js';
 import { billingClient } from '../../services/billing-client.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 
 const context = { currentUser: null } as never;
 const authContext = { currentUser: { id: 'user-1', username: 'u' } } as never;
@@ -191,5 +192,31 @@ describe('cloudHostResolvers.Query.cloudHostBillingQuote', () => {
     await expect(
       cloudHostResolvers.Query.cloudHostBillingQuote({}, {}, authContext),
     ).resolves.toEqual({ createCredits: 5, perMinuteCredits: 1, availableBalance: null });
+  });
+
+  it('T-OBS B1: 降级告警错误对象进 err 字段（message/stack 不丢，不落 reason)', async () => {
+    const warnSpy = vi.spyOn(rootLogger, 'warn').mockImplementation((() => rootLogger) as never);
+    const priceErr = new Error('price service down');
+    const accountErr = new Error('account service down');
+    vi.mocked(billingClient.getPriceQuote).mockRejectedValue(priceErr);
+    vi.mocked(billingClient.getAccount).mockRejectedValue(accountErr);
+
+    await cloudHostResolvers.Query.cloudHostBillingQuote({}, {}, authContext);
+
+    const priceCall = warnSpy.mock.calls.find(
+      (c) => (c[0] as { event?: string })?.event === 'price-fallback',
+    );
+    expect(priceCall).toBeDefined();
+    expect(priceCall![0]).toMatchObject({ err: priceErr });
+    expect(priceCall![0]).not.toHaveProperty('reason');
+
+    const accountCall = warnSpy.mock.calls.find(
+      (c) => (c[0] as { event?: string })?.event === 'balance-unavailable',
+    );
+    expect(accountCall).toBeDefined();
+    expect(accountCall![0]).toMatchObject({ err: accountErr });
+    expect(accountCall![0]).not.toHaveProperty('reason');
+
+    warnSpy.mockRestore();
   });
 });

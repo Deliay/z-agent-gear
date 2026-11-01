@@ -1,4 +1,5 @@
 import { WorkflowTemplate } from '../../models/workflow-template.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { validateTemplateGraph, type WorkflowTemplateNodeInput } from './template.js';
 
 export const BUILTIN_TEMPLATE_NAME = '开发工作流';
@@ -145,5 +146,8 @@ export async function seedBuiltinWorkflowTemplate(): Promise<void> {
     isBuiltin: true,
     nodes: BUILTIN_TEMPLATE_NODES,
   });
-  console.log(`[Workflow] 内置模板「${BUILTIN_TEMPLATE_NAME}」已创建`);
+  rootLogger.info(
+    { component: 'workflow-seed', template: BUILTIN_TEMPLATE_NAME },
+    'builtin workflow template created',
+  );
 }

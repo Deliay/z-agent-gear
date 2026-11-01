@@ -1,5 +1,8 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
 import { DOCKER_SCRIPT_V1 } from './001-preset-workloads.js';
+
+const log = logger.child({ component: 'migration/002-refresh-docker-preset-script' });
 
 /**
  * 002-refresh-docker-preset-script：把存量（管理员未定制过的）「Docker」预制工作负载脚本
@@ -7,7 +10,7 @@ import { DOCKER_SCRIPT_V1 } from './001-preset-workloads.js';
  *
  * 刷新口径（裁决 3/4）：
  * - 未定制判定严格相等：`initScript === DOCKER_SCRIPT_V2` 直接返回（已刷新）；
- *   `initScript === DOCKER_SCRIPT_V1` 才刷新；其余视为管理员定制，`console.warn` 且不覆盖。
+ *   `initScript === DOCKER_SCRIPT_V1` 才刷新；其余视为管理员定制，打 `warn` 且不覆盖。
  * - 防御路径：`presetKey='docker'` 不存在时先按精确 `name='Docker'` 再查一次；两者都不存在才按 v2
  *   创建；同名项已存在则告警跳过，不创建重名项。
  *
@@ -132,8 +135,9 @@ export async function run(): Promise<void> {
     // 防御（裁决 4）：001 可能因同名冲突跳过，这里按精确 name 再查一次，避免创建重名项。
     const byName = await CloudWorkload.findOne({ name: DOCKER_PRESET_NAME });
     if (byName) {
-      console.warn(
-        `[Migration 002] workload named "${DOCKER_PRESET_NAME}" already exists without presetKey, skipping`,
+      log.warn(
+        { name: DOCKER_PRESET_NAME },
+        'workload already exists without presetKey, skipping',
       );
       return;
     }
@@ -146,20 +150,20 @@ export async function run(): Promise<void> {
       presetKey: DOCKER_PRESET_KEY,
       isPreset: true,
     });
-    console.log('[Migration 002] docker preset workload created (v2)');
+    log.info('docker preset workload created (v2)');
     return;
   }
 
   const initScript = (wl as { initScript?: string | null }).initScript;
   if (initScript === DOCKER_SCRIPT_V2) {
-    console.log('[Migration 002] docker preset script already refreshed, skipping');
+    log.info('docker preset script already refreshed, skipping');
     return;
   }
   if (initScript === DOCKER_SCRIPT_V1) {
     (wl as { initScript: string }).initScript = DOCKER_SCRIPT_V2;
     await (wl as { save: () => Promise<unknown> }).save();
-    console.log('[Migration 002] docker preset script refreshed to v2');
+    log.info('docker preset script refreshed to v2');
     return;
   }
-  console.warn('[Migration 002] docker preset script modified by admin, skipping');
+  log.warn('docker preset script modified by admin, skipping');
 }

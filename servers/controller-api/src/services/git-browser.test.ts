@@ -24,6 +24,7 @@ import { gitBrowserService, GitBrowserService } from './git-browser.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
+import { createTestLogger } from '../observability/testing.js';
 
 function createMockSocket() {
   return { emit: vi.fn() };
@@ -82,17 +83,24 @@ describe('GitBrowserService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('git:check', {
         requestId: 'req-1',
         path: '/fake/path',
+        _meta: {},
       });
     });
 
     it('should log error when controller not found', async () => {
       const controllerMock = Controller as unknown as { _mockLean: ReturnType<typeof vi.fn> };
       controllerMock._mockLean.mockResolvedValue(null);
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const testLog = createTestLogger();
+      const service = new GitBrowserService(testLog.logger);
+      service.start(mockIO as never);
 
-      await gitBrowserService.check('req-1', 'ctrl-1', '/fake/path');
+      await service.check('req-1', 'ctrl-1', '/fake/path');
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Controller not found'));
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'error',
+        controllerId: 'ctrl-1',
+        msg: 'controller not found',
+      }));
       expect(mockSocket.emit).not.toHaveBeenCalled();
     });
 
@@ -100,11 +108,17 @@ describe('GitBrowserService', () => {
       const controllerMock = Controller as unknown as { _mockLean: ReturnType<typeof vi.fn> };
       controllerMock._mockLean.mockResolvedValue({ keyId: 'key-123' });
       vi.mocked(sessionService.getSocketId).mockResolvedValue(null);
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const testLog = createTestLogger();
+      const service = new GitBrowserService(testLog.logger);
+      service.start(mockIO as never);
 
-      await gitBrowserService.check('req-1', 'ctrl-1', '/fake/path');
+      await service.check('req-1', 'ctrl-1', '/fake/path');
 
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Controller offline'));
+      expect(testLog.records).toContainEqual(expect.objectContaining({
+        level: 'error',
+        controllerId: 'ctrl-1',
+        msg: 'controller offline',
+      }));
       expect(mockSocket.emit).not.toHaveBeenCalled();
     });
 
@@ -128,6 +142,7 @@ describe('GitBrowserService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('git:init', {
         requestId: 'req-1',
         path: '/fake/path',
+        _meta: {},
       });
     });
   });

@@ -17,6 +17,7 @@ vi.mock('fs', () => ({
 vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/test'),
   tmpdir: vi.fn(() => '/tmp'),
+  hostname: vi.fn(() => 'test-host'),
 }));
 
 import { ProcessRegistry } from './process-registry.js';

@@ -78,7 +78,57 @@ describe('WorktreeService', () => {
         repoPath: '/repo',
         worktreePath: '/wt',
         branch: 'feat/branch',
+        _meta: {},
       });
+    });
+
+    it('should pass committer through to controller socket', async () => {
+      const service = new WorktreeService();
+      service.start(mockIO as never);
+
+      const committer = { name: 'Deliay', email: 'admin@remiliascarlet.com' };
+      await service.handleAdd('req-1', 'ctrl-1', '/repo', '/wt', 'feat/branch', committer);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('git:worktree:add', {
+        requestId: 'req-1',
+        repoPath: '/repo',
+        worktreePath: '/wt',
+        branch: 'feat/branch',
+        committer,
+        _meta: {},
+      });
+    });
+
+    it('T-CB-C2: should pass committer co-author fields through to controller socket', async () => {
+      const service = new WorktreeService();
+      service.start(mockIO as never);
+
+      const committer = {
+        name: 'Deliay',
+        email: 'admin@remiliascarlet.com',
+        coAuthorName: 'zag-bot[bot]',
+        coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+      };
+      await service.handleAdd('req-1', 'ctrl-1', '/repo', '/wt', 'feat/branch', committer);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('git:worktree:add', {
+        requestId: 'req-1',
+        repoPath: '/repo',
+        worktreePath: '/wt',
+        branch: 'feat/branch',
+        committer,
+        _meta: {},
+      });
+    });
+
+    it('should omit committer key when committer is undefined', async () => {
+      const service = new WorktreeService();
+      service.start(mockIO as never);
+
+      await service.handleAdd('req-1', 'ctrl-1', '/repo', '/wt', 'feat/branch', undefined);
+
+      const payload = vi.mocked(mockSocket.emit).mock.calls[0][1] as Record<string, unknown>;
+      expect(payload).not.toHaveProperty('committer');
     });
   });
 
@@ -93,6 +143,7 @@ describe('WorktreeService', () => {
         requestId: 'req-1',
         repoPath: '/repo',
         worktreePath: '/wt',
+        _meta: {},
       });
     });
   });
@@ -107,6 +158,7 @@ describe('WorktreeService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('git:status', {
         requestId: 'req-1',
         path: '/wt',
+        _meta: {},
       });
     });
   });
@@ -122,6 +174,7 @@ describe('WorktreeService', () => {
         requestId: 'req-1',
         path: '/wt',
         message: 'feat: msg',
+        _meta: {},
       });
     });
   });

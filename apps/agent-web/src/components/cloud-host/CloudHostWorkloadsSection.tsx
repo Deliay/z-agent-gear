@@ -193,13 +193,13 @@ export default function CloudHostWorkloadsSection({
     () => new Map(workloads.map((workload) => [workload.workloadId, workload.name])),
     [workloads],
   )
-  // 按 workloadKind 分组：standard = 运行环境/工具，harness = 云电脑（当前目录只含 standard）
+  // 按 workloadKind 分组：standard = 运行环境/工具，harness = 云电脑（Harness，可选工作负载）
   const groups = useMemo(() => {
     const standard = workloads.filter((workload) => (workload.workloadKind ?? 'STANDARD') === 'STANDARD')
     const harness = workloads.filter((workload) => workload.workloadKind === 'HARNESS')
     return [
       { key: 'STANDARD', title: '运行环境 / 工具', items: standard },
-      { key: 'HARNESS', title: '云电脑', items: harness },
+      { key: 'HARNESS', title: '云电脑（Harness）', items: harness },
     ].filter((group) => group.items.length > 0)
   }, [workloads])
 
@@ -292,6 +292,11 @@ export default function CloudHostWorkloadsSection({
                         {workload.isPreset && (
                           <Badge variant="outline" className="shrink-0">
                             预制
+                          </Badge>
+                        )}
+                        {workload.workloadKind === 'HARNESS' && (
+                          <Badge variant="outline" className="shrink-0">
+                            可选
                           </Badge>
                         )}
                         {workload.installed && (

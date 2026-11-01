@@ -4,6 +4,7 @@ import { Session } from '../models/session.js';
 import { Controller } from '../models/controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 import { sessionService } from './session.js';
 import { resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 
@@ -52,12 +53,12 @@ class WorktreeService {
     const gitWorktrees: { path: string; branch: string }[] = [];
     if (isOnline) {
       const requestId = `wtl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      await redis.publish('session:command', JSON.stringify({
+      await publish('session:command', {
         type: 'git:worktree:list',
         requestId,
         controllerId,
         cwd: workspace.path,
-      }));
+      });
 
       for (let i = 0; i < 30; i++) {
         const result = await redis.get(`git:worktree:list:${requestId}`);
@@ -197,14 +198,14 @@ class WorktreeService {
     let removed = false;
     let removeError: string | null = null;
     const rmReqId = `wtr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'git:worktree:remove',
       requestId: rmReqId,
       controllerId,
       repoPath: workspace.path,
       worktreePath,
       force: true,
-    }));
+    });
 
     for (let i = 0; i < 30; i++) {
       const result = await redis.get(`git:worktree:remove:${rmReqId}`);
@@ -221,12 +222,12 @@ class WorktreeService {
     // 3. fs:remove-dir fallback if git:worktree:remove didn't succeed
     if (!removed) {
       const fsReqId = `fsr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      await redis.publish('session:command', JSON.stringify({
+      await publish('session:command', {
         type: 'fs:remove-dir',
         requestId: fsReqId,
         controllerId,
         path: worktreePath,
-      }));
+      });
 
       let fsRemoved = false;
       for (let i = 0; i < 30; i++) {
