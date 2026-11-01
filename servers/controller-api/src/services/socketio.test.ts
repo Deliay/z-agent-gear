@@ -444,7 +444,7 @@ describe('SocketIO Service', () => {
         expect(Controller.deleteOne).toHaveBeenCalledWith({ keyId: 'key123' });
         expect(ControllerKey.deleteOne).toHaveBeenCalledWith({ _id: 'key123' });
         expect(sessionService.cleanupKey).toHaveBeenCalledWith('key123');
-        expect(mockSocket.emit).toHaveBeenCalledWith('unregistered');
+        expect(mockSocket.emit).toHaveBeenCalledWith('unregistered', { _meta: {} });
         expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
       });
     });

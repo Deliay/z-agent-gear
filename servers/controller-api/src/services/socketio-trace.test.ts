@@ -343,6 +343,26 @@ describe('A2 socket 事件链路', () => {
     );
   });
 
+  it('unregister → unregistered 下发报文顶层 _meta.traceparent 非空且指向 socket.unregister span（A2 全量 withTraceMeta）', async () => {
+    const mockSocket = createMockSocket();
+    const mockIO = createMockIO(mockSocket);
+    await registerAuthenticated(mockSocket, mockIO);
+
+    mockSocket._trigger('unregister', { reason: 'bye' });
+    await vi.waitFor(() => {
+      expect(mockSocket.emit).toHaveBeenCalledWith('unregistered', expect.anything());
+    });
+
+    // 下发报文顶层注入 `_meta.traceparent`（活跃 socket.unregister span，与其它下发 emit 口径一致）
+    const emit = mockSocket.emit.mock.calls.at(-1)! as [string, { _meta?: { traceparent?: string } }];
+    expect(emit[0]).toBe('unregistered');
+    expect(emit[1]._meta?.traceparent).toMatch(TP_RE);
+    const span = await endedSpan('socket.unregister');
+    expect(emit[1]._meta?.traceparent).toBe(
+      `00-${span.spanContext().traceId}-${span.spanContext().spanId}-01`,
+    );
+  });
+
   it('F11 豁免：acp:message / acp:load-session:message / port-forward:data / heartbeat 不逐条开 span', async () => {
     const mockSocket = createMockSocket();
     const mockIO = createMockIO(mockSocket);

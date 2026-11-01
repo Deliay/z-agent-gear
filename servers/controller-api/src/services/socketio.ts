@@ -312,7 +312,7 @@ export function createSocketIOServer(
         await ControllerKey.deleteOne({ _id: keyId });
         await sessionService.cleanupKey(keyId);
 
-        socket.emit('unregistered');
+        socket.emit('unregistered', withTraceMeta({}));
         socket.disconnect(true);
       } catch (err) {
         logger.error({ err }, 'unregister error');
