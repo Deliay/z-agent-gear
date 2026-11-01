@@ -125,7 +125,7 @@ RUN mkdir -p "$NVM_DIR" \
 RUN . "$NVM_DIR/nvm.sh" \
  && npm install -g "pnpm@${PNPM_VERSION}" \
  && npm cache clean --force \
- && pnpm add -g agent-gear@2.13.x \
+ && pnpm add -g agent-gear@2.14.x \
  && pnpm store prune \
  && node -v && npm -v && pnpm -v && agent-gear --version
 USER root
