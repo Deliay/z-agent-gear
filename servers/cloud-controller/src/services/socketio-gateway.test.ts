@@ -1073,6 +1073,32 @@ describe('worker Socket.IO gateway', () => {
     expect(platform.length).toBeLessThanOrEqual(64);
   });
 
+  it('T-OBS13: registered 日志 hostname 落日志前经 sanitizeVersionForLog（去控制符 + 截断 64）', async () => {
+    testLog.reset();
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+
+    // B2：hostname 为 worker 可控上报值——注入控制字符（ESC 转义 + \r\n）+ 超长（80 个 x），
+    // 落日志前须与 version/platform 同口径脱敏（不得裸入）。
+    socket.emit('register', {
+      hostname: `evil\u001b[31m${'x'.repeat(40)}\r\n${'x'.repeat(40)}`,
+      version: OK_VERSION,
+    });
+    const registered = await waitFor<{ controllerId: string }>(socket, 'registered');
+    expect(registered.controllerId).toBe(container.id);
+
+    const registeredLog = testLog.records.find(
+      (record) => record.msg === 'registered' && record.containerId === container.id,
+    );
+    expect(registeredLog).toBeDefined();
+    const hostname = String(registeredLog?.hostname);
+    // 控制字符（\u001b / \r / \n）被移除，超长截断到恰 64
+    expect(hostname).toBe(`evil[31m${'x'.repeat(56)}`);
+    expect(hostname).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(hostname.length).toBe(64);
+    socket.close();
+  });
+
   it('T-OBS13: 握手携带 auth.traceparent（合法/非法）均不报错，缺失行为不变', async () => {
     testLog.reset();
     const validTraceparent = `00-${'a'.repeat(32)}-${'b'.repeat(16)}-01`;

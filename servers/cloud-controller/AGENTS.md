@@ -86,7 +86,7 @@ src/
 | `WORKLOAD_LOG_MAX_BYTES` | 单条执行日志存储上限（默认 262144，写入前尾部截断） |
 | `K8S_ENABLED` | 是否使用真实 K8s 客户端（默认 `true`；本地/测试设 `false`） |
 | `RUNTIME_CLASS_NAME` | 容器 runtimeClass（默认 `sysbox-runc`） |
-| `LOG_LEVEL` | 日志级别（`debug`/`info`/`warn`/`error`，默认 `info`）。排查 worker 回连时设 `debug` 看逐请求日志 |
+| `LOG_LEVEL` | 日志级别（`debug`/`info`/`warn`/`error`，默认 `info`）。回连排查的逐请求/逐事件级别见「回连失败排查」（engine path `http-request` 等默认 `info` 已可见，仅非 engine-path `http-request` 需 `debug`） |
 | `AGENT_API_URL` | agent-api 内部地址（可空；配置后启用云电脑 ready/terminal 回调） |
 | `AGENT_API_TIMEOUT_MS` | 内部回调超时（默认 5000，正数） |
 | `ADMIN_API_URL` | admin-api 内部地址（可空；配置后启用云电脑模型 Key `revoke-by-host`） |
@@ -100,7 +100,7 @@ worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日�
    - 完全没有该行 → 请求没到 Pod，问题在入口层（Ingress 路径/TLS/host/DNS/Service）。看 Ingress 控制器日志：`kubectl -n <ingress-ns> logs <ingress-pod>`。
    - 出现 `"event":"ws-upgrade-path-mismatch"`（`grep '"event":"ws-upgrade-path-mismatch"'`，字段 `path`/`expectedPath`）→ Ingress 误配成 `/worker`（`/worker` 是 namespace，不是路径）；把 Ingress `spec.rules[].http.paths[].path` 改为 `/socket.io`（Prefix）。误打 `/worker` 的普通 HTTP 请求另有一条 `"event":"worker-path-request"` warn（msg `"/worker" 是 Socket.IO namespace，不是 URL 路径；Ingress 应放行 engine path`）。
    - 出现 `"event":"engine-connection-error"`（`grep '"event":"engine-connection-error"'`，msg `engine connection_error`，字段 `code`/`err.message`/`context`）→ 到 Pod 了但被 engine 拒绝（协议版本/CORS/传输不匹配），按 message 处理。
-   - 逐请求细节（含 engine path 的 `"event":"http-request"`）默认 debug：`LOG_LEVEL=debug` 查看。
+   - **逐请求细节分级**（级别决定要不要调 `LOG_LEVEL`，与 `socket-diagnostics.ts` 逐条一致）：`ws-upgrade-accepted`=info（msg `ws upgrade accepted`）、`ws-upgrade-path-mismatch`=warn、`upgrade-socket-error`=warn、engine path 的 `"event":"http-request"`（msg `engine path http request`）=**info**、`worker-path-request`=warn、`engine-connection-error`=warn——以上默认 `LOG_LEVEL=info` 均可见；仅**非** engine-path 的 `"event":"http-request"`（msg `http request`）是 **debug**，需 `LOG_LEVEL=debug` 查看。
 3. **握手鉴权是否通过**：到达后 `worker-gateway` 组件依次打印 `"event":"handshake_attempt"`（msg `handshake attempt`，字段 `tokenPresent`/`from`/`transport`）→ `"event":"handshake_accepted"` 或 `"event":"handshake_rejected"`（msg `handshake accepted`/`handshake rejected`，拒绝带 `reason: 'INVALID_TOKEN'`、`tokenPresent`）→ `"event":"connected"`（msg `connected`）→ `"event":"registered"`（msg `registered`，字段 `version`/`platform` 经 `sanitizeVersionForLog`）。卡在哪一步即问题所在（token 失效/版本不兼容/register 失败等）；限流看 `"event":"handshake_rate_limited"`、版本/载荷不符看 `"event":"register_rejected"`（`reason: 'VERSION_MISMATCH'|'INVALID_PAYLOAD'`）。
 4. **worker 侧细节**：`Connection error: websocket error` 现在会追加 `(type=... description=... context=...)`，其中 `context` 常含真实 HTTP 状态（如 `unexpected server response (404)`），据此判断是入口层 404 还是 TLS 问题。
 
@@ -136,9 +136,9 @@ npm run test:coverage
   - `status.sync.tick` — 状态对账**每轮一个 span**（属性记 `checked`/`changed` 条数，不逐容器开 span）；
   - `workload.dispatch` — `workload:run` **批次一个 span**（属性 `workload.count`，不逐条脚本开 span）。
 - **Socket.IO 握手 / `_meta` 封套位置**：worker 事件报文顶层 `_meta: { traceparent? }` 与云电脑 Job env 注入表见 [`contracts/cloud-controller-websocket.md`](../../contracts/cloud-controller-websocket.md) **附录 B**（B.1 `_meta` 可选字段 / B.2 Job env 注入表）；`emitToContainer()` 统一注入 `_meta.traceparent`，消费者必须容忍 `_meta` 缺失。agent-gear 侧握手 `auth.traceparent` 见 `contracts/agent-session-websocket.md` §7。
-- **env 变量**：`LOG_LEVEL`（默认 `info`，排 worker 回连设 `debug`）/ `LOG_PRETTY`（仅非生产生效）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 不启用导出、零外发**）/ `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS`（仅经 env 传递，**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` / `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORT_TIMEOUT_MS`，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。harness Job 注入的 `OTEL_*` + `ZAG_INIT_TRACEPARENT` 由 `buildHarnessJobEnv` 生成（附录 B.2）。
+- **env 变量**：`LOG_LEVEL`（默认 `info`；仅非 engine-path 逐请求 `http-request` 为 `debug` 级需提升，级别口径见「回连失败排查」）/ `LOG_PRETTY`（仅非生产生效）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 不启用导出、零外发**）/ `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS`（仅经 env 传递，**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` / `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORT_TIMEOUT_MS`，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。harness Job 注入的 `OTEL_*` + `ZAG_INIT_TRACEPARENT` 由 `buildHarnessJobEnv` 生成（附录 B.2）。
 - **排障**：
-  - `LOG_LEVEL=debug npm run dev`（或部署 env）看逐请求/逐事件日志；`LOG_PRETTY=1` 非生产看人类可读输出。
+  - `LOG_LEVEL=debug npm run dev`（或部署 env）补看非 engine-path 的逐请求 `http-request` 日志（upgrade/握手/engine path `http-request` 等默认 `info` 已可见）；`LOG_PRETTY=1` 非生产看人类可读输出。
   - `OTEL_SDK_DISABLED=true` 可在不回滚的情况下关闭追踪导出（日志不受影响）。
   - JSON 单行日志可直接 `grep`：按级别 `grep '"level":"error"'`、按组件 `grep '"component":"…"'`、按链路 `grep '"trace_id":"<trace-id>"'` 串起一次请求的全链路（配合 `kubectl -n zag-cloud logs deploy/cloud-controller`）。
 
