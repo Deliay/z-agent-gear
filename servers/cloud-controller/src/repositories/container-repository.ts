@@ -126,6 +126,11 @@ export interface ContainerRepository {
     patch: UpdateContainerInput,
     options?: UpdateContainerOptions,
   ): Promise<CloudContainerEntity | null>;
+  /**
+   * 原子追加 harness 类型（`$addToSet`，去重）：运行期成功安装 harness 负载后由 dispatcher
+   * 回填。写点在 cloud-controller（agent-api 的 cloudcontainers 为只读镜像）。
+   */
+  addHarnessType(id: string, harnessType: string): Promise<void>;
 }
 
 interface RawDoc {
@@ -328,6 +333,11 @@ export class MongoContainerRepository implements ContainerRepository {
     ).lean<RawDoc | null>();
     return doc ? toEntity(doc) : null;
   }
+
+  async addHarnessType(id: string, harnessType: string): Promise<void> {
+    if (!mongoose.isValidObjectId(id)) return;
+    await CloudContainer.updateOne({ _id: id }, { $addToSet: { harnessTypes: harnessType } });
+  }
 }
 
 /**
@@ -430,5 +440,13 @@ export class InMemoryContainerRepository implements ContainerRepository {
     this.store.set(id, updated);
     this.operations.push(`update:${updated.status}`);
     return { ...updated, workloadPlan: clonePlan(updated.workloadPlan) };
+  }
+
+  async addHarnessType(id: string, harnessType: string): Promise<void> {
+    const found = this.store.get(id);
+    if (!found) return;
+    if (found.harnessTypes.includes(harnessType)) return;
+    this.store.set(id, { ...found, harnessTypes: [...found.harnessTypes, harnessType] });
+    this.operations.push(`addHarnessType:${harnessType}`);
   }
 }

@@ -473,7 +473,8 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| T-AW2/T-AW3/T-AW4 | 新建入口、名称/harness 必填、无存储参数、选 1 提示「就绪后不会自动创建会话，需先创建或绑定工作区」、提交后 Sidebar 云图标 + 启动中 |
+| T-AW2/T-AW3/T-AW4 | 新建入口、名称必填、harness 可选（0 个可提交，提示「可不选，之后在设置-工作负载中补装」）、无存储参数、选 1 提示「就绪后不会自动创建会话，需先创建或绑定工作区」、提交后 Sidebar 云图标 + 启动中 |
+| T-AW-HARNESS | 创建 0-harness 云电脑成功（`harnessTypes=[]`、不默认建会话）；设置-工作负载展示「云电脑（Harness）」分组与「可选」徽标，运行中未安装可发起安装、无卸载入口（需 `MONGODB_URI` 推进 RUNNING） |
 | E2E-1 | 普通创建不预置默认工作区、不自动建会话；ready 后展示无工作区提示，defaultSessionId/workspaceId 为 null |
 | P10-CH1 | 未选 Github 项目 → 不弹四阶段进度框；ready 后 phase2 语义（无默认工作区/无默认会话，sessions=0） |
 | P10-CH2 | 选 Github 项目 → 四阶段进度；成功后进入项目会话、回填 defaultSessionId、无空默认会话 |

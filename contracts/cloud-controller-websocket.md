@@ -421,10 +421,12 @@ Content-Type: application/json
 }
 ```
 
-- `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`agentGearMinVersion`/`secrets`/`workloadPlan` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
+- `hostId`/`refId`/`userId`/`hostName`/`expiresAt`/`agentGearMinVersion`/`secrets` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
+- `harnessTypes`（harness）**允许空数组**：0 个 harness 的云电脑合法（harness 为可选工作负载，可在设置-工作负载中后期补装）；非空时仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选），白名单外返回 `400 INVALID_HARNESS`。
+- `workloadPlan`（harness）**允许为空**（省略或空数组）：0 harness + 0 standard 场景合法，容器无初始化脚本直接 `online`；显式下发时校验规则同下方 `workloadPlan` 通用条款。
 - `tenantId` **可选**（滚动升级兼容）：前台用户所属租户 id，落库到 `cloudcontainers.tenantId`；旧版 agent-api 未下发时回退为 `tenantId = userId` 并记录 warn（个人租户恒等，发布顺序已保证新版 agent-api 先上线，回退仅兜底）。显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
 - `workspaceId` **可选**（多租户二期新增）：前台用户当前租户工作区 id，落库到 `cloudcontainers.workspaceId`；缺失时按同库 `workspaces` 集合以 `{tenantId, type:'global'}` 解析全局工作区回退，解析不到置 `null` 并记录 warn；显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
-- `harnessTypes` 仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 下限恒为 `2.10.0`（以 2.10.0 为底取 max），含 `deepseek_harness` 时为 `2.11.0`（见 §3.4）。
+- `harnessTypes` 非空时仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 下限恒为 `2.12.0`（以 2.12.0 为底取 max），并按 `harnessTypes` 细分类型常量上调（见 §3.4）。
 - `expiresAt` 仅落库留存（容器 TTL 留档，不再关联模型 Key 有效期；模型 Key 改为随容器回收）；Job **不再设置 `activeDeadlineSeconds`**，工作容器最长运行时间无限制，不会因到期被 K8s 强制销毁。
 - `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
 - `secrets.modelContextLengths` 为**可选**字段：`模型 ID → 最长上下文（token，正整数）` 的 JSON object 字符串（无有效条目时为 `{}`）；缺省/空串表示无上下文信息（滚动升级期间旧调用方不下发），不纳入「secrets 各字段非空」必填校验；携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传给 worker。
@@ -439,7 +441,7 @@ Content-Type: application/json
 
 **错误：**
 - `400` —— `purpose` 非法（仅接受 `idle|harness`；其余用途返回 `UNSUPPORTED_PURPOSE`「该任务类型暂未开放」）。
-- `400` `INVALID_HARNESS` —— `purpose=harness` 时缺字段/`secrets` 不完整/`harnessTypes` 为空或非白名单。
+- `400` `INVALID_HARNESS` —— `purpose=harness` 时缺字段/`secrets` 不完整/`harnessTypes` 非数组或含白名单外类型（空数组合法）。
 - `400` `INVALID_WORKLOAD` —— `workloadIds` 非数组 / 超过 10 个 / 含不存在的 ID；或 `workloadPlan` 非数组 / 超过 10 个 / `workloadId` 重复或不存在 / `params` 非对象 / `implicit` 非布尔 / `required` 非布尔。
 - `500` —— 创建 Job 失败（容器记录标记 `failed` 并保留，可被强制销毁清理）。
 
@@ -491,6 +493,14 @@ Content-Type: application/json
 
 - `source` 可选：`user` | `mcp`（缺省 `user`）。
 - 服务端按只读定义做后序 DFS 展开（依赖先行、去重、≤10），显式工作负载合并用户参数并按 `paramSchema` 校验；隐式依赖取默认参数。`required` 固定 `false`。
+- `workloadId` 可为 harness 负载（`workloadKind=harness`，可选工作负载）：安装成功后容器读模型 `harnessTypes` **追加**该负载的 `harnessType`（去重，仅成功结果；失败不追加；standard 负载不动）。
+- harness 负载安装前做**逐类型版本门禁**：所需版本 =
+  `max(MIN_HARNESS_VERSION_BY_TYPE[harnessType] ?? MIN_HARNESS_WORKER_VERSION, MIN_HARNESS_WORKER_VERSION)`，
+  与在线 worker 上报版本（`register` 的 `version`）比较；不满足返回 `400 INVALID_WORKLOAD`（可读原因）。
+  在线版本不可得（未注册/注册信息缺失）时放行并 `warn` 留痕。
+- runtime 批次与 init 批次**同口径注入云电脑初始化 env**（§2.9：`ZAG_HARNESS_TYPES` / `ZAG_MODEL_*` /
+  `ZAG_DEFAULT_WORKSPACE` 等，`purpose=harness` 时）；env 无法构建（secret 缺失/模型配置不完整）时该次安装判失败
+  并返回可读原因，不下发 `undefined` 或半套配置（沿用 T-CC13 口径）。
 - 已安装仍允许重复执行（脚本幂等）；成功结果的 `installedWorkloads` 按 `workloadId` 去重（保留首次记录）。
 
 **响应 200：** `{ "batchId": "...", "items": [{ "logId": "...", "workloadId": "...", "workloadName": "..." }] }`
@@ -550,7 +560,7 @@ Content-Type: application/json
 | `billingStartedAt` | `string \| null` | 就绪计费起点（首次 `markOnline` 的时刻，ISO 时间戳）；`null` 表示未就绪/不计费 |
 | `hostId` | `string \| null` | 云电脑 ID（`purpose=harness`） |
 | `hostName` | `string \| null` | 云电脑用户命名 |
-| `harnessTypes` | `string[]` | harness 类型（`purpose=harness`，缺省 `[]`） |
+| `harnessTypes` | `string[]` | harness 类型（`purpose=harness`，缺省 `[]`）；读模型口径 =「创建时选定 ∪ 运行期成功安装的 harness 负载」（去重） |
 | `controllerKeyId` | `string \| null` | 标准连接使用的 ControllerKey ID |
 | `containerApiKeyId` | `string \| null` | 运行专用模型 Key ID |
 | `expiresAt` | `string \| null` | 容器 TTL 留档时间（不驱动模型 Key 失效） |

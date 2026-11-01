@@ -14,6 +14,7 @@ import {
 import { cloudWorkloadCatalog, type CloudWorkloadCatalogItem } from './cloud-workload-catalog.js';
 import { actorFilter } from './workspace-context.js';
 import { cloudHostService } from './cloud-host-service.js';
+import { invalidateAcpHarnessInstall } from './acp-options-cache.js';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 
 type Doc = Record<string, unknown>;
@@ -41,6 +42,14 @@ interface CloudHostWorkloadServiceDeps {
 }
 
 const TERMINAL_LOG_STATUSES = new Set(['success', 'failed', 'timeout']);
+
+/** 落库小写 kind → GraphQL 大写枚举（未知/历史缺省按 STANDARD）。 */
+function toWorkloadKind(kind: unknown): 'STANDARD' | 'HARNESS' {
+  return String(kind ?? 'standard').toLowerCase() === 'harness' ? 'HARNESS' : 'STANDARD';
+}
+
+/** 运行期可安装的负载类别：standard + harness（harness 可选、幂等、不提供卸载）。 */
+const INSTALLABLE_WORKLOAD_KINDS = new Set(['standard', 'harness']);
 
 /** 错误文案脱敏：过滤 token/Authorization/常见 token 前缀，截断 512。 */
 export function sanitizeOperationError(err: unknown): string {
@@ -119,13 +128,14 @@ export class CloudHostWorkloadService {
   async list(userId: string, controllerId: string): Promise<CloudHostWorkloadItem[]> {
     const host = await this.requireCloudHost(userId, controllerId);
     const installed = await this.installedMap(String(host._id));
-    const items = await this.catalog.listStandard();
+    // 全量目录：standard + harness（harness 为可选工作负载，运行期可补装）
+    const items = await this.catalog.listAll();
     return items.map((item) => {
       const record = installed.get(item.id);
       return {
         workloadId: item.id,
         name: item.name,
-        workloadKind: 'STANDARD',
+        workloadKind: toWorkloadKind(item.workloadKind),
         paramSchema: item.paramSchema,
         dependsOnWorkloadIds: item.dependsOnWorkloadIds,
         isPreset: item.isPreset,
@@ -190,7 +200,10 @@ export class CloudHostWorkloadService {
     if (!mongoose.isValidObjectId(input.workloadId)) throw new Error('Workload not found');
     const workload = await this.catalog.findById(input.workloadId);
     if (!workload) throw new Error('Workload not found');
-    if (workload.workloadKind !== 'standard') throw new Error('Workload not found');
+    // 白名单：standard | harness（DB 落库为小写）；其余类别仍按「不存在」处理
+    if (!INSTALLABLE_WORKLOAD_KINDS.has(String(workload.workloadKind).toLowerCase())) {
+      throw new Error('Workload not found');
+    }
 
     const operation = await CloudHostSetupOperation.create(({
       userId: input.userId,
@@ -295,6 +308,13 @@ export class CloudHostWorkloadService {
           status: 'SUCCEEDED',
           detail: workload.name,
         });
+        // 运行期新装 harness：失效 ACP 可用性/选项缓存，使新工具与选项立即可见（裁决 16）。
+        if (workload.workloadKind.toLowerCase() === 'harness' && workload.harnessType) {
+          await invalidateAcpHarnessInstall(
+            String((operation as Doc).controllerId ?? ''),
+            workload.harnessType,
+          );
+        }
       }
 
       await CloudHostSetupOperation.updateOne(
