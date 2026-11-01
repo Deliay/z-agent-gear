@@ -14,7 +14,7 @@ permissions:
 
 env:
   IMAGE_NAMESPACE: zero-tools
-  # mongod 二进制缓存目录：必须放在 node_modules 之外（npm ci 会清空 node_modules）
+  # mongod 二进制缓存目录：必须放在 node_modules 之外（pnpm install 会重建 node_modules）
   MONGOMS_DOWNLOAD_DIR: ${{ github.workspace }}/.mongodb-binaries
 
 jobs:
@@ -23,24 +23,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          version: 12.16.1
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: servers/admin-api/package-lock.json
+          cache: pnpm
+          cache-dependency-path: servers/admin-api/pnpm-lock.yaml
 
       - name: Install
         working-directory: servers/admin-api
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       # 缓存 mongod 二进制（需包含 .md5 sidecar，缺失会被判定为损坏并重新下载）
       - name: Cache mongod binary
         uses: actions/cache@v4
         with:
           path: .mongodb-binaries
-          key: mongoms-${{ runner.os }}-${{ hashFiles('servers/admin-api/package-lock.json') }}
+          key: mongoms-${{ runner.os }}-${{ hashFiles('servers/admin-api/pnpm-lock.yaml') }}
 
-      # npm 默认不执行依赖的 postinstall（install-scripts 策略），这里直接执行脚本预先下载 mongod
+      # allowBuilds 显式禁止 mongodb-memory-server 的 install 脚本，这里直接执行脚本预先下载 mongod
       - name: Pre-download mongod
         working-directory: servers/admin-api
         run: node node_modules/mongodb-memory-server/postinstall.js
@@ -48,7 +52,7 @@ jobs:
       # 测试门禁：构建前跑单测，避免带红测试推成 latest
       - name: Test
         working-directory: servers/admin-api
-        run: npm test
+        run: pnpm test
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -72,6 +76,19 @@ jobs:
             ${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/admin-api:latest
           provenance: false
           sbom: false
+
+      # 单项目依赖隔离断言：镜像内只允许存在当前项目依赖
+      - name: Assert single-project dependencies
+        run: |
+          set -e
+          IMAGE="${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/admin-api:${{ github.sha }}"
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+            cd /app &&
+            test ! -d servers &&
+            test ! -d apps &&
+            test ! -d packages &&
+            pnpm list --depth 0 --prod
+          '
 
       # 镜像启动冒烟：拉起 Mongo，启动容器并验证 /health 可响应（防止打包入口不可用导致 CrashLoop）
       - name: Smoke test image

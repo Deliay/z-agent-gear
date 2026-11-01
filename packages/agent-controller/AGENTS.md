@@ -201,9 +201,9 @@ init 脚本（admin-api 迁移 006）在安装固定版本 OpenCode 后执行
 
 ```bash
 aspire start     # 启动 Aspire 编排（拉起全部服务）
-npm run build    # Compile TypeScript
-npm run start    # Start production controller
-npm run test     # Run tests
+pnpm run build    # Compile TypeScript
+pnpm run start    # Start production controller
+pnpm run test     # Run tests
 ```
 
 ## Development with Aspire
@@ -222,17 +222,17 @@ aspire start
 #    mutation { createControllerKey(input: { name: "dev", type: local }) { rawKey } }
 
 # 4. 使用生成的 Key 启动 agent-gear
-npm run dev -- --key <rawKey> --server <controller-api-endpoint>
+pnpm run dev -- --key <rawKey> --server <controller-api-endpoint>
 ```
 
 ### 示例
 
 ```bash
 # Aspire 启动后 controller-api 在 4001 端口
-npm run dev -- --key zag_k_1_abc123... --server http://localhost:4001
+pnpm run dev -- --key zag_k_1_abc123... --server http://localhost:4001
 
 # 或使用环境变量
-ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 npm run dev
+ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 pnpm run dev
 ```
 
 ## Config Priority
