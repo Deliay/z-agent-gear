@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSessionStream } from './useSessionStream'
 import { parseSessionUpdate } from '@/components/session/group-messages'
 import {
@@ -119,6 +119,11 @@ interface UseNodeSessionActivityOptions {
   sessionId?: string | null
   /** 仅在需要实时动态（进行中）时建立连接；关闭时保留已捕获的最后动态与用量 */
   active: boolean
+  /**
+   * 已完成节点（首屏挂载即 DONE）：短连一次拉取 SSE history 补全 token 用量，
+   * 收到 history（或首次错误）后立即断开，避免为历史节点长期占用连接。
+   */
+  snapshot?: boolean
 }
 
 /**
@@ -128,9 +133,15 @@ interface UseNodeSessionActivityOptions {
 export function useNodeSessionActivity({
   sessionId,
   active,
+  snapshot = false,
 }: UseNodeSessionActivityOptions): NodeSessionActivity {
   const [state, setState] = useState<NodeSessionActivity>({ activity: null, tokenUsage: null })
   const updatesRef = useRef<unknown[]>([])
+  const disconnectRef = useRef<(() => void) | null>(null)
+  const snapshotRef = useRef(snapshot)
+  useEffect(() => {
+    snapshotRef.current = snapshot
+  }, [snapshot])
 
   const recompute = useCallback(() => {
     setState(summarizeSessionUpdates(updatesRef.current))
@@ -148,15 +159,25 @@ export function useNodeSessionActivity({
     (messages: unknown[]) => {
       updatesRef.current = messages.slice(-MAX_TRACKED_MESSAGES)
       recompute()
+      // 快照模式：拿到 history（含最后一条 usage_update）后立即释放连接
+      if (snapshotRef.current) disconnectRef.current?.()
     },
     [recompute],
   )
 
-  useSessionStream({
-    sessionId: active && sessionId ? sessionId : '',
+  const onError = useCallback(() => {
+    if (snapshotRef.current) disconnectRef.current?.()
+  }, [])
+
+  const { disconnect } = useSessionStream({
+    sessionId: (active || snapshot) && sessionId ? sessionId : '',
     onMessage,
     onHistory,
+    onError,
   })
+  useEffect(() => {
+    disconnectRef.current = disconnect
+  }, [disconnect])
 
   return state
 }

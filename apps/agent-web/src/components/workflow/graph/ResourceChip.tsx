@@ -33,7 +33,7 @@ export default function ResourceChip({ resource, onOpen }: ResourceChipProps) {
       }}
     >
       <Icon className="size-3 shrink-0 text-muted-foreground" />
-      <span className="min-w-0 truncate">{resource.title}</span>
+      <span className="line-clamp-2 min-w-0 break-all text-left leading-tight">{resource.title}</span>
       {resource.checkRunUrl && (
         <span className="shrink-0 rounded bg-success/15 px-1 text-[9px] text-success">检查项</span>
       )}

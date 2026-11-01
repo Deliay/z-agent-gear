@@ -541,7 +541,7 @@ describe('Sidebar 集成测试', () => {
       ]);
     });
 
-    it('T-UI4-AGG4 网关分区聚合全部主机的网关暴露', () => {
+    it('T-UI4-AGG4 网关分区聚合在线主机的网关暴露（离线主机不渲染）', () => {
       mockHome({
         controllers: [
           makeController({
@@ -562,6 +562,17 @@ describe('Sidebar 集成测试', () => {
               limit: 10,
             },
           }),
+          makeController({
+            id: 'ctrl-offline',
+            name: '离线主机',
+            status: 'offline',
+            hostname: 'offline-host',
+            gateways: {
+              gateways: [{ id: 'gw-3', controllerId: 'ctrl-offline', name: 'api-offline', port: 3002, status: 'active', createdAt: '' }],
+              total: 1,
+              limit: 10,
+            },
+          }),
         ],
       });
       render(<Sidebar name="testuser" />);
@@ -570,6 +581,8 @@ describe('Sidebar 集成测试', () => {
       const list = screen.getByTestId('sidebar-gateway-list');
       expect(within(list).getByText('api-one')).toBeInTheDocument();
       expect(within(list).getByText('api-two')).toBeInTheDocument();
+      // 离线主机网关配置行不上屏（与既有「UI 层按 status 自行隐藏」口径一致）
+      expect(within(list).queryByText('api-offline')).not.toBeInTheDocument();
     });
   });
 

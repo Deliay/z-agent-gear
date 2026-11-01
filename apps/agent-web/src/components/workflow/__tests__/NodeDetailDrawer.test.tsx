@@ -124,6 +124,11 @@ describe('NodeDetailDrawer', () => {
     expect(screen.getByText('评审报告')).toBeInTheDocument()
     expect(screen.getByTestId('markdown-content')).toHaveTextContent('# 评审结论')
     expect(screen.getByText('acme/repo#1')).toBeInTheDocument()
+    // 检查项外链 + 短 sha（与列表视图/资源详情口径一致）
+    const checkRun = screen.getByRole('link', { name: '检查项' })
+    expect(checkRun).toHaveAttribute('href', 'https://checks/1')
+    expect(checkRun).toHaveAttribute('title', '检查项 · commit abcdef1')
+    expect(screen.getByText(/· commit abcdef1/)).toBeInTheDocument()
     expect(screen.getByText(/最近同步：2026-10-31T12:00:00Z/)).toBeInTheDocument()
   })
 

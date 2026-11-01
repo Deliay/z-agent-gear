@@ -124,14 +124,14 @@ npm run preview  # Preview production build
 
 > 纯前端展示层；计划见 `docs/engineering/plan/20261030-feat-ui-optimization-phase4.md`。
 
-- **侧边栏四分区**：`Sidebar` 顶层为「主机」「工作流」「会话」「网关」四个全宽折叠分区；默认展开工作流/会话、折叠主机/网关，展开态持久化在 `localStorage['sidebar-sections-expanded']`（`lib/sidebar-prefs.ts`）。工作流/会话/网关跨环境聚合（工作流含「已归档（N）」自折叠分组），主机分区保留「主机 → 工作区 → 会话」树与设置按钮；条目排序 `updatedAt` 倒序 + id tie-break，防轮询跳动。
+- **侧边栏四分区**：`Sidebar` 顶层为「主机」「工作流」「会话」「网关」四个全宽折叠分区；默认展开工作流/会话、折叠主机/网关，展开态持久化在 `localStorage['sidebar-sections-expanded']`（`lib/sidebar-prefs.ts`）。工作流/会话/网关跨环境聚合（工作流含「已归档（N）」自折叠分组）；网关仅聚合**在线主机**的网关配置行（离线主机不渲染，与既有「UI 层按 status 自行隐藏该区块」口径一致）；主机分区保留「主机 → 工作区 → 会话」树与设置按钮；条目排序 `updatedAt` 倒序 + id tie-break，防轮询跳动。
 - **空态收敛**：`TreeSection` 不再渲染 `emptyMessage` 占位文字（入参保留兼容），无内容时仅保留可展开空容器；层级缩进按 `level * 0.5rem`（≈2 空格）。
 - **拖拽调宽**：`SidebarResizer` 4px 热区（pointer capture），clamp 15–28rem、默认 20rem，`pointerup` 写入 `localStorage['sidebar-width']`，双击恢复默认；`MainLayout` 桌面 grid 列使用 `var(--sidebar-width,20rem)`，移动端不渲染 Resizer（`lib/sidebar-width.ts` 为宽度口径单一来源）。
 - **工作流卡片**：侧边栏条目不显示控制器名，第一行「名称 + 状态徽标」、第二行工作区；控制器名与执行中节点名走 tooltip（`WorkflowInstanceCard`）。
-- **图表视图**：`graph-layout.ts` 以 dagre `rankdir:'TB'`（nodesep 40 / ranksep 70）布局，节点宽 280px、高度分档估算；连线 `strokeWidth:2` + `MarkerType.ArrowClosed`；画布 `h-full min-h-[480px]`，由 `WorkflowInstancePage` 视图区行填充；图表模式隐藏右栏 `BlackboardPanel`/`WorkflowContextPanel`（列表视图零变化）。
+- **图表视图**：`graph-layout.ts` 以 dagre `rankdir:'TB'`（nodesep 40 / ranksep 70）布局，节点宽 280px、高度分档估算（120–220px）；连线 `strokeWidth:2` + `MarkerType.ArrowClosed`；画布 `h-full min-h-[480px]`，由 `WorkflowInstancePage` 视图区行填充；图表模式隐藏右栏 `BlackboardPanel`/`WorkflowContextPanel`（列表视图零变化）。
 - **节点卡片**：`graph/WorkflowNodeCard.tsx` 自定义节点（状态色左脊 + 名称 + 类型/返工徽标 + Harness/模型 + 进行中动态行 + 完成态 token + PR/检查项徽标 + 资源小卡片 + 人类节点就地操作）；交互元素统一 `nodrag` + `stopPropagation`。
-- **实时动态**：`hooks/useNodeSessionActivity.ts` 复用 `useSessionStream`（不自行创建 EventSource），复用 `group-messages.parseSessionUpdate` 与 `tool-call-state` 的 `mergeToolCallMessages`/`toolCallHeaderTitle` 口径；思考/文本结尾截断常量 `LIVE_ACTIVITY_TAIL_CHARS = 40`；仅进行中节点建立连接，DONE 后关闭连接并保留已捕获的最后动态与用量。
-- **资源上图**：`buildResourceOwnership` 纯函数负责归属——黑板 key 前缀 `{nodeId}-{nodeName}-产物-`（与列表视图 `lib/artifact-owners.ts` 同源）、PR 按 `nodeId`、追加提示词仅「恰好一个 RUNNING/REWORK 节点」时归属该节点，否则与无法解析的黑板条目一并进入画布顶部实例资源行；垃圾桶永不渲染；同节点最多 3 个可见小卡片 + 「+N」；小卡片限宽 12rem、单行截断。
+- **实时动态**：`hooks/useNodeSessionActivity.ts` 复用 `useSessionStream`（不自行创建 EventSource），复用 `group-messages.parseSessionUpdate` 与 `tool-call-state` 的 `mergeToolCallMessages`/`toolCallHeaderTitle` 口径；思考/文本结尾截断常量 `LIVE_ACTIVITY_TAIL_CHARS = 40`；进行中节点建立实时连接，转为 DONE 后关闭连接并保留已捕获的最后动态与用量；**首屏即为 DONE 的 AI 节点**以快照模式短连一次，收到 SSE history（含最后一条 `usage_update`）后立即断开，用于补全刷新后的 token 展示（不长期占用连接）。
+- **资源上图**：`buildResourceOwnership` 纯函数负责归属——黑板 key 前缀 `{nodeId}-{nodeName}-产物-`（与列表视图 `lib/artifact-owners.ts` 同源）、PR 按 `nodeId`、追加提示词仅「恰好一个 RUNNING/REWORK 节点」时归属该节点，否则与无法解析的黑板条目一并进入画布顶部实例资源行；垃圾桶永不渲染；同节点最多 3 个可见小卡片 + 「+N」；小卡片限宽 12rem、标题最多 2 行（`line-clamp-2`）截断。
 - **状态语义色单一来源**：`WorkflowNodeTreeConstants` 的 `NODE_STATUS_VISUAL`（`{spine, tint, badge}`）为唯一来源，`NODE_STATUS_BADGE` 重导出 `badge` 段保持兼容；REJECT 为静态琥珀、REWORK 为琥珀 + `animate-pulse`、FAILED 走 destructive；图表/列表/卡片/MiniMap 全部消费该映射或对应 `NODE_STATUS_COLOR_VAR`，禁止新增固定 hex 色值。
 - **详情抽屉**：`components/ui/sheet.tsx`（Base UI 原语自实现，右侧滑出/全高/遮罩/Esc 关闭）+ `NodeDetailDrawer`（节点/资源两形态）；`WorkflowInstancePage` 提升抽屉状态，图表与列表视图共用；列表视图 `WorkflowNodeTree` 节点头部提供「详情」入口。
 - **共享人类节点操作**：`hooks/useHumanNodeActions.ts` + `HumanNodeActions` 组件，列表/卡片/抽屉三处同源（草稿键 `workflow-node-draft:{instanceId}:{nodeId}`）。

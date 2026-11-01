@@ -267,13 +267,17 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
   };
 
   const onlineControllers = controllers.filter((controller) => controller.status === 'online');
+  // 网关聚合与既有口径一致：仅在线主机的网关配置行上屏（离线主机不渲染其网关条目）
+  const gatewayRows = onlineControllers.flatMap((controller) =>
+    (controller.gateways?.gateways ?? []).map((gateway) => ({
+      gateway,
+      controllerId: controller.id,
+    })),
+  );
   const sortedSessions = sortByUpdatedAtDesc(sessions.map((session) => ({ ...session, updatedAt: session.updatedAt ?? '' })));
   const sortedWorkflows = sortByUpdatedAtDesc(workflowInstances);
   const sortedArchivedWorkflows = sortByUpdatedAtDesc(archivedWorkflowInstances);
-  const gatewayCount = controllers.reduce(
-    (total, controller) => total + (controller.gateways?.gateways?.length ?? 0),
-    0,
-  );
+  const gatewayCount = gatewayRows.length;
 
   return (
     <nav className={`flex flex-col bg-sidebar text-sidebar-foreground ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
@@ -606,11 +610,9 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
           )}
         >
           <ul className="space-y-0.5" data-testid="sidebar-gateway-list">
-            {controllers.flatMap((controller) =>
-              (controller.gateways?.gateways ?? []).map((gateway) => (
-                <GatewayItem key={gateway.id} gateway={gateway} controllerId={controller.id} />
-              )),
-            )}
+            {gatewayRows.map(({ gateway, controllerId }) => (
+              <GatewayItem key={gateway.id} gateway={gateway} controllerId={controllerId} />
+            ))}
           </ul>
         </SidebarSection>
       </div>

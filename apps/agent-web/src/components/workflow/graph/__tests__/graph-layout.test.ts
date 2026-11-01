@@ -110,7 +110,7 @@ describe('layoutGraphNodes', () => {
     })
     expect(base).toBeGreaterThanOrEqual(120)
     expect(rich).toBeGreaterThan(base)
-    expect(rich).toBeLessThanOrEqual(260)
+    expect(rich).toBeLessThanOrEqual(220)
   })
 })
 

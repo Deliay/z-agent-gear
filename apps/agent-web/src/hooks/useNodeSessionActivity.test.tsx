@@ -7,6 +7,7 @@ import {
   useNodeSessionActivity,
 } from './useNodeSessionActivity'
 
+const disconnectSpy = vi.fn()
 const streamCalls: Array<{
   sessionId: string
   onMessage?: (message: unknown) => void
@@ -20,7 +21,7 @@ vi.mock('./useSessionStream', () => ({
     onHistory?: (messages: unknown[]) => void
   }) => {
     streamCalls.push(options)
-    return { isConnected: false, error: null, disconnect: vi.fn() }
+    return { isConnected: false, error: null, disconnect: disconnectSpy }
   },
 }))
 
@@ -31,6 +32,7 @@ function message(update: Record<string, unknown>) {
 
 beforeEach(() => {
   streamCalls.length = 0
+  disconnectSpy.mockClear()
 })
 
 describe('tailText', () => {
@@ -129,6 +131,26 @@ describe('useNodeSessionActivity', () => {
     rerender({ active: false })
     expect(streamCalls.at(-1)?.sessionId).toBe('')
     expect(result.current.tokenUsage).toBe(42)
+  })
+
+  it('T-UI4-NA8 已完成节点快照模式：短连拉 history 补 usage 后立即断开', () => {
+    const { result } = renderHook(() =>
+      useNodeSessionActivity({ sessionId: 's1', active: false, snapshot: true }),
+    )
+    expect(streamCalls.at(-1)?.sessionId).toBe('s1')
+
+    act(() => {
+      streamCalls.at(-1)?.onHistory?.([
+        message({ sessionUpdate: 'usage_update', used: 99 }),
+      ])
+    })
+    expect(result.current.tokenUsage).toBe(99)
+    expect(disconnectSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('T-UI4-NA8 非快照的非进行中节点不建连', () => {
+    renderHook(() => useNodeSessionActivity({ sessionId: 's1', active: false }))
+    expect(streamCalls.at(-1)?.sessionId).toBe('')
   })
 
   it('history 首帧回填最新活动与用量', () => {

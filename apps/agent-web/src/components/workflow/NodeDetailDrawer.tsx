@@ -121,6 +121,27 @@ function NodeDetail({ instance, node, onOpenSession }: {
                   {link.prUrl}
                 </a>
               )}
+              {link.checkRunUrl && (
+                <div className="mt-0.5 min-w-0 break-all text-xs text-muted-foreground">
+                  检查项：
+                  <a
+                    href={link.checkRunUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={
+                      link.lastSyncedCommitSha
+                        ? `检查项 · commit ${link.lastSyncedCommitSha.slice(0, 7)}`
+                        : '检查项'
+                    }
+                    className="text-primary hover:underline"
+                  >
+                    检查项
+                  </a>
+                  {link.lastSyncedCommitSha && (
+                    <> · commit {link.lastSyncedCommitSha.slice(0, 7)}</>
+                  )}
+                </div>
+              )}
               {link.lastSyncAt && (
                 <div className="mt-0.5 text-xs text-muted-foreground">最近同步：{link.lastSyncAt}</div>
               )}

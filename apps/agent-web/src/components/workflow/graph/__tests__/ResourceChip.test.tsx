@@ -30,11 +30,11 @@ describe('ResourceChip', () => {
     expect(screen.getByTestId('resource-chip-prompt')).toBeInTheDocument()
   })
 
-  it('T-UI4-RC2 限宽 12rem 且标题单行截断', () => {
+  it('T-UI4-RC2 限宽 12rem 且标题最多 2 行截断', () => {
     render(<ResourceChip resource={resource({ title: '很长的资源标题'.repeat(10) })} />)
     const chip = screen.getByTestId('resource-chip-blackboard')
     expect(chip.className).toContain('max-w-48')
-    expect(chip.querySelector('.truncate')).toBeTruthy()
+    expect(chip.querySelector('.line-clamp-2')).toBeTruthy()
   })
 
   it('T-UI4-RC3 点击回调资源对象且阻止冒泡', () => {

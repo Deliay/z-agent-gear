@@ -120,7 +120,7 @@ export default function WorkflowGraphView({
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.2}
-        proOptions={{ hideAttribution: true }}
+        attributionPosition="bottom-left"
         className="h-full w-full"
       >
         <Background />

@@ -203,7 +203,7 @@ export function estimateNodeHeight(viewModel: Pick<
   if (viewModel.type === 'AI' && ACTIVE_STATUSES.includes(viewModel.status)) height += 26
   if (viewModel.resources.length > 0 || viewModel.moreResources > 0) height += 44
   if (viewModel.actionable) height += 104
-  return Math.min(260, Math.max(120, height))
+  return Math.min(220, Math.max(120, height))
 }
 
 export interface LayoutInput {

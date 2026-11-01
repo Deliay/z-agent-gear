@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { NodeProps } from '@xyflow/react'
 import { Loader2, RotateCcw } from 'lucide-react'
 import HumanNodeActions from '../HumanNodeActions'
@@ -26,9 +27,12 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
   const visual = NODE_STATUS_VISUAL[data.status]
   const isAiRunning =
     data.type === 'AI' && (data.status === 'RUNNING' || data.status === 'REWORK')
+  // 首屏即为 DONE 的 AI 节点：短连一次拉 history 补 token；运行中完成的节点沿用已捕获用量
+  const [doneOnMount] = useState(() => data.type === 'AI' && data.status === 'DONE')
   const { activity, tokenUsage } = useNodeSessionActivity({
     sessionId: data.sessionId,
     active: isAiRunning,
+    snapshot: doneOnMount && data.status === 'DONE',
   })
 
   return (
