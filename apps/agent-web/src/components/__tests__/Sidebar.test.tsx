@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import Sidebar from '../Sidebar';
+import { SIDEBAR_SECTIONS_KEY } from '../../lib/sidebar-prefs';
 import type { CloudHostData, HomeOverviewData, HomeOverviewControllerData, HomeOverviewWorkspaceData, SessionData } from '../../graphql/types';
 import type { WorkflowInstanceSummaryData } from '../../graphql/workflow';
 
@@ -21,8 +22,8 @@ vi.mock('../../stores/homeOverview', () => ({
 }));
 
 vi.mock('react-router-dom', () => ({
-  NavLink: ({ children, to, className }: { children: React.ReactNode; to: string; className?: string | ((state: { isActive: boolean; isPending: boolean }) => string) }) => (
-    <a href={to} className={typeof className === 'function' ? className({ isActive: false, isPending: false }) : className}>
+  NavLink: ({ children, to, className, title }: { children: React.ReactNode; to: string; className?: string | ((state: { isActive: boolean; isPending: boolean }) => string); title?: string }) => (
+    <a href={to} title={title} className={typeof className === 'function' ? className({ isActive: false, isPending: false }) : className}>
       {children}
     </a>
   ),
@@ -218,9 +219,21 @@ function mockCapabilities(enabled = true, supportedHarnesses: CloudHostData['har
   });
 }
 
+/** 渲染侧边栏并展开「主机」分区（分区默认折叠，符合 PRD 功能点 1） */
+function renderSidebar(props: { mobile?: boolean } = {}) {
+  const result = render(<Sidebar name="testuser" {...props} />);
+  const hostsToggle = screen.getByRole('button', { name: '主机' });
+  if (hostsToggle.getAttribute('aria-expanded') === 'false') {
+    fireEvent.click(hostsToggle);
+  }
+  return result;
+}
+
 describe('Sidebar 集成测试', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    document.body.className = '';
     mockCapabilities();
     mockHome();
   });
@@ -229,7 +242,7 @@ describe('Sidebar 集成测试', () => {
     mockHome({
       workspaces: [makeWorkspace()],
     });
-    render(<Sidebar name="testuser" />);
+    renderSidebar();
 
     const newSessionButtons = screen.getAllByLabelText('新建会话');
     fireEvent.click(newSessionButtons[0]);
@@ -265,21 +278,22 @@ describe('Sidebar 集成测试', () => {
   });
 
   describe('① 四个平级分组渲染', () => {
-    it('展开控制器后渲染统一网关、工作流、会话、工作区四个分组', () => {
-      render(<Sidebar name="testuser" />);
+    it('渲染主机、工作流、会话、网关四个分区，且主机分区内保留工作区分组', () => {
+      renderSidebar();
 
-      expect(screen.getByText('统一网关')).toBeInTheDocument();
-      expect(screen.getByText('工作流')).toBeInTheDocument();
-      expect(screen.getByText('会话')).toBeInTheDocument();
+      for (const title of ['主机', '工作流', '会话', '网关']) {
+        expect(screen.getByTestId(`sidebar-section-${title === '主机' ? 'hosts' : title === '工作流' ? 'workflows' : title === '会话' ? 'sessions' : 'gateways'}`)).toBeInTheDocument();
+      }
       expect(screen.getByText('工作区')).toBeInTheDocument();
     });
   });
 
   describe('② 网关 Plus 打开 GatewayDialog', () => {
-    it('无网关时点击 Plus 按钮打开 GatewayDialog 且弹窗不在 hidden 容器内', () => {
-      render(<Sidebar name="testuser" />);
+    it('聚合分区点击「新增网关」选择主机后打开 GatewayDialog 且弹窗不在 hidden 容器内', () => {
+      renderSidebar();
 
-      fireEvent.click(screen.getByTitle('新增网关'));
+      fireEvent.click(screen.getByRole('button', { name: '新增网关' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: '测试控制器' }));
 
       const dialog = screen.getByTestId('gateway-dialog');
       expect(dialog).toBeInTheDocument();
@@ -299,7 +313,8 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
+      fireEvent.click(screen.getByRole('button', { name: '网关' }));
 
       expect(screen.getByText('my-api')).toBeInTheDocument();
     });
@@ -315,7 +330,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.getByText('深层会话')).toBeInTheDocument();
       expect(screen.getByText('project-sub')).toBeInTheDocument();
@@ -327,7 +342,7 @@ describe('Sidebar 集成测试', () => {
         workspaces: [makeWorkspace({ id: 'ws-1', name: 'project', path: '/home/user' })],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.getByText('孤立会话')).toBeInTheDocument();
       expect(screen.getByText('未知工作区')).toBeInTheDocument();
@@ -335,9 +350,10 @@ describe('Sidebar 集成测试', () => {
   });
 
   describe('④ 工作流集中列表', () => {
-    it('无工作流实例时显示空态', () => {
-      render(<Sidebar name="testuser" />);
-      expect(screen.getByText('无工作流实例')).toBeInTheDocument();
+    it('无工作流实例时空态收敛（不渲染占位文字，列表为空）', () => {
+      renderSidebar();
+      expect(screen.queryByText('无工作流实例')).not.toBeInTheDocument();
+      expect(screen.getByTestId('sidebar-workflow-list').children).toHaveLength(0);
     });
 
     it('集中平铺展示全部实例并标注所属工作区与状态（不按工作区分组）', () => {
@@ -349,21 +365,23 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.queryByText('无工作流实例')).not.toBeInTheDocument();
       expect(screen.getByText('实例一')).toBeInTheDocument();
       expect(screen.getByText('实例二')).toBeInTheDocument();
-      // 归属工作区/控制器标注（工作区已删除显示「未知工作区」）
-      expect(screen.getByText(/^project · 测试控制器 · /)).toBeInTheDocument();
+      // 两行卡片：第二行工作区名称（工作区已删除显示「未知工作区」），控制器名不再占卡片行
+      const cards = screen.getAllByTestId('workflow-instance-card');
+      expect(cards[0]).toHaveTextContent('project');
+      expect(cards[0]).not.toHaveTextContent('测试控制器');
       expect(screen.getByText('未知工作区')).toBeInTheDocument();
       // 点击直达详情
       expect(screen.getByText('实例一').closest('a')?.getAttribute('href')).toBe('/workflows/inst-1');
     });
 
     it('实例上报后从空态切换为列表', () => {
-      const { rerender } = render(<Sidebar name="testuser" />);
-      expect(screen.getByText('无工作流实例')).toBeInTheDocument();
+      const { rerender } = renderSidebar();
+      expect(screen.getByTestId('sidebar-workflow-list').children).toHaveLength(0);
 
       mockHome({ workflowInstances: [makeInstance()] });
       rerender(<Sidebar name="testuser" />);
@@ -376,21 +394,23 @@ describe('Sidebar 集成测试', () => {
   describe('⑤ 无限渲染循环回归', () => {
     it('render 后正常完成，无 React 报错', () => {
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
       expect(consoleSpy).not.toHaveBeenCalled();
       consoleSpy.mockRestore();
     });
   });
 
-  describe('⑥ 无会话/无工作区时显示空态文案', () => {
-    it('无会话时显示「无会话」', () => {
-      render(<Sidebar name="testuser" />);
-      expect(screen.getByText('无会话')).toBeInTheDocument();
+  describe('⑥ 空态收敛（不再渲染占位文字）', () => {
+    it('无会话时不显示「无会话」，会话列表为空', () => {
+      renderSidebar();
+      expect(screen.queryByText('无会话')).not.toBeInTheDocument();
+      expect(screen.getByTestId('sidebar-session-list').children).toHaveLength(0);
     });
 
-    it('无工作区时显示「无工作区」', () => {
-      render(<Sidebar name="testuser" />);
-      expect(screen.getByText('无工作区')).toBeInTheDocument();
+    it('无工作区时不显示「无工作区」，工作区分组仍可展开为空', () => {
+      renderSidebar();
+      expect(screen.queryByText('无工作区')).not.toBeInTheDocument();
+      expect(screen.getByText('工作区')).toBeInTheDocument();
     });
   });
 
@@ -401,7 +421,7 @@ describe('Sidebar 集成测试', () => {
         archivedWorkflowInstances: [makeInstance({ id: 'inst-archived', name: '已归档实例', archived: true })],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.queryByText('已归档实例')).not.toBeInTheDocument();
       expect(screen.getByText('活跃实例')).toBeInTheDocument();
@@ -415,6 +435,144 @@ describe('Sidebar 集成测试', () => {
     });
   });
 
+
+  describe('UI 四期：四折叠分区与跨环境聚合', () => {
+    it('T-UI4-SEC1 默认展开「工作流」「会话」，折叠「主机」「网关」', () => {
+      render(<Sidebar name="testuser" />);
+
+      expect(screen.getByRole('button', { name: '工作流' })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: '会话' })).toHaveAttribute('aria-expanded', 'true');
+      expect(screen.getByRole('button', { name: '主机' })).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getByRole('button', { name: '网关' })).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    it('T-UI4-SEC2 点击标题行切换展开态并持久化', () => {
+      render(<Sidebar name="testuser" />);
+
+      fireEvent.click(screen.getByRole('button', { name: '主机' }));
+      expect(screen.getByRole('button', { name: '主机' })).toHaveAttribute('aria-expanded', 'true');
+      expect(JSON.parse(localStorage.getItem(SIDEBAR_SECTIONS_KEY)!).hosts).toBe(true);
+
+      fireEvent.click(screen.getByRole('button', { name: '工作流' }));
+      expect(screen.getByRole('button', { name: '工作流' })).toHaveAttribute('aria-expanded', 'false');
+      expect(JSON.parse(localStorage.getItem(SIDEBAR_SECTIONS_KEY)!).workflows).toBe(false);
+    });
+
+    it('T-UI4-SEC3 刷新（重新挂载）后保持展开态', () => {
+      const first = render(<Sidebar name="testuser" />);
+      fireEvent.click(screen.getByRole('button', { name: '网关' }));
+      first.unmount();
+
+      render(<Sidebar name="testuser" />);
+      expect(screen.getByRole('button', { name: '网关' })).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('T-UI4-SEC4 折叠分区的标题与 actions 保留，内容不渲染', () => {
+      render(<Sidebar name="testuser" />);
+
+      expect(screen.queryByTestId('sidebar-section-content-hosts')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('sidebar-section-content-gateways')).not.toBeInTheDocument();
+      expect(screen.getByTestId('sidebar-section-content-sessions')).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: '新建会话' }).length).toBeGreaterThan(0);
+    });
+
+    it('T-UI4-AGG1 两个主机的会话聚合在同一列表且点击行为不变', () => {
+      mockHome({
+        controllers: [
+          makeController({ id: 'ctrl-1', name: '主机一' }),
+          makeController({ id: 'ctrl-2', name: '主机二', hostname: '主机二' }),
+        ],
+        sessions: [
+          makeSession({ id: 's1', controllerId: 'ctrl-1', title: '会话一', updatedAt: '2026-01-01T00:00:00Z' }),
+          makeSession({
+            id: 's2',
+            controllerId: 'ctrl-2',
+            controllerName: '主机二',
+            title: '会话二',
+            updatedAt: '2026-01-02T00:00:00Z',
+          }),
+        ],
+      });
+      render(<Sidebar name="testuser" />);
+
+      const list = screen.getByTestId('sidebar-session-list');
+      expect(within(list).getByText('会话一')).toBeInTheDocument();
+      expect(within(list).getByText('会话二')).toBeInTheDocument();
+      expect(within(list).getByText('会话二').closest('a')).toHaveAttribute('href', '/sessions/s2');
+      // 条目 tooltip 带所属主机名
+      expect(within(list).getByText('会话二').closest('a')?.getAttribute('title')).toContain('主机二');
+    });
+
+    it('T-UI4-AGG2 两个主机的工作流聚合在同一列表（含已归档分组）', () => {
+      mockHome({
+        controllers: [
+          makeController({ id: 'ctrl-1', name: '主机一' }),
+          makeController({ id: 'ctrl-2', name: '主机二', hostname: '主机二' }),
+        ],
+        workflowInstances: [
+          makeInstance({ id: 'w1', controllerId: 'ctrl-1', name: '主机一实例' }),
+          makeInstance({ id: 'w2', controllerId: 'ctrl-2', name: '主机二实例' }),
+        ],
+        archivedWorkflowInstances: [makeInstance({ id: 'w3', name: '归档实例', archived: true })],
+      });
+      render(<Sidebar name="testuser" />);
+
+      const list = screen.getByTestId('sidebar-workflow-list');
+      expect(within(list).getByText('主机一实例')).toBeInTheDocument();
+      expect(within(list).getByText('主机二实例')).toBeInTheDocument();
+      expect(within(list).getByText(/已归档（1）/)).toBeInTheDocument();
+    });
+
+    it('T-UI4-AGG3 排序稳定：updatedAt 倒序 + id tie-break（轮询不跳动）', () => {
+      mockHome({
+        sessions: [
+          makeSession({ id: 'b', title: 'B', updatedAt: '2026-01-01T00:00:00Z' }),
+          makeSession({ id: 'a', title: 'A', updatedAt: '2026-01-01T00:00:00Z' }),
+          makeSession({ id: 'c', title: 'C', updatedAt: '2026-01-03T00:00:00Z' }),
+        ],
+      });
+      render(<Sidebar name="testuser" />);
+
+      const links = within(screen.getByTestId('sidebar-session-list')).getAllByRole('link');
+      expect(links.map((link) => link.getAttribute('href'))).toEqual([
+        '/sessions/c',
+        '/sessions/a',
+        '/sessions/b',
+      ]);
+    });
+
+    it('T-UI4-AGG4 网关分区聚合全部主机的网关暴露', () => {
+      mockHome({
+        controllers: [
+          makeController({
+            id: 'ctrl-1',
+            name: '主机一',
+            gateways: {
+              gateways: [{ id: 'gw-1', controllerId: 'ctrl-1', name: 'api-one', port: 3000, status: 'active', createdAt: '' }],
+              total: 1,
+              limit: 10,
+            },
+          }),
+          makeController({
+            id: 'ctrl-2',
+            name: '主机二',
+            gateways: {
+              gateways: [{ id: 'gw-2', controllerId: 'ctrl-2', name: 'api-two', port: 3001, status: 'active', createdAt: '' }],
+              total: 1,
+              limit: 10,
+            },
+          }),
+        ],
+      });
+      render(<Sidebar name="testuser" />);
+      fireEvent.click(screen.getByRole('button', { name: '网关' }));
+
+      const list = screen.getByTestId('sidebar-gateway-list');
+      expect(within(list).getByText('api-one')).toBeInTheDocument();
+      expect(within(list).getByText('api-two')).toBeInTheDocument();
+    });
+  });
+
   describe('云电脑体验（Phase 8）', () => {
     it('T-AW1 云电脑显示云图标，普通主机不显示', () => {
       mockHome({
@@ -424,7 +582,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.getAllByTestId('cloud-host-icon')).toHaveLength(1);
     });
@@ -442,7 +600,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.getByTestId('cloud-host-status')).toHaveTextContent(label);
       fireEvent.click(screen.getByTitle('控制器配置'));
@@ -460,20 +618,20 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.getByTestId('cloud-host-status')).toHaveTextContent('失败 · container exited');
     });
 
     it('T-AW2 capabilities.enabled=false 时隐藏新建云电脑入口', () => {
       mockCapabilities(false, []);
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.queryByLabelText('新建云电脑')).not.toBeInTheDocument();
     });
 
     it('T-AW2 无活跃云电脑时显示新建入口并可打开对话框', () => {
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       const entry = screen.getByLabelText('新建云电脑');
       expect(entry).not.toBeDisabled();
@@ -489,7 +647,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       const entry = screen.getByLabelText('新建云电脑');
       expect(entry).not.toBeDisabled();
@@ -505,13 +663,13 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.getByLabelText('新建云电脑')).not.toBeDisabled();
     });
 
     it('T-AW4 新建成功后 refetch HOME_OVERVIEW 并进入主机配置页', () => {
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       fireEvent.click(screen.getByLabelText('新建云电脑'));
       fireEvent.click(screen.getByText('提交云电脑'));
@@ -522,7 +680,7 @@ describe('Sidebar 集成测试', () => {
     });
 
     it('T-AW14 mobile Sidebar 同样可达新建云电脑入口', () => {
-      render(<Sidebar name="testuser" mobile />);
+      renderSidebar({ mobile: true });
 
       expect(screen.getByLabelText('新建云电脑')).toBeInTheDocument();
     });
@@ -534,9 +692,9 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
-      const row = screen.getByTestId('cloud-host-status').closest('button');
+      const row = screen.getByTestId('cloud-host-status').closest('div');
       expect(row).toHaveClass('opacity-50');
       expect(screen.getByTitle('控制器配置')).toBeInTheDocument();
     });
@@ -552,7 +710,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.getByTestId('cloud-host-default-session-hint')).toHaveTextContent(
         '默认会话创建失败，可手动创建会话',
@@ -560,7 +718,7 @@ describe('Sidebar 集成测试', () => {
     });
 
     it('D-2 默认会话已创建或多 Harness 时不展示失败提示', () => {
-      const { rerender } = render(<Sidebar name="testuser" />);
+      const { rerender } = renderSidebar();
       mockHome({
         controllers: [
           makeController({
@@ -605,7 +763,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.getByTestId('cloud-host-no-workspace-hint')).toHaveTextContent(
         '未创建默认工作区，请先创建或绑定工作区',
@@ -631,7 +789,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.queryByTestId('cloud-host-no-workspace-hint')).not.toBeInTheDocument();
       expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
@@ -648,7 +806,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      const { rerender } = render(<Sidebar name="testuser" />);
+      const { rerender } = renderSidebar();
 
       expect(screen.getByLabelText('Github 项目设置')).toBeInTheDocument();
       fireEvent.click(screen.getByLabelText('新建工作区'));
@@ -683,7 +841,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.queryByTestId('cloud-host-no-workspace-hint')).not.toBeInTheDocument();
       expect(screen.queryByTestId('cloud-host-default-session-hint')).not.toBeInTheDocument();
@@ -696,7 +854,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       const buttons = screen.getAllByLabelText('新建会话');
       const sectionButton = buttons.find((button) => button.getAttribute('title') === '云电脑未运行，无法创建会话');
@@ -721,7 +879,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       expect(screen.getAllByLabelText('Github 项目设置')).toHaveLength(1);
     });
@@ -737,7 +895,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      renderSidebar();
 
       fireEvent.click(screen.getByLabelText('Github 项目设置'));
 
@@ -753,7 +911,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" mobile />);
+      renderSidebar({ mobile: true });
 
       expect(screen.getByLabelText('Github 项目设置')).toBeInTheDocument();
     });
