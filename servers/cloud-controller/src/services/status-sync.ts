@@ -7,10 +7,16 @@ import type { HeartbeatTracker } from './heartbeat-tracker.js';
 import type { K8sClient, K8sJobEvent } from './k8s-client.js';
 import { WORKER_LABEL_SELECTOR } from './k8s-job-manager.js';
 
-/** 巡检统计（`status.sync.tick` span 属性来源）：`checked` 为检查记录数，`changed` 为状态变更数。 */
+/**
+ * 巡检统计（`status.sync.tick` span 属性来源）：`checked` 为本轮**实际检查的容器数**
+ * （各步骤只计状态真正落入本步骤检查范围的记录，跨步骤按记录 id 去重，不重复累加），
+ * `changed` 为状态变更数。
+ */
 export interface ScanStats {
   checked: number;
   changed: number;
+  /** 已计入 `checked` 的记录 id（跨步骤去重集合，`countChecked` 懒初始化）。 */
+  checkedIds?: Set<string>;
 }
 
 export interface StatusSyncOptions {
@@ -75,6 +81,8 @@ export class StatusSyncService {
   /**
    * 每轮 15s 巡检：整轮一个 `status.sync.tick` span（属性记 `checked`/`changed` 条数），
    * 不对每个容器开 span。各步骤独立吞错（单步失败不阻断其余步骤，也不打挂进程）。
+   * `checked` 按**实际检查状态数**计数（去重后的容器数，跨步骤按记录 id 去重），
+   * 不做三步 `records.length` 全量累加（C5）。
    */
   private async runInspectionTick(): Promise<void> {
     try {
@@ -125,6 +133,18 @@ export class StatusSyncService {
     } catch (err) {
       this.opts.logger.error({ component: 'status-sync', event, err }, msg);
     }
+  }
+
+  /**
+   * 计入一次「实际检查」：只统计状态真正落入本步骤检查范围的记录，
+   * 并按记录 id 跨步骤去重（同一容器一轮内被多步骤看到时 `checked` 不重复累加，C5）。
+   */
+  private countChecked(stats: ScanStats | undefined, recordId: string): void {
+    if (!stats) return;
+    const seen = stats.checkedIds ?? (stats.checkedIds = new Set());
+    if (seen.has(recordId)) return;
+    seen.add(recordId);
+    stats.checked += 1;
   }
 
   /** 尝试建立 watch；失败时记录并安排指数退避重试（不向外抛错，避免打挂进程/watch 断链）。 */
@@ -374,18 +394,19 @@ export class StatusSyncService {
     for (const record of records) {
       // 卡死的 destroying：无论 Job 是否还在都需迁移终态，故不做 Job 存在性前置过滤。
       if (record.status === 'destroying') {
+        this.countChecked(stats, record.id);
         const deleted = await this.opts.containerService.reclaimResidualJob(record.id);
         if (deleted) reclaimed.push(record.id);
         continue;
       }
       if (record.status !== 'failed' && record.status !== 'exited') continue;
+      this.countChecked(stats, record.id);
       const job = byContainerId.get(record.id) ?? byName.get(record.name);
       if (!job) continue;
       const deleted = await this.opts.containerService.reclaimResidualJob(record.id);
       if (deleted) reclaimed.push(record.id);
     }
     if (stats) {
-      stats.checked += records.length;
       stats.changed += reclaimed.length;
     }
     return reclaimed;
@@ -413,6 +434,7 @@ export class StatusSyncService {
     const timedOut: string[] = [];
     for (const record of records) {
       if (record.status !== 'connecting' && record.status !== 'creating') continue;
+      this.countChecked(stats, record.id);
       if (now - record.updatedAt.getTime() >= this.opts.connectTimeoutMs) {
         await this.opts.containerService.markFailed(
           record.id,
@@ -422,7 +444,6 @@ export class StatusSyncService {
       }
     }
     if (stats) {
-      stats.checked += records.length;
       stats.changed += timedOut.length;
     }
     return timedOut;
@@ -436,6 +457,7 @@ export class StatusSyncService {
     const offline: string[] = [];
     for (const record of records) {
       if (record.status !== 'online') continue;
+      this.countChecked(stats, record.id);
       if (!this.opts.heartbeatTracker.has(record.id)) {
         this.opts.heartbeatTracker.record(
           record.id,
@@ -449,7 +471,6 @@ export class StatusSyncService {
       }
     }
     if (stats) {
-      stats.checked += records.length;
       stats.changed += offline.length;
     }
     return offline;

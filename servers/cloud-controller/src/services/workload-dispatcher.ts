@@ -1063,7 +1063,12 @@ export class WorkloadDispatcher {
     // 每次 `workload:run` 批次下发一个 span（高频通道不逐条开 span，F11）。
     withSpan(
       'workload.dispatch',
-      { 'messaging.batch.message_count': logs.length, phase },
+      {
+        'messaging.batch.message_count': logs.length,
+        // C5：批次内工作负载条数（与 messaging.batch.message_count 同值，语义锚定用）。
+        'workload.count': logs.length,
+        phase,
+      },
       () => {
         this.deps.emitToContainer(containerId, WORKLOAD_RUN_EVENT, payload);
       },

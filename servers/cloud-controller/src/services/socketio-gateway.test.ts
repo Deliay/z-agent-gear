@@ -1010,7 +1010,12 @@ describe('worker Socket.IO gateway', () => {
     const socket = await connectWith(token);
 
     // socket.emit('registered') 报文带 _meta，既有字段保留
-    socket.emit('register', { hostname: 'worker-meta', version: OK_VERSION });
+    // B2：platform 携带控制符 + 超长内容，落日志前须脱敏（不得裸入）
+    socket.emit('register', {
+      hostname: 'worker-meta',
+      version: OK_VERSION,
+      platform: `evil\u001b[31m${'x'.repeat(80)}\r\n`,
+    });
     const registered = await waitFor<{
       controllerId: string;
       initializing: boolean;
@@ -1056,9 +1061,16 @@ describe('worker Socket.IO gateway', () => {
       containerId: container.id,
     });
     expect(typeof connected?.socketId).toBe('string');
-    expect(
-      testLog.records.some((record) => record.msg === 'registered' && record.containerId === container.id),
-    ).toBe(true);
+    const registeredLog = testLog.records.find(
+      (record) => record.msg === 'registered' && record.containerId === container.id,
+    );
+    expect(registeredLog).toBeDefined();
+    // B2：worker 可控 version/platform 写日志前经 sanitizeVersionForLog（去控制符 + 截断 64）
+    expect(registeredLog?.version).toBe(OK_VERSION);
+    const platform = String(registeredLog?.platform);
+    expect(platform).toBe(`evil[31m${'x'.repeat(56)}`);
+    expect(platform).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(platform.length).toBeLessThanOrEqual(64);
   });
 
   it('T-OBS13: 握手携带 auth.traceparent（合法/非法）均不报错，缺失行为不变', async () => {

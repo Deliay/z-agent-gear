@@ -420,8 +420,10 @@ export function registerWorkerGateway(
               socketId: socket.id,
               containerId,
               hostname,
-              version: payload?.version ?? 'unknown',
-              platform: payload?.platform ?? 'unknown',
+              // B2：version/platform 为 worker 可控上报值，写日志前统一
+              // `sanitizeVersionForLog`（去控制符 + 截断 64），与拒绝路径 :344 同口径。
+              version: sanitizeVersionForLog(payload?.version),
+              platform: sanitizeVersionForLog(payload?.platform),
               initializing: willInitialize,
             },
             'registered',
