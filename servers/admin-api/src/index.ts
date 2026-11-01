@@ -58,6 +58,8 @@ import * as migration015PresetPlaywright from './migrations/015-preset-playwrigh
 import * as migration016PresetMongo from './migrations/016-preset-mongodb.js';
 // 017：工作负载全局安装 npm → pnpm（open code/kimi/dsh/playwright 脚本字节匹配刷新）
 import * as migration017WorkloadPnpmScripts from './migrations/017-workload-pnpm-scripts.js';
+// 018：pnpm 9.15.9 → 12.16.1（全局 bin 目录变更，四条工作负载脚本刷新）
+import * as migration018Pnpm12Upgrade from './migrations/018-pnpm-12-upgrade.js';
 import { CloudHost } from './models/cloud-host.js';
 
 const logger = rootLogger.child({ component: 'admin-api' });
@@ -170,6 +172,7 @@ async function start() {
       migration015PresetPlaywright,
       migration016PresetMongo,
       migration017WorkloadPnpmScripts,
+      migration018Pnpm12Upgrade,
     ]);
   } catch (err) {
     logger.error({ err }, 'runMigrations failed (non-fatal)');

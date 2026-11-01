@@ -12,9 +12,9 @@
 # pnpm 口径（docs/engineering/plan/20261029-feat-pnpm-workload-and-harness-optional.md）：
 # - 启动时 ensure_pnpm 预装固定版本 pnpm（幂等、失败仅告警不阻断保活；工作负载脚本自带
 #   npm 自举回退兜底存量容器）；
-# - PNPM_HOME 并入 WORKER_PATH，并写 /etc/profile.d/pnpm.sh（登录 shell）与 `pnpm setup`
-#   （交互 shell ~/.bashrc）双入口；agent-gear 预装与自更新统一走 pnpm（`pnpm add -g`），
-#   npm 仅保留为 pnpm 自举通道（存量容器 `npm install -g pnpm@9.15.9`）。
+# - PNPM_HOME/bin（pnpm 12 的全局 bin）与 PNPM_HOME 并入 WORKER_PATH，并写 /etc/profile.d/pnpm.sh
+#   （登录 shell）与 `pnpm setup`（交互 shell ~/.bashrc）双入口；agent-gear 预装与自更新统一走
+#   pnpm（`pnpm add -g`），npm 仅保留为 pnpm 自举通道（存量容器 `npm install -g pnpm@12.16.1`）。
 #
 # 连接参数：
 #   ZAG_SERVER_ENDPOINT / ZAG_CONTROLLER_KEY（cloud-controller /worker）
@@ -28,15 +28,17 @@ WORKER_UID=1000
 WORKER_GID=1000
 WORKER_HOME=/home/worker
 WORKER_NVM_DIR="$WORKER_HOME/.nvm"
-# pnpm 固定版本与全局 bin 目录（决策 1/2）：与迁移 017 脚本内自举回退块同版本。
-PNPM_VERSION="${PNPM_VERSION:-9.15.9}"
+# pnpm 固定版本与全局 bin 目录（决策 1/2）：与迁移 017/018 脚本内自举回退块同版本。
+PNPM_VERSION="${PNPM_VERSION:-12.16.1}"
 # pnpm 可执行文件（测试可指向不存在的命令，用于验证存量容器自举分支）。
 PNPM_CMD="${ZAG_PNPM_CMD:-pnpm}"
 PNPM_HOME="$WORKER_HOME/.local/share/pnpm"
+# pnpm 12 的全局 bin 目录为 $PNPM_HOME/bin（pnpm 9 为 $PNPM_HOME，两者都保留以兼容存量）。
+PNPM_BIN_DIR="$PNPM_HOME/bin"
 # /etc/profile.d 写入目标（登录 shell 全局生效）；仅测试可用环境变量改写到临时目录。
 PNPM_PROFILE_FILE="${ZAG_PNPM_PROFILE_FILE:-/etc/profile.d/pnpm.sh}"
-# 既有顺序不变，仅在 nvm bin 之后追加 PNPM_HOME（pnpm add -g 的全局 bin 落点）。
-WORKER_PATH="$WORKER_NVM_DIR/current/bin:$PNPM_HOME:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# 既有顺序不变，仅在 nvm bin 之后追加 pnpm 全局 bin。
+WORKER_PATH="$WORKER_NVM_DIR/current/bin:$PNPM_BIN_DIR:$PNPM_HOME:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 CHILD_PID=""
 SCAN_PID=""
@@ -81,7 +83,7 @@ write_pnpm_profile() {
     if [ -f "$PNPM_PROFILE_FILE" ]; then
       sed -i '/^# >>> pnpm >>>$/,/^# <<< pnpm <<<$/d' "$PNPM_PROFILE_FILE" 2>/dev/null || true
     fi
-    printf '# >>> pnpm >>>\nexport PNPM_HOME="%s"\ncase ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac\n# <<< pnpm <<<\n' \
+    printf '# >>> pnpm >>>\nexport PNPM_HOME="%s"\ncase ":$PATH:" in *":$PNPM_HOME/bin:"*) ;; *) export PATH="$PNPM_HOME/bin:$PATH" ;; esac\ncase ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac\n# <<< pnpm <<<\n' \
       "$PNPM_HOME" >> "$PNPM_PROFILE_FILE"
   } 2>/dev/null || log "WARN: cannot write pnpm profile ($PNPM_PROFILE_FILE)"
 }

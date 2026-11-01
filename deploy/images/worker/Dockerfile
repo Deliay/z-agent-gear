@@ -21,7 +21,6 @@
 #   NODEJS_DIST_MIRROR  Node.js 发行包代理源（nvm 的 index.tab/SHASUMS/tarball 均取自此处）
 #   NODE_VERSION        由 nvm 安装的 Node.js 主版本（默认 24）
 #   NPM_REGISTRY        npm 代理源（构建期用于自举 pnpm / 安装全局包，并以 ENV 固化到运行时供 Node.js 工作负载脚本读取）
-#   PNPM_VERSION        worker 内预装的 pnpm 版本（默认 9.15.9，与 entrypoint 自举版本一致）
 
 FROM ubuntu:24.04
 
@@ -33,7 +32,6 @@ ARG NVM_INSTALL_URL=https://nexus.internal.fffdan.com/repository/github-raw-prox
 ARG NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy
 ARG NODE_VERSION=24
 ARG NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/
-ARG PNPM_VERSION=9.15.9
 # .NET 由工作负载脚本经 apt 安装（不再依赖 dotnet-install.sh）。默认包名 dotnet10、默认执行 apt-get upgrade，
 # 可在运行时用同名环境变量覆盖；如内网 Ubuntu 源不含 .NET 10，可用 DOTNET_APT_SOURCE/DOTNET_APT_KEY_URL
 # 在构建期注入内部 Microsoft feed 代理（见下方「.NET apt 源」）。
@@ -104,7 +102,7 @@ ENV NVM_DIR=/home/worker/.nvm \
     NVM_NODEJS_ORG_MIRROR="$NODEJS_DIST_MIRROR" \
     NVM_SYMLINK_CURRENT=true \
     PNPM_HOME=/home/worker/.local/share/pnpm \
-    PATH=/home/worker/.local/share/pnpm:$PATH
+    PATH=/home/worker/.local/share/pnpm/bin:/home/worker/.local/share/pnpm:$PATH
 USER worker
 RUN mkdir -p "$NVM_DIR" \
  && METHOD=script \
@@ -119,11 +117,12 @@ RUN mkdir -p "$NVM_DIR" \
  && ln -sfn "$(dirname "$(dirname "$(nvm which default)")")" "$NVM_DIR/current" \
  && npm config set registry "$NPM_REGISTRY"
 # 4.1) 用 npm 自举 pnpm（npm 仅保留为 pnpm 引导通道），之后全局 CLI 统一用 pnpm 安装。
-#      PNPM_HOME 已在上面写入 PATH，`pnpm add -g` 的 bin 落点对运行时可见。
+#      pnpm 12 的全局 bin 目录是 $PNPM_HOME/bin（不是 $PNPM_HOME），必须在 PATH 中，否则 `pnpm add -g` 直接报
+#      ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH。版本固定在这里而不是顶部 ARG，避免改版本时整层缓存全失效。
 # 镜像唯一预装的全局包：agent-gear。
 # 不预装 Claude Code / Codex 的 ACP 适配器（claude-agent-acp、codex-acp）。
 RUN . "$NVM_DIR/nvm.sh" \
- && npm install -g "pnpm@${PNPM_VERSION}" \
+ && npm install -g "pnpm@12.16.1" \
  && npm cache clean --force \
  && pnpm add -g agent-gear@2.15.x \
  && pnpm store prune \
