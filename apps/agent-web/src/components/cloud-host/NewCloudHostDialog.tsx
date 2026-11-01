@@ -153,15 +153,10 @@ export default function NewCloudHostDialog({
     : trimmedName.length > NAME_MAX_LENGTH
       ? `名称不能超过 ${NAME_MAX_LENGTH} 个字符`
       : null
-  const harnessError = selectedHarnesses.length === 0 ? '请至少选择一种 Harness' : null
   const featureDisabled = !capabilities.enabled
   const projectIncomplete = projectEnabled && !projectForm.isValid
-  const submitDisabled =
-    submitting ||
-    featureDisabled ||
-    Boolean(nameError) ||
-    Boolean(harnessError) ||
-    projectIncomplete
+  // harness 为可选工作负载：不选（0 个）也可提交，就绪后可在「设置-工作负载」补装。
+  const submitDisabled = submitting || featureDisabled || Boolean(nameError) || projectIncomplete
 
   const handleCreateError = (err: unknown) => {
     setError(getErrorMessage(err));
@@ -342,8 +337,10 @@ export default function NewCloudHostDialog({
                 ))}
               </div>
             )}
-            {harnessError && supportedHarnesses.length > 0 && (
-              <p className="mt-1 text-xs text-destructive">{harnessError}</p>
+            {supportedHarnesses.length > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                可不选，之后在设置-工作负载中补装
+              </p>
             )}
             {/* 默认工作区只在「Git 项目设置」初始化时创建：普通创建就绪后不会自动进会话 */}
             {selectedHarnesses.length === 1 && (

@@ -17,11 +17,13 @@ vi.mock('../models/cloud-host-setup-operation.js', () => ({
 vi.mock('./cloud-host-service.js', () => ({
   cloudHostService: { findOwnedRawHostByController: vi.fn() },
 }));
+vi.mock('./acp-options-cache.js', () => ({ invalidateAcpHarnessInstall: vi.fn() }));
 
 import { Controller } from '../models/controller.js';
 import { CloudContainer } from '../models/cloud-container.js';
 import { CloudHostSetupOperation } from '../models/cloud-host-setup-operation.js';
 import { cloudHostService } from './cloud-host-service.js';
+import { invalidateAcpHarnessInstall } from './acp-options-cache.js';
 import {
   CloudHostWorkloadService,
   mapOperation,
@@ -62,7 +64,7 @@ describe('CloudHostWorkloadService', () => {
     } as never);
     const service = new CloudHostWorkloadService({
       catalog: {
-        listStandard: vi.fn().mockResolvedValue([
+        listAll: vi.fn().mockResolvedValue([
           {
             id: 'w1',
             name: 'Github',
@@ -93,13 +95,20 @@ describe('CloudHostWorkloadService', () => {
     expect(items[1]).toMatchObject({ workloadId: 'w2', installed: false, dependsOnWorkloadIds: [] });
   });
 
-  it('T-CHW1-b: list 透出 workloadKind（standard 固定 STANDARD）', async () => {
+  it('T-AH1: list 含 harness 且 workloadKind 映射真实值（不再硬编码 STANDARD）', async () => {
     vi.mocked(CloudContainer.findOne).mockReturnValue({
-      sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
+      sort: vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          installedWorkloads: [
+            { workloadId: 'w2', name: 'OpenCode（Harness）', installedAt: new Date(), source: 'user' },
+          ],
+        }),
+      }),
     } as never);
+    const listStandard = vi.fn();
     const service = new CloudHostWorkloadService({
       catalog: {
-        listStandard: vi.fn().mockResolvedValue([
+        listAll: vi.fn().mockResolvedValue([
           {
             id: 'w1',
             name: 'Docker',
@@ -109,12 +118,63 @@ describe('CloudHostWorkloadService', () => {
             workloadKind: 'standard',
             initScript: 'x',
           },
+          {
+            id: 'w2',
+            name: 'OpenCode（Harness）',
+            paramSchema: [],
+            dependsOnWorkloadIds: [],
+            isPreset: true,
+            workloadKind: 'harness',
+            initScript: 'x',
+          },
         ]),
+        listStandard,
       } as never,
     });
 
     const items = await service.list(USER_ID, CONTROLLER_ID);
-    expect(items[0].workloadKind).toBe('STANDARD');
+    expect(items.map((item) => [item.workloadId, item.workloadKind, item.installed])).toEqual([
+      ['w1', 'STANDARD', false],
+      ['w2', 'HARNESS', true],
+    ]);
+    // 创建期目录仍仅 standard（决策 10）
+    expect(listStandard).not.toHaveBeenCalled();
+  });
+
+  it('T-AH2: createInstallOperation 放行 harness、拒绝未知 kind', async () => {
+    vi.mocked(CloudHostSetupOperation.create).mockResolvedValue({
+      _id: 'op-h1',
+      toObject: () => ({
+        _id: 'op-h1',
+        kind: 'installWorkload',
+        status: 'RUNNING',
+        steps: [{ key: 'workload', status: 'PENDING' }],
+      }),
+    } as never);
+    const findById = vi.fn().mockResolvedValue({
+      id: W1,
+      name: 'OpenCode（Harness）',
+      workloadKind: 'harness',
+    });
+    const service = new CloudHostWorkloadService({
+      catalog: { findById } as never,
+    });
+    vi.spyOn(service, 'enqueue').mockImplementation(() => undefined);
+
+    const operation = await service.createInstallOperation({
+      userId: USER_ID,
+      controllerId: CONTROLLER_ID,
+      workloadId: W1,
+    });
+    expect(operation).toMatchObject({ id: 'op-h1', status: 'RUNNING' });
+    expect(CloudHostSetupOperation.create).toHaveBeenCalledWith(
+      expect.objectContaining({ workloadId: W1, kind: 'installWorkload' }),
+    );
+
+    findById.mockResolvedValueOnce({ id: W1, name: 'X', workloadKind: 'system' });
+    await expect(
+      service.createInstallOperation({ userId: USER_ID, controllerId: CONTROLLER_ID, workloadId: W1 }),
+    ).rejects.toThrow('Workload not found');
   });
 
   it('T-CHW-CAT: listCatalog 无主机上下文返回全部 standard 且 installed=false', async () => {
@@ -254,6 +314,48 @@ describe('CloudHostWorkloadService', () => {
       { _id: 'op2' },
       { $set: { status: 'SUCCEEDED', error: null } },
     );
+  });
+
+  it('T-AH2/T-CC-R16: harness 安装成功失效 ACP 能力/选项缓存', async () => {
+    vi.mocked(CloudHostSetupOperation.findById).mockReturnValue(
+      lean({
+        _id: 'op-h2',
+        hostId: HOST_ID,
+        controllerId: CONTROLLER_ID,
+        containerId: CONTAINER_ID,
+        workloadId: W1,
+        status: 'RUNNING',
+      }),
+    );
+    vi.mocked(CloudContainer.findOne).mockReturnValue({
+      sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue({ installedWorkloads: [] }) }),
+    } as never);
+    const controllerClient = {
+      startRuntimeWorkload: vi.fn().mockResolvedValue({
+        batchId: 'b-h2',
+        items: [{ logId: 'l-h2', workloadId: W1, workloadName: 'Kimi Code（Harness）' }],
+      }),
+      getWorkloadLogs: vi.fn().mockResolvedValue([
+        { id: 'l-h2', status: 'success', workloadName: 'Kimi Code（Harness）', log: '' },
+      ]),
+    };
+    const service = new CloudHostWorkloadService({
+      controllerClient: controllerClient as never,
+      catalog: {
+        findById: vi.fn().mockResolvedValue({
+          id: W1,
+          name: 'Kimi Code（Harness）',
+          workloadKind: 'harness',
+          harnessType: 'kimi_code',
+        }),
+      } as never,
+    });
+    vi.spyOn(service, 'updateStep').mockResolvedValue();
+    vi.spyOn(service, 'pollBatch').mockResolvedValue();
+
+    await (service as any).runInstall('op-h2');
+
+    expect(invalidateAcpHarnessInstall).toHaveBeenCalledWith(CONTROLLER_ID, 'kimi_code');
   });
 
   it('T-CHW4: 执行失败 → operation FAILED，错误可读且脱敏', async () => {

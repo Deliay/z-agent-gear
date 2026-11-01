@@ -405,6 +405,16 @@ tests/
 - [ ] 创建云电脑允许 0 个 harness；harness 安装失败不再销毁容器（required=false）
 - [ ] 单元测试覆盖达标（T-MIG-PN1~PN5、T-EP9/10、T-AH*、T-CC-R*）、API 测试通过、E2E 通过
 
+## 9.1 实现期勘误（不改变方案结论）
+
+实现（`feat/pnpm-workload-and-harness-optional-impl`）与本文的差异，均已在实现计划「实现期勘误」登记：
+
+1. **`run_as_worker` 而非 `run_as_worker_exec`**：§5.2 实现点 1 的 `run_as_worker_exec npm install -g pnpm@9.15.9` / `run_as_worker_exec pnpm setup` 为笔误——`run_as_worker_exec` 会 `exec` 替换当前 shell（仅用于后台子进程链路），pnpm 预装与 `pnpm setup` 实际使用 `run_as_worker`（计划裁决 5）。
+2. **entrypoint 用例编号**：T-EP9/T-EP10 已被既有用例占用，pnpm 预装用例实际为 **T-EP13/T-EP14**（语义不变）。
+3. **统一回退块补充 `PNPM_HOME`/PATH**：存量容器自举安装 pnpm 后需要 `PNPM_HOME` 在脚本 PATH 内，否则 `pnpm add -g` 产物 bin 不被硬校验命中；新镜像上幂等无害。
+4. **runtime 版本门禁版本来源**：在线版本取 gateway 记录的最近一次 `register` 上报值（断开即清除），不可得时放行并 `warn` 留痕（与契约 A.2.5 一致）。
+5. **0-harness 创建**：`internal-api` 同步放宽 harness `harnessTypes` 空数组与 `workloadPlan` 为空（A.2.2 的必要实现，Phase 5 清单未显式列出）。
+
 ## 10. 相关文档
 
 - 关联 PRD：`docs/product/draft/20261029-pnpm-workload-and-harness-optional.md`（Issue #369）

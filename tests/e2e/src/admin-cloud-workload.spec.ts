@@ -576,7 +576,7 @@ test.describe('Admin Cloud Workload E2E', () => {
     for (const name of ['Docker', 'Node.js', '.NET', 'Aspire', 'OpenCode（Harness）', 'Kimi Code（Harness）', 'DeepSeek Harness（Harness）', 'Github', 'MongoDB', 'Playwright']) {
       await expect(page.getByText(name, { exact: true }).first()).toBeVisible();
     }
-    // 「预制」徽章恰好 9 个
+    // 「预制」徽章恰好 10 个（历史注释笔误修正：预制项计数为 10，本期不新增）
     await expect(page.getByText('预制', { exact: true })).toHaveCount(10);
 
     // Aspire 行展示依赖 Docker / .NET

@@ -76,7 +76,7 @@ test.describe('Cloud Host E2E', () => {
       const dialog = page.getByRole('dialog');
       await expect(dialog.getByRole('heading', { name: '新建云电脑' })).toBeVisible();
 
-      // 名称必填 + harness 必选；本期无存储/会话导入参数
+      // 名称必填、harness 可选（0 个可提交）；本期无存储/会话导入参数
       const createButton = dialog.getByRole('button', { name: '创建云电脑' });
       await expect(createButton).toBeDisabled();
       await expect(dialog.getByText('存储会话')).toHaveCount(0);
@@ -87,6 +87,9 @@ test.describe('Cloud Host E2E', () => {
       await expect(dialog.getByText('请输入云电脑名称')).toBeVisible();
 
       await dialog.locator('#cloud-host-name').fill(hostName);
+      // T-AW-HARNESS：不选 harness 也可提交（补装提示可见）
+      await expect(dialog.getByText('可不选，之后在设置-工作负载中补装')).toBeVisible();
+      await expect(createButton).toBeEnabled();
       // T-E-HL7 / T-E-DS1：Kimi Code / DeepSeek Harness 与 OpenCode 均可选、可多选（多选提示「不自动创建会话」）
       const kimi = dialog.getByRole('checkbox', { name: 'Kimi Code' });
       await expect(kimi).toBeVisible({ timeout: 15000 });
@@ -630,6 +633,65 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
           controllerId: new mongoose.Types.ObjectId(host.controllerId),
         }),
       ).toBe(1);
+    } finally {
+      await cleanupHost(page, token, name);
+    }
+  });
+
+  test('T-AW-HARNESS: 创建 0-harness 云电脑 + 设置-工作负载展示 harness（可选）', async ({ page }) => {
+    test.skip(!MONGO_URI, '需要 MONGODB_URI 推进云电脑为 RUNNING');
+    test.setTimeout(120_000);
+    const { token, username } = await registerFundedUser(page);
+    await loginViaUI(page, username);
+    const name = `e2e-harness-opt-${Date.now().toString(36)}`;
+
+    try {
+      await page.getByRole('button', { name: '新建云电脑' }).click();
+      const dialog = page.getByRole('dialog');
+      await dialog.locator('#cloud-host-name').fill(name);
+      // harness 可选：不勾选任何 harness 也能提交（提示补装入口；无「请至少选择」拦截）
+      await expect(dialog.getByText('可不选，之后在设置-工作负载中补装')).toBeVisible();
+      await expect(dialog.getByText('请至少选择一种 Harness')).toHaveCount(0);
+      const createButton = dialog.getByRole('button', { name: '创建云电脑' });
+      await expect(createButton).toBeEnabled();
+      await createButton.click();
+
+      const host = await waitForHost(page, token, name);
+      const listRes = await gqlRequest(
+        page,
+        `query { myCloudHosts { id name harnessTypes } }`,
+        undefined,
+        token,
+      );
+      const listed = (await listRes.json()).data.myCloudHosts.find(
+        (item: { name: string }) => item.name === name,
+      );
+      expect(listed?.harnessTypes).toEqual([]);
+
+      // 推进为 RUNNING（环境无真实 worker，用 Mongo fixture）
+      await setHostRunning(host.id);
+      await page.reload();
+      const row = page.locator(sidebar()).locator('li', { hasText: name });
+      await expect(row).toBeVisible({ timeout: 15000 });
+      await row.getByTitle('控制器配置').click();
+      await expect(page).toHaveURL(/\/settings\?controllerId=/);
+      await expect(page.getByTestId('cloud-host-panel')).toContainText('运行中', {
+        timeout: 15000,
+      });
+
+      // 设置-工作负载：HARNESS 分组「云电脑（Harness）」+「可选」标识，未安装可发起安装
+      await page.getByTestId('config-tab-workloads').click();
+      await expect(page.getByText('云电脑（Harness）')).toBeVisible({ timeout: 15000 });
+      await expect(page.getByText('运行环境 / 工具')).toBeVisible({ timeout: 15000 });
+      const harnessItem = page.locator('li', { hasText: 'OpenCode（Harness）' });
+      await expect(harnessItem).toBeVisible({ timeout: 15000 });
+      await expect(harnessItem.getByText('可选', { exact: true })).toBeVisible();
+      await expect(harnessItem.getByText('预制', { exact: true })).toBeVisible();
+      await expect(
+        harnessItem.getByRole('button', { name: '安装 OpenCode（Harness）' }),
+      ).toBeEnabled();
+      // 无卸载入口
+      await expect(page.getByRole('button', { name: /卸载/ })).toHaveCount(0);
     } finally {
       await cleanupHost(page, token, name);
     }

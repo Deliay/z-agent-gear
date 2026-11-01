@@ -109,10 +109,12 @@ function iso(value: unknown): string | null {
   return value instanceof Date ? value.toISOString() : null;
 }
 
+/**
+ * 归一 harness 类型：允许 0 个（harness 为可选工作负载，运行期可在设置-工作负载补装）。
+ * 非数组按空处理；非字符串/白名单外仍报 `unsupported harness type: …`；去重保序。
+ */
 function parseHarnessTypes(raw: string[]): HarnessType[] {
-  if (!Array.isArray(raw) || raw.length === 0) {
-    throw new Error('at least one harness type is required');
-  }
+  if (!Array.isArray(raw) || raw.length === 0) return [];
   const result: HarnessType[] = [];
   for (const value of raw) {
     if (typeof value !== 'string') {
@@ -125,9 +127,6 @@ function parseHarnessTypes(raw: string[]): HarnessType[] {
     if (!result.includes(normalized as HarnessType)) {
       result.push(normalized as HarnessType);
     }
-  }
-  if (result.length === 0) {
-    throw new Error('at least one harness type is required');
   }
   return result;
 }
@@ -474,11 +473,12 @@ export class CloudHostService {
     presets: HarnessPreset[],
     workloadIds: string[],
   ): Promise<CreateWorkloadPlanEntry[]> {
+    // harness 为可选工作负载：安装失败不硬失败销毁容器，可事后在设置-工作负载补装。
     const harnessPlan: CreateWorkloadPlanEntry[] = presets.map((preset) => ({
       workloadId: preset.id,
       params: {},
       implicit: false,
-      required: true,
+      required: false,
     }));
     if (workloadIds.length === 0) return harnessPlan;
 
@@ -908,7 +908,6 @@ const CLOUD_HOST_PUBLIC_ERRORS = new Set([
   'name is too long',
   'insufficient balance',
   'harness feature is disabled',
-  'at least one harness type is required',
   'cloud host is not configured',
   'control plane unavailable',
   'billing service unavailable',

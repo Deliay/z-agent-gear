@@ -39,6 +39,27 @@ async function deleteKeysByPattern(pattern: string): Promise<number> {
   }
 }
 
+/**
+ * 云电脑运行期新装 harness 成功后失效 ACP 探测缓存（实现计划裁决 16）：
+ * - `acp:capability:<controllerId>`（工具可用性列表）—— 新工具需重新探测才能出现在列表；
+ * - `acp:options:<controllerId>:<acpServerType>`（Mode/模型选项）—— 探测失败的空结果不应继续命中。
+ * 失败只告警，不阻断安装主流程（TTL 兜底）。
+ */
+export async function invalidateAcpHarnessInstall(
+  controllerId: string,
+  acpServerType: string,
+): Promise<void> {
+  try {
+    const redis = getRedisClient();
+    await redis.del(
+      `acp:capability:${controllerId}`,
+      `${ACP_OPTIONS_KEY_PREFIX}${controllerId}:${acpServerType}`,
+    );
+  } catch (err) {
+    logger.warn({ controllerId, acpServerType, err }, 'invalidate acp caches after harness install failed');
+  }
+}
+
 /** 失效某个控制器的全部工具选项缓存（模型/模式变更后调用）。 */
 export async function invalidateAcpOptionsForController(controllerId: string): Promise<number> {
   return deleteKeysByPattern(`${ACP_OPTIONS_KEY_PREFIX}${controllerId}:*`);

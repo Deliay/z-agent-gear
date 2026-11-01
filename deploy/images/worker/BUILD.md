@@ -291,6 +291,25 @@ ls "$HOME/.cache/ms-playwright" | grep '^chromium-'   # 默认仅 Chromium（Fir
 echo "$PLAYWRIGHT_DOWNLOAD_HOST"                      # 安装时已持久化到用户环境
 ```
 
+pnpm 预装与工作负载安装口径（entrypoint `ensure_pnpm` + 迁移 017 脚本）：
+
+```bash
+# entrypoint 预装（新容器；固定版本 9.15.9）
+pnpm --version                       # 9.15.9
+echo "$PNPM_HOME"                    # /home/worker/.local/share/pnpm
+login_shell_path=$(bash -lc 'echo "$PATH"'); case ":$login_shell_path:" in *":$PNPM_HOME:"*) echo ok ;; *) echo missing ;; esac
+# 交互 shell（pnpm setup 接线）：登录 worker 后
+bash -lc 'command -v pnpm'
+# worker 身份（run_as_worker 口径）可直接使用
+sudo -u worker env HOME=/home/worker PNPM_HOME=/home/worker/.local/share/pnpm \
+  PATH="/home/worker/.nvm/current/bin:/home/worker/.local/share/pnpm:$PATH" pnpm --version
+# 安装来源走内网代理（pnpm 读同一 ~/.npmrc）
+pnpm config get registry             # https://nexus.internal.fffdan.com/repository/npm-proxy/
+# 工作负载脚本安装行统一 `pnpm add -g`（OpenCode/Kimi Code/DeepSeek Harness/Playwright）；
+# 存量容器（无 pnpm）由脚本内自举回退块 `npm install -g pnpm@9.15.9` 兜底
+# 预装失败仅告警：保活/agent-gear 链路正常，工作负载脚本回退块兜底（无阻断）
+```
+
 MongoDB（原生 apt 安装；成功判据仅 `mongod --version`，不拉起实例）：
 
 ```bash
@@ -328,6 +347,10 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 - [ ] **地址已持久化到双用户环境**：root 与 worker 用户登录/交互 shell 均能读到 `PLAYWRIGHT_DOWNLOAD_HOST`（`/etc/profile.d/playwright.sh` + 各自 `~/.bashrc` 标记块）；两用户执行 `playwright install firefox` 补装走内网代理
 - [ ] 清空 `playwright_download_host` 参数（且未提供 `PLAYWRIGHT_DOWNLOAD_HOST`）且 Playwright 尚未安装时：该工作负载**快速失败**并在执行记录中给出含正确地址形态的明确指引（容器仍继续后续初始化并上线）
 - [ ] 下载地址不可达/Chromium 未就绪时该工作负载记录失败与日志，容器仍继续后续初始化并上线
+- [ ] 新容器 `pnpm --version` 为 `9.15.9`；`PNPM_HOME`（`/home/worker/.local/share/pnpm`）经 `WORKER_PATH` 与 `/etc/profile.d/pnpm.sh` 双入口生效
+- [ ] 四个工作负载（OpenCode / Kimi Code / DeepSeek Harness / Playwright）安装行均为 `pnpm add -g`，来源走内网 npm 代理，结尾硬校验通过
+- [ ] 存量容器（镜像无 pnpm）由脚本内自举回退块安装 pnpm 后安装成功
+- [ ] 预装 pnpm 失败仅告警：`agent-gear` 保活/自更新链路正常，工作负载脚本回退块兜底
 - [ ] Playwright 重复执行幂等（已安装直接校验通过、不重复下载）；工具与 Chromium 任一缺失时整体判失败
 
 > **安装来源（重要）**：默认来源由「Docker」工作负载参数 `docker_apt_url` 提供——迁移 003 默认填入内网

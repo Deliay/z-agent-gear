@@ -299,13 +299,26 @@ describe('CloudHostService', () => {
       );
     });
 
-    it('validates harness types', async () => {
-      await expect(service.create('user-1', { name: 'x', harnessTypes: [] })).rejects.toThrow(
-        'at least one harness type is required',
+    it('T-AH3: harnessTypes 允许 0 个；白名单外仍报错、去重保序不变', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'x', harnessTypes: [] });
+      expect(cloudWorkloadReader.findHarnessPreset).not.toHaveBeenCalled();
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ harnessTypes: [] }),
       );
+      expect(cloudControllerClient.startHarness).toHaveBeenCalledWith(
+        expect.objectContaining({ harnessTypes: [], workloadPlan: [] }),
+      );
+
       await expect(
         service.create('user-1', { name: 'x', harnessTypes: ['UNKNOWN'] }),
       ).rejects.toThrow('unsupported harness type: UNKNOWN');
+      await expect(
+        service.create('user-1', {
+          name: 'x',
+          harnessTypes: ['OPENCODE' as never, 'OPENCODE' as never],
+        }),
+      ).resolves.toBeDefined();
     });
 
     it('T-CH-GH1: 非法/非本人 githubAccountId 拒绝，合法则落库透传', async () => {
@@ -404,7 +417,7 @@ describe('CloudHostService', () => {
         vi.mocked(billingClient.createCloudHostApiKey).mock.calls[0][0],
       ).not.toHaveProperty('expiresAt');
       expect(payload.workloadPlan).toEqual([
-        { workloadId: 'preset-1', params: {}, implicit: false, required: true },
+        { workloadId: 'preset-1', params: {}, implicit: false, required: false },
       ]);
       expect(payload.secrets).toMatchObject({
         hostKey: 'zag_k_1_raw',
@@ -705,7 +718,7 @@ describe('CloudHostService', () => {
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.workloadPlan).toEqual([
-        { workloadId: 'preset-1', params: {}, implicit: false, required: true },
+        { workloadId: 'preset-1', params: {}, implicit: false, required: false },
       ]);
       expect(catalogMock.listStandard).not.toHaveBeenCalled();
     });
@@ -721,7 +734,7 @@ describe('CloudHostService', () => {
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.workloadPlan).toEqual([
-        { workloadId: 'preset-1', params: {}, implicit: false, required: true },
+        { workloadId: 'preset-1', params: {}, implicit: false, required: false },
         { workloadId: DOCKER_ID, params: {}, implicit: false, required: false },
       ]);
     });
