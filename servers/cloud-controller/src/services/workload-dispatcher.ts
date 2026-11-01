@@ -77,6 +77,19 @@ export class ContainerBusyError extends Error {
   }
 }
 
+/**
+ * runtime 批次：云电脑运行环境（harness env）无法构建（secret 缺失/模型配置不完整）。
+ * 不向 worker 下发 `undefined` 或半套配置；错误文案不含任何 secret 明文（T-CC-R2）。
+ */
+export class HarnessEnvironmentUnavailableError extends Error {
+  constructor(
+    message = '云电脑运行环境缺失（secret 或模型配置不完整），无法安装 harness 工作负载',
+  ) {
+    super(message);
+    this.name = 'HarnessEnvironmentUnavailableError';
+  }
+}
+
 export interface RuntimeEntry {
   workloadId: string;
   workloadName: string;
@@ -453,6 +466,22 @@ export class WorkloadDispatcher {
         throw new InvalidRuntimeBatchError('runtime batch requires at least one entry');
       }
 
+      // purpose=harness：与 init 批次同源解析 env（`ZAG_HARNESS_TYPES` / `ZAG_MODEL_*` /
+      // `ZAG_DEFAULT_WORKSPACE` 等），`harness prepare` 依赖；解析失败在落库任何批次前判失败。
+      const runEnv = this.resolveRunEnv(container);
+      if (!runEnv.ok) {
+        this.deps.logger.warn(
+          {
+            component: 'workload-dispatcher',
+            event: 'harness-env-unavailable',
+            containerId,
+            phase: 'runtime',
+          },
+          'harness env unavailable (runtime batch aborted)',
+        );
+        throw new HarnessEnvironmentUnavailableError();
+      }
+
       const now = new Date(this.now());
       const inputs: CreateWorkloadLogInput[] = input.entries.map((entry, index) => ({
         containerId,
@@ -481,7 +510,7 @@ export class WorkloadDispatcher {
         containerId,
         'init',
         logs,
-        undefined,
+        runEnv.env,
         input.githubAuth === true,
       );
 
@@ -701,7 +730,13 @@ export class WorkloadDispatcher {
     return null;
   }
 
-  /** 回填已安装工作负载（按 workloadId 去重，保留首次记录）。 */
+  /**
+   * 回填已安装工作负载（按 workloadId 去重，保留首次记录）。
+   *
+   * harness 负载（`harnessType` 非空）额外对 `cloudcontainers.harnessTypes` `$addToSet`
+   * （决策 8：已安装回填的唯一写点同点扩展；standard 负载不动）。该追加独立于
+   * `installedWorkloads` 去重：历史上已安装但尚未登记 harness 类型时也能补登记。
+   */
   private async appendInstalledWorkload(
     containerId: string,
     workloadId: string,
@@ -710,6 +745,14 @@ export class WorkloadDispatcher {
   ): Promise<void> {
     const container = await this.deps.containerRepository.findById(containerId);
     if (!container) return;
+    const workload = await this.deps.workloadRepository.findById(workloadId);
+    const harnessType =
+      typeof workload?.harnessType === 'string' && workload.harnessType.trim()
+        ? workload.harnessType.trim()
+        : null;
+    if (harnessType) {
+      await this.deps.containerRepository.addHarnessType(containerId, harnessType);
+    }
     if ((container.installedWorkloads ?? []).some((item) => item.workloadId === workloadId)) {
       return;
     }

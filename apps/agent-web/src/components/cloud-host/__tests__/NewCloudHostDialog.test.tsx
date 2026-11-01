@@ -127,13 +127,23 @@ describe('NewCloudHostDialog', () => {
     expect(submitButton()).toBeDisabled();
   });
 
-  it('T-AW3 未选择 Harness 时禁用提交', () => {
+  it('T-WEB3 未选择 Harness 也可提交（0 个 harness）+ 补装提示', async () => {
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
 
-    expect(screen.getByText('请至少选择一种 Harness')).toBeInTheDocument();
-    expect(submitButton()).toBeDisabled();
+    // 不再有「请至少选择一种 Harness」拦截
+    expect(screen.queryByText('请至少选择一种 Harness')).not.toBeInTheDocument();
+    expect(screen.getByText('可不选，之后在设置-工作负载中补装')).toBeInTheDocument();
+    expect(submitButton()).not.toBeDisabled();
+
+    fireEvent.click(submitButton());
+
+    await waitFor(() => {
+      expect(mockCreateCloudHost).toHaveBeenCalledWith({
+        variables: { input: { name: '云电脑 A', harnessTypes: [] } },
+      });
+    });
   });
 
   it('不提供「创建默认工作区」勾选，单 Harness 提示就绪后不会自动创建会话', () => {
@@ -210,7 +220,7 @@ describe('NewCloudHostDialog', () => {
     'name is required',
     'name is too long',
     'harness feature is disabled',
-    'at least one harness type is required',
+    'cloud host is not configured',
     'unsupported harness type: x',
   ])('T-AW5 服务端错误「%s」原样展示', async (message) => {
     mockCreateCloudHost.mockRejectedValueOnce(new Error(message));

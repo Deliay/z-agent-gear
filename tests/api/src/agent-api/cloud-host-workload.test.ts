@@ -41,6 +41,14 @@ const CATALOG = `
   }
 `;
 
+const INSTALL = `
+  mutation Install($input: InstallCloudHostWorkloadInput!) {
+    installCloudHostWorkload(input: $input) {
+      id kind status steps { key status detail } sessionId error
+    }
+  }
+`;
+
 const SETUP = `
   mutation Setup($input: SetupCloudHostGithubProjectInput!) {
     setupCloudHostGithubProject(input: $input) {
@@ -192,6 +200,115 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
       const foreign = await gql(WORKLOADS, { controllerId: seeded.controllerId }, other.token);
       expect(foreign.errors?.[0]?.message).toBe('Cloud host not found');
     } finally {
+      await seeded.cleanup();
+    }
+  });
+
+  it('T-AH-API1: cloudHostWorkloads 含 harness 条目（kind 真实映射 + installed 标记）', async () => {
+    const { token, userId } = await newFrontUser();
+    const seeded = await seedHost(userId);
+    const db = (await mongoDb())!;
+    const harness = await db.collection('cloudworkloads').findOne({ presetKey: 'harness-opencode' });
+    expect(harness, 'harness-opencode 预置项应由迁移 006 写入').toBeTruthy();
+    const containerId = new mongoose.Types.ObjectId();
+    await db.collection('cloudcontainers').insertOne({
+      _id: containerId,
+      name: `container-${containerId}`,
+      namespace: 'zag-workers',
+      status: 'online',
+      purpose: 'harness',
+      hostId: seeded.hostId,
+      harnessTypes: ['opencode'],
+      image: 'zero-tools/zag-worker:latest',
+      installedWorkloads: [
+        {
+          workloadId: harness!._id.toString(),
+          name: harness!.name,
+          installedAt: new Date(),
+          source: 'user',
+        },
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    try {
+      const result = await gql(WORKLOADS, { controllerId: seeded.controllerId }, token);
+      expect(result.errors).toBeUndefined();
+      const items = result.data.cloudHostWorkloads as Array<Record<string, unknown>>;
+      const harnessItem = items.find(
+        (item) => item.workloadId === harness!._id.toString(),
+      );
+      expect(harnessItem).toMatchObject({
+        name: 'OpenCode（Harness）',
+        workloadKind: 'HARNESS',
+        isPreset: true,
+        installed: true,
+        source: 'user',
+      });
+      // standard 条目仍为 STANDARD（真实映射，不再硬编码）
+      expect(items.some((item) => item.workloadKind === 'STANDARD')).toBe(true);
+      for (const item of items) {
+        expect(['STANDARD', 'HARNESS']).toContain(item.workloadKind);
+      }
+    } finally {
+      await db.collection('cloudcontainers').deleteOne({ _id: containerId });
+      await seeded.cleanup();
+    }
+  });
+
+  it('T-AH-API2: installCloudHostWorkload 放行 harness，已安装走 SKIPPED 幂等', async () => {
+    const { token, userId } = await newFrontUser();
+    const seeded = await seedHost(userId);
+    const db = (await mongoDb())!;
+    const harness = await db.collection('cloudworkloads').findOne({ presetKey: 'harness-opencode' });
+    expect(harness).toBeTruthy();
+    const workloadId = harness!._id.toString();
+    const containerId = new mongoose.Types.ObjectId();
+    await db.collection('cloudcontainers').insertOne({
+      _id: containerId,
+      name: `container-${containerId}`,
+      namespace: 'zag-workers',
+      status: 'online',
+      purpose: 'harness',
+      hostId: seeded.hostId,
+      harnessTypes: ['opencode'],
+      image: 'zero-tools/zag-worker:latest',
+      installedWorkloads: [
+        { workloadId, name: harness!.name, installedAt: new Date(), source: 'user' },
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    async function installAndWait(): Promise<Record<string, any>> {
+      const started = await gql(
+        INSTALL,
+        { input: { controllerId: seeded.controllerId, workloadId } },
+        token,
+      );
+      expect(started.errors).toBeUndefined();
+      const operationId = started.data.installCloudHostWorkload.id as string;
+      for (let i = 0; i < 50; i += 1) {
+        const polled = await gql(OPERATION, { id: operationId }, token);
+        const operation = polled.data?.cloudHostSetupOperation;
+        if (operation && operation.status !== 'RUNNING') return operation;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error('install operation did not reach a terminal state');
+    }
+
+    try {
+      // 已安装 → SKIPPED（幂等），且 harness 负载不再被拒绝为 Workload not found
+      const first = await installAndWait();
+      expect(first.status).toBe('SUCCEEDED');
+      expect(first.steps[0]).toMatchObject({ key: 'workload', status: 'SKIPPED' });
+      expect(first.steps[0].detail).toContain('已安装');
+
+      const second = await installAndWait();
+      expect(second.status).toBe('SUCCEEDED');
+      expect(second.steps[0]).toMatchObject({ status: 'SKIPPED' });
+    } finally {
+      await db.collection('cloudcontainers').deleteOne({ _id: containerId });
       await seeded.cleanup();
     }
   });
