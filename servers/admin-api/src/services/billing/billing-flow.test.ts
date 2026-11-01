@@ -19,7 +19,11 @@ import { ReceiptService } from './receipt.js';
 import { ReservationService } from './reservation.js';
 import { MeteringService } from './metering.js';
 import { eventIngestService } from './event-ingest.js';
+import { createTestLogger } from '../../observability/testing.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from './testing/mongo.js';
+
+/** 静音 logger（无断言路径注入）。 */
+const silentLogger = createTestLogger('billing-recon').logger;
 
 const T0 = new Date('2026-10-01T00:00:00.000Z').getTime();
 
@@ -1169,6 +1173,7 @@ describe('计费域核心（真实 Mongo 集成）', () => {
     const recon = new ReconciliationService(billing, reservations, {
       listContainers: async () => [],
       now: () => T0 + 120_000,
+      logger: silentLogger,
     });
     const reports = await recon.run('resources');
     expect(reports[0].errorCount).toBe(1);
@@ -1191,6 +1196,7 @@ describe('计费域核心（真实 Mongo 集成）', () => {
         throw new Error('control plane down');
       },
       now: () => T0 + 60_000,
+      logger: silentLogger,
     });
     const [report] = await recon.run('resources');
     expect(report.errorCount).toBe(1);

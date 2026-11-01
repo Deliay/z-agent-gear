@@ -1,3 +1,4 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
 import {
   HARNESS_OPENCODE_INIT_SCRIPT,
@@ -7,6 +8,8 @@ import {
   HARNESS_DEEPSEEK_INIT_SCRIPT,
   HARNESS_DEEPSEEK_INIT_SCRIPT_V1,
 } from './010-preset-harness-deepseek.js';
+
+const log = logger.child({ component: 'migration/011-refresh-harness-prepare-scope' });
 
 /**
  * 011-refresh-harness-prepare-scope：把存量（管理员未定制过的）harness 预置工作负载脚本中
@@ -42,24 +45,20 @@ export async function run(): Promise<void> {
   for (const { presetKey, v1, v2 } of REFRESHES) {
     const wl = await CloudWorkload.findOne({ presetKey });
     if (!wl) {
-      console.log(`[Migration 011] preset workload "${presetKey}" not found, skipping`);
+      log.info({ presetKey }, 'preset workload not found, skipping');
       continue;
     }
     const initScript = (wl as { initScript?: string | null }).initScript;
     if (initScript === v2) {
-      console.log(`[Migration 011] preset workload "${presetKey}" already refreshed, skipping`);
+      log.info({ presetKey }, 'preset workload already refreshed, skipping');
       continue;
     }
     if (initScript === v1) {
       (wl as { initScript: string }).initScript = v2;
       await (wl as { save: () => Promise<unknown> }).save();
-      console.log(
-        `[Migration 011] preset workload "${presetKey}" init script refreshed (scoped harness prepare)`,
-      );
+      log.info({ presetKey }, 'preset workload init script refreshed (scoped harness prepare)');
       continue;
     }
-    console.warn(
-      `[Migration 011] preset workload "${presetKey}" init script modified by admin, skipping`,
-    );
+    log.warn({ presetKey }, 'preset workload init script modified by admin, skipping');
   }
 }

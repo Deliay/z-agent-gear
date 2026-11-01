@@ -10,6 +10,7 @@ import { InMemoryContainerRepository } from '../repositories/container-repositor
 import { InMemoryWorkloadRepository } from '../repositories/workload-repository.js';
 import { InMemoryWorkloadLogRepository } from '../repositories/workload-log-repository.js';
 import type { CloudWorkloadEntity } from '../repositories/workload-repository.js';
+import { createTestLogger } from '../observability/testing.js';
 
 const INIT_TIMEOUT_MS = 1000;
 // 起始时钟取真实当前时间：内存日志仓储以 Date.now() 记录 createdAt，避免注入时钟早于
@@ -72,6 +73,7 @@ function setup(
     secretStore?: SecretStore;
   } = {},
 ) {
+  const log = createTestLogger('workload-dispatcher');
   const repo = new InMemoryContainerRepository();
   const tokenService = new TokenService(repo);
   const jobManager = new K8sJobManager(new InMemoryK8sClient(), {
@@ -79,17 +81,22 @@ function setup(
     image: 'zero-tools/zag-worker:latest',
     publicWsEndpoint: 'cloud.example.com:4003',
   });
-  const containerService = new ContainerService(repo, tokenService, jobManager, {
-    namespace: 'zag-workers',
-    image: 'zero-tools/zag-worker:latest',
-    connectTimeoutMs: 300000,
-    shutdownGraceMs: 0,
-  });
+  const containerService = new ContainerService(
+    repo,
+    tokenService,
+    jobManager,
+    {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: 300000,
+      shutdownGraceMs: 0,
+    },
+    log.logger,
+  );
   const workloadRepository = new InMemoryWorkloadRepository();
   const workloadLogRepository = new InMemoryWorkloadLogRepository();
   const secretStore = options.secretStore ?? new SecretStore();
   const emitted: Array<{ containerId: string; event: string; payload: RunPayload }> = [];
-  const warnings: unknown[][] = [];
   const forceDestroyCalls: Array<{ containerId: string; reason: string }> = [];
   const connection = { connected: options.connected ?? true };
   let nowMs = NOW_BASE;
@@ -115,11 +122,7 @@ function setup(
     forceDestroy: (containerId, reason) => forceDestroyImpl.fn(containerId, reason),
     secretStore,
     now: () => nowMs,
-    logger: {
-      info: () => {},
-      warn: (...args: unknown[]) => warnings.push(args),
-      error: () => {},
-    },
+    logger: log.logger,
   });
 
   const createContainer = async (
@@ -175,7 +178,7 @@ function setup(
     secretStore,
     dispatcher,
     emitted,
-    warnings,
+    log,
     connection,
     forceDestroyCalls,
     forceDestroyImpl,
@@ -312,7 +315,7 @@ describe('WorkloadDispatcher - init 批次', () => {
 
 describe('WorkloadDispatcher - 结果幂等与串号', () => {
   it('T-WD5: 终态记录忽略重复结果；logId 不属于该容器则拒绝并告警', async () => {
-    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, warnings } =
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, log } =
       setup();
     workloadRepository.add(mkWorkload('w1', 'init-a', { initScript: 'echo a' }));
     workloadRepository.add(mkWorkload('w2', 'init-b', { initScript: 'echo b' }));
@@ -333,12 +336,20 @@ describe('WorkloadDispatcher - 结果幂等与串号', () => {
     const secondLog = (await workloadLogRepository.findByContainer(second.id))[0]!;
     await dispatcher.handleResult(second.id, { logId: firstLog.id, status: 'failed' });
     expect((await workloadLogRepository.findById(secondLog.id))?.status).toBe('running');
-    expect(warnings.length).toBeGreaterThan(0);
+    expect(
+      log.records.some((r) => r.level === 'warn' && r.event === 'result-container-mismatch'),
+    ).toBe(true);
 
     // 未知 logId 不崩溃
     await dispatcher.handleResult(first.id, { logId: 'does-not-exist', status: 'success' });
+    expect(
+      log.records.some((r) => r.level === 'warn' && r.event === 'result-unknown-logid'),
+    ).toBe(true);
     // 缺少 logId 也不崩溃（记录告警）
     await dispatcher.handleResult(first.id, { status: 'success' });
+    expect(
+      log.records.some((r) => r.level === 'warn' && r.event === 'result-missing-logid'),
+    ).toBe(true);
   });
 
   it('T-WD5b: 结果日志按 WORKLOAD_LOG_MAX_BYTES 尾部截断', async () => {
@@ -1268,7 +1279,7 @@ describe('WorkloadDispatcher - harness env', () => {
 
   it('T-CC13: harness secret 缺失 → init 失败且不 online，日志不打印 secret', async () => {
     const secretStore = new SecretStore();
-    const { dispatcher, workloadRepository, createHarnessContainer, repo, runs, warnings } = setup({
+    const { dispatcher, workloadRepository, createHarnessContainer, repo, runs, log } = setup({
       secretStore,
     });
     workloadRepository.add(mkWorkload('w1', 'opencode', { initScript: 'echo init' }));
@@ -1282,9 +1293,12 @@ describe('WorkloadDispatcher - harness env', () => {
     const stored = await repo.findById(container.id);
     expect(stored?.status).toBe('failed');
     expect(stored?.exitReason).toContain('环境');
+    expect(
+      log.records.some((r) => r.level === 'warn' && r.event === 'harness-env-unavailable'),
+    ).toBe(true);
     // 告警文本不包含任何 secret 或模型 Key 占位
-    expect(JSON.stringify(warnings)).not.toContain('zag_sk_');
-    expect(JSON.stringify(warnings)).not.toContain('zag_k_');
+    expect(JSON.stringify(log.records)).not.toContain('zag_sk_');
+    expect(JSON.stringify(log.records)).not.toContain('zag_k_');
   });
 
   it('T-CC13: harness model 配置缺失视为错误（host 字段缺失则跳过对应变量）', async () => {

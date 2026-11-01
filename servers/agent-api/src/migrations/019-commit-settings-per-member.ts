@@ -1,5 +1,8 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
 import { ensureIndex } from './index-utils.js';
+
+const log = logger.child({ component: 'migration/019-commit-settings-per-member' });
 
 export const name = '019-commit-settings-per-member';
 
@@ -258,9 +261,16 @@ export async function run(): Promise<void> {
   const residualLegacyType = await settings.countDocuments({ committerType: LEGACY_COMMITTER_TYPE });
   const residualWorkspace = await settings.countDocuments({ workspaceId: { $exists: true } });
 
-  console.log(
-    `[Migration 019] converted=${converted.converted} unsetMissing=${converted.unsetFromMissingAccount} ` +
-      `rekeyed=${rekeyed.rekeyed} merged=${rekeyed.merged} cleaned=${cleaned.cleaned} ` +
-      `residualLegacyType=${residualLegacyType} residualWorkspace=${residualWorkspace}`,
+  log.info(
+    {
+      converted: converted.converted,
+      unsetMissing: converted.unsetFromMissingAccount,
+      rekeyed: rekeyed.rekeyed,
+      merged: rekeyed.merged,
+      cleaned: cleaned.cleaned,
+      residualLegacyType,
+      residualWorkspace,
+    },
+    'migration completed',
   );
 }

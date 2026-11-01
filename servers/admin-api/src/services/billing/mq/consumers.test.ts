@@ -9,6 +9,7 @@ vi.mock('./topology.js', async (importOriginal) => {
 });
 
 import { BillingDeadLetter } from '../../../models/billing-dead-letter.js';
+import { createTestLogger } from '../../../observability/testing.js';
 import {
   consumeWithRetry,
   startMeteringConsumer,
@@ -46,7 +47,8 @@ function message(
   } as never;
 }
 
-const logger = { warn: vi.fn(), info: vi.fn() };
+/** 静音 logger（无断言路径注入）。 */
+const logger = createTestLogger('billing-mq').logger;
 
 describe('计费消费者', () => {
   beforeEach(() => vi.clearAllMocks());

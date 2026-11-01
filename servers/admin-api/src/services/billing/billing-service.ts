@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { BillingAccount } from '../../models/billing-account.js';
 import { BillingApiCall } from '../../models/billing-api-call.js';
 import { BillingEvent } from '../../models/billing-event.js';
@@ -30,6 +31,8 @@ import {
   escapeRegExp,
   reservationBizPrefix,
 } from './reservation.js';
+
+const logger = rootLogger.child({ component: 'billing-service' });
 
 export type DestroyContainer = (resourceId: string, reason: string) => Promise<void>;
 
@@ -679,8 +682,9 @@ export class BillingService {
           await this.destroyContainer(reservation.resourceId, CONTAINER_FORCE_DESTROY_REASON);
           destroyed += 1;
         } catch (err) {
-          console.warn(
-            `[billing] force destroy failed for ${reservation.resourceId}: ${(err as Error).message}`,
+          logger.warn(
+            { err, resourceId: reservation.resourceId },
+            '[billing] force destroy failed',
           );
         }
       }
@@ -742,8 +746,9 @@ export class BillingService {
               ? 'has all-zero effective price row'
               : 'priced to zero'
             : 'has no effective price row';
-          console.warn(
-            `[billing] model ${modelId} ${reason}; charge skipped (eventId=${event.eventId})`,
+          logger.warn(
+            { modelId, reason, eventId: event.eventId },
+            '[billing] model charge skipped',
           );
         }
       }

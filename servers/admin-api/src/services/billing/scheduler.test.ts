@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { createTestLogger } from '../../observability/testing.js';
 import { BillingScheduler } from './scheduler.js';
+
+/** 静音 logger（无断言路径注入）。 */
+const silentLogger = createTestLogger('billing-scheduler').logger;
 
 afterEach(() => {
   vi.useRealTimers();
@@ -16,7 +20,7 @@ describe('BillingScheduler', () => {
       publisher: publisher as never,
       settlementTick: settlementTick as never,
       reconciliation: reconciliation as never,
-      logger: { warn: vi.fn(), info: vi.fn() },
+      logger: silentLogger,
     });
     scheduler.start();
     expect(publisher.start).toHaveBeenCalled();
@@ -39,7 +43,7 @@ describe('BillingScheduler', () => {
       publisher: publisher as never,
       settlementTick: settlementTick as never,
       reconciliation: reconciliation as never,
-      logger: { warn: vi.fn(), info: vi.fn() },
+      logger: silentLogger,
     });
     scheduler.start();
     // 进程启动后的第一个 tick 立即补跑，而不是等待某个精确分钟。

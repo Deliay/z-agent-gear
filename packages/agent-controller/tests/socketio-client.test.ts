@@ -170,6 +170,13 @@ import * as os from 'os';
 import { readdir, access } from 'fs/promises';
 import { fsHandler } from '../src/fs-handler.js';
 import { processRegistry, isProcessAlive } from '../src/acp/process-registry.js';
+import { createTestLogger, type TestLogger } from '../src/observability/testing.js';
+import { context, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { parseTraceparent } from '../src/observability/trace.js';
+
+/** 每个用例独立的内存日志 sink（断言结构化 records，不再 spy console）。 */
+let testLog: TestLogger;
 
 function createMockSocket() {
   const handlers: Record<string, (...args: unknown[]) => void> = {};
@@ -193,9 +200,8 @@ beforeEach(() => {
   mockStop.mockClear();
   relayInstances.length = 0;
   localServerInstances.length = 0;
+  testLog = createTestLogger('socketio-client');
   vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-  vi.spyOn(console, 'log').mockImplementation(() => {});
-  vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -208,15 +214,60 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
 
       expect(io).toHaveBeenCalledWith('http://localhost:4001', {
         transports: ['websocket'],
         reconnection: true,
         reconnectionDelay: 1000,
         reconnectionDelayMax: 60000,
-        auth: { token: 'zag_k_1_abc123' },
+        auth: expect.any(Function),
       });
+
+      // 无活跃 span：握手 auth 只有 token，不注入无效 traceparent
+      const authFn = vi.mocked(io).mock.calls[0][1]!.auth as (cb: (data: object) => void) => void;
+      let authData: Record<string, unknown> | undefined;
+      authFn((data) => { authData = data as Record<string, unknown>; });
+      expect(authData).toEqual({ token: 'zag_k_1_abc123' });
+    });
+
+    it('T-OBS13: 握手 auth 注入活跃 span 的 traceparent，重连（auth 重新求值）时重新注入', () => {
+      // context.with 需要全局 context manager 才能传播活跃 span（生产由 startTelemetry 注册）
+      context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+      try {
+        const mockSocket = createMockSocket();
+        vi.mocked(io).mockReturnValue(mockSocket as never);
+
+        connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
+
+        const authFn = vi.mocked(io).mock.calls[0][1]!.auth as (cb: (data: object) => void) => void;
+        const evaluate = () => {
+          let data: Record<string, unknown> | undefined;
+          authFn((d) => { data = d as Record<string, unknown>; });
+          return data!;
+        };
+
+        const parent1 = parseTraceparent('00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01')!;
+        const parent2 = parseTraceparent('00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01')!;
+
+        // 首次连接尝试：注入当前活跃 span 的 traceparent
+        context.with(trace.setSpanContext(context.active(), parent1), () => {
+          expect(evaluate()).toEqual({
+            token: 'zag_k_1_abc123',
+            traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+          });
+        });
+
+        // 重连：auth 函数再次求值 → 按新活跃 span 重新注入
+        context.with(trace.setSpanContext(context.active(), parent2), () => {
+          expect(evaluate()).toEqual({
+            token: 'zag_k_1_abc123',
+            traceparent: '00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01',
+          });
+        });
+      } finally {
+        context.disable();
+      }
     });
 
     it('should emit register on connect', () => {
@@ -241,7 +292,7 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
 
       mockSocket._trigger('connect');
 
@@ -259,7 +310,7 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
 
       mockSocket._trigger('registered', { controllerId: 'ctrl123' });
 
@@ -271,7 +322,7 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
 
       mockSocket._trigger('error', { code: 'INVALID_KEY', message: 'Invalid key' });
 
@@ -283,7 +334,7 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
 
       mockSocket._trigger('unregistered');
 
@@ -297,7 +348,7 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
 
       mockSocket._trigger('shutdown', { reason: 'key_revoked' });
 
@@ -311,23 +362,31 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
 
       mockSocket._trigger('disconnect', 'transport close');
 
       expect(mockStop).toHaveBeenCalled();
-      expect(console.log).toHaveBeenCalledWith('Disconnected: transport close');
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({ msg: 'disconnected', reason: 'transport close' }),
+      );
     });
 
     it('should log on connect_error', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
 
       mockSocket._trigger('connect_error', new Error('connection failed'));
 
-      expect(console.error).toHaveBeenCalledWith('Connection error: connection failed');
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({
+          level: 'error',
+          msg: 'connection error',
+          err: expect.objectContaining({ message: 'connection failed' }),
+        }),
+      );
     });
 
     it('T-AG16: uses an explicit handshake token instead of the key (controller-api standard connection)', () => {
@@ -339,8 +398,13 @@ describe('SocketIO Client', () => {
       });
 
       expect(io).toHaveBeenCalledWith('wss://controller.example.com', expect.objectContaining({
-        auth: { token: 'zag_k_1_host_key' },
+        auth: expect.any(Function),
       }));
+      // 显式 handshake token 优先于 key（auth 求值后仍是显式 token）
+      const authFn = vi.mocked(io).mock.calls[0][1]!.auth as (cb: (data: object) => void) => void;
+      let authData: Record<string, unknown> | undefined;
+      authFn((data) => { authData = data as Record<string, unknown>; });
+      expect(authData).toEqual({ token: 'zag_k_1_host_key' });
     });
 
     it('T-AG16b: never puts the host key into the URL/query and supports handshakeToken=false', () => {
@@ -351,7 +415,12 @@ describe('SocketIO Client', () => {
         handshakeToken: false,
       });
 
-      expect(io).toHaveBeenCalledWith(expect.not.stringContaining('token='), expect.objectContaining({ auth: {} }));
+      expect(io).toHaveBeenCalledWith(expect.not.stringContaining('token='), expect.objectContaining({ auth: expect.any(Function) }));
+      // handshakeToken=false：不发送 auth.token（求值后为空对象）
+      const authFn = vi.mocked(io).mock.calls[0][1]!.auth as (cb: (data: object) => void) => void;
+      let authData: Record<string, unknown> | undefined;
+      authFn((data) => { authData = data as Record<string, unknown>; });
+      expect(authData).toEqual({});
     });
 
     it('T-AG3: forwards the full registered payload (including initializing) to onRegistered', () => {
@@ -455,17 +524,19 @@ describe('SocketIO Client', () => {
     it('T-AG13: redacts secret values from invalid workload payload logs', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       mockSocket._trigger('workload:run', {
         phase: 'init',
         items: 'invalid',
         env: { ZAG_MODEL_API_KEY: 'zag_sk_super_secret' },
       });
 
-      expect(warnSpy).toHaveBeenCalledWith(expect.not.stringContaining('zag_sk_super_secret'));
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('***'));
+      const record = testLog.records.find((r) => r.event === 'workload_invalid_payload');
+      expect(record).toBeDefined();
+      expect(record).toEqual(expect.objectContaining({ level: 'warn', msg: 'workload:run ignored: invalid payload' }));
+      expect(JSON.stringify(record)).not.toContain('zag_sk_super_secret');
+      expect(JSON.stringify(record)).toContain('***');
     });
   });
 
@@ -492,7 +563,7 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       mockSocket._trigger('connect');
       mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
 
@@ -518,7 +589,7 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       mockSocket._trigger('connect');
       mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
 
@@ -543,7 +614,7 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       mockSocket._trigger('connect');
       mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
 
@@ -569,7 +640,7 @@ describe('SocketIO Client', () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
 
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       mockSocket._trigger('connect');
       mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
 
@@ -592,7 +663,7 @@ describe('SocketIO Client', () => {
       mockBridge.listSessions.mockClear();
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       mockSocket._trigger('connect');
       mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
       return mockSocket;
@@ -669,7 +740,7 @@ describe('SocketIO Client', () => {
     it('should emit failure result when bridge not found', async () => {
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       mockSocket._trigger('connect');
       mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
 
@@ -698,7 +769,7 @@ describe('SocketIO Client', () => {
       mockBridge.supportsDelete.mockClear();
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       mockSocket._trigger('connect');
       mockSocket._trigger('registered', { controllerId: 'ctrl-1' });
       return mockSocket;
@@ -782,7 +853,7 @@ describe('SocketIO Client', () => {
       bridgeInstances.length = 0;
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       return mockSocket;
     }
 
@@ -872,7 +943,7 @@ describe('SocketIO Client', () => {
       bridgeInstances.length = 0;
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       return mockSocket;
     }
 
@@ -913,14 +984,15 @@ describe('SocketIO Client', () => {
     });
 
     it('ignores malformed payloads with a warning', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as never);
       const mockSocket = setup();
 
       mockSocket._trigger('acp:stop', { ackRequired: true });
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(warnSpy).toHaveBeenCalled();
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({ level: 'warn', msg: 'acp:stop ignored: invalid payload' }),
+      );
       expect(killSpy).not.toHaveBeenCalled();
       expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:stopped', expect.anything());
     });
@@ -940,7 +1012,7 @@ describe('SocketIO Client', () => {
       bridgeInstances.length = 0;
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       return mockSocket;
     }
 
@@ -978,7 +1050,6 @@ describe('SocketIO Client', () => {
     });
 
     it('ignores malformed payloads with a warning', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true as never);
       const mockSocket = setup();
       // connectToServer seeds the fs whitelist via listEntries once; clear it
@@ -987,7 +1058,9 @@ describe('SocketIO Client', () => {
       mockSocket._trigger('acp:reconcile', { activeSessionIds: 'oops', pendingKillSessionIds: null });
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(warnSpy).toHaveBeenCalled();
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({ level: 'warn', msg: 'acp:reconcile ignored: invalid payload' }),
+      );
       expect(processRegistry.listEntries).not.toHaveBeenCalled();
       expect(killSpy).not.toHaveBeenCalled();
     });
@@ -998,7 +1071,7 @@ describe('SocketIO Client', () => {
       bridgeInstances.length = 0;
       const mockSocket = createMockSocket();
       vi.mocked(io).mockReturnValue(mockSocket as never);
-      connectToServer('http://localhost:4001', 'zag_k_1_abc123');
+      connectToServer('http://localhost:4001', 'zag_k_1_abc123', { logger: testLog.logger });
       return mockSocket;
     }
 
@@ -1076,11 +1149,16 @@ describe('SocketIO Client', () => {
 
     it('outputs an upgrade guide and exits on VERSION_MISMATCH', () => {
       const mockSocket = setup();
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       mockSocket._trigger('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch' });
 
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('upgrade agent-controller'));
+      // 用户可读升级提示保留原文（msg 一字不改）
+      expect(testLog.records).toContainEqual(
+        expect.objectContaining({
+          level: 'error',
+          msg: 'Please upgrade agent-controller to 2.x (npm i -g agent-gear@2 or the matching release).',
+        }),
+      );
       expect(mockSocket.disconnect).toHaveBeenCalled();
       expect(process.exit).toHaveBeenCalledWith(1);
     });

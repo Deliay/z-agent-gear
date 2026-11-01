@@ -49,7 +49,7 @@ export class AdminOutboxPublisher {
 
   constructor(
     private readonly url: string,
-    logger: MqLogger = console,
+    logger: MqLogger,
     private readonly intervalMs = 2000,
   ) {
     this.connection = new MqConnection(url, logger);
@@ -130,8 +130,9 @@ export class AdminOutboxPublisher {
       },
     );
     if (failed) {
-      this.logger.warn?.(
-        `[billing-outbox] event ${eventId} exceeded ${this.maxAttempts} attempts, quarantined`,
+      this.logger.warn(
+        { eventId, maxAttempts: this.maxAttempts },
+        '[billing-outbox] event exceeded max attempts, quarantined',
       );
     }
   }
@@ -193,15 +194,16 @@ export class AdminOutboxPublisher {
           published += 1;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          this.logger.warn?.(`[billing-outbox] publish failed for ${doc.eventId}: ${message}`);
+          this.logger.warn({ err, eventId: doc.eventId }, '[billing-outbox] publish failed');
           this.roundFailed = true;
           if (isMessageLevelRejection(err)) {
             // 消息级被拒（毒消息）：消耗 attempts，达到上限后隔离。
             await this.markFailure(doc.eventId, message, doc.attempts);
           } else {
             // R10-3：传输级失败不消耗 per-message attempts，仅释放认领并进入 relay 退避。
-            this.logger.warn?.(
-              `[billing-outbox] transport failure, keeping ${doc.eventId} attempts=${doc.attempts}`,
+            this.logger.warn(
+              { eventId: doc.eventId, attempts: doc.attempts },
+              '[billing-outbox] transport failure, attempts kept',
             );
           }
           // R-1：失败后停止本轮（不再 continue）。否则 broker 恢复后「后一条先发」，
@@ -239,7 +241,7 @@ export class AdminOutboxPublisher {
         await this.relayOnce();
       } catch (err) {
         this.roundFailed = true;
-        this.logger.warn?.('[billing-outbox] relay failed', (err as Error).message);
+        this.logger.warn({ err }, '[billing-outbox] relay failed');
       }
       // stop() 可能在 relay 期间发生：此时不得续排定时器。
       if (!this.started) return;

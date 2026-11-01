@@ -2,9 +2,12 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { config, ADMIN_USERNAME, MIN_PASSWORD_LENGTH, isWeakAdminPassword } from '../config/index.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 import { AdminUser } from '../models/admin-user.js';
 
 const SALT_ROUNDS = 10;
+
+const logger = rootLogger.child({ component: 'auth' });
 
 /**
  * 帐号不存在时的恒定时间对照哈希（问题 7）。
@@ -46,14 +49,15 @@ export function generateInitialAdminPassword(): string {
  * 初始密码来源（问题 4，已移除硬编码 `admin1234567`）：
  * - 配置了 `ADMIN_INITIAL_PASSWORD`：使用之（启动期 assertRuntimeConfig 已拒绝弱口令）；
  * - 未配置：生成强随机密码。
- * 两种来源均保留 `mustChangePassword: true`，并**每次种子时**在启动日志一次性输出初始口令（问题 47），
+ * 两种来源均保留 `mustChangePassword: true`，并**每次种子时**一次性输出初始口令（问题 47），
  * 便于编排层注入随机口令后运维仍可获取。
  *
- * ⚠️ 安全提示（建议 J）：以下 stdout 输出包含明文初始口令，属于有意的权衡（首次登录强制改密）。
- * 日志聚合 / 采集系统（ELK、Loki、云日志等）**不得**将该输出持久化为可检索日志；请对 admin-api
+ * ⚠️ 安全提示（建议 J）：`bootstrapAdminPassword` 为 contracts/observability.md §6.2 **唯一审计例外**，
+ * 首次 seed 时明文输出**一次**（`msg` 含「审计例外」标记）；其余 `password` 类键一律脱敏。
+ * 日志聚合 / 采集系统（ELK、Loki、云日志等）**不得**将该记录持久化为可检索日志；请对 admin-api
  * 的 stdout 做脱敏/直连终端处理，或仅在需要时临时查看容器启动日志。
  */
-export async function seedAdmin(): Promise<void> {
+export async function seedAdmin(log: ObservationLogger = logger): Promise<void> {
   const count = await AdminUser.countDocuments();
   if (count > 0) return;
 
@@ -62,22 +66,30 @@ export async function seedAdmin(): Promise<void> {
   const password = generated ? generateInitialAdminPassword() : configured;
 
   const passwordHash = await hashPassword(password);
-  await AdminUser.create({
+  const created = await AdminUser.create({
     username: ADMIN_USERNAME,
     passwordHash,
     mustChangePassword: true,
     passwordChangedAt: new Date(),
   });
+  const userId = String((created as { _id?: unknown })._id ?? '');
 
-  console.log('============================================================');
-  console.log('[admin-api] 已种入管理员初始口令（仅本次显示，请立即登录并修改）');
-  console.log(`[admin-api]   用户名: ${ADMIN_USERNAME}`);
-  console.log(
-    `[admin-api]   来源: ${generated ? '随机生成（未配置 ADMIN_INITIAL_PASSWORD）' : 'ADMIN_INITIAL_PASSWORD 环境变量'}`,
+  log.info(
+    {
+      userId,
+      username: ADMIN_USERNAME,
+      source: generated
+        ? '随机生成（未配置 ADMIN_INITIAL_PASSWORD）'
+        : 'ADMIN_INITIAL_PASSWORD 环境变量',
+      mustChangePassword: true,
+    },
+    '已种入管理员初始口令（仅本次显示，首次登录强制改密）',
   );
-  console.log(`[admin-api]   初始密码: ${password}`);
-  console.log('[admin-api] 首次登录强制改密。');
-  console.log('============================================================');
+  // 唯一审计例外（contracts/observability.md §6.2）：bootstrapAdminPassword 不脱敏，msg 含「审计例外」。
+  log.warn(
+    { bootstrapAdminPassword: password, userId },
+    '初始管理员密码（仅首次初始化输出一次，请立即修改；审计例外）',
+  );
 }
 
 export async function login(username: string, password: string) {

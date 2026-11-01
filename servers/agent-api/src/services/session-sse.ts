@@ -1,5 +1,6 @@
 import type { Response } from 'express';
 import { getRedisClient } from '../middleware/redis.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { sessionService } from './session.js';
 
 interface SSEConnection {
@@ -138,31 +139,46 @@ export class SessionSSEService {
     globalStatusSubscriber = redis.duplicate();
     globalStatusSubscriber.subscribe('session:status');
     globalStatusSubscriber.on('message', (_channel, message) => {
+      let parsed: Record<string, unknown>;
       try {
-        const parsed = JSON.parse(message) as Record<string, unknown>;
-        const { sessionId, status, error } = parsed as { sessionId: string; status: string; error?: string };
-        if (status) {
-          const extra: Record<string, unknown> = {};
-          if (Array.isArray(parsed.modes) && parsed.modes.length) extra.modes = parsed.modes;
-          if (parsed.currentModeId) extra.currentModeId = parsed.currentModeId;
-          if (parsed.currentModel) extra.currentModel = parsed.currentModel;
-          if (Array.isArray(parsed.availableModels) && parsed.availableModels.length) extra.availableModels = parsed.availableModels;
-          if (parsed.currentModelId) extra.currentModelId = parsed.currentModelId;
-          if (Array.isArray(parsed.configOptions) && parsed.configOptions.length) extra.configOptions = parsed.configOptions;
-          if (parsed.initialConfigError) extra.initialConfigError = parsed.initialConfigError;
-          this.dispatchStatus(sessionId, status, error, extra);
-        }
-        this.broadcastModeChanged(sessionId, parsed);
-        this.broadcastModelChanged(sessionId, parsed);
-        if (parsed.protocolVersionMismatch) {
-          const mismatch = parsed.protocolVersionMismatch as { expectedVersion?: number; agentVersion?: number };
-          if (typeof mismatch.expectedVersion === 'number' && typeof mismatch.agentVersion === 'number') {
-            this.broadcastProtocolVersionMismatch(sessionId, mismatch.expectedVersion, mismatch.agentVersion);
-          }
-        }
+        parsed = JSON.parse(message) as Record<string, unknown>;
       } catch {
-        // ignore parse errors
+        return;
       }
+      // session:status 为状态迁移（非 session:message 高频流）：开一个 handle span；
+      // session:message 的 SSE 扇出不逐条开 span（F11/D8）。
+      const parent = extractTraceparent(parsed._meta);
+      void withSpan(
+        'session:status handle',
+        {
+          'messaging.destination.name': 'session:status',
+          sessionId: String((parsed as { sessionId?: unknown }).sessionId ?? ''),
+          status: String((parsed as { status?: unknown }).status ?? ''),
+        },
+        () => {
+          const { sessionId, status, error } = parsed as { sessionId: string; status: string; error?: string };
+          if (status) {
+            const extra: Record<string, unknown> = {};
+            if (Array.isArray(parsed.modes) && parsed.modes.length) extra.modes = parsed.modes;
+            if (parsed.currentModeId) extra.currentModeId = parsed.currentModeId;
+            if (parsed.currentModel) extra.currentModel = parsed.currentModel;
+            if (Array.isArray(parsed.availableModels) && parsed.availableModels.length) extra.availableModels = parsed.availableModels;
+            if (parsed.currentModelId) extra.currentModelId = parsed.currentModelId;
+            if (Array.isArray(parsed.configOptions) && parsed.configOptions.length) extra.configOptions = parsed.configOptions;
+            if (parsed.initialConfigError) extra.initialConfigError = parsed.initialConfigError;
+            this.dispatchStatus(sessionId, status, error, extra);
+          }
+          this.broadcastModeChanged(sessionId, parsed);
+          this.broadcastModelChanged(sessionId, parsed);
+          if (parsed.protocolVersionMismatch) {
+            const mismatch = parsed.protocolVersionMismatch as { expectedVersion?: number; agentVersion?: number };
+            if (typeof mismatch.expectedVersion === 'number' && typeof mismatch.agentVersion === 'number') {
+              this.broadcastProtocolVersionMismatch(sessionId, mismatch.expectedVersion, mismatch.agentVersion);
+            }
+          }
+        },
+        { parent },
+      );
     });
   }
 

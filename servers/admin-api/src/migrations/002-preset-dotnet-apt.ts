@@ -1,5 +1,8 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
 import { DOTNET_SCRIPT } from './001-preset-workloads.js';
+
+const log = logger.child({ component: 'migration/002-preset-dotnet-apt' });
 
 /**
  * 002-preset-dotnet-apt：把存量预制 .NET 工作负载的初始化脚本从旧的
@@ -58,17 +61,15 @@ async function findExistingDotnet(): Promise<{ id: string; initScript: unknown }
 export async function run(): Promise<void> {
   const existing = await findExistingDotnet();
   if (!existing) {
-    console.warn('[Migration 002] preset .NET workload not found, skipping');
+    log.warn('preset .NET workload not found, skipping');
     return;
   }
 
   if (existing.initScript !== LEGACY_DOTNET_SCRIPT) {
-    console.warn(
-      '[Migration 002] preset .NET initScript has been customized, skipping (not overwriting)',
-    );
+    log.warn('preset .NET initScript has been customized, skipping (not overwriting)');
     return;
   }
 
   await CloudWorkload.updateOne({ _id: existing.id }, { $set: { initScript: DOTNET_SCRIPT } });
-  console.log('[Migration 002] preset .NET workload upgraded to apt-based init script');
+  log.info('preset .NET workload upgraded to apt-based init script');
 }

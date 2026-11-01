@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/016-github-installation-github-user-id' });
 
 export const name = '016-github-installation-github-user-id';
 
@@ -40,5 +43,5 @@ export async function run(): Promise<void> {
     );
   }
   await installations.createIndex({ githubUserId: 1 });
-  console.log(`[Migration 016] githubinstallations githubUserId backfilled: ${rows.length}`);
+  log.info({ backfilled: rows.length }, 'githubinstallations githubUserId backfilled');
 }

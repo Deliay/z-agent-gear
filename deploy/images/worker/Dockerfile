@@ -117,7 +117,7 @@ RUN mkdir -p "$NVM_DIR" \
 # 镜像唯一预装的 npm 全局包：agent-gear。
 # 不预装 Claude Code / Codex 的 ACP 适配器（claude-agent-acp、codex-acp）。
 RUN . "$NVM_DIR/nvm.sh" \
- && npm install -g agent-gear@2.12.x \
+ && npm install -g agent-gear@2.13.x \
  && npm cache clean --force \
  && node -v && npm -v && agent-gear --version
 USER root

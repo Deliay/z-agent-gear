@@ -1,6 +1,8 @@
 import { GraphQLError } from 'graphql';
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { runWithLogContext } from '../../observability/log-context.js';
 import { Account } from '../../models/account.js';
 import { BillingAccount } from '../../models/billing-account.js';
 import { Tenant } from '../../models/tenant.js';
@@ -11,6 +13,8 @@ import { WorkspaceMember } from '../../models/workspace-member.js';
 import { availableCents, centsToCredits } from '../../services/billing/money.js';
 import { assertAdmin } from './guard.js';
 import type { AdminAuthContext } from './auth.js';
+
+const logger = rootLogger.child({ component: 'admin-tenant' });
 
 /**
  * 后台租户与账户管理（contracts/admin-tenant.graphql）。
@@ -209,14 +213,14 @@ function upstreamError(
     return tenantError(errorText(payload, 'CONFLICT'), 'CONFLICT');
   }
   if (status === 401 || status === 403) {
-    console.error(`[admin-tenant] ${label} rejected internal token (status ${status})`);
+    logger.error({ label, status }, '[admin-tenant] rejected internal token');
     return tenantError('AGENT_API_UNAVAILABLE', 'AGENT_API_UNAVAILABLE');
   }
   if (status === 502 || status === 503 || status === 504) {
-    console.error(`[admin-tenant] ${label} failed with status ${status}`);
+    logger.error({ label, status }, '[admin-tenant] upstream call failed');
     return tenantError('AGENT_API_UNAVAILABLE', 'AGENT_API_UNAVAILABLE');
   }
-  console.error(`[admin-tenant] ${label} failed with status ${status}`);
+  logger.error({ label, status }, '[admin-tenant] upstream call failed');
   return tenantError('服务内部错误，请稍后重试', 'INTERNAL_SERVER_ERROR');
 }
 
@@ -231,7 +235,7 @@ async function callInternalApi(
     throw tenantError('AGENT_API_UNAVAILABLE', 'AGENT_API_UNAVAILABLE');
   }
   if (!config.internalApiToken) {
-    console.error(`[admin-tenant] INTERNAL_API_TOKEN is not configured, cannot forward ${label}`);
+    logger.error({ label }, '[admin-tenant] INTERNAL_API_TOKEN is not configured, cannot forward');
     throw tenantError('AGENT_API_UNAVAILABLE', 'AGENT_API_UNAVAILABLE');
   }
 
@@ -247,7 +251,7 @@ async function callInternalApi(
       signal: AbortSignal.timeout(10_000),
     });
   } catch (err) {
-    console.error(`[admin-tenant] forward ${label} failed`, (err as Error).message);
+    logger.error({ err, label }, '[admin-tenant] forward failed');
     throw tenantError('AGENT_API_UNAVAILABLE', 'AGENT_API_UNAVAILABLE');
   }
 
@@ -261,6 +265,12 @@ interface FrontUserCreatedPayload {
   tenant?: { id?: string; name?: string; createdAt?: string };
 }
 
+/** 开户结果：用户视图 + 创建结果中的个人专属租户 ID（供日志上下文补传，契约 §5.3）。 */
+interface FrontUserCreated {
+  user: AdminTenantUserView;
+  tenantId?: string;
+}
+
 /**
  * 开户转发：`POST {AGENT_API_URL}/internal/users`。
  * 契约错误：400 `INVALID_BODY`（规则非法）/ 409 `USERNAME_TAKEN`；401/403 视为上游不可用（配置错误）。
@@ -268,7 +278,7 @@ interface FrontUserCreatedPayload {
 async function forwardCreateFrontUser(
   username: string,
   password: string,
-): Promise<AdminTenantUserView> {
+): Promise<FrontUserCreated> {
   const { status, payload } = await callInternalApi(
     'POST',
     '/internal/users',
@@ -281,16 +291,19 @@ async function forwardCreateFrontUser(
     const id = created.user?.id ?? created.tenant?.id;
     const loginName = created.account?.username ?? username;
     if (!id) {
-      console.error('[admin-tenant] /internal/users returned an unexpected payload');
+      logger.error('[admin-tenant] /internal/users returned an unexpected payload');
       throw tenantError('服务内部错误，请稍后重试', 'INTERNAL_SERVER_ERROR');
     }
     return {
-      id,
-      name: created.user?.name ?? created.tenant?.name ?? loginName,
-      username: loginName,
-      // 开户产物=个人专属租户的唯一成员，恒为 admin（多租户二期角色口径）
-      role: 'admin',
-      createdAt: created.user?.createdAt ?? created.tenant?.createdAt ?? new Date().toISOString(),
+      user: {
+        id,
+        name: created.user?.name ?? created.tenant?.name ?? loginName,
+        username: loginName,
+        // 开户产物=个人专属租户的唯一成员，恒为 admin（多租户二期角色口径）
+        role: 'admin',
+        createdAt: created.user?.createdAt ?? created.tenant?.createdAt ?? new Date().toISOString(),
+      },
+      tenantId: created.tenant?.id,
     };
   }
 
@@ -320,12 +333,12 @@ async function forwardCreateTeamTenant(name: string): Promise<AdminTenantView> {
     tenantId = existing ? String(existing._id) : undefined;
   }
   if (!tenantId) {
-    console.error('[admin-tenant] /internal/tenants returned an unexpected payload');
+    logger.error('[admin-tenant] /internal/tenants returned an unexpected payload');
     throw tenantError('服务内部错误，请稍后重试', 'INTERNAL_SERVER_ERROR');
   }
   const summary = await tenantSummaryById(tenantId);
   if (!summary) {
-    console.error(`[admin-tenant] team tenant ${tenantId} not visible in mirror after creation`);
+    logger.error({ tenantId }, '[admin-tenant] team tenant not visible in mirror after creation');
     throw tenantError('服务内部错误，请稍后重试', 'INTERNAL_SERVER_ERROR');
   }
   return summary;
@@ -344,7 +357,7 @@ async function memberViewFromPayload(
   const user = payload?.user;
   const id = user?.id;
   if (!id || !mongoose.isValidObjectId(id)) {
-    console.error('[admin-tenant] /internal/tenants/:id/members returned an unexpected payload');
+    logger.error('[admin-tenant] /internal/tenants/:id/members returned an unexpected payload');
     throw tenantError('服务内部错误，请稍后重试', 'INTERNAL_SERVER_ERROR');
   }
   const doc = await User.findById(id).lean<{ name?: string; createdAt?: Date } | null>();
@@ -505,20 +518,24 @@ export const tenantResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      const page = toPage(args.page, 1, 100_000);
-      const pageSize = toPage(args.pageSize, 50, 200);
-      const keyword = args.keyword?.trim();
-      const filter: Record<string, unknown> = keyword
-        ? { name: { $regex: escapeRegex(keyword), $options: 'i' } }
-        : {};
-      const docs = await Tenant.find(filter)
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * pageSize)
-        .limit(pageSize)
-        .lean<TenantDoc[]>();
-      const ids = docs.map((doc) => String(doc._id));
-      const [counts, balances] = await Promise.all([memberCounts(ids), tenantBalances(ids)]);
-      return docs.map((doc) => tenantView(doc, counts, balances));
+      // 日志上下文经 mixin 自动注入；已有键不覆盖（契约 §5.3）。
+      // tenantId 不可得：跨租户列表查询，无租户入参。
+      return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
+        const page = toPage(args.page, 1, 100_000);
+        const pageSize = toPage(args.pageSize, 50, 200);
+        const keyword = args.keyword?.trim();
+        const filter: Record<string, unknown> = keyword
+          ? { name: { $regex: escapeRegex(keyword), $options: 'i' } }
+          : {};
+        const docs = await Tenant.find(filter)
+          .sort({ createdAt: -1 })
+          .skip((page - 1) * pageSize)
+          .limit(pageSize)
+          .lean<TenantDoc[]>();
+        const ids = docs.map((doc) => String(doc._id));
+        const [counts, balances] = await Promise.all([memberCounts(ids), tenantBalances(ids)]);
+        return docs.map((doc) => tenantView(doc, counts, balances));
+      });
     },
     adminTenant: async (
       _parent: unknown,
@@ -526,27 +543,32 @@ export const tenantResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      // 契约返回可空：非法/不存在的 id 一律 null（不泄露存在性）
-      if (!mongoose.isValidObjectId(args.id)) return null;
-      const tenantId = new mongoose.Types.ObjectId(args.id);
-      const tenant = await Tenant.findById(tenantId).lean<TenantDoc | null>();
-      if (!tenant) return null;
+      return runWithLogContext(
+        { userId: context.currentAdmin!.id, tenantId: args.id },
+        async () => {
+          // 契约返回可空：非法/不存在的 id 一律 null（不泄露存在性）
+          if (!mongoose.isValidObjectId(args.id)) return null;
+          const tenantId = new mongoose.Types.ObjectId(args.id);
+          const tenant = await Tenant.findById(tenantId).lean<TenantDoc | null>();
+          if (!tenant) return null;
 
-      const id = String(tenant._id);
-      const isTeam = tenant.type === 'team';
-      const [users, workspaces] = await Promise.all([
-        tenantMemberViews(id, isTeam),
-        tenantWorkspaceViews(id),
-      ]);
+          const id = String(tenant._id);
+          const isTeam = tenant.type === 'team';
+          const [users, workspaces] = await Promise.all([
+            tenantMemberViews(id, isTeam),
+            tenantWorkspaceViews(id),
+          ]);
 
-      return {
-        id,
-        name: tenant.name,
-        type: isTeam ? 'team' : 'personal',
-        users,
-        workspaces,
-        createdAt: toIso(tenant.createdAt),
-      };
+          return {
+            id,
+            name: tenant.name,
+            type: isTeam ? 'team' : 'personal',
+            users,
+            workspaces,
+            createdAt: toIso(tenant.createdAt),
+          };
+        },
+      );
     },
   },
   Mutation: {
@@ -556,16 +578,20 @@ export const tenantResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      const username = args.username ?? '';
-      const password = args.password ?? '';
-      // 本地预校验与 agent-api `assertUsernamePasswordRules` 同口径（避免无谓转发）
-      if (username.length < 2 || username.length > 20) {
-        throw tenantError('Username must be between 2 and 20 characters', 'INVALID_ARGUMENT');
-      }
-      if (password.length < 6) {
-        throw tenantError('Password must be at least 6 characters', 'INVALID_ARGUMENT');
-      }
-      return forwardCreateFrontUser(username, password);
+      return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
+        const username = args.username ?? '';
+        const password = args.password ?? '';
+        // 本地预校验与 agent-api `assertUsernamePasswordRules` 同口径（避免无谓转发）
+        if (username.length < 2 || username.length > 20) {
+          throw tenantError('Username must be between 2 and 20 characters', 'INVALID_ARGUMENT');
+        }
+        if (password.length < 6) {
+          throw tenantError('Password must be at least 6 characters', 'INVALID_ARGUMENT');
+        }
+        const { user, tenantId } = await forwardCreateFrontUser(username, password);
+        // tenantId 于开户结果中才可得：创建完成后并入日志上下文（已有键不覆盖，契约 §5.3）
+        return runWithLogContext(tenantId ? { tenantId } : {}, () => user);
+      });
     },
     adminCreateTeamTenant: async (
       _parent: unknown,
@@ -573,7 +599,11 @@ export const tenantResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      return forwardCreateTeamTenant(args.name ?? '');
+      return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
+        const created = await forwardCreateTeamTenant(args.name ?? '');
+        // tenantId 于创建结果（created.id 即租户 ID）中才可得：并入日志上下文（已有键不覆盖，契约 §5.3）
+        return runWithLogContext({ tenantId: created.id }, () => created);
+      });
     },
     adminAddTenantMember: async (
       _parent: unknown,
@@ -581,9 +611,14 @@ export const tenantResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      const operatorId = context.currentAdmin!.id;
-      const role: TenantRoleValue = args.role ?? 'developer';
-      return forwardAddTenantMember(operatorId, args.tenantId, args.username ?? '', role);
+      return runWithLogContext(
+        { userId: context.currentAdmin!.id, tenantId: args.tenantId },
+        () => {
+          const operatorId = context.currentAdmin!.id;
+          const role: TenantRoleValue = args.role ?? 'developer';
+          return forwardAddTenantMember(operatorId, args.tenantId, args.username ?? '', role);
+        },
+      );
     },
     adminRemoveTenantMember: async (
       _parent: unknown,
@@ -591,8 +626,13 @@ export const tenantResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      const operatorId = context.currentAdmin!.id;
-      return forwardRemoveTenantMember(operatorId, args.tenantId, args.userId);
+      return runWithLogContext(
+        { userId: context.currentAdmin!.id, tenantId: args.tenantId },
+        () => {
+          const operatorId = context.currentAdmin!.id;
+          return forwardRemoveTenantMember(operatorId, args.tenantId, args.userId);
+        },
+      );
     },
   },
 };

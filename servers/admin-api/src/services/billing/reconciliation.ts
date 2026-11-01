@@ -12,6 +12,7 @@ import { CloudHost } from '../../models/cloud-host.js';
 import { accountService, type AccountService } from './account-service.js';
 import type { BillingService } from './billing-service.js';
 import type { ReservationService } from './reservation.js';
+import type { MqLogger } from './mq/connection.js';
 import { documentId } from './id.js';
 
 export interface ReconciliationReport {
@@ -55,14 +56,14 @@ export interface ReconciliationOptions {
   accounts?: AccountService;
   listContainers: ContainerLister;
   now?: () => number;
-  logger?: { warn?: (...args: unknown[]) => void };
+  logger: MqLogger;
 }
 
 /** 三线对账：资金（wallet vs Σledger）、计量（事件 vs 计量）、资源（ACTIVE 预留 vs 存活容器）。 */
 export class ReconciliationService {
   private readonly accounts: AccountService;
   private readonly now: () => number;
-  private readonly logger: NonNullable<ReconciliationOptions['logger']>;
+  private readonly logger: MqLogger;
   private lastReports: ReconciliationReport[] = [];
 
   constructor(
@@ -72,7 +73,7 @@ export class ReconciliationService {
   ) {
     this.accounts = options.accounts ?? accountService;
     this.now = options.now ?? (() => Date.now());
-    this.logger = options.logger ?? console;
+    this.logger = options.logger;
   }
 
   async run(line?: 'funds' | 'metering' | 'resources' | string): Promise<ReconciliationReport[]> {
@@ -156,8 +157,9 @@ export class ReconciliationService {
       containers = await this.options.listContainers();
     } catch (err) {
       // 控制面抖动 ≠ 容器全部消失：资源对账线本次中止，绝不对 ACTIVE 预留批量结算/释放。
-      this.logger.warn?.(
-        `[billing-recon] listContainers failed, abort resources line: ${(err as Error).message}`,
+      this.logger.warn(
+        { err },
+        '[billing-recon] listContainers failed, abort resources line',
       );
       return this.report('resources', 0, [
         { error: 'list_containers_failed', message: (err as Error).message },
@@ -196,8 +198,9 @@ export class ReconciliationService {
           occurredAt: new Date(this.now()),
         });
       } catch (err) {
-        this.logger.warn?.(
-          `[billing-recon] finalize ${reservation.resourceId} failed: ${(err as Error).message}`,
+        this.logger.warn(
+          { err, resourceId: reservation.resourceId },
+          '[billing-recon] finalize failed',
         );
       }
     }
@@ -449,7 +452,10 @@ export class ReconciliationService {
           },
         },
       );
-      this.logger.warn?.(`[billing-recon] re-queued quarantined model call event ${row.eventId}`);
+      this.logger.warn(
+        { eventId: row.eventId },
+        '[billing-recon] re-queued quarantined model call event',
+      );
       errors.push({ eventId: row.eventId, reason: 'quarantined_event_requeued' });
     }
 
@@ -744,12 +750,16 @@ export class ReconciliationService {
     if (await BillingOutbox.exists({ repairOf: event.eventId })) return 'bounded';
     try {
       await insert(event.eventId, null);
-      this.logger.warn?.(`[billing-recon] repaired missing billing event ${event.eventId}`);
+      this.logger.warn(
+        { eventId: event.eventId },
+        '[billing-recon] repaired missing billing event',
+      );
       return 'injected';
     } catch (err) {
       if ((err as { code?: number }).code !== 11000) {
-        this.logger.warn?.(
-          `[billing-recon] repair event ${event.eventId} failed: ${(err as Error).message}`,
+        this.logger.warn(
+          { err, eventId: event.eventId },
+          '[billing-recon] repair event failed',
         );
         return 'failed';
       }
@@ -774,21 +784,26 @@ export class ReconciliationService {
           },
         },
       );
-      this.logger.warn?.(`[billing-recon] re-queued quarantined billing event ${event.eventId}`);
+      this.logger.warn(
+        { eventId: event.eventId },
+        '[billing-recon] re-queued quarantined billing event',
+      );
       return 'requeued';
     }
     if (existing.published) {
       const repairedId = `${event.eventId}:repair:${this.now()}`;
       try {
         await insert(repairedId, event.eventId);
-        this.logger.warn?.(
-          `[billing-recon] re-injected published-but-incomplete event as ${repairedId}`,
+        this.logger.warn(
+          { eventId: repairedId, repairOf: event.eventId },
+          '[billing-recon] re-injected published-but-incomplete event',
         );
         return 'injected';
       } catch (err) {
         if ((err as { code?: number }).code === 11000) return 'bounded';
-        this.logger.warn?.(
-          `[billing-recon] repair event ${repairedId} failed: ${(err as Error).message}`,
+        this.logger.warn(
+          { err, eventId: repairedId },
+          '[billing-recon] repair event failed',
         );
         return 'failed';
       }

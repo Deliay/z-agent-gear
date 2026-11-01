@@ -51,9 +51,6 @@ function setup() {
   fake.handlers.clear();
   fake.socket.emit.mockClear();
   login.instances.length = 0;
-  vi.spyOn(console, 'log').mockImplementation(() => {});
-  vi.spyOn(console, 'warn').mockImplementation(() => {});
-  vi.spyOn(console, 'error').mockImplementation(() => {});
   probe.probeAcpServerOptions.mockReset().mockResolvedValue({
     modes: [],
     availableModels: [],

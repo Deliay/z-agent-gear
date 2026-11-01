@@ -78,6 +78,7 @@ describe('WorktreeService', () => {
         repoPath: '/repo',
         worktreePath: '/wt',
         branch: 'feat/branch',
+        _meta: {},
       });
     });
 
@@ -94,6 +95,7 @@ describe('WorktreeService', () => {
         worktreePath: '/wt',
         branch: 'feat/branch',
         committer,
+        _meta: {},
       });
     });
 
@@ -119,6 +121,7 @@ describe('WorktreeService', () => {
         requestId: 'req-1',
         repoPath: '/repo',
         worktreePath: '/wt',
+        _meta: {},
       });
     });
   });
@@ -133,6 +136,7 @@ describe('WorktreeService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('git:status', {
         requestId: 'req-1',
         path: '/wt',
+        _meta: {},
       });
     });
   });
@@ -148,6 +152,7 @@ describe('WorktreeService', () => {
         requestId: 'req-1',
         path: '/wt',
         message: 'feat: msg',
+        _meta: {},
       });
     });
   });

@@ -9,8 +9,26 @@ vi.mock('./models.js', () => ({
   },
 }));
 
+// 迁移日志走 pino（console 清零）：mock logger.child() 产出的记录器供断言/静音。
+vi.mock('../observability/logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../observability/logger.js')>();
+  const child = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  return {
+    ...actual,
+    logger: { child: () => child, debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  };
+});
+
 import { Migrations } from './models.js';
+import { logger } from '../observability/logger.js';
 import { runMigrations, type Migration } from './runner';
+
+const childLog = logger.child({}) as unknown as {
+  debug: ReturnType<typeof vi.fn>;
+  info: ReturnType<typeof vi.fn>;
+  warn: ReturnType<typeof vi.fn>;
+  error: ReturnType<typeof vi.fn>;
+};
 
 function executedLean(names: string[]) {
   (Migrations.find as any).mockReturnValue({
@@ -21,8 +39,6 @@ function executedLean(names: string[]) {
 describe('runMigrations (cloud_controller_migrations)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     (Migrations.create as any).mockResolvedValue({});
     (Migrations.deleteOne as any).mockResolvedValue({ deletedCount: 1 });
     (Migrations.deleteMany as any).mockResolvedValue({ deletedCount: 0 });
@@ -88,6 +104,15 @@ describe('runMigrations (cloud_controller_migrations)', () => {
       .map((call: unknown[]) => call[0] as { name?: string })
       .filter((arg) => arg.name);
     expect(recorded).toEqual([{ name: '002', executedAt: expect.any(Date) }]);
+    // 逐迁移吞错：console.error → logger.error({ err }, …)，错误对象进 err 字段
+    expect(childLog.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'migration-failed',
+        migration: '001',
+        err: expect.any(Error),
+      }),
+      'migration failed',
+    );
   });
 
   it('always releases the lock (owner-scoped)', async () => {

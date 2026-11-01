@@ -1,5 +1,7 @@
 import type { Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 import { harnessLoginRegistry, type HarnessLoginRegistry } from './harness-login-registry.js';
 
 export interface AcpServerOptionsData {
@@ -54,9 +56,14 @@ function cacheKey(controllerId: string, serverType: string): string {
 export class AcpOptionsProber {
   private pendingRequests = new Map<string, ProbeRequest>();
   private readonly registry: HarnessLoginRegistry;
+  private readonly logger: ObservationLogger;
 
-  constructor(registry: HarnessLoginRegistry = harnessLoginRegistry) {
+  constructor(
+    registry: HarnessLoginRegistry = harnessLoginRegistry,
+    logger: ObservationLogger = rootLogger.child({ component: 'acp-options-prober' }),
+  ) {
     this.registry = registry;
+    this.logger = logger;
   }
 
   async probeOptions(
@@ -89,7 +96,7 @@ export class AcpOptionsProber {
       entry.timeout = setTimeout(() => this.handleProbeTimeout(entry, serverType), PROBE_TIMEOUT_MS);
       this.pendingRequests.set(requestId, entry);
 
-      controllerSocket.emit('acp:probe-options', { requestId, serverType });
+      controllerSocket.emit('acp:probe-options', withTraceMeta({ requestId, serverType }));
     });
   }
 
@@ -108,11 +115,9 @@ export class AcpOptionsProber {
         );
         return;
       }
-      console.warn(
-        `[ACP options] Login guard deadline exceeded for ${entry.controllerId}/${serverType}, forcing settle`,
-      );
+      this.logger.warn({ controllerId: entry.controllerId, serverType }, 'login guard deadline exceeded, forcing settle');
     } else {
-      console.warn(`[ACP options] Probe timeout for ${entry.controllerId}/${serverType}`);
+      this.logger.warn({ controllerId: entry.controllerId, serverType }, 'probe timeout');
     }
     entry.resolve(EMPTY_OPTIONS);
   }
@@ -133,14 +138,15 @@ export class AcpOptionsProber {
         probedAt: new Date().toISOString(),
       };
       await redis.set(key, JSON.stringify(options), 'EX', SUCCESS_CACHE_TTL);
-      console.log(
-        `[ACP options] Probed ${controllerId}/${payload.serverType}: ` +
-        `modes=${options.modes.length} models=${options.models.length}`,
+      this.logger.info(
+        { controllerId, serverType: payload.serverType, modes: options.modes.length, models: options.models.length },
+        'probed ACP options',
       );
       request.resolve(options);
     } else {
-      console.warn(
-        `[ACP options] Probe failed for ${controllerId}/${payload.serverType}: ${payload.error ?? 'unknown'}`,
+      this.logger.warn(
+        { controllerId, serverType: payload.serverType, error: payload.error ?? 'unknown' },
+        'probe failed',
       );
       await redis.set(key, JSON.stringify(EMPTY_OPTIONS), 'EX', FAILURE_CACHE_TTL);
       request.resolve(EMPTY_OPTIONS);

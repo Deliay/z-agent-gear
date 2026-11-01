@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { AcpMessage } from '../models/acp-message.js';
+
+const log = logger.child({ component: 'migration/001-unify-content-format' });
 
 export const name = '001-unify-content-format';
 
@@ -37,6 +40,6 @@ export async function run(): Promise<void> {
 
     await AcpMessage.bulkWrite(operations);
     processed += batch.length;
-    console.log(`[Migration 001] Processed ${processed} messages`);
+    log.debug({ processed }, 'processed messages');
   }
 }

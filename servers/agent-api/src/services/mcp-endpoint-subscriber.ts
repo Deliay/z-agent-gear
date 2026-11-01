@@ -1,9 +1,13 @@
 import type { Redis } from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 
 const SESSION_STATUS_CHANNEL = 'session:status';
 const TERMINAL_STATUSES = new Set(['ended', 'removed']);
+
+const logger = rootLogger.child({ component: 'mcp-endpoint-subscriber' });
 
 /**
  * Revokes the session MCP endpoint whenever a session reaches a terminal
@@ -25,11 +29,11 @@ export class McpEndpointRevokeSubscriber {
 
     this.subscriber = getRedisClient().duplicate();
     this.subscriber.subscribe(SESSION_STATUS_CHANNEL).catch((err: Error) => {
-      console.error(`Failed to subscribe to ${SESSION_STATUS_CHANNEL}:`, err.message);
+      logger.error({ err, channel: SESSION_STATUS_CHANNEL }, 'failed to subscribe to session status channel');
     });
 
     this.subscriber.on('message', async (_channel: string, message: string) => {
-      let parsed: { sessionId?: string; status?: string };
+      let parsed: { sessionId?: string; status?: string; _meta?: unknown };
       try {
         parsed = JSON.parse(message);
       } catch {
@@ -37,11 +41,19 @@ export class McpEndpointRevokeSubscriber {
       }
       if (!parsed.sessionId || !parsed.status || !TERMINAL_STATUSES.has(parsed.status)) return;
 
-      try {
-        await this.endpointService.revokeEndpoint(parsed.sessionId);
-      } catch (err) {
-        console.error(`Failed to revoke MCP endpoint for session ${parsed.sessionId}:`, (err as Error).message);
-      }
+      const parent = extractTraceparent(parsed._meta);
+      await withSpan(
+        `${SESSION_STATUS_CHANNEL} handle`,
+        { 'messaging.destination.name': SESSION_STATUS_CHANNEL, sessionId: parsed.sessionId, status: parsed.status },
+        async () => {
+          try {
+            await this.endpointService.revokeEndpoint(parsed.sessionId as string);
+          } catch (err) {
+            logger.error({ err, sessionId: parsed.sessionId }, 'failed to revoke MCP endpoint');
+          }
+        },
+        { parent },
+      );
     });
   }
 

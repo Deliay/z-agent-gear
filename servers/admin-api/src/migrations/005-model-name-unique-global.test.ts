@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/model.js', () => ({
   Model: {
@@ -22,7 +24,17 @@ vi.mock('../models/model-rename-record.js', () => ({
 import { Model } from '../models/model.js';
 import { Provider } from '../models/provider.js';
 import { ModelRenameRecord } from '../models/model-rename-record.js';
-import * as migration from './005-model-name-unique-global';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./005-model-name-unique-global.js');
+childSpy.mockRestore();
 
 interface MockModel {
   _id: string;
@@ -46,8 +58,7 @@ function mockProviders(providers: Array<{ _id: string; name: string }>) {
 describe('migration 005-model-name-unique-global', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    testLog.reset();
     mockModels([]);
     mockProviders([{ _id: 'provider-1', name: 'OpenAI A' }]);
     (Model.updateOne as any).mockResolvedValue({ modifiedCount: 1 });

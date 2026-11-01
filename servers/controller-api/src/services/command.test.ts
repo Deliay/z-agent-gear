@@ -103,7 +103,7 @@ describe('CommandService', () => {
     await vi.waitFor(() => {
       expect(sessionService.getSocketId).toHaveBeenCalledWith('key123');
       expect(mockIO.to).toHaveBeenCalledWith('socket-123');
-      expect(mockIO.emit).toHaveBeenCalledWith('shutdown', { reason: 'key_revoked' });
+      expect(mockIO.emit).toHaveBeenCalledWith('shutdown', { reason: 'key_revoked', _meta: {} });
       expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
       expect(Controller.findOne).toHaveBeenCalledWith({ keyId: 'key123' });
       expect(Controller.deleteOne).toHaveBeenCalledWith({ keyId: 'key123' });

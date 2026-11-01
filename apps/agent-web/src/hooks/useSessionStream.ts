@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getApiBase } from '../lib/api-base';
+import { logger } from '../lib/logger';
 
 interface SSEMessage {
   type: string;
@@ -62,10 +63,10 @@ export function useSessionStream({
             // Keep-alive, no action needed
             break;
           default:
-            console.warn('Unknown SSE message type:', data.type);
+            logger.warn({ type: data.type }, 'Unknown SSE message type');
         }
       } catch (err) {
-        console.error('Failed to parse SSE message:', err);
+        logger.error({ err }, 'Failed to parse SSE message');
       }
     };
 
