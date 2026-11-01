@@ -265,6 +265,12 @@ interface FrontUserCreatedPayload {
   tenant?: { id?: string; name?: string; createdAt?: string };
 }
 
+/** 开户结果：用户视图 + 创建结果中的个人专属租户 ID（供日志上下文补传，契约 §5.3）。 */
+interface FrontUserCreated {
+  user: AdminTenantUserView;
+  tenantId?: string;
+}
+
 /**
  * 开户转发：`POST {AGENT_API_URL}/internal/users`。
  * 契约错误：400 `INVALID_BODY`（规则非法）/ 409 `USERNAME_TAKEN`；401/403 视为上游不可用（配置错误）。
@@ -272,7 +278,7 @@ interface FrontUserCreatedPayload {
 async function forwardCreateFrontUser(
   username: string,
   password: string,
-): Promise<AdminTenantUserView> {
+): Promise<FrontUserCreated> {
   const { status, payload } = await callInternalApi(
     'POST',
     '/internal/users',
@@ -289,12 +295,15 @@ async function forwardCreateFrontUser(
       throw tenantError('服务内部错误，请稍后重试', 'INTERNAL_SERVER_ERROR');
     }
     return {
-      id,
-      name: created.user?.name ?? created.tenant?.name ?? loginName,
-      username: loginName,
-      // 开户产物=个人专属租户的唯一成员，恒为 admin（多租户二期角色口径）
-      role: 'admin',
-      createdAt: created.user?.createdAt ?? created.tenant?.createdAt ?? new Date().toISOString(),
+      user: {
+        id,
+        name: created.user?.name ?? created.tenant?.name ?? loginName,
+        username: loginName,
+        // 开户产物=个人专属租户的唯一成员，恒为 admin（多租户二期角色口径）
+        role: 'admin',
+        createdAt: created.user?.createdAt ?? created.tenant?.createdAt ?? new Date().toISOString(),
+      },
+      tenantId: created.tenant?.id,
     };
   }
 
@@ -509,7 +518,8 @@ export const tenantResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      // 日志上下文（userId/tenantId）经 mixin 自动注入；已有键不覆盖（契约 §5.3）
+      // 日志上下文经 mixin 自动注入；已有键不覆盖（契约 §5.3）。
+      // tenantId 不可得：跨租户列表查询，无租户入参。
       return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
         const page = toPage(args.page, 1, 100_000);
         const pageSize = toPage(args.pageSize, 50, 200);
@@ -578,7 +588,9 @@ export const tenantResolvers = {
         if (password.length < 6) {
           throw tenantError('Password must be at least 6 characters', 'INVALID_ARGUMENT');
         }
-        return forwardCreateFrontUser(username, password);
+        const { user, tenantId } = await forwardCreateFrontUser(username, password);
+        // tenantId 于开户结果中才可得：创建完成后并入日志上下文（已有键不覆盖，契约 §5.3）
+        return runWithLogContext(tenantId ? { tenantId } : {}, () => user);
       });
     },
     adminCreateTeamTenant: async (
@@ -587,9 +599,11 @@ export const tenantResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      return runWithLogContext({ userId: context.currentAdmin!.id }, () =>
-        forwardCreateTeamTenant(args.name ?? ''),
-      );
+      return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
+        const created = await forwardCreateTeamTenant(args.name ?? '');
+        // tenantId 于创建结果（created.id 即租户 ID）中才可得：并入日志上下文（已有键不覆盖，契约 §5.3）
+        return runWithLogContext({ tenantId: created.id }, () => created);
+      });
     },
     adminAddTenantMember: async (
       _parent: unknown,

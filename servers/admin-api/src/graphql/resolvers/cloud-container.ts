@@ -108,7 +108,8 @@ export const cloudContainerResolvers = {
   Query: {
     adminCloudContainers: async (_parent: unknown, _args: unknown, context: AdminAuthContext) => {
       assertAdmin(context);
-      // 日志上下文（userId）经 mixin 自动注入；已有键不覆盖（契约 §5.3）
+      // 日志上下文经 mixin 自动注入；已有键不覆盖（契约 §5.3）。
+      // tenantId 不可得：跨租户容器列表，无租户入参。
       return runWithLogContext({ userId: context.currentAdmin!.id }, async () =>
         (await loadContainers(context)).containers,
       );
@@ -119,6 +120,7 @@ export const cloudContainerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      // tenantId 不可得：控制面状态为全局视图，无租户入参。
       return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
         // 与列表共用同一次加载：online 直接由「本次是否降级」决定，避免与降级事件脱钩
         const { degraded } = await loadContainers(context);
@@ -138,6 +140,7 @@ export const cloudContainerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      // tenantId 不可得：启动入参与结果（CloudContainerDTO）均不含租户归属。
       return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
       // 本期仅支持 IDLE（裁决 10）；契约字段保留供后续迭代
       if (args.purpose !== 'IDLE') {
@@ -224,6 +227,7 @@ export const cloudContainerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      // tenantId 不可得：入参与销毁结果（boolean）均不含租户归属。
       return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
         try {
           return await cloudControllerClient.destroy(args.id);

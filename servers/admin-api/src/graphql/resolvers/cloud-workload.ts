@@ -35,7 +35,8 @@ export const cloudWorkloadResolvers = {
   Query: {
     adminCloudWorkloads: async (_parent: unknown, _args: unknown, context: AdminAuthContext) => {
       assertAdmin(context);
-      // 日志上下文（userId）经 mixin 自动注入；已有键不覆盖（契约 §5.3）
+      // 日志上下文经 mixin 自动注入；已有键不覆盖（契约 §5.3）。
+      // tenantId 不可得：跨租户工作负载列表，无租户入参。
       return runWithLogContext({ userId: context.currentAdmin!.id }, () => cloudWorkloadService.list());
     },
     adminCloudContainerWorkloadLogs: async (
@@ -44,6 +45,7 @@ export const cloudWorkloadResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      // tenantId 不可得：仅有 containerId，数据面无租户归属字段。
       return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
         try {
           // 优先经 cloud-controller 内部 API（单一事实源）
@@ -70,6 +72,7 @@ export const cloudWorkloadResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      // tenantId 不可得：创建入参与结果（CloudWorkloadDTO）均不含租户归属。
       return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
         try {
           return await cloudWorkloadService.create(args.input);
@@ -87,6 +90,7 @@ export const cloudWorkloadResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      // tenantId 不可得：入参与结果（CloudWorkloadDTO）均不含租户归属。
       return runWithLogContext({ userId: context.currentAdmin!.id }, async () => {
         try {
           const result = await cloudWorkloadService.update(args.id, args.input);
@@ -109,6 +113,7 @@ export const cloudWorkloadResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
+      // tenantId 不可得：入参与删除结果均不含租户归属。
       return runWithLogContext({ userId: context.currentAdmin!.id }, () =>
         cloudWorkloadService.delete(args.id),
       );
