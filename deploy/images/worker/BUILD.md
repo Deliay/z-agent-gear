@@ -85,7 +85,7 @@ docker run --rm -it --entrypoint bash \
 - [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
 - [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 24.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
-- [ ] **镜像唯一预装全局包**为 `agent-gear`（固定 `2.13.x`，通过 `npm install -g pnpm` 自举 pnpm 后由 `pnpm add -g` 安装）；**不预装** `@agentclientprotocol/claude-agent-acp`（`command -v claude-agent-acp` 应无输出）与 `@agentclientprotocol/codex-acp`（`command -v codex-acp` 应无输出），二者由用户按需安装（agent-controller 仍保留探测与启动能力）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
+- [ ] **镜像唯一预装全局包**为 `agent-gear`（固定 `2.15.x`，通过 `npm install -g pnpm` 自举 pnpm 后由 `pnpm add -g` 安装）；**不预装** `@agentclientprotocol/claude-agent-acp`（`command -v claude-agent-acp` 应无输出）与 `@agentclientprotocol/codex-acp`（`command -v codex-acp` 应无输出），二者由用户按需安装（agent-controller 仍保留探测与启动能力）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
 - [ ] `agent-gear --version` ≥ `2.11.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起，`cordis.patch.yml` 的 insert 受管条目 `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
 
 - [ ] `agent-gear harness --help` 可见 `prepare` 子命令
@@ -296,7 +296,7 @@ pnpm 预装与工作负载安装口径（entrypoint `ensure_pnpm` + 迁移 017 �
 ```bash
 # 镜像构建期：npm 仅用于自举 pnpm，agent-gear 由 pnpm 安装
 npm install -g pnpm@9.15.9
-pnpm add -g agent-gear@2.13.x
+pnpm add -g agent-gear@2.15.x
 # entrypoint 预装（新容器；固定版本 9.15.9）
 pnpm --version                       # 9.15.9
 echo "$PNPM_HOME"                    # /home/worker/.local/share/pnpm
