@@ -7,8 +7,9 @@ type: Permanent
 
 **功能名称**: 云电脑组件安装切换 pnpm、设置-工作负载显示可选 harness
 **关联 PRD**: `docs/product/draft/20261029-pnpm-workload-and-harness-optional.md`
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-10-29
+**最近更新**: 2026-11-01（v1.1 事实校准：与最新 `main` 合并后更新 agent-gear 镜像版本 2.13.x、worker 门禁基线 2.12.0、关键代码行号与 `run_as_worker` 纠偏；方案结论与决策不变）
 **作者**: ZeroAsh Agent
 **feat-branch**: `feat/pnpm-workload-and-harness-optional`
 
@@ -23,10 +24,10 @@ type: Permanent
 
 现状（代码事实）：
 
-- **npm 全局安装落点**：worker 镜像 `deploy/images/worker/Dockerfile:120`（`npm install -g agent-gear@2.11.x`）与 `entrypoint.sh:57`（自更新 `npm install -g agent-gear`，属引导链、不在本期靶面）；预制工作负载脚本——`006-preset-harness-opencode.ts`（`npm install -g "@opencode/cli@…"`）、`009-preset-harness-kimi-code.ts`（`npm install -g "@moonshot-ai/kimi-code@…"`）、`013-preset-harness-deepseek-header-masq.ts`（双包 `npm install -g "@deepseek-ai/dsh@…" "@deepseek-ai/dsh-acp-app@…"`，且因 `dsh plugin` 转发 pnpm 而在脚本内引导 `npm install -g "pnpm@9.15.9"`）、`015-preset-playwright.ts`（`npm install -g playwright`）、`001-preset-workloads.ts:66`（`pnpm|yarn|bun) npm install -g "$pm"`，包管理器自举）。**镜像未预装 pnpm**（BUILD.md:215）。
-- **harness 是创建即安装的必须步骤**：`cloud-host-workload-plan.ts:120-125` 把 harness 预置固定放前且 `required: true`（硬失败强制注销）；创建表单强制「至少选择一种 Harness」（`NewCloudHostDialog.tsx:156`），`parseHarnessTypes` 空数组抛 `at least one harness type is required`（`cloud-host-service.ts:107-110`）。
-- **harness 不出现在设置-工作负载**：`cloud-workload-catalog.ts:26` `listStandard()` 只查 `workloadKind:'standard'`；`createInstallOperation` 对 harness 负载抛 `Workload not found`（`cloud-host-workload-service.ts:197`）；前端 `CloudHostWorkloadsSection` 已有 HARNESS 分组渲染代码但数据恒为空。
-- **会话约束**：`session.ts:172-177`（A-11）会话 ACP 工具须落在云电脑 `harnessTypes` 映射内（`allowed.length > 0` 时强制）；`harnessTypes` 仅在创建时写入（`container-service.ts:415` Job env `ZAG_HARNESS_TYPES`、`buildHarnessEnv` 按容器读模型实时组装批次 env）。
+- **npm 全局安装落点**：worker 镜像 `deploy/images/worker/Dockerfile:120`（`npm install -g agent-gear@2.13.x`）与 `entrypoint.sh:73`（自更新 `npm install -g agent-gear`，属引导链、不在本期靶面）；预制工作负载脚本——`006-preset-harness-opencode.ts`（`npm install -g "@opencode/cli@…"`）、`009-preset-harness-kimi-code.ts`（`npm install -g "@moonshot-ai/kimi-code@…"`）、`013-preset-harness-deepseek-header-masq.ts`（双包 `npm install -g "@deepseek-ai/dsh@…" "@deepseek-ai/dsh-acp-app@…"`，且因 `dsh plugin` 转发 pnpm 而在脚本内引导 `npm install -g "pnpm@9.15.9"`）、`015-preset-playwright.ts`（`npm install -g playwright`）、`001-preset-workloads.ts:69`（`pnpm|yarn|bun) npm install -g "$pm"`，包管理器自举）。**镜像未预装 pnpm**（BUILD.md:215）。
+- **harness 是创建即安装的必须步骤**：`cloud-host-workload-plan.ts:120-126` 把 harness 预置固定放前且 `required: true`（硬失败强制注销）；创建表单强制「至少选择一种 Harness」（`NewCloudHostDialog.tsx:156`），`parseHarnessTypes` 空数组抛 `at least one harness type is required`（`cloud-host-service.ts:113-116`，另有兜底分支 `:129-131`）。
+- **harness 不出现在设置-工作负载**：`cloud-workload-catalog.ts:26` `listStandard()` 只查 `workloadKind:'standard'`；`createInstallOperation` 对 harness 负载抛 `Workload not found`（`cloud-host-workload-service.ts:193`）；前端 `CloudHostWorkloadsSection` 已有 HARNESS 分组渲染代码但数据恒为空。
+- **会话约束**：`session.ts:185-191`（A-11）会话 ACP 工具须落在云电脑 `harnessTypes` 映射内（`allowed.length > 0` 时强制）；`harnessTypes` 仅在创建时写入（`container-service.ts:447` Job env `ZAG_HARNESS_TYPES`、`buildHarnessEnv` 按容器读模型实时组装批次 env）。
 
 ### 1.2 目标
 
@@ -50,7 +51,7 @@ type: Permanent
 
 **不做**：
 
-- 不切换 agent-gear（镜像预装 `Dockerfile:120` 与自更新 `entrypoint.sh:57`）的 npm 安装——它是容器引导与保活自更新关键链路、不属于「工作负载」，npm 同时保留为 pnpm 自举通道（§6.1 决策 3）；
+- 不切换 agent-gear（镜像预装 `Dockerfile:120` 与自更新 `entrypoint.sh:73`）的 npm 安装——它是容器引导与保活自更新关键链路、不属于「工作负载」，npm 同时保留为 pnpm 自举通道（§6.1 决策 3）；
 - 不改 `001-preset-workloads.ts` 的 `pnpm|yarn|bun) npm install -g "$pm"`（包管理器自举通道，pnpm 无法自举自身，§6.1 决策 4）；
 - 不改 agent-web 前台「连接控制器」命令模板（`command-template.ts` 的 `npx` / `npm install -g agent-gear` 指引，面向本地控制器，非云电脑工作负载）；
 - 不做 harness 卸载入口（已安装不提供卸载，口径不变）；不做 harness 版本选择参数；
@@ -128,7 +129,7 @@ graph LR
   - **A.2.5**（在线容器 runtime 安装）增补：
     1. `workloadId` 可为 harness 负载（`workloadKind=harness`）；安装成功后容器读模型 `harnessTypes` **追加**该负载的 `harnessType`（去重，仅成功结果）；
     2. runtime 批次与 init 批次同口径注入「云电脑初始化 env」（§2.9：`ZAG_HARNESS_TYPES`/`ZAG_MODEL_*`/`ZAG_DEFAULT_WORKSPACE` 等，purpose=harness 时）；env 缺失（如 secret 不完整）时安装判失败并返回可读原因；
-    3. harness 负载安装前做**逐类型版本门禁**：`MIN_HARNESS_VERSION_BY_TYPE`（`kimi_code: 2.8.0`、`deepseek_harness: 2.11.0`）与 `MIN_HARNESS_WORKER_VERSION`（2.10.0）取最大值对比在线 worker 版本，不满足 `400 INVALID_WORKLOAD`（可读原因）；
+    3. harness 负载安装前做**逐类型版本门禁**：`MIN_HARNESS_VERSION_BY_TYPE`（`kimi_code: 2.8.0`、`deepseek_harness: 2.12.0`）与 `MIN_HARNESS_WORKER_VERSION`（2.12.0）取最大值对比在线 worker 版本，不满足 `400 INVALID_WORKLOAD`（可读原因）；
   - 附录读模型注记：`harnessTypes` 为「创建时选定 ∪ 运行期成功安装的 harness 负载」。
 - `contracts/admin-cloud-workload.graphql`：**无变更**（`workloadKind` / `harnessType` 字段已存在）。
 
@@ -161,7 +162,7 @@ graph LR
 
 #### 集合: `cloudcontainers`（运行态追加，无 schema 变更）
 
-- `harnessTypes: string[]`：创建时写入（现状）∪ **运行期成功安装 harness 负载后追加**（去重）；驱动会话 A-11 门（`session.ts:172-177`）与设置页展示；
+- `harnessTypes: string[]`：创建时写入（现状）∪ **运行期成功安装 harness 负载后追加**（去重）；驱动会话 A-11 门（`session.ts:185-191`）与设置页展示；
 - `installedWorkloads[]`：口径不变（成功 + init + 非 system），harness 负载同样回填（`source: start|user|mcp`）。
 
 #### 集合: `admin_migrations`
@@ -240,8 +241,8 @@ flowchart TD
 
 - **描述**: `deploy/images/worker/entrypoint.sh` 新增 `ensure_pnpm()`，在启动自更新之前执行，保证任何工作负载脚本下发前 pnpm 就绪。
 - **技术细节**:
-  - 预装命令（Issue 引导口径 + 固定版本）：`command -v pnpm >/dev/null 2>&1 || run_as_worker_exec npm install -g pnpm@9.15.9`（经 `run_as_worker` 写 worker 的 per-user nvm 前缀；registry 沿用 `NPM_REGISTRY`/`~/.npmrc` 内网代理）；
-  - 全局 bin 接线（§6.1 决策 2）：`run_as_worker` 环境显式 `PNPM_HOME=/home/worker/.local/share/pnpm`，`WORKER_PATH="$WORKER_NVM_DIR/current/bin:$PNPM_HOME:/usr/local/sbin:…"`（`entrypoint.sh:24`）；追加 `/etc/profile.d/pnpm.sh`（`export PNPM_HOME=…` + `PATH` 追加，登录 shell 全局生效，同 Playwright 的 `playwright.sh` 模式）并执行 `run_as_worker_exec pnpm setup`（交互 shell）；幂等标记块重写；
+  - 预装命令（Issue 引导口径 + 固定版本）：`command -v pnpm >/dev/null 2>&1 || run_as_worker npm install -g pnpm@9.15.9`（`run_as_worker` 写 worker 的 per-user nvm 前缀；`run_as_worker_exec` 会 exec 替换当前 shell、仅用于后台子进程链路，此处不可用；registry 沿用 `NPM_REGISTRY`/`~/.npmrc` 内网代理）；
+  - 全局 bin 接线（§6.1 决策 2）：`run_as_worker` 环境显式 `PNPM_HOME=/home/worker/.local/share/pnpm`，`WORKER_PATH="$WORKER_NVM_DIR/current/bin:$PNPM_HOME:/usr/local/sbin:…"`（`entrypoint.sh:24`）；追加 `/etc/profile.d/pnpm.sh`（`export PNPM_HOME=…` + `PATH` 追加，登录 shell 全局生效，同 Playwright 的 `playwright.sh` 模式）并执行 `run_as_worker pnpm setup || true`（交互 shell）；幂等标记块重写；
   - 失败语义：pnpm 预装失败**仅告警不阻断**（与 agent-gear 自更新同口径），脚本侧自举回退兜底；`ZAG_SKIP_AGENT_GEAR_UPDATE=1` 不影响 pnpm 预装；
   - `entrypoint.test.sh` 新增用例：T-EP9 预装幂等（已存在不重复安装）、T-EP10 预装失败仅告警且保活链路正常（沿用 PATH stub 模式）。
 - **风险点**: pnpm 安装本身依赖 npm 与内网 registry 可达——失败时工作负载脚本会再次尝试自举（双保险）；`WORKER_PATH` 变更影响所有 `run_as_worker` 调用，新增目录仅追加、不改变既有顺序。
@@ -278,21 +279,21 @@ flowchart TD
 
 - **描述**: 使「后期补装 harness」与「创建时预装」能力等价：模型配置注入可用、版本门禁生效、会话门放行。
 - **技术细节**:
-  - **runtime 批次 harness env**：`startRuntimeBatch`（`workload-dispatcher.ts:437`）当前 `emitRun(..., undefined, ...)` 不带 env；改为与 init 同源 `resolveRunEnv(container)`（purpose=harness 批次注入 `ZAG_HARNESS_TYPES`/`ZAG_MODEL_*`/`ZAG_DEFAULT_WORKSPACE` 等，§2.9），解析失败（secret 缺失/配置不完整）时判失败并返回可读原因，不下发半套配置（T-CC13 口径沿用）。这是 `harness prepare`（`readHarnessEnv()` 必需 `ZAG_MODEL_BASE_URL/ZAG_MODEL_API_KEY/ZAG_MODEL_IDS/ZAG_DEFAULT_WORKSPACE`）在运行期安装可用的前提；
+  - **runtime 批次 harness env**：`startRuntimeBatch`（`workload-dispatcher.ts:439`）当前 `emitRun(..., undefined, ...)` 不带 env；改为与 init 同源 `resolveRunEnv(container)`（purpose=harness 批次注入 `ZAG_HARNESS_TYPES`/`ZAG_MODEL_*`/`ZAG_DEFAULT_WORKSPACE` 等，§2.9），解析失败（secret 缺失/配置不完整）时判失败并返回可读原因，不下发半套配置（T-CC13 口径沿用）。这是 `harness prepare`（`readHarnessEnv()` 必需 `ZAG_MODEL_BASE_URL/ZAG_MODEL_API_KEY/ZAG_MODEL_IDS/ZAG_DEFAULT_WORKSPACE`）在运行期安装可用的前提；
   - **逐类型版本门禁**：`internal-api.ts` runtime 安装路由对 `workloadKind=harness` 的负载取 `max(MIN_HARNESS_VERSION_BY_TYPE[harnessType], MIN_HARNESS_WORKER_VERSION)` 与在线 worker 版本（socketio-gateway 注册信息）比对，不满足 `400 INVALID_WORKLOAD` 可读原因；无法获取 worker 版本时按「已通过注册门禁」放行并告警留痕（契约注记）；
-  - **harnessTypes 追加**：`appendInstalledWorkload`（`workload-dispatcher.ts:656-694`，成功 + init + 非 system 的唯一回填点）同点扩展：负载 `harnessType` 非空时对 `cloudcontainers.harnessTypes` `$addToSet`（去重；standard 负载不动）。写点在 cloud-controller（agent-api 的 cloud-container 为只读镜像，§6.1 决策 8）。效果：会话 A-11 门（`session.ts:172-177`）放行该类型、设置页 `harnessTypes` 展示更新、后续批次 `buildHarnessEnv` 的 `ZAG_HARNESS_TYPES` 自动涵盖；
+  - **harnessTypes 追加**：`appendInstalledWorkload`（`workload-dispatcher.ts:705-724`，成功 + init + 非 system 的唯一回填点）同点扩展：负载 `harnessType` 非空时对 `cloudcontainers.harnessTypes` `$addToSet`（去重；standard 负载不动）。写点在 cloud-controller（agent-api 的 cloud-container 为只读镜像，§6.1 决策 8）。效果：会话 A-11 门（`session.ts:185-191`）放行该类型、设置页 `harnessTypes` 展示更新、后续批次 `buildHarnessEnv` 的 `ZAG_HARNESS_TYPES` 自动涵盖；
   - **边界口径**：0-harness 云电脑（`harnessTypes=[]`）时 A-11 的 `allowed.length > 0` 不生效（不限制）；补装首个 harness 后收窄为该类型集合——与「可创建会话的工具范围 = 已启用 harness」的既有口径一致。
-- **风险点**: Job env `ZAG_HARNESS_TYPES`（`container-service.ts:415`）仍为创建期快照——经核对 agent-gear 仅 `harness prepare` 消费该变量（`harness/env.ts`），ACP 探测为动态探测、会话门在 agent-api 侧按 `harnessTypes` 读模型判定，故无需重注入 Job env；实现期以「补装后创建该类型会话 + ACP 列表可见」实测收口。
+- **风险点**: Job env `ZAG_HARNESS_TYPES`（`container-service.ts:447`）仍为创建期快照——经核对 agent-gear 仅 `harness prepare` 消费该变量（`harness/env.ts`），ACP 探测为动态探测、会话门在 agent-api 侧按 `harnessTypes` 读模型判定，故无需重注入 Job env；实现期以「补装后创建该类型会话 + ACP 列表可见」实测收口。
 
 #### 实现点 5: harness 可选化（创建 0 个 + required=false）
 
 - **描述**: 解除「创建必须至少一个 harness」与「harness 硬失败」两个强制语义。
 - **技术细节**:
-  - `cloud-host-service.parseHarnessTypes`（`cloud-host-service.ts:107-110`）：空数组不再抛 `at least one harness type is required`，返回 `[]`（白名单/去重逻辑不变）；
+  - `cloud-host-service.parseHarnessTypes`（`cloud-host-service.ts:113-116`，兜底分支 `:129-131`）：空数组不再抛 `at least one harness type is required`，返回 `[]`（白名单/去重逻辑不变）；
   - `cloud-host-workload-plan.resolveCreateWorkloadPlan`（`cloud-host-workload-plan.ts:120-125`）：harness 预置 `required: true → false`（`implicit` 与顺序不变）——harness 安装失败不再触发 `markMustFailure`/`forceDestroy`，容器照常就绪，可事后补装（PRD「harness 永远是可选工作负载」）；
   - A.2.2 放宽：`harnessTypes` 允许空数组、`workloadPlan` 允许空（`resolveContainerPlan` 已支持空计划：无 init 脚本直接 online）；
   - 前端 `NewCloudHostDialog`：删除 `selectedHarnesses.length === 0 ? '请至少选择一种 Harness' : null` 校验（`NewCloudHostDialog.tsx:156`），追加提示文案「可不选，之后在设置-工作负载中补装」；默认会话规则提示不变（恰好 1 个自动建会话）；`useCloudHostProvisioning` 的 `createSession: harnessTypes.length === 1` 逻辑不变；
-  - `resolveAgentGearMinVersion`（空数组 → 基线 2.10.0）行为不变。
+  - `resolveAgentGearMinVersion`（空数组 → 基线 `CLOUD_HOST_AGENT_GEAR_MIN_VERSION` = 2.12.0）行为不变。
 - **风险点**: `required=false` 使「创建时勾选但安装失败」从硬失败变为就绪可用——与旧 PRD（[[20261020-feat-container-harness-support]]）「环境准备失败则启动失败」口径不同，属本需求明确的口径变更（评审重点确认项）。
 
 #### 实现点 6: 测试口径更新
@@ -324,7 +325,7 @@ flowchart TD
 | 10 | 创建对话框「预装工作负载」catalog 含 harness | 含 | 不含（创建走 `harnessTypes` 选择器） | B | 避免双入口与默认会话规则歧义；harness 创建期选择保留产品语义（选 1 个自动建会话） |
 | 11 | 既有脚本刷新方式 | 直接覆盖 | 字节匹配刷新（011/012/013 口径） | B | 不覆盖管理员定制/删除；只增不改是迁移体系既定约束 |
 | 12 | 迁移编号 | 固定 017 | 被并行需求占用则顺延 | B | 沿用 MongoDB/Playwright 并行撞号的既有协调裁决模式 |
-| 13 | runtime harness 版本门禁 | 不校验（靠注册门禁） | 逐类型校验（`MIN_HARNESS_VERSION_BY_TYPE` 取 max） | B | 注册门禁按创建期 `agentGearMinVersion`，运行期新增类型（如 deepseek 2.11.0）需补校验；无法取版本时放行并留痕 |
+| 13 | runtime harness 版本门禁 | 不校验（靠注册门禁） | 逐类型校验（`MIN_HARNESS_VERSION_BY_TYPE` 取 max） | B | 注册门禁按创建期 `agentGearMinVersion`，运行期新增类型（如 deepseek_harness 2.12.0）需补校验；无法取版本时放行并留痕 |
 
 ### 6.2 依赖与约束
 

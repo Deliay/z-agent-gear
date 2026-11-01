@@ -5,12 +5,12 @@ type: Permanent
 
 # 云电脑组件安装切换 pnpm 与工作负载 Harness 可选化 - 实现计划
 
-**关联 Proposal**: `docs/engineering/proposals/20261029-feat-pnpm-workload-and-harness-optional.md`（v1.0）
+**关联 Proposal**: `docs/engineering/proposals/20261029-feat-pnpm-workload-and-harness-optional.md`（v1.1）
 **关联 PRD**: `docs/product/draft/20261029-pnpm-workload-and-harness-optional.md`（v1.0，Issue #369）
 **需求总分支（feat-branch）**: `feat/pnpm-workload-and-harness-optional`（基于 `main`，需求总 PR #373）
 **实现分支**: `feat/pnpm-workload-and-harness-optional-impl`（基于 `feat/pnpm-workload-and-harness-optional`）
 **创建日期**: 2026-10-29
-**计划版本**: v1.0
+**计划版本**: v1.1（2026-11-01 与最新 `main` 合并后同步代码事实：agent-gear 2.13.x、worker 门禁 2.12.0、行号校准）
 
 ## 实现顺序
 
@@ -40,7 +40,7 @@ flowchart TD
 
 - **无 GraphQL 字段变更**：只改注释与口径文字（`cloud-host.graphql`）与契约注记（`cloud-controller-websocket.md` A.2.2 / A.2.5）；`contracts/admin-cloud-workload.graphql` 不动。
 - **无数据模型 schema 变更**：`cloudworkloads` 仅脚本文本刷新（字节匹配）；`cloudcontainers.harnessTypes` 仅运行态追加。
-- **npm 保留范围**（提案决策 3/4）：agent-gear 镜像预装（`Dockerfile:120`）与自更新（`entrypoint.sh:57`）保持 `npm install -g`；`001-preset-workloads.ts:66` 的 `pnpm|yarn|bun) npm install -g "$pm"` 包管理器自举通道不动；agent-web 前台「连接控制器」命令模板（`command-template.ts`）不动。**工作负载全局安装一律 `pnpm add -g`**。
+- **npm 保留范围**（提案决策 3/4）：agent-gear 镜像预装（`Dockerfile:120`）与自更新（`entrypoint.sh:73`）保持 `npm install -g`；`001-preset-workloads.ts:69` 的 `pnpm|yarn|bun) npm install -g "$pm"` 包管理器自举通道不动；agent-web 前台「连接控制器」命令模板（`command-template.ts`）不动。**工作负载全局安装一律 `pnpm add -g`**。
 - **harness 永远是可选工作负载**：`required=false`、不进「必须工作负载」语义、安装失败不销毁容器；已安装不提供卸载入口；不做 harness 版本选择参数。
 - **创建期 catalog 维持 standard**（决策 10）：`cloudHostWorkloadCatalog` 不含 harness（创建走 `harnessTypes` 多选器，避免双入口）；`cloudHostWorkloads` 与 MCP `workload_list` 含 harness。
 - **迁移只增不改**（决策 11）：字节匹配刷新，管理员定制/删除不覆盖（`console.warn` 跳过），重跑幂等。
@@ -69,7 +69,7 @@ flowchart TD
 6. **`ensure_pnpm` 落点与失败语义**：在保活循环/自更新之前执行一次（入口段），`command -v pnpm >/dev/null 2>&1 || run_as_worker npm install -g "pnpm@${PNPM_VERSION}" || log "WARN: pnpm install failed…"`——失败**仅告警不阻断**（`set -euo pipefail` 下显式 `||` 容忍，与 agent-gear 自更新同口径）；`ZAG_SKIP_AGENT_GEAR_UPDATE=1` 不影响 pnpm 预装。
 7. **PNPM_HOME / PATH 接线（决策 2）**：`PNPM_HOME="$WORKER_HOME/.local/share/pnpm"`；`WORKER_PATH="$WORKER_NVM_DIR/current/bin:$PNPM_HOME:/usr/local/sbin:…"`（既有顺序不变、仅追加目录）；`run_as_worker` / `run_as_worker_exec` 环境显式 `PNPM_HOME="$PNPM_HOME"`；`/etc/profile.d/pnpm.sh` 幂等标记块重写（`# >>> pnpm >>>` … `# <<< pnpm <<<`，先 `sed` 清旧块再追加，`sed` 失败 `|| true`）：`export PNPM_HOME=…` + PATH 追加（登录 shell 全局生效，同 015 `playwright.sh` 模式）；并执行 `run_as_worker pnpm setup || true`（交互 shell `~/.bashrc` 接线，双保险）。
 8. **pnpm registry**：pnpm 读同一 `~/.npmrc`（脚本内既有 `npm config set registry "$REGISTRY"` / entrypoint `NPM_REGISTRY` 约定已写入该文件），一期**不加** `pnpm config set registry` 兜底；实现期实测若 pnpm 未继承 registry，再补同步兜底并回写提案（§6.1 决策 1 的实测裁决机制）。
-9. **`parseHarnessTypes` 放宽两处**（`cloud-host-service.ts:107-110` 与 `:125` 两个 `at least one harness type is required` throw）：均改为「空/去重后空 → 返回 `[]`」（第二分支实际不可达，一并放宽防御）；白名单校验与去重逻辑不变；非字符串/白名单外仍报 `unsupported harness type: …`。
+9. **`parseHarnessTypes` 放宽两处**（`cloud-host-service.ts:113-116` 与 `:129-131` 两个 `at least one harness type is required` throw）：均改为「空/去重后空 → 返回 `[]`」（第二分支实际不可达，一并放宽防御）；白名单校验与去重逻辑不变；非字符串/白名单外仍报 `unsupported harness type: …`。
 10. **`createInstallOperation` 白名单与大小写口径**：`workloadKind !== 'standard'` 拒绝改为白名单 `['standard','harness']`（DB 落库为小写），其余仍 `Workload not found`；GraphQL 侧 `list()` 映射真实 kind 为大写 `'STANDARD' | 'HARNESS'`（现硬编码 `'STANDARD'`）；已安装 → SKIPPED 幂等分支不变。
 11. **runtime 版本门禁取版本失败**：无法获取在线 worker 版本（socketio-gateway 注册信息缺失）时**放行并 `console.warn` 留痕**（契约注记明示）；满足/不满足的判定：`max(MIN_HARNESS_VERSION_BY_TYPE[harnessType] ?? MIN_HARNESS_WORKER_VERSION, MIN_HARNESS_WORKER_VERSION)` 与 worker 版本对比，不满足 `400 INVALID_WORKLOAD` 可读原因（复用 `worker-version.ts` 的 `harnessMinVersion` / `maxWorkerVersion` 语义，不新造比较逻辑）。
 12. **`harnessTypes` 追加条件**（决策 8）：`appendInstalledWorkload` 同点扩展——仅当负载 `harnessType` 非空**且该次执行成功**（现有「成功 + init + 非 system」谓词内）时对 `cloudcontainers.harnessTypes` `$addToSet`（去重）；standard 负载不动；失败结果不追加。
@@ -133,7 +133,7 @@ bash deploy/images/worker/entrypoint.test.sh   # T-EP0~T-EP10 全绿
 - [ ] T-EP9/T-EP10 通过；T-EP0~T-EP8 断言校准后全绿
 - [ ] `WORKER_PATH` 仅追加 `$PNPM_HOME`、既有顺序不变；`run_as_worker*` 均携带 `PNPM_HOME`
 - [ ] `ensure_pnpm` 在任何工作负载脚本下发前执行；失败仅告警（`bash -n` + 测试桩断言）
-- [ ] 不改 `Dockerfile:120` agent-gear npm 预装与 `entrypoint.sh:57` 自更新口径（`git diff` 确认）
+- [ ] 不改 `Dockerfile:120` agent-gear npm 预装与 `entrypoint.sh:73` 自更新口径（`git diff` 确认）
 - [ ] BUILD.md pnpm 手工验收块成文（仅文档）
 
 ---
@@ -272,7 +272,7 @@ npm run build && npx vitest run
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `servers/cloud-controller/src/services/workload-dispatcher.ts` | 修改 | `startRuntimeBatch`（`:437`）：`emitRun(..., undefined, ...)` 改为与 init 同源 `resolveRunEnv(container)`（`:499`，purpose=harness 注入 `ZAG_HARNESS_TYPES`/`ZAG_MODEL_*`/`ZAG_DEFAULT_WORKSPACE` 等，`buildHarnessEnv`（`:210-219`）口径）；解析失败（secret 缺失/配置不完整）时判失败并返回可读原因，不下发 `undefined`/半套 env（T-CC13 口径沿用）；`appendInstalledWorkload`（`:677`）同点扩展：负载 `harnessType` 非空且成功时 `cloudcontainers.harnessTypes` `$addToSet`（裁决 12） |
+| `servers/cloud-controller/src/services/workload-dispatcher.ts` | 修改 | `startRuntimeBatch`（`:439`）：`emitRun(..., undefined, ...)` 改为与 init 同源 `resolveRunEnv(container)`（`:501`，purpose=harness 注入 `ZAG_HARNESS_TYPES`/`ZAG_MODEL_*`/`ZAG_DEFAULT_WORKSPACE` 等，`buildHarnessEnv`（`:205-219`）口径）；解析失败（secret 缺失/配置不完整）时判失败并返回可读原因，不下发 `undefined`/半套 env（T-CC13 口径沿用）；`appendInstalledWorkload`（`:705`）同点扩展：负载 `harnessType` 非空且成功时 `cloudcontainers.harnessTypes` `$addToSet`（裁决 12） |
 | `servers/cloud-controller/src/routes/internal-api.ts` | 修改 | `POST /containers/:containerId/workloads`（`:630`）对 `workloadKind=harness` 负载做逐类型版本门禁（裁决 11：`max(MIN_HARNESS_VERSION_BY_TYPE[type], MIN_HARNESS_WORKER_VERSION)` 对比在线 worker 版本，不满足 `400 INVALID_WORKLOAD` 可读原因；版本不可得放行并 `console.warn` 留痕） |
 | `servers/cloud-controller/src/services/worker-version.ts` | 不变（复用） | `MIN_HARNESS_VERSION_BY_TYPE` / `MIN_HARNESS_WORKER_VERSION` / `harnessMinVersion` / `maxWorkerVersion` 直接复用，不新造比较逻辑 |
 | `servers/cloud-controller/src/services/workload-dispatcher.test.ts` | 修改 | T-CC-R1/R2/R3 |
@@ -285,7 +285,7 @@ npm run build && npx vitest run
 | T-CC-R1 | runtime 批次 harness env 注入 | purpose=harness 容器的 runtime 批次 `emitRun` 携带与 init 同源 env（`ZAG_HARNESS_TYPES`/`ZAG_MODEL_*`/`ZAG_DEFAULT_WORKSPACE` 等）；standard 容器无 env 口径不变 |
 | T-CC-R2 | env 解析失败判可读错误 | secret 缺失/配置不完整 → 批次判失败并返回可读原因，不下发 `undefined` env、不下发半套配置 |
 | T-CC-R3 | `harnessTypes` 追加 | 负载 `harnessType` 非空且成功 → `cloudcontainers.harnessTypes` `$addToSet`（已含则去重不动）；失败结果不追加；standard 负载不动 |
-| T-CC-R4 | runtime harness 版本门禁 | worker 版本 < `max(MIN_HARNESS_VERSION_BY_TYPE[type], 2.10.0)` → `400 INVALID_WORKLOAD` 可读原因；满足 → 放行；版本不可得 → 放行 + `console.warn` 留痕 |
+| T-CC-R4 | runtime harness 版本门禁 | worker 版本 < `max(MIN_HARNESS_VERSION_BY_TYPE[type], 2.12.0)` → `400 INVALID_WORKLOAD` 可读原因；满足 → 放行；版本不可得 → 放行 + `console.warn` 留痕 |
 
 ### 命令参考
 
