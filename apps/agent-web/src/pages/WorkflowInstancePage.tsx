@@ -14,6 +14,7 @@ import { NODE_STATUS_BADGE, NODE_STATUS_LABELS } from '@/components/workflow/Wor
 import BlackboardPanel from '@/components/workflow/BlackboardPanel'
 import WorkflowContextPanel from '@/components/workflow/WorkflowContextPanel'
 import SessionSidePanel from '@/components/workflow/SessionSidePanel'
+import NodeDetailDrawer, { type NodeDetailTarget } from '@/components/workflow/NodeDetailDrawer'
 import MobileBackButton from '@/components/MobileBackButton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -31,6 +32,8 @@ export default function WorkflowInstancePage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const [sideSessionId, setSideSessionId] = useState<string | null>(null)
+  // 节点/资源详情抽屉：图表与列表共用，状态提升到页面层（轮询刷新不重置）
+  const [detailTarget, setDetailTarget] = useState<NodeDetailTarget | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteWorkflowInstance] = useMutation(DELETE_WORKFLOW_INSTANCE)
@@ -116,8 +119,14 @@ export default function WorkflowInstancePage() {
   }
 
   return (
-    <div className="h-full overflow-y-auto p-4 md:p-6">
-      <div className="mb-4 flex items-center gap-2">
+    <div
+      className={
+        viewMode === 'graph'
+          ? 'flex h-full min-h-0 flex-col gap-4 p-4 md:p-6'
+          : 'h-full overflow-y-auto p-4 md:p-6'
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2">
         <MobileBackButton to="/sessions" />
         <h1 className="text-xl font-bold">{instance.name}</h1>
         {instance.currentNodeNames.length > 0 ? (
@@ -184,7 +193,7 @@ export default function WorkflowInstancePage() {
       {failedNodes.length > 0 && (
         <div
           role="alert"
-          className="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 p-3"
+          className="rounded-lg border border-destructive/40 bg-destructive/10 p-3"
         >
           <p className="text-sm font-semibold text-destructive">
             ⚠️ {failedNodes.length} 个节点失败，流程已阻断，需要人工介入
@@ -200,35 +209,45 @@ export default function WorkflowInstancePage() {
         </div>
       )}
 
-      <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
-        {viewMode === 'list' ? (
+      {viewMode === 'graph' ? (
+        // 图表模式：画布占满视图区（高度随窗口自适应），右侧资源树隐藏（资源已上图）
+        <div className="min-h-0 min-w-0 flex-1">
+          <WorkflowGraphView
+            instance={instance}
+            onOpenDetail={setDetailTarget}
+            onOpenSession={setSideSessionId}
+          />
+        </div>
+      ) : (
+        <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
           <WorkflowNodeTree
             instance={instance}
             onOpenSession={setSideSessionId}
             pullRequestLinks={instance.pullRequestLinks}
+            onOpenDetail={(nodeId) => setDetailTarget({ type: 'node', nodeId })}
           />
-        ) : (
-          <WorkflowGraphView
-            instance={instance}
-            onNodeClick={(nodeId) => {
-              const node = instance.nodes.find((n) => n.id === nodeId)
-              if (node?.sessionId) {
-                setSideSessionId(node.sessionId)
-              }
-            }}
-          />
-        )}
-        <div className="min-w-0 space-y-4">
-          <BlackboardPanel
-            blackboard={instance.blackboard}
-            trash={instance.blackboardTrash}
-          />
-          <WorkflowContextPanel
-            additionalPrompts={instance.additionalPrompts}
-            pullRequestLinks={instance.pullRequestLinks}
-          />
+          <div className="min-w-0 space-y-4">
+            <BlackboardPanel
+              blackboard={instance.blackboard}
+              trash={instance.blackboardTrash}
+            />
+            <WorkflowContextPanel
+              additionalPrompts={instance.additionalPrompts}
+              pullRequestLinks={instance.pullRequestLinks}
+            />
+          </div>
         </div>
-      </div>
+      )}
+
+      <NodeDetailDrawer
+        open={detailTarget != null}
+        onOpenChange={(open) => {
+          if (!open) setDetailTarget(null)
+        }}
+        instance={instance}
+        target={detailTarget}
+        onOpenSession={(sessionId) => setSideSessionId(sessionId)}
+      />
 
       <SessionSidePanel
         sessionId={sideSessionId}

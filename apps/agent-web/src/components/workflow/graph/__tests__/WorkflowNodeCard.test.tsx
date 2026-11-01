@@ -1,0 +1,171 @@
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import type { NodeProps } from '@xyflow/react'
+import WorkflowNodeCard, { type WorkflowNodeCardNode } from '../WorkflowNodeCard'
+import type { WorkflowGraphNodeData } from '../graph-layout'
+
+const mockActivity = vi.hoisted(() => ({
+  value: { activity: null as null | { kind: 'thinking' | 'tool_call' | 'text'; text: string }, tokenUsage: null as number | null },
+}))
+const mockHandleComplete = vi.fn()
+const mockSetRejectOpen = vi.fn()
+
+vi.mock('@/hooks/useNodeSessionActivity', () => ({
+  useNodeSessionActivity: () => mockActivity.value,
+}))
+
+vi.mock('@/hooks/useHumanNodeActions', () => ({
+  useHumanNodeActions: () => ({
+    input: '',
+    setInput: vi.fn(),
+    rejectOpen: false,
+    setRejectOpen: mockSetRejectOpen,
+    reason: '',
+    setReason: vi.fn(),
+    submitting: false,
+    handleComplete: mockHandleComplete,
+    handleReject: vi.fn(),
+    canReject: false,
+  }),
+}))
+
+function data(overrides: Partial<WorkflowGraphNodeData> = {}): WorkflowGraphNodeData {
+  return {
+    instanceId: 'inst-1',
+    nodeId: 'n1',
+    name: '实现',
+    type: 'AI',
+    status: 'RUNNING',
+    stage: '实现阶段',
+    description: null,
+    harness: 'OpenCode',
+    model: 'gpt-4o',
+    sessionId: 's1',
+    reworkCount: 0,
+    prLinks: [],
+    hasCheckRun: false,
+    resources: [],
+    moreResources: 0,
+    actionable: false,
+    onOpenDetail: vi.fn(),
+    onOpenResource: vi.fn(),
+    ...overrides,
+  }
+}
+
+function renderCard(overrides: Partial<WorkflowGraphNodeData> = {}) {
+  const props = {
+    id: 'n1',
+    data: data(overrides),
+  } as unknown as NodeProps<WorkflowNodeCardNode>
+  return render(<WorkflowNodeCard {...props} />)
+}
+
+beforeEach(() => {
+  mockActivity.value = { activity: null, tokenUsage: null }
+  mockHandleComplete.mockClear()
+  mockSetRejectOpen.mockClear()
+})
+
+describe('WorkflowNodeCard', () => {
+  it('T-UI4-NC1 七态渲染状态徽标与状态色脊', () => {
+    const { rerender } = renderCard({ status: 'RUNNING' })
+    expect(screen.getByTestId('node-status-badge-n1')).toHaveTextContent('执行中')
+    expect(screen.getByTestId('node-status-spine').className).toContain('bg-info')
+
+    const props = { id: 'n1', data: data({ status: 'FAILED' }) } as unknown as NodeProps<WorkflowNodeCardNode>
+    rerender(<WorkflowNodeCard {...props} />)
+    expect(screen.getByTestId('node-status-badge-n1')).toHaveTextContent('失败')
+    expect(screen.getByTestId('node-status-spine').className).toContain('bg-destructive')
+  })
+
+  it('T-UI4-NC2 AI 节点展示 Harness 与模型', () => {
+    renderCard()
+    expect(screen.getByText('OpenCode')).toBeInTheDocument()
+    expect(screen.getByText('gpt-4o')).toBeInTheDocument()
+  })
+
+  it('T-UI4-NC3 进行中动态行：思考中/工具调用/总结中/等待消息', () => {
+    mockActivity.value = { activity: { kind: 'thinking', text: '…思考结尾' }, tokenUsage: null }
+    const { rerender } = renderCard({ status: 'RUNNING' })
+    expect(screen.getByTestId('node-live-activity-n1')).toHaveTextContent('思考中 …思考结尾')
+
+    mockActivity.value = { activity: { kind: 'tool_call', text: 'Tool Call: 执行测试' }, tokenUsage: null }
+    rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'RUNNING' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
+    expect(screen.getByTestId('node-live-activity-n1')).toHaveTextContent('Tool Call: 执行测试')
+
+    mockActivity.value = { activity: { kind: 'text', text: '…总结' }, tokenUsage: null }
+    rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'REWORK' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
+    expect(screen.getByTestId('node-live-activity-n1')).toHaveTextContent('总结中 …总结')
+
+    mockActivity.value = { activity: null, tokenUsage: null }
+    rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'RUNNING' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
+    expect(screen.getByTestId('node-live-activity-n1')).toHaveTextContent('等待消息')
+  })
+
+  it('T-UI4-NC4 完成态 token 行：有用量展示 token，无用量仅「已完成」', () => {
+    mockActivity.value = { activity: null, tokenUsage: 3210 }
+    const { rerender } = renderCard({ status: 'DONE' })
+    expect(screen.getByTestId('node-result-n1')).toHaveTextContent('已完成 · 消耗 3210 tokens')
+    expect(screen.queryByTestId('node-live-activity-n1')).not.toBeInTheDocument()
+
+    mockActivity.value = { activity: null, tokenUsage: null }
+    rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'DONE' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
+    expect(screen.getByTestId('node-result-n1')).toHaveTextContent(/^已完成$/)
+  })
+
+  it('T-UI4-NC5 PR / 检查项 / 返工徽标按有无信息显隐', () => {
+    renderCard({ reworkCount: 2 })
+    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.queryByText('PR')).not.toBeInTheDocument()
+
+    const link = {
+      pullRequestId: 'acme/repo#1',
+      prUrl: 'https://github.com/acme/repo/pull/1',
+      nodeId: 'n1',
+      nodeName: '实现',
+      registeredAt: '',
+      checkRunUrl: 'https://checks/1',
+      lastSyncedCommitSha: 'abcdef123',
+      lastSyncAt: '',
+      lastSyncError: null,
+    }
+    const { container } = render(
+      <WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'DONE', prLinks: [link], hasCheckRun: true }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />,
+    )
+    expect(container.querySelector('a[href="https://github.com/acme/repo/pull/1"]')).toBeTruthy()
+    expect(screen.getByText('检查项')).toBeInTheDocument()
+  })
+
+  it('T-UI4-NC6 人类节点可操作时展示输入与完成/打回，操作不冒泡', () => {
+    renderCard({ type: 'HUMAN', actionable: true, harness: null, model: null })
+    const textarea = screen.getByLabelText('实现 完成输入')
+    expect(textarea.className).toContain('nodrag')
+    expect(screen.getByText('完成').closest('div')?.className).toContain('nodrag')
+    fireEvent.click(screen.getByText('完成'))
+    expect(mockHandleComplete).toHaveBeenCalled()
+    fireEvent.click(screen.getByText('打回'))
+    expect(mockSetRejectOpen).toHaveBeenCalledWith(true)
+  })
+
+  it('T-UI4-NC7 头部点击打开节点详情抽屉', () => {
+    const onOpenDetail = vi.fn()
+    renderCard({ onOpenDetail })
+    fireEvent.click(screen.getByRole('button', { name: '实现 详情' }))
+    expect(onOpenDetail).toHaveBeenCalledWith('n1')
+  })
+
+  it('T-UI4-NC8 资源小卡片横排渲染并点击回调', () => {
+    const onOpenResource = vi.fn()
+    renderCard({
+      status: 'DONE',
+      resources: [
+        { id: 'r1', kind: 'blackboard', title: '评审报告', value: 'v', url: null, checkRunUrl: null, pullRequestId: null, nodeId: 'n1' },
+      ],
+      onOpenResource,
+    })
+    expect(screen.getByTestId('resource-row').className).not.toContain('flex-wrap')
+    fireEvent.click(screen.getByText('评审报告'))
+    expect(onOpenResource).toHaveBeenCalledTimes(1)
+  })
+})
