@@ -1,8 +1,8 @@
-# 默认工作容器镜像构建与自验（内网环境）
+# 默认工作容器镜像构建与自验
 
-> 该镜像依赖内网 Nexus（Ubuntu / GitHub raw / Node.js 发行包 / npm 代理）与 Harbor 镜像代理，
-> **不在 GitHub CI 构建**（runner 不可达内网）。请在可访问内网的机器上执行构建与自验。
-> 构建过程**不回退公网**：Node.js 与 npm 由 nvm 安装，nvm 及其发行包全部取自内网代理。
+> 构建期使用**官方公网源**（Ubuntu archive / raw.githubusercontent.com / nodejs.org / registry.npmjs.org），
+> 因此可在 GitHub Actions 等公网环境构建；所有依赖安装完成后，镜像内的 apt / nvm(Node.js) / npm 源
+> 会切换为**内网 Nexus**，供容器运行时与预制工作负载使用。
 
 ## 构建
 
@@ -10,16 +10,23 @@
 cd deploy/images/worker
 docker build -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 
-# 内网地址变化时通过 --build-arg 覆盖
+# 运行期内网源变化时通过 --build-arg 覆盖（不影响构建期使用的官方源）
 docker build \
   --build-arg UBUNTU_MIRROR=https://nexus.internal.fffdan.com/repository/ubuntu-proxy/ \
-  --build-arg GITHUB_RAW_PROXY=https://nexus.internal.fffdan.com/repository/github-raw-proxy \
   --build-arg NVM_VERSION=v0.40.8 \
   --build-arg NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy \
   --build-arg NODE_VERSION=24 \
   --build-arg NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/ \
   -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 ```
+
+| 参数 | 生效阶段 | 默认 | 说明 |
+|------|---------|------|------|
+| `UBUNTU_MIRROR` | 运行期 | 内网 `ubuntu-proxy` | 构建完成后写入 `/etc/apt/sources.list.d/ubuntu.sources` |
+| `NODEJS_DIST_MIRROR` | 运行期 | 内网 `node-proxy` | 以 `NVM_NODEJS_ORG_MIRROR` 固化，运行时 nvm 安装 Node.js 使用 |
+| `NPM_REGISTRY` | 运行期 | 内网 `npm-proxy` | 构建完成后写入 worker `~/.npmrc` 并固化为 ENV |
+| `NVM_INSTALL_URL` | 构建期 | 官方 `raw.githubusercontent.com` | 仅在构建期安装 nvm 时使用 |
+| `NODE_VERSION` | 构建期 | `24` | 由 nvm 安装的 Node.js 主版本 |
 
 ### .NET（apt）相关构建参数
 
@@ -32,7 +39,8 @@ docker build \
 | `DOTNET_APT_SOURCE` | build-arg（可选） | 空 | 内网 Ubuntu 源不含 `dotnet10` 时的 Microsoft feed 代理源 |
 | `DOTNET_APT_KEY_URL` | build-arg（可选） | 空 | 与 `DOTNET_APT_SOURCE` 配套的签名密钥地址 |
 
-`DOTNET_APT_SOURCE` 与 `DOTNET_APT_KEY_URL` 同时提供时，构建期会追加 `/etc/apt/sources.list.d/dotnet.list`；未提供则仅使用内网 Ubuntu 源（不阻断构建）。例如：
+`DOTNET_APT_SOURCE` 与 `DOTNET_APT_KEY_URL` 同时提供时，会写入 `/etc/apt/sources.list.d/dotnet.list`
+（供运行时工作负载使用）；未提供则运行时仅使用 `UBUNTU_MIRROR`（不阻断构建）。例如：
 
 ```bash
 docker build \
@@ -43,26 +51,23 @@ docker build \
 
 构建完成后将镜像 `WORKER_IMAGE` 配置为 `core.harbor.internal.fffdan.com/zero-tools/worker:dev`（或推送后使用正式 tag）。
 
-## 前置条件（nvm 走内网代理）
+## 前置条件（构建期公网 / 运行期内网）
 
-镜像内**不存在** apt 的 `nodejs`/`npm`，Node.js 与 npm 全部由 nvm 提供，且 nvm 安装脚本、nvm 脚本本体、
-Node.js 发行包均只取自内网代理。构建前请确认以下地址可访问（应返回 200）：
+镜像内**不存在** apt 的 `nodejs`/`npm`，Node.js 与 npm 全部由 nvm 提供。构建期需要可访问：
+`archive.ubuntu.com` / `security.ubuntu.com` / `raw.githubusercontent.com` / `nodejs.org` / `registry.npmjs.org`。
+构建完成后镜像内的源已切换为内网 Nexus；运行时无需公网。
 
 ```bash
-BASE=https://nexus.internal.fffdan.com/repository/github-raw-proxy/nvm-sh/nvm/v0.40.8
-for f in install.sh nvm.sh nvm-exec bash_completion; do
-  printf '%s  %s\n' "$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$BASE/$f")" "$f"
+for u in \
+  http://archive.ubuntu.com/ubuntu/dists/noble/Release \
+  https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh \
+  https://nodejs.org/dist/index.tab \
+  https://registry.npmjs.org/pnpm; do
+  printf '%s  %s\n' "$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$u")" "$u"
 done
-curl -s -o /dev/null -m 20 -w 'node-proxy/index.tab: %{http_code}\n' \
-  https://nexus.internal.fffdan.com/repository/node-proxy/index.tab
 ```
 
-其中 `install.sh`（nvm 安装脚本）与 `nvm.sh`/`nvm-exec`/`bash_completion`（脚本内容）由 `GITHUB_RAW_PROXY`
-提供，Node.js 的 `index.tab`/`SHASUMS256.txt`/`node-*.tar.xz` 由 `NODEJS_DIST_MIRROR` 提供。
-
-> 若上述地址返回 404 / 提示 `Remote Auto Blocked`，说明 Nexus 侧到上游（raw.githubusercontent.com）
-> 的通道不可用，需先恢复该代理仓库或预热缓存后再构建（Dockerfile 已用 `. "$NVM_DIR/nvm.sh"` 断言，
-> nvm 脚本缺失会直接构建失败，不会静默产出残缺镜像）。
+> nvm 安装脚本缺失会直接构建失败（Dockerfile 用 `. "$NVM_DIR/nvm.sh"` 断言），不会静默产出残缺镜像。
 
 ## 自验（PRD 功能点 1 验收标准：瘦身后通用能力可用）
 
