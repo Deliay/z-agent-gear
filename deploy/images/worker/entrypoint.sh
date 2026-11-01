@@ -13,7 +13,8 @@
 # - 启动时 ensure_pnpm 预装固定版本 pnpm（幂等、失败仅告警不阻断保活；工作负载脚本自带
 #   npm 自举回退兜底存量容器）；
 # - PNPM_HOME 并入 WORKER_PATH，并写 /etc/profile.d/pnpm.sh（登录 shell）与 `pnpm setup`
-#   （交互 shell ~/.bashrc）双入口；agent-gear 预装与自更新仍走 npm（引导链，不在切换范围）。
+#   （交互 shell ~/.bashrc）双入口；agent-gear 预装与自更新统一走 pnpm（`pnpm add -g`），
+#   npm 仅保留为 pnpm 自举通道（存量容器 `npm install -g pnpm@9.15.9`）。
 #
 # 连接参数：
 #   ZAG_SERVER_ENDPOINT / ZAG_CONTROLLER_KEY（cloud-controller /worker）
@@ -29,6 +30,8 @@ WORKER_HOME=/home/worker
 WORKER_NVM_DIR="$WORKER_HOME/.nvm"
 # pnpm 固定版本与全局 bin 目录（决策 1/2）：与迁移 017 脚本内自举回退块同版本。
 PNPM_VERSION="${PNPM_VERSION:-9.15.9}"
+# pnpm 可执行文件（测试可指向不存在的命令，用于验证存量容器自举分支）。
+PNPM_CMD="${ZAG_PNPM_CMD:-pnpm}"
 PNPM_HOME="$WORKER_HOME/.local/share/pnpm"
 # /etc/profile.d 写入目标（登录 shell 全局生效）；仅测试可用环境变量改写到临时目录。
 PNPM_PROFILE_FILE="${ZAG_PNPM_PROFILE_FILE:-/etc/profile.d/pnpm.sh}"
@@ -86,18 +89,18 @@ write_pnpm_profile() {
 # 预装固定版本 pnpm（幂等）：优先 `command -v pnpm` 命中即跳过；安装固定版本 pin。
 # 失败仅告警不阻断（工作负载脚本内的自举回退块兜底存量容器）；不受自更新 skip 开关影响。
 ensure_pnpm() {
-  if run_as_worker sh -c 'command -v pnpm >/dev/null 2>&1'; then
-    log "pnpm already installed: $(run_as_worker pnpm --version 2>/dev/null || echo 'version unknown')"
+  if run_as_worker sh -c "command -v '$PNPM_CMD' >/dev/null 2>&1"; then
+    log "pnpm already installed: $(run_as_worker "$PNPM_CMD" --version 2>/dev/null || echo 'version unknown')"
   elif run_as_worker npm install -g "pnpm@${PNPM_VERSION}" --no-fund --no-audit; then
-    log "pnpm installed: $(run_as_worker pnpm --version 2>/dev/null || echo 'version unknown')"
+    log "pnpm installed: $(run_as_worker "$PNPM_CMD" --version 2>/dev/null || echo 'version unknown')"
   else
     log "WARN: pnpm install failed; workload scripts will fall back to npm bootstrap"
   fi
   write_pnpm_profile
-  run_as_worker pnpm setup >/dev/null 2>&1 || true
+  run_as_worker "$PNPM_CMD" setup >/dev/null 2>&1 || true
 }
 
-# 启动 / 每轮自更新：npm install -g agent-gear（写入 worker 的 per-user nvm 前缀）。
+# 启动 / 每轮自更新：pnpm add -g agent-gear（写入 PNPM_HOME 全局 bin）。
 # 失败不阻断保活；skip 开关跳过全部自更新。
 update_agent_gear() {
   if [ "${ZAG_SKIP_AGENT_GEAR_UPDATE:-0}" = "1" ]; then
@@ -105,10 +108,10 @@ update_agent_gear() {
     return 0
   fi
   local registry
-  registry=$(run_as_worker npm config get registry 2>/dev/null || echo unknown)
-  log "updating agent-gear via npm (registry=$registry)"
+  registry=$(run_as_worker "$PNPM_CMD" config get registry 2>/dev/null || echo unknown)
+  log "updating agent-gear via pnpm (registry=$registry)"
   local rc=0
-  run_as_worker_exec npm install -g agent-gear --no-fund --no-audit &
+  run_as_worker_exec "$PNPM_CMD" add -g agent-gear &
   CHILD_PID=$!
   wait "$CHILD_PID" || rc=$?
   CHILD_PID=""
