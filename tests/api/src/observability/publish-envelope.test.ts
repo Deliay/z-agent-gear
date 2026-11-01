@@ -43,8 +43,8 @@ function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) {
-      // migrations 不允许修改（历史不可变），不在巡检范围（已知偏差，见回归报告）
-      if (entry !== 'migrations' && entry !== 'node_modules' && entry !== 'dist') walk(full, out);
+      // 覆盖全部 src（含 migrations）：migrations 与其它源码同规格，发布点同样必须经 publishJson。
+      if (entry !== 'node_modules' && entry !== 'dist') walk(full, out);
     } else if (full.endsWith('.ts')) {
       out.push(full);
     }

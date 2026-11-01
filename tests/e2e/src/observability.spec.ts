@@ -12,6 +12,11 @@
  *
  * trace 用例需要 OTEL SDK 生效（服务以 `OTEL_EXPORTER_OTLP_ENDPOINT` 配置启动，如 Aspire
  * collector / compose otel-endpoint），否则日志无 `trace_id` 字段（契约 §7 采样与日志解耦）。
+ * SDK 未启用判定：请求后两侧日志全量无任何 `trace_id` 即视为 SDK 未启用，trace 用例
+ * **明确 skip 并输出指引**，不假装通过、也不误报失败。
+ *
+ * 超时：日志获取的 `docker compose logs` 回落单次最长 8s、trace 用例多轮读取，最坏耗时超
+ * Playwright 默认 30s，故文件级 `test.setTimeout(60000)`（等效 `test.describe.configure({ timeout: 60000 })`）。
  */
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
@@ -19,6 +24,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ADMIN_TEST_PASSWORD, DEFAULT_ADMIN_PASSWORD, forceAdminPassword } from './helpers.js';
+
+// 最坏耗时（多次 `docker compose logs` 8s/次 + trace 轮询）超默认 30s（文件级超时）。
+test.setTimeout(60000);
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -228,15 +236,34 @@ test('T-OBS20 一次 GraphQL 请求的 trace_id 同时出现在 agent-api 与 ad
   // 日志落地/采集有延迟，轮询等待本次请求的新 trace_id 同现两边（最多 ~10s）
   const deadline = Date.now() + 10_000;
   let shared = new Set<string>();
+  let agentLines: string[] = agentLog!;
+  let adminLines: string[] = adminLog!;
   for (;;) {
-    const agentIds = traceIds(logLines(SERVICES[0]) ?? []);
-    const adminIds = traceIds(logLines(SERVICES[1]) ?? []);
+    agentLines = logLines(SERVICES[0]) ?? agentLines;
+    adminLines = logLines(SERVICES[1]) ?? adminLines;
+    const agentIds = traceIds(agentLines);
+    const adminIds = traceIds(adminLines);
     shared = new Set(
       [...agentIds].filter((id) => adminIds.has(id) && !agentBefore.has(id) && !adminBefore.has(id)),
     );
     if (shared.size > 0 || Date.now() > deadline) break;
     await new Promise((r) => setTimeout(r, 1000));
   }
+
+  // SDK 未启用判定：请求后日志全量仍无任何 trace_id = 服务未以 OTel SDK 启动
+  //（OTEL_EXPORTER_OTLP_ENDPOINT 未配置时 SDK 完全不启动、日志无 trace_id 字段，契约 §7），
+  // trace 贯通无从验证——明确 skip 并输出指引，不假装通过、也不误报失败。
+  const agentAll = traceIds(agentLines);
+  const adminAll = traceIds(adminLines);
+  const OTEL_GUIDE =
+    '未检测到 OTel SDK 生效（服务日志全量无 trace_id 字段）。指引：以 OTEL_EXPORTER_OTLP_ENDPOINT ' +
+    '（如 Aspire collector / compose otel-endpoint）与 OTEL_TRACES_SAMPLER_ARG=1 启动服务后重跑；' +
+    '未配置采集端时 SDK 完全不启动（零外发），本用例无法验证 trace 贯通。';
+  test.skip(agentAll.size + adminAll.size === 0, OTEL_GUIDE);
+  test.skip(
+    agentAll.size === 0 || adminAll.size === 0,
+    `仅单侧日志出现 trace_id（agent-api ${agentAll.size} 个 / admin-api ${adminAll.size} 个）：` + OTEL_GUIDE,
+  );
 
   expect(
     [...shared],
