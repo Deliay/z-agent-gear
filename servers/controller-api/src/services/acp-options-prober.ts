@@ -1,5 +1,6 @@
 import type { Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 import { harnessLoginRegistry, type HarnessLoginRegistry } from './harness-login-registry.js';
 
@@ -95,7 +96,7 @@ export class AcpOptionsProber {
       entry.timeout = setTimeout(() => this.handleProbeTimeout(entry, serverType), PROBE_TIMEOUT_MS);
       this.pendingRequests.set(requestId, entry);
 
-      controllerSocket.emit('acp:probe-options', { requestId, serverType });
+      controllerSocket.emit('acp:probe-options', withTraceMeta({ requestId, serverType }));
     });
   }
 

@@ -1,4 +1,5 @@
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { sessionService } from './session.js';
@@ -55,7 +56,7 @@ export class CommandService {
   private async handleShutdown(keyId: string): Promise<void> {
     const socketId = await sessionService.getSocketId(keyId);
     if (socketId && this.io) {
-      this.io.to(socketId).emit('shutdown', { reason: 'key_revoked' });
+      this.io.to(socketId).emit('shutdown', withTraceMeta({ reason: 'key_revoked' }));
       this.io.sockets.sockets.get(socketId)?.disconnect(true);
     }
 

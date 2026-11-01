@@ -804,4 +804,55 @@ describe('SessionCommandService', () => {
       });
     });
   });
+
+  describe('acp:set-config-option command', () => {
+    it('B4: 配置值明文不入日志，只记类型/长度', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+      vi.mocked(acpSessionManager.setConfigOption).mockResolvedValue(true);
+
+      const testLog = createTestLogger();
+      const service = new SessionCommandService(testLog.logger);
+      service.start(createMockIO() as never);
+
+      const secret = 'sk-super-secret-value';
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:set-config-option',
+        sessionId: 'sess-1',
+        configId: 'model.apiKey',
+        value: secret,
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionManager.setConfigOption).toHaveBeenCalledWith('sess-1', 'model.apiKey', secret);
+      });
+
+      // 配置值明文零泄漏（参照 harness-login-manager 的 urlLength 口径：只记类型/长度）
+      expect(JSON.stringify(testLog.records)).not.toContain(secret);
+      const rec = testLog.records.find((r) => r.msg === 'setting config option');
+      expect(rec).toMatchObject({
+        level: 'info',
+        sessionId: 'sess-1',
+        configId: 'model.apiKey',
+        valueType: 'string',
+        valueLength: secret.length,
+      });
+      expect(rec).not.toHaveProperty('value');
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'acp:set-config-option',
+        sessionId: 'sess-1',
+        configId: 'thoughtLevel.enabled',
+        value: true,
+      }));
+
+      await vi.waitFor(() => {
+        expect(acpSessionManager.setConfigOption).toHaveBeenCalledWith('sess-1', 'thoughtLevel.enabled', true);
+      });
+      const boolRec = testLog.records.find((r) => r.msg === 'setting config option' && r.configId === 'thoughtLevel.enabled');
+      expect(boolRec).toMatchObject({ valueType: 'boolean' });
+      expect(boolRec).not.toHaveProperty('value');
+      expect(JSON.stringify(testLog.records)).not.toContain('"value"');
+    });
+  });
 });

@@ -5,6 +5,7 @@ import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 import { harnessLoginRegistry, type HarnessLoginRegistry } from './harness-login-registry.js';
 
@@ -151,7 +152,7 @@ export class ACPSessionManager {
       if (initial?.modelId) {
         startPayload.modelId = initial.modelId;
       }
-      controllerSocket.emit('acp:start', startPayload);
+      controllerSocket.emit('acp:start', withTraceMeta(startPayload));
       // 发出即登记 MCP 归属：真实 agent 会在 session/new 期间发起 MCP initialize，
       // 早于 start:result，归属校验需在此时即通过（失败/停止路径负责清理）。
       this.registerRelayOwner(sessionId, controllerId);
@@ -297,10 +298,10 @@ export class ACPSessionManager {
     });
 
     // Forward message to controller
-    session.controllerSocket.emit('acp:message', {
+    session.controllerSocket.emit('acp:message', withTraceMeta({
       sessionId,
       message,
-    });
+    }));
 
     return true;
   }
@@ -585,7 +586,7 @@ export class ACPSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
-    session.controllerSocket.emit('acp:cancel', { sessionId });
+    session.controllerSocket.emit('acp:cancel', withTraceMeta({ sessionId }));
     return true;
   }
 
@@ -625,7 +626,7 @@ export class ACPSessionManager {
       if (initial?.modelId) {
         resumePayload.modelId = initial.modelId;
       }
-      controllerSocket.emit('acp:resume', resumePayload);
+      controllerSocket.emit('acp:resume', withTraceMeta(resumePayload));
       // 同 acp:start：发出即登记 MCP 归属，覆盖 resume 启动窗口内的 MCP 握手
       this.registerRelayOwner(sessionId, controllerId);
 
@@ -738,10 +739,10 @@ export class ACPSessionManager {
         ? ((message.content as Record<string, unknown>).content as Record<string, unknown>).text as string ?? ''
         : '';
 
-    session.controllerSocket.emit('acp:message', {
+    session.controllerSocket.emit('acp:message', withTraceMeta({
       sessionId,
       message: { type: message.type, content: rawContent },
-    });
+    }));
     return true;
   }
 
@@ -760,7 +761,7 @@ export class ACPSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
-    session.controllerSocket.emit('acp:set-mode', { sessionId, modeId });
+    session.controllerSocket.emit('acp:set-mode', withTraceMeta({ sessionId, modeId }));
 
     // Optimistic update
     await Session.findByIdAndUpdate(sessionId, { currentModeId: modeId });
@@ -773,7 +774,7 @@ export class ACPSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
-    session.controllerSocket.emit('acp:set-model', { sessionId, modelId });
+    session.controllerSocket.emit('acp:set-model', withTraceMeta({ sessionId, modelId }));
 
     // Optimistic update
     await Session.findByIdAndUpdate(sessionId, { currentModelId: modelId });
@@ -786,7 +787,7 @@ export class ACPSessionManager {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
-    session.controllerSocket.emit('acp:set-config-option', { sessionId, configId, value });
+    session.controllerSocket.emit('acp:set-config-option', withTraceMeta({ sessionId, configId, value }));
     return true;
   }
 
@@ -991,7 +992,7 @@ export class ACPSessionManager {
     if (!payload.success) return;
     if (this.sessions.has(payload.sessionId) || this.startingSessions.has(payload.sessionId)) return;
     this.logger.warn({ sessionId: payload.sessionId }, 'late successful start/resume result with no active session, reaping orphan process');
-    socket.emit('acp:stop', { sessionId: payload.sessionId });
+    socket.emit('acp:stop', withTraceMeta({ sessionId: payload.sessionId }));
   }
 
   /**
@@ -1119,7 +1120,7 @@ export class ACPSessionManager {
     controllerSocket.on('acp:stopped', onStopped);
 
     for (let attempt = 0; attempt <= STOP_MAX_RETRIES; attempt++) {
-      controllerSocket.emit('acp:stop', { sessionId, ackRequired: true });
+      controllerSocket.emit('acp:stop', withTraceMeta({ sessionId, ackRequired: true }));
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => resolve(), STOP_ACK_TIMEOUT_MS);
         const checkAck = () => {
@@ -1179,10 +1180,10 @@ export class ACPSessionManager {
       }
 
       this.logger.info({ controllerId, active: activeSessionIds.size, pendingKill: pendingKillSessionIds.length }, 'sending acp:reconcile to controller');
-      controllerSocket.emit('acp:reconcile', {
+      controllerSocket.emit('acp:reconcile', withTraceMeta({
         activeSessionIds: [...activeSessionIds],
         pendingKillSessionIds,
-      });
+      }));
     } catch (error) {
       this.logger.error({ controllerId, err: error }, 'failed to reconcile controller');
     }

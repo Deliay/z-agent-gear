@@ -4,6 +4,7 @@ import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 import { withSpan } from '../observability/trace.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 
 const SCAN_INTERVAL_MS = 15_000;
 const TIMEOUT_THRESHOLD_MS = 60_000;
@@ -52,7 +53,7 @@ export class HeartbeatService {
       for (const keyId of keyIds) {
         const socketId = await sessionService.getSocketId(keyId);
         if (socketId && this.io) {
-          this.io.to(socketId).emit('shutdown', { reason: 'heartbeat_timeout' });
+          this.io.to(socketId).emit('shutdown', withTraceMeta({ reason: 'heartbeat_timeout' }));
           this.io.sockets.sockets.get(socketId)?.disconnect(true);
         }
         await sessionService.cleanupKey(keyId);

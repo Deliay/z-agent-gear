@@ -2,9 +2,10 @@ import { Server as SocketIOServer, type Socket } from 'socket.io';
 import bcrypt from 'bcryptjs';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import { publish } from '../middleware/publish.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
-import { runWithLogContext } from '../observability/log-context.js';
-import { injectTraceparent, withSpan } from '../observability/trace.js';
+import { runWithLogContext, type LogContext } from '../observability/log-context.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
@@ -35,19 +36,11 @@ interface RegisterPayload {
   platform?: string;
 }
 
-/** 服务端下发报文统一注入顶层 `_meta.traceparent`（契约 agent-session-websocket.md §7）：不破坏既有 payload 字段。 */
-function withMeta<T>(payload: T): T {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
-  const meta = injectTraceparent({});
-  // 无活跃 span 时不注入空 `_meta`（保持既有报文形态，`_meta` 为可选保留位）。
-  if (Object.keys(meta).length === 0) return payload;
-  const record = payload as Record<string, unknown>;
-  const existing = record._meta;
-  const existingMeta =
-    existing && typeof existing === 'object' && !Array.isArray(existing)
-      ? (existing as Record<string, unknown>)
-      : {};
-  return { ...record, _meta: { ...existingMeta, ...meta } } as T;
+/** 事件报文顶层 `sessionId`（string）提取（A2 日志上下文）；缺失/非字符串返回 undefined。 */
+function payloadSessionId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== 'object') return undefined;
+  const value = (payload as Record<string, unknown>).sessionId;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function firstString(value: unknown): string | undefined {
@@ -62,10 +55,51 @@ export function createSocketIOServer(
   io: SocketIOServer,
   logger: ObservationLogger = rootLogger.child({ component: 'socketio' }),
 ): void {
+  /**
+   * socket 事件处理器统一包装（A2）：入口 `runWithLogContext({userId, controllerId, sessionId})`
+   * + `withSpan('socket.<event>')`，parent 取事件报文顶层 `_meta.traceparent`（缺失/非法回落握手
+   * traceparent，T-OBS13），使事件触发的 Redis 发布（publishJson 注入 `_meta.traceparent`）保持活跃 span。
+   * 高频 chunk 路径（`acp:message` / `acp:load-session:message` / `port-forward:data`）与 `heartbeat`
+   * 不走本包装（F11：按消息/按分片/心跳不开逐条 span，维持现状）。
+   */
+  function onEvent(
+    socket: Socket,
+    event: string,
+    handler: (payload: any) => void | Promise<void>,
+  ): void {
+    socket.on(event, (payload: any) => {
+      const sessionId = payloadSessionId(payload);
+      const ctx: LogContext = {
+        userId: socket.data.userId,
+        controllerId: socket.data.controllerId,
+      };
+      if (sessionId) ctx.sessionId = sessionId;
+      const parent =
+        extractTraceparent(payload?._meta) ?? (socket.data.traceparent as string | undefined);
+      void runWithLogContext(ctx, () =>
+        withSpan(
+          `socket.${event}`,
+          {
+            'messaging.system': 'socketio',
+            'messaging.destination.name': event,
+            socketId: socket.id,
+            ...(sessionId ? { sessionId } : {}),
+          },
+          async () => {
+            await handler(payload);
+          },
+          { parent },
+        ),
+      ).catch((err: unknown) => {
+        logger.error({ event, err }, 'socket event handler error');
+      });
+    });
+  }
+
   // 引擎级错误监听只注册一次；放在 connection 回调内会随每条连接叠加监听器并重复刷日志。
+  // 错误对象进 `err` 字段（B1：不把 err.message 压平进 detail 丢 Error 结构）。
   const transportErrorHandler = (err: unknown) => {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error({ event: 'transport_error', detail: msg }, 'transport error');
+    logger.error({ event: 'transport_error', err }, 'transport error');
   };
   io.on('error', (err) => {
     logger.error({ event: 'engine_error', err }, 'engine error');
@@ -86,9 +120,7 @@ export function createSocketIOServer(
     // 记录握手来源：用于定位未 register 即断开的匿名连接（IP / Origin / UA / 凭据键名）。
     logger.info(connectionFields(socket), 'socket connected');
 
-    socket.on('register', async (payload: RegisterPayload) => {
-      await runWithLogContext({ userId: socket.data.userId, controllerId: socket.data.controllerId }, async () => {
-      await withSpan('socket.register', { socketId: socket.id, 'messaging.system': 'socketio' }, async () => {
+    onEvent(socket, 'register', async (payload: RegisterPayload) => {
       try {
         const { key, hostname, version } = payload;
 
@@ -117,7 +149,7 @@ export function createSocketIOServer(
             },
             'register rejected',
           );
-          socket.emit('error', withMeta({ code: 'INVALID_KEY', message: 'Key not found' }));
+          socket.emit('error', withTraceMeta({ code: 'INVALID_KEY', message: 'Key not found' }));
           socket.disconnect(true);
           return;
         }
@@ -144,7 +176,7 @@ export function createSocketIOServer(
             },
             'register rejected',
           );
-          socket.emit('error', withMeta({ code: 'INVALID_KEY', message: 'Invalid key' }));
+          socket.emit('error', withTraceMeta({ code: 'INVALID_KEY', message: 'Invalid key' }));
           socket.disconnect(true);
           return;
         }
@@ -164,7 +196,7 @@ export function createSocketIOServer(
             },
             'register rejected',
           );
-          socket.emit('error', withMeta({ code: 'VERSION_MISMATCH', message: 'Version mismatch' }));
+          socket.emit('error', withTraceMeta({ code: 'VERSION_MISMATCH', message: 'Version mismatch' }));
           socket.disconnect(true);
           return;
         }
@@ -182,7 +214,7 @@ export function createSocketIOServer(
             },
             'register rejected',
           );
-          socket.emit('error', withMeta({ code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' }));
+          socket.emit('error', withTraceMeta({ code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' }));
           socket.disconnect(true);
           return;
         }
@@ -235,7 +267,7 @@ export function createSocketIOServer(
 
         // Generate resume token for reconnection after server restart
         const resumeToken = await sessionService.storeResumeToken(keyId);
-        socket.emit('registered', withMeta({ controllerId: controller._id.toString(), resumeToken }));
+        socket.emit('registered', withTraceMeta({ controllerId: controller._id.toString(), resumeToken }));
 
         // 重连对账：下发权威活跃会话与待清理会话，controller 据此收割孤儿进程（内部容错，不影响注册）
         await acpSessionManager.reconcileOnRegister(socket, controller._id.toString());
@@ -249,13 +281,12 @@ export function createSocketIOServer(
           },
           'register error',
         );
-        socket.emit('error', withMeta({ code: 'INVALID_KEY', message: 'Registration failed' }));
+        socket.emit('error', withTraceMeta({ code: 'INVALID_KEY', message: 'Registration failed' }));
         socket.disconnect(true);
       }
-      }, { parent: handshakeTraceparent });
-      });
     });
 
+    // F11 豁免：心跳按「心跳与 watch 不开逐条 span」维持现状（heartbeat.tick 每轮单 span 覆盖扫描侧）
     socket.on('heartbeat', async () => {
       if (!authenticated || !socket.data.keyId) return;
       try {
@@ -271,7 +302,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('unregister', async (payload: { reason: string }) => {
+    onEvent(socket, 'unregister', async (payload: { reason: string }) => {
       if (!authenticated || !socket.data.keyId) return;
 
       try {
@@ -289,7 +320,7 @@ export function createSocketIOServer(
     });
 
     // ACP events
-    socket.on('acp:permission', async (data: {
+    onEvent(socket, 'acp:permission', async (data: {
       requestId: string;
       sessionId: string;
       toolCall: {
@@ -306,14 +337,14 @@ export function createSocketIOServer(
         await permissionManager.handlePermissionRequest(socket, data);
       } catch (error) {
         logger.error({ event: 'acp:permission', err: error, sessionId: data.sessionId }, 'error handling permission request');
-        socket.emit('acp:permission:response', withMeta({
+        socket.emit('acp:permission:response', withTraceMeta({
           requestId: data.requestId,
           outcome: { outcome: 'cancelled' },
         }));
       }
     });
 
-    socket.on('acp:elicitation', async (data: {
+    onEvent(socket, 'acp:elicitation', async (data: {
       requestId: string;
       sessionId: string;
       mode: 'form' | 'url';
@@ -328,14 +359,14 @@ export function createSocketIOServer(
         await elicitationManager.handleElicitationRequest(socket, data);
       } catch (error) {
         logger.error({ event: 'acp:elicitation', err: error, sessionId: data.sessionId }, 'error handling elicitation request');
-        socket.emit('acp:elicitation:response', withMeta({
+        socket.emit('acp:elicitation:response', withTraceMeta({
           requestId: data.requestId,
           action: 'cancel',
         }));
       }
     });
 
-    socket.on('acp:elicitation:complete', async (data: {
+    onEvent(socket, 'acp:elicitation:complete', async (data: {
       sessionId: string;
       elicitationId: string;
     }) => {
@@ -347,7 +378,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:elicitation:resolved', async (data: {
+    onEvent(socket, 'acp:elicitation:resolved', async (data: {
       requestId?: string;
       sessionId: string;
       reason: 'unsupported_mode' | 'timeout' | 'cancelled';
@@ -361,7 +392,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('harness:login:required', async (data: {
+    onEvent(socket, 'harness:login:required', async (data: {
       requestId: string;
       serverType: string;
       trigger: string;
@@ -378,7 +409,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('harness:login:succeeded', async (data: { requestId: string; account?: string }) => {
+    onEvent(socket, 'harness:login:succeeded', async (data: { requestId: string; account?: string }) => {
       if (!authenticated) return;
       try {
         await harnessLoginManager.handleLoginSucceeded(socket, data);
@@ -387,7 +418,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('harness:login:failed', async (data: { requestId: string; reason: 'cancelled' | 'timeout' | 'error'; error?: string }) => {
+    onEvent(socket, 'harness:login:failed', async (data: { requestId: string; reason: 'cancelled' | 'timeout' | 'error'; error?: string }) => {
       if (!authenticated) return;
       try {
         await harnessLoginManager.handleLoginFailed(socket, data);
@@ -396,12 +427,12 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:check:result', async (payload: { requestId: string; servers: Array<{ type: string; available: boolean; version?: string }> }) => {
+    onEvent(socket, 'acp:check:result', async (payload: { requestId: string; servers: Array<{ type: string; available: boolean; version?: string }> }) => {
       if (!authenticated) return;
       acpCapabilityDetector.handleCheckResult(payload.requestId, payload.servers);
     });
 
-    socket.on('acp:probe-options:result', async (payload: {
+    onEvent(socket, 'acp:probe-options:result', async (payload: {
       requestId: string;
       serverType: string;
       success: boolean;
@@ -415,7 +446,7 @@ export function createSocketIOServer(
       await acpOptionsProber.handleProbeResult(socket.data.controllerId, payload);
     });
 
-    socket.on('acp:start:result', async (payload: {
+    onEvent(socket, 'acp:start:result', async (payload: {
       requestId: string;
       sessionId: string;
       success: boolean;
@@ -426,7 +457,7 @@ export function createSocketIOServer(
       // This is handled by the acpSessionManager through promise resolution
     });
 
-    socket.on('acp:resume:result', async (payload: {
+    onEvent(socket, 'acp:resume:result', async (payload: {
       requestId: string;
       sessionId: string;
       success: boolean;
@@ -436,6 +467,7 @@ export function createSocketIOServer(
       // This is handled by the acpSessionManager through promise resolution
     });
 
+    // F11 豁免：按消息高频 chunk 路径不开逐条 span（维持现状）
     socket.on('acp:message', async (payload: { sessionId: string; message: Record<string, unknown> }) => {
       if (!authenticated) return;
       try {
@@ -445,7 +477,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:config-options', async (payload: {
+    onEvent(socket, 'acp:config-options', async (payload: {
       sessionId: string;
       configOptions: Array<Record<string, unknown>>;
     }) => {
@@ -459,7 +491,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:initial-config:result', async (payload: {
+    onEvent(socket, 'acp:initial-config:result', async (payload: {
       sessionId: string;
       modeId?: string;
       modelId?: string;
@@ -475,7 +507,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:protocol-version-mismatch', async (payload: {
+    onEvent(socket, 'acp:protocol-version-mismatch', async (payload: {
       sessionId: string;
       expectedVersion: number;
       agentVersion: number;
@@ -494,7 +526,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:stopped', async (payload: { sessionId: string; reason: string; exitCode?: number }) => {
+    onEvent(socket, 'acp:stopped', async (payload: { sessionId: string; reason: string; exitCode?: number }) => {
       if (!authenticated) return;
       try {
         await acpSessionManager.handleControllerStopped(payload.sessionId, payload.reason, payload.exitCode);
@@ -503,7 +535,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:prompt:start', async (payload: { sessionId: string }) => {
+    onEvent(socket, 'acp:prompt:start', async (payload: { sessionId: string }) => {
       if (!authenticated) return;
       try {
         await acpSessionManager.handlePromptStart(payload.sessionId);
@@ -512,7 +544,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:prompt:complete', async (payload: {
+    onEvent(socket, 'acp:prompt:complete', async (payload: {
       sessionId: string;
       stopReason: string;
     }) => {
@@ -524,7 +556,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:list-sessions:result', async (payload: {
+    onEvent(socket, 'acp:list-sessions:result', async (payload: {
       requestId: string;
       success: boolean;
       sessions?: Array<{ sessionId: string; title: string | null; cwd: string; updatedAt: string | null }>;
@@ -544,7 +576,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:delete-history-session:result', async (payload: {
+    onEvent(socket, 'acp:delete-history-session:result', async (payload: {
       requestId: string;
       sessionId: string;
       success: boolean;
@@ -565,7 +597,7 @@ export function createSocketIOServer(
       }
     });
 
-    socket.on('acp:load-session:result', async (payload: {
+    onEvent(socket, 'acp:load-session:result', async (payload: {
       requestId: string;
       success: boolean;
       sessionId?: string;
@@ -589,6 +621,7 @@ export function createSocketIOServer(
       }
     });
 
+    // F11 豁免：历史消息逐条转发（按消息 chunk）不开逐条 span（维持现状）
     socket.on('acp:load-session:message', async (payload: {
       requestId: string;
       direction: 'input' | 'output';
@@ -603,99 +636,100 @@ export function createSocketIOServer(
       });
     });
 
-    socket.on('acp:load-session:complete', async (payload: { requestId: string }) => {
+    onEvent(socket, 'acp:load-session:complete', async (payload: { requestId: string }) => {
       if (!authenticated) return;
       acpSessionSyncService.finalizeAndCacheLoadResult(payload.requestId);
     });
 
     // File system events
-    socket.on('fs:browse:result', async (payload: { requestId: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }) => {
+    onEvent(socket, 'fs:browse:result', async (payload: { requestId: string; entries: Array<{ name: string; path: string; isDirectory: boolean }> }) => {
       if (!authenticated) return;
       await folderBrowserService.handleBrowseResult(payload.requestId, payload.entries);
     });
 
-    socket.on('fs:home:result', async (payload: { requestId: string; path: string }) => {
+    onEvent(socket, 'fs:home:result', async (payload: { requestId: string; path: string }) => {
       if (!authenticated) return;
       await folderBrowserService.handleHomeResult(payload.requestId, payload.path);
     });
 
-    socket.on('git:check:result', async (payload) => {
+    onEvent(socket, 'git:check:result', async (payload) => {
       if (!authenticated) return;
       await gitBrowserService.handleCheckResult(payload.requestId, payload);
     });
 
-    socket.on('git:init:result', async (payload) => {
+    onEvent(socket, 'git:init:result', async (payload) => {
       if (!authenticated) return;
       await gitBrowserService.handleInitResult(payload.requestId, payload);
     });
 
     // Worktree / Git extension result events
-    socket.on('fs:mkdir:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+    onEvent(socket, 'fs:mkdir:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await fsMkdirService.handleMkdirResult(payload.requestId, payload);
     });
 
-    socket.on('git:worktree:add:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+    onEvent(socket, 'git:worktree:add:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await worktreeService.handleAddResult(payload.requestId, payload);
     });
 
-    socket.on('git:worktree:remove:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+    onEvent(socket, 'git:worktree:remove:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await worktreeService.handleRemoveResult(payload.requestId, payload);
     });
 
-    socket.on('git:status:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+    onEvent(socket, 'git:status:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await worktreeService.handleStatusResult(payload.requestId, payload);
     });
 
-    socket.on('git:commit:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+    onEvent(socket, 'git:commit:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await worktreeService.handleCommitResult(payload.requestId, payload);
     });
 
-    socket.on('git:worktree:list:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+    onEvent(socket, 'git:worktree:list:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await worktreeService.handleListResult(payload.requestId, payload);
     });
 
-    socket.on('fs:remove-dir:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+    onEvent(socket, 'fs:remove-dir:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await worktreeService.handleRemoveDirResult(payload.requestId, payload);
     });
 
-    socket.on('error', (err) => {
+    onEvent(socket, 'error', (err) => {
       logger.error({ event: 'socket_error', socketId: socket.id, keyId: socket.data.keyId, err }, 'error on connection');
     })
 
-    socket.on('connect_error', (err) => {
+    onEvent(socket, 'connect_error', (err) => {
       logger.error({ event: 'connect_error', socketId: socket.id, err }, 'connection error');
     });
 
     // Port Forward events (event names kept unchanged for backward compatibility)
-    socket.on('port-forward:created', async (payload: { tunnelId: string; success: boolean; error?: string }) => {
+    onEvent(socket, 'port-forward:created', async (payload: { tunnelId: string; success: boolean; error?: string }) => {
       if (!authenticated) return;
       gatewayRelayService.handleTunnelCreated(payload.tunnelId, payload.success, payload.error);
     });
 
+    // F11 豁免：按分片数据通道（base64 TCP 分片）不开逐条 span（维持现状）
     socket.on('port-forward:data', async (payload: { tunnelId: string; data: string }) => {
       if (!authenticated) return;
       const buffer = Buffer.from(payload.data, 'base64');
       await gatewayRelayService.handleTunnelData(payload.tunnelId, buffer);
     });
 
-    socket.on('port-forward:close', async (payload: { tunnelId: string }) => {
+    onEvent(socket, 'port-forward:close', async (payload: { tunnelId: string }) => {
       if (!authenticated) return;
       gatewayRelayService.handleTunnelClose(payload.tunnelId);
     });
 
-    socket.on('port-forward:error', async (payload: { tunnelId: string; error: string }) => {
+    onEvent(socket, 'port-forward:error', async (payload: { tunnelId: string; error: string }) => {
       if (!authenticated) return;
       gatewayRelayService.handleTunnelError(payload.tunnelId, payload.error);
     });
 
-    socket.on('mcp:request', (payload: {
+    onEvent(socket, 'mcp:request', async (payload: {
       requestId: string;
       sessionId: string;
       serverName: string;
@@ -705,13 +739,16 @@ export function createSocketIOServer(
       if (!authenticated || !socket.data.controllerId) return;
       if (!payload || !payload.requestId || !payload.sessionId || !payload.serverName) {
         logger.warn({ event: 'mcp:request', detail: 'invalid payload' }, 'invalid mcp:request payload');
-        socket.emit('mcp:response', withMeta({ requestId: payload?.requestId ?? 'unknown', status: 400, body: { error: 'Invalid payload' } }));
+        socket.emit('mcp:response', withTraceMeta({ requestId: payload?.requestId ?? 'unknown', status: 400, body: { error: 'Invalid payload' } }));
         return;
       }
-      mcpRelayService.handleMcpRequest(socket, payload).catch((err) => {
+      // await 转发：`mcp:relay:request` 发布发生在 socket.mcp:request span 内，`_meta.traceparent` 可续链
+      try {
+        await mcpRelayService.handleMcpRequest(socket, payload);
+      } catch (err) {
         logger.error({ event: 'mcp:request', err, requestId: payload.requestId }, 'mcp:request handler error');
-        socket.emit('mcp:response', withMeta({ requestId: payload.requestId, status: 500, body: { error: 'Internal server error' } }));
-      });
+        socket.emit('mcp:response', withTraceMeta({ requestId: payload.requestId, status: 500, body: { error: 'Internal server error' } }));
+      }
     });
 
     socket.on('disconnect', async (reason: string, description?: unknown) => {

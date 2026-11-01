@@ -1,6 +1,7 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { harnessLoginRegistry, type HarnessLoginRegistry } from './harness-login-registry.js';
@@ -291,7 +292,7 @@ export class HarnessLoginManager {
       this.logger.warn({ socketId: pending.socketId, requestId }, 'cancel target socket not connected (dropped)');
       return;
     }
-    socket.emit(CANCEL_CHANNEL, { requestId: pending.requestId });
+    socket.emit(CANCEL_CHANNEL, withTraceMeta({ requestId: pending.requestId }));
   }
 
   /** controller 断线收敛：发布 resolved(failed) 并清注册表，挂起动作由超时守卫的绝对上限结算。 */

@@ -397,7 +397,17 @@ export class SessionCommandService {
   }
 
   private async handleAcpSetConfigOption(sessionId: string, configId: string, value: string | boolean): Promise<void> {
-    this.logger.info({ sessionId, configId, value: String(value) }, 'setting config option');
+    // 敏感配置值不入日志（B4）：只记类型与长度（参照 harness-login-manager 的 urlLength 口径），
+    // 不论 configId 是否在敏感名单内都不得打印配置值明文。
+    this.logger.info(
+      {
+        sessionId,
+        configId,
+        valueType: typeof value,
+        valueLength: typeof value === 'string' ? value.length : String(value).length,
+      },
+      'setting config option',
+    );
     const result = await acpSessionManager.setConfigOption(sessionId, configId, value);
     if (!result) {
       this.logger.error({ sessionId, configId, op: 'acp:set-config-option' }, 'ACP set-config-option failed');

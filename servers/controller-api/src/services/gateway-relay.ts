@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import type { Server as SocketIOServer, Socket } from 'socket.io';
@@ -116,7 +117,7 @@ export class GatewayRelayService {
       return;
     }
     this.tunnels.set(tunnelId, { controllerId, port, socketId: socket.id });
-    socket.emit('port-forward:create', { tunnelId, port });
+    socket.emit('port-forward:create', withTraceMeta({ tunnelId, port }));
   }
 
   private async handleProxyRequest(payload: {
@@ -181,10 +182,10 @@ export class GatewayRelayService {
       body,
     });
 
-    socket.emit('port-forward:data', {
+    socket.emit('port-forward:data', withTraceMeta({
       tunnelId,
       data: Buffer.from(requestData).toString('base64'),
-    });
+    }));
   }
 
   async handleTunnelData(tunnelId: string, data: Buffer): Promise<void> {

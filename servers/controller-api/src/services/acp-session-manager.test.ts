@@ -653,7 +653,7 @@ describe('ACPSessionManager', () => {
       // Simulate ack response to avoid timeout
       const stopPromise = manager.stopSession('sess-1', 'user_close');
       await vi.waitFor(() => {
-        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true, _meta: {} });
       });
       // Trigger the ack
       socket._trigger('acp:stopped', { sessionId: 'sess-1', reason: 'user_close' });
@@ -682,7 +682,7 @@ describe('ACPSessionManager', () => {
 
       const stopPromise = manager.stopSession('sess-1', 'user_close');
       await vi.waitFor(() => {
-        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true, _meta: {} });
       });
       // 同 socket 上另一个 session 的 acp:stopped 先到 —— 不得结算/消耗 sess-1 的 ack 等待
       socket._trigger('acp:stopped', { sessionId: 'sess-other', reason: 'user_close' });
@@ -724,7 +724,7 @@ describe('ACPSessionManager', () => {
       socket._trigger('acp:start:result', { requestId, sessionId: 'sess-1', success: true });
       await startPromise;
       await vi.waitFor(() => {
-        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true });
+        expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-1', ackRequired: true, _meta: {} });
       });
       socket._trigger('acp:stopped', { sessionId: 'sess-1', reason: 'user_delete' });
       await stopPromise;
@@ -761,7 +761,7 @@ describe('ACPSessionManager', () => {
       socket._trigger('acp:start:result', { requestId: 'req-stale', sessionId: 'sess-ghost', success: true });
 
       // 孤儿收割：通知 controller 停掉该进程
-      expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-ghost' });
+      expect(socket.emit).toHaveBeenCalledWith('acp:stop', { sessionId: 'sess-ghost', _meta: {} });
     });
 
     it('迟到的 failure result → 不收割（进程未拉起）', async () => {
@@ -875,6 +875,7 @@ describe('ACPSessionManager', () => {
       expect(socket.emit).toHaveBeenCalledWith('acp:reconcile', {
         activeSessionIds: ['sess-2'],
         pendingKillSessionIds: ['sess-1'],
+        _meta: {},
       });
       expect(mockRedis.del).toHaveBeenCalledWith('acp:stop:pending:ctrl-1');
     });
@@ -903,6 +904,7 @@ describe('ACPSessionManager', () => {
       expect(socket.emit).toHaveBeenCalledWith('acp:reconcile', {
         activeSessionIds: expect.arrayContaining(['sess-mem', 'sess-db']),
         pendingKillSessionIds: ['sess-kill'],
+        _meta: {},
       });
     });
 
@@ -916,6 +918,7 @@ describe('ACPSessionManager', () => {
       expect(socket.emit).toHaveBeenCalledWith('acp:reconcile', {
         activeSessionIds: [],
         pendingKillSessionIds: [],
+        _meta: {},
       });
       expect(mockRedis.del).not.toHaveBeenCalled();
     });

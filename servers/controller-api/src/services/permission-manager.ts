@@ -1,6 +1,7 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 import { extractTraceparent, withSpan } from '../observability/trace.js';
 
@@ -123,7 +124,7 @@ export class PermissionManager {
     if (this.io) {
       const socket = this.io.sockets.sockets.get(pending.socketId);
       if (socket) {
-        socket.emit('acp:permission:response', { requestId, outcome });
+        socket.emit('acp:permission:response', withTraceMeta({ requestId, outcome }));
       }
     }
   }
@@ -137,10 +138,10 @@ export class PermissionManager {
     if (this.io) {
       const socket = this.io.sockets.sockets.get(pending.socketId);
       if (socket) {
-        socket.emit('acp:permission:response', {
+        socket.emit('acp:permission:response', withTraceMeta({
           requestId,
           outcome: { outcome: 'cancelled' },
-        });
+        }));
       }
     }
   }

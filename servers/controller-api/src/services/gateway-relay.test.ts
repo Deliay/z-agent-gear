@@ -272,6 +272,7 @@ describe('GatewayRelayService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('port-forward:create', {
         tunnelId: 'ctrl-1:8080:mock-uuid',
         port: 8080,
+        _meta: {},
       });
       expect((service as any).tunnels.has('ctrl-1:8080:mock-uuid')).toBe(true);
     });

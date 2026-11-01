@@ -1,4 +1,5 @@
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
@@ -38,7 +39,7 @@ export class FolderBrowserService {
       return;
     }
 
-    socket.emit('fs:browse', { requestId, path: path || null });
+    socket.emit('fs:browse', withTraceMeta({ requestId, path: path || null }));
   }
 
   async getHomeDirectory(requestId: string, controllerId: string): Promise<void> {
@@ -63,7 +64,7 @@ export class FolderBrowserService {
       return;
     }
 
-    socket.emit('fs:home', { requestId });
+    socket.emit('fs:home', withTraceMeta({ requestId }));
   }
 
   async handleBrowseResult(requestId: string, entries: Array<{ name: string; path: string; isDirectory: boolean }>): Promise<void> {

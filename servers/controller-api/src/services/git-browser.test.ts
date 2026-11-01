@@ -83,6 +83,7 @@ describe('GitBrowserService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('git:check', {
         requestId: 'req-1',
         path: '/fake/path',
+        _meta: {},
       });
     });
 
@@ -141,6 +142,7 @@ describe('GitBrowserService', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('git:init', {
         requestId: 'req-1',
         path: '/fake/path',
+        _meta: {},
       });
     });
   });

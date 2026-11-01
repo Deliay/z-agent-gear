@@ -217,7 +217,7 @@ describe('HarnessLoginManager', () => {
       await manager.handleLoginRequired(socket as never, VALID_REQUIRED as never);
       manager.handleCancel({ requestId: 'req-1' });
 
-      expect(socket.emit).toHaveBeenCalledWith('harness:login:cancel', { requestId: 'req-1' });
+      expect(socket.emit).toHaveBeenCalledWith('harness:login:cancel', { requestId: 'req-1', _meta: {} });
       // 取消不自行清注册表：等 controller 上抛 failed(cancelled) 收敛
       expect(registry.pendingFor('ctrl-1')?.requestId).toBe('req-1');
     });

@@ -1,4 +1,5 @@
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
@@ -25,7 +26,7 @@ export class WorktreeService {
     if (!socketId) { this.logger.error({ controllerId, event }, 'controller offline'); return; }
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) { this.logger.error({ controllerId, socketId, event }, 'socket not found'); return; }
-    socket.emit(event, payload);
+    socket.emit(event, withTraceMeta(payload));
   }
 
   async handleAdd(

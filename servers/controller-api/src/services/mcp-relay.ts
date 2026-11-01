@@ -2,7 +2,9 @@ import type { Redis } from 'ioredis';
 import type { Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { acpSessionManager } from './acp-session-manager.js';
 
 const RELAY_REQUEST_CHANNEL = 'mcp:relay:request';
@@ -48,7 +50,7 @@ export class McpRelayService {
     );
     if (!controllerId || !acpSessionManager.sessionBelongsToController(sessionId, controllerId)) {
       this.logger.warn({ requestId, sessionId, controllerId: controllerId ?? null }, 'mcp:request -> 404 (session not owned by controller)');
-      socket.emit('mcp:response', { requestId, status: 404, body: {} });
+      socket.emit('mcp:response', withTraceMeta({ requestId, status: 404, body: {} }));
       return;
     }
 
@@ -64,7 +66,7 @@ export class McpRelayService {
       clearTimeout(pending.timeout);
       subscriber.off('message', onMessage);
       subscriber.disconnect();
-      pending.socket.emit('mcp:response', { requestId, status, body: {} });
+      pending.socket.emit('mcp:response', withTraceMeta({ requestId, status, body: {} }));
     };
 
     const onMessage = (channel: string, message: string): void => {
@@ -76,15 +78,35 @@ export class McpRelayService {
       subscriber.off('message', onMessage);
       subscriber.disconnect();
       try {
-        const parsed = JSON.parse(message) as { requestId?: string; status?: number; body?: unknown };
-        this.logger.info({ requestId, status: parsed.status ?? 200 }, 'mcp:request response from agent-api');
-        pending.socket.emit('mcp:response', {
-          requestId: parsed.requestId ?? requestId,
-          status: parsed.status ?? 200,
-          body: parsed.body ?? {},
-        });
-      } catch {
-        pending.socket.emit('mcp:response', { requestId, status: 502, body: {} });
+        const parsed = JSON.parse(message) as {
+          requestId?: string;
+          status?: number;
+          body?: unknown;
+          _meta?: { traceparent?: string };
+        };
+        // 回程链路（A4）：提取报文 `_meta.traceparent` 作为本 handle span 的 parent（缺失/非法容错）
+        const parent = extractTraceparent(parsed._meta);
+        withSpan(
+          'mcp:relay:response handle',
+          {
+            'messaging.system': 'redis',
+            'messaging.destination.name': channel,
+            requestId: parsed.requestId ?? requestId,
+          },
+          () => {
+            this.logger.info({ requestId, status: parsed.status ?? 200 }, 'mcp:request response from agent-api');
+            pending.socket.emit('mcp:response', withTraceMeta({
+              requestId: parsed.requestId ?? requestId,
+              status: parsed.status ?? 200,
+              body: parsed.body ?? {},
+            }));
+          },
+          { parent },
+        );
+      } catch (err) {
+        // 502 曾静默无来源：补记错误对象（A4），错误一律进 err 字段
+        this.logger.error({ err, requestId, channel }, 'failed to handle mcp:relay:response');
+        pending.socket.emit('mcp:response', withTraceMeta({ requestId, status: 502, body: {} }));
       }
     };
 
@@ -114,7 +136,7 @@ export class McpRelayService {
         this.pending.delete(requestId);
         clearTimeout(pending.timeout);
         pending.subscriber.disconnect();
-        pending.socket.emit('mcp:response', { requestId, status: 503, body: {} });
+        pending.socket.emit('mcp:response', withTraceMeta({ requestId, status: 503, body: {} }));
       }
     }
   }

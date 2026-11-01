@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { McpServer } from '../models/mcp-server.js';
 import { McpProxyKey } from '../models/mcp-proxy-key.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { withSpan } from '../observability/trace.js';
 
 const OWNER_TTL_SECONDS = 45;
@@ -99,7 +100,7 @@ export class McpProxyRegistry {
         );
 
         if (!server) {
-          socket.emit('proxy:error', { code: 'PROXY_NOT_FOUND', message: 'Server not found' });
+          socket.emit('proxy:error', withTraceMeta({ code: 'PROXY_NOT_FOUND', message: 'Server not found' }));
           socket.disconnect(true);
           return;
         }
@@ -112,7 +113,7 @@ export class McpProxyRegistry {
         });
 
         await this.setOwner(serverId);
-        socket.emit('proxy:registered', { proxyId, serverId });
+        socket.emit('proxy:registered', withTraceMeta({ proxyId, serverId }));
       });
 
       socket.on('proxy:heartbeat', async (data: { proxyId: string }) => {
@@ -161,7 +162,7 @@ export class McpProxyRegistry {
       }, 30000);
 
       this.pendingRequests.set(requestId, { proxyId, resolve, reject, timeout });
-      conn.socket.emit('proxy:request', { requestId, request });
+      conn.socket.emit('proxy:request', withTraceMeta({ requestId, request }));
     });
   }
 

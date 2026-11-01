@@ -1,5 +1,6 @@
 import type { Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 
 interface SessionInfo {
@@ -88,7 +89,7 @@ export class AcpSessionSyncService {
         controllerSocket,
       });
 
-      controllerSocket.emit('acp:list-sessions', { requestId, serverType, cwd });
+      controllerSocket.emit('acp:list-sessions', withTraceMeta({ requestId, serverType, cwd }));
     });
   }
 
@@ -114,7 +115,7 @@ export class AcpSessionSyncService {
         controllerSocket,
       });
 
-      controllerSocket.emit('acp:load-session', { requestId, serverType, sessionId: acpSessionId, cwd });
+      controllerSocket.emit('acp:load-session', withTraceMeta({ requestId, serverType, sessionId: acpSessionId, cwd }));
     });
   }
 
@@ -137,7 +138,7 @@ export class AcpSessionSyncService {
         controllerSocket,
       });
 
-      controllerSocket.emit('acp:delete-history-session', { requestId, serverType, sessionId, externalSessionId, cwd });
+      controllerSocket.emit('acp:delete-history-session', withTraceMeta({ requestId, serverType, sessionId, externalSessionId, cwd }));
     });
   }
 

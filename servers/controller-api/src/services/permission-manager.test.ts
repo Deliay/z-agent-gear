@@ -109,6 +109,7 @@ describe('PermissionManager', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:permission:response', {
         requestId: 'req-1',
         outcome: { outcome: 'selected', optionId: 'opt-1' },
+        _meta: {},
       });
       expect(manager.getPendingRequestCount()).toBe(0);
     });
@@ -144,6 +145,7 @@ describe('PermissionManager', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:permission:response', {
         requestId: 'req-1',
         outcome: { outcome: 'cancelled' },
+        _meta: {},
       });
       expect(manager.getPendingRequestCount()).toBe(0);
     });

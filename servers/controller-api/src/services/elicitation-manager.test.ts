@@ -116,6 +116,7 @@ describe('ElicitationManager', () => {
         requestId: 'elic-1',
         action: 'accept',
         content: { strategy: 'balanced' },
+        _meta: {},
       });
       expect(manager.getPendingRequestCount()).toBe(0);
     });
@@ -145,6 +146,7 @@ describe('ElicitationManager', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:response', {
         requestId: 'elic-1',
         action: 'cancel',
+        _meta: {},
       });
       expect(manager.getPendingRequestCount()).toBe(0);
     });
@@ -189,6 +191,7 @@ describe('ElicitationManager', () => {
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:response', {
         requestId: 'elic-1',
         action: 'cancel',
+        _meta: {},
       });
       expect(manager.getPendingRequestCount()).toBe(0);
     });

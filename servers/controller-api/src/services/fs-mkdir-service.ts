@@ -1,4 +1,5 @@
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
@@ -25,7 +26,7 @@ export class FsMkdirService {
     if (!socketId) { this.logger.error({ controllerId, requestId, op: 'fs:mkdir' }, 'controller offline'); return; }
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) { this.logger.error({ controllerId, socketId, requestId, op: 'fs:mkdir' }, 'socket not found'); return; }
-    socket.emit('fs:mkdir', { requestId, parentPath, folderName });
+    socket.emit('fs:mkdir', withTraceMeta({ requestId, parentPath, folderName }));
   }
 
   async handleMkdirResult(requestId: string, result: Record<string, unknown>): Promise<void> {

@@ -132,7 +132,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
       });
 
       // 注册成功后下发重连对账事件（activeSessionIds/pendingKillSessionIds）
@@ -140,6 +140,7 @@ describe('SocketIO Service', () => {
         expect(mockSocket.emit).toHaveBeenCalledWith('acp:reconcile', {
           activeSessionIds: [],
           pendingKillSessionIds: [],
+          _meta: {},
         });
       });
     });
@@ -175,7 +176,7 @@ describe('SocketIO Service', () => {
       });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
       });
 
       const upsertCall = vi.mocked(Controller.findOneAndUpdate).mock.calls[0]!;
@@ -207,7 +208,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
       });
 
       const upsertCall = vi.mocked(Controller.findOneAndUpdate).mock.calls[0]!;
@@ -230,7 +231,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'invalid-key', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'INVALID_KEY', message: 'Key not found' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'INVALID_KEY', message: 'Key not found', _meta: {} });
         expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
       });
     });
@@ -256,7 +257,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'wrong-key', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'INVALID_KEY', message: 'Invalid key' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'INVALID_KEY', message: 'Invalid key', _meta: {} });
         expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
       });
     });
@@ -282,7 +283,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.5.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch', _meta: {} });
         expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
       });
     });
@@ -313,9 +314,9 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
       });
-      expect(mockSocket.emit).not.toHaveBeenCalledWith('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch' });
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch', _meta: {} });
     });
 
     it('should reject with KEY_ALREADY_ONLINE when session exists', async () => {
@@ -340,7 +341,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session', _meta: {} });
         expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
       });
     });
@@ -374,7 +375,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
       });
 
       mockSocket._trigger('heartbeat');
@@ -434,7 +435,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
       });
 
       mockSocket._trigger('unregister', { reason: 'user_detach' });
@@ -537,7 +538,7 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token' });
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
       });
 
       mockSocket._trigger('disconnect');
@@ -655,5 +656,34 @@ describe('SocketIO Service - initial-config result', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(mockRedis.publish).not.toHaveBeenCalledWith('session:status', expect.anything());
+  });
+});
+
+describe('SocketIO Service - transport_error 日志（B1）', () => {
+  it('错误对象进 err 字段（不把 err.message 压平进 detail 丢 Error 结构）', () => {
+    const testLog = createTestLogger('socketio');
+    const engineHandlers: Record<string, (...args: unknown[]) => void> = {};
+    const mockIO = {
+      on: vi.fn(),
+      engine: {
+        on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+          engineHandlers[event] = handler;
+        }),
+      },
+    };
+
+    createSocketIOServer(mockIO as never, testLog.logger);
+
+    expect(engineHandlers.error).toBeDefined();
+    engineHandlers.error!(new Error('transport boom'));
+
+    const rec = testLog.records.find((r) => r.event === 'transport_error');
+    expect(rec?.level).toBe('error');
+    expect(rec?.msg).toBe('transport error');
+    const err = rec?.err as { type?: string; message?: string; stack?: string };
+    expect(err?.type).toBe('Error');
+    expect(err?.message).toBe('transport boom');
+    expect(typeof err?.stack).toBe('string');
+    expect(rec).not.toHaveProperty('detail');
   });
 });

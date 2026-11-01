@@ -1,4 +1,5 @@
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
@@ -38,7 +39,7 @@ export class GitBrowserService {
     if (!socketId) { this.logger.error({ controllerId, requestId, op: 'git:check' }, 'controller offline'); return; }
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) { this.logger.error({ controllerId, socketId, requestId, op: 'git:check' }, 'socket not found'); return; }
-    socket.emit('git:check', { requestId, path });
+    socket.emit('git:check', withTraceMeta({ requestId, path }));
   }
 
   async init(requestId: string, controllerId: string, path: string): Promise<void> {
@@ -50,7 +51,7 @@ export class GitBrowserService {
     if (!socketId) { this.logger.error({ controllerId, requestId, op: 'git:init' }, 'controller offline'); return; }
     const socket = this.io.sockets.sockets.get(socketId);
     if (!socket) { this.logger.error({ controllerId, socketId, requestId, op: 'git:init' }, 'socket not found'); return; }
-    socket.emit('git:init', { requestId, path });
+    socket.emit('git:init', withTraceMeta({ requestId, path }));
   }
 
   async handleCheckResult(requestId: string, result: GitCheckResult): Promise<void> {
