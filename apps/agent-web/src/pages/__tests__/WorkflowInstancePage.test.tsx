@@ -26,6 +26,21 @@ vi.mock('@/components/workflow/SessionSidePanel', () => ({
   default: () => null,
 }));
 
+vi.mock('@/components/workflow/WorkflowGraphView', () => ({
+  default: ({ onOpenDetail }: { onOpenDetail?: (target: { type: 'node'; nodeId: string }) => void }) => (
+    <div data-testid="workflow-graph-view">
+      <button type="button" onClick={() => onOpenDetail?.({ type: 'node', nodeId: 'n1' })}>
+        图表节点
+      </button>
+    </div>
+  ),
+}));
+
+vi.mock('@/components/workflow/NodeDetailDrawer', () => ({
+  default: ({ open, target }: { open: boolean; target: unknown }) =>
+    open ? <div data-testid="node-detail-drawer">{JSON.stringify(target)}</div> : null,
+}));
+
 vi.mock('@/components/MobileBackButton', () => ({
   default: () => null,
 }));
@@ -298,6 +313,47 @@ describe('WorkflowInstancePage 关联 Pull Request 与追加提示词', () => {
     fireEvent.click(screen.getByRole('button', { name: /追加提示词（1）/ }));
     expect(screen.getByText('github-pr')).toBeInTheDocument();
     expect(screen.getByText(/指引内容/)).toBeInTheDocument();
+  });
+
+  it('T-UI4-GV1 图表模式隐藏右栏资源树，画布占满视图区', () => {
+    localStorage.setItem('workflow-view-mode', 'graph');
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+
+    const { container } = render(<WorkflowInstancePage />);
+
+    expect(screen.getByTestId('workflow-graph-view')).toBeInTheDocument();
+    expect(screen.queryByTestId('blackboard-panel')).not.toBeInTheDocument();
+    expect(screen.queryByText(/关联 Pull Request/)).not.toBeInTheDocument();
+    const outer = container.firstElementChild as HTMLElement;
+    expect(outer.className).toContain('h-full');
+    expect(outer.className).toContain('flex-col');
+  });
+
+  it('T-UI4-GV2 图表节点点击打开节点详情抽屉', () => {
+    localStorage.setItem('workflow-view-mode', 'graph');
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByText('图表节点'));
+    expect(screen.getByTestId('node-detail-drawer')).toHaveTextContent('"nodeId":"n1"');
+  });
+
+  it('T-UI4-GV3 列表视图保留右栏资源树（零变化）', () => {
+    localStorage.setItem('workflow-view-mode', 'list');
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    expect(screen.getByTestId('blackboard-panel')).toBeInTheDocument();
+    expect(screen.getByText(/关联 Pull Request/)).toBeInTheDocument();
+  });
+
+  it('T-UI4-GV4 列表视图节点「详情」入口同样打开抽屉（功能点 6）', () => {
+    localStorage.setItem('workflow-view-mode', 'list');
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '评审 详情' }));
+    expect(screen.getByTestId('node-detail-drawer')).toHaveTextContent('"nodeId":"n1"');
   });
 
   it('空态展示暂无关联与暂无', () => {

@@ -49,8 +49,10 @@ vi.mock('../../stores/auth', () => ({
   useAuth: () => ({ user: { name: 'tester' }, loading: false }),
 }));
 
+const { mockIsMobile } = vi.hoisted(() => ({ mockIsMobile: { value: false } }));
+
 vi.mock('../../hooks/useIsMobile', () => ({
-  useIsMobile: () => false,
+  useIsMobile: () => mockIsMobile.value,
 }));
 
 vi.mock('../../components/Sidebar', () => ({
@@ -116,6 +118,27 @@ function homeWithCloudHost(
 describe('MainLayout 首页聚合查询', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    mockIsMobile.value = false;
+  });
+
+  it('T-UI4-RES6 桌面端挂载侧边栏拖拽热区，宽度走 CSS 变量（默认 20rem/320px）', () => {
+    mockUseQuery.mockReturnValue({ data: homeData, loading: false, error: undefined, refetch: mockRefetch });
+    const { container } = render(<MainLayout />);
+
+    expect(screen.getByTestId('sidebar-resizer')).toBeInTheDocument();
+    const grid = container.querySelector('.grid') as HTMLElement;
+    expect(grid.className).toContain('grid-cols-[var(--sidebar-width,20rem)_minmax(0,1fr)]');
+    expect(grid.style.getPropertyValue('--sidebar-width')).toBe('320px');
+  });
+
+  it('T-UI4-RES7 移动端不渲染拖拽热区（移动布局不回归）', () => {
+    mockIsMobile.value = true;
+    mockUseQuery.mockReturnValue({ data: homeData, loading: false, error: undefined, refetch: mockRefetch });
+    render(<MainLayout />);
+
+    expect(screen.queryByTestId('sidebar-resizer')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sidebar')).toBeInTheDocument();
   });
 
   it('仅挂载一次 HOME_OVERVIEW 查询且 pollInterval 为 15000（T-F1）', () => {
