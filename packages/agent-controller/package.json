@@ -1,6 +1,7 @@
 {
   "name": "agent-gear",
   "version": "2.13.0",
+  "packageManager": "pnpm@12.16.1",
   "description": "ZeroAsh Agent Gear - Agent controller daemon",
   "repository": {
     "type": "git",
@@ -44,5 +45,9 @@
     "tsx": "^4.22.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.6"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
   }
 }

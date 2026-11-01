@@ -46,7 +46,7 @@ aspire describe controller-api
 API_URL=http://localhost:10001/graphql \
 ADMIN_API_URL=http://localhost:10003/graphql \
 CONTROLLER_API_URL=http://localhost:35273 \
-npm test
+pnpm test
 ```
 
 > admin 套件（`src/admin-api/**`）与 agent-api scope 回归需要 admin-api 就绪：`aspire start && aspire wait admin-api agent-api && aspire wait controller-api`。
@@ -59,9 +59,9 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（49 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
-| `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
-| `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
+| `pnpm test` | 运行全部常规测试文件（49 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `pnpm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
+| `pnpm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
 > **注意**: `acp-real-*` 测试会启动真实的 agent-controller 进程，共享 PID 文件 `/tmp/agent-controller.pid` 和端口 34519，因此必须串行执行，且需要干净数据库状态。
 

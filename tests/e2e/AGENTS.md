@@ -46,7 +46,7 @@ ADMIN_API_URL=http://localhost:10003/graphql \
 ADMIN_WEB_URL=http://localhost:<admin-web-port> \
 API_URL=http://localhost:10001/graphql \
 CONTROLLER_API_URL=http://localhost:35273 \
-npx playwright test
+pnpm exec playwright test
 ```
 
 > admin 套件（`admin-*.spec.ts`）需要 admin-web 与 admin-api：`aspire start && aspire wait admin-web admin-api agent-api`。
@@ -77,7 +77,7 @@ npx playwright test
 
 ```bash
 ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-uri> \
-  npx playwright test admin-*.spec.ts --workers=1
+  pnpm exec playwright test admin-*.spec.ts --workers=1
 ```
 
 > 注意: 所有端口由 Aspire 动态分配，请在 `aspire describe` 输出中查看实际端口。

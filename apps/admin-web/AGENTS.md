@@ -12,14 +12,14 @@
 ## Dev Commands
 
 ```bash
-npm install
-npm run build    # tsc -b && vite build
-npm run lint
-npm test
-npm run preview
+pnpm install
+pnpm run build    # tsc -b && vite build
+pnpm run lint
+pnpm test
+pnpm run preview
 ```
 
-本项目由 Aspire 编排启动，无需单独运行 `npm run dev`；单独开发时 Vite dev 代理 `/graphql` → `http://localhost:10003`。
+本项目由 Aspire 编排启动，无需单独运行 `pnpm run dev`；单独开发时 Vite dev 代理 `/graphql` → `http://localhost:10003`。
 
 ## 认证与路由
 

@@ -10,6 +10,13 @@ fail() { FAIL=$((FAIL + 1)); echo "FAIL - $*" >&2; }
 assert_eq() { if [ "$1" = "$2" ]; then pass "$3"; else fail "$3 (expected=$1 actual=$2)"; fi; }
 assert_contains() { if [ -f "$1" ] && grep -qF -- "$2" "$1"; then pass "$3"; else fail "$3 (missing '$2' in $1)"; fi; }
 count_lines() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
+count_agent_gear_updates() {
+  if [ -f "$STUB_DIR/pnpm_invocations" ]; then
+    grep -c 'add -g agent-gear' "$STUB_DIR/pnpm_invocations" 2>/dev/null || true
+  else
+    echo 0
+  fi
+}
 
 write_stubs() {
   mkdir -p "$STUB_DIR"
@@ -56,6 +63,13 @@ STUB
 set -u
 echo "$*" >> "$STUB_DIR/pnpm_invocations"
 if [ "${1:-}" = "--version" ]; then echo "9.15.9"; exit 0; fi
+if [ "${1:-}" = "config" ] && [ "${2:-}" = "get" ]; then
+  echo "https://npm.internal.fffdan.com/repository/npm-proxy/"
+  exit 0
+fi
+case "${STUB_PNPM_MODE:-ok}" in
+  fail) case "$*" in *"add -g agent-gear"*) exit 1 ;; esac ;;
+esac
 exit 0
 STUB
   cat > "$STUB_DIR/agent-gear" <<'STUB'
@@ -87,6 +101,8 @@ setup_env() {
   RUN_TMP="$TEST_DIR/run"
   mkdir -p "$STUB_DIR" "$RUN_TMP"
   write_stubs
+  : > "$STUB_DIR/npm_installs"
+  : > "$STUB_DIR/pnpm_invocations"
   echo "2.13.0" > "$STUB_DIR/version"
   # profile.d 落到临时目录（测试非 root，不写 /etc）；默认假定 pnpm 已装（T-EP13 显式移除）
   mkdir -p "$TEST_DIR/etc/profile.d"
@@ -98,8 +114,9 @@ setup_env() {
   export STUB_RUN_FOREVER=0
   export STUB_NPM_MODE=ok
   export STUB_NPM_FAIL_PNPM=0
+  export STUB_PNPM_MODE=ok
   export STUB_AGENT_EXITS="42"
-  unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS STUB_RUN_FOREVER
+  unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS STUB_RUN_FOREVER STUB_PNPM_MODE ZAG_PNPM_CMD
 }
 
 teardown_env() {
@@ -135,19 +152,19 @@ export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP1 42 后入口 0 退出"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP1 agent-gear 启动 2 次"
-assert_eq 2 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP1 启动自更新 1 + 每轮自更新 1"
+assert_eq 2 "$(count_agent_gear_updates)" "T-EP1 启动自更新 1 + 每轮自更新 1"
 assert_contains "$TEST_DIR/stdout.log" "self-update then restarting" "T-EP1 日志记录自更新后重启"
 teardown_env
 
 echo "== T-EP2: 自更新失败被容忍，仍保活重启 =="
 setup_env
 export STUB_AGENT_EXITS="1 42"
-export STUB_NPM_MODE=fail
+export STUB_PNPM_MODE=fail
 export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP2 更新失败不阻断保活"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP2 仍然重启"
-assert_eq 2 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP2 启动与每轮各尝试一次"
+assert_eq 2 "$(count_agent_gear_updates)" "T-EP2 启动与每轮各尝试一次"
 assert_contains "$TEST_DIR/stdout.log" "WARN: agent-gear update failed" "T-EP2 日志 WARN 容忍失败"
 teardown_env
 
@@ -158,7 +175,7 @@ export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP3 收敛退出 0"
 assert_eq 3 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP3 启动 3 次"
-assert_eq 3 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP3 每轮均自更新"
+assert_eq 3 "$(count_agent_gear_updates)" "T-EP3 每轮均自更新"
 teardown_env
 
 echo "== T-EP4: skip 开关跳过全部自更新但仍重启 =="
@@ -168,7 +185,7 @@ export ZAG_SKIP_AGENT_GEAR_UPDATE=1
 export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP4 skip 后仍收敛 0"
-assert_eq 0 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP4 不执行任何 npm 安装"
+assert_eq 0 "$(count_agent_gear_updates)" "T-EP4 不执行任何 agent-gear 自更新"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP4 仍然重启"
 assert_contains "$TEST_DIR/stdout.log" "skipping agent-gear update" "T-EP4 日志说明跳过"
 teardown_env
@@ -180,7 +197,7 @@ export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP5 42 后收敛 0"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP5 非零退出后重启"
-assert_eq 2 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP5 重启前自更新"
+assert_eq 2 "$(count_agent_gear_updates)" "T-EP5 重启前自更新"
 teardown_env
 
 echo "== T-EP6: 正常退出 0（非 42）→ 自更新并重启 =="
@@ -190,7 +207,7 @@ export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP6 42 后收敛 0"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP6 正常退出也重启"
-assert_eq 2 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP6 重启前自更新"
+assert_eq 2 "$(count_agent_gear_updates)" "T-EP6 重启前自更新"
 teardown_env
 
 signal_case() {
@@ -216,7 +233,7 @@ signal_case() {
   assert_eq 0 "$rc" "T-EP7($signal) 入口退出码 0"
   assert_contains "$STUB_DIR/signals" "TERM" "T-EP7($signal) setpriv 链下子进程收到信号"
   assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP7($signal) 销毁后不重启"
-  assert_eq 1 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP7($signal) 不触发每轮自更新"
+  assert_eq 1 "$(count_agent_gear_updates)" "T-EP7($signal) 不触发每轮自更新"
   teardown_env
 }
 echo "== T-EP7: 信号转发 =="
@@ -242,7 +259,7 @@ export STUB_AGENT_EXITS="42"
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP9 入口 0 退出"
 assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP9 不重启"
-assert_eq 1 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP9 仅启动自更新 1 次"
+assert_eq 1 "$(count_agent_gear_updates)" "T-EP9 仅启动自更新 1 次"
 assert_contains "$TEST_DIR/stdout.log" "server shutdown; stopping keepalive" "T-EP9 日志说明服务端终止"
 teardown_env
 
@@ -253,7 +270,7 @@ export ZAG_KEEPALIVE_BACKOFF_MS=40
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP10 收敛退出 0"
 assert_eq 4 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP10 启动 4 次"
-assert_eq 4 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP10 每轮自更新"
+assert_eq 4 "$(count_agent_gear_updates)" "T-EP10 每轮自更新"
 t1=$(sed -n '2p' "$STUB_DIR/agent_starts" | awk '{print $2}')
 t2=$(sed -n '3p' "$STUB_DIR/agent_starts" | awk '{print $2}')
 t3=$(sed -n '4p' "$STUB_DIR/agent_starts" | awk '{print $2}')
@@ -338,7 +355,7 @@ assert_contains "$PNPM_PROFILE_PATH" 'export PATH="$PNPM_HOME:$PATH"' "T-EP13 pr
 teardown_env
 
 setup_env
-rm -f "$STUB_DIR/pnpm"
+export ZAG_PNPM_CMD=pnpm-missing
 export STUB_AGENT_EXITS="42"
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP13 未装 pnpm 时入口正常退出"
@@ -352,7 +369,7 @@ teardown_env
 
 echo "== T-EP14: pnpm 预装失败仅告警、保活链路正常 =="
 setup_env
-rm -f "$STUB_DIR/pnpm"
+export ZAG_PNPM_CMD=pnpm-missing
 export STUB_NPM_FAIL_PNPM=1
 export STUB_AGENT_EXITS="1 42"
 export ZAG_KEEPALIVE_BACKOFF_MS=10
@@ -360,11 +377,11 @@ rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP14 pnpm 失败不阻断保活"
 assert_contains "$TEST_DIR/stdout.log" "WARN: pnpm install failed" "T-EP14 日志 WARN 容忍 pnpm 失败"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP14 agent-gear 照常拉起并重启"
-assert_eq 2 "$(grep -c 'install -g agent-gear' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP14 agent-gear 自更新不受影响"
+assert_contains "$TEST_DIR/stdout.log" "updating agent-gear via pnpm" "T-EP14 agent-gear 自更新仍按轮尝试"
 teardown_env
 
 setup_env
-rm -f "$STUB_DIR/pnpm"
+export ZAG_PNPM_CMD=pnpm-missing
 export STUB_NPM_FAIL_PNPM=1
 export ZAG_SKIP_AGENT_GEAR_UPDATE=1
 export STUB_AGENT_EXITS="42"
