@@ -1,11 +1,13 @@
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { toast } from 'sonner';
 import { useAuth } from '../stores/auth';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useUserEventStream } from '../hooks/useUserEventStream';
 import Sidebar from '../components/Sidebar';
+import SidebarResizer from '../components/SidebarResizer';
+import { readSidebarWidth } from '../lib/sidebar-width';
 import { Button } from '../components/ui/button';
 import { HarnessLoginDialog } from '../components/harness/HarnessLoginDialog';
 import {
@@ -31,6 +33,8 @@ export default function MainLayout() {
   const isMobile = useIsMobile();
   const location = useLocation();
   const navigate = useNavigate();
+  // 侧边栏宽度：本地记忆（localStorage['sidebar-width']），拖动分界线实时更新
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
 
   // 工作区上下文：myWorkspaces/myTenants 同步 + 失效回退（Phase 8）
   useWorkspaceContextSync();
@@ -117,12 +121,16 @@ export default function MainLayout() {
 
   let layout: ReactNode;
 
-  // Desktop: keep existing two-column layout (zero changes)
+  // Desktop: 两列布局，侧边栏宽度走 CSS 变量并由 SidebarResizer 拖拽调节
   if (!isMobile) {
     layout = (
-      <div className="grid h-screen grid-cols-[280px_1fr]">
+      <div
+        className="relative grid h-screen grid-cols-[var(--sidebar-width,20rem)_minmax(0,1fr)]"
+        style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
+      >
         <Sidebar name={user?.name ?? ''} />
-        <main className="overflow-auto">
+        <SidebarResizer width={sidebarWidth} onWidthChange={setSidebarWidth} />
+        <main className="min-w-0 overflow-auto">
           <Outlet />
         </main>
       </div>
