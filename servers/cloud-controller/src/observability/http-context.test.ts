@@ -97,15 +97,30 @@ describe('T-OBS12 httpContext', () => {
     expect(levels).toEqual(['debug', 'info']);
   });
 
-  it('SSE 只记连接建立与断开各一条', () => {
-    const t = createTestLogger();
-    const mw = httpContext({ logger: t.logger });
-    const res = makeRes();
-    mw(makeReq({ path: '/api/session-stream', url: '/api/session-stream' }), res, () => undefined);
-    res.emit('close');
-    expect(t.records.filter((r) => r.msg === 'sse connected')).toHaveLength(1);
-    expect(t.records.filter((r) => r.msg === 'sse disconnected')).toHaveLength(1);
-    expect(t.records.filter((r) => r.msg === 'request completed')).toHaveLength(0);
+  it('SSE 只记连接建立与断开各一条（真实端点 /api/session/:id/stream 与 /api/user/stream）', () => {
+    for (const path of ['/api/session/sess-1/stream', '/api/user/stream']) {
+      const t = createTestLogger();
+      const mw = httpContext({ logger: t.logger });
+      const res = makeRes();
+      mw(makeReq({ path, url: path }), res, () => undefined);
+      res.emit('close');
+      expect(t.records.filter((r) => r.msg === 'sse connected'), path).toHaveLength(1);
+      expect(t.records.filter((r) => r.msg === 'sse disconnected'), path).toHaveLength(1);
+      expect(t.records.filter((r) => r.msg === 'request completed'), path).toHaveLength(0);
+    }
+  });
+
+  it('非 SSE 路径（含旧 /api/session-stream 字面量）不产生 sse 日志', () => {
+    for (const path of ['/api/session-stream', '/api/session/sess-1/history', '/graphql']) {
+      const t = createTestLogger();
+      const mw = httpContext({ logger: t.logger });
+      const res = makeRes();
+      mw(makeReq({ path, url: path }), res, () => undefined);
+      res.emit('close');
+      expect(t.records.filter((r) => r.msg === 'sse connected'), path).toHaveLength(0);
+      expect(t.records.filter((r) => r.msg === 'sse disconnected'), path).toHaveLength(0);
+      expect(t.records.filter((r) => r.msg === 'request completed'), path).toHaveLength(1);
+    }
   });
 
   it('span 名含方法与路由，5xx 置 ERROR', async () => {

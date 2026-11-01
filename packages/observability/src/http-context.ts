@@ -36,7 +36,10 @@ export function normalizeRequestId(raw: string | undefined): { requestId: string
 }
 
 const HEALTH_PATHS = new Set(['/health', '/healthz', '/readyz', '/livez', '/api/health']);
-const SSE_PATH = '/api/session-stream';
+// SSE 端点（agent-api session-stream.ts）：`/api/session/:id/stream` 与 `/api/user/stream`。
+// routePath 可能是路由模式（`/session/:id/stream`）或完整路径（`/api/session/<id>/stream`），
+// 统一按可选 `/api` 前缀 + `session/<id>|user` + `/stream` 匹配（D8：连接建立/断开各一条日志）。
+const SSE_PATH_RE = /^(?:\/api)?\/(?:session\/[^/]+|user)\/stream\/?$/;
 
 function headerValue(req: HttpContextRequest, name: string): string | undefined {
   const raw = req.headers?.[name];
@@ -61,7 +64,7 @@ export function httpContext(
       const routePath = (Array.isArray(req.route?.path) ? req.route?.path[0] : req.route?.path) ?? req.path ?? req.url ?? '/';
       const name = `${method} ${routePath}`;
       const isHealth = HEALTH_PATHS.has(routePath);
-      const isSse = routePath === SSE_PATH;
+      const isSse = SSE_PATH_RE.test(routePath);
       const attrs: Attributes = {
         'http.request.method': method,
         'url.path': routePath,

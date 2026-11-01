@@ -1,7 +1,7 @@
 // GENERATED FROM packages/observability/src/telemetry.ts — DO NOT EDIT
 
 /**
- * OpenTelemetry SDK 启停（`@opentelemetry/sdk-trace-node` 基线，5 包通用）。
+ * OpenTelemetry SDK 启停（`@opentelemetry/sdk-trace@3.x` 基线，5 包通用）。
  *
  * - **未配置 `OTEL_EXPORTER_OTLP_ENDPOINT`（或 `OTEL_SDK_DISABLED=true`）= 完全不启动**：
  *   不注册 exporter、不开线程、零外发（契约 §7）；
