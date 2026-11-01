@@ -62,7 +62,7 @@ STUB
 #!/usr/bin/env bash
 set -u
 echo "$*" >> "$STUB_DIR/pnpm_invocations"
-if [ "${1:-}" = "--version" ]; then echo "9.15.9"; exit 0; fi
+if [ "${1:-}" = "--version" ]; then echo "12.16.1"; exit 0; fi
 if [ "${1:-}" = "config" ] && [ "${2:-}" = "get" ]; then
   echo "https://npm.internal.fffdan.com/repository/npm-proxy/"
   exit 0
@@ -289,7 +289,7 @@ assert_contains "$STUB_DIR/setpriv_env" "HOME=/home/worker" "T-EP11 HOME"
 assert_contains "$STUB_DIR/setpriv_env" "USER=worker" "T-EP11 USER"
 assert_contains "$STUB_DIR/setpriv_env" "NVM_DIR=/home/worker/.nvm" "T-EP11 NVM_DIR"
 assert_contains "$STUB_DIR/setpriv_env" "PNPM_HOME=/home/worker/.local/share/pnpm" "T-EP11 PNPM_HOME 注入 worker env"
-assert_contains "$STUB_DIR/setpriv_env" "PATH=/home/worker/.nvm/current/bin" "T-EP11 PATH 以 worker nvm 打头"
+assert_contains "$STUB_DIR/setpriv_env" "PATH=/home/worker/.nvm/current/bin:/home/worker/.local/share/pnpm/bin:/home/worker/.local/share/pnpm:" "T-EP11 PATH 以 worker nvm 打头并含 pnpm 全局 bin"
 teardown_env
 echo "== T-EP12: 单行 JSON 日志（T-OBS16） =="
 setup_env
@@ -351,7 +351,7 @@ assert_contains "$STUB_DIR/pnpm_invocations" "--version" "T-EP13 读取已装 pn
 assert_contains "$STUB_DIR/pnpm_invocations" "setup" "T-EP13 执行 pnpm setup 接线交互 shell"
 assert_eq 1 "$(grep -c '^# >>> pnpm >>>$' "$PNPM_PROFILE_PATH" 2>/dev/null || true)" "T-EP13 profile.d 写入标记块"
 assert_contains "$PNPM_PROFILE_PATH" "export PNPM_HOME=\"/home/worker/.local/share/pnpm\"" "T-EP13 profile.d 注入 PNPM_HOME"
-assert_contains "$PNPM_PROFILE_PATH" 'export PATH="$PNPM_HOME:$PATH"' "T-EP13 profile.d 追加 PATH"
+assert_contains "$PNPM_PROFILE_PATH" 'export PATH="$PNPM_HOME/bin:$PATH"' "T-EP13 profile.d 追加 PNPM_HOME/bin 到 PATH"
 teardown_env
 
 setup_env
@@ -359,7 +359,7 @@ export ZAG_PNPM_CMD=pnpm-missing
 export STUB_AGENT_EXITS="42"
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP13 未装 pnpm 时入口正常退出"
-assert_eq 1 "$(grep -c 'install -g pnpm@9.15.9' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP13 缺失时恰好安装一次固定版本 pnpm"
+assert_eq 1 "$(grep -c 'install -g pnpm@12.16.1' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP13 缺失时恰好安装一次固定版本 pnpm"
 # 重跑幂等：标记块不重复追加（重置 stub 计数，避免第二次启动命中第 2 次退出编排）
 rm -f "$STUB_DIR/agent_starts"
 rc=$(run_entrypoint)
@@ -387,7 +387,7 @@ export ZAG_SKIP_AGENT_GEAR_UPDATE=1
 export STUB_AGENT_EXITS="42"
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP14 skip 自更新后仍收敛"
-assert_eq 1 "$(grep -c 'install -g pnpm@9.15.9' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP14 skip 自更新不影响 pnpm 预装尝试"
+assert_eq 1 "$(grep -c 'install -g pnpm@12.16.1' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP14 skip 自更新不影响 pnpm 预装尝试"
 assert_contains "$TEST_DIR/stdout.log" "skipping agent-gear update" "T-EP14 自更新按开关跳过"
 teardown_env
 
