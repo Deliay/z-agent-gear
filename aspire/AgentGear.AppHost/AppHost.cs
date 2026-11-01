@@ -172,7 +172,7 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     });
 
 var internalApiToken = builder.AddParameter("internal-api-token", secret: true, value: SecretOrDefault("internal-api-token"));
-var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zag/worker:latest");
+var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zero-tools/worker:latest");
 var publicWsEndpoint = builder.AddParameter("public-ws-endpoint", value: "localhost:10004");
 // 前台云电脑开关：publish 默认关闭（灰度时置 true）；dev 固定 true 便于联调。
 var harnessEnabled = builder.AddParameter("harness-enabled", value: "false");
