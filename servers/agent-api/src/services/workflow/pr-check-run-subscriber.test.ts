@@ -70,7 +70,6 @@ beforeEach(() => {
   vi.mocked(prHandlerRegistry.findByNode).mockResolvedValue({ _id: 'h1' } as never);
   vi.mocked(captureSnapshot).mockReturnValue(snapshot);
   vi.mocked(syncTodoPanel).mockResolvedValue(undefined);
-  vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 });
 
 describe('PrCheckRunSubscriber.handleMessage', () => {

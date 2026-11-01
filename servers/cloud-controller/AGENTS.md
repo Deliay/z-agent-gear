@@ -86,22 +86,22 @@ src/
 | `WORKLOAD_LOG_MAX_BYTES` | 单条执行日志存储上限（默认 262144，写入前尾部截断） |
 | `K8S_ENABLED` | 是否使用真实 K8s 客户端（默认 `true`；本地/测试设 `false`） |
 | `RUNTIME_CLASS_NAME` | 容器 runtimeClass（默认 `sysbox-runc`） |
-| `LOG_LEVEL` | 日志级别（`debug`/`info`/`warn`/`error`，默认 `info`）。排查 worker 回连时设 `debug` 看逐请求日志 |
+| `LOG_LEVEL` | 日志级别（`debug`/`info`/`warn`/`error`，默认 `info`）。回连排查的逐请求/逐事件级别见「回连失败排查」（engine path `http-request` 等默认 `info` 已可见，仅非 engine-path `http-request` 需 `debug`） |
 | `AGENT_API_URL` | agent-api 内部地址（可空；配置后启用云电脑 ready/terminal 回调） |
 | `AGENT_API_TIMEOUT_MS` | 内部回调超时（默认 5000，正数） |
 | `ADMIN_API_URL` | admin-api 内部地址（可空；配置后启用云电脑模型 Key `revoke-by-host`） |
 
 ## 回连失败排查（worker 连不上 cloud-controller）
 
-worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日志」时，按下面顺序定位（`LOG_LEVEL=info` 即可，无需改代码）：
+worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日志」时，按下面顺序定位（`LOG_LEVEL=info` 即可，无需改代码）。日志为 pino 单行 JSON（`"component"`/`"event"` 字段化），直接 `grep` 字段或 `msg` 即可命中。
 
-1. **确认 cloud-controller 在跑且日志可见**：`kubectl -n zag-cloud logs deploy/cloud-controller`。进程启动必定打印 `cloud-controller listening on :<port> (engine path /socket.io/ ...)` 与一条 worker 回连提示；若这条都没有，说明看错了 Pod/容器，或服务未启动。
-2. **请求是否到达 Pod**：websocket 握手走 HTTP **upgrade**，不经过 express；命中时会打印
-   `[ws] upgrade accepted path=/socket.io/ ... host=... xfp=... xff=...`。
+1. **确认 cloud-controller 在跑且日志可见**：`kubectl -n zag-cloud logs deploy/cloud-controller`。进程启动必定打印一条启动日志（`grep '"port":'` 或 `grep 'cloud-controller listening'` 命中），`msg` 为 `cloud-controller listening；worker 回连地址为 wss://<PUBLIC_WS_ENDPOINT>/worker，握手实际打到 engine path，Ingress 必须放行该路径`，字段 `port`/`enginePath`/`logLevel`/`publicWsEndpoint`；若这条都没有，说明看错了 Pod/容器，或服务未启动。
+2. **请求是否到达 Pod**：websocket 握手走 HTTP **upgrade**，不经过 express；命中时 `socket-diagnostics` 组件会打印 `"event":"ws-upgrade-accepted"`（`grep '"event":"ws-upgrade-accepted"'`），`msg` 为 `ws upgrade accepted`，字段 `path`/`host`/`xForwardedProto`/`xForwardedFor`/`userAgent`/`remoteAddress`。
    - 完全没有该行 → 请求没到 Pod，问题在入口层（Ingress 路径/TLS/host/DNS/Service）。看 Ingress 控制器日志：`kubectl -n <ingress-ns> logs <ingress-pod>`。
-   - 出现 `[ws] upgrade path mismatch: got "/worker", expected "/socket.io/"` → Ingress 误配成 `/worker`（`/worker` 是 namespace，不是路径）；把 Ingress `spec.rules[].http.paths[].path` 改为 `/socket.io`（Prefix）。
-   - 出现 `[ws] engine connection_error code=... message=...` → 到 Pod 了但被 engine 拒绝（协议版本/CORS/传输不匹配），按 message 处理。
-3. **握手鉴权是否通过**：到达后依次打印 `[worker] handshake attempt ... token=present|MISSING` → `handshake accepted/rejected (INVALID_TOKEN)` → `connected` → `registered`。卡在哪一步即问题所在（token 失效/版本不兼容/register 失败等）。
+   - 出现 `"event":"ws-upgrade-path-mismatch"`（`grep '"event":"ws-upgrade-path-mismatch"'`，字段 `path`/`expectedPath`）→ Ingress 误配成 `/worker`（`/worker` 是 namespace，不是路径）；把 Ingress `spec.rules[].http.paths[].path` 改为 `/socket.io`（Prefix）。误打 `/worker` 的普通 HTTP 请求另有一条 `"event":"worker-path-request"` warn（msg `"/worker" 是 Socket.IO namespace，不是 URL 路径；Ingress 应放行 engine path`）。
+   - 出现 `"event":"engine-connection-error"`（`grep '"event":"engine-connection-error"'`，msg `engine connection_error`，字段 `code`/`err.message`/`context`）→ 到 Pod 了但被 engine 拒绝（协议版本/CORS/传输不匹配），按 message 处理。
+   - **逐请求细节分级**（级别决定要不要调 `LOG_LEVEL`，与 `socket-diagnostics.ts` 逐条一致）：`ws-upgrade-accepted`=info（msg `ws upgrade accepted`）、`ws-upgrade-path-mismatch`=warn、`upgrade-socket-error`=warn、engine path 的 `"event":"http-request"`（msg `engine path http request`）=**info**、`worker-path-request`=warn、`engine-connection-error`=warn——以上默认 `LOG_LEVEL=info` 均可见；仅**非** engine-path 的 `"event":"http-request"`（msg `http request`）是 **debug**，需 `LOG_LEVEL=debug` 查看。
+3. **握手鉴权是否通过**：到达后 `worker-gateway` 组件依次打印 `"event":"handshake_attempt"`（msg `handshake attempt`，字段 `tokenPresent`/`from`/`transport`）→ `"event":"handshake_accepted"` 或 `"event":"handshake_rejected"`（msg `handshake accepted`/`handshake rejected`，拒绝带 `reason: 'INVALID_TOKEN'`、`tokenPresent`）→ `"event":"connected"`（msg `connected`）→ `"event":"registered"`（msg `registered`，字段 `version`/`platform` 经 `sanitizeVersionForLog`）。卡在哪一步即问题所在（token 失效/版本不兼容/register 失败等）；限流看 `"event":"handshake_rate_limited"`、版本/载荷不符看 `"event":"register_rejected"`（`reason: 'VERSION_MISMATCH'|'INVALID_PAYLOAD'`）。
 4. **worker 侧细节**：`Connection error: websocket error` 现在会追加 `(type=... description=... context=...)`，其中 `context` 常含真实 HTTP 状态（如 `unexpected server response (404)`），据此判断是入口层 404 还是 TLS 问题。
 
 > 说明：`/worker` 是 Socket.IO **namespace**，握手实际打 engine path `/socket.io/`；`ZAG_SERVER_ENDPOINT=wss://<host>/worker` 是本仓库既定约定，**不是**让 Ingress 暴露 `/worker`（见契约 `contracts/cloud-controller-websocket.md` §1.2）。
@@ -127,6 +127,21 @@ npm run test:coverage
 
 本项目采用测试驱动开发（TDD）模式，遵循红-绿-重构循环。详细指南参考 [TDD Skill](../../.agents/skills/tdd/SKILL.md)。
 
+## 日志与可观测性
+
+- **日志形态**：pino 单行 JSON（`packages/observability` vendored 副本 `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。
+- **span 清单**（另有 `httpContext()` 的 HTTP SERVER span）：
+  - `container.start` — 创建 Job 全程（`container-service.ts`）；span 内 `injectTraceparent()` 取 traceparent 注入 Job env `ZAG_INIT_TRACEPARENT`（SDK 关闭时为空 → 不注入）；
+  - `socket.handshake` — `/worker` namespace 握手 middleware（`socketio-gateway.ts`，提取 `auth.traceparent`，`containerId` 写入日志上下文）；
+  - `status.sync.tick` — 状态对账**每轮一个 span**（属性记 `checked`/`changed` 条数，不逐容器开 span）；
+  - `workload.dispatch` — `workload:run` **批次一个 span**（属性 `workload.count`，不逐条脚本开 span）。
+- **Socket.IO 握手 / `_meta` 封套位置**：worker 事件报文顶层 `_meta: { traceparent? }` 与云电脑 Job env 注入表见 [`contracts/cloud-controller-websocket.md`](../../contracts/cloud-controller-websocket.md) **附录 B**（B.1 `_meta` 可选字段 / B.2 Job env 注入表）；`emitToContainer()` 统一注入 `_meta.traceparent`，消费者必须容忍 `_meta` 缺失。agent-gear 侧握手 `auth.traceparent` 见 `contracts/agent-session-websocket.md` §7。
+- **env 变量**：`LOG_LEVEL`（默认 `info`；仅非 engine-path 逐请求 `http-request` 为 `debug` 级需提升，级别口径见「回连失败排查」）/ `LOG_PRETTY`（仅非生产生效）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 不启用导出、零外发**）/ `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS`（仅经 env 传递，**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` / `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORT_TIMEOUT_MS`，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。harness Job 注入的 `OTEL_*` + `ZAG_INIT_TRACEPARENT` 由 `buildHarnessJobEnv` 生成（附录 B.2）。
+- **排障**：
+  - `LOG_LEVEL=debug npm run dev`（或部署 env）补看非 engine-path 的逐请求 `http-request` 日志（upgrade/握手/engine path `http-request` 等默认 `info` 已可见）；`LOG_PRETTY=1` 非生产看人类可读输出。
+  - `OTEL_SDK_DISABLED=true` 可在不回滚的情况下关闭追踪导出（日志不受影响）。
+  - JSON 单行日志可直接 `grep`：按级别 `grep '"level":"error"'`、按组件 `grep '"component":"…"'`、按链路 `grep '"trace_id":"<trace-id>"'` 串起一次请求的全链路（配合 `kubectl -n zag-cloud logs deploy/cloud-controller`）。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
@@ -137,7 +152,7 @@ npm run test:coverage
 
 - **数据口径**：`cloudcontainers.tenantId`（String，`default: null`、`index: true`）为**复制新增**字段，与 `userId` 同类型；personal 期恒等于 `userId`，原 `userId` 字段与筛选维度全保留（不 rename）。写入口径：仅 `purpose=harness` 写入（来自 harness 请求 `tenantId`），`idle` 等未接入租户的容器保持 `null`；读取层对历史行容忍 `null`。
 - **写入校验（F8）**：`parseHarnessRequest` 校验 `tenantId` 为非空字符串并透传 `ContainerService.start → repo.create`；旧版 agent-api 缺省时回退 `tenantId = userId` 并 `console.warn`（发布顺序已保证新 agent-api 先上线，回退仅兜底）；显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
-- **迁移基建（F1）**：`src/migrations/` 按 admin-api 改进版复刻——独立账本集合 `cloud_controller_migrations`（不与 agent-api `migrations`、admin-api `admin_migrations` 混用）、锁 `_lock=migration_lock` 带 `owner` 归属（只释放自己的锁）、5 分钟锁 TTL（过期锁启动时清理后可接管）、**逐迁移吞错**（失败仅 `console.error`、不写账本、继续后续迁移，下次启动重试）。`index.ts` 在 `mongoose.connect` 之后、`httpServer.listen` 之前 `await runMigrations([...])`；runner 整体异常只 warn，不阻断启动（与既有服务一致）。
+- **迁移基建（F1）**：`src/migrations/` 按 admin-api 改进版复刻——独立账本集合 `cloud_controller_migrations`（不与 agent-api `migrations`、admin-api `admin_migrations` 混用）、锁 `_lock=migration_lock` 带 `owner` 归属（只释放自己的锁）、5 分钟锁 TTL（过期锁启动时清理后可接管）、**逐迁移吞错**（失败仅记 `logger.error`（`event: 'migration-failed'`，`component: 'migration/runner'`）、不写账本、继续后续迁移，下次启动重试）。`index.ts` 在 `mongoose.connect` 之后、`httpServer.listen` 之前 `await runMigrations([...])`；runner 整体异常只 warn，不阻断启动（与既有服务一致）。
 - **迁移 001**：`001-cloudcontainers-tenant-id-backfill` 以聚合管线 `updateMany({userId 存在且非空, tenantId 缺失/null}, [{$set:{tenantId:'$userId'}}])` 回填存量行（单次库内更新，无需拉回应用侧），随后显式 `createIndex({tenantId:1})`；已回填行不再命中，幂等可重跑。`userId` 缺失的行跳过、不改动。
 - **只读镜像**：`servers/agent-api/src/models/cloud-container.ts` 同步 `tenantId` 字段（schema 注释标注与 cloud-controller 同步演进），写方仍仅本服务。
 

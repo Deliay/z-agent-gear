@@ -1,5 +1,9 @@
 import { Server as SocketIOServer, Socket } from 'socket.io';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 
 interface PermissionOption {
   optionId: string;
@@ -37,6 +41,11 @@ export class PermissionManager {
   private pendingRequests = new Map<string, PendingRequest>();
   private io: SocketIOServer | null = null;
   private subscriber: ReturnType<typeof getRedisClient> | null = null;
+  private readonly logger: ObservationLogger;
+
+  constructor(logger: ObservationLogger = rootLogger.child({ component: 'permission-manager' })) {
+    this.logger = logger;
+  }
 
   start(io: SocketIOServer): void {
     this.io = io;
@@ -49,7 +58,7 @@ export class PermissionManager {
 
     this.subscriber.subscribe(PERMISSION_RESPONSE_CHANNEL, (err) => {
       if (err) {
-        console.error('Failed to subscribe to permission response channel:', err);
+        this.logger.error({ err, channel: PERMISSION_RESPONSE_CHANNEL }, 'failed to subscribe to channel');
         return;
       }
     });
@@ -58,10 +67,20 @@ export class PermissionManager {
       if (channel !== PERMISSION_RESPONSE_CHANNEL) return;
 
       try {
-        const data = JSON.parse(message) as { requestId: string; outcome: { outcome: string; optionId?: string } };
-        await this.handlePermissionResponse(data);
+        const data = JSON.parse(message) as {
+          requestId: string;
+          outcome: { outcome: string; optionId?: string };
+          _meta?: { traceparent?: string };
+        };
+        const parent = extractTraceparent(data._meta);
+        await withSpan(
+          `${PERMISSION_RESPONSE_CHANNEL} handle`,
+          { 'messaging.system': 'redis', 'messaging.destination.name': channel, requestId: data.requestId },
+          () => this.handlePermissionResponse(data),
+          { parent },
+        );
       } catch (err) {
-        console.error('Error handling permission response:', err);
+        this.logger.error({ err, channel }, 'error handling permission response');
       }
     });
   }
@@ -80,15 +99,14 @@ export class PermissionManager {
       timeout,
     });
 
-    const redis = getRedisClient();
-    await redis.publish(PERMISSION_REQUEST_CHANNEL, JSON.stringify({
+    await publish(PERMISSION_REQUEST_CHANNEL, {
       requestId,
       controllerId: socket.data.controllerId,
       sessionId,
       userId: socket.data.userId,
       toolCall,
       options,
-    }));
+    });
   }
 
   async handlePermissionResponse(data: { requestId: string; outcome: { outcome: string; optionId?: string } }): Promise<void> {
@@ -96,7 +114,7 @@ export class PermissionManager {
     const pending = this.pendingRequests.get(requestId);
 
     if (!pending) {
-      console.warn(`Permission request ${requestId} not found or already responded`);
+      this.logger.warn({ requestId }, 'permission request not found or already responded');
       return;
     }
 
@@ -106,7 +124,7 @@ export class PermissionManager {
     if (this.io) {
       const socket = this.io.sockets.sockets.get(pending.socketId);
       if (socket) {
-        socket.emit('acp:permission:response', { requestId, outcome });
+        socket.emit('acp:permission:response', withTraceMeta({ requestId, outcome }));
       }
     }
   }
@@ -120,10 +138,10 @@ export class PermissionManager {
     if (this.io) {
       const socket = this.io.sockets.sockets.get(pending.socketId);
       if (socket) {
-        socket.emit('acp:permission:response', {
+        socket.emit('acp:permission:response', withTraceMeta({
           requestId,
           outcome: { outcome: 'cancelled' },
-        });
+        }));
       }
     }
   }

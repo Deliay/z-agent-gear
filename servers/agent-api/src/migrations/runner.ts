@@ -1,9 +1,12 @@
+import { logger } from '../observability/logger.js';
 import { Migrations } from './models.js';
 
 export interface Migration {
   name: string;
   run: () => Promise<void>;
 }
+
+const log = logger.child({ component: 'migration/runner' });
 
 async function acquireLock(): Promise<boolean> {
   try {
@@ -25,7 +28,7 @@ async function releaseLock(): Promise<void> {
 export async function runMigrations(migrations: Migration[]): Promise<void> {
   const hasLock = await acquireLock();
   if (!hasLock) {
-    console.log('[Migration] Lock not acquired, skipping');
+    log.info('migration lock not acquired, skipping');
     return;
   }
 
@@ -35,17 +38,17 @@ export async function runMigrations(migrations: Migration[]): Promise<void> {
 
     for (const migration of migrations) {
       if (executedNames.has(migration.name)) {
-        console.log(`[Migration] ${migration.name} already executed, skipping`);
+        log.info({ migration: migration.name }, 'already executed, skipping');
         continue;
       }
 
-      console.log(`[Migration] Running ${migration.name}...`);
+      log.info({ migration: migration.name }, 'running migration');
       try {
         await migration.run();
         await Migrations.create({ name: migration.name, executedAt: new Date() });
-        console.log(`[Migration] ${migration.name} completed`);
+        log.info({ migration: migration.name }, 'migration completed');
       } catch (err) {
-        console.error(`[Migration] ${migration.name} failed:`, err);
+        log.error({ err, migration: migration.name }, 'migration failed');
       }
     }
   } finally {

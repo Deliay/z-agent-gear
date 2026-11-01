@@ -115,6 +115,37 @@ export async function startMockGitHubServer(options?: {
       return;
     }
 
+    // installation account（GitHub App setup：/app/installations/:id）
+    if (method === 'GET' && /^\/app\/installations\/[^/]+$/.test(url)) {
+      json(res, 200, {
+        id: Number(url.split('/').pop()),
+        account: {
+          id: 9001,
+          login: 'octo-org',
+          avatar_url: 'https://avatars.mock/9001',
+          type: 'Organization',
+        },
+      });
+      return;
+    }
+
+    // installation repositories（installation token 鉴权）
+    if (method === 'GET' && url === '/installation/repositories') {
+      json(res, 200, {
+        total_count: 1,
+        repositories: [
+          {
+            id: 7001,
+            name: 'demo',
+            full_name: 'octo-org/demo',
+            private: false,
+            permissions: { admin: true, push: true, pull: true },
+          },
+        ],
+      });
+      return;
+    }
+
     // pull request head
     const pullMatch = /^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/.exec(url);
     if (method === 'GET' && pullMatch) {

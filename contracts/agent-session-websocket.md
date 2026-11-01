@@ -1223,12 +1223,17 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 | `repoPath` | `string` | 是 | 原始 Git 仓库绝对路径 |
 | `worktreePath` | `string` | 是 | Worktree 目标目录绝对路径 |
 | `branch` | `string` | 是 | 分支名称（如 `example-repo/test-branch`） |
+| `committer` | `{ name: string; email: string; coAuthorName?: string; coAuthorEmail?: string }` | 否 | Worktree 级提交人（可选）。缺省 = 不写 Worktree 身份，沿用容器级 bot。`coAuthorName/coAuthorEmail` 成对出现时，后续提交自动追加 `Co-authored-by` trailer |
 
 **客户端行为：**
 
 1. 创建 Worktree 目标目录（如目标目录不存在）
 2. 执行 `git worktree add -b <branch> <worktreePath> <repoPath>`
-3. 回复 `git:worktree:add:result`
+3. 若 `committer` 存在：依次执行 `git config extensions.worktreeConfig true`、`git config --worktree user.name <name>`、`git config --worktree user.email <email>`（值做 shell 转义；单条失败告警不阻断，仅作用于该 Worktree）
+4. 若 `coAuthorName/coAuthorEmail` 成对存在：在 `<git-common-dir>/zag-hooks/` 写受管 `prepare-commit-msg` hook，并 `git config --worktree core.hooksPath <hookDir>`、`--worktree zag.coAuthorName/Email <bot 身份>`；hook 从 worktree 配置读取 trailer，已存在则跳过（幂等），失败仅告警
+5. 回复 `git:worktree:add:result`
+
+> 降级说明：旧版本控制器（< 2.12.0）忽略未知字段 `committer`，Worktree 身份静默缺失并沿用容器级 bot，不返回错误；< 2.13.0 忽略 `coAuthor*`，仅缺失共同作者 trailer。
 
 ### 3.13 `git:worktree:add:result`（Controller → Server）
 
@@ -1518,14 +1523,22 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
   "controllerId": "string",
   "repoPath": "string",
   "worktreePath": "string",
-  "branch": "string"
+  "branch": "string",
+  "committer": {
+    "name": "string",
+    "email": "string",
+    "coAuthorName": "string?",
+    "coAuthorEmail": "string?"
+  }
 }
 ```
+
+> `committer` 为可选字段（缺省 = 不写 Worktree 身份、沿用容器级 bot）；`coAuthor*` 成对出现时启用共同作者 trailer。旧版本控制器忽略未知字段 `committer`/`coAuthor*` → 优雅降级，不报错。
 
 **服务端行为：**
 
 1. 查找 controller socket
-2. 发送 `git:worktree:add` Socket.IO 事件（含 `requestId`, `repoPath`, `worktreePath`, `branch`）
+2. 发送 `git:worktree:add` Socket.IO 事件（含 `requestId`, `repoPath`, `worktreePath`, `branch`, 可选 `committer`）
 3. 等待 `git:worktree:add:result`（30s 超时）
 4. 成功时：缓存结果到 Redis `git:worktree:add:{requestId}`（TTL 60s）
 5. 失败时：缓存空结果
@@ -1900,3 +1913,21 @@ Controller 代理不声明 `fs`/`terminal` 能力，文件系统和终端由 Ope
 - WebSocket 断开：Socket.IO 自动重连（指数退避）
 - SSE 断开：浏览器 EventSource 自动重连
 - ACP 进程崩溃：通知前端，用户可手动重建 Session
+
+---
+
+## 7. 链路传播（`_meta` 保留位）
+
+本节为 W3C Trace Context 传播约定（详见 [`observability.md`](./observability.md) §4）。
+
+### 7.1 `_meta` 保留位声明
+
+- 事件报文顶层 `_meta` 字段为平台 W3C Trace Context 保留位，**本期不写入 ACP payload**：ACP 协议自身的 `_meta` 字段（如 §2.5 中 raw 快照上限所指的 ACP 字段）与本保留位无关，互不影响。
+- 平台侧事件（`acp:*`、`session:*` 等）如需传播链路，仅使用顶层 `_meta: { traceparent?: string }`，消费者**必须容忍 `_meta` 缺失**；无效 `traceparent` 忽略（视为缺失），不得报错。
+
+### 7.2 握手 `auth.traceparent`（可选）
+
+controller-api Socket.IO 服务端接受握手 `auth.traceparent`（W3C `traceparent`，可选）：
+
+- 控制器（`agent-gear`）在 `io(url, { auth: { token, traceparent } })` 中携带当前活跃 span 的 `traceparent`；重连时重新注入。
+- 服务端在握手 middleware 提取并作为服务端连接 span 的父上下文；缺失 / 非法时按无父上下文处理，不影响鉴权与连接建立。

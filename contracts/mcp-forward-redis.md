@@ -112,3 +112,24 @@
 | `FORWARD_TIMEOUT` | 30s 内无匹配响应 | agent-api |
 | `SERVER_NOT_FOUND` | server 不存在或已停用 | agent-api 入口 |
 | `FORWARD_ERROR` | 持有者转发异常 | controller-api |
+
+---
+
+## 7. `_meta` 链路传播保留位
+
+平台 Redis 频道报文允许携带顶层 `_meta` 字段，用于 W3C Trace Context 传播（详见 [`observability.md`](./observability.md) §4）：
+
+```jsonc
+{
+  "…报文既有字段…": "…",
+  "_meta": { "traceparent": "00-<trace-id>-<span-id>-<flags>" }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `_meta.traceparent` | `string` | 否 | W3C `traceparent`；无效 / 缺失时忽略，不得报错 |
+
+- 发布方经共享模块 `publishJson`（`packages/observability`）统一注入；**消费者必须容忍 `_meta` 缺失**（历史报文兼容）。
+- `_meta` 为平台保留位，不得与业务字段冲突；消费方不得把 `_meta` 转发进 ACP payload。
+- 受影响频道清单：`session:command`、`session:message`、`session:status`、`permission:*`、`elicitation:*`、`harness:login:*`、`mcp:*`、`pr:check-run`。

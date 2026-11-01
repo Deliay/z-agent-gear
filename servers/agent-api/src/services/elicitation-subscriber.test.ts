@@ -18,10 +18,22 @@ vi.mock('./session-sse.js', () => ({
   },
 }));
 
-import { ElicitationSubscriberService } from './elicitation-subscriber.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { todoService } from './todo-service.js';
 import { sessionSSEService } from './session-sse.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把
+ * elicitation-subscriber 日志写入内存 sink，断言 `records` 的结构化字段。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { ElicitationSubscriberService } = await import('./elicitation-subscriber.js');
+childSpy.mockRestore();
 
 type MessageHandler = (channel: string, message: string) => Promise<void>;
 
@@ -44,6 +56,7 @@ function getMessageHandler(): MessageHandler {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  testLog.reset();
   mockRedis.duplicate.mockReturnValue(mockSubscriber);
   mockSubscriber.subscribe.mockImplementation((...args: unknown[]) => {
     const cb = args[args.length - 1] as (err: Error | null) => void;
@@ -124,15 +137,13 @@ describe('ElicitationSubscriberService', () => {
   });
 
   it('should not fail on malformed messages', async () => {
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const service = new ElicitationSubscriberService();
     service.start();
 
     const handler = getMessageHandler();
     await handler('elicitation:request', 'not-json');
 
-    expect(consoleSpy).toHaveBeenCalled();
-    consoleSpy.mockRestore();
+    expect(testLog.records.some((r) => r.level === 'error')).toBe(true);
 
     service.stop();
   });
@@ -219,7 +230,6 @@ describe('ElicitationSubscriberService - resolved', () => {
   });
 
   it('T-ES5: 缺 userId 时拒绝写入（租户隔离）', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { service, handler } = setup();
     await handler('elicitation:resolved', JSON.stringify({
       requestId: 'elic-4',
@@ -227,13 +237,14 @@ describe('ElicitationSubscriberService - resolved', () => {
       reason: 'timeout',
     }));
     expect(todoService.markElicitationResolved).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('without userId'), expect.anything(), expect.anything());
-    warnSpy.mockRestore();
+    const rec = testLog.records.find((r) => r.level === 'warn' && String(r.msg).includes('without userId'));
+    expect(rec).toBeDefined();
+    expect(rec?.event).toBe('resolved-no-user');
+    expect(rec?.reason).toBe('timeout');
     service.stop();
   });
 
   it('T-ES6: 未知 reason 收敛为 failed 并告警（不静默按 cancelled 处理）', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { service, handler } = setup();
     vi.mocked(todoService.markElicitationResolved).mockResolvedValue(1);
     await handler('elicitation:resolved', JSON.stringify({
@@ -246,12 +257,11 @@ describe('ElicitationSubscriberService - resolved', () => {
       userId: 'user-1',
       sessionId: 'sess-1',
     });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('unknown reason'),
-      'protocol_drift',
-      'elic-5',
-    );
-    warnSpy.mockRestore();
+    const rec = testLog.records.find((r) => r.level === 'warn' && String(r.msg).includes('unknown reason'));
+    expect(rec).toBeDefined();
+    expect(rec?.event).toBe('unknown-reason');
+    expect(rec?.reason).toBe('protocol_drift');
+    expect(rec?.requestId).toBe('elic-5');
     service.stop();
   });
 });

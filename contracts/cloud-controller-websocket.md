@@ -655,3 +655,45 @@ cloud-controller 在容器生命周期节点写入集合 `billingoutbox`（与 a
 | `startedAt` | `string \| null` | 开始时间（ISO） |
 | `finishedAt` | `string \| null` | 结束时间（ISO） |
 | `createdAt` | `string` | 记录创建时间（ISO，用于排序） |
+
+---
+
+## 附录 B：worker 事件 `_meta` 可选字段与 Job env 注入
+
+### B.1 worker 事件报文 `_meta`（可选）
+
+`workload:run`、`workload:result`、`shutdown`、`registered`、`unregistered` 报文允许携带顶层 `_meta` 字段，用于 W3C Trace Context 传播（详见 [`observability.md`](./observability.md) §4）：
+
+```jsonc
+{
+  "…事件既有字段…": "…",
+  "_meta": {
+    "traceparent": "00-<32位trace-id>-<16位span-id>-<2位flags>"
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `_meta.traceparent` | `string` | 否 | W3C `traceparent`；无效 / 缺失时忽略（视为无链路上下文），不得报错 |
+
+- `_meta` 为平台保留位，**不写入 ACP payload**。
+- **旧 worker 忽略未知字段**：不理解 `_meta` 的 worker 行为不变；服务端发送时不得依赖 worker 回传 `_meta`。
+- 消费方**必须容忍 `_meta` 缺失**（历史报文兼容）。
+
+### B.2 Job env 注入表
+
+cloud-controller 创建云电脑（`purpose=harness`）Job 时经 `buildHarnessJobEnv` 注入以下观测相关环境变量：
+
+| 变量 | 注入条件 | 说明 |
+|------|----------|------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | cloud-controller 已配置 `OTEL_EXPORTER_OTLP_ENDPOINT` | 采集端地址透传 |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | 同上 | 固定 `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | 同上且配置了 headers | 采集端鉴权；**禁止出现在任何日志** |
+| `OTEL_SERVICE_NAME` | 同上 | 固定 `agent-gear` |
+| `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` | 同上 | 采样口径与平台一致 |
+| `OTEL_RESOURCE_ATTRIBUTES` | 同上 | 追加 `zag.container.id`、`zag.cloud.host.id`、`zag.user.id`、`zag.tenant.id`、`zag.workspace.id` |
+| `ZAG_INIT_TRACEPARENT` | 同上且 `container.start` span 存在 | 创建链路 `traceparent`；容器内 `agent-gear` 将 `startup` span 以 **link**（非 parent）关联 |
+| `OTEL_SDK_DISABLED` | **未配置采集端** | 固定 `true`（容器内 SDK 完全不启动，仅注入此一项） |
+
+- 旧容器（未适配观测的 worker 版本）不识别以上变量，行为不变；不提升版本门禁。

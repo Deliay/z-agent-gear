@@ -1,14 +1,22 @@
 import { isTerminalStatus } from '../models/cloud-container.js';
+import { type ObservationLogger } from '../observability/logger.js';
+import { withSpan } from '../observability/trace.js';
 import type { ContainerRepository } from '../repositories/container-repository.js';
 import type { ContainerService } from './container-service.js';
 import type { HeartbeatTracker } from './heartbeat-tracker.js';
 import type { K8sClient, K8sJobEvent } from './k8s-client.js';
 import { WORKER_LABEL_SELECTOR } from './k8s-job-manager.js';
 
-interface Logger {
-  info?: (...args: unknown[]) => void;
-  warn?: (...args: unknown[]) => void;
-  error?: (...args: unknown[]) => void;
+/**
+ * 巡检统计（`status.sync.tick` span 属性来源）：`checked` 为本轮**实际检查的容器数**
+ * （各步骤只计状态真正落入本步骤检查范围的记录，跨步骤按记录 id 去重，不重复累加），
+ * `changed` 为状态变更数。
+ */
+export interface ScanStats {
+  checked: number;
+  changed: number;
+  /** 已计入 `checked` 的记录 id（跨步骤去重集合，`countChecked` 懒初始化）。 */
+  checkedIds?: Set<string>;
 }
 
 export interface StatusSyncOptions {
@@ -29,7 +37,7 @@ export interface StatusSyncOptions {
   creatingGraceMs?: number;
   /** 工作负载看门狗（并入 15s 巡检，裁决 10）：推进超时/卡死的 init 记录。 */
   dispatcher?: { onWatchdog(now?: number): Promise<void> };
-  logger?: Logger;
+  logger: ObservationLogger;
 }
 
 const SCAN_INTERVAL_MS = 15000;
@@ -65,23 +73,78 @@ export class StatusSyncService {
     // stop() 可能在 watch 建立期间被调用：此时不得再创建巡检定时器。
     if (this.stopped) return;
     this.timer = setInterval(() => {
-      void this.scanTimeouts().catch((err) => {
-        this.opts.logger?.error?.('[status-sync] scanTimeouts failed', err);
-      });
-      void this.scanHeartbeats().catch((err) => {
-        this.opts.logger?.error?.('[status-sync] scanHeartbeats failed', err);
-      });
-      void this.sweepTerminalJobs().catch((err) => {
-        this.opts.logger?.error?.('[status-sync] terminal sweep failed', err);
-      });
-      const dispatcher = this.opts.dispatcher;
-      if (dispatcher) {
-        void dispatcher.onWatchdog().catch((err) => {
-          this.opts.logger?.error?.('[status-sync] workload watchdog failed', err);
-        });
-      }
+      void this.runInspectionTick();
     }, SCAN_INTERVAL_MS);
     this.timer.unref?.();
+  }
+
+  /**
+   * 每轮 15s 巡检：整轮一个 `status.sync.tick` span（属性记 `checked`/`changed` 条数），
+   * 不对每个容器开 span。各步骤独立吞错（单步失败不阻断其余步骤，也不打挂进程）。
+   * `checked` 按**实际检查状态数**计数（去重后的容器数，跨步骤按记录 id 去重），
+   * 不做三步 `records.length` 全量累加（C5）。
+   */
+  private async runInspectionTick(): Promise<void> {
+    try {
+      await withSpan('status.sync.tick', {}, async (span) => {
+        const stats: ScanStats = { checked: 0, changed: 0 };
+        await this.runScanStep(
+          () => this.scanTimeouts(undefined, stats),
+          'scan-timeouts-failed',
+          'scanTimeouts failed',
+        );
+        await this.runScanStep(
+          () => this.scanHeartbeats(undefined, stats),
+          'scan-heartbeats-failed',
+          'scanHeartbeats failed',
+        );
+        await this.runScanStep(
+          () => this.sweepTerminalJobs(stats),
+          'terminal-sweep-failed',
+          'terminal sweep failed',
+        );
+        const dispatcher = this.opts.dispatcher;
+        if (dispatcher) {
+          await this.runScanStep(
+            () => dispatcher.onWatchdog(),
+            'workload-watchdog-failed',
+            'workload watchdog failed',
+          );
+        }
+        span.setAttribute('checked', stats.checked);
+        span.setAttribute('changed', stats.changed);
+      });
+    } catch (err) {
+      this.opts.logger.error(
+        { component: 'status-sync', event: 'inspection-tick-failed', err },
+        'inspection tick failed',
+      );
+    }
+  }
+
+  /** 单个巡检步骤：吞掉 rejection 并记 error（保持「巡检不打挂进程」语义）。 */
+  private async runScanStep(
+    step: () => Promise<unknown>,
+    event: string,
+    msg: string,
+  ): Promise<void> {
+    try {
+      await step();
+    } catch (err) {
+      this.opts.logger.error({ component: 'status-sync', event, err }, msg);
+    }
+  }
+
+  /**
+   * 计入一次「实际检查」：只统计状态真正落入本步骤检查范围的记录，
+   * 并按记录 id 跨步骤去重（同一容器一轮内被多步骤看到时 `checked` 不重复累加，C5）。
+   */
+  private countChecked(stats: ScanStats | undefined, recordId: string): void {
+    if (!stats) return;
+    const seen = stats.checkedIds ?? (stats.checkedIds = new Set());
+    if (seen.has(recordId)) return;
+    seen.add(recordId);
+    stats.checked += 1;
   }
 
   /** 尝试建立 watch；失败时记录并安排指数退避重试（不向外抛错，避免打挂进程/watch 断链）。 */
@@ -95,7 +158,10 @@ export class StatusSyncService {
         this.watchRetryTimer = null;
       }
     } catch (err) {
-      this.opts.logger?.error?.('[status-sync] failed to establish watch, will retry', err);
+      this.opts.logger.error(
+        { component: 'status-sync', event: 'watch-establish-failed', err },
+        'failed to establish watch, will retry',
+      );
       this.scheduleWatchRetry();
     }
   }
@@ -129,12 +195,18 @@ export class StatusSyncService {
       WORKER_LABEL_SELECTOR,
       (event) => {
         void this.handleJobEvent(event).catch((err) => {
-          this.opts.logger?.error?.('[status-sync] handleJobEvent failed', err);
+          this.opts.logger.error(
+            { component: 'status-sync', event: 'handle-job-event-failed', err },
+            'handleJobEvent failed',
+          );
         });
       },
       (error) => {
         void this.handleWatchDisconnect(error).catch((err) => {
-          this.opts.logger?.error?.('[status-sync] handleWatchDisconnect failed', err);
+          this.opts.logger.error(
+            { component: 'status-sync', event: 'handle-watch-disconnect-failed', err },
+            'handleWatchDisconnect failed',
+          );
         });
       },
     );
@@ -172,7 +244,10 @@ export class StatusSyncService {
 
   /** watch 断开：记录 → 全量对账 → 自动重连（失败则退避重试）。 */
   async handleWatchDisconnect(error?: unknown): Promise<void> {
-    this.opts.logger?.warn?.('[status-sync] watch disconnected, reconciling', error);
+    this.opts.logger.warn(
+      { component: 'status-sync', event: 'watch-disconnected', err: error },
+      'watch disconnected, reconciling',
+    );
     try {
       this.unwatch?.();
     } catch {
@@ -182,7 +257,10 @@ export class StatusSyncService {
     try {
       await this.reconcile();
     } catch (err) {
-      this.opts.logger?.error?.('[status-sync] reconcile after disconnect failed', err);
+      this.opts.logger.error(
+        { component: 'status-sync', event: 'reconcile-after-disconnect-failed', err },
+        'reconcile after disconnect failed',
+      );
     }
     if (this.stopped) return;
     // 断线重连同样采用指数退避（建议 C），而非固定延迟，避免 apiserver 抖动时反复冲击。
@@ -211,7 +289,10 @@ export class StatusSyncService {
         status: 'failed',
         exitReason: '孤儿 Job',
       });
-      this.opts.logger?.warn?.(`[status-sync] orphan job detected: ${event.job.name}`);
+      this.opts.logger.warn(
+        { component: 'status-sync', event: 'orphan-job', jobName: event.job.name },
+        'orphan job detected',
+      );
       return;
     }
 
@@ -280,7 +361,10 @@ export class StatusSyncService {
         status: 'failed',
         exitReason: '孤儿 Job',
       });
-      this.opts.logger?.warn?.(`[status-sync] orphan job detected during reconcile: ${job.name}`);
+      this.opts.logger.warn(
+        { component: 'status-sync', event: 'orphan-job', jobName: job.name },
+        'orphan job detected during reconcile',
+      );
     }
 
     await this.sweepTerminalJobs();
@@ -296,7 +380,7 @@ export class StatusSyncService {
    * 使用一次 `listJobs()` 全量拉取后在内存索引匹配，避免逐记录 `getJob` 的 N+1。
    * 返回本次真实回收了 Job 的 containerId 列表。
    */
-  async sweepTerminalJobs(): Promise<string[]> {
+  async sweepTerminalJobs(stats?: ScanStats): Promise<string[]> {
     const jobs = await this.opts.k8sClient.listJobs(WORKER_LABEL_SELECTOR);
     const byContainerId = new Map<string, K8sJobEvent['job']>();
     const byName = new Map<string, K8sJobEvent['job']>();
@@ -310,15 +394,20 @@ export class StatusSyncService {
     for (const record of records) {
       // 卡死的 destroying：无论 Job 是否还在都需迁移终态，故不做 Job 存在性前置过滤。
       if (record.status === 'destroying') {
+        this.countChecked(stats, record.id);
         const deleted = await this.opts.containerService.reclaimResidualJob(record.id);
         if (deleted) reclaimed.push(record.id);
         continue;
       }
       if (record.status !== 'failed' && record.status !== 'exited') continue;
+      this.countChecked(stats, record.id);
       const job = byContainerId.get(record.id) ?? byName.get(record.name);
       if (!job) continue;
       const deleted = await this.opts.containerService.reclaimResidualJob(record.id);
       if (deleted) reclaimed.push(record.id);
+    }
+    if (stats) {
+      stats.changed += reclaimed.length;
     }
     return reclaimed;
   }
@@ -340,11 +429,12 @@ export class StatusSyncService {
    * `initializing`（执行初始化脚本）**不在此巡检范围**：长脚本可能超过回连超时，
    * 由 workload-dispatcher 看门狗按「单条超时 + 容差」收口（裁决 10 / 契约 §3.2）。
    */
-  async scanTimeouts(now: number = Date.now()): Promise<string[]> {
+  async scanTimeouts(now: number = Date.now(), stats?: ScanStats): Promise<string[]> {
     const records = await this.opts.repo.findAll();
     const timedOut: string[] = [];
     for (const record of records) {
       if (record.status !== 'connecting' && record.status !== 'creating') continue;
+      this.countChecked(stats, record.id);
       if (now - record.updatedAt.getTime() >= this.opts.connectTimeoutMs) {
         await this.opts.containerService.markFailed(
           record.id,
@@ -353,17 +443,21 @@ export class StatusSyncService {
         timedOut.push(record.id);
       }
     }
+    if (stats) {
+      stats.changed += timedOut.length;
+    }
     return timedOut;
   }
 
   /**
    * 心跳离线巡检：online 容器连续 3 次（约 90s）未收到心跳 → 退回 connecting 等待重连。
    */
-  async scanHeartbeats(now: number = Date.now()): Promise<string[]> {
+  async scanHeartbeats(now: number = Date.now(), stats?: ScanStats): Promise<string[]> {
     const records = await this.opts.repo.findAll();
     const offline: string[] = [];
     for (const record of records) {
       if (record.status !== 'online') continue;
+      this.countChecked(stats, record.id);
       if (!this.opts.heartbeatTracker.has(record.id)) {
         this.opts.heartbeatTracker.record(
           record.id,
@@ -375,6 +469,9 @@ export class StatusSyncService {
         this.opts.heartbeatTracker.remove(record.id);
         offline.push(record.id);
       }
+    }
+    if (stats) {
+      stats.changed += offline.length;
     }
     return offline;
   }

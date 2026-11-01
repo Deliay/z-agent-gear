@@ -1,4 +1,6 @@
 import { sessionService } from '../session.js';
+import { logger as rootLogger } from '../../observability/logger.js';
+import { withSpan } from '../../observability/trace.js';
 import { todoService } from '../todo-service.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
@@ -12,6 +14,8 @@ import {
 import { getArtifactKeys, getValue } from './blackboard.js';
 import { PLATFORM_SERVER_NAME } from './tool-handlers.js';
 import { ADMIN_PLATFORM_SERVER_NAME, ensureAdminToolsServer } from './admin-tools.js';
+
+const logger = rootLogger.child({ component: 'workflow-orchestrator' });
 
 /** 工作流系统提示（注入到每个 AI 节点会话提示词首位） */
 export const WORKFLOW_SYSTEM_PROMPT =
@@ -170,6 +174,14 @@ class WorkflowOrchestrator {
 
   /** AI 节点 READY→RUNNING：组装提示词 → 创建打标会话（按阶段 worktree）→ 发送提示词 */
   async startNodeSession(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
+    return withSpan(
+      'workflow.node.advance',
+      { workflowInstanceId: instance._id.toString(), nodeId: node.nodeId },
+      () => this.startNodeSessionInner(instance, node),
+    );
+  }
+
+  private async startNodeSessionInner(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
     const configuredNode = await this.loadNodeConfig(instance, node);
     const agentConfig = configuredNode.agentConfig;
     if (!agentConfig) {
@@ -191,6 +203,28 @@ class WorkflowOrchestrator {
     const instanceSlug = slugify(instance.name) || instance._id.toString();
     const stageSlug = slugify(node.stage) || 'stage';
 
+    // 节点级 Worktree 复用实例初始化时的提交人快照（成员中途改设置不影响已建 Worktree）；
+    // 快照缺失显式传 null，避免 session.create 回退到会话创建者的实时解析。
+    const snapshot = instance as WorkflowInstanceDoc & {
+      worktreeCommitterName?: string | null;
+      worktreeCommitterEmail?: string | null;
+      worktreeCoAuthorName?: string | null;
+      worktreeCoAuthorEmail?: string | null;
+    };
+    const worktreeCommitter =
+      snapshot.worktreeCommitterName && snapshot.worktreeCommitterEmail
+        ? {
+            name: snapshot.worktreeCommitterName,
+            email: snapshot.worktreeCommitterEmail,
+            ...(snapshot.worktreeCoAuthorName && snapshot.worktreeCoAuthorEmail
+              ? {
+                  coAuthorName: snapshot.worktreeCoAuthorName,
+                  coAuthorEmail: snapshot.worktreeCoAuthorEmail,
+                }
+              : {}),
+          }
+        : null;
+
     const session = await sessionService.create(instance.userId.toString(), {
       controllerId: instance.controllerId.toString(),
       acpServerType: agentConfig.acpServerType,
@@ -198,6 +232,7 @@ class WorkflowOrchestrator {
       enableWorktree,
       worktreeBranchSuffix: enableWorktree ? `${instanceSlug}/${stageSlug}` : undefined,
       existingWorktreePath,
+      worktreeCommitter,
       workflowInstanceId: instance._id.toString(),
       workflowNodeId: node.nodeId,
       resourceWorkspaceId: instance.resourceWorkspaceId
@@ -318,9 +353,9 @@ class WorkflowOrchestrator {
   ): void {
     const nextAttempt = attempt + 1;
     if (nextAttempt > FALLBACK_RETRY_MAX) {
-      console.warn(
-        `[workflow] ${kind} fallback deferred retry exhausted after ${FALLBACK_RETRY_MAX} attempts ` +
-          `(instance=${instanceId}, session=${sessionId}); creating intervention todo`,
+      logger.warn(
+        { event: 'fallback-exhausted', kind, instanceId, sessionId },
+        'fallback deferred retry exhausted, creating intervention todo',
       );
       // 禁止静默丢链：超限必须留下人工介入待办
       void this.notifyFallbackExhausted(kind, sessionId, instanceId);
@@ -335,10 +370,9 @@ class WorkflowOrchestrator {
           return this.handleSessionRemoved(sessionId, nextAttempt);
         })
         .catch((err) => {
-          console.warn(
-            `[workflow] ${kind} fallback deferred retry failed ` +
-              `(instance=${instanceId}, session=${sessionId}, attempt=${nextAttempt}), rescheduling:`,
-            (err as Error).message,
+          logger.warn(
+            { event: 'fallback-retry-failed', kind, instanceId, sessionId, attempt: nextAttempt, err },
+            'fallback deferred retry failed, rescheduling',
           );
           // N-10(b)：runDetached 超时/异常不能一次性丢弃兜底链，按同一 attempt 预算继续退避重排
           this.deferSessionFallback(kind, sessionId, instanceId, nextAttempt);
@@ -359,17 +393,17 @@ class WorkflowOrchestrator {
       })) as unknown as WorkflowInstanceDoc | null;
       if (!instance) {
         // N-14：超限链路最后一步也不得静默——实例已删除/不可查时留下可检索告警
-        console.warn(
-          `[workflow] ${kind} fallback exhausted todo skipped: instance not found ` +
-            `(instance=${instanceId}, session=${sessionId})`,
+        logger.warn(
+          { event: 'fallback-todo-instance-missing', kind, instanceId, sessionId },
+          'fallback exhausted todo skipped: instance not found',
         );
         return;
       }
       const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
       if (!node) {
-        console.warn(
-          `[workflow] ${kind} fallback exhausted todo skipped: node not found ` +
-            `(instance=${instanceId}, session=${sessionId})`,
+        logger.warn(
+          { event: 'fallback-todo-node-missing', kind, instanceId, sessionId },
+          'fallback exhausted todo skipped: node not found',
         );
         return;
       }
@@ -383,9 +417,9 @@ class WorkflowOrchestrator {
         reason: `会话兜底（${kind}）重试 ${FALLBACK_RETRY_MAX} 次后仍失败，请人工介入`,
       });
     } catch (err) {
-      console.warn(
-        `[workflow] ${kind} fallback exhausted todo failed (instance=${instanceId}, session=${sessionId}):`,
-        (err as Error).message,
+      logger.warn(
+        { event: 'fallback-todo-failed', kind, instanceId, sessionId, err },
+        'fallback exhausted todo failed',
       );
     }
   }

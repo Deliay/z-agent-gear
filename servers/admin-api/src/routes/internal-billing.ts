@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { BillingInvoice } from '../models/billing-invoice.js';
 import { BillingLedger } from '../models/billing-ledger.js';
 import { BillingReceipt } from '../models/billing-receipt.js';
@@ -26,6 +27,8 @@ import {
   oneTimeChargeService,
 } from '../services/billing/one-time-charge.js';
 import { isCloudHostOwnedBy } from '../services/billing/cloud-host-ownership.js';
+
+const logger = rootLogger.child({ component: 'internal-billing' });
 
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
@@ -108,7 +111,7 @@ export function createInternalBillingRouter(): Router {
       res.json({ ...toBillingAccountWire(account), ledgerCount });
     } catch (err) {
       // C2：内部错误详情只记服务端日志，绝不把 Mongo/驱动信息原样吐给调用方/终端用户。
-      console.error('[internal-billing] GET /account failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] GET /account failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -169,7 +172,7 @@ export function createInternalBillingRouter(): Router {
         res.status(409).json({ error: 'INSUFFICIENT_BALANCE', available: err.available });
         return;
       }
-      console.error('[internal-billing] POST /charges failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] POST /charges failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -194,7 +197,7 @@ export function createInternalBillingRouter(): Router {
       });
       res.json(result);
     } catch (err) {
-      console.error('[internal-billing] POST /refunds failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] POST /refunds failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -212,7 +215,7 @@ export function createInternalBillingRouter(): Router {
     try {
       res.json(await oneTimeChargeService.getPriceQuote(productIds));
     } catch (err) {
-      console.error('[internal-billing] GET /price-quote failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] GET /price-quote failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -398,7 +401,7 @@ export function createInternalBillingRouter(): Router {
         res.status(400).json({ error: 'INVALID_BODY' });
         return;
       }
-      console.error('[internal-billing] POST /api-keys failed', message);
+      logger.error({ err }, '[internal-billing] POST /api-keys failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -414,7 +417,7 @@ export function createInternalBillingRouter(): Router {
       const revoked = await apiKeyService.revokeByCloudHost(cloudHostId);
       res.json({ success: true, revoked });
     } catch (err) {
-      console.error('[internal-billing] POST /api-keys/revoke-by-host failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] POST /api-keys/revoke-by-host failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -433,7 +436,7 @@ export function createInternalBillingRouter(): Router {
         res.status(404).json({ error: 'NOT_FOUND' });
         return;
       }
-      console.error('[internal-billing] POST /api-keys/:id/revoke failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] POST /api-keys/:id/revoke failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -460,7 +463,7 @@ export function createInternalBillingRouter(): Router {
         res.status(404).json({ error: 'NOT_FOUND' });
         return;
       }
-      console.error('[internal-billing] DELETE /api-keys failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] DELETE /api-keys failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -468,7 +471,7 @@ export function createInternalBillingRouter(): Router {
   // C2：兜底错误处理——任何端点未捕获异常（Express 5 自动转发 rejected promise）统一返回
   // 通用 INTERNAL_ERROR，绝不把 err.message/堆栈回给调用方。
   router.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
-    console.error('[internal-billing] unhandled error', (err as Error)?.message);
+    logger.error({ err }, '[internal-billing] unhandled error');
     // P3：响应头已发出时不能再写 body，转交 Express 默认处理器关闭连接，避免悬挂 socket。
     if (res.headersSent) {
       next(err);

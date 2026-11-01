@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { BillingOutbox } from '../../../models/billing-outbox.js';
+import { createTestLogger } from '../../../observability/testing.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../testing/mongo.js';
+
+/** 静音 logger（无断言路径注入）。 */
+const silentLogger = createTestLogger('billing-outbox').logger;
 
 const { fakeChannel } = vi.hoisted(() => ({
   fakeChannel: {
@@ -45,7 +49,7 @@ describe('AdminOutboxPublisher', () => {
   });
 
   it('outbox → confirm → 标记 published；重复入队幂等', async () => {
-    const publisher = new AdminOutboxPublisher('amqp://x', console, 1000);
+    const publisher = new AdminOutboxPublisher('amqp://x', silentLogger, 1000);
     const event = {
       eventId: 'model_call.completed:r1',
       eventType: 'model_call.completed' as const,
@@ -75,7 +79,7 @@ describe('AdminOutboxPublisher', () => {
   });
 
   it('R10-3: 传输级失败不消耗 attempts，下一轮重试成功', async () => {
-    const publisher = new AdminOutboxPublisher('amqp://x', console, 1000);
+    const publisher = new AdminOutboxPublisher('amqp://x', silentLogger, 1000);
     await publisher.enqueue({
       eventId: 'model_call.completed:r2',
       eventType: 'model_call.completed',
@@ -101,7 +105,7 @@ describe('AdminOutboxPublisher', () => {
   });
 
   it('R10-3: 消息级被拒（AMQP replyCode）才消耗 attempts 并记录 lastError', async () => {
-    const publisher = new AdminOutboxPublisher('amqp://x', console, 1000);
+    const publisher = new AdminOutboxPublisher('amqp://x', silentLogger, 1000);
     await publisher.enqueue({
       eventId: 'model_call.completed:r3',
       eventType: 'model_call.completed',
@@ -124,7 +128,7 @@ describe('AdminOutboxPublisher', () => {
   });
 
   it('R10-2: 发布头只携带 x-publish-attempts，不再发送 x-retry-count', async () => {
-    const publisher = new AdminOutboxPublisher('amqp://x', console, 1000);
+    const publisher = new AdminOutboxPublisher('amqp://x', silentLogger, 1000);
     await publisher.enqueue({
       eventId: 'model_call.completed:r4',
       eventType: 'model_call.completed',
@@ -141,7 +145,7 @@ describe('AdminOutboxPublisher', () => {
   });
 
   it('start/stop 启停 relay 定时器', async () => {
-    const publisher = new AdminOutboxPublisher('amqp://x', console, 60_000);
+    const publisher = new AdminOutboxPublisher('amqp://x', silentLogger, 60_000);
     publisher.start();
     await publisher.stop();
     expect(await publisher.relayOnce()).toBe(0);

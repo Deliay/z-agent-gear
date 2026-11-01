@@ -97,10 +97,9 @@ describe('GatewayService', () => {
       expect(result.name).toBe('my-service');
       expect(result.port).toBe(3000);
       expect(result.status).toBe('active');
-      expect(mockRedis.publish).toHaveBeenCalledWith(
-        'port-forward:command',
-        JSON.stringify({ type: 'tunnel:create', controllerId: 'ctrl1', port: 3000 }),
-      );
+      expect(mockRedis.publish).toHaveBeenCalledWith('port-forward:command', expect.any(String));
+      const { _meta, ...createBody } = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      expect(createBody).toEqual({ type: 'tunnel:create', controllerId: 'ctrl1', port: 3000 });
     });
 
     it('should throw when controller not found', async () => {
@@ -176,10 +175,9 @@ describe('GatewayService', () => {
       const result = await gatewayService.delete('ctrl1', 'user1', 'my-service');
 
       expect(result).toBe(true);
-      expect(mockRedis.publish).toHaveBeenCalledWith(
-        'port-forward:command',
-        JSON.stringify({ type: 'tunnel:close', controllerId: 'ctrl1', port: 3000 }),
-      );
+      expect(mockRedis.publish).toHaveBeenCalledWith('port-forward:command', expect.any(String));
+      const { _meta, ...closeBody } = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      expect(closeBody).toEqual({ type: 'tunnel:close', controllerId: 'ctrl1', port: 3000 });
     });
 
     it('should return false when gateway not found', async () => {

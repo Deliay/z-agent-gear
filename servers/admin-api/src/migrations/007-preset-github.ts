@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
+
+const log = logger.child({ component: 'migration/007-preset-github' });
 
 /**
  * 007-preset-github：写入预制工作负载「Github」（安装 gh CLI）。
@@ -55,14 +58,15 @@ export const GITHUB_PARAM_SCHEMA = [
 export async function run(): Promise<void> {
   const byKey = await CloudWorkload.findOne({ presetKey: GITHUB_PRESET_KEY });
   if (byKey) {
-    console.warn(
-      `[Migration 007] preset workload "${GITHUB_PRESET_KEY}" already exists (by presetKey), skipping`,
+    log.warn(
+      { presetKey: GITHUB_PRESET_KEY },
+      'preset workload already exists (by presetKey), skipping',
     );
     return;
   }
   const byName = await CloudWorkload.findOne({ name: GITHUB_PRESET_NAME });
   if (byName) {
-    console.warn(`[Migration 007] workload named "${GITHUB_PRESET_NAME}" already exists, skipping`);
+    log.warn({ name: GITHUB_PRESET_NAME }, 'workload with the same name already exists, skipping');
     return;
   }
 
@@ -77,5 +81,5 @@ export async function run(): Promise<void> {
     workloadKind: 'standard',
     harnessType: null,
   });
-  console.log(`[Migration 007] preset workload "${GITHUB_PRESET_KEY}" created`);
+  log.info({ presetKey: GITHUB_PRESET_KEY }, 'preset workload created');
 }

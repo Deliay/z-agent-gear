@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
+
+const log = logger.child({ component: 'migration/015-preset-playwright' });
 
 /**
  * 015-preset-playwright：写入预制工作负载「Playwright」（Issue #342）。
@@ -105,15 +108,17 @@ ls "$BROWSERS_CACHE" 2>/dev/null | grep -q '^chromium-' || {
 export async function run(): Promise<void> {
   const byKey = await CloudWorkload.findOne({ presetKey: PLAYWRIGHT_PRESET_KEY });
   if (byKey) {
-    console.warn(
-      `[Migration 015] preset workload "${PLAYWRIGHT_PRESET_KEY}" already exists (by presetKey), skipping`,
+    log.warn(
+      { presetKey: PLAYWRIGHT_PRESET_KEY },
+      'preset workload already exists (by presetKey), skipping',
     );
     return;
   }
   const byName = await CloudWorkload.findOne({ name: PLAYWRIGHT_PRESET_NAME });
   if (byName) {
-    console.warn(
-      `[Migration 015] workload named "${PLAYWRIGHT_PRESET_NAME}" already exists, skipping`,
+    log.warn(
+      { name: PLAYWRIGHT_PRESET_NAME },
+      'workload with the same name already exists, skipping',
     );
     return;
   }
@@ -123,9 +128,7 @@ export async function run(): Promise<void> {
     (await CloudWorkload.findOne({ presetKey: 'nodejs' })) ??
     (await CloudWorkload.findOne({ name: 'Node.js' }));
   if (!nodejs) {
-    console.warn(
-      '[Migration 015] preset workload "nodejs" not found, creating without dependency',
-    );
+    log.warn('preset workload "nodejs" not found, creating without dependency');
   }
 
   await CloudWorkload.create({
@@ -139,5 +142,5 @@ export async function run(): Promise<void> {
     workloadKind: 'standard',
     harnessType: null,
   });
-  console.log(`[Migration 015] preset workload "${PLAYWRIGHT_PRESET_KEY}" created`);
+  log.info({ presetKey: PLAYWRIGHT_PRESET_KEY }, 'preset workload created');
 }

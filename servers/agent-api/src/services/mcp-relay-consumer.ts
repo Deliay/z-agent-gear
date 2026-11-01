@@ -1,8 +1,13 @@
 import type { Redis } from 'ioredis';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { dispatch } from './mcp-dispatch.js';
 
 const RELAY_REQUEST_CHANNEL = 'mcp:relay:request';
+
+const logger = rootLogger.child({ component: 'mcp-relay-consumer' });
 
 interface RelayRequestMessage {
   requestId?: string;
@@ -10,6 +15,7 @@ interface RelayRequestMessage {
   serverName?: string;
   token?: string;
   body?: unknown;
+  _meta?: unknown;
 }
 
 /**
@@ -25,7 +31,7 @@ export class McpRelayConsumer {
 
     this.subscriber = getRedisClient().duplicate();
     this.subscriber.subscribe(RELAY_REQUEST_CHANNEL).catch((err: Error) => {
-      console.error(`Failed to subscribe to ${RELAY_REQUEST_CHANNEL}:`, err.message);
+      logger.error({ err, channel: RELAY_REQUEST_CHANNEL }, 'failed to subscribe to MCP relay request channel');
     });
 
     this.subscriber.on('message', async (_channel: string, message: string) => {
@@ -36,33 +42,62 @@ export class McpRelayConsumer {
         return;
       }
       if (!parsed.requestId || !parsed.sessionId || !parsed.token) return;
+      const { requestId, sessionId, serverName, token } = parsed;
 
-      console.log(`[MCP relay] request requestId=${parsed.requestId} session=${parsed.sessionId} server=${parsed.serverName ?? '-'} method=${(parsed.body as { method?: string })?.method ?? '?'}`);
-      let result: { status: number; body: unknown };
-      try {
-        result = await dispatch({
-          sessionId: parsed.sessionId,
-          serverName: parsed.serverName,
-          token: parsed.token,
-          body: parsed.body,
-        });
-      } catch (err) {
-        console.error(`[MCP relay] dispatch failed: requestId=${parsed.requestId} session=${parsed.sessionId}: ${(err as Error).message}`);
-        result = {
-          status: 502,
-          body: { jsonrpc: '2.0', id: null, error: { code: 'FORWARD_ERROR', message: (err as Error).message } },
-        };
-      }
-      console.log(`[MCP relay] dispatch result requestId=${parsed.requestId} status=${result.status} body=${JSON.stringify(result.body)?.slice(0, 300)}`);
+      const method = (parsed.body as { method?: string })?.method ?? '?';
+      // 消费侧对称提取（contracts/mcp-forward-redis.md §7）：发布侧 publishJson 注入的
+      // `_meta.traceparent` 在回调入口提取为 span 父链路；`_meta` 缺失/非法时容忍（回退根链路）。
+      const parent = extractTraceparent(parsed._meta);
+      await withSpan(
+        `${RELAY_REQUEST_CHANNEL} handle`,
+        {
+          'messaging.destination.name': RELAY_REQUEST_CHANNEL,
+          requestId,
+          sessionId,
+          serverName: serverName ?? '',
+          method,
+        },
+        async () => {
+          logger.debug(
+            { event: 'request', requestId, sessionId, serverName: serverName ?? null, method },
+            'MCP relay request',
+          );
+          let result: { status: number; body: unknown };
+          try {
+            result = await dispatch({
+              sessionId,
+              serverName,
+              token,
+              body: parsed.body,
+            });
+          } catch (err) {
+            logger.error(
+              { event: 'dispatch-failed', requestId, sessionId, err },
+              'MCP relay dispatch failed',
+            );
+            result = {
+              status: 502,
+              body: { jsonrpc: '2.0', id: null, error: { code: 'FORWARD_ERROR', message: (err as Error).message } },
+            };
+          }
+          // 响应正文不入日志：第三方 MCP 响应可含凭据，字符串正文 REDACT_PATHS 管不到（contracts/observability.md §6）
+          logger.debug(
+            { event: 'dispatch-result', requestId, status: result.status },
+            'MCP relay dispatch result',
+          );
 
-      try {
-        await getRedisClient().publish(
-          `mcp:relay:response:${parsed.requestId}`,
-          JSON.stringify({ requestId: parsed.requestId, status: result.status, body: result.body }),
-        );
-      } catch (err) {
-        console.error(`[MCP relay] failed to publish response: requestId=${parsed.requestId}: ${(err as Error).message}`);
-      }
+          try {
+            await publish(`mcp:relay:response:${requestId}`, {
+              requestId,
+              status: result.status,
+              body: result.body,
+            });
+          } catch (err) {
+            logger.error({ event: 'publish-failed', requestId, err }, 'failed to publish MCP relay response');
+          }
+        },
+        { parent },
+      );
     });
   }
 

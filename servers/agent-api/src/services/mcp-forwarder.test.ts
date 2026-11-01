@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { context, trace } from '@opentelemetry/api';
+import { AsyncLocalStorageContextManager } from '@opentelemetry/context-async-hooks';
+import { SimpleSpanProcessor, TracerProvider } from '@opentelemetry/sdk-trace';
 
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
@@ -6,6 +9,14 @@ vi.mock('../middleware/redis.js', () => ({
 
 import { getRedisClient } from '../middleware/redis.js';
 import { McpForwarder } from './mcp-forwarder.js';
+import { RecordingExporter } from '../observability/recording-exporter.js';
+
+const mem = new RecordingExporter();
+
+beforeAll(() => {
+  context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable());
+  trace.setGlobalTracerProvider(new TracerProvider({ spanProcessors: [new SimpleSpanProcessor({ exporter: mem })] }));
+});
 
 const REQUEST_CHANNEL = 'mcp:forward:request';
 const RESPONSE_CHANNEL = 'mcp:forward:response';
@@ -111,5 +122,53 @@ describe('McpForwarder', () => {
       error: { code: 'FORWARD_ERROR', message: 'forward exploded' },
     }));
     await expect(promise).rejects.toMatchObject({ name: 'ForwardError', code: 'FORWARD_ERROR', message: 'forward exploded' });
+  });
+});
+
+const A4_TRACE_ID = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+const A4_PARENT_SPAN_ID = '0123456789abcdef';
+
+describe('McpForwarder T-OBS A4 mcp:forward:response 回程链路传播', () => {
+  it('handle span 以回包 _meta.traceparent 为父链路（同 trace、父 span id 对齐）', async () => {
+    const forwarder = new McpForwarder();
+    const promise = forwarder.request({ serverId: 'server-1', sessionId: 'session-1', request: { method: 'tools/call' } });
+    await flushPromises();
+
+    const published = JSON.parse(vi.mocked(redisClient.publish).mock.calls[0][1] as string) as { requestId: string };
+    const onMessage = messageHandlers[0];
+    onMessage(RESPONSE_CHANNEL, JSON.stringify({
+      requestId: published.requestId,
+      response: { jsonrpc: '2.0', result: 'ok' },
+      _meta: { traceparent: `00-${A4_TRACE_ID}-${A4_PARENT_SPAN_ID}-01` },
+    }));
+    await expect(promise).resolves.toEqual({ jsonrpc: '2.0', result: 'ok' });
+
+    const span = mem.spans.find(
+      (s) => s.name === 'mcp:forward:response handle' && s.attributes.requestId === published.requestId,
+    );
+    expect(span).toBeDefined();
+    expect(span!.spanContext().traceId).toBe(A4_TRACE_ID);
+    expect(span!.parentSpanContext?.spanId).toBe(A4_PARENT_SPAN_ID);
+    expect(span!.parentSpanContext?.isRemote).toBe(true);
+  });
+
+  it('_meta 缺失时容错：handle span 仍创建（回退根链路），回程解析不受影响', async () => {
+    const forwarder = new McpForwarder();
+    const promise = forwarder.request({ serverId: 'server-1', sessionId: 'session-1', request: { method: 'tools/call' } });
+    await flushPromises();
+
+    const published = JSON.parse(vi.mocked(redisClient.publish).mock.calls[0][1] as string) as { requestId: string };
+    const onMessage = messageHandlers[0];
+    onMessage(RESPONSE_CHANNEL, JSON.stringify({
+      requestId: published.requestId,
+      response: { jsonrpc: '2.0', result: 'ok' },
+    }));
+    await expect(promise).resolves.toEqual({ jsonrpc: '2.0', result: 'ok' });
+
+    const span = mem.spans.find(
+      (s) => s.name === 'mcp:forward:response handle' && s.attributes.requestId === published.requestId,
+    );
+    expect(span).toBeDefined();
+    expect(span!.parentSpanContext).toBeUndefined();
   });
 });

@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/002-rename-portforward-to-gateway' });
 
 const OLD_COLLECTION = 'portforwards';
 const NEW_COLLECTION = 'gateways';
@@ -8,19 +11,19 @@ export const name = '002-rename-portforward-to-gateway';
 export async function run(): Promise<void> {
   const db = mongoose.connection.db;
   if (!db) {
-    console.log('[Migration 002] No database connection, skipping');
+    log.info('no database connection, skipping');
     return;
   }
 
   const collections = await db.listCollections({ name: OLD_COLLECTION }).toArray();
   if (collections.length === 0) {
-    console.log('[Migration 002] No portforwards collection found, skipping');
+    log.info('no portforwards collection found, skipping');
     return;
   }
 
   const newCollections = await db.listCollections({ name: NEW_COLLECTION }).toArray();
   if (newCollections.length > 0) {
-    console.log('[Migration 002] gateways collection already exists, dropping old collection');
+    log.info('gateways collection already exists, dropping old collection');
     await db.dropCollection(OLD_COLLECTION);
     return;
   }
@@ -35,7 +38,7 @@ export async function run(): Promise<void> {
   ]).toArray();
 
   if (duplicatePorts.length > 0) {
-    console.log(`[Migration 002] Found ${duplicatePorts.length} duplicate port groups, generating unique names`);
+    log.info({ duplicatePortGroups: duplicatePorts.length }, 'duplicate port groups found, generating unique names');
   }
 
   const docs = await gw.find({}).toArray();
@@ -60,5 +63,5 @@ export async function run(): Promise<void> {
   await gw.createIndex({ controllerId: 1, name: 1 }, { unique: true });
   await gw.dropIndex('controllerId_1_port_1');
 
-  console.log(`[Migration 002] Renamed ${docs.length} records from portforwards to gateways`);
+  log.info({ renamed: docs.length }, 'renamed records from portforwards to gateways');
 }

@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/018-drop-legacy-tenantless-unique-indexes' });
 
 export const name = '018-drop-legacy-tenantless-unique-indexes';
 
@@ -66,10 +69,11 @@ export async function run(): Promise<void> {
       if (!index.name || index.name === '_id_') continue;
       if (keySignature(index.key as Record<string, unknown>) !== legacySignature) continue;
       await collection.dropIndex(index.name);
-      console.log(
-        `[Migration 018] dropped legacy unique index ${target.collection}.${index.name} (replaced by ${target.replacedBy})`,
+      log.debug(
+        { collection: target.collection, index: index.name, replacedBy: target.replacedBy },
+        'dropped legacy unique index',
       );
     }
   }
-  console.log('[Migration 018] completed');
+  log.info('migration completed');
 }

@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
+
+const log = logger.child({ component: 'migration/009-preset-harness-kimi-code' });
 
 /**
  * 009-preset-harness-kimi-code：写入云电脑 harness 运行环境预置项「Kimi Code（Harness）」。
@@ -51,14 +54,12 @@ mkdir -p "\${ZAG_DEFAULT_WORKSPACE:-/root/workspace}"
 export async function run(): Promise<void> {
   const byKey = await CloudWorkload.findOne({ presetKey: PRESET_KEY });
   if (byKey) {
-    console.warn(
-      `[Migration 009] preset workload "${PRESET_KEY}" already exists (by presetKey), skipping`,
-    );
+    log.warn({ presetKey: PRESET_KEY }, 'preset workload already exists (by presetKey), skipping');
     return;
   }
   const byName = await CloudWorkload.findOne({ name: PRESET_NAME });
   if (byName) {
-    console.warn(`[Migration 009] workload named "${PRESET_NAME}" already exists, skipping`);
+    log.warn({ name: PRESET_NAME }, 'workload with the same name already exists, skipping');
     return;
   }
 
@@ -73,5 +74,5 @@ export async function run(): Promise<void> {
     workloadKind: 'harness',
     harnessType: 'kimi_code',
   });
-  console.log(`[Migration 009] preset workload "${PRESET_KEY}" created`);
+  log.info({ presetKey: PRESET_KEY }, 'preset workload created');
 }

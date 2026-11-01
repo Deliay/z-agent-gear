@@ -92,10 +92,13 @@ describe('McpForwardConsumer', () => {
     }));
 
     expect(registry.forwardRequest).toHaveBeenCalledWith('proxy_server-1', { method: 'tools/list' });
-    expect(mockRedis.publish).toHaveBeenCalledWith(
-      'mcp:forward:response',
-      JSON.stringify({ requestId: 'req-1', response: { jsonrpc: '2.0', result: { tools: [] } } }),
-    );
+    expect(mockRedis.publish).toHaveBeenCalled();
+    const fwdCall = mockRedis.publish.mock.calls.at(-1)! as [string, string];
+    expect(fwdCall[0]).toBe('mcp:forward:response');
+    expect(JSON.parse(fwdCall[1])).toMatchObject({
+      requestId: 'req-1',
+      response: { jsonrpc: '2.0', result: { tools: [] } },
+    });
   });
 
   it('should publish error when forwarding fails', async () => {
@@ -110,10 +113,13 @@ describe('McpForwardConsumer', () => {
       request: { method: 'tools/call' },
     }));
 
-    expect(mockRedis.publish).toHaveBeenCalledWith(
-      'mcp:forward:response',
-      JSON.stringify({ requestId: 'req-2', error: { code: 'FORWARD_ERROR', message: 'boom' } }),
-    );
+    expect(mockRedis.publish).toHaveBeenCalled();
+    const errCall = mockRedis.publish.mock.calls.at(-1)! as [string, string];
+    expect(errCall[0]).toBe('mcp:forward:response');
+    expect(JSON.parse(errCall[1])).toMatchObject({
+      requestId: 'req-2',
+      error: { code: 'FORWARD_ERROR', message: 'boom' },
+    });
   });
 
   it('should not crash on malformed message', () => {

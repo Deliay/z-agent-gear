@@ -23,7 +23,7 @@ import ControllerListSection from '@/components/settings/ControllerListSection';
 import McpProxyKeySection from '@/components/settings/McpProxyKeySection';
 import McpRegistrySection from '@/components/settings/McpRegistrySection';
 import GithubBindingSection from '@/components/settings/GithubBindingSection';
-import CommitSettingsSection from '@/components/settings/CommitSettingsSection';
+import GitSettingsSection from '@/components/settings/GitSettingsSection';
 import WorkflowSection from '@/components/settings/WorkflowSection';
 import WorkspaceContextBanner from '@/components/settings/WorkspaceContextBanner';
 import ControllerConfigPage from './ControllerConfigPage';
@@ -40,6 +40,7 @@ import {
 const NAV_ITEMS = [
   { id: 'account-section', label: '帐号', icon: User },
   { id: 'github-section', label: 'GitHub 绑定', icon: GitBranch },
+  { id: 'git-section', label: 'Git', icon: GitBranch },
   { id: 'provider-section', label: '供应商设置', icon: Boxes },
   { id: 'model-section', label: '可用模型', icon: Cpu },
   { id: 'controller-section', label: '控制器管理', icon: Server },
@@ -49,11 +50,11 @@ const NAV_ITEMS = [
 
 const NAV_GROUPS = [
   { label: '帐号', items: [NAV_ITEMS[0]] },
-  { label: 'GitHub', items: [NAV_ITEMS[1]] },
-  { label: '模型设置', items: [NAV_ITEMS[2], NAV_ITEMS[3]] },
-  { label: '本地控制器', items: [NAV_ITEMS[4]] },
-  { label: 'MCP 代理', items: [NAV_ITEMS[5]] },
-  { label: '工作流', items: [NAV_ITEMS[6]] },
+  { label: 'Git', items: [NAV_ITEMS[1], NAV_ITEMS[2]] },
+  { label: '模型设置', items: [NAV_ITEMS[3], NAV_ITEMS[4]] },
+  { label: '本地控制器', items: [NAV_ITEMS[5]] },
+  { label: 'MCP 代理', items: [NAV_ITEMS[6]] },
+  { label: '工作流', items: [NAV_ITEMS[7]] },
 ];
 
 export default function SettingsPage() {
@@ -166,7 +167,10 @@ export default function SettingsPage() {
 
           <section id="github-section" className="mb-8 md:mb-10">
             <GithubBindingSection />
-            <CommitSettingsSection />
+          </section>
+
+          <section id="git-section" className="mb-8 md:mb-10">
+            <GitSettingsSection />
           </section>
 
           <section id="provider-section" className="mb-8 md:mb-10">

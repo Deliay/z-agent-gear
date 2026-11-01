@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { BROWSE_FOLDER, GET_HOME_DIRECTORY } from '../../graphql/queries';
 import { CREATE_FOLDER } from '../../graphql/mutations';
+import { logger } from '@/lib/logger';
 import type { FolderEntryData, CreateFolderMutation } from '../../graphql/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -78,7 +79,7 @@ export default function DirectoryPicker({ controllerId, onSelect, onClose }: Dir
         setCurrentPath(data.createFolder.path);
       }
     } catch (err) {
-      console.error('Failed to create folder:', err);
+      logger.error({ err }, 'Failed to create folder');
     }
     setShowNewFolder(false);
     setNewFolderName('');

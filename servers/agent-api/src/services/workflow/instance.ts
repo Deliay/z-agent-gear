@@ -9,6 +9,8 @@ import { workflowEngine } from './engine.js';
 import { validateTemplateGraph } from './template.js';
 import { validateAgentConfigs } from './configured.js';
 import { getRedisClient } from '../../middleware/redis.js';
+import { publish } from '../../middleware/publish.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { getAvailableServerTypes } from './capability.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir } from './worktree-utils.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
@@ -16,6 +18,12 @@ import { GITHUB_PR_PROMPT, GITHUB_PR_PROMPT_KEY, SYSTEM_PROMPT_KEYS } from './pr
 import { actorFilter } from '../workspace-context.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
 import { getWorkspaceContext } from '../workspace-context.js';
+import {
+  commitSettingsService,
+  type ResolvedWorktreeCommitter,
+} from '../commit-settings-service.js';
+
+const logger = rootLogger.child({ component: 'workflow-instance' });
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -49,6 +57,11 @@ export interface InstantiateWorkflowInput {
   name: string;
   nodes: InstantiateNodeInput[];
   createWorkflowWorktree?: boolean | null;
+  /**
+   * Worktree 提交人（覆盖创建者解析）：`undefined` = 按创建者实时解析；
+   * 显式 `null` = 不下发（沿用容器级 bot，Issue 触发人无法识别时使用）。
+   */
+  worktreeCommitter?: ResolvedWorktreeCommitter | null;
 }
 
 /** 工作流实例服务：统一实例化入口 + 实例节点编辑 + 人类节点操作。 */
@@ -150,6 +163,12 @@ class WorkflowInstanceService {
     }
 
     // 5. 创建工作流 Worktree（如果启用）
+    // Worktree 提交人快照：实例化时解析一次（issue 覆盖 > 创建者「提交人」），
+    // 实例级与节点级 Worktree 复用同一快照；两者皆空 = 不下发（沿用容器级 bot）。
+    const worktreeCommitter = await this.resolveWorktreeCommitterSnapshot(
+      userId,
+      input.worktreeCommitter,
+    );
     let workflowWorktreePath: string | undefined;
     let workflowWorktreeBranch: string | undefined;
     if (input.createWorkflowWorktree && workspace.defaultBranch) {
@@ -163,6 +182,7 @@ class WorkflowInstanceService {
           defaultBranch,
         },
         input.name,
+        worktreeCommitter,
       );
       workflowWorktreePath = result.path;
       workflowWorktreeBranch = result.branch;
@@ -218,6 +238,10 @@ class WorkflowInstanceService {
         lastNodeStatus: first ? 'READY' : null,
         workflowWorktreePath,
         workflowWorktreeBranch,
+        worktreeCommitterName: worktreeCommitter?.name ?? null,
+        worktreeCommitterEmail: worktreeCommitter?.email ?? null,
+        worktreeCoAuthorName: worktreeCommitter?.coAuthorName ?? null,
+        worktreeCoAuthorEmail: worktreeCommitter?.coAuthorEmail ?? null,
       });
     } catch (err) {
       // 如果创建实例失败且已创建 Worktree，回滚 Worktree
@@ -230,10 +254,27 @@ class WorkflowInstanceService {
             workflowWorktreeBranch,
           );
         } catch (rollbackErr) {
-          console.error('回滚 Worktree 失败:', rollbackErr);
+          logger.error({ event: 'rollback-worktree-failed', err: rollbackErr }, 'rollback worktree failed');
         }
       }
       throw err;
+    }
+  }
+
+  /**
+   * Worktree 提交人快照解析：调用方显式传入优先（issue 触发人），
+   * 未传入（undefined）时按创建者「提交人」实时解析；解析失败降级 null（bot）。
+   */
+  private async resolveWorktreeCommitterSnapshot(
+    userId: string,
+    explicit: ResolvedWorktreeCommitter | null | undefined,
+  ): Promise<ResolvedWorktreeCommitter | null> {
+    if (explicit !== undefined) return explicit;
+    try {
+      return await commitSettingsService.resolveWorktreeCommitter(userId);
+    } catch (err) {
+      logger.warn({ event: 'resolve-committer-failed', err }, 'resolve worktree committer failed');
+      return null;
     }
   }
 
@@ -242,6 +283,7 @@ class WorkflowInstanceService {
     controllerId: string,
     workspace: { _id: string; name: string; path: string; defaultBranch?: string },
     workflowName: string,
+    committer?: ResolvedWorktreeCommitter | null,
   ): Promise<{ path: string; branch: string }> {
     const redis = getRedisClient();
     
@@ -266,17 +308,16 @@ class WorkflowInstanceService {
     const wtPath = `${worktreeDir}/${safeWorkspaceName}/workflow-${slug}-${uniqueSuffix}`;
 
     const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await redis.publish(
-      'session:command',
-      JSON.stringify({
-        type: 'git:worktree:add',
-        requestId,
-        controllerId,
-        repoPath: workspace.path,
-        worktreePath: wtPath,
-        branch,
-      }),
-    );
+    await publish('session:command', {
+      type: 'git:worktree:add',
+      requestId,
+      controllerId,
+      repoPath: workspace.path,
+      worktreePath: wtPath,
+      branch,
+      // 可选：缺省 = 不写 worktree 身份（沿用容器级 bot；旧 worker 忽略未知字段）
+      ...(committer ? { committer } : {}),
+    });
 
     // 等待控制器响应（最多 30 秒）
     for (let i = 0; i < 30; i++) {
@@ -527,7 +568,7 @@ class WorkflowInstanceService {
     try {
       await prHandlerRegistry.unregisterByInstance(instanceId, reason);
     } catch (err) {
-      console.warn(`[workflow-instance] unregister PR handlers failed (${reason}):`, (err as Error).message);
+      logger.warn({ event: 'unregister-pr-handlers-failed', reason, err }, 'unregister PR handlers failed');
     }
   }
 
@@ -647,7 +688,10 @@ class WorkflowInstanceService {
       try {
         await sessionService.delete(session._id.toString(), userId, { skipAckWait: true });
       } catch (err) {
-        console.error(`删除工作流实例「${instance.name}」的会话失败（${session._id}）：`, err);
+        logger.error(
+          { event: 'delete-instance-session-failed', instanceName: instance.name, sessionId: String(session._id), err },
+          'delete instance session failed',
+        );
       }
     }
     // 清理工作流 Worktree（如果存在）
@@ -664,7 +708,10 @@ class WorkflowInstanceService {
           );
         }
       } catch (err) {
-        console.error(`删除工作流实例「${instance.name}」的 Worktree 失败:`, err);
+        logger.error(
+          { event: 'delete-instance-worktree-failed', instanceName: instance.name, err },
+          'delete instance worktree failed',
+        );
         // 标记清理失败，便于后续孤儿 Worktree 回收
         await WorkflowInstance.updateOne(
           { _id: id },
@@ -684,17 +731,14 @@ class WorkflowInstanceService {
   ): Promise<void> {
     const redis = getRedisClient();
     const requestId = `wtr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await redis.publish(
-      'session:command',
-      JSON.stringify({
-        type: 'git:worktree:remove',
-        requestId,
-        controllerId,
-        repoPath,
-        worktreePath,
-        branch: worktreeBranch,
-      }),
-    );
+    await publish('session:command', {
+      type: 'git:worktree:remove',
+      requestId,
+      controllerId,
+      repoPath,
+      worktreePath,
+      branch: worktreeBranch,
+    });
     // 等待控制器响应（最多 10 秒）
     for (let i = 0; i < 10; i++) {
       const result = await redis.get(`git:worktree:remove:${requestId}`);

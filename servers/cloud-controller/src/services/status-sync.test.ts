@@ -6,10 +6,12 @@ import { K8sJobManager } from './k8s-job-manager.js';
 import { StatusSyncService } from './status-sync.js';
 import { TokenService } from './token-service.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
+import { createTestLogger } from '../observability/testing.js';
 
 const CONNECT_TIMEOUT_MS = 300000;
 
 function setup() {
+  const log = createTestLogger('status-sync');
   const repo = new InMemoryContainerRepository();
   const client = new InMemoryK8sClient();
   const tokenService = new TokenService(repo);
@@ -19,12 +21,18 @@ function setup() {
     runtimeClassName: 'sysbox-runc',
     publicWsEndpoint: 'cloud.example.com:4003',
   });
-  const service = new ContainerService(repo, tokenService, jobManager, {
-    namespace: 'zag-workers',
-    image: 'zero-tools/zag-worker:latest',
-    connectTimeoutMs: CONNECT_TIMEOUT_MS,
-    shutdownGraceMs: 0,
-  });
+  const service = new ContainerService(
+    repo,
+    tokenService,
+    jobManager,
+    {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: CONNECT_TIMEOUT_MS,
+      shutdownGraceMs: 0,
+    },
+    log.logger,
+  );
   const heartbeatTracker = new HeartbeatTracker();
   const statusSync = new StatusSyncService({
     repo,
@@ -34,8 +42,9 @@ function setup() {
     connectTimeoutMs: CONNECT_TIMEOUT_MS,
     image: 'zero-tools/zag-worker:latest',
     reconnectDelayMs: 0,
+    logger: log.logger,
   });
-  return { repo, client, tokenService, jobManager, service, heartbeatTracker, statusSync };
+  return { repo, client, tokenService, jobManager, service, heartbeatTracker, statusSync, log };
 }
 
 describe('StatusSyncService', () => {
@@ -258,6 +267,7 @@ describe('StatusSyncService', () => {
   });
 
   it('T-Y13: stop() during startWatch aborts the newly created watch (建议 G)', async () => {
+    const log = createTestLogger('status-sync');
     const repo = new InMemoryContainerRepository();
     const tokenService = new TokenService(repo);
     const jobManager = new K8sJobManager(new InMemoryK8sClient(), {
@@ -265,12 +275,18 @@ describe('StatusSyncService', () => {
       image: 'zero-tools/zag-worker:latest',
       publicWsEndpoint: 'cloud.example.com:4003',
     });
-    const service = new ContainerService(repo, tokenService, jobManager, {
-      namespace: 'zag-workers',
-      image: 'zero-tools/zag-worker:latest',
-      connectTimeoutMs: CONNECT_TIMEOUT_MS,
-      shutdownGraceMs: 0,
-    });
+    const service = new ContainerService(
+      repo,
+      tokenService,
+      jobManager,
+      {
+        namespace: 'zag-workers',
+        image: 'zero-tools/zag-worker:latest',
+        connectTimeoutMs: CONNECT_TIMEOUT_MS,
+        shutdownGraceMs: 0,
+      },
+      log.logger,
+    );
 
     let releaseWatch: ((unwatch: () => void) => void) | null = null;
     let aborted = 0;
@@ -292,6 +308,7 @@ describe('StatusSyncService', () => {
       connectTimeoutMs: CONNECT_TIMEOUT_MS,
       image: 'zero-tools/zag-worker:latest',
       reconnectDelayMs: 0,
+      logger: log.logger,
     });
 
     const startPromise = statusSync.start();
@@ -309,6 +326,7 @@ describe('StatusSyncService', () => {
   it('T-Y8: rejecting watch-start / rejecting scan never throws out of start()', async () => {
     vi.useFakeTimers();
     try {
+      const log = createTestLogger('status-sync');
       const repo = new InMemoryContainerRepository();
       const tokenService = new TokenService(repo);
       const jobManager = new K8sJobManager(new InMemoryK8sClient(), {
@@ -316,12 +334,18 @@ describe('StatusSyncService', () => {
         image: 'zero-tools/zag-worker:latest',
         publicWsEndpoint: 'cloud.example.com:4003',
       });
-      const service = new ContainerService(repo, tokenService, jobManager, {
-        namespace: 'zag-workers',
-        image: 'zero-tools/zag-worker:latest',
-        connectTimeoutMs: CONNECT_TIMEOUT_MS,
-        shutdownGraceMs: 0,
-      });
+      const service = new ContainerService(
+        repo,
+        tokenService,
+        jobManager,
+        {
+          namespace: 'zag-workers',
+          image: 'zero-tools/zag-worker:latest',
+          connectTimeoutMs: CONNECT_TIMEOUT_MS,
+          shutdownGraceMs: 0,
+        },
+        log.logger,
+      );
       const failingClient: K8sClient = {
         createJob: async () => {},
         getJob: async () => null,
@@ -331,7 +355,6 @@ describe('StatusSyncService', () => {
           throw new Error('apiserver unreachable');
         },
       };
-      const logged: unknown[] = [];
       const statusSync = new StatusSyncService({
         repo,
         k8sClient: failingClient,
@@ -340,23 +363,27 @@ describe('StatusSyncService', () => {
         connectTimeoutMs: CONNECT_TIMEOUT_MS,
         image: 'zero-tools/zag-worker:latest',
         reconnectDelayMs: 0,
-        logger: {
-          info: (...args: unknown[]) => logged.push(args),
-          warn: (...args: unknown[]) => logged.push(args),
-          error: (...args: unknown[]) => logged.push(args),
-        },
+        logger: log.logger,
       });
 
       // watch 建立失败不应把 rejection 抛出 start()
       await expect(statusSync.start()).resolves.toBeUndefined();
-      expect(logged.length).toBeGreaterThan(0);
+      expect(
+        log.records.some(
+          (r) => r.level === 'error' && r.msg === 'failed to establish watch, will retry',
+        ),
+      ).toBe(true);
 
       // 周期巡检中的异步 rejection 也不应打挂进程
+      const recordsBefore = log.records.length;
       repo.findAll = async () => {
         throw new Error('mongo down');
       };
       await vi.advanceTimersByTimeAsync(15000);
-      expect(logged.length).toBeGreaterThan(0);
+      expect(log.records.length).toBeGreaterThan(recordsBefore);
+      expect(
+        log.records.some((r) => r.level === 'error' && r.msg === 'scanTimeouts failed'),
+      ).toBe(true);
 
       statusSync.stop();
     } finally {
@@ -421,6 +448,7 @@ describe('StatusSyncService', () => {
   it('T-Y16: 15s 巡检会驱动工作负载看门狗（裁决 10）', async () => {
     vi.useFakeTimers();
     try {
+      const log = createTestLogger('status-sync');
       const repo = new InMemoryContainerRepository();
       const tokenService = new TokenService(repo);
       const jobManager = new K8sJobManager(new InMemoryK8sClient(), {
@@ -428,12 +456,18 @@ describe('StatusSyncService', () => {
         image: 'zero-tools/zag-worker:latest',
         publicWsEndpoint: 'cloud.example.com:4003',
       });
-      const service = new ContainerService(repo, tokenService, jobManager, {
-        namespace: 'zag-workers',
-        image: 'zero-tools/zag-worker:latest',
-        connectTimeoutMs: CONNECT_TIMEOUT_MS,
-        shutdownGraceMs: 0,
-      });
+      const service = new ContainerService(
+        repo,
+        tokenService,
+        jobManager,
+        {
+          namespace: 'zag-workers',
+          image: 'zero-tools/zag-worker:latest',
+          connectTimeoutMs: CONNECT_TIMEOUT_MS,
+          shutdownGraceMs: 0,
+        },
+        log.logger,
+      );
       let watchdogCalls = 0;
       const statusSync = new StatusSyncService({
         repo,
@@ -443,6 +477,7 @@ describe('StatusSyncService', () => {
         connectTimeoutMs: CONNECT_TIMEOUT_MS,
         image: 'zero-tools/zag-worker:latest',
         reconnectDelayMs: 0,
+        logger: log.logger,
         dispatcher: {
           onWatchdog: async () => {
             watchdogCalls += 1;
