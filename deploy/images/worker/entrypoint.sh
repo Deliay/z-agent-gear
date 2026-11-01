@@ -33,11 +33,16 @@ shutting_down=0
 json_escape() { printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
 log() {
-  local esc time
+  local esc time ver env_name host_name
   esc=$(json_escape "$*")
+  # 契约 T-OBS16「每行可 JSON.parse」：字段值与 msg 一样必须过 json_escape（env/主机名含引号或
+  # 反斜杠时裸插会产生非法 JSON）。pid 为数字，安全。
+  ver=$(json_escape "${ZAG_WORKER_VERSION:-unknown}")
+  env_name=$(json_escape "${NODE_ENV:-development}")
+  host_name=$(json_escape "$(hostname 2>/dev/null || echo unknown)")
   time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   printf '{"level":"info","time":"%s","service":"zag-worker","serviceVersion":"%s","env":"%s","hostname":"%s","pid":%s,"component":"worker-entrypoint","msg":"%s"}\n' \
-    "$time" "${ZAG_WORKER_VERSION:-unknown}" "${NODE_ENV:-development}" "$(hostname 2>/dev/null || echo unknown)" "$$" "$esc"
+    "$time" "$ver" "$env_name" "$host_name" "$$" "$esc"
 }
 
 # 以 worker 身份执行：setpriv 降权 + 显式构造环境（root 环境无 nodejs）。
