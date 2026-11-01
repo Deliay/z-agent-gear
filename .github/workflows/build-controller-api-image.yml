@@ -21,16 +21,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          version: 12.16.1
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-          cache: npm
-          cache-dependency-path: servers/controller-api/package-lock.json
+          cache: pnpm
+          cache-dependency-path: servers/controller-api/pnpm-lock.yaml
 
       # 测试门禁：构建前跑单测，避免带红测试推成 latest
       - name: Install and test
         working-directory: servers/controller-api
-        run: npm ci && npm test
+        run: pnpm install --frozen-lockfile && pnpm test
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,9 +51,23 @@ jobs:
         with:
           context: servers/controller-api
           file: servers/controller-api/Dockerfile
+          load: true
+          push: true
           tags: |
             ${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/controller-api:${{ github.sha }}
             ${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/controller-api:latest
-          push: true
           provenance: false
           sbom: false
+
+      # 单项目依赖隔离断言：镜像内只允许存在当前项目依赖
+      - name: Assert single-project dependencies
+        run: |
+          set -e
+          IMAGE="${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/controller-api:${{ github.sha }}"
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+            cd /app &&
+            test ! -d servers &&
+            test ! -d apps &&
+            test ! -d packages &&
+            pnpm list --depth 0 --prod
+          '

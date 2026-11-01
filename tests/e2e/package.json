@@ -1,6 +1,7 @@
 {
   "name": "agent-web-e2e",
   "private": true,
+  "packageManager": "pnpm@12.16.1",
   "type": "module",
   "scripts": {
     "test": "playwright test",

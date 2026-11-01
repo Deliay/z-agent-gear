@@ -39,18 +39,18 @@ src/
 - **`MqLogger` = pino 子集**：`services/billing/mq/connection.ts` 的 `MqLogger` 即共享模块 `ObservationLogger` 类型；billing 全部调用走 pino 原生签名（禁止 variadic 与字符串拼接）。
 - **migrations 结构化口径**：`src/migrations/**` 与其它源码同规格（`logger.child({ component: 'migration/<编号>-<名称>' })`，`no-console` 守卫扫描全部 `src` 含 `migrations`，任何新增 `console` 即红），见 `common-rules.md`「migrations 结构化口径」。
 - **env 变量**：`LOG_LEVEL` / `LOG_PRETTY`（仅非生产）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 零外发**）/ `OTEL_EXPORTER_OTLP_HEADERS`（**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` 等，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。
-- **排障**：`LOG_PRETTY=1 npm run dev` 看人类可读输出；`LOG_LEVEL=debug` 看高频细节；`OTEL_SDK_DISABLED=true` 关追踪导出（日志不受影响）；JSON 单行日志可直接 `grep`（`grep '"level":"error"'`、`grep '"trace_id":"<trace-id>"'` 跨服务串链路、`grep '"requestId":"<id>"'` 串一次请求）。
+- **排障**：`LOG_PRETTY=1 pnpm run dev` 看人类可读输出；`LOG_LEVEL=debug` 看高频细节；`OTEL_SDK_DISABLED=true` 关追踪导出（日志不受影响）；JSON 单行日志可直接 `grep`（`grep '"level":"error"'`、`grep '"trace_id":"<trace-id>"'` 跨服务串链路、`grep '"requestId":"<id>"'` 串一次请求）。
 
 ## Dev Commands
 
 ```bash
 aspire start             # Start all services via Aspire orchestration
-npm run build            # Compile TypeScript (tsc)
-npm test                 # vitest run
-LOG_PRETTY=1 npm run dev # 单独启动（tsx watch），pretty 人类可读日志
+pnpm run build            # Compile TypeScript (tsc)
+pnpm test                 # vitest run
+LOG_PRETTY=1 pnpm run dev # 单独启动（tsx watch），pretty 人类可读日志
 ```
 
-本项目由 Aspire 编排启动，无需单独运行 `npm run dev`。使用 `aspire describe` 查看 admin-api 的 HTTP endpoint。
+本项目由 Aspire 编排启动，无需单独运行 `pnpm run dev`。使用 `aspire describe` 查看 admin-api 的 HTTP endpoint。
 
 ## TDD Workflow
 
