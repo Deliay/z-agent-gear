@@ -91,6 +91,8 @@
 - 旧 worker / 旧容器忽略未知字段与未知 env，互不影响（向后兼容）。
 - 无效 / 非法 `traceparent` 一律忽略（视为缺失），不得报错。
 
+**RabbitMQ 消费 span（既定口径，不是 bug）**：RabbitMQ 通道**不适用 `_meta` 封套**（发布/消费由 amqplib 自动埋点覆盖）。admin-api billing 消费循环（`servers/admin-api/src/services/billing/mq/consumers.ts` metering / settlement 两处 `channel.consume`）按「订阅回调入口一个 span」口径，**逐消息一个** `messaging.process` span（每次投递的 consume 回调一个）：属性 `messaging.system=rabbitmq`、`messaging.destination.name=<队列>`、`messaging.operation.type=process`、`messaging.batch.message_count` **固定 `1`**（每次投递自成一批）。批内（幂等接入 / 重试 / 结算链门控等多步骤处理）不逐步骤开 span。
+
 ---
 
 ## 5. 共享观测模块（`packages/observability`）
@@ -164,7 +166,7 @@ err.config.headers.authorization
 | 未配置 `OTEL_EXPORTER_OTLP_ENDPOINT`（或 `OTEL_SDK_DISABLED=true`） | SDK 完全不启动：无 exporter、无线程、零外发、`currentTraceIds()` 为空；日志完全不受影响 |
 | 采样丢弃 | `parentbased_traceidratio`（父已采样则子跟随）；被丢弃的请求**仍输出完整日志**，仅无 `trace_id` 字段（日志与采样解耦） |
 | 导出超时 | 5s 超时丢弃本批，只 `debug` 记一条，不重试放大 |
-| 高频通道 | `session:message` / ACP `agent_message_chunk` / 工作负载日志轮询 / 心跳与 watch **不开逐条 span**；在「连接生命周期」「批次」「订阅回调入口」开一个 span 并以属性记录条数（`messaging.batch.message_count`） |
+| 高频通道 | `session:message` / ACP `agent_message_chunk` / 工作负载日志轮询 / 心跳与 watch **不开逐条 span**；在「连接生命周期」「批次」「订阅回调入口」开一个 span 并以属性记录条数（`messaging.batch.message_count`）。RabbitMQ 消费循环逐消息一个 `messaging.process` span、`messaging.batch.message_count` 固定 `1`，属该口径的既定形态（见 §4） |
 | pretty 降级 | 非生产 `LOG_PRETTY=1` 且 `pino-pretty` 不可 `require` 时降级 JSON 并 `warn` 一次 |
 | 进程崩溃 | `uncaughtException`：`logger.fatal` 后 `exit(1)`；`unhandledRejection`：`logger.error` |
 

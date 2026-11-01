@@ -34,10 +34,10 @@ src/
 
 - **日志形态**：pino 单行 JSON（vendored `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。`httpContext()` 提供 `x-request-id` 归一化、HTTP SERVER span 与访问日志（`/health` 为 debug）。
 - **span 清单**：
-  - `messaging.process` — RabbitMQ 计费消费循环**批次 span**（属性 `messaging.batch.message_count`，不逐消息开 span；发布/消费由 amqplib 自动埋点覆盖）。
+  - `messaging.process` — RabbitMQ 计费消费循环**逐消息一个 span**（metering/settlement 消费回调即「订阅回调入口一个 span」口径；`messaging.batch.message_count` 固定 `1`，批内不逐步骤开 span；发布/消费由 amqplib 自动埋点覆盖），登记见 `contracts/observability.md` §4。
 - **审计例外（契约 §6.2 唯一）**：`bootstrapAdminPassword` — 首次 seed 管理员时明文输出**一次**（`msg` 含「审计例外」标记），不进 `REDACT_PATHS`；其余 `password`/`token`/`secret` 类键一律脱敏（`T-OBS3b` 断言边界）。
 - **`MqLogger` = pino 子集**：`services/billing/mq/connection.ts` 的 `MqLogger` 即共享模块 `ObservationLogger` 类型；billing 全部调用走 pino 原生签名（禁止 variadic 与字符串拼接）。
-- **migration 例外**：`src/migrations/**` 不允许修改（历史不可变），迁移文件保留原 `console` 输出（`no-console` 守卫跳过 `migrations` 目录），见 `common-rules.md`「migration 例外」。
+- **migrations 结构化口径**：`src/migrations/**` 与其它源码同规格（`logger.child({ component: 'migration/<编号>-<名称>' })`，`no-console` 守卫扫描全部 `src` 含 `migrations`，任何新增 `console` 即红），见 `common-rules.md`「migrations 结构化口径」。
 - **env 变量**：`LOG_LEVEL` / `LOG_PRETTY`（仅非生产）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 零外发**）/ `OTEL_EXPORTER_OTLP_HEADERS`（**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` 等，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。
 - **排障**：`LOG_PRETTY=1 npm run dev` 看人类可读输出；`LOG_LEVEL=debug` 看高频细节；`OTEL_SDK_DISABLED=true` 关追踪导出（日志不受影响）；JSON 单行日志可直接 `grep`（`grep '"level":"error"'`、`grep '"trace_id":"<trace-id>"'` 跨服务串链路、`grep '"requestId":"<id>"'` 串一次请求）。
 

@@ -153,7 +153,8 @@ npm run start   # Start production server
   - `cloudhost.create` / `cloudhost.start` / `cloudhost.destroy` — 云电脑创建/启动/销毁编排（`cloud-host-service.ts`，属性含 `cloudHostId`/`userId` 等）；
   - `workflow.node.advance` — 工作流**每节点推进一个 span**（`workflow/orchestrator.ts`，属性 `workflowInstanceId`/`nodeId`）；
   - `issues-trigger.scan` — Issues 联动**每轮扫描一个 span**（属性 `candidateCount`；另有 `issues-event handle` / `pr-event handle` 事件入口 span）；
-  - 订阅 `<channel> handle` — 7 个 Redis 订阅者（`permission`/`elicitation`/`harness-login`/`mcp-endpoint`/`session-lifecycle`/`pr-check-run`/`session-sse`）回调入口各一个 span（如 `<SESSION_STATUS_CHANNEL> handle`），父上下文取 `extractTraceparent(payload._meta)`；**`session:message` 高频通道不逐条开 span**。
+  - 订阅 `<channel> handle` — Redis 订阅回调入口各一个 span（`permission`/`elicitation`/`harness-login`/`mcp-endpoint`/`session-lifecycle`/`session-sse`，如 `<SESSION_STATUS_CHANNEL> handle`），父上下文取 `extractTraceparent(payload._meta)`；
+  - **高频豁免**：`workflow/pr-check-run-subscriber` 订阅 `session:message`，按契约 §7 高频通道口径**不逐条开 span**（回调仅结构化日志，`component: 'pr-check-run-subscriber'`，不进 span 清单）。
 - **Socket.IO / Redis `_meta` 封套位置**：Redis 频道报文顶层 `_meta: { traceparent? }` 见 [`contracts/mcp-forward-redis.md`](../../contracts/mcp-forward-redis.md) §7 与 [`contracts/agent-session-websocket.md`](../../contracts/agent-session-websocket.md) §7；39 处发布点一律经 `publishJson(publish, channel, payload)` 注入（`src/middleware/publish.ts`）。
 - **env 变量**：`LOG_LEVEL` / `LOG_PRETTY`（仅非生产）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 零外发**）/ `OTEL_EXPORTER_OTLP_HEADERS`（**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` 等，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。
 - **排障**：`LOG_LEVEL=debug` 看高频细节（`session:message` 逐条为 debug）；`OTEL_SDK_DISABLED=true` 关追踪导出；JSON 单行日志可直接 `grep`（`grep '"requestId":"<id>"'` 串一次请求、`grep '"trace_id":"<trace-id>"'` 跨服务串链路、`grep '"level":"error"'`）。

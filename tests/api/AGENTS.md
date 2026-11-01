@@ -781,9 +781,9 @@ npm test
 | 测试 | 描述 |
 |------|------|
 | T-OBS8 / T-OBS21（`src/observability/vendor-consistency.test.ts`） | vendor 一致性与同步幂等：5 包 7 文件与单源 `packages/observability/src` 内容全等（文件头 `GENERATED ... — DO NOT EDIT` 必须存在）；`node scripts/sync-observability.mjs --check` 重复运行输出一致、退出码 0 |
-| T-OBS19（API 横切，`src/observability/http-crosscut.test.ts`，需 live 服务） | 四服务 `/health` 与 GraphQL 响应带 `x-request-id`；入站合法值（`/^[A-Za-z0-9._:-]{8,128}$/`）沿用、非法值重生成并标注 `requestIdReplaced: true`；错误响应 join 后不含 token/password 明文（以 `INTERNAL_API_TOKEN` / `ADMIN_INITIAL_PASSWORD` 实际值 + 哨兵值断言）。模块加载时探测各服务 `/health`，不可达时对应用例 skip 并输出 `aspire start` 启动指引 |
+| T-OBS19（API 横切，`src/observability/http-crosscut.test.ts`，需 live 服务） | 四服务 `/health` 与 GraphQL 响应带 `x-request-id`；入站合法值（`/^[A-Za-z0-9._:-]{8,128}$/`）沿用、非法值重生成为 UUID v4（以响应头回显断言；日志字段 `requestIdReplaced: true` 由单测 T-OBS12 `servers/cloud-controller/src/observability/http-context.test.ts` 的 `normalizeRequestId` 口径覆盖，live 用例不断言日志字段）；错误响应 join 后不含 token/password 明文（以 `INTERNAL_API_TOKEN` / `ADMIN_INITIAL_PASSWORD` 实际值 + 哨兵值断言）。模块加载时探测各服务 `/health`，不可达时对应用例 skip 并输出 `aspire start` 启动指引 |
 | T-OBS22（publishJson 封套巡检，`src/observability/publish-envelope.test.ts`，静态扫描可独立运行） | agent-api / controller-api 发布点全部经 `publishJson`（静态扫描 + 白名单断言：`redis.publish(` 直接调用数为 0，豁免需行内 `// publish-envelope-ok: <原因>`）；报文顶层注入 `_meta.traceparent` 且消费者容忍 `_meta` 缺失（历史报文行为不变） |
-| 全仓验收扫描（`src/observability/invariant-scan.test.ts`，静态扫描可独立运行） | `servers/*/src` console 直出 0 命中、`packages/agent-controller/src` 命中全部带 `// no-console-allow`、`apps/*/src` 仅 `src/lib/logger.ts` 命中；`interface Logger` 重复声明清零；`src/migrations/`（不允许修改）console 保留为已知偏差，仅统计输出 |
+| 全仓验收扫描（`src/observability/invariant-scan.test.ts`，静态扫描可独立运行） | `servers/*/src` console 直出 0 命中（**含 `src/migrations/`**：迁移已全量结构化，任何新增 console 即红）、`packages/agent-controller/src` 命中全部带 `// no-console-allow`、`apps/*/src` 仅 `src/lib/logger.ts` 命中；`interface Logger` 重复声明清零 |
 
 > `OTEL_*` 环境变量**可选**：未配置 `OTEL_EXPORTER_OTLP_ENDPOINT` = SDK 完全不启动、零外发，T-OBS 系列在无采集端环境下即通过；字段字典 / 传播规则 / 脱敏名单见 `contracts/observability.md`。
 

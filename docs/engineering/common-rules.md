@@ -146,9 +146,9 @@ logger.info('session created', sessionId);       // ❌ 变参形态：sessionId
 
 ### `no-console` 守卫与白名单
 
-- 守卫位置：每运行时包的 `src/observability/no-console.test.ts`（T-OBS7），递归扫描本包 `src` 下全部 `.ts`（含测试文件），命中 `console.<level>(` 即失败。
+- 守卫位置：每运行时包的 `src/observability/no-console.test.ts`（T-OBS7），递归扫描本包 `src` 下全部 `.ts`（含测试文件与 `src/migrations/**`），命中 `console.<level>(` 即失败。
 - 行内白名单：在该行末尾标注 `// no-console-allow: <原因>`（守卫会统计输出白名单条目）；新增白名单必须写明原因，禁止无理由豁免。
-- **migrations 目录除外**（见下「migration 例外」）：`src/migrations/**` 不在守卫范围。
+- **migrations 同规格**（见下「migrations 结构化口径」）：`src/migrations/**` 在守卫范围内，任何新增 `console` 即红。
 
 ### vendor 修改流程（共享观测模块）
 
@@ -160,9 +160,9 @@ logger.info('session created', sessionId);       // ❌ 变参形态：sessionId
 
 详见 [`packages/observability/README.md`](../../packages/observability/README.md)。
 
-### migration 例外（已知偏差登记）
+### migrations 结构化口径
 
-**`src/migrations/**` 不允许修改**（历史不可变：已执行的迁移不得改写，避免账本与历史输出漂移）。因此迁移文件保留原 `console` 输出，`no-console` 守卫跳过 `migrations` 目录，新写迁移也不强制结构化。这与实现计划 `plan/20261030-feat-unified-logging-and-otel.md` §4.5/§4.6 的迁移条目（要求迁移改为 `logger.child({ component: 'migration/NNN' })`）是**已知偏差**，以本条为准。
+`src/migrations/**` 与其它源码**同规格**：迁移日志一律 `logger.child({ component: 'migration/<编号>-<名称>' })`（runner 为 `component: 'migration/runner'`），错误对象进 `err` 字段，禁止 `console` 直出；`no-console` 守卫扫描全部 `src/**/*.ts`（含 `migrations` 目录），任何新增 `console` 即红（守卫含「walker 覆盖 migrations 目录」用例，防整目录跳过）。写新迁移与写其它源码同规格。
 
 ## Test Pitfalls
 

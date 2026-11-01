@@ -93,15 +93,15 @@ src/
 
 ## 回连失败排查（worker 连不上 cloud-controller）
 
-worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日志」时，按下面顺序定位（`LOG_LEVEL=info` 即可，无需改代码）：
+worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日志」时，按下面顺序定位（`LOG_LEVEL=info` 即可，无需改代码）。日志为 pino 单行 JSON（`"component"`/`"event"` 字段化），直接 `grep` 字段或 `msg` 即可命中。
 
-1. **确认 cloud-controller 在跑且日志可见**：`kubectl -n zag-cloud logs deploy/cloud-controller`。进程启动必定打印 `cloud-controller listening on :<port> (engine path /socket.io/ ...)` 与一条 worker 回连提示；若这条都没有，说明看错了 Pod/容器，或服务未启动。
-2. **请求是否到达 Pod**：websocket 握手走 HTTP **upgrade**，不经过 express；命中时会打印
-   `[ws] upgrade accepted path=/socket.io/ ... host=... xfp=... xff=...`。
+1. **确认 cloud-controller 在跑且日志可见**：`kubectl -n zag-cloud logs deploy/cloud-controller`。进程启动必定打印一条启动日志（`grep '"port":'` 或 `grep 'cloud-controller listening'` 命中），`msg` 为 `cloud-controller listening；worker 回连地址为 wss://<PUBLIC_WS_ENDPOINT>/worker，握手实际打到 engine path，Ingress 必须放行该路径`，字段 `port`/`enginePath`/`logLevel`/`publicWsEndpoint`；若这条都没有，说明看错了 Pod/容器，或服务未启动。
+2. **请求是否到达 Pod**：websocket 握手走 HTTP **upgrade**，不经过 express；命中时 `socket-diagnostics` 组件会打印 `"event":"ws-upgrade-accepted"`（`grep '"event":"ws-upgrade-accepted"'`），`msg` 为 `ws upgrade accepted`，字段 `path`/`host`/`xForwardedProto`/`xForwardedFor`/`userAgent`/`remoteAddress`。
    - 完全没有该行 → 请求没到 Pod，问题在入口层（Ingress 路径/TLS/host/DNS/Service）。看 Ingress 控制器日志：`kubectl -n <ingress-ns> logs <ingress-pod>`。
-   - 出现 `[ws] upgrade path mismatch: got "/worker", expected "/socket.io/"` → Ingress 误配成 `/worker`（`/worker` 是 namespace，不是路径）；把 Ingress `spec.rules[].http.paths[].path` 改为 `/socket.io`（Prefix）。
-   - 出现 `[ws] engine connection_error code=... message=...` → 到 Pod 了但被 engine 拒绝（协议版本/CORS/传输不匹配），按 message 处理。
-3. **握手鉴权是否通过**：到达后依次打印 `[worker] handshake attempt ... token=present|MISSING` → `handshake accepted/rejected (INVALID_TOKEN)` → `connected` → `registered`。卡在哪一步即问题所在（token 失效/版本不兼容/register 失败等）。
+   - 出现 `"event":"ws-upgrade-path-mismatch"`（`grep '"event":"ws-upgrade-path-mismatch"'`，字段 `path`/`expectedPath`）→ Ingress 误配成 `/worker`（`/worker` 是 namespace，不是路径）；把 Ingress `spec.rules[].http.paths[].path` 改为 `/socket.io`（Prefix）。误打 `/worker` 的普通 HTTP 请求另有一条 `"event":"worker-path-request"` warn（msg `"/worker" 是 Socket.IO namespace，不是 URL 路径；Ingress 应放行 engine path`）。
+   - 出现 `"event":"engine-connection-error"`（`grep '"event":"engine-connection-error"'`，msg `engine connection_error`，字段 `code`/`err.message`/`context`）→ 到 Pod 了但被 engine 拒绝（协议版本/CORS/传输不匹配），按 message 处理。
+   - 逐请求细节（含 engine path 的 `"event":"http-request"`）默认 debug：`LOG_LEVEL=debug` 查看。
+3. **握手鉴权是否通过**：到达后 `worker-gateway` 组件依次打印 `"event":"handshake_attempt"`（msg `handshake attempt`，字段 `tokenPresent`/`from`/`transport`）→ `"event":"handshake_accepted"` 或 `"event":"handshake_rejected"`（msg `handshake accepted`/`handshake rejected`，拒绝带 `reason: 'INVALID_TOKEN'`、`tokenPresent`）→ `"event":"connected"`（msg `connected`）→ `"event":"registered"`（msg `registered`，字段 `version`/`platform` 经 `sanitizeVersionForLog`）。卡在哪一步即问题所在（token 失效/版本不兼容/register 失败等）；限流看 `"event":"handshake_rate_limited"`、版本/载荷不符看 `"event":"register_rejected"`（`reason: 'VERSION_MISMATCH'|'INVALID_PAYLOAD'`）。
 4. **worker 侧细节**：`Connection error: websocket error` 现在会追加 `(type=... description=... context=...)`，其中 `context` 常含真实 HTTP 状态（如 `unexpected server response (404)`），据此判断是入口层 404 还是 TLS 问题。
 
 > 说明：`/worker` 是 Socket.IO **namespace**，握手实际打 engine path `/socket.io/`；`ZAG_SERVER_ENDPOINT=wss://<host>/worker` 是本仓库既定约定，**不是**让 Ingress 暴露 `/worker`（见契约 `contracts/cloud-controller-websocket.md` §1.2）。
@@ -152,7 +152,7 @@ npm run test:coverage
 
 - **数据口径**：`cloudcontainers.tenantId`（String，`default: null`、`index: true`）为**复制新增**字段，与 `userId` 同类型；personal 期恒等于 `userId`，原 `userId` 字段与筛选维度全保留（不 rename）。写入口径：仅 `purpose=harness` 写入（来自 harness 请求 `tenantId`），`idle` 等未接入租户的容器保持 `null`；读取层对历史行容忍 `null`。
 - **写入校验（F8）**：`parseHarnessRequest` 校验 `tenantId` 为非空字符串并透传 `ContainerService.start → repo.create`；旧版 agent-api 缺省时回退 `tenantId = userId` 并 `console.warn`（发布顺序已保证新 agent-api 先上线，回退仅兜底）；显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
-- **迁移基建（F1）**：`src/migrations/` 按 admin-api 改进版复刻——独立账本集合 `cloud_controller_migrations`（不与 agent-api `migrations`、admin-api `admin_migrations` 混用）、锁 `_lock=migration_lock` 带 `owner` 归属（只释放自己的锁）、5 分钟锁 TTL（过期锁启动时清理后可接管）、**逐迁移吞错**（失败仅 `console.error`、不写账本、继续后续迁移，下次启动重试）。`index.ts` 在 `mongoose.connect` 之后、`httpServer.listen` 之前 `await runMigrations([...])`；runner 整体异常只 warn，不阻断启动（与既有服务一致）。
+- **迁移基建（F1）**：`src/migrations/` 按 admin-api 改进版复刻——独立账本集合 `cloud_controller_migrations`（不与 agent-api `migrations`、admin-api `admin_migrations` 混用）、锁 `_lock=migration_lock` 带 `owner` 归属（只释放自己的锁）、5 分钟锁 TTL（过期锁启动时清理后可接管）、**逐迁移吞错**（失败仅记 `logger.error`（`event: 'migration-failed'`，`component: 'migration/runner'`）、不写账本、继续后续迁移，下次启动重试）。`index.ts` 在 `mongoose.connect` 之后、`httpServer.listen` 之前 `await runMigrations([...])`；runner 整体异常只 warn，不阻断启动（与既有服务一致）。
 - **迁移 001**：`001-cloudcontainers-tenant-id-backfill` 以聚合管线 `updateMany({userId 存在且非空, tenantId 缺失/null}, [{$set:{tenantId:'$userId'}}])` 回填存量行（单次库内更新，无需拉回应用侧），随后显式 `createIndex({tenantId:1})`；已回填行不再命中，幂等可重跑。`userId` 缺失的行跳过、不改动。
 - **只读镜像**：`servers/agent-api/src/models/cloud-container.ts` 同步 `tenantId` 字段（schema 注释标注与 cloud-controller 同步演进），写方仍仅本服务。
 
