@@ -35,7 +35,12 @@ export class WorktreeService {
     repoPath: string,
     worktreePath: string,
     branch: string,
-    committer?: { name: string; email: string },
+    committer?: {
+      name: string;
+      email: string;
+      coAuthorName?: string;
+      coAuthorEmail?: string;
+    },
   ): Promise<void> {
     await this.emitToController(controllerId, 'git:worktree:add', {
       requestId,

@@ -1,7 +1,7 @@
 import { exec, type ExecException } from 'child_process';
-import { mkdirSync, rmSync, existsSync } from 'fs';
+import { chmodSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { dirname, join } from 'path';
+import { dirname, join, resolve } from 'path';
 import { logger as rootLogger, type ObservationLogger } from './observability/logger.js';
 
 function expandTilde(p: string): string {
@@ -35,10 +35,56 @@ export interface WorktreeAddResult {
   error?: string;
 }
 
-/** Worktree 级提交人（`git:worktree:add` 可选载荷，缺省 = 不写身份）。 */
+/**
+ * Worktree 级提交人（`git:worktree:add` 可选载荷，缺省 = 不写身份）。
+ * `coAuthorName/coAuthorEmail` 成对出现时，后续提交自动追加 `Co-authored-by` trailer。
+ */
 export interface WorktreeCommitter {
   name: string;
   email: string;
+  coAuthorName?: string;
+  coAuthorEmail?: string;
+}
+
+/** 共同作者 hook 的受管标记：文件内容固定，不含用户数据。 */
+export const CO_AUTHOR_HOOK_MARKER = '# zag-managed';
+export const CO_AUTHOR_HOOK_DIR = 'zag-hooks';
+export const CO_AUTHOR_HOOK_NAME = 'prepare-commit-msg';
+
+/** 共同作者 hook：从当前 worktree 生效配置读取 trailer，缺省（无配置）直接放行。 */
+export function renderCoAuthorHook(): string {
+  return [
+    '#!/bin/sh',
+    `${CO_AUTHOR_HOOK_MARKER}: append Co-authored-by trailer from worktree config (idempotent)`,
+    'MSG="$1"',
+    '[ -n "$MSG" ] || exit 0',
+    'NAME=$(git config --get zag.coAuthorName 2>/dev/null) || exit 0',
+    'EMAIL=$(git config --get zag.coAuthorEmail 2>/dev/null) || exit 0',
+    '[ -n "$NAME" ] && [ -n "$EMAIL" ] || exit 0',
+    'TRAILER="Co-authored-by: $NAME <$EMAIL>"',
+    'grep -qF "$TRAILER" "$MSG" 2>/dev/null && exit 0',
+    'git interpret-trailers --in-place --trailer "$TRAILER" "$MSG" 2>/dev/null \\',
+    "  || printf '\\n%s\\n' \"$TRAILER\" >> \"$MSG\"",
+    'exit 0',
+    '',
+  ].join('\n');
+}
+
+function isControlFree(value: string): boolean {
+  return !/[\r\n\0]/.test(value);
+}
+
+/** 共同作者成对净化：只有两个字段都合法时才启用，否则整体忽略。 */
+function normalizeCoAuthor(
+  committer: Partial<WorktreeCommitter>,
+): { coAuthorName: string; coAuthorEmail: string } | undefined {
+  const { coAuthorName, coAuthorEmail } = committer;
+  if (typeof coAuthorName !== 'string' || typeof coAuthorEmail !== 'string') return undefined;
+  const name = coAuthorName.trim();
+  const email = coAuthorEmail.trim();
+  if (!name || !email) return undefined;
+  if (!isControlFree(name) || !isControlFree(email)) return undefined;
+  return { coAuthorName: name, coAuthorEmail: email };
 }
 
 /**
@@ -50,7 +96,8 @@ function normalizeCommitter(committer?: WorktreeCommitter): WorktreeCommitter | 
   const { name, email } = committer as Partial<WorktreeCommitter>;
   if (typeof name !== 'string' || name.trim().length === 0) return undefined;
   if (typeof email !== 'string' || email.trim().length === 0) return undefined;
-  return { name, email };
+  const coAuthor = normalizeCoAuthor(committer as Partial<WorktreeCommitter>);
+  return coAuthor ? { name, email, ...coAuthor } : { name, email };
 }
 
 export interface WorktreeRemoveResult {
@@ -124,7 +171,7 @@ export class WorktreeHandler {
    * - `extensions.worktreeConfig true` 落在共享配置（幂等，重复 set 同值无副作用）；
    * - `--worktree user.name/user.email` 落在 `.git/worktrees/<name>/config.worktree`；
    * - name/email 为**用户可控值**，一律经 `shellQuote` 转义后拼接；
-   * - 单条失败仅 `console.warn`，不阻断 worktree 创建（身份缺失可接受）。
+   * - 单条失败仅 `this.log.warn`，不阻断 worktree 创建（身份缺失可接受）。
    */
   private async applyWorktreeCommitter(worktreePath: string, committer: WorktreeCommitter): Promise<void> {
     const pathArg = shellQuote(worktreePath);
@@ -139,6 +186,62 @@ export class WorktreeHandler {
       } catch (err) {
         // 不输出 name/email 值（用户数据），仅记录失败步骤与原因
         this.log.warn({ err }, '写入 worktree 提交人配置失败（忽略）');
+      }
+    }
+
+    if (committer.coAuthorName && committer.coAuthorEmail) {
+      await this.applyWorktreeCoAuthor(
+        worktreePath,
+        committer.coAuthorName,
+        committer.coAuthorEmail,
+      );
+    }
+  }
+
+  /**
+   * 安装 worktree 级共同作者 hook（仅作用于该 worktree）。
+   *
+   * - 通过 `rev-parse --path-format=absolute --git-common-dir` 定位共享 git 目录，
+   *   在 `<common>/zag-hooks/` 写单一受管 hook（多 worktree 共用，行为由各自 config.worktree 决定）；
+   * - `core.hooksPath` / `zag.coAuthorName` / `zag.coAuthorEmail` 一律 `--worktree` 写入；
+   * - 任一步失败只告警，不阻断 worktree 创建。
+   */
+  private async applyWorktreeCoAuthor(
+    worktreePath: string,
+    coAuthorName: string,
+    coAuthorEmail: string,
+  ): Promise<void> {
+    const pathArg = shellQuote(worktreePath);
+    let hookDir: string;
+    try {
+      const { stdout } = await execAsync(
+        `git -C ${pathArg} rev-parse --path-format=absolute --git-common-dir`,
+      );
+      const commonDir = stdout.trim();
+      if (!commonDir) throw new Error('git-common-dir is empty');
+      // `--path-format=absolute` 保证绝对路径；兼容旧 git 的相对输出时以 worktree 为基准解析。
+      hookDir = join(resolve(worktreePath, commonDir), CO_AUTHOR_HOOK_DIR);
+      mkdirSync(hookDir, { recursive: true });
+      const hookPath = join(hookDir, CO_AUTHOR_HOOK_NAME);
+      writeFileSync(hookPath, renderCoAuthorHook(), { mode: 0o755 });
+      chmodSync(hookPath, 0o755);
+    } catch (err) {
+      // 不输出路径/用户数据，仅记录失败原因
+      this.log.warn({ err }, '写入 worktree 共同作者 hook 失败（忽略）');
+      return;
+    }
+
+    const commands = [
+      `git -C ${pathArg} config --worktree core.hooksPath ${shellQuote(hookDir)}`,
+      `git -C ${pathArg} config --worktree zag.coAuthorName ${shellQuote(coAuthorName)}`,
+      `git -C ${pathArg} config --worktree zag.coAuthorEmail ${shellQuote(coAuthorEmail)}`,
+    ];
+    for (const command of commands) {
+      try {
+        await execAsync(command);
+      } catch (err) {
+        // 不输出共同作者值（服务端数据），仅记录失败步骤与原因
+        this.log.warn({ err }, '写入 worktree 共同作者配置失败（忽略）');
       }
     }
   }

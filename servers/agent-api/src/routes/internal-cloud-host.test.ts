@@ -311,6 +311,15 @@ describe('internal cloud host routes', () => {
       expect(await response.json()).toEqual({ mode: 'unset' });
     });
 
+    it('T-IC-B4: 主机不存在（含软删）返回 unset，不解析 bot', async () => {
+      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue(null);
+
+      const response = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ mode: 'unset' });
+      expect(commitSettingsService.resolveCloudHostIdentity).not.toHaveBeenCalled();
+    });
+
     it('T-IC-B3: 双鉴权与永不 404 不变（无凭据 401、错 key 403、INTERNAL_API_TOKEN 放行、主机缺失仍 200）', async () => {
       const noAuth = await fetch(
         `${baseUrl}/internal/cloud-hosts/${CONTROLLER_ID}/commit-identity`,

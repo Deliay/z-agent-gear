@@ -47,6 +47,7 @@ const COMMIT_SETTINGS = `
       committerType
       customName
       customEmail
+      commitWithBot
     }
   }
 `;
@@ -57,6 +58,7 @@ const UPDATE_COMMIT_SETTINGS = `
       committerType
       customName
       customEmail
+      commitWithBot
     }
   }
 `;
@@ -171,6 +173,7 @@ describe('GitHub Binding API', () => {
         committerType: 'UNSET',
         customName: null,
         customEmail: null,
+        commitWithBot: false,
       });
     });
 
@@ -185,6 +188,7 @@ describe('GitHub Binding API', () => {
         committerType: 'CUSTOM',
         customName: 'Zhang San',
         customEmail: 'zhangsan@example.com',
+        commitWithBot: false,
       });
 
       const res = await gqlRequest(COMMIT_SETTINGS, undefined, token);
@@ -200,6 +204,25 @@ describe('GitHub Binding API', () => {
         expect(rows[0].workspaceId).toBeUndefined();
         expect(rows[0].committerMode).toBeUndefined();
       }
+    });
+
+    it('T-CB-API2: 保存 / 回读 commitWithBot；UNSET 归一 false', async () => {
+      const saved = await update({
+        committerType: 'CUSTOM',
+        customName: 'Zhang San',
+        customEmail: 'zhangsan@example.com',
+        commitWithBot: true,
+      });
+      expect(saved.errors).toBeUndefined();
+      expect(saved.data.updateCommitSettings).toMatchObject({ commitWithBot: true });
+
+      const res = await gqlRequest(COMMIT_SETTINGS, undefined, token);
+      const body = await res.json();
+      expect(body.data.commitSettings.commitWithBot).toBe(true);
+
+      const unset = await update({ committerType: 'UNSET', commitWithBot: true });
+      expect(unset.errors).toBeUndefined();
+      expect(unset.data.updateCommitSettings).toMatchObject({ commitWithBot: false });
     });
 
     it('T-CS-API3: 白名单 invalid custom committer 逐字 + 校验矩阵', async () => {
@@ -234,6 +257,7 @@ describe('GitHub Binding API', () => {
         committerType: 'UNSET',
         customName: null,
         customEmail: null,
+        commitWithBot: false,
       });
 
       const otherRes = await gqlRequest(

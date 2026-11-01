@@ -38,7 +38,7 @@ const GITHUB_ACCOUNTS = `
 const COMMIT_SETTINGS = `
   query TeamCommitSettings {
     commitSettings {
-      committerType customName customEmail
+      committerType customName customEmail commitWithBot
     }
   }
 `;
@@ -46,7 +46,7 @@ const COMMIT_SETTINGS = `
 const UPDATE_COMMIT_SETTINGS = `
   mutation TeamUpdateCommitSettings($input: CommitSettingsInput!) {
     updateCommitSettings(input: $input) {
-      committerType customName customEmail
+      committerType customName customEmail commitWithBot
     }
   }
 `;
@@ -263,6 +263,7 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
         committerType: 'CUSTOM',
         customName: 'Dev Committer',
         customEmail: 'dev@example.com',
+        commitWithBot: false,
       });
 
       const readbackInGlobal = await gqlCtx(COMMIT_SETTINGS, undefined, developer.token, teamGlobalId);
@@ -350,6 +351,7 @@ describe('多租户二期：团队工作区 GitHub 共享绑定（T-GH-WS）', (
         committerType: 'CUSTOM',
         customName: 'Admin Committer',
         customEmail: 'admin@example.com',
+        commitWithBot: false,
       });
 
       const readback = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, teamGlobalId);

@@ -114,6 +114,9 @@ const workflowInstanceSchema = new mongoose.Schema(
     // Worktree 提交人快照（实例化时解析一次；null = 不下发，沿用容器级 bot）
     worktreeCommitterName: { type: String, default: null },
     worktreeCommitterEmail: { type: String, default: null },
+    // 与 bot 共同提交（成员级开关在 Worktree 创建时的快照；null = 不追加共同作者）
+    worktreeCoAuthorName: { type: String, default: null },
+    worktreeCoAuthorEmail: { type: String, default: null },
     // Worktree 清理失败标记（deleteInstance 时清理失败，孤儿 worktree 需手动回收）
     worktreeCleanupFailed: { type: Boolean, default: false },
   },
