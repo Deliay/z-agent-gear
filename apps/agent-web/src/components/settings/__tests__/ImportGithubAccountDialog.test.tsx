@@ -24,6 +24,7 @@ const UNSET_SETTINGS: CommitSettings = {
   committerType: 'UNSET',
   customName: null,
   customEmail: null,
+  commitWithBot: false,
 };
 
 const ACCOUNTS: PersonalGithubAccount[] = [
@@ -133,6 +134,7 @@ describe('ImportGithubAccountDialog', () => {
               committerType: 'CUSTOM',
               customName: '自定义名字',
               customEmail: 'custom@example.com',
+              commitWithBot: false,
             },
           },
         });

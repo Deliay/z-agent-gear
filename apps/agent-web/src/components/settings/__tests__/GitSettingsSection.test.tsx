@@ -25,6 +25,7 @@ const UNSET_SETTINGS: CommitSettings = {
   committerType: 'UNSET',
   customName: null,
   customEmail: null,
+  commitWithBot: false,
 };
 
 const ACCOUNTS: PersonalGithubAccount[] = [
@@ -110,6 +111,7 @@ describe('GitSettingsSection', () => {
               committerType: 'UNSET',
               customName: null,
               customEmail: null,
+              commitWithBot: false,
             },
           },
         });
@@ -187,6 +189,7 @@ describe('GitSettingsSection', () => {
           committerType: 'CUSTOM',
           customName: 'Zhang San',
           customEmail: 'zhangsan@example.com',
+          commitWithBot: false,
         },
       });
       render(<GitSettingsSection />);
@@ -203,6 +206,7 @@ describe('GitSettingsSection', () => {
           committerType: 'CUSTOM',
           customName: 'Zhang San',
           customEmail: 'zhangsan@example.com',
+          commitWithBot: false,
         },
       });
       render(<GitSettingsSection />);
@@ -210,6 +214,87 @@ describe('GitSettingsSection', () => {
       fireEvent.click(saveButton());
 
       expect(await screen.findByRole('alert')).toHaveTextContent('unexpected backend failure');
+    });
+  });
+
+  // T-FE-G4：与 bot 共同提交
+  describe('T-FE-G4 与 bot 共同提交', () => {
+    it('未设置提交人时勾选项置灰并提示', () => {
+      render(<GitSettingsSection />);
+
+      const checkbox = screen.getByRole('checkbox', { name: '与 bot 共同提交' });
+      expect(checkbox).not.toBeChecked();
+      expect(checkbox).toBeDisabled();
+      expect(screen.getByText('设置提交人后可勾选')).toBeInTheDocument();
+    });
+
+    it('自定义 + 勾选后保存提交 commitWithBot=true', async () => {
+      render(<GitSettingsSection />);
+
+      fireEvent.click(typeGroup().getByRole('radio', { name: '自定义' }));
+      fireEvent.change(screen.getByLabelText('用户名'), { target: { value: 'Zhang San' } });
+      fireEvent.change(screen.getByLabelText('邮箱'), { target: { value: 'zhangsan@example.com' } });
+      fireEvent.click(screen.getByRole('checkbox', { name: '与 bot 共同提交' }));
+
+      expect(screen.getByRole('checkbox', { name: '与 bot 共同提交' })).toBeChecked();
+      fireEvent.click(saveButton());
+
+      await waitFor(() => {
+        expect(mockUpdateCommitSettings).toHaveBeenCalledWith({
+          variables: {
+            input: {
+              committerType: 'CUSTOM',
+              customName: 'Zhang San',
+              customEmail: 'zhangsan@example.com',
+              commitWithBot: true,
+            },
+          },
+        });
+      });
+    });
+
+    it('服务端返回 commitWithBot=true 时正确回显勾选', () => {
+      mockQueries({
+        settings: {
+          committerType: 'CUSTOM',
+          customName: 'Zhang San',
+          customEmail: 'zhangsan@example.com',
+          commitWithBot: true,
+        },
+      });
+      render(<GitSettingsSection />);
+
+      expect(screen.getByRole('checkbox', { name: '与 bot 共同提交' })).toBeChecked();
+    });
+
+    it('切换回未设置时取消勾选并按 false 保存', async () => {
+      mockQueries({
+        settings: {
+          committerType: 'CUSTOM',
+          customName: 'Zhang San',
+          customEmail: 'zhangsan@example.com',
+          commitWithBot: true,
+        },
+      });
+      render(<GitSettingsSection />);
+
+      fireEvent.click(typeGroup().getByRole('radio', { name: '未设置' }));
+      expect(screen.getByRole('checkbox', { name: '与 bot 共同提交' })).not.toBeChecked();
+      expect(screen.getByRole('checkbox', { name: '与 bot 共同提交' })).toBeDisabled();
+
+      fireEvent.click(saveButton());
+      await waitFor(() => {
+        expect(mockUpdateCommitSettings).toHaveBeenCalledWith({
+          variables: {
+            input: {
+              committerType: 'UNSET',
+              customName: null,
+              customEmail: null,
+              commitWithBot: false,
+            },
+          },
+        });
+      });
     });
   });
 
@@ -221,6 +306,7 @@ describe('GitSettingsSection', () => {
           committerType: 'CUSTOM',
           customName: 'Zhang San',
           customEmail: 'zhangsan@example.com',
+          commitWithBot: false,
         },
       });
       render(<GitSettingsSection />);
@@ -237,6 +323,7 @@ describe('GitSettingsSection', () => {
             committerType: 'CUSTOM',
             customName: 'Zhang San',
             customEmail: 'zhangsan@example.com',
+            commitWithBot: false,
           },
         },
       });
@@ -256,6 +343,7 @@ describe('GitSettingsSection', () => {
               committerType: 'CUSTOM',
               customName: 'Zhang San',
               customEmail: 'zhangsan@example.com',
+              commitWithBot: false,
             },
           },
         });
@@ -280,6 +368,7 @@ describe('GitSettingsSection', () => {
           committerType: 'CUSTOM',
           customName: 'Zhang San',
           customEmail: 'zhangsan@example.com',
+          commitWithBot: false,
         },
       });
       rerender(<GitSettingsSection />);

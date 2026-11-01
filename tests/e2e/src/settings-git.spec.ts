@@ -8,6 +8,7 @@ interface CommitSettingsFixture {
   committerType: 'CUSTOM' | 'UNSET';
   customName: string | null;
   customEmail: string | null;
+  commitWithBot: boolean;
 }
 
 interface PersonalAccountFixture {
@@ -21,6 +22,7 @@ const EMPTY_SETTINGS: CommitSettingsFixture = {
   committerType: 'UNSET',
   customName: null,
   customEmail: null,
+  commitWithBot: false,
 };
 
 /** 内联 1x1 占位图：避免 E2E 出站拉取真实头像（截图/离线环境均可断言）。 */
@@ -104,6 +106,7 @@ async function mockGitGraphQL(
               committerType: 'CUSTOM',
               customName: (input.customName ?? '').trim(),
               customEmail: (input.customEmail ?? '').trim(),
+              commitWithBot: input.commitWithBot === true,
             }
           : { ...EMPTY_SETTINGS };
       updates.push(saved);
@@ -177,6 +180,7 @@ test.describe('Settings Git E2E', () => {
       committerType: 'CUSTOM',
       customName: 'Git E2E User',
       customEmail: 'git-e2e@example.com',
+      commitWithBot: false,
     });
 
     // 切回「未设置」→ 保存后服务端清空自定义字段
@@ -234,6 +238,7 @@ test.describe('Settings Git E2E', () => {
       committerType: 'CUSTOM',
       customName: SECOND_ACCOUNT.githubLogin,
       customEmail: editedEmail,
+      commitWithBot: false,
     });
   });
 
@@ -300,6 +305,33 @@ test.describe('Settings Git E2E', () => {
     await expect(save).toBeEnabled();
   });
 
+  test('E2E-CB1: 「与 bot 共同提交」未设置时置灰，自定义勾选后保存并回显', async ({ page }) => {
+    const mocked = await mockGitGraphQL(page);
+    await openSettings(page);
+    const git = gitSection(page);
+    const checkbox = git.getByRole('checkbox', { name: '与 bot 共同提交' });
+
+    await expect(checkbox).not.toBeChecked();
+    await expect(checkbox).toBeDisabled();
+    await expect(git.getByText('设置提交人后可勾选')).toBeVisible();
+
+    await committerTypeGroup(page).getByRole('radio', { name: '自定义' }).check();
+    await git.getByLabel('用户名').fill('Git E2E User');
+    await git.getByLabel('邮箱').fill('git-e2e@example.com');
+    await expect(checkbox).toBeEnabled();
+    await expect(git.getByText('设置提交人后可勾选')).toHaveCount(0);
+    await checkbox.check();
+    await git.getByRole('button', { name: '保存 Git 设置' }).click();
+    await expect(page.getByText(SAVE_TOAST)).toBeVisible({ timeout: 5000 });
+
+    expect(mocked.updates[0]).toMatchObject({ commitWithBot: true });
+    expect(mocked.current().commitWithBot).toBe(true);
+
+    await page.reload();
+    await expect(committerTypeGroup(page).getByRole('radio', { name: '自定义' })).toBeChecked();
+    await expect(git.getByRole('checkbox', { name: '与 bot 共同提交' })).toBeChecked();
+  });
+
   test('E2E-GIT4: 存量设置等价回显（GitHub login + noreply 邮箱）并与保存值一致', async ({
     page,
   }) => {
@@ -308,6 +340,7 @@ test.describe('Settings Git E2E', () => {
       committerType: 'CUSTOM',
       customName: 'octocat',
       customEmail: '583231+octocat@users.noreply.github.com',
+      commitWithBot: false,
     };
     const mocked = await mockGitGraphQL(page, { initialSettings: legacySettings });
     await openSettings(page);

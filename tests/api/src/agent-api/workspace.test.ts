@@ -1386,7 +1386,7 @@ const DELETE_PROVIDER = `mutation DeleteProvider($id: ID!) { deleteProvider(id: 
 const COMMIT_SETTINGS = `
   query CommitSettings {
     commitSettings {
-      committerType customName customEmail
+      committerType customName customEmail commitWithBot
     }
   }
 `;
@@ -1394,7 +1394,7 @@ const COMMIT_SETTINGS = `
 const UPDATE_COMMIT_SETTINGS = `
   mutation UpdateCommitSettings($input: CommitSettingsInput!) {
     updateCommitSettings(input: $input) {
-      committerType customName customEmail
+      committerType customName customEmail commitWithBot
     }
   }
 `;
@@ -1703,6 +1703,7 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
       committerType: 'UNSET',
       customName: null,
       customEmail: null,
+      commitWithBot: false,
     });
 
     // 普通工作区保存后：团队全局工作区读到同一份（成员级，与工作区无关）
@@ -1717,6 +1718,7 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
       committerType: 'CUSTOM',
       customName: 'Member Committer',
       customEmail: 'member@example.com',
+      commitWithBot: false,
     });
 
     const inGlobal = await gqlCtx(COMMIT_SETTINGS, undefined, admin.token, teamGlobalId);
@@ -1732,6 +1734,7 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
       committerType: 'CUSTOM',
       customName: 'Member Committer',
       customEmail: 'member@example.com',
+      commitWithBot: false,
     });
 
     // 成员独立：developer 的设置不受 admin 影响
@@ -1741,6 +1744,7 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
       committerType: 'UNSET',
       customName: null,
       customEmail: null,
+      commitWithBot: false,
     });
 
     // 落库口径：tenantId = 成员归属租户（personal，= userId），而非保存上下文租户（team）

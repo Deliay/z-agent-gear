@@ -378,6 +378,7 @@ export const UPDATE_COMMIT_SETTINGS = gql`
       committerType
       customName
       customEmail
+      commitWithBot
     }
   }
 `

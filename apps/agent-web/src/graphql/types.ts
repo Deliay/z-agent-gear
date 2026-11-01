@@ -891,12 +891,16 @@ export interface CommitSettings {
   /** committerType = CUSTOM 时为自定义用户名/邮箱，其余为 null */
   customName: string | null
   customEmail: string | null
+  /** 与 bot 共同提交：仅 CUSTOM 时可为 true；UNSET 恒 false */
+  commitWithBot: boolean
 }
 
 export interface CommitSettingsInput {
   committerType: CommitterType
   customName?: string | null
   customEmail?: string | null
+  /** 缺省 false；UNSET 时服务端归一 false */
+  commitWithBot?: boolean
 }
 
 /** 「导入Github帐号信息」弹窗条目（Query.personalGithubAccounts） */

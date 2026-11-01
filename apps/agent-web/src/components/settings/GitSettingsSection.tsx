@@ -66,6 +66,7 @@ export default function GitSettingsSection() {
   const [committerType, setCommitterType] = useState<CommitterType>('UNSET')
   const [customName, setCustomName] = useState('')
   const [customEmail, setCustomEmail] = useState('')
+  const [commitWithBot, setCommitWithBot] = useState(false)
   const [serverError, setServerError] = useState<string | null>(null)
   const [importOpen, setImportOpen] = useState(false)
 
@@ -81,6 +82,7 @@ export default function GitSettingsSection() {
     setCommitterType(commitSettings.committerType)
     setCustomName(commitSettings.customName ?? '')
     setCustomEmail(commitSettings.customEmail ?? '')
+    setCommitWithBot(commitSettings.commitWithBot)
   }, [commitSettings])
 
   const blockingMessage =
@@ -98,6 +100,7 @@ export default function GitSettingsSection() {
     setCommitterType(settings.committerType)
     setCustomName(settings.customName ?? '')
     setCustomEmail(settings.customEmail ?? '')
+    setCommitWithBot(settings.commitWithBot)
   }
 
   const handleImportSelect = (account: PersonalGithubAccount) => {
@@ -114,6 +117,7 @@ export default function GitSettingsSection() {
       committerType,
       customName: null,
       customEmail: null,
+      commitWithBot: committerType === 'CUSTOM' ? commitWithBot : false,
     }
     if (committerType === 'CUSTOM') {
       input.customName = customName.trim()
@@ -158,12 +162,36 @@ export default function GitSettingsSection() {
                 onChange={() => {
                   markDirty()
                   setCommitterType(option.value)
+                  if (option.value !== 'CUSTOM') setCommitWithBot(false)
                 }}
               />
               <span>{option.label}</span>
             </label>
           ))}
         </div>
+      </div>
+
+      <div className="space-y-1">
+        <label
+          className={`flex items-center gap-2 text-sm ${
+            committerType === 'CUSTOM' ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'
+          }`}
+        >
+          <input
+            type="checkbox"
+            name="git-commit-with-bot"
+            checked={committerType === 'CUSTOM' && commitWithBot}
+            disabled={committerType !== 'CUSTOM'}
+            onChange={(event) => {
+              markDirty()
+              setCommitWithBot(event.target.checked)
+            }}
+          />
+          <span>与 bot 共同提交</span>
+        </label>
+        {committerType !== 'CUSTOM' && (
+          <p className="text-xs text-muted-foreground">设置提交人后可勾选</p>
+        )}
       </div>
 
       {committerType === 'CUSTOM' && (

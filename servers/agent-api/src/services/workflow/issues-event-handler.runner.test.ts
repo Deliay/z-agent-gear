@@ -589,7 +589,12 @@ describe('IssuesTriggerRunner 触发人身份优先级（T-GH-S3/S4）', () => {
     h.triggerFindById.mockReturnValue(
       pending({ triggerUserId: TRIGGER_USER_ID, triggerSenderId: 583231, triggerSenderLogin: 'octocat' }),
     );
-    h.resolveWorktreeCommitter.mockResolvedValue({ name: 'Deliay', email: 'deliay@example.com' });
+    h.resolveWorktreeCommitter.mockResolvedValue({
+      name: 'Deliay',
+      email: 'deliay@example.com',
+      coAuthorName: 'zag-bot[bot]',
+      coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+    });
     mockInstantiated();
 
     await runner.advance(TRIGGER_ID);
@@ -598,6 +603,8 @@ describe('IssuesTriggerRunner 触发人身份优先级（T-GH-S3/S4）', () => {
     expect(instantiateArg().worktreeCommitter).toEqual({
       name: 'Deliay',
       email: 'deliay@example.com',
+      coAuthorName: 'zag-bot[bot]',
+      coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
     });
   });
 

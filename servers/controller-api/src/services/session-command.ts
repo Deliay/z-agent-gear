@@ -42,7 +42,13 @@ interface SessionCommandPayload {
   force?: boolean;
   mcpEndpoint?: { token: string; serverNames: string[] };
   /** Worktree 级提交人（可选；缺省不下发，worker 沿用容器级 bot）。仅此白名单字段，不开放任意 git 命令。 */
-  committer?: { name: string; email: string };
+  committer?: {
+    name: string;
+    email: string;
+    /** 成对出现时由 worker 追加共同作者 trailer。 */
+    coAuthorName?: string;
+    coAuthorEmail?: string;
+  };
   _meta?: { traceparent?: string };
 }
 
