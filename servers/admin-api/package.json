@@ -28,7 +28,6 @@
     "@opentelemetry/resources": "^3.0.0",
     "@opentelemetry/sdk-metrics": "^3.0.0",
     "@opentelemetry/sdk-trace": "^3.0.0",
-    "@opentelemetry/semantic-conventions": "^1.29.0",
     "amqplib": "^2.2.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
