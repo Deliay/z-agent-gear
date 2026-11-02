@@ -301,7 +301,9 @@ pnpm test
 | register - 版本不匹配 | 应返回 VERSION_MISMATCH 并断开 |
 | heartbeat - 已认证客户端 | 应接受心跳，连接保持在线 |
 | unregister - 主动注销 | 应删除 key 和 controller 记录并断开 |
-| session 独占 - 重复 key | 第二个连接应收到 KEY_ALREADY_ONLINE |
+| session 接管 - 重复 key（T-ST11） | 第二个连接接管并收到 `registered`，第一个连接收到 `SESSION_REPLACED` 并断开；第二个心跳后持续在线 |
+| session 接管 - 重启残留（T-ST12） | Redis 预置 `session:<keyId>` 为死 socketId、客户端不带 `resumeToken` → 注册成功且不出现 `KEY_ALREADY_ONLINE` |
+| 心跳巡检 - 重启后不误伤（T-ST15） | 残留 session 接管并刷新心跳后触发巡检 → controller 保持 online、无 `heartbeat_timeout`、session 仍存在 |
 
 ### Session API (`agent-api/session.test.ts`)
 
