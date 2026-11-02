@@ -5,6 +5,11 @@ import { gqlRequest, loginViaUI, registerFundedUser } from './helpers';
 // K8S_ENABLED=false 下归档由 InMemory 实现完成；CLOUD_STORAGE_ENABLED=false 时整套跳过。
 const HARNESS_ENABLED = process.env.HARNESS_ENABLED === 'true';
 const STORAGE_ENABLED = process.env.CLOUD_STORAGE_ENABLED !== 'false';
+const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN;
+const AGENT_BASE = (process.env.API_URL || 'http://localhost:10001/graphql').replace(
+  /\/graphql\/?$/,
+  '',
+);
 
 const CREATE_STORAGE = `
   mutation CreateStorage($input: CreateCloudStorageInput!) {
@@ -25,6 +30,7 @@ const DELETE_HOST = `mutation Delete($id: ID!) { deleteCloudHost(id: $id) }`;
 test.describe('Cloud Storage E2E', () => {
   test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
   test.skip(!STORAGE_ENABLED, 'CLOUD_STORAGE_ENABLED=false：云存储入口关闭');
+  test.skip(!INTERNAL_TOKEN, 'INTERNAL_API_TOKEN 缺失：无法模拟 ready/归档回调');
 
   test('E2E-CS1/CS2: create → mount → archive → destroy → folded', async ({ page }) => {
     const { token, username } = await registerFundedUser(page);
@@ -67,7 +73,7 @@ test.describe('Cloud Storage E2E', () => {
       const hostRes = await gqlRequest(
         page,
         CREATE_HOST,
-        { input: { name: hostName, harnessTypes: [], storageId } },
+        { input: { name: hostName, harnessTypes: ['OPENCODE'], storageId } },
         token,
       );
       const hostBody = await hostRes.json();
@@ -90,33 +96,55 @@ test.describe('Cloud Storage E2E', () => {
         page.getByRole('button', { name: `销毁 ${storageName}` }),
       ).toHaveCount(0);
 
-      // 停止云电脑 → 归档（已归档半价）
+      // 停止云电脑 → 归档（已归档半价）。
+      // K8S_ENABLED=false 时没有真实 worker：先经内部 ready 回调置「已就绪」（归档联动要求 readyAt），
+      // 停止后由测试直接投递 cloud-controller 的归档成功回调（真实集群由 archiver Job 产生同一回调）。
+      const ready = await page.request.post(`${AGENT_BASE}/internal/cloud-hosts/${hostId}/ready`, {
+        headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        data: {},
+      });
+      expect(ready.status()).toBe(200);
       await gqlRequest(page, STOP_HOST, { id: hostId, force: true }, token);
+      const archive = await page.request.post(
+        `${AGENT_BASE}/internal/cloud-storages/${storageId}/archives`,
+        {
+          headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+          data: {
+            archiveId: 'c'.repeat(24),
+            storageId,
+            cloudHostId: hostId,
+            fileName: 'my-host-20261102-153012.tar.gz2',
+            path: `/archive/${'a'.repeat(24)}/${storageId}/my-host-20261102-153012.tar.gz2`,
+            status: 'SUCCEEDED',
+            usageBytes: 5368709120,
+          },
+        },
+      );
+      expect(archive.status()).toBe(200);
+
       let storageStatus = '';
-      for (let attempt = 0; attempt < 40; attempt += 1) {
-        const statusRes = await (await gqlRequest(page, STORAGE_STATUS, { id: storageId }, token)).json();
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const statusRes = await (
+          await gqlRequest(page, STORAGE_STATUS, { id: storageId }, token)
+        ).json();
         storageStatus = statusRes.data?.cloudStorage?.status ?? '';
-        if (storageStatus === 'ARCHIVED' || storageStatus === 'ARCHIVING') break;
+        if (storageStatus === 'ARCHIVED') break;
         await page.waitForTimeout(500);
       }
-      expect(['ARCHIVING', 'ARCHIVED']).toContain(storageStatus);
+      expect(storageStatus).toBe('ARCHIVED');
+      const archived = await (await gqlRequest(page, STORAGE_STATUS, { id: storageId }, token)).json();
+      expect(archived.data.cloudStorage.hourlyCredits).toBe(2.5);
 
-      if (storageStatus === 'ARCHIVED') {
-        const archived = await (await gqlRequest(page, STORAGE_STATUS, { id: storageId }, token)).json();
-        expect(archived.data.cloudStorage.hourlyCredits).toBe(2.5);
-        await expect(page.getByTestId('cloud-storage-section').getByText('已归档')).toBeVisible({
-          timeout: 15000,
-        });
-      }
-
-      // 销毁 → 进入「已销毁」折叠区（默认折叠，展开后可见）
-      const destroyed = await (await gqlRequest(page, DESTROY_STORAGE, { id: storageId }, token)).json();
-      expect(destroyed.errors).toBeUndefined();
-      expect(destroyed.data.destroyCloudStorage.status).toBe('DESTROYED');
-
+      // 设置页展示「已归档」并可销毁（二次确认）→ 进入「已销毁」折叠区
       await page.reload();
       const sectionAfter = page.getByTestId('cloud-storage-section');
-      await expect(sectionAfter.getByText(storageName)).toHaveCount(0);
+      await expect(sectionAfter.getByText('已归档')).toBeVisible({ timeout: 15000 });
+      await page.getByRole('button', { name: `销毁 ${storageName}` }).click();
+      const confirm = page.getByRole('dialog');
+      await expect(confirm.getByText('销毁云存储')).toBeVisible();
+      await confirm.getByRole('button', { name: '确认销毁' }).click();
+      await expect(sectionAfter.getByText(storageName)).toHaveCount(0, { timeout: 15000 });
+
       const fold = sectionAfter.getByRole('button', { name: '已销毁' });
       await expect(fold).toHaveAttribute('aria-expanded', 'false');
       await fold.click();

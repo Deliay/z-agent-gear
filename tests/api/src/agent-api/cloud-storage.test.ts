@@ -5,6 +5,8 @@ import { fundFrontUser } from './funding.js';
 // 前台云存储 API（需要 Aspire 全量服务；cloud-controller 以 K8S_ENABLED=false 的 InMemory 实现承接 PVC）。
 // 覆盖：创建/校验/列表口径/销毁/挂载占用/归档半价报价。
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
+const AGENT_BASE = API_URL.replace(/\/graphql\/?$/, '');
+const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN;
 const STORAGE_ENABLED = process.env.CLOUD_STORAGE_ENABLED !== 'false';
 const HARNESS_ENABLED = process.env.HARNESS_ENABLED === 'true';
 
@@ -208,7 +210,7 @@ describe.skipIf(!STORAGE_ENABLED)('Cloud Storage API', () => {
 });
 
 function testMounting(): void {
-  describe.skipIf(!HARNESS_ENABLED)('Cloud Storage mounting', () => {
+  describe.skipIf(!HARNESS_ENABLED || !INTERNAL_TOKEN)('Cloud Storage mounting', () => {
     it('T-CS-A1/A3: attaches to exactly one cloud host and blocks destroy while attached', async () => {
       const { token } = await fundedUser();
       const storage = await newStorage(token, `mount-${Date.now().toString(36)}`, 8);
@@ -253,33 +255,60 @@ function testMounting(): void {
       const storage = await newStorage(token, `archive-${Date.now().toString(36)}`, 6);
       const created = await gql(
         CREATE_HOST,
-        { input: { name: `host-${Date.now().toString(36)}`, harnessTypes: [], storageId: storage.id } },
+        { input: { name: `host-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], storageId: storage.id } },
         token,
       );
       expect(created.errors).toBeUndefined();
       const hostId = created.data.createCloudHost.id;
 
-      const stopped = await gql(STOP_HOST, { id: hostId, force: true }, token);
-      expect(stopped.errors).toBeUndefined();
+      // 模拟 cloud-controller 销毁完成后的 terminal 回调（K8S_ENABLED=false 时无真实 worker 上线，
+      // 归档触发不会自动发生）：先 ready（设置 readyAt，归档联动才生效），再 terminal 携带
+      // storage.archiveStatus=pending → ATTACHED→ARCHIVING，同时把云电脑推进到 STOPPED。
+      const ready = await fetch(`${AGENT_BASE}/internal/cloud-hosts/${hostId}/ready`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        body: JSON.stringify({}),
+      });
+      expect(ready.status).toBe(200);
+
+      const terminal = await fetch(`${AGENT_BASE}/internal/cloud-hosts/${hostId}/terminal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        body: JSON.stringify({ status: 'stopped', storage: { id: storage.id, archiveStatus: 'pending' } }),
+      });
+      expect(terminal.status).toBe(200);
 
       let status = '';
-      let archiveStatus = '';
-      let hourly = 0;
-      for (let attempt = 0; attempt < 40; attempt += 1) {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
         const detail = await gql(DETAIL, { id: storage.id }, token);
         status = detail.data?.cloudStorage?.status ?? '';
-        archiveStatus = detail.data?.cloudStorage?.currentArchive?.status ?? '';
-        hourly = detail.data?.cloudStorage?.hourlyCredits ?? 0;
-        if (status === 'ARCHIVED') break;
+        if (status === 'ARCHIVING') break;
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
-      expect(['ARCHIVING', 'ARCHIVED']).toContain(status);
-      if (status === 'ARCHIVED') {
-        expect(archiveStatus).toBe('SUCCEEDED');
-        expect(hourly).toBe(3); // 6Gi 全价 6 → 归档半价 3
-      }
+      expect(status).toBe('ARCHIVING');
+
+      const archiveId = 'b'.repeat(24);
+      const callback = await fetch(`${AGENT_BASE}/internal/cloud-storages/${storage.id}/archives`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        body: JSON.stringify({
+          archiveId,
+          storageId: storage.id,
+          cloudHostId: hostId,
+          fileName: 'my-host-20261102-153012.tar.gz2',
+          path: `/archive/${'a'.repeat(24)}/${storage.id}/my-host-20261102-153012.tar.gz2`,
+          status: 'SUCCEEDED',
+          usageBytes: 5368709120,
+        }),
+      });
+      expect(callback.status).toBe(200);
+
+      const archived = await gql(DETAIL, { id: storage.id }, token);
+      expect(archived.data.cloudStorage.status).toBe('ARCHIVED');
+      expect(archived.data.cloudStorage.hourlyCredits).toBe(2.5); // 6Gi 全价 5（≤10Gi 固定档）→ 归档半价 2.5
+      expect(archived.data.cloudStorage.currentArchive.status).toBe('SUCCEEDED');
 
       await gql(DELETE_HOST, { id: hostId }, token);
-    });
+    }, 60_000);
   });
 }

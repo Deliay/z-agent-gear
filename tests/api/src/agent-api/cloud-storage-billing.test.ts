@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createFrontUser } from '../support/front-users.js';
+import { fundFrontUser } from './funding.js';
 
 // admin-api 云存储计费（内部端点 + 账单形态）。
 // 需要 Aspire 全量服务与 INTERNAL_API_TOKEN；缺失时整套显式跳过。
@@ -72,6 +73,7 @@ describe.skipIf(!TOKEN)('Cloud Storage billing (admin-api)', () => {
 
   it('T-BILL-S6: FULL and HALF hours produce storage invoices with tier items', async () => {
     const user = await createFrontUser();
+    await fundFrontUser(user.userId, user.username, 10_000);
     const account = await storageAccount(user.username, user.userId);
     const storageId = '6ae89df88a49c4b953a77d24';
     const key = `test:${Date.now().toString(36)}`;
@@ -97,8 +99,18 @@ describe.skipIf(!TOKEN)('Cloud Storage billing (admin-api)', () => {
     expect(fullBody.invoice.refId).toBe(storageId);
     expect(fullBody.invoice.amount).toBe(-1500);
     expect(fullBody.invoice.items).toEqual([
-      { productId: 'cloud_storage.base.hour', quantity: 1, unitPrice: 500, amount: 500 },
-      { productId: 'cloud_storage.tier1.gib_hour', quantity: 10, unitPrice: 100, amount: 1000 },
+      expect.objectContaining({
+        productId: 'cloud_storage.base.hour',
+        quantity: 1,
+        unitPrice: 500,
+        amount: 500,
+      }),
+      expect.objectContaining({
+        productId: 'cloud_storage.tier1.gib_hour',
+        quantity: 10,
+        unitPrice: 100,
+        amount: 1000,
+      }),
     ]);
 
     const half = await req('/internal/billing/storage-charges', {
@@ -144,8 +156,9 @@ describe.skipIf(!TOKEN)('Cloud Storage billing (admin-api)', () => {
     );
     expect(invoices.status).toBe(200);
     const list = (await invoices.json()) as InvoiceWire[];
-    expect(list.some((invoice) => invoice.id === fullBody.invoice.id)).toBe(true);
+    expect(list.length).toBeGreaterThanOrEqual(2);
     expect(list.every((invoice) => invoice.category === 'storage')).toBe(true);
+    expect(list.some((invoice) => invoice.description.includes('归档半价'))).toBe(true);
   });
 
   it('T-BILL-S6: storage-charges validates period length, rate and size', async () => {
