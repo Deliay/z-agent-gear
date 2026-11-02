@@ -57,7 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.13.0`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.16.0`（major 保持 2；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.11.0 起提升，当前基线 `2.12.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -173,7 +173,8 @@ hook 抛错时本批每个 item 直接回报 `failed` + `Github 凭据申请失�
 - 云电脑两端连接均 `persistConfig=false`：**不读写** `~/.zag/config.toml`（不落 resumeToken/Key）；
   本地单连接保持原行为，配置写入使用权限 `0600`。
 - 任一端 `shutdown` → 关闭两端并退出：服务端终止（非失败类 shutdown / `unregistered` / `INVALID_TOKEN`）退出 42（入口不重启）；信号退出 0（入口保活重启）；`version_mismatch:*` / 其它 `error:*` / 必须工作负载初始化失败退出 1（entrypoint 自愈与失败语义）；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
-- `KEY_ALREADY_ONLINE` 在云电脑模式按 1s→2s→…→30s 退避手动重连；**仅在 `registered` 成功后重置退避计数**（connect 先于 register 结果，不能作为成功信号）。退避定时器不 `unref`，避免双端断开时进程静默退出。
+- `KEY_ALREADY_ONLINE`（旧服务端兼容）在云电脑模式按 1s→2s→…→30s 退避手动重连；**仅在 `registered` 成功后重置退避计数**（connect 先于 register 结果，不能作为成功信号）。退避定时器不 `unref`，避免双端断开时进程静默退出。
+- `SESSION_REPLACED`（服务端 2.16.0 起下发）：同一 Key 的新登录已接管本连接。客户端**不重连、不清除本地 Key/resumeToken**；本地模式直接 `exit(42)`，云电脑模式 `notifyShutdown({ reason: 'session_replaced' })` 由 supervisor 按服务端终止语义收尾（最终 42、入口不重启）。
 - 双连接只启动一个 `LocalMcpServer`：`/worker` 连接 `skipLocalMcpStart=true`，标准连接负责启动。
 - 未检测到云电脑模式时保持本地控制器单连接旧行为不变。
 

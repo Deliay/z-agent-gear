@@ -120,7 +120,7 @@
 | `INVALID_TOKEN` | 握手 token 校验失败（仅在 `connect_error` 中返回，不会进入 `register` 阶段） |
 | `RATE_LIMITED` | 握手频率超限（按一次性 token 的 `containerId` 前缀滑动窗口限速，无 token 时回退来源 IP；另有更高上限的 per-IP 兜底桶，仅在 `connect_error` 中返回） |
 
-> `INVALID_KEY` / `KEY_ALREADY_ONLINE` 为本地 controller 场景错误码，本契约不使用。
+> `INVALID_KEY` / `KEY_ALREADY_ONLINE` / `SESSION_REPLACED` 为本地 controller 场景错误码，本契约不使用。
 
 ### 2.5 `heartbeat`（Worker → Server）
 

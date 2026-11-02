@@ -12,6 +12,7 @@ const mockRedis = {
   set: vi.fn(),
   del: vi.fn(),
   expire: vi.fn(),
+  eval: vi.fn(),
 };
 
 beforeEach(() => {
@@ -20,25 +21,59 @@ beforeEach(() => {
 });
 
 describe('SessionService', () => {
-  describe('acquireSession', () => {
-    it('should acquire session when no existing session', async () => {
-      mockRedis.get.mockResolvedValue(null);
-      mockRedis.set.mockResolvedValue('OK');
+  describe('takeoverSession', () => {
+    it('T-ST1: returns null when no previous session and sets the new socket id', async () => {
+      mockRedis.eval.mockResolvedValue(null);
 
-      const result = await sessionService.acquireSession('key1', 'socket1');
+      const result = await sessionService.takeoverSession('key1', 'socket1');
 
-      expect(result).toBe(true);
-      expect(mockRedis.get).toHaveBeenCalledWith('session:key1');
-      expect(mockRedis.set).toHaveBeenCalledWith('session:key1', 'socket1', 'EX', 90);
+      expect(result).toBeNull();
+      expect(mockRedis.eval).toHaveBeenCalledWith(
+        expect.stringContaining("redis.call('GET', KEYS[1])"),
+        1,
+        'session:key1',
+        'socket1',
+        90,
+      );
     });
 
-    it('should fail to acquire session when session exists', async () => {
-      mockRedis.get.mockResolvedValue('existing-socket');
+    it('T-ST2: returns the previous socket id when a session already exists', async () => {
+      mockRedis.eval.mockResolvedValue('existing-socket');
 
-      const result = await sessionService.acquireSession('key1', 'socket1');
+      const result = await sessionService.takeoverSession('key1', 'socket1');
+
+      expect(result).toBe('existing-socket');
+      expect(mockRedis.eval).toHaveBeenCalledWith(
+        expect.any(String),
+        1,
+        'session:key1',
+        'socket1',
+        90,
+      );
+    });
+  });
+
+  describe('releaseSession', () => {
+    it('T-ST3: releases the session when the socket id matches', async () => {
+      mockRedis.eval.mockResolvedValue(1);
+
+      const result = await sessionService.releaseSession('key1', 'socket1');
+
+      expect(result).toBe(true);
+      expect(mockRedis.eval).toHaveBeenCalledWith(
+        expect.stringContaining("redis.call('DEL', KEYS[1])"),
+        1,
+        'session:key1',
+        'socket1',
+      );
+    });
+
+    it('T-ST4: does not release the session when the socket id does not match', async () => {
+      mockRedis.eval.mockResolvedValue(0);
+
+      const result = await sessionService.releaseSession('key1', 'stale-socket');
 
       expect(result).toBe(false);
-      expect(mockRedis.set).not.toHaveBeenCalled();
     });
   });
 
@@ -104,33 +139,6 @@ describe('SessionService', () => {
       expect(token).toBeTruthy();
       expect(typeof token).toBe('string');
       expect(mockRedis.set).toHaveBeenCalledWith('resume:key1', token);
-    });
-  });
-
-  describe('acquireSession with resumeToken', () => {
-    it('should allow reconnection when resume token matches', async () => {
-      mockRedis.get
-        .mockResolvedValueOnce('existing-socket')  // session:key1 exists
-        .mockResolvedValueOnce('valid-token');      // resume:key1 matches
-      mockRedis.del.mockResolvedValue(1);
-      mockRedis.set.mockResolvedValue('OK');
-
-      const result = await sessionService.acquireSession('key1', 'new-socket', 'valid-token');
-
-      expect(result).toBe(true);
-      expect(mockRedis.del).toHaveBeenCalledWith('session:key1');
-      expect(mockRedis.set).toHaveBeenCalledWith('session:key1', 'new-socket', 'EX', 90);
-    });
-
-    it('should reject when resume token does not match', async () => {
-      mockRedis.get
-        .mockResolvedValueOnce('existing-socket')  // session:key1 exists
-        .mockResolvedValueOnce('valid-token');      // resume:key1 has different value
-
-      const result = await sessionService.acquireSession('key1', 'new-socket', 'wrong-token');
-
-      expect(result).toBe(false);
-      expect(mockRedis.set).not.toHaveBeenCalled();
     });
   });
 

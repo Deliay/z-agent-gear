@@ -39,7 +39,9 @@ vi.mock('../models/session.js', () => ({
 
 vi.mock('./session.js', () => ({
   sessionService: {
-    acquireSession: vi.fn(),
+    takeoverSession: vi.fn(),
+    releaseSession: vi.fn(),
+    getSocketId: vi.fn(),
     storeResumeToken: vi.fn().mockResolvedValue('test-resume-token'),
     refreshSession: vi.fn(),
     updateHeartbeat: vi.fn(),
@@ -88,10 +90,12 @@ function createMockSocket() {
 
 function createMockIO() {
   const connectionHandler = vi.fn();
+  const sockets = new Map<string, unknown>();
   return {
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       if (event === 'connection') connectionHandler(handler);
     }),
+    sockets: { sockets },
     _connectionHandler: connectionHandler,
   };
 }
@@ -118,7 +122,7 @@ describe('SocketIO Service', () => {
         type: 'local',
       });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
         _id: { toString: () => 'ctrl123' },
       } as never);
@@ -157,7 +161,7 @@ describe('SocketIO Service', () => {
         type: 'local',
       });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
         _id: { toString: () => 'ctrl123' },
       } as never);
@@ -195,7 +199,7 @@ describe('SocketIO Service', () => {
         type: 'local',
       });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
         _id: { toString: () => 'ctrl123' },
       } as never);
@@ -300,7 +304,7 @@ describe('SocketIO Service', () => {
         type: 'local',
       });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
         _id: { toString: () => 'ctrl123' },
       } as never);
@@ -319,7 +323,53 @@ describe('SocketIO Service', () => {
       expect(mockSocket.emit).not.toHaveBeenCalledWith('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch', _meta: {} });
     });
 
-    it('should reject with KEY_ALREADY_ONLINE when session exists', async () => {
+    it('T-ST5: takes over an existing session and notifies the previous socket', async () => {
+      const mockSocket = createMockSocket();
+      const previousSocket = {
+        id: 'socket-old',
+        data: { hostname: 'old-host', version: '2.0.0' },
+        emit: vi.fn(),
+        disconnect: vi.fn(),
+      };
+      const mockIO = createMockIO();
+      mockIO.sockets.sockets.set('socket-old', previousSocket);
+
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
+      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue('socket-old');
+      vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
+        _id: { toString: () => 'ctrl123' },
+      } as never);
+      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+
+      createSocketIOServer(mockIO as never);
+
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'new-host', version: '2.0.0' });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
+      });
+
+      expect(sessionService.takeoverSession).toHaveBeenCalledWith('key123', 'socket-123');
+      expect(previousSocket.emit).toHaveBeenCalledWith('error', {
+        code: 'SESSION_REPLACED',
+        message: 'Key has been logged in from another connection',
+        _meta: {},
+      });
+      expect(previousSocket.disconnect).toHaveBeenCalledWith(true);
+      expect(mockSocket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('T-ST5b: does not kick itself when the same socket registers again', async () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
@@ -331,7 +381,11 @@ describe('SocketIO Service', () => {
         type: 'local',
       });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-      vi.mocked(sessionService.acquireSession).mockResolvedValue(false);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue('socket-123');
+      vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
+        _id: { toString: () => 'ctrl123' },
+      } as never);
+      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
 
       createSocketIOServer(mockIO as never);
 
@@ -341,9 +395,81 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
 
       await vi.waitFor(() => {
-        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session', _meta: {} });
-        expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
       });
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('error', expect.objectContaining({ code: 'SESSION_REPLACED' }));
+      expect(mockSocket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('T-ST8a: invalid key does not take over an existing session', async () => {
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      vi.mocked(lookupKey).mockResolvedValue(null);
+
+      createSocketIOServer(mockIO as never);
+
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', { key: 'invalid-key', hostname: 'dev-machine', version: '2.0.0' });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'INVALID_KEY', message: 'Key not found', _meta: {} });
+      });
+      expect(sessionService.takeoverSession).not.toHaveBeenCalled();
+    });
+
+    it('T-ST8b: bcrypt failure does not take over an existing session', async () => {
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
+      vi.mocked(bcrypt.compare).mockResolvedValue(false as never);
+
+      createSocketIOServer(mockIO as never);
+
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'INVALID_KEY', message: 'Invalid key', _meta: {} });
+      });
+      expect(sessionService.takeoverSession).not.toHaveBeenCalled();
+    });
+
+    it('T-ST8c: version mismatch does not take over an existing session', async () => {
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
+      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+
+      createSocketIOServer(mockIO as never);
+
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '1.5.0' });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('error', { code: 'VERSION_MISMATCH', message: 'Version mismatch', _meta: {} });
+      });
+      expect(sessionService.takeoverSession).not.toHaveBeenCalled();
     });
   });
 
@@ -360,7 +486,7 @@ describe('SocketIO Service', () => {
         type: 'local',
       });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
         _id: { toString: () => 'ctrl123' },
       } as never);
@@ -418,7 +544,7 @@ describe('SocketIO Service', () => {
         type: 'local',
       });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
         _id: { toString: () => 'ctrl123' },
       } as never);
@@ -447,6 +573,51 @@ describe('SocketIO Service', () => {
         expect(mockSocket.emit).toHaveBeenCalledWith('unregistered', { _meta: {} });
         expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
       });
+    });
+
+    it('T-ST7: a superseded socket cannot unregister the new connection', async () => {
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
+      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
+      vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
+        _id: { toString: () => 'ctrl123' },
+      } as never);
+      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+      vi.mocked(Controller.deleteOne).mockResolvedValue({} as never);
+      vi.mocked(ControllerKey.deleteOne).mockResolvedValue({} as never);
+      vi.mocked(sessionService.cleanupKey).mockResolvedValue();
+      vi.mocked(sessionService.getSocketId).mockResolvedValue('socket-new');
+
+      createSocketIOServer(mockIO as never);
+
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
+      });
+
+      mockSocket._trigger('unregister', { reason: 'user_detach' });
+
+      await vi.waitFor(() => {
+        expect(sessionService.getSocketId).toHaveBeenCalledWith('key123');
+        expect(mockSocket.disconnect).toHaveBeenCalledWith(true);
+      });
+      expect(Controller.deleteOne).not.toHaveBeenCalled();
+      expect(ControllerKey.deleteOne).not.toHaveBeenCalled();
+      expect(sessionService.cleanupKey).not.toHaveBeenCalled();
+      expect(mockSocket.emit).not.toHaveBeenCalledWith('unregistered', expect.anything());
     });
 
     it('should ignore unregister when not authenticated', async () => {
@@ -511,7 +682,7 @@ describe('SocketIO Service', () => {
       });
     });
 
-    it('should remove session when authenticated', async () => {
+    it('T-ST6: releases the owned session and marks the controller offline', async () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
@@ -523,12 +694,13 @@ describe('SocketIO Service', () => {
         type: 'local',
       });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
         _id: { toString: () => 'ctrl123' },
       } as never);
       vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
-      vi.mocked(sessionService.removeSession).mockResolvedValue();
+      vi.mocked(Controller.updateOne).mockResolvedValue({} as never);
+      vi.mocked(sessionService.releaseSession).mockResolvedValue(true);
 
       createSocketIOServer(mockIO as never);
 
@@ -544,11 +716,55 @@ describe('SocketIO Service', () => {
       mockSocket._trigger('disconnect');
 
       await vi.waitFor(() => {
-        expect(sessionService.removeSession).toHaveBeenCalledWith('key123');
+        expect(sessionService.releaseSession).toHaveBeenCalledWith('key123', 'socket-123');
+        expect(Controller.updateOne).toHaveBeenCalledWith(
+          { keyId: 'key123', status: { $ne: 'unbound' } },
+          { status: 'offline' },
+        );
       });
+      expect(sessionService.removeSession).not.toHaveBeenCalled();
     });
 
-    it('should not remove session when not authenticated', async () => {
+    it('T-ST6b: a superseded socket disconnect does not offline the new connection', async () => {
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      vi.mocked(lookupKey).mockResolvedValue({
+        keyId: 'key123',
+        keyHash: 'hashed-key',
+        userId: 'user1',
+        status: 'active',
+        type: 'local',
+      });
+      vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
+      vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
+        _id: { toString: () => 'ctrl123' },
+      } as never);
+      vi.mocked(ControllerKey.updateOne).mockResolvedValue({} as never);
+      vi.mocked(Controller.updateOne).mockResolvedValue({} as never);
+      vi.mocked(sessionService.releaseSession).mockResolvedValue(false);
+
+      createSocketIOServer(mockIO as never);
+
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('register', { key: 'zag_k_1_abc123', hostname: 'dev-machine', version: '2.0.0' });
+
+      await vi.waitFor(() => {
+        expect(mockSocket.emit).toHaveBeenCalledWith('registered', { controllerId: 'ctrl123', resumeToken: 'test-resume-token', _meta: {} });
+      });
+
+      mockSocket._trigger('disconnect');
+
+      await vi.waitFor(() => {
+        expect(sessionService.releaseSession).toHaveBeenCalledWith('key123', 'socket-123');
+      });
+      expect(Controller.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('should not release session when not authenticated', async () => {
       const mockSocket = createMockSocket();
       const mockIO = createMockIO();
 
@@ -559,7 +775,7 @@ describe('SocketIO Service', () => {
 
       mockSocket._trigger('disconnect');
 
-      expect(sessionService.removeSession).not.toHaveBeenCalled();
+      expect(sessionService.releaseSession).not.toHaveBeenCalled();
     });
   });
 
@@ -576,7 +792,7 @@ describe('SocketIO Service', () => {
         type: 'local',
       });
       vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-      vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+      vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
       vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
         _id: { toString: () => 'ctrl123' },
       } as never);
