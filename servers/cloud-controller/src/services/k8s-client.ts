@@ -1,12 +1,67 @@
 /**
- * K8s 客户端抽象：Job CRUD + Watch。
+ * K8s 客户端抽象：Job/PVC CRUD + Watch + Pod 读取。
  * `RealK8sClient` 走 @kubernetes/client-node；`InMemoryK8sClient` 用于本地/测试，
- * 记录 Job spec（含 env）供 E2E/mock 链路读取。
+ * 记录 Job/PVC spec（含 env）供 E2E/mock 链路读取。
  */
 
 export interface K8sEnvVar {
   name: string;
   value: string;
+}
+
+export interface K8sVolumeMount {
+  name: string;
+  mountPath: string;
+  readOnly?: boolean;
+}
+
+export interface K8sVolume {
+  name: string;
+  persistentVolumeClaim?: { claimName: string; readOnly?: boolean };
+}
+
+export interface K8sContainer {
+  name: string;
+  image: string;
+  env?: K8sEnvVar[];
+  /** 主容器/初始化容器支持自定义命令（归档、恢复、用量、清理 Job）。 */
+  command?: string[];
+  args?: string[];
+  resources?: K8sResourceRequirements;
+  volumeMounts?: K8sVolumeMount[];
+}
+
+export interface K8sPodSecurityContext {
+  fsGroup?: number;
+  fsGroupChangePolicy?: 'OnRootMismatch' | 'Always';
+}
+
+/** PVC 清单（契约 A.2.7 / 提案实现点 2）。名称全部由服务端生成，不接受用户输入。 */
+export interface K8sPvcManifest {
+  apiVersion: 'v1';
+  kind: 'PersistentVolumeClaim';
+  metadata: {
+    name: string;
+    namespace: string;
+    labels: Record<string, string>;
+  };
+  spec: {
+    accessModes: string[];
+    volumeMode?: 'Filesystem' | 'Block';
+    resources: { requests: { storage: string } };
+    /** 空/缺省时**整段省略**（使用集群默认 StorageClass；显式空串会禁用动态供给）。 */
+    storageClassName?: string;
+  };
+}
+
+export interface K8sPvcInfo {
+  name: string;
+  namespace: string;
+  labels: Record<string, string>;
+  capacity: string | null;
+  storageClassName: string | null;
+  accessModes: string[];
+  phase: string | null;
 }
 
 export interface K8sResourceList {
@@ -49,12 +104,18 @@ export interface K8sJobManifest {
          * （C-6；`ZAG_HOST_KEY` 已注入 env，Pod 内不应再持有集群凭据）。
          */
         automountServiceAccountToken?: boolean;
-        containers: Array<{
-          name: string;
-          image: string;
-          env: K8sEnvVar[];
-          resources: K8sResourceRequirements;
-        }>;
+        /**
+         * PVC 写权限（云存储挂载）：`fsGroup: 1000` + `OnRootMismatch`，避免每次挂载全量 chown。
+         * 未挂载云存储时**不设置该字段**（零回归）。
+         */
+        securityContext?: K8sPodSecurityContext;
+        /** 已归档恢复的初始化容器（`tar -xjf`）；全新挂载时**不注入**（零回归）。 */
+        initContainers?: K8sContainer[];
+        /** PVC 卷（storage / archive）；未挂载云存储时**不设置**（零回归）。 */
+        volumes?: K8sVolume[];
+        /** 用量 du Job 固定节点（RWO PVC 同节点；裁决 15）。 */
+        nodeName?: string;
+        containers: K8sContainer[];
       };
     };
   };
@@ -90,9 +151,38 @@ export interface K8sClient {
     onEvent: (event: K8sJobEvent) => void,
     onClose?: (error?: unknown) => void,
   ): Promise<() => void>;
+  /** 创建 PVC（已存在时由 Real 返回 409，调用方先 `get` 做幂等判定）。 */
+  createPersistentVolumeClaim(manifest: K8sPvcManifest): Promise<void>;
+  /** 读取 PVC；404 归一为 `null`（与 `getJob` 同口径）。 */
+  getPersistentVolumeClaim(name: string): Promise<K8sPvcInfo | null>;
+  /** 删除 PVC；404 视为成功（幂等）。 */
+  deletePersistentVolumeClaim(name: string): Promise<void>;
+  listPersistentVolumeClaims(labelSelector: string): Promise<K8sPvcInfo[]>;
+  /** 读取归属 Pod 的 `spec.nodeName`（RWO PVC 同节点 du/归档用）；无匹配 Pod 返回 `null`。 */
+  readPodNodeName(labelSelector: string): Promise<string | null>;
+  /** 读取匹配 label 的 Pod 日志（归档/用量标记行解析）；无匹配 Pod 返回空串。 */
+  readPodLogs(labelSelector: string): Promise<string>;
 }
 
 export const CONTAINER_ID_LABEL = 'zag.cloud/container-id';
+
+/** 按 `k=v[,k2=v2]` 匹配标签（与 K8s labelSelector 的等值语义一致）。 */
+export function matchesLabelSelector(
+  labels: Record<string, string>,
+  selector: string,
+): boolean {
+  return selector
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .every((part) => {
+      const index = part.indexOf('=');
+      if (index < 0) return Object.prototype.hasOwnProperty.call(labels, part);
+      const key = part.slice(0, index);
+      const value = part.slice(index + 1);
+      return labels[key] === value;
+    });
+}
 
 interface StoredJob {
   info: K8sJobInfo;
@@ -101,6 +191,7 @@ interface StoredJob {
 
 export class InMemoryK8sClient implements K8sClient {
   private readonly jobs = new Map<string, StoredJob>();
+  private readonly pvcs = new Map<string, { info: K8sPvcInfo; manifest: K8sPvcManifest }>();
   private watchers: Array<{
     selector: string;
     onEvent: (event: K8sJobEvent) => void;
@@ -109,12 +200,25 @@ export class InMemoryK8sClient implements K8sClient {
 
   /** 已创建的 manifest（供断言 env/标签）。 */
   readonly createdManifests: K8sJobManifest[] = [];
+  /** 已创建的 PVC manifest（供断言标签/容量/StorageClass）。 */
+  readonly createdPvcManifests: K8sPvcManifest[] = [];
   /** deleteJob 调用记录（供断言 propagationPolicy 与重试）。 */
   readonly deleteCalls: Array<{ name: string; options?: DeleteJobOptions }> = [];
+  /** deletePersistentVolumeClaim 调用记录（供断言 404 幂等/重试）。 */
+  readonly deletedPvcNames: string[] = [];
   /** 前 N 次 deleteJob 调用失败（模拟 K8s 异常）。 */
   failDeleteTimes = 0;
   /** 前 N 次 createJob 调用失败（模拟创建失败）。 */
   failCreateTimes = 0;
+  /** 前 N 次 createPersistentVolumeClaim 调用失败（模拟 PVC 创建失败）。 */
+  failCreatePvcTimes = 0;
+  /** 前 N 次 deletePersistentVolumeClaim 调用失败（模拟删除失败，404 之外的异常）。 */
+  failDeletePvcTimes = 0;
+  /** Job 创建完成钩子（测试用：可在创建瞬间推进 phase / 写入 Pod 日志）。 */
+  onJobCreated?: (manifest: K8sJobManifest) => void;
+
+  private readonly podLogsByJob = new Map<string, string>();
+  private readonly podNodesByJob = new Map<string, string>();
 
   async createJob(manifest: K8sJobManifest): Promise<void> {
     if (this.failCreateTimes > 0) {
@@ -131,7 +235,57 @@ export class InMemoryK8sClient implements K8sClient {
       containerId: labels[CONTAINER_ID_LABEL] ?? null,
     };
     this.jobs.set(info.name, { info, manifest });
+    this.onJobCreated?.(manifest);
     this.emit({ type: 'ADDED', job: info });
+  }
+
+  async createPersistentVolumeClaim(manifest: K8sPvcManifest): Promise<void> {
+    if (this.failCreatePvcTimes > 0) {
+      this.failCreatePvcTimes -= 1;
+      throw new Error('createPersistentVolumeClaim failed');
+    }
+    this.createdPvcManifests.push(manifest);
+    const info: K8sPvcInfo = {
+      name: manifest.metadata.name,
+      namespace: manifest.metadata.namespace,
+      labels: manifest.metadata.labels,
+      capacity: manifest.spec.resources.requests.storage,
+      storageClassName: manifest.spec.storageClassName ?? null,
+      accessModes: [...manifest.spec.accessModes],
+      phase: 'Bound',
+    };
+    this.pvcs.set(info.name, { info, manifest });
+  }
+
+  async getPersistentVolumeClaim(name: string): Promise<K8sPvcInfo | null> {
+    return this.pvcs.get(name)?.info ?? null;
+  }
+
+  async deletePersistentVolumeClaim(name: string): Promise<void> {
+    this.deletedPvcNames.push(name);
+    if (this.failDeletePvcTimes > 0) {
+      this.failDeletePvcTimes -= 1;
+      throw new Error('deletePersistentVolumeClaim failed');
+    }
+    this.pvcs.delete(name);
+  }
+
+  async listPersistentVolumeClaims(labelSelector: string): Promise<K8sPvcInfo[]> {
+    return [...this.pvcs.values()]
+      .map((entry) => entry.info)
+      .filter((info) => matchesLabelSelector(info.labels, labelSelector));
+  }
+
+  async readPodNodeName(labelSelector: string): Promise<string | null> {
+    const job = this.findJobBySelector(labelSelector);
+    if (!job) return null;
+    return this.podNodesByJob.get(job.name) ?? null;
+  }
+
+  async readPodLogs(labelSelector: string): Promise<string> {
+    const job = this.findJobBySelector(labelSelector);
+    if (!job) return '';
+    return this.podLogsByJob.get(job.name) ?? '';
   }
 
   async getJob(name: string): Promise<K8sJobInfo | null> {
@@ -174,6 +328,36 @@ export class InMemoryK8sClient implements K8sClient {
 
   getManifest(name: string): K8sJobManifest | null {
     return this.jobs.get(name)?.manifest ?? null;
+  }
+
+  getPvc(name: string): K8sPvcInfo | null {
+    return this.pvcs.get(name)?.info ?? null;
+  }
+
+  getPvcManifest(name: string): K8sPvcManifest | null {
+    return this.pvcs.get(name)?.manifest ?? null;
+  }
+
+  setPodLog(jobName: string, log: string): void {
+    this.podLogsByJob.set(jobName, log);
+  }
+
+  setPodNode(jobName: string, nodeName: string): void {
+    this.podNodesByJob.set(jobName, nodeName);
+  }
+
+  /** 模拟动态供给结果（Pending → Bound / Lost）。 */
+  setPvcPhase(name: string, phase: string): void {
+    const entry = this.pvcs.get(name);
+    if (!entry) return;
+    entry.info = { ...entry.info, phase };
+  }
+
+  private findJobBySelector(selector: string): K8sJobInfo | null {
+    for (const entry of this.jobs.values()) {
+      if (matchesLabelSelector(entry.info.labels, selector)) return entry.info;
+    }
+    return null;
   }
 
   getEnv(name: string): Record<string, string> {
@@ -235,6 +419,7 @@ export class RealK8sClient implements K8sClient {
   private k8s: any;
   private kc: any;
   private batchApi: any;
+  private coreApi: any;
 
   constructor(private readonly namespace: string) {}
 
@@ -250,7 +435,25 @@ export class RealK8sClient implements K8sClient {
     this.k8s = k8s;
     this.kc = kc;
     this.batchApi = kc.makeApiClient(k8s.BatchV1Api);
+    // PVC / Pod 读取（云存储）走 CoreV1Api。
+    this.coreApi = kc.makeApiClient(k8s.CoreV1Api);
     this.initialized = true;
+  }
+
+  private isNotFound(err: any): boolean {
+    return err?.code === 404 || err?.statusCode === 404 || err?.response?.statusCode === 404;
+  }
+
+  private toPvcInfo(pvc: any): K8sPvcInfo {
+    return {
+      name: pvc?.metadata?.name ?? '',
+      namespace: pvc?.metadata?.namespace ?? this.namespace,
+      labels: pvc?.metadata?.labels ?? {},
+      capacity: pvc?.spec?.resources?.requests?.storage ?? null,
+      storageClassName: pvc?.spec?.storageClassName ?? null,
+      accessModes: pvc?.spec?.accessModes ?? [],
+      phase: pvc?.status?.phase ?? null,
+    };
   }
 
   private toInfo(job: any): K8sJobInfo {
@@ -283,9 +486,86 @@ export class RealK8sClient implements K8sClient {
       const job = await this.batchApi.readNamespacedJob({ name, namespace: this.namespace });
       return this.toInfo(job);
     } catch (err: any) {
-      if (err?.code === 404 || err?.statusCode === 404 || err?.response?.statusCode === 404) {
+      if (this.isNotFound(err)) {
         return null;
       }
+      throw err;
+    }
+  }
+
+  async createPersistentVolumeClaim(manifest: K8sPvcManifest): Promise<void> {
+    await this.ensureInitialized();
+    await this.coreApi.createNamespacedPersistentVolumeClaim({
+      namespace: manifest.metadata.namespace,
+      body: manifest,
+    });
+  }
+
+  async getPersistentVolumeClaim(name: string): Promise<K8sPvcInfo | null> {
+    await this.ensureInitialized();
+    try {
+      const pvc = await this.coreApi.readNamespacedPersistentVolumeClaim({
+        name,
+        namespace: this.namespace,
+      });
+      return this.toPvcInfo(pvc);
+    } catch (err: any) {
+      if (this.isNotFound(err)) return null;
+      throw err;
+    }
+  }
+
+  async deletePersistentVolumeClaim(name: string): Promise<void> {
+    await this.ensureInitialized();
+    try {
+      await this.coreApi.deleteNamespacedPersistentVolumeClaim({
+        name,
+        namespace: this.namespace,
+      });
+    } catch (err: any) {
+      // 契约 A.2.7：PVC 不存在按成功处理（幂等）。
+      if (this.isNotFound(err)) return;
+      throw err;
+    }
+  }
+
+  async listPersistentVolumeClaims(labelSelector: string): Promise<K8sPvcInfo[]> {
+    await this.ensureInitialized();
+    const result = await this.coreApi.listNamespacedPersistentVolumeClaim({
+      namespace: this.namespace,
+      labelSelector,
+    });
+    const items: any[] = result?.items ?? [];
+    return items.map((pvc) => this.toPvcInfo(pvc));
+  }
+
+  private async listPods(labelSelector: string): Promise<any[]> {
+    await this.ensureInitialized();
+    const result = await this.coreApi.listNamespacedPod({
+      namespace: this.namespace,
+      labelSelector,
+    });
+    return result?.items ?? [];
+  }
+
+  async readPodNodeName(labelSelector: string): Promise<string | null> {
+    const pods = await this.listPods(labelSelector);
+    return pods[0]?.spec?.nodeName ?? null;
+  }
+
+  async readPodLogs(labelSelector: string): Promise<string> {
+    const pods = await this.listPods(labelSelector);
+    const pod = pods[0];
+    if (!pod?.metadata?.name) return '';
+    try {
+      const log = await this.coreApi.readNamespacedPodLog({
+        name: pod.metadata.name,
+        namespace: this.namespace,
+        container: pod.spec?.containers?.[0]?.name,
+      });
+      return typeof log === 'string' ? log : '';
+    } catch (err: any) {
+      if (this.isNotFound(err)) return '';
       throw err;
     }
   }

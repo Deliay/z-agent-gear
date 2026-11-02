@@ -63,6 +63,20 @@ export interface CloudContainerEntity {
   billingAccountId: string | null;
   /** 就绪计费起点（首次进入 online）；null 表示未就绪/不计费。 */
   billingStartedAt: Date | null;
+  // ---- 云存储（历史行 null 容忍） ----
+  storageId: string | null;
+  storagePvcName: string | null;
+  storageSizeGi: number | null;
+  storageWorkspaceId: string | null;
+  storageStorageClass: string | null;
+  storageRestorePath: string | null;
+  storageArchiveStatus: 'pending' | 'running' | 'succeeded' | 'failed' | null;
+  storageArchiveId: string | null;
+  storageArchiveFileName: string | null;
+  storageArchiveUsageBytes: number | null;
+  storageArchiveStartedAt: Date | null;
+  storageArchiveFinishedAt: Date | null;
+  storageArchiveFailure: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -97,6 +111,19 @@ export interface CreateContainerInput {
   initCompletedAt?: Date | null;
   billingAccountId?: string | null;
   billingStartedAt?: Date | null;
+  storageId?: string | null;
+  storagePvcName?: string | null;
+  storageSizeGi?: number | null;
+  storageWorkspaceId?: string | null;
+  storageStorageClass?: string | null;
+  storageRestorePath?: string | null;
+  storageArchiveStatus?: 'pending' | 'running' | 'succeeded' | 'failed' | null;
+  storageArchiveId?: string | null;
+  storageArchiveFileName?: string | null;
+  storageArchiveUsageBytes?: number | null;
+  storageArchiveStartedAt?: Date | null;
+  storageArchiveFinishedAt?: Date | null;
+  storageArchiveFailure?: string | null;
   /** 仅测试用途：显式指定时间戳，便于超时巡检确定性测试。 */
   createdAt?: Date;
   updatedAt?: Date;
@@ -114,6 +141,8 @@ export interface UpdateContainerOptions {
   fromStatuses?: CloudContainerStatus[];
   /** 仅当这些字段当前为 null/缺失时才更新（原子「首次写入」语义）。 */
   requireNullFields?: string[];
+  /** 字段等值前置条件（原子 CAS，如 `storageArchiveStatus: 'failed'`）。 */
+  matchFields?: Record<string, unknown>;
 }
 
 export interface ContainerRepository {
@@ -169,6 +198,19 @@ interface RawDoc {
   initCompletedAt?: Date | null;
   billingAccountId?: string | null;
   billingStartedAt?: Date | null;
+  storageId?: string | null;
+  storagePvcName?: string | null;
+  storageSizeGi?: number | null;
+  storageWorkspaceId?: string | null;
+  storageStorageClass?: string | null;
+  storageRestorePath?: string | null;
+  storageArchiveStatus?: string | null;
+  storageArchiveId?: string | null;
+  storageArchiveFileName?: string | null;
+  storageArchiveUsageBytes?: number | null;
+  storageArchiveStartedAt?: Date | null;
+  storageArchiveFinishedAt?: Date | null;
+  storageArchiveFailure?: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -256,9 +298,33 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     initCompletedAt: doc.initCompletedAt ?? null,
     billingAccountId: doc.billingAccountId ?? null,
     billingStartedAt: doc.billingStartedAt ?? null,
+    storageId: doc.storageId ?? null,
+    storagePvcName: doc.storagePvcName ?? null,
+    storageSizeGi: doc.storageSizeGi ?? null,
+    storageWorkspaceId: doc.storageWorkspaceId ?? null,
+    storageStorageClass: doc.storageStorageClass ?? null,
+    storageRestorePath: doc.storageRestorePath ?? null,
+    storageArchiveStatus: normalizeArchiveStatus(doc.storageArchiveStatus),
+    storageArchiveId: doc.storageArchiveId ?? null,
+    storageArchiveFileName: doc.storageArchiveFileName ?? null,
+    storageArchiveUsageBytes: doc.storageArchiveUsageBytes ?? null,
+    storageArchiveStartedAt: doc.storageArchiveStartedAt ?? null,
+    storageArchiveFinishedAt: doc.storageArchiveFinishedAt ?? null,
+    storageArchiveFailure: doc.storageArchiveFailure ?? null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
+}
+
+function normalizeArchiveStatus(
+  value: string | null | undefined,
+): 'pending' | 'running' | 'succeeded' | 'failed' | null {
+  return value === 'pending' ||
+    value === 'running' ||
+    value === 'succeeded' ||
+    value === 'failed'
+    ? value
+    : null;
 }
 
 export class MongoContainerRepository implements ContainerRepository {
@@ -293,6 +359,19 @@ export class MongoContainerRepository implements ContainerRepository {
       initCompletedAt: input.initCompletedAt ?? null,
       billingAccountId: input.billingAccountId ?? null,
       billingStartedAt: input.billingStartedAt ?? null,
+      storageId: input.storageId ?? null,
+      storagePvcName: input.storagePvcName ?? null,
+      storageSizeGi: input.storageSizeGi ?? null,
+      storageWorkspaceId: input.storageWorkspaceId ?? null,
+      storageStorageClass: input.storageStorageClass ?? null,
+      storageRestorePath: input.storageRestorePath ?? null,
+      storageArchiveStatus: input.storageArchiveStatus ?? null,
+      storageArchiveId: input.storageArchiveId ?? null,
+      storageArchiveFileName: input.storageArchiveFileName ?? null,
+      storageArchiveUsageBytes: input.storageArchiveUsageBytes ?? null,
+      storageArchiveStartedAt: input.storageArchiveStartedAt ?? null,
+      storageArchiveFinishedAt: input.storageArchiveFinishedAt ?? null,
+      storageArchiveFailure: input.storageArchiveFailure ?? null,
     });
     return toEntity(doc.toObject() as unknown as RawDoc);
   }
@@ -325,6 +404,9 @@ export class MongoContainerRepository implements ContainerRepository {
     }
     for (const field of options?.requireNullFields ?? []) {
       filter[field] = null;
+    }
+    for (const [field, value] of Object.entries(options?.matchFields ?? {})) {
+      filter[field] = value;
     }
     const doc = await CloudContainer.findOneAndUpdate(
       filter,
@@ -382,6 +464,19 @@ export class InMemoryContainerRepository implements ContainerRepository {
       initCompletedAt: input.initCompletedAt ?? null,
       billingAccountId: input.billingAccountId ?? null,
       billingStartedAt: input.billingStartedAt ?? null,
+      storageId: input.storageId ?? null,
+      storagePvcName: input.storagePvcName ?? null,
+      storageSizeGi: input.storageSizeGi ?? null,
+      storageWorkspaceId: input.storageWorkspaceId ?? null,
+      storageStorageClass: input.storageStorageClass ?? null,
+      storageRestorePath: input.storageRestorePath ?? null,
+      storageArchiveStatus: input.storageArchiveStatus ?? null,
+      storageArchiveId: input.storageArchiveId ?? null,
+      storageArchiveFileName: input.storageArchiveFileName ?? null,
+      storageArchiveUsageBytes: input.storageArchiveUsageBytes ?? null,
+      storageArchiveStartedAt: input.storageArchiveStartedAt ?? null,
+      storageArchiveFinishedAt: input.storageArchiveFinishedAt ?? null,
+      storageArchiveFailure: input.storageArchiveFailure ?? null,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? input.createdAt ?? now,
     };
@@ -429,6 +524,10 @@ export class InMemoryContainerRepository implements ContainerRepository {
     for (const field of options?.requireNullFields ?? []) {
       const value = (found as unknown as Record<string, unknown>)[field];
       if (value !== null && value !== undefined) return null;
+    }
+    for (const [field, value] of Object.entries(options?.matchFields ?? {})) {
+      const current = (found as unknown as Record<string, unknown>)[field];
+      if (current !== value) return null;
     }
     const updated: CloudContainerEntity = {
       ...found,
