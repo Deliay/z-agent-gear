@@ -417,9 +417,24 @@ Content-Type: application/json
     "modelContextLengths": "{\"model-a\":128000}",
     "defaultWorkspace": "/home/worker/workspace"
   },
-  "workloadPlan": [{ "workloadId": "<objectId>", "params": {}, "implicit": false, "required": true }]
+  "workloadPlan": [{ "workloadId": "<objectId>", "params": {}, "implicit": false, "required": true }],
+  "storage": {
+    "id": "<cloudStorageId>",
+    "pvcName": "zag-storage-<storageId>",
+    "sizeGi": 20,
+    "workspaceId": "<tenantWorkspaceId>",
+    "storageClass": "ceph-rbd",
+    "restore": { "archivePath": "/archive/<workspaceId>/<storageId>/<fileName>" }
+  }
 }
 ```
+
+- `storage`（harness，可选）：挂载云存储为 worker 主目录 `/home/worker`。
+  - 缺省/`null` → 不挂载，行为与现状完全一致（Job manifest 无 `volumes`/`volumeMounts`/`securityContext`/`initContainers`）；
+  - `id`/`pvcName`/`workspaceId` 非空字符串；`sizeGi` 为 1~30 整数；`pvcName` 必须匹配 `^zag-storage-[a-z0-9-]+$`；
+  - `storageClass` 可选：1~63 字符且匹配 `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`；空/缺省回退 `CLOUD_STORAGE_CLASS`，二者皆空时省略 `storageClassName`（使用集群默认 StorageClass）；
+  - `restore` 缺省/`null` = 全新挂载（不注入 initContainer）；携带时 `archivePath` 必须匹配 `^/archive/[a-f0-9]{24}/[a-f0-9]{24}/[A-Za-z0-9._-]{1,120}\.tar\.gz2$` 且不含 `..`（恢复前先删除同名残留 PVC 再按原容量/StorageClass 重建）；
+  - 非法返回 `400 INVALID_HARNESS`，不创建 Job；同一存储同时被两个活跃容器引用返回 `409 STORAGE_IN_USE`（纵深防御，互斥权威在 agent-api 的 CAS + 唯一索引）。
 
 - `hostId`/`refId`/`userId`/`hostName`/`expiresAt`/`agentGearMinVersion`/`secrets` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
 - `harnessTypes`（harness）**允许空数组**：0 个 harness 的云电脑合法（harness 为可选工作负载，可在设置-工作负载中后期补装）；非空时仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选），白名单外返回 `400 INVALID_HARNESS`。
@@ -537,6 +552,110 @@ Content-Type: application/json
 
 **错误：** 同 A.2.5（`INVALID_SCRIPT` 用于脚本非法）。
 
+### A.2.7 云存储 PVC 管理
+
+```
+POST /internal/storages
+Content-Type: application/json
+
+{ "storageId": "<id>", "tenantId": "<tenant>", "workspaceId": "<workspace>", "sizeGi": 20, "storageClass": "ceph-rbd" }
+```
+
+- PVC 名称由服务端生成 `zag-storage-<storageId>`（`STORAGE_PVC_PREFIX` 可配）；标签 `app=zag-storage`、`zag.cloud/storage-id|workspace-id|tenant-id`。
+- 幂等：PVC 已存在且容量/StorageClass 与请求一致 → `created:false`；容量或 StorageClass 不一致 → `409 STORAGE_PVC_CONFLICT`（本期不支持扩容）。
+- `storageClass` 空则回退 `CLOUD_STORAGE_CLASS`；二者皆空时省略 `storageClassName`。
+
+**响应 200：** `{ "storageId": "...", "pvcName": "zag-storage-...", "created": true }`
+**错误：** `400 INVALID_BODY`、`409 STORAGE_PVC_CONFLICT`。
+
+```
+GET /internal/storages/:storageId
+```
+
+**响应 200：** `{ "storageId": "...", "pvcName": "zag-storage-...", "exists": true, "capacity": "20Gi", "phase": "Bound" }`
+
+```
+DELETE /internal/storages/:storageId
+```
+
+- 仍有活跃容器引用（`cloudcontainers.storageId` + 活跃状态）→ `409 STORAGE_IN_USE`；PVC 不存在按成功处理。
+
+**响应 200：** `{ "storageId": "...", "deleted": true }`
+
+```
+POST /internal/storages/:storageId/cleanup
+{ "workspaceId": "<id>", "deleteArchive": true }
+```
+
+- 删除源 PVC（若存在）并在 `deleteArchive=true` 时删除归档目录 `/archive/<workspaceId>/<storageId>/`；归档进行中 → `409 ARCHIVE_RUNNING`。
+- 与归档/恢复/用量共用按工作区归档 PVC 的串行锁。
+
+**响应 200：** `{ "accepted": true }`
+
+### A.2.8 归档触发与查询
+
+```
+POST /internal/containers/:id/archive
+{ "archiveId": "<id>", "fileName": "<hostName>-<YYYYMMDD-HHmmss>.tar.gz2" }
+```
+
+- 归档只在销毁云电脑后触发；容器仍活跃 → `409 CONTAINER_ACTIVE`；已有 `pending/running` 归档 → `409 ARCHIVE_RUNNING`（幂等返回已有 archiveId）；容器未挂载存储 → `409 NO_STORAGE`。
+- `fileName` 由 agent-api 生成（ASCII 安全化），cloud-controller 原样落库并用于归档路径。
+
+**响应 200：** `{ "accepted": true, "archiveId": "<id>" }`
+**错误：** `404 NOT_FOUND`、`409 CONTAINER_ACTIVE`、`409 ARCHIVE_RUNNING`、`409 NO_STORAGE`。
+
+```
+GET /internal/containers/:id/archive
+```
+
+**响应 200：**
+
+```jsonc
+{ "status": "NONE|PENDING|RUNNING|SUCCEEDED|FAILED",
+  "archiveId": "...", "fileName": "...", "usageBytes": 123,
+  "startedAt": "...", "finishedAt": "...", "failureReason": null }
+```
+
+### A.2.9 用量刷新
+
+```
+POST /internal/storages/:storageId/usage-refresh
+{ "containerId": "<id>" }
+```
+
+- 从云电脑 Pod 读取 `nodeName`，以 `nodeName` 直指该节点创建 du Job（只读挂载源 PVC，`du -sb` 输出 `ZAG_ARCHIVE_RESULT` 标记行），完成后回调 `/internal/cloud-storages/:id/usage`。
+- 仅 `ATTACHED` 且源 PVC 存在；容器非活跃 → `409 CONTAINER_NOT_ACTIVE`；无存储 → `409 NO_STORAGE`。
+
+**响应 200：** `{ "accepted": true }`
+
+### A.2.10 归档/用量回调（cloud-controller → agent-api）
+
+```
+POST /internal/cloud-storages/:storageId/archives
+Content-Type: application/json
+
+{
+  "archiveId": "<id>", "storageId": "<id>",
+  "cloudHostId": "<id>", "containerId": "<id>", "cloudHostName": "我的云电脑",
+  "fileName": "my-host-20261102-153012.tar.gz2",
+  "path": "/archive/<workspaceId>/<storageId>/<fileName>",
+  "status": "RUNNING|SUCCEEDED|FAILED",
+  "usageBytes": 5368709120,
+  "startedAt": "...", "finishedAt": "...", "failureReason": null
+}
+```
+
+```
+POST /internal/cloud-storages/:storageId/usage
+{ "usageBytes": 5368709120, "measuredAt": "..." }
+```
+
+- 均 Bearer `INTERNAL_API_TOKEN`；按 `archiveId` 幂等，终态单调（SUCCEEDED 后迟到的 RUNNING 忽略）；回调失败按 `0/250ms/1s/3s` 退避重试，最终失败只记 error（agent-api 以 `GET /internal/containers/:id/archive` 兜底对账）。
+- terminal 回调（websocket `container:terminal` → agent-api `/internal/cloud-hosts/:id/terminal`）报文新增
+  `storage: { "id": "<storageId>", "archiveStatus": "pending|running|succeeded|failed|null" }`；agent-api 据此把存储
+  `ATTACHED → ARCHIVING`（避免「云电脑已 STOPPED、存储仍显示已挂载」）。未挂载存储时不携带该字段。
+
 ### A.3 CloudContainer JSON 结构
 
 | 字段 | 类型 | 说明 |
@@ -565,6 +684,18 @@ Content-Type: application/json
 | `containerApiKeyId` | `string \| null` | 运行专用模型 Key ID |
 | `expiresAt` | `string \| null` | 容器 TTL 留档时间（不驱动模型 Key 失效） |
 | `installedWorkloads` | `object[]` | 容器内已安装工作负载（只增不删）；每项 `{ workloadId, name, installedAt, source }` |
+| `storageId` | `string \| null` | 挂载的云存储 ID |
+| `storagePvcName` | `string \| null` | 源 PVC 名称 |
+| `storageSizeGi` | `number \| null` | 存储容量（Gi） |
+| `storageWorkspaceId` | `string \| null` | 存储归属工作区 |
+| `storageRestorePath` | `string \| null` | 本次启动恢复的归档路径；全新挂载为 `null` |
+| `storageArchiveStatus` | `string \| null` | `pending` / `running` / `succeeded` / `failed` / `null` |
+| `storageArchiveId` | `string \| null` | 最近一次归档 ID |
+| `storageArchiveFileName` | `string \| null` | 最近一次归档文件名 |
+| `storageArchiveUsageBytes` | `number \| null` | 归档时采集的实际占用（字节） |
+| `storageArchiveStartedAt` | `string \| null` | 归档开始时间 |
+| `storageArchiveFinishedAt` | `string \| null` | 归档结束时间 |
+| `storageArchiveFailure` | `string \| null` | 归档失败原因 |
 
 > `secrets` 永不出现在列表/详情响应中。
 
