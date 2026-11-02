@@ -48,6 +48,8 @@ export interface ArchiveCallbackInput {
   startedAt?: string | null;
   finishedAt?: string | null;
   failureReason?: string | null;
+  /** 仅 SUCCEEDED 有意义：源 PVC 是否已释放（false 时记入 currentArchive 留痕）。 */
+  sourcePvcReleased?: boolean | null;
 }
 
 export interface UsageCallbackInput {
@@ -740,6 +742,9 @@ export class CloudStorageService {
       fileName: input.fileName ?? str(existing?.fileName),
       path: input.path ?? str(existing?.path),
       startedAt,
+      // 裁决 13：归档成功但源 PVC 删除失败时留痕（false），供运维/再挂载先删后建判断。
+      sourcePvcReleased:
+        input.sourcePvcReleased ?? existing?.sourcePvcReleased ?? null,
     };
 
     if (input.status === 'RUNNING') {
@@ -951,6 +956,8 @@ export class CloudStorageService {
       startedAt: iso(archive.startedAt),
       finishedAt: iso(archive.finishedAt),
       failureReason: archive.failureReason ?? null,
+      sourcePvcReleased:
+        typeof archive.sourcePvcReleased === 'boolean' ? archive.sourcePvcReleased : null,
     };
   }
 

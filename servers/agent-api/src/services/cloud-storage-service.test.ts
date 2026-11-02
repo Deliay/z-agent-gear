@@ -609,6 +609,7 @@ describe('archive callbacks / retry / usage (T-CS-AR1..AR5)', () => {
       usageBytes: 1024,
       fileName: 'host-20261102-000000.tar.gz2',
       path: `/archive/${WS}/${STORAGE_ID}/host.tar.gz2`,
+      sourcePvcReleased: false,
     });
 
     expect(result?.status).toBe('ARCHIVED');
@@ -626,6 +627,7 @@ describe('archive callbacks / retry / usage (T-CS-AR1..AR5)', () => {
       archiveId: 'a1',
       status: 'SUCCEEDED',
       usageBytes: 1024,
+      sourcePvcReleased: false,
     });
   });
 

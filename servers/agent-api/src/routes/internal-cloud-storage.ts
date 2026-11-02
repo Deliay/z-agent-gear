@@ -58,6 +58,8 @@ function parseArchiveBody(body: unknown): {
       startedAt: typeof value.startedAt === 'string' ? value.startedAt : null,
       finishedAt: typeof value.finishedAt === 'string' ? value.finishedAt : null,
       failureReason: typeof value.failureReason === 'string' ? value.failureReason : null,
+      sourcePvcReleased:
+        typeof value.sourcePvcReleased === 'boolean' ? value.sourcePvcReleased : null,
     },
   };
 }

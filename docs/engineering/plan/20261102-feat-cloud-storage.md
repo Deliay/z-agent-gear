@@ -73,7 +73,7 @@ flowchart TD
 10. **恢复中提示**：不新增云电脑状态。`CloudHost.storageRestoring: Boolean!` 为字段级 resolver，口径 `host.status === 'STARTING' && storage != null && storage.currentArchive != null`（仅从归档恢复时存在当前归档）；前端在云电脑状态旁展示「正在恢复数据」。同时新建对话框在选择「已归档」存储时静态提示耗时。
 11. **能力开关**：新增 `cloudStorageCapabilities { enabled }` 查询承载 `CLOUD_STORAGE_ENABLED`（不复用 `cloudHostCapabilities`，避免语义耦合）；前端 `enabled=false` 时隐藏设置区块与创建区块，服务端仍为权威拦截（`storage feature is disabled`）。
 12. **归档触发点单一收敛**：仅 `ContainerService.maybeStartStorageArchive(container)` 触发，接入 `destroyLocked`（含终态重入、`forceDestroy`、必须失败、欠费强拆）、`markFailed`（status-sync 的 Job 消失/失败收口）；幂等条件 `storageId != null && storageArchiveStatus ∈ {null, failed}` 时 CAS 到 `pending`；归档任务在**容器互斥锁外**执行（`KeyedMutex` 非可重入）。
-13. **归档成功后的源 PVC 释放顺序**：`解析用量标记行成功 → 删除源 PVC（最多 3 次）→ 回调 SUCCEEDED`；删除失败不阻断回调，回调带 `sourcePvcReleased:false` 记入 `currentArchive`。为消除「残留源 PVC + 再次挂载」风险：**从 `ARCHIVED` 挂载恢复时，cloud-controller 先删除同名 PVC（若存在）再创建**，保证恢复目标为空卷（避免旧数据残留与 tar 覆盖语义歧义）。
+13. **归档成功后的源 PVC 释放顺序**：`解析用量标记行成功 → CAS succeeded → 删除源 PVC（最多 3 次）→ 回调 SUCCEEDED`；删除失败不阻断回调，回调带 `sourcePvcReleased:false` 并记入 `currentArchive`。为消除「残留源 PVC + 再次挂载」风险：**从 `ARCHIVED` 挂载恢复时，cloud-controller 先删除同名 PVC（若存在）再创建**，保证恢复目标为空卷（避免旧数据残留与 tar 覆盖语义歧义）。本期**不单独实现孤儿 PVC 巡检回收**，以「再挂载先删后建」作为残留源的收口方式（`sourcePvcReleased` 留痕供运维排查）。
 14. **归档 Job 结果解析**：每 5s 轮询 Job 状态 + 读取 Pod 日志（`readNamespacedPodLog`），解析 `ZAG_ARCHIVE_RESULT={"usageBytes":N}` 标记行；Job `succeeded` 但标记行缺失/不可解析 → 判 `failed`（`failureReason='用量标记行缺失'`），**不删除源 PVC、不替换旧归档**。
 15. **`usage-refresh` 仅 `ATTACHED`**：du Job 以 `nodeName` 直指云电脑 Pod 所在节点（RWO 同节点），只读挂载源 PVC；失败/超时保留上一次值并返回 `accepted:true`（异步语义，前端仅提示「已发起刷新」）。
 16. **工作负载幂等（admin-api 018）验收可行性**：真实「容器内旧环境重跑」只能在内网集群手工验收，单测做**静态不变量 + 选中脚本的可执行性**：
@@ -495,7 +495,7 @@ cd tests/e2e && aspire wait agent-web admin-web && npx playwright test cloud-sto
 | 主目录被 PVC 遮蔽导致容器无 node（起不来） | Phase 2 `bootstrap_home` 幂等自举 + `ZAG_STORAGE_HOME=1` fail-fast；镜像先于 agent-api 发布（§9.4）；未更新镜像的工作区不开放挂载入口（capabilities） |
 | `fsGroup` 在某些 CSI 不生效（PVC 根不可写） | 单测断言 `fsGroup/OnRootMismatch`；内网验收专项验证 worker 写入；如未生效，补 fallback initContainer `chown 1000:1000 /target`（不改协议） |
 | 归档中断/worker 抢占导致数据不一致 | 临时文件 + 「成功后才删旧/改名」；Job 与 workspace 串行；下次归档开头 `rm -f *.tmp`；旧归档在成功前绝不被删 |
-| 归档成功但源 PVC 删除失败 | 回调带 `sourcePvcReleased:false` 留痕；再次挂载时先删后建（裁决 13）；巡检重试删除孤儿 PVC |
+| 归档成功但源 PVC 删除失败 | 回调带 `sourcePvcReleased:false` 并记入 `currentArchive` 留痕；再次挂载时先删后建（裁决 13）；本期不单独巡检回收孤儿 PVC（以再挂载先删后建收口） |
 | ARCHIVED 再挂载时恢复缓慢/失败 | initContainer 失败即 Job 失败 → 云电脑创建失败 → 存储回滚 ARCHIVED（归档不丢）；前端明确提示与「正在恢复数据」 |
 | 归档 PVC RWO 跨节点 attach 排队 | 同工作区归档串行；恢复与归档不并发；必要时 `CLOUD_ARCHIVE_ACCESS_MODE=ReadWriteMany`（StorageClass 须支持） |
 | 计费重复/漏计 | 幂等键 `storageId+桶末 epochHour`；游标 `chargedHours` 单调；失败即停不跨桶部分成功；每日对账加「存储」线 |

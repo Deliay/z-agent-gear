@@ -7,8 +7,8 @@
 #   usage    用量：du -sb 输出 ZAG_ARCHIVE_RESULT 标记行
 #   cleanup  清理：删除归档目录 /archive/<workspace>/<storage>
 #
-# 说明：cloud-controller 的归档 Job 使用内联脚本（便于单测断言），本入口供镜像级
-# 复用/冒烟验证；二者脚本口径必须保持一致（任务顺序与标记行）。
+# 说明：cloud-controller 的归档/用量/清理/恢复 Job 直接以本入口为 command（MODE 区分），
+# 这是唯一生效实现；storage-service 的 buildArchiveScript 仅作口径说明与单测断言。
 set -euo pipefail
 
 MODE="${MODE:-archive}"

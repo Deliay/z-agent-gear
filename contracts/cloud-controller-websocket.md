@@ -643,7 +643,9 @@ Content-Type: application/json
   "path": "/archive/<workspaceId>/<storageId>/<fileName>",
   "status": "RUNNING|SUCCEEDED|FAILED",
   "usageBytes": 5368709120,
-  "startedAt": "...", "finishedAt": "...", "failureReason": null
+  "startedAt": "...", "finishedAt": "...", "failureReason": null,
+  // SUCCEEDED 时必填：源 PVC 是否已释放（删除失败/false 由 agent-api 记入 currentArchive 留痕）
+  "sourcePvcReleased": true
 }
 ```
 

@@ -75,6 +75,7 @@ describe('internal cloud storage routes', () => {
       startedAt: '2026-11-02T15:00:00.000Z',
       finishedAt: '2026-11-02T15:10:00.000Z',
       failureReason: null,
+      sourcePvcReleased: true,
     });
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
@@ -91,6 +92,7 @@ describe('internal cloud storage routes', () => {
       startedAt: '2026-11-02T15:00:00.000Z',
       finishedAt: '2026-11-02T15:10:00.000Z',
       failureReason: null,
+      sourcePvcReleased: true,
     });
   });
 

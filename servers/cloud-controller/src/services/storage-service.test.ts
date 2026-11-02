@@ -30,9 +30,12 @@ function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
   });
 }
 
-function setup(options: { timeoutMs?: number; withArchivePvc?: boolean } = {}) {
+function setup(
+  options: { timeoutMs?: number; withArchivePvc?: boolean; notifyArchiveFailures?: number } = {},
+) {
   const repo = new InMemoryContainerRepository();
   const client = new InMemoryK8sClient();
+  let archiveCallbackFailures = options.notifyArchiveFailures ?? 0;
   const storageManager = new K8sStorageManager(client, {
     namespace: 'zag-cloud',
     storagePvcPrefix: 'zag-storage-',
@@ -58,6 +61,10 @@ function setup(options: { timeoutMs?: number; withArchivePvc?: boolean } = {}) {
     },
     agentApiClient: {
       notifyStorageArchive: async (storageId, payload) => {
+        if (archiveCallbackFailures > 0) {
+          archiveCallbackFailures -= 1;
+          throw new Error('agent-api unavailable');
+        }
         archiveCalls.push({ storageId, payload: payload as ArchiveCallbackPayload });
       },
       notifyStorageUsage: async (storageId, payload) => {
@@ -231,6 +238,35 @@ describe('StorageService 归档', () => {
     const success = archiveCalls.at(-1)!;
     expect(success.payload.status).toBe('SUCCEEDED');
     expect(success.payload.sourcePvcReleased).toBe(false);
+  });
+
+  it('T-CC-AR2b: 源 PVC 删除失败 + 回调未送达 → 巡检重投上报 sourcePvcReleased=false', async () => {
+    const { repo, client, storageManager, service, archiveCalls } = setup({
+      notifyArchiveFailures: 2,
+    });
+    await seedStorage(client, storageManager);
+    const container = await createTerminalContainer(repo);
+    autoComplete(client, {
+      app: 'zag-archive',
+      log: 'ZAG_ARCHIVE_RESULT={"usageBytes":512}',
+    });
+    client.failDeletePvcTimes = 3;
+
+    await service.startArchive(container.id, { archiveId: 'archive-1', fileName: FILE_NAME });
+    await service.drainArchiveTasks();
+
+    const stored = await repo.findById(container.id);
+    expect(stored?.storageArchiveStatus).toBe('succeeded');
+    expect(archiveCalls).toHaveLength(0);
+    expect(await service.isSourcePvcReleased(STORAGE_ID)).toBe(false); // 删除 3 次失败后仍存在
+
+    await service.reconcileArchives();
+    const reposted = archiveCalls.at(-1)!;
+    expect(reposted.payload).toMatchObject({
+      archiveId: 'archive-1',
+      status: 'SUCCEEDED',
+      sourcePvcReleased: false,
+    });
   });
 
   it('T-CC-AR3: Job 失败 → failed + 回调；源 PVC 与旧归档保留', async () => {

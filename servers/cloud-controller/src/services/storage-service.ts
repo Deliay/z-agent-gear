@@ -1167,7 +1167,8 @@ export class StorageService {
       startedAt: container.storageArchiveStartedAt?.toISOString() ?? null,
       finishedAt: container.storageArchiveFinishedAt?.toISOString() ?? null,
       failureReason: container.storageArchiveFailure,
-      sourcePvcReleased: succeeded,
+      // 重投同样上报实际释放结果（删除失败时必须为 false，不能写死 succeeded）。
+      sourcePvcReleased,
     });
     return delivered;
   }
