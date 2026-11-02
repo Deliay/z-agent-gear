@@ -43,20 +43,40 @@ export class HeartbeatService {
 
       if (offlineControllers.length === 0) return;
 
-      const keyIds = offlineControllers.map((c) => c.keyId.toString());
-
-      await Controller.updateMany(
-        { _id: { $in: offlineControllers.map((c) => c._id) } },
-        { status: 'offline' },
-      );
-
-      for (const keyId of keyIds) {
+      for (const candidate of offlineControllers) {
+        const keyId = candidate.keyId.toString();
+        // 先捕获所有权：后续只认这个 socketId，不重新读取，避免接管后被误伤。
         const socketId = await sessionService.getSocketId(keyId);
+
+        // 条件状态迁移（CAS）：新连接已刷新心跳时不会命中，直接跳过。
+        const markedOffline = await Controller.findOneAndUpdate(
+          {
+            _id: candidate._id,
+            status: 'online',
+            lastHeartbeatAt: { $lt: threshold },
+          },
+          { status: 'offline' },
+          { returnDocument: 'after' },
+        );
+        if (!markedOffline) continue;
+
         if (socketId && this.io) {
           this.io.to(socketId).emit('shutdown', withTraceMeta({ reason: 'heartbeat_timeout' }));
           this.io.sockets.sockets.get(socketId)?.disconnect(true);
         }
-        await sessionService.cleanupKey(keyId);
+
+        if (!socketId) {
+          // 无会话：只清理心跳/恢复凭据，避免误删并发写入的新 session。
+          await sessionService.removeHeartbeat(keyId);
+          await sessionService.removeResumeToken(keyId);
+          continue;
+        }
+
+        const released = await sessionService.releaseSession(keyId, socketId);
+        if (released) {
+          await sessionService.removeHeartbeat(keyId);
+          await sessionService.removeResumeToken(keyId);
+        }
       }
     } catch (err) {
       this.logger.error({ err }, 'heartbeat scan error');

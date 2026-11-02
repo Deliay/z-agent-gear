@@ -201,22 +201,31 @@ export function createSocketIOServer(
           return;
         }
 
-        const acquired = await sessionService.acquireSession(keyId, socket.id, payload.resumeToken);
-        if (!acquired) {
-          logger.warn(
-            {
-              event: 'register_rejected',
-              socketId: socket.id,
-              address: socket.handshake.address ?? null,
-              hostname: hostname ?? null,
-              keyId,
-              reason: 'KEY_ALREADY_ONLINE',
-            },
-            'register rejected',
-          );
-          socket.emit('error', withTraceMeta({ code: 'KEY_ALREADY_ONLINE', message: 'Key already has an active session' }));
-          socket.disconnect(true);
-          return;
+        // 新登录优先：原子接管 session。previousSocketId 若指向本进程内仍存活的旧连接，
+        // 通知其被替换并断开；若为重启后残留的已死 socketId，则仅覆盖，不报错。
+        const previousSocketId = await sessionService.takeoverSession(keyId, socket.id);
+        if (previousSocketId && previousSocketId !== socket.id) {
+          const previous = io.sockets.sockets.get(previousSocketId);
+          if (previous) {
+            logger.info(
+              {
+                event: 'session_replaced',
+                keyId,
+                previousSocketId,
+                newSocketId: socket.id,
+                previousHostname: previous.data.hostname ?? null,
+                newHostname: hostname ?? null,
+                previousVersion: previous.data.version ?? null,
+                newVersion: version ?? null,
+              },
+              'session replaced by newer login',
+            );
+            previous.emit('error', withTraceMeta({
+              code: 'SESSION_REPLACED',
+              message: 'Key has been logged in from another connection',
+            }));
+            previous.disconnect(true);
+          }
         }
 
         const controller = await Controller.findOneAndUpdate(
@@ -250,6 +259,8 @@ export function createSocketIOServer(
         socket.data.userId = userId;
         socket.data.controllerId = controller._id.toString();
         socket.data.lastIp = socket.handshake.address;
+        socket.data.hostname = hostname;
+        socket.data.version = version;
         socket.join(`user:${userId}`);
 
         logger.info(
@@ -307,6 +318,13 @@ export function createSocketIOServer(
 
       try {
         const { keyId } = socket.data;
+
+        // 所有权校验：已被接管（session 指向新 socket）的旧连接无权注销新连接。
+        const current = await sessionService.getSocketId(keyId);
+        if (current && current !== socket.id) {
+          socket.disconnect(true);
+          return;
+        }
 
         await Controller.deleteOne({ keyId });
         await ControllerKey.deleteOne({ _id: keyId });
@@ -764,11 +782,14 @@ export function createSocketIOServer(
         // 登录中的请求随 socket 断开收敛：发布 resolved(failed) + 清注册表
         harnessLoginManager.clearForSocket(socket.id);
         if (socket.data.keyId) {
-          await Controller.updateOne(
-            { keyId: socket.data.keyId, status: { $ne: 'unbound' } },
-            { status: 'offline' },
-          );
-          await sessionService.removeSession(socket.data.keyId);
+          // 仅当会话仍归本 socket 所有时才置 offline；被接管的旧连接断开不得影响新连接。
+          const released = await sessionService.releaseSession(socket.data.keyId, socket.id);
+          if (released) {
+            await Controller.updateOne(
+              { keyId: socket.data.keyId, status: { $ne: 'unbound' } },
+              { status: 'offline' },
+            );
+          }
         }
         await acpSessionManager.handleSocketDisconnect(socket.id);
       } catch (err) {
