@@ -154,6 +154,7 @@ flowchart LR
 - [[draft/20261029-pnpm-workload-and-harness-optional.md]] — 云电脑组件安装切换 pnpm 与工作负载 Harness 可选化（云电脑内组件与工作负载（含 harness）安装统一由 npm 改为 pnpm、环境预装 pnpm；已运行云电脑设置-工作负载显示 harness 为可选工作负载、可后期按需安装；创建时 harness 改为可选可补装）
 - [[draft/20261030-unified-logging-and-otel.md]] — 规范化日志与全链路可观测性（全运行时统一结构化日志并取消自由文本打印、跨服务与云电脑 Job 的全链路追踪、请求标识与脱敏、级别/采样/外发开关可控）
 - [[draft/20261031-commit-with-bot-coauthor.md]] — Commit 与 bot 共同提交（设置页「Git」区块新增「与 bot 共同提交」勾选项：仅提交人为自定义时可用，勾选后 Worktree 提交以成员为主作者、平台 bot 为共同作者；云电脑自身提交仍为 bot 单独署名，旧版本云电脑与 bot 不可用时优雅降级）
+- [[draft/20261102-cloud-storage.md]] — 云电脑支持申请存储（设置-云存储按 1~30Gi 创建并阶梯小时计费、归属工作区并记录创建人；创建云电脑时勾选挂载或就地新建，一个存储同时只能挂载一台云电脑；销毁时自动压缩为 .tar.gz2 写入工作区归档空间，支持归档记录查看/删除/重试）
 
 ### 实现中文档（`shipping/`）
 
