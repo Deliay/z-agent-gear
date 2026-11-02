@@ -47,6 +47,7 @@ import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
 import { scheduleTenantSelfCheck } from './services/tenant-self-check.js';
+import { scheduleCloudStorageReconcile } from './services/cloud-storage-service.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { harnessLoginSubscriberService } from './services/harness-login-subscriber.js';
@@ -243,6 +244,8 @@ async function start() {
     logger.info({ port: config.port }, 'Agent Gear API running');
     // 多租户一期：启动后轻量异步自检（不阻塞对外服务，异常仅告警）
     scheduleTenantSelfCheck();
+    // 云存储 ARCHIVING 对账（回调最终丢失兜底；定时器 unref，不阻塞退出）
+    scheduleCloudStorageReconcile(config.cloudStorageReconcileMs);
   });
 }
 

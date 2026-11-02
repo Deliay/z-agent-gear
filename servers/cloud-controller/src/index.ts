@@ -263,7 +263,10 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
             const fresh = (await containerService.getById(container.id)) ?? container;
             terminalStorage = {
               id: container.storageId,
-              archiveStatus: fresh.storageArchiveStatus ?? 'pending',
+              // 透传真实归档状态：null = 未触发归档（agent-api 据此 releaseStorage 回滚），
+              // 不得强改写为 pending（契约 A.2.10）。
+              archiveStatus: fresh.storageArchiveStatus ?? null,
+              archiveId: fresh.storageArchiveId ?? null,
             };
           }
           try {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { createFrontUser } from '../support/front-users.js';
 import { fundFrontUser } from './funding.js';
 
@@ -45,7 +45,14 @@ interface InvoiceWire {
   items: Array<{ productId: string; quantity: number; unitPrice: number; amount: number }>;
 }
 
-describe.skipIf(!TOKEN)('Cloud Storage billing (admin-api)', () => {
+describe('Cloud Storage billing (admin-api)', () => {
+  beforeAll(() => {
+    if (!TOKEN) {
+      // 与 tests/api AGENTS「缺失内部 token 时显式报错」口径一致（不静默跳过）。
+      throw new Error('cloud-storage-billing requires INTERNAL_API_TOKEN');
+    }
+  });
+
   it('T-BILL-S1: storage-quote exposes full / archived tiers', async () => {
     const res = await req('/internal/billing/storage-quote?sizeGi=20');
     expect(res.status).toBe(200);

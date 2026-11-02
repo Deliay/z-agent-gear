@@ -509,7 +509,15 @@ export default function NewCloudHostDialog({
                         id="cloud-host-storage"
                         aria-label="云存储"
                         value={selectedStorageId}
-                        onChange={(event) => setSelectedStorageId(event.target.value)}
+                        onChange={(event) => {
+                          const value = event.target.value
+                          if (value === '__new__') {
+                            setSelectedStorageId('')
+                            setNewStorageOpen(true)
+                            return
+                          }
+                          setSelectedStorageId(value)
+                        }}
                         className="w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
                       >
                         <option value="">请选择云存储</option>
@@ -520,6 +528,7 @@ export default function NewCloudHostDialog({
                             {storage.hourlyCredits} credits/小时 · {storage.createdBy.name}
                           </option>
                         ))}
+                        <option value="__new__">新建…</option>
                       </select>
                     </div>
                   )}
@@ -661,10 +670,10 @@ export default function NewCloudHostDialog({
             )}
             {storageAttachEnabled && selectedStorage && (
               <div className="mt-2 space-y-1 text-xs text-muted-foreground">
-                <p>
-                  存储费用：{selectedStorage.hourlyCredits} credits/小时（挂载期间按小时计费）
-                </p>
-                {isArchivedStorage(selectedStorage) && <p>该存储已归档，按半价计费</p>}
+                <p>{`存储费用：${selectedStorage.hourlyCreditsFull} credits/小时（挂载期间按全价计费；归档后 ${selectedStorage.hourlyCreditsArchived} credits/小时）`}</p>
+                {isArchivedStorage(selectedStorage) && (
+                  <p>该存储已归档，启动时先恢复数据，恢复完成后挂载期间按全价计费</p>
+                )}
               </div>
             )}
           </div>

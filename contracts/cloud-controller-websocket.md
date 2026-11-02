@@ -562,6 +562,7 @@ Content-Type: application/json
 ```
 
 - PVC 名称由服务端生成 `zag-storage-<storageId>`（`STORAGE_PVC_PREFIX` 可配）；标签 `app=zag-storage`、`zag.cloud/storage-id|workspace-id|tenant-id`。
+- `storageId` / `tenantId` / `workspaceId` 均必填（缺失 400 `INVALID_BODY`，避免产生缺标签 PVC）。
 - 幂等：PVC 已存在且容量/StorageClass 与请求一致 → `created:false`；容量或 StorageClass 不一致 → `409 STORAGE_PVC_CONFLICT`（本期不支持扩容）。
 - `storageClass` 空则回退 `CLOUD_STORAGE_CLASS`；二者皆空时省略 `storageClassName`。
 
@@ -653,8 +654,9 @@ POST /internal/cloud-storages/:storageId/usage
 
 - 均 Bearer `INTERNAL_API_TOKEN`；按 `archiveId` 幂等，终态单调（SUCCEEDED 后迟到的 RUNNING 忽略）；回调失败按 `0/250ms/1s/3s` 退避重试，最终失败只记 error（agent-api 以 `GET /internal/containers/:id/archive` 兜底对账）。
 - terminal 回调（websocket `container:terminal` → agent-api `/internal/cloud-hosts/:id/terminal`）报文新增
-  `storage: { "id": "<storageId>", "archiveStatus": "pending|running|succeeded|failed|null" }`；agent-api 据此把存储
-  `ATTACHED → ARCHIVING`（避免「云电脑已 STOPPED、存储仍显示已挂载」）。未挂载存储时不携带该字段。
+  `storage: { "id": "<storageId>", "archiveStatus": "pending|running|succeeded|failed|null", "archiveId": "<本次归档 id>" }`；agent-api 据此把存储
+  `ATTACHED → ARCHIVING`（避免「云电脑已 STOPPED、存储仍显示已挂载」）；`archiveStatus=null` 表示未触发归档，
+  agent-api 走 `releaseStorage` 回滚；`archiveId` 用于开启新归档周期（旧周期迟到回调忽略）。未挂载存储时不携带该字段。
 
 ### A.3 CloudContainer JSON 结构
 

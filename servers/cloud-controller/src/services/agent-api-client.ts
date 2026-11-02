@@ -26,6 +26,8 @@ export type TerminalStatus = 'stopped' | 'failed';
 export interface TerminalStorageState {
   id: string;
   archiveStatus: 'pending' | 'running' | 'succeeded' | 'failed' | null;
+  /** 本次归档 id（契约 A.2.10 扩展；新周期占位/旧回调判定）。 */
+  archiveId?: string | null;
 }
 
 const DEFAULT_TIMEOUT_MS = 5000;

@@ -117,6 +117,7 @@ vi.mock('./cloud-storage-service.js', () => ({
     releaseStorage: vi.fn(),
     markAttached: vi.fn(),
     markArchiving: vi.fn(),
+    reconcileFromTerminal: vi.fn().mockResolvedValue(false),
     recordContainer: vi.fn(),
   },
 }));
@@ -1408,8 +1409,40 @@ describe('CloudHostService', () => {
         storage: { id: STORAGE_ID, archiveStatus: 'pending' },
       });
 
-      expect(cloudStorageService.markArchiving).toHaveBeenCalledWith(STORAGE_ID, HOST_ID);
+      expect(cloudStorageService.markArchiving).toHaveBeenCalledWith(STORAGE_ID, HOST_ID, null);
       expect(cloudStorageService.releaseStorage).not.toHaveBeenCalled();
+    });
+
+    it('T-CS-AR1b: 已 ready 终止但 archiveStatus=null（未触发归档）→ 释放存储，不永久卡已挂载', async () => {
+      const host = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: new Date('2026-10-20T01:00:00.000Z'),
+        status: 'RUNNING',
+      });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(host) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(
+          hostDoc({
+            storageId: STORAGE_ID,
+            readyAt: new Date('2026-10-20T01:00:00.000Z'),
+            status: 'STOPPED',
+          }),
+        ) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+      vi.mocked(cloudStorageService.reconcileFromTerminal).mockResolvedValueOnce(false);
+
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: null },
+      });
+
+      expect(cloudStorageService.reconcileFromTerminal).toHaveBeenCalledWith(
+        STORAGE_ID,
+        'container-1',
+      );
+      expect(cloudStorageService.releaseStorage).toHaveBeenCalledWith(STORAGE_ID, HOST_ID);
+      expect(cloudStorageService.markArchiving).not.toHaveBeenCalled();
     });
 
     it('ready 幂等兜底 ATTACHING→ATTACHED（含重复 ready）', async () => {

@@ -535,4 +535,4 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 ## 云存储（`src/cloud-storage.spec.ts`）
 
 - E2E-CS1/CS2：设置-云存储创建（报价全价/归档半价）→ 新建云电脑挂载 → 已挂载存储不再出现在可挂载下拉且无销毁入口 → 停止云电脑归档（`ARCHIVED` 且半价）→ 销毁 → 主列表移除、「已销毁」折叠区默认折叠、展开后可见。
-- 依赖：`HARNESS_ENABLED=true`、`CLOUD_STORAGE_ENABLED`（缺省 true）、`MONGODB_URI`（测试用户充值）；`K8S_ENABLED=false` 时归档由 InMemory Job 完成，真实恢复/压缩由内网集群手工验收覆盖。
+- 依赖：`HARNESS_ENABLED=true`、`CLOUD_STORAGE_ENABLED`（缺省 true）、`INTERNAL_API_TOKEN`（ready/归档回调模拟）、`MONGODB_URI`（测试用户充值）；`K8S_ENABLED=false` 时归档由 InMemory Job 完成，真实恢复/压缩由内网集群手工验收覆盖。

@@ -710,9 +710,11 @@ describe('NewCloudHostDialog 云存储区块', () => {
       screen.getByText('该存储已归档，启动时将先恢复数据，耗时取决于数据量'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText('存储费用：7.5 credits/小时（挂载期间按小时计费）'),
+      screen.getByText('存储费用：15 credits/小时（挂载期间按全价计费；归档后 7.5 credits/小时）'),
     ).toBeInTheDocument();
-    expect(screen.getByText('该存储已归档，按半价计费')).toBeInTheDocument();
+    expect(
+      screen.getByText('该存储已归档，启动时先恢复数据，恢复完成后挂载期间按全价计费'),
+    ).toBeInTheDocument();
 
     fireEvent.click(submitButton());
     await waitFor(() => {

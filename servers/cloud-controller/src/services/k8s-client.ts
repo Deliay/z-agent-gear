@@ -277,13 +277,13 @@ export class InMemoryK8sClient implements K8sClient {
   }
 
   async readPodNodeName(labelSelector: string): Promise<string | null> {
-    const job = this.findJobBySelector(labelSelector);
+    const job = this.findJobByPodSelector(labelSelector);
     if (!job) return null;
     return this.podNodesByJob.get(job.name) ?? null;
   }
 
   async readPodLogs(labelSelector: string): Promise<string> {
-    const job = this.findJobBySelector(labelSelector);
+    const job = this.findJobByPodSelector(labelSelector);
     if (!job) return '';
     return this.podLogsByJob.get(job.name) ?? '';
   }
@@ -356,6 +356,18 @@ export class InMemoryK8sClient implements K8sClient {
   private findJobBySelector(selector: string): K8sJobInfo | null {
     for (const entry of this.jobs.values()) {
       if (matchesLabelSelector(entry.info.labels, selector)) return entry.info;
+    }
+    return null;
+  }
+
+  /**
+   * Pod 标签语义对齐真实集群：K8s 不会把 Job metadata.labels 复制给 Pod，
+   * Pod 选择器必须匹配 `spec.template.metadata.labels`（缺省回退 Job labels 兼容历史夹具）。
+   */
+  private findJobByPodSelector(selector: string): K8sJobInfo | null {
+    for (const entry of this.jobs.values()) {
+      const podLabels = entry.manifest.spec.template.metadata?.labels ?? entry.info.labels;
+      if (matchesLabelSelector(podLabels, selector)) return entry.info;
     }
     return null;
   }

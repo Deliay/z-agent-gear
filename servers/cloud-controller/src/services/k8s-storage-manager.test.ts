@@ -88,6 +88,49 @@ describe('K8sStorageManager', () => {
     expect(client.createdPvcManifests).toHaveLength(1);
   });
 
+  it('T-CC-P2: 未指定 StorageClass 时，K8s 回填默认类名仍幂等（不误报冲突）', async () => {
+    const { client, manager } = setup({ storageClass: '', archiveStorageClass: '' });
+    const name = `zag-storage-${storage.storageId}`;
+    // 模拟 K8s API 对省略 storageClassName 的 PVC 回填集群默认类名。
+    await client.createPersistentVolumeClaim({
+      apiVersion: 'v1',
+      kind: 'PersistentVolumeClaim',
+      metadata: {
+        name,
+        namespace: 'zag-cloud',
+        labels: { app: 'zag-storage' },
+      },
+      spec: {
+        accessModes: ['ReadWriteOnce'],
+        volumeMode: 'Filesystem',
+        resources: { requests: { storage: '20Gi' } },
+        storageClassName: 'cluster-default',
+      },
+    });
+
+    await expect(manager.ensureStoragePvc({ ...storage, storageClass: null })).resolves.toEqual({
+      pvcName: name,
+      created: false,
+    });
+
+    const archiveName = `zag-archive-${storage.workspaceId}`;
+    await client.createPersistentVolumeClaim({
+      apiVersion: 'v1',
+      kind: 'PersistentVolumeClaim',
+      metadata: { name: archiveName, namespace: 'zag-cloud', labels: { app: 'zag-archive' } },
+      spec: {
+        accessModes: ['ReadWriteOnce'],
+        volumeMode: 'Filesystem',
+        resources: { requests: { storage: '100Gi' } },
+        storageClassName: 'cluster-default',
+      },
+    });
+    await expect(manager.ensureArchivePvc(storage.workspaceId!, storage.tenantId)).resolves.toEqual({
+      pvcName: archiveName,
+      created: false,
+    });
+  });
+
   it('T-CC-P3: 已存在但容量或 StorageClass 不同 → StoragePvcConflictError', async () => {
     const { manager } = setup();
     await manager.ensureStoragePvc(storage);

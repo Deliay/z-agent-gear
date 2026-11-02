@@ -69,6 +69,27 @@ describe('storage-pricing（T-BILL-S1 报价边界）', () => {
     });
   });
 
+  it('纯函数：管理员调价出现奇数分时半价仍为整数分且明细合计一致', () => {
+    const quote = quoteStorageHourly(20, {
+      baseCents: 501,
+      tier1Cents: 101,
+      tier2Cents: 301,
+    });
+    expect(quote.full.hourlyCents).toBe(1511);
+    expect(quote.archived.hourlyCents).toBe(
+      quote.archived.items.reduce((acc, item) => acc + item.amount, 0),
+    );
+    for (const item of quote.archived.items) {
+      expect(Number.isInteger(item.unitPrice)).toBe(true);
+      expect(Number.isInteger(item.amount)).toBe(true);
+      expect(item.amount).toBe(item.quantity * item.unitPrice);
+    }
+    expect(quote.archived.items).toEqual([
+      { productId: 'cloud_storage.base.hour', quantity: 1, unitPrice: 250, amount: 250 },
+      { productId: 'cloud_storage.tier1.gib_hour', quantity: 10, unitPrice: 50, amount: 500 },
+    ]);
+  });
+
   it('容量非法（0/31/小数）拒绝报价', () => {
     for (const sizeGi of [0, 31, 10.5, Number.NaN]) {
       expect(() => quoteStorageHourly(sizeGi)).toThrow(

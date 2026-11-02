@@ -454,7 +454,8 @@ export const CLOUD_STORAGE_CAPABILITIES = gql`
 `
 
 /** 设置操作字段（进度对话框 1.5s 轮询） */
-export const CLOUD_HOST_SETUP_OPERATION_FIELDS = gql`  fragment CloudHostSetupOperationFields on CloudHostSetupOperation {
+export const CLOUD_HOST_SETUP_OPERATION_FIELDS = gql`
+  fragment CloudHostSetupOperationFields on CloudHostSetupOperation {
     id
     kind
     status

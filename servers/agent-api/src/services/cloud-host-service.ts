@@ -101,6 +101,8 @@ export interface TerminalCallbackInput {
   storage?: {
     id?: string | null;
     archiveStatus?: string | null;
+    /** cloud-controller 本次归档 id（新周期占位/旧回调判定用，可缺省）。 */
+    archiveId?: string | null;
   } | null;
 }
 
@@ -955,7 +957,21 @@ export class CloudHostService {
       }
       const archiveStatus = input.storage?.archiveStatus;
       if (archiveStatus === 'pending' || archiveStatus === 'running') {
-        await this.storageService.markArchiving(storageId, id);
+        await this.storageService.markArchiving(
+          storageId,
+          id,
+          input.storage?.archiveId ? String(input.storage.archiveId) : null,
+        );
+        return;
+      }
+      // succeeded/failed/null：回调可能丢失，按最近容器查询归档终态补齐；
+      // 无归档可收口时释放存储，避免永久卡在「已挂载」（不可销毁/不可再挂载）。
+      const reconciled = await this.storageService.reconcileFromTerminal(
+        storageId,
+        host.containerId ? String(host.containerId) : null,
+      );
+      if (!reconciled) {
+        await this.storageService.releaseStorage(storageId, id);
       }
     } catch (err) {
       logger.warn(
@@ -1066,6 +1082,8 @@ const CLOUD_HOST_PUBLIC_ERRORS = new Set([
   'storage feature is disabled',
   'storage not found',
   'storage is not attachable',
+  'storage size must be between 1 and 30 Gi',
+  'global workspace is read-only',
   // Issues 联动配置
   'cloud host not found',
   'workflow must contain a human node',

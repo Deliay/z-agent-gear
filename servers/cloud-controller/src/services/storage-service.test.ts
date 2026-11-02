@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sStorageManager } from './k8s-storage-manager.js';
 import {
+  ContainerActiveError,
   StorageArchiveRunningError,
   StorageService,
   buildArchiveScript,
@@ -177,11 +178,18 @@ describe('StorageService 归档', () => {
     ]);
     const archiver = podSpec.containers[0]!;
     expect(archiver.image).toBe('archiver:test');
+    expect(archiver.command).toEqual(['/usr/local/bin/archiver-entrypoint.sh']);
+    expect(archiver.env).toContainEqual({ name: 'MODE', value: 'archive' });
+    // Pod 模板必须携带同一组标签（K8s 不会复制 Job metadata.labels 给 Pod）。
+    expect(manifest!.spec.template.metadata?.labels).toMatchObject({
+      app: 'zag-archive',
+      'zag.cloud/container-id': container.id,
+      'zag.cloud/archive-id': 'archive-1',
+    });
     expect(archiver.volumeMounts).toEqual([
       { name: 'source', mountPath: '/source', readOnly: true },
       { name: 'archive', mountPath: '/archive' },
     ]);
-    expect(archiver.args?.[0]).toContain('rm -f "$dir"/*.tmp');
     expect(archiver.env).toContainEqual({ name: 'ARCHIVE_FILE', value: FILE_NAME });
 
     const stored = await repo.findById(container.id);
@@ -289,6 +297,22 @@ describe('StorageService 归档', () => {
     expect((await repo.findById(container.id))?.storageArchiveId).toBe('archive-1');
   });
 
+  it('T-CC-AR1: 仅 exited/failed 允许归档（destroying 仍活跃 → 拒绝）', async () => {
+    const { repo, client, storageManager, service } = setup();
+    await seedStorage(client, storageManager);
+    const destroying = await createTerminalContainer(repo, { status: 'destroying' });
+    await expect(
+      service.startArchive(destroying.id, { archiveId: 'a-destroying', fileName: FILE_NAME }),
+    ).rejects.toBeInstanceOf(ContainerActiveError);
+
+    const failed = await createTerminalContainer(repo, { status: 'failed' });
+    autoComplete(client, { app: 'zag-archive', log: 'ZAG_ARCHIVE_RESULT={"usageBytes":1}' });
+    await expect(
+      service.startArchive(failed.id, { archiveId: 'a-failed', fileName: FILE_NAME }),
+    ).resolves.toMatchObject({ accepted: true });
+    await service.drainArchiveTasks();
+  });
+
   it('T-CC-AR4: maybeStartArchive 幂等（succeeded 后不再触发）', async () => {
     const { repo, client, storageManager, service } = setup();
     await seedStorage(client, storageManager);
@@ -387,7 +411,7 @@ describe('StorageService 用量刷新（T-CC-U1）', () => {
         backoffLimit: 0,
         ttlSecondsAfterFinished: 600,
         template: {
-          metadata: { labels: {} },
+          metadata: { labels: { app: 'zag-worker', 'zag.cloud/container-id': container.id } },
           spec: {
             restartPolicy: 'Never',
             containers: [{ name: 'worker', image: 'w', env: [], resources: { limits: { cpu: '1', memory: '1Gi' } } }],
@@ -407,6 +431,11 @@ describe('StorageService 用量刷新（T-CC-U1）', () => {
 
     const job = client.createdManifests.find((m) => m.metadata.labels.app === 'zag-usage')!;
     expect(job.spec.template.spec.nodeName).toBe('node-1');
+    expect(job.spec.template.metadata?.labels).toMatchObject({
+      app: 'zag-usage',
+      'zag.cloud/container-id': container.id,
+      'zag.cloud/storage-id': STORAGE_ID,
+    });
     expect(job.spec.template.spec.volumes?.[0]?.persistentVolumeClaim?.readOnly).toBe(true);
     expect(usageCalls).toHaveLength(1);
     expect(usageCalls[0]!.payload.usageBytes).toBe(12345);
@@ -435,7 +464,12 @@ describe('StorageService 清理（T-CC-D1）', () => {
     expect(spec.volumes?.[0]?.persistentVolumeClaim?.claimName).toBe(
       `zag-archive-${WORKSPACE_ID}`,
     );
-    expect(spec.containers[0]!.args?.[0]).toContain('rm -rf "$dir"');
+    expect(spec.containers[0]!.command).toEqual(['/usr/local/bin/archiver-entrypoint.sh']);
+    expect(spec.containers[0]!.env).toContainEqual({ name: 'MODE', value: 'cleanup' });
+    expect(cleanupJob.spec.template.metadata?.labels).toMatchObject({
+      app: 'zag-cleanup',
+      'zag.cloud/storage-id': STORAGE_ID,
+    });
 
     // 重复清理：源 PVC 已不存在按成功处理（幂等）。
     await expect(

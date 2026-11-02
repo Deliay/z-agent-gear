@@ -262,6 +262,12 @@ internalCloudHostRouter.post('/:id/terminal', async (req: Request, res: Response
                   : req.body.storage.archiveStatus === null
                     ? null
                     : undefined,
+              archiveId:
+                typeof req.body.storage.archiveId === 'string'
+                  ? req.body.storage.archiveId
+                  : req.body.storage.archiveId === null
+                    ? null
+                    : undefined,
             }
           : undefined,
     });

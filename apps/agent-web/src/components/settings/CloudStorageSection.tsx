@@ -122,6 +122,11 @@ function DestroyedStorageRow({ storage }: { storage: CloudStorageData }) {
           {failed ? '失败时间' : '销毁时间'}：
           {formatDateTime(storage.destroyedAt)}
         </div>
+        {failed && storage.failureReason && (
+          <div className="min-w-0 break-words text-destructive">
+            失败原因：{storage.failureReason}
+          </div>
+        )}
       </dl>
     </div>
   )

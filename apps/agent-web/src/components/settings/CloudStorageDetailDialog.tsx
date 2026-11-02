@@ -200,6 +200,14 @@ export default function CloudStorageDetailDialog({
                 <h3 className="text-sm font-medium">基本信息</h3>
                 <DetailRow label="名称">{storage.name}</DetailRow>
                 <DetailRow label="容量">{storage.sizeGi}Gi</DetailRow>
+                <DetailRow label="每小时费用">
+                  {storage.hourlyCreditsFull} credits（归档后 {storage.hourlyCreditsArchived} credits）
+                </DetailRow>
+                <DetailRow label="归档空间">
+                  {storage.archiveSpace.usedGi === null
+                    ? `由平台管理（上限 ${storage.archiveSpace.capacityGi}Gi）`
+                    : `${storage.archiveSpace.usedGi}Gi / ${storage.archiveSpace.capacityGi}Gi`}
+                </DetailRow>
                 <DetailRow label="状态">
                   <Badge variant={cloudStorageStatusBadgeVariant(storage.status)}>
                     {cloudStorageStatusLabel(storage.status)}

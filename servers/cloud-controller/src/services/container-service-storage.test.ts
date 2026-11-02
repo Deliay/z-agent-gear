@@ -227,7 +227,9 @@ describe('ContainerService 云存储挂载（T-CC-J1/J2/RS1/RS2）', () => {
       name: 'RESTORE_FILE',
       value: `/archive/${WORKSPACE_ID}/${STORAGE_ID}/${FILE_NAME}`,
     });
-    expect(initContainer.args?.[0]).toContain('tar -xjf "$RESTORE_FILE" -C /target');
+    expect(initContainer.env).toContainEqual({ name: 'MODE', value: 'restore' });
+    expect(initContainer.command).toEqual(['/usr/local/bin/archiver-entrypoint.sh']);
+    expect(initContainer.args).toBeUndefined();
     expect(initContainer.volumeMounts).toEqual([
       { name: 'storage', mountPath: '/target' },
       { name: 'archive', mountPath: '/archive', readOnly: true },

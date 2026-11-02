@@ -95,6 +95,12 @@ export function buildArchiveFileName(hostName: string | null | undefined, at: Da
   return `${sanitizeArchiveName(hostName)}-${stamp}.tar.gz2`;
 }
 
+/** 未指定/空串统一归一为 `null`（= 使用集群默认 StorageClass）。 */
+function normalizeStorageClass(value: string | null | undefined): string | null {
+  const trimmed = (value ?? '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export class K8sStorageManager {
   private readonly storagePvcPrefix: string;
   private readonly archivePvcPrefix: string;
@@ -221,13 +227,15 @@ export class K8sStorageManager {
     capacity: string,
   ): StoredPvc {
     const pvcName = manifest.metadata.name;
-    const desiredClass = manifest.spec.storageClassName ?? null;
+    const desiredClass = normalizeStorageClass(manifest.spec.storageClassName);
     const existingCapacity = existing.capacity ?? null;
-    const existingClass = existing.storageClassName ?? null;
+    const existingClass = normalizeStorageClass(existing.storageClassName);
     if (existingCapacity !== null && existingCapacity !== capacity) {
       throw new StoragePvcConflictError(pvcName, `capacity ${existingCapacity} != ${capacity}`);
     }
-    if (existingClass !== desiredClass) {
+    // 未指定 StorageClass（desired=null）= 使用集群默认：K8s 回读可能是默认类名或空串，
+    // 均视为兼容；仅当请求显式指定 class 时才要求精确一致（避免重试返回 409）。
+    if (desiredClass !== null && existingClass !== desiredClass) {
       throw new StoragePvcConflictError(
         pvcName,
         `storageClass ${existingClass ?? '<default>'} != ${desiredClass ?? '<default>'}`,

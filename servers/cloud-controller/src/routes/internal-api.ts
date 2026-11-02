@@ -350,7 +350,11 @@ export function parseStorageRequest(raw: unknown): StartStorageInput | null | un
   const pvcName = nonEmptyString(record.pvcName);
   const workspaceId = nonEmptyString(record.workspaceId);
   if (!id || !pvcName || !workspaceId) return undefined;
-  if (!STORAGE_PVC_NAME_PATTERN.test(pvcName)) return undefined;
+  if (!/^[a-f0-9]{24}$/.test(id)) return undefined;
+  // 源卷名必须与 storageId 对应（服务端派生），避免挂载到错误卷。
+  if (pvcName !== `zag-storage-${id}` || !STORAGE_PVC_NAME_PATTERN.test(pvcName)) {
+    return undefined;
+  }
 
   const sizeGi = record.sizeGi;
   if (
@@ -1058,6 +1062,8 @@ export function createInternalRouter(
     const sizeGi = body.sizeGi;
     if (
       !storageId ||
+      !tenantId ||
+      !workspaceId ||
       typeof sizeGi !== 'number' ||
       !Number.isInteger(sizeGi) ||
       sizeGi < 1 ||
@@ -1065,7 +1071,7 @@ export function createInternalRouter(
     ) {
       res.status(400).json({
         error: 'INVALID_BODY',
-        message: 'storageId 与 sizeGi(1..30 整数) 为必填',
+        message: 'storageId/tenantId/workspaceId 与 sizeGi(1..30 整数) 为必填',
       });
       return;
     }

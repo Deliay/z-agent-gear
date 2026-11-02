@@ -59,7 +59,7 @@ pnpm test
 
 | 脚本 | 说明 |
 |------|------|
-| `pnpm test` | 运行全部常规测试文件（49 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `pnpm test` | 运行全部常规测试文件（52 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `pnpm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `pnpm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 

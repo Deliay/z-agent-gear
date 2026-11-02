@@ -166,17 +166,29 @@ export class CloudStorageService {
     return context;
   }
 
-  private async resolveAccount(tenantId: string): Promise<{ id: string; availableBalance: number }> {
+  private async resolveAccount(
+    tenantId: string,
+  ): Promise<{ id: string | null; availableBalance: number | null }> {
     try {
       const account = await this.billing.getAccount('tenant', tenantId);
       return { id: account.id, availableBalance: account.availableBalance };
-    } catch {
-      throw new Error('billing service unavailable');
+    } catch (err) {
+      // 提案 §1.3 / 实现点 12：计费服务不可用时降级放行（与云电脑创建报价同口径），
+      // 不阻断存储创建/挂载；billingAccountId 置空，出账由 admin-api 侧后续补记。
+      logger.warn(
+        { event: 'storage_billing_unavailable', tenantId, err },
+        'billing unavailable, storage continues without account',
+      );
+      return { id: null, availableBalance: null };
     }
   }
 
   /** 首小时余额校验（计费服务不可用时降级放行，与云电脑报价同口径）。 */
-  private async assertCanAfford(account: { id: string; availableBalance: number }, sizeGi: number): Promise<void> {
+  private async assertCanAfford(
+    account: { id: string | null; availableBalance: number | null },
+    sizeGi: number,
+  ): Promise<void> {
+    if (account.availableBalance === null) return;
     let hourlyCredits: number;
     try {
       const quote = await this.billing.getStorageQuote(sizeGi);
@@ -276,6 +288,16 @@ export class CloudStorageService {
           },
         },
       ).catch(() => undefined);
+      // 兜底回收可能已创建的 PVC（防止 CREATE_FAILED 留下孤儿卷；best-effort）。
+      const cleanup = this.controllerClient.deleteStorage?.(String(storageId));
+      if (cleanup) {
+        await cleanup.catch((cleanupErr) => {
+          logger.warn(
+            { event: 'storage_create_cleanup_failed', storageId: String(storageId), err: cleanupErr },
+            'cloud storage create cleanup failed',
+          );
+        });
+      }
       logger.warn(
         { event: 'storage_create_failed', storageId: String(storageId), err },
         'cloud storage create failed',
@@ -529,6 +551,8 @@ export class CloudStorageService {
           attachedBy: input.userId,
           attachedAt: new Date(),
           attachFromStatus: fromStatus,
+          // 挂载期间（含从 ARCHIVED 恢复）按全价计费；归档成功后回调再切回 HALF。
+          billingRate: 'FULL',
         },
       },
       { returnDocument: 'after' },
@@ -553,7 +577,7 @@ export class CloudStorageService {
     if (cloudHostId) filter.attachedCloudHostId = cloudHostId;
     const updated = (await CloudStorage.findOneAndUpdate(
       filter,
-      { $set: { status: 'ATTACHED' } },
+      { $set: { status: 'ATTACHED', billingRate: 'FULL' } },
       { returnDocument: 'after' },
     ).lean()) as Doc | null;
     if (updated) {
@@ -585,6 +609,8 @@ export class CloudStorageService {
       {
         $set: {
           status: fromStatus,
+          // 回滚到 ARCHIVED 时恢复半价；回到 IDLE 保持全价。
+          billingRate: fromStatus === 'ARCHIVED' ? 'HALF' : 'FULL',
           attachedCloudHostId: null,
           attachedControllerId: null,
           attachedBy: null,
@@ -603,21 +629,60 @@ export class CloudStorageService {
     return updated;
   }
 
-  /** terminal 回调携带 `storage.archiveStatus=pending/running` 时推进 `ATTACHED → ARCHIVING`。 */
-  async markArchiving(storageId: string, cloudHostId?: string | null): Promise<Doc | null> {
+  /** terminal 回调携带 `storage.archiveStatus=pending/running` 时推进 `ATTACHED → ARCHIVING`。
+   *  `archiveId`（cloud-controller 本次归档 id）用于开启新归档周期：与旧周期不同则重置
+   *  currentArchive 为 PENDING 占位，避免上一轮 SUCCEEDED 污染本轮回调判定。 */
+  async markArchiving(
+    storageId: string,
+    cloudHostId?: string | null,
+    archiveId?: string | null,
+  ): Promise<Doc | null> {
     if (!mongoose.isValidObjectId(storageId)) return null;
     const filter: Record<string, unknown> = { _id: storageId, status: 'ATTACHED' };
     if (cloudHostId) filter.attachedCloudHostId = cloudHostId;
     const updated = (await CloudStorage.findOneAndUpdate(
       filter,
-      { $set: { status: 'ARCHIVING' } },
+      { $set: { status: 'ARCHIVING', billingRate: 'FULL' } },
       { returnDocument: 'after' },
     ).lean()) as Doc | null;
+    const current = updated ?? ((await CloudStorage.findOne({ _id: storageId }).lean()) as Doc | null);
+    if (!current) return null;
+    const previous = current.currentArchive as Doc | null;
+    const previousId = previous?.archiveId ? String(previous.archiveId) : null;
+    if (archiveId && previousId !== archiveId) {
+      // 新归档周期：占位 currentArchive，旧周期的迟到回调按「非当前 archiveId」忽略。
+      const placeholder = {
+        archiveId,
+        containerId: str(previous?.containerId),
+        cloudHostId: current.attachedCloudHostId ?? previous?.cloudHostId ?? null,
+        cloudHostName: str(previous?.cloudHostName),
+        fileName: str(previous?.fileName) ?? '',
+        path: str(previous?.path),
+        status: 'PENDING',
+        usageBytes: null,
+        startedAt: new Date(),
+        finishedAt: null,
+        failureReason: null,
+      };
+      const withPlaceholder = (await CloudStorage.findOneAndUpdate(
+        { _id: storageId, status: 'ARCHIVING' },
+        { $set: { currentArchive: placeholder } },
+        { returnDocument: 'after' },
+      ).lean()) as Doc | null;
+      if (withPlaceholder) return withPlaceholder;
+    } else if (!archiveId && previous) {
+      // 旧版 cloud-controller 未下发 archiveId：清除上一周期归档，避免新周期回调被旧 SUCCEEDED 拦截。
+      const cleared = (await CloudStorage.findOneAndUpdate(
+        { _id: storageId, status: 'ARCHIVING' },
+        { $set: { currentArchive: null } },
+        { returnDocument: 'after' },
+      ).lean()) as Doc | null;
+      if (cleared) return cleared;
+    }
     if (updated) {
       logger.info({ event: 'archive_started', storageId }, 'cloud storage archiving');
-      return updated;
     }
-    return (await CloudStorage.findOne({ _id: storageId }).lean()) as Doc | null;
+    return current;
   }
 
   /** 记录本次挂载的容器（归档重试/对账用；仅在仍处于本次挂载时写入）。 */
@@ -640,12 +705,20 @@ export class CloudStorageService {
     const doc = (await CloudStorage.findById(storageId).lean()) as Doc | null;
     if (!doc) return null;
     const existing = doc.currentArchive as Doc | null;
-    const sameArchive = existing && String(existing.archiveId) === input.archiveId;
+    const existingId = existing?.archiveId ? String(existing.archiveId) : null;
+    const sameArchive = existingId !== null && existingId === input.archiveId;
     const existingTerminal = sameArchive && isArchiveTerminal(existing?.status);
     if (existingTerminal) return this.present(doc);
-    // 已成功归档后迟到的旧 archiveId 回调一律忽略
-    if (!sameArchive && String(existing?.status ?? '') === 'SUCCEEDED') {
-      return this.present(doc);
+    // 非当前归档周期的迟到回调一律忽略（旧周期的 SUCCEEDED/FAILED 不得覆盖新周期）：
+    // - 已 ARCHIVED 且旧回调为 SUCCEEDED；
+    // - 当前处于 ARCHIVING 且已存在另一个 archiveId（新周期占位/运行中）。
+    if (existing && !sameArchive && existingId !== null) {
+      if (String(existing.status) === 'SUCCEEDED' && String(doc.status) === 'ARCHIVED') {
+        return this.present(doc);
+      }
+      if (String(doc.status) === 'ARCHIVING') {
+        return this.present(doc);
+      }
     }
 
     const now = new Date();
@@ -670,9 +743,12 @@ export class CloudStorageService {
     };
 
     if (input.status === 'RUNNING') {
-      if (String(doc.status) !== 'ARCHIVING') return this.present(doc);
+      // 允许 ATTACHED（RUNNING 回调早于 terminal 的 markArchiving）与 ARCHIVING。
+      if (String(doc.status) !== 'ARCHIVING' && String(doc.status) !== 'ATTACHED') {
+        return this.present(doc);
+      }
       const updated = (await CloudStorage.findOneAndUpdate(
-        { _id: storageId, status: 'ARCHIVING' },
+        { _id: storageId, status: { $in: ['ATTACHED', 'ARCHIVING'] } },
         {
           $set: {
             currentArchive: {
@@ -779,6 +855,44 @@ export class CloudStorageService {
   }
 
   /**
+   * terminal 回调兜底：按最近容器查询归档终态并补齐（回调丢失时避免永久卡 ATTACHED）。
+   * 返回 true 表示已收口（成功转 ARCHIVED / 失败保持 ARCHIVING 记失败标记）。
+   */
+  async reconcileFromTerminal(
+    storageId: string,
+    containerId: string | null,
+  ): Promise<boolean> {
+    if (!mongoose.isValidObjectId(storageId)) return false;
+    let targetContainerId = containerId;
+    if (!targetContainerId) {
+      const doc = (await CloudStorage.findById(storageId).select('lastContainerId').lean()) as Doc | null;
+      targetContainerId = str(doc?.lastContainerId);
+    }
+    if (!targetContainerId) return false;
+    try {
+      const archive = await this.controllerClient.getArchive(targetContainerId);
+      if (!archive.archiveId) return false;
+      if (archive.status !== 'SUCCEEDED' && archive.status !== 'FAILED') return false;
+      await this.handleArchiveCallback(storageId, {
+        archiveId: archive.archiveId,
+        containerId: targetContainerId,
+        status: archive.status,
+        usageBytes: archive.usageBytes ?? null,
+        startedAt: archive.startedAt ?? null,
+        finishedAt: archive.finishedAt ?? null,
+        failureReason: archive.failureReason ?? null,
+      });
+      return true;
+    } catch (err) {
+      logger.warn(
+        { event: 'archive_terminal_reconcile_failed', storageId, containerId: targetContainerId, err },
+        'cloud storage terminal reconcile failed',
+      );
+      return false;
+    }
+  }
+
+  /**
    * `ARCHIVING` 对账兜底：超过阈值仍未收口时，按最近容器查询归档状态；
    * 已成功/失败的回调漏投时补齐（幂等）。返回实际处理的存储数。
    */
@@ -846,7 +960,13 @@ export class CloudStorageService {
       name: String(doc.name ?? ''),
       sizeGi: Number(doc.sizeGi ?? 0),
       status: doc.status,
-      usageBytes: doc.usageBytes ?? null,
+      // 契约：待挂载（从未写入）实际占用为 0；未知为 null（已归档/挂载中未采集）。
+      usageBytes:
+        doc.usageBytes === null || doc.usageBytes === undefined
+          ? doc.status === 'IDLE'
+            ? 0
+            : null
+          : doc.usageBytes,
       usageUpdatedAt: iso(doc.usageUpdatedAt),
       createdById: doc.createdBy ? String(doc.createdBy) : null,
       createdAt: iso(doc.createdAt) ?? new Date(0).toISOString(),
@@ -952,6 +1072,19 @@ export function fallbackStorageQuote(sizeGi: number): {
 }
 
 export const cloudStorageService = new CloudStorageService();
+
+/** 定时对账 ARCHIVING（回调最终丢失兜底）；与 admin-api scheduler 同模式，定时器 unref。 */
+export function scheduleCloudStorageReconcile(intervalMs: number): NodeJS.Timeout {
+  const run = () => {
+    void cloudStorageService.reconcileARCHIVING().catch((err) => {
+      logger.warn({ event: 'archive_reconcile_tick_failed', err }, 'storage reconcile tick failed');
+    });
+  };
+  run();
+  const timer = setInterval(run, Math.max(intervalMs, 60_000));
+  timer.unref?.();
+  return timer;
+}
 
 /** 契约允许透传的错误文案（未命中统一 internal error，避免泄露 Mongo/驱动信息）。 */
 const CLOUD_STORAGE_PUBLIC_ERRORS = new Set([

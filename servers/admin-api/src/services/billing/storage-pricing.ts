@@ -104,12 +104,17 @@ export function quoteStorageHourly(
     },
   ].filter((item) => item.quantity > 0);
 
-  const archivedItems: StorageQuoteItem[] = fullItems.map((item) => ({
-    productId: item.productId,
-    quantity: item.quantity,
-    unitPrice: item.unitPrice / 2,
-    amount: item.amount / 2,
-  }));
+  const archivedItems: StorageQuoteItem[] = fullItems.map((item) => {
+    // 半价取整：单价向下取整到「分」，金额 = quantity × 半价单价，保证明细合计与账单金额一致、
+    // 且不出现小数分（money.ts：分是最小单位）。默认价目均为 100 的整数倍，行为不变。
+    const unitPrice = Math.floor(item.unitPrice / 2);
+    return {
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPrice,
+      amount: item.quantity * unitPrice,
+    };
+  });
 
   const fullCents = fullItems.reduce((acc, item) => acc + item.amount, 0);
   const archivedCents = archivedItems.reduce((acc, item) => acc + item.amount, 0);

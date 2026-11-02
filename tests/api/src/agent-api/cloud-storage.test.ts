@@ -171,7 +171,8 @@ describe.skipIf(!STORAGE_ENABLED)('Cloud Storage API', () => {
 
   it('T-CS6/CS7: destroy only idle/archived, then moves into the destroyed fold', async () => {
     const { token } = await fundedUser();
-    const created = await newStorage(token, `destroy-${Date.now().toString(36)}`, 5);
+    const name = `destroy-${Date.now().toString(36)}`;
+    const created = await newStorage(token, name, 5);
 
     const destroyed = await gql(DESTROY, { id: created.id }, token);
     expect(destroyed.errors).toBeUndefined();
@@ -185,8 +186,8 @@ describe.skipIf(!STORAGE_ENABLED)('Cloud Storage API', () => {
     const found = folded.data.cloudStorages.find((item: { id: string }) => item.id === created.id);
     expect(found?.status).toBe('DESTROYED');
 
-    // 销毁后同名允许重建
-    const again = await gql(CREATE, { input: { name: `destroy-${Date.now().toString(36)}`, sizeGi: 5 } }, token);
+    // 销毁后同名允许重建（名称随 destroyedAt 释放）
+    const again = await gql(CREATE, { input: { name, sizeGi: 5 } }, token);
     expect(again.errors).toBeUndefined();
   });
 
@@ -308,6 +309,56 @@ function testMounting(): void {
       expect(archived.data.cloudStorage.hourlyCredits).toBe(2.5); // 6Gi 全价 5（≤10Gi 固定档）→ 归档半价 2.5
       expect(archived.data.cloudStorage.currentArchive.status).toBe('SUCCEEDED');
 
+      // 第二轮：已归档 → 再挂载（费率回 FULL）→ 再归档（新 archiveId 不被旧 SUCCEEDED 阻断）
+      const second = await gql(
+        CREATE_HOST,
+        { input: { name: `host2-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], storageId: storage.id } },
+        token,
+      );
+      expect(second.errors).toBeUndefined();
+      const hostId2 = second.data.createCloudHost.id;
+      const attachedAgain = await gql(DETAIL, { id: storage.id }, token);
+      expect(attachedAgain.data.cloudStorage.status).toBe('ATTACHED');
+      // 挂载期间按全价（不是归档半价）
+      expect(attachedAgain.data.cloudStorage.hourlyCredits).toBe(5);
+
+      const ready2 = await fetch(`${AGENT_BASE}/internal/cloud-hosts/${hostId2}/ready`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        body: JSON.stringify({}),
+      });
+      expect(ready2.status).toBe(200);
+      const archiveId2 = 'd'.repeat(24);
+      const terminal2 = await fetch(`${AGENT_BASE}/internal/cloud-hosts/${hostId2}/terminal`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        body: JSON.stringify({
+          status: 'stopped',
+          storage: { id: storage.id, archiveStatus: 'pending', archiveId: archiveId2 },
+        }),
+      });
+      expect(terminal2.status).toBe(200);
+
+      const callback2 = await fetch(`${AGENT_BASE}/internal/cloud-storages/${storage.id}/archives`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        body: JSON.stringify({
+          archiveId: archiveId2,
+          storageId: storage.id,
+          cloudHostId: hostId2,
+          fileName: 'my-host-20261102-160000.tar.gz2',
+          path: `/archive/${'a'.repeat(24)}/${storage.id}/my-host-20261102-160000.tar.gz2`,
+          status: 'SUCCEEDED',
+          usageBytes: 1024,
+        }),
+      });
+      expect(callback2.status).toBe(200);
+      const archivedAgain = await gql(DETAIL, { id: storage.id }, token);
+      expect(archivedAgain.data.cloudStorage.status).toBe('ARCHIVED');
+      expect(archivedAgain.data.cloudStorage.currentArchive.id).toBe(archiveId2);
+      expect(archivedAgain.data.cloudStorage.hourlyCredits).toBe(2.5);
+
+      await gql(DELETE_HOST, { id: hostId2 }, token);
       await gql(DELETE_HOST, { id: hostId }, token);
     }, 60_000);
   });

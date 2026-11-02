@@ -103,9 +103,10 @@ export interface CreateJobInput {
 /** 云电脑主目录固定挂载点（整块存储即 worker 主目录；提案实现点 3）。 */
 export const STORAGE_HOME_MOUNT_PATH = '/home/worker';
 
-/** 恢复 initContainer 脚本：解压归档到目标卷（`tar -xjf` = bzip2）。 */
+/** 恢复 initContainer 脚本：解压归档到目标卷（`tar -xjf` = bzip2）。
+ *  镜像入口 `MODE=restore` 为唯一生效实现；此常量保留用于文档/单测口径说明。 */
 export const STORAGE_RESTORE_SCRIPT = [
-  'set -eu',
+  'set -euo pipefail',
   'tar -xjf "$RESTORE_FILE" -C /target',
   'echo "ZAG_RESTORE_DONE"',
 ].join('\n');
@@ -197,9 +198,12 @@ export class K8sJobManager {
           {
             name: 'storage-restore',
             image: archiverImage,
-            env: [{ name: 'RESTORE_FILE', value: restorePath }],
-            command: ['/bin/sh', '-c'],
-            args: [STORAGE_RESTORE_SCRIPT],
+            command: ['/usr/local/bin/archiver-entrypoint.sh'],
+            env: [
+              { name: 'MODE', value: 'restore' },
+              { name: 'RESTORE_FILE', value: restorePath },
+              { name: 'TARGET_DIR', value: '/target' },
+            ],
             resources: { limits: { cpu: '2', memory: '2Gi' } },
             volumeMounts: [
               { name: 'storage', mountPath: '/target' },

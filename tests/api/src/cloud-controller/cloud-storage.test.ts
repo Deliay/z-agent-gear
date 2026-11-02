@@ -91,7 +91,7 @@ describe.skipIf(!TOKEN)('cloud-controller storage API', () => {
     const workspaceId = oid();
     await req('/internal/storages', {
       method: 'POST',
-      body: JSON.stringify({ storageId, workspaceId, sizeGi: 5 }),
+      body: JSON.stringify({ storageId, tenantId: oid(), workspaceId, sizeGi: 5 }),
     });
 
     const cleaned = await req(`/internal/storages/${storageId}/cleanup`, {
