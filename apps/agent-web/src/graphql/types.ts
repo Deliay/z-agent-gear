@@ -149,6 +149,7 @@ export interface CloudStorageArchiveData {
   startedAt?: string | null
   finishedAt?: string | null
   failureReason?: string | null
+  sourcePvcReleased?: boolean | null
 }
 
 export interface CloudStorageArchiveSpaceData {

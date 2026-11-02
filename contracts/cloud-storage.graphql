@@ -47,6 +47,9 @@ type CloudStorageArchive {
   startedAt: String
   finishedAt: String
   failureReason: String
+  # 归档成功时源 PVC 是否已释放（false 表示删除失败、源卷仍存在，供运维排查；
+  # 再次挂载时 cloud-controller 会先删除同名残留 PVC 再重建）
+  sourcePvcReleased: Boolean
 }
 
 # 创建人摘要（只暴露展示所需字段）

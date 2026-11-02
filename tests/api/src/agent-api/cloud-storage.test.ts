@@ -43,7 +43,7 @@ const DETAIL = `
   query Storage($id: ID!) {
     cloudStorage(id: $id) {
       id name sizeGi status hourlyCredits hourlyCreditsFull hourlyCreditsArchived
-      currentArchive { id fileName status }
+      currentArchive { id fileName status sourcePvcReleased }
       archiveSpace { capacityGi usedGi }
     }
   }
@@ -300,6 +300,7 @@ function testMounting(): void {
           path: `/archive/${'a'.repeat(24)}/${storage.id}/my-host-20261102-153012.tar.gz2`,
           status: 'SUCCEEDED',
           usageBytes: 5368709120,
+          sourcePvcReleased: false,
         }),
       });
       expect(callback.status).toBe(200);
@@ -308,6 +309,7 @@ function testMounting(): void {
       expect(archived.data.cloudStorage.status).toBe('ARCHIVED');
       expect(archived.data.cloudStorage.hourlyCredits).toBe(2.5); // 6Gi 全价 5（≤10Gi 固定档）→ 归档半价 2.5
       expect(archived.data.cloudStorage.currentArchive.status).toBe('SUCCEEDED');
+      expect(archived.data.cloudStorage.currentArchive.sourcePvcReleased).toBe(false);
 
       // 第二轮：已归档 → 再挂载（费率回 FULL）→ 再归档（新 archiveId 不被旧 SUCCEEDED 阻断）
       const second = await gql(

@@ -29,6 +29,7 @@ export const cloudStorageTypeDefs = `#graphql
     startedAt: String
     finishedAt: String
     failureReason: String
+    sourcePvcReleased: Boolean
   }
 
   type CloudStorageCreator {

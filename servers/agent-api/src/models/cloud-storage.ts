@@ -45,6 +45,8 @@ const archiveSchema = new mongoose.Schema(
     startedAt: { type: Date, default: null },
     finishedAt: { type: Date, default: null },
     failureReason: { type: String, default: null },
+    // 裁决 13：归档成功但源 PVC 删除失败时 false（留痕；true=已释放，null=未知/非成功态）。
+    sourcePvcReleased: { type: Boolean, default: null },
   },
   { _id: false },
 );

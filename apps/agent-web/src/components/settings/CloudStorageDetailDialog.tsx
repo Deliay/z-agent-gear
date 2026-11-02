@@ -281,6 +281,13 @@ export default function CloudStorageDetailDialog({
                         <span className="text-destructive">{archive.failureReason}</span>
                       </DetailRow>
                     )}
+                    {archive.status === 'SUCCEEDED' && archive.sourcePvcReleased === false && (
+                      <DetailRow label="源卷释放">
+                        <span className="text-destructive">
+                          源容量卷删除失败（数据已归档，再次挂载时自动清理）
+                        </span>
+                      </DetailRow>
+                    )}
                   </div>
                 )}
               </section>

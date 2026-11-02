@@ -49,6 +49,7 @@ function makeStorage(overrides: Partial<CloudStorageData> = {}): CloudStorageDat
       startedAt: '2026-11-02T09:50:00.000Z',
       finishedAt: '2026-11-02T10:00:00.000Z',
       failureReason: null,
+      sourcePvcReleased: false,
     },
     archiveSpace: { capacityGi: 100, usedGi: null },
     failureReason: null,
@@ -99,6 +100,9 @@ describe('CloudStorageDetailDialog', () => {
     expect(screen.getByText('my-host-20261102-100000.tar.gz2')).toBeInTheDocument()
     expect(screen.getByText('2.0 MiB')).toBeInTheDocument()
     expect(screen.getByText('归档成功')).toBeInTheDocument()
+    expect(
+      screen.getByText('源容量卷删除失败（数据已归档，再次挂载时自动清理）'),
+    ).toBeInTheDocument()
 
     const refresh = screen.getByRole('button', { name: '刷新用量' })
     expect(refresh).toBeEnabled()

@@ -392,6 +392,7 @@ export const CLOUD_STORAGE_FIELDS = gql`
       startedAt
       finishedAt
       failureReason
+      sourcePvcReleased
     }
     archiveSpace {
       capacityGi
