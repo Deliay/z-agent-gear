@@ -40,7 +40,9 @@ vi.mock('../models/session.js', () => ({
 
 vi.mock('./session.js', () => ({
   sessionService: {
-    acquireSession: vi.fn(),
+    takeoverSession: vi.fn(),
+    releaseSession: vi.fn(),
+    getSocketId: vi.fn(),
     storeResumeToken: vi.fn().mockResolvedValue('test-resume-token'),
     refreshSession: vi.fn(),
     updateHeartbeat: vi.fn(),
@@ -159,7 +161,7 @@ async function registerAuthenticated(mockSocket: MockSocket, mockIO: ReturnType<
     type: 'local',
   } as never);
   vi.mocked(bcrypt.compare).mockResolvedValue(true as never);
-  vi.mocked(sessionService.acquireSession).mockResolvedValue(true);
+  vi.mocked(sessionService.takeoverSession).mockResolvedValue(null);
   vi.mocked(Controller.findOneAndUpdate).mockResolvedValue({
     _id: { toString: () => 'ctrl123' },
   } as never);

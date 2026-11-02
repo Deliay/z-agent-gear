@@ -555,6 +555,18 @@ export function connectToServer(
   });
 
   socket.on('error', (data: ErrorPayload) => {
+    if (data.code === 'SESSION_REPLACED') {
+      // 同一 Key 的新登录已接管本连接：不重连（避免互踢），不清本地 Key，
+      // 按服务端终止语义退出（入口不保活重启）。
+      log.info({ event: 'session_replaced' }, 'connection replaced by a newer login');
+      socket.disconnect();
+      if (options?.onShutdown) {
+        notifyShutdown({ reason: 'session_replaced' });
+        return;
+      }
+      process.exit(EXIT_SERVER_SHUTDOWN);
+      return;
+    }
     log.error({ event: 'server_error', code: data.code, serverMessage: data.message }, 'server error');
     if (data.code === 'INVALID_TOKEN') {
       // token 已失效 = 已被服务端注销：服务端终止语义（退出码 42，入口不保活重启）。
