@@ -1,19 +1,29 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { CREATE_CLOUD_HOST } from '../../graphql/mutations'
-import { CLOUD_HOST_BILLING_QUOTE, CLOUD_HOST_WORKLOAD_CATALOG } from '../../graphql/queries'
+import {
+  CLOUD_HOST_BILLING_QUOTE,
+  CLOUD_HOST_WORKLOAD_CATALOG,
+  CLOUD_STORAGE_CAPABILITIES,
+  CLOUD_STORAGES,
+} from '../../graphql/queries'
 import type {
   CloudHostBillingQuoteQuery,
   CloudHostCapabilitiesData,
   CloudHostData,
   CloudHostWorkloadCatalogQuery,
   CloudHostWorkloadItemData,
+  CloudStorageCapabilitiesQuery,
+  CloudStorageData,
   CreateCloudHostMutation,
+  GetCloudStoragesQuery,
   HarnessType,
 } from '../../graphql/types'
 import { useGithubProjectForm } from '../../hooks/useGithubProjectForm'
 import { useCloudHostProvisioning } from '../../hooks/useCloudHostProvisioning'
 import GithubSetupProgressDialog from './GithubSetupProgressDialog'
+import NewCloudStorageDialog from '@/components/settings/NewCloudStorageDialog'
+import { cloudStorageStatusLabel, isArchivedStorage } from '@/lib/cloud-storage'
 import {
   Dialog,
   DialogContent,
@@ -52,6 +62,9 @@ const SERVER_ERROR_MESSAGES: Record<string, string> = {
   'github account is locked': '云电脑已绑定其他 Github 帐号，不可修改',
   'too many workloads (max 5)': '创建时最多选择 5 个工作负载',
   'workloads exceed 10': '展开依赖后超过工作负载上限（10 个）',
+  'storage is not attachable': '所选云存储已被占用或不可挂载，请刷新后重试',
+  'storage not found': '所选云存储不存在，请刷新后重试',
+  'storage feature is disabled': '云存储功能未开启',
 }
 
 function getErrorMessage(error: unknown): string {
@@ -83,6 +96,10 @@ export default function NewCloudHostDialog({
   const [selectedHarnesses, setSelectedHarnesses] = useState<HarnessType[]>([])
   const [selectedWorkloadIds, setSelectedWorkloadIds] = useState<string[]>([])
   const [projectEnabled, setProjectEnabled] = useState(false)
+  const [storageAttachEnabled, setStorageAttachEnabled] = useState(false)
+  const [selectedStorageId, setSelectedStorageId] = useState('')
+  const [createdStorage, setCreatedStorage] = useState<CloudStorageData | null>(null)
+  const [newStorageOpen, setNewStorageOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [setupError, setSetupError] = useState<string | null>(null)
@@ -123,12 +140,44 @@ export default function NewCloudHostDialog({
     quote?.availableBalance !== undefined &&
     quote.availableBalance < quote.createCredits
 
+  const { data: storageCapabilitiesData } = useQuery<CloudStorageCapabilitiesQuery>(
+    CLOUD_STORAGE_CAPABILITIES,
+    { skip: !open },
+  )
+  const storageFeatureEnabled =
+    storageCapabilitiesData?.cloudStorageCapabilities?.enabled === true
+  const {
+    data: storagesData,
+    refetch: refetchStorages,
+  } = useQuery<GetCloudStoragesQuery>(CLOUD_STORAGES, {
+    variables: { onlyAttachable: true, includeDestroyed: false },
+    skip: !open || !storageFeatureEnabled,
+    fetchPolicy: 'cache-and-network',
+  })
+
+  const attachableStorages = useMemo(() => {
+    const fromServer = (storagesData?.cloudStorages ?? []).filter(
+      (storage) => storage.status === 'IDLE' || storage.status === 'ARCHIVED',
+    )
+    // 新建成功后立即出现在下拉中，无需等待列表重拉
+    if (createdStorage && !fromServer.some((storage) => storage.id === createdStorage.id)) {
+      return [...fromServer, createdStorage]
+    }
+    return fromServer
+  }, [storagesData, createdStorage])
+  const selectedStorage =
+    attachableStorages.find((storage) => storage.id === selectedStorageId) ?? null
+
   useEffect(() => {
     if (open) {
       setName('')
       setSelectedHarnesses([])
       setSelectedWorkloadIds([])
       setProjectEnabled(false)
+      setStorageAttachEnabled(false)
+      setSelectedStorageId('')
+      setCreatedStorage(null)
+      setNewStorageOpen(false)
       setSubmitting(false)
       setError(null)
       setupStartedRef.current = false
@@ -155,13 +204,21 @@ export default function NewCloudHostDialog({
       : null
   const featureDisabled = !capabilities.enabled
   const projectIncomplete = projectEnabled && !projectForm.isValid
+  const storageIncomplete = storageAttachEnabled && !selectedStorageId
   // harness 为可选工作负载：不选（0 个）也可提交，就绪后可在「设置-工作负载」补装。
-  const submitDisabled = submitting || featureDisabled || Boolean(nameError) || projectIncomplete
+  const submitDisabled =
+    submitting || featureDisabled || Boolean(nameError) || projectIncomplete || storageIncomplete
 
   const handleCreateError = (err: unknown) => {
     setError(getErrorMessage(err));
     if (err instanceof Error && err.message.includes('insufficient balance')) {
       if (typeof refetchQuote === 'function') void refetchQuote();
+    }
+    if (
+      err instanceof Error &&
+      (err.message.includes('storage is not attachable') || err.message.includes('storage not found'))
+    ) {
+      void refetchStorages();
     }
   };
 
@@ -183,6 +240,17 @@ export default function NewCloudHostDialog({
 
   const dependencyNames = (workload: CloudHostWorkloadItemData): string[] =>
     (workload.dependsOnWorkloadIds ?? []).map((id) => workloadNames.get(id) ?? id)
+
+  const handleStorageCreated = async (storage: CloudStorageData) => {
+    setCreatedStorage(storage)
+    setSelectedStorageId(storage.id)
+    setNewStorageOpen(false)
+    try {
+      await refetchStorages()
+    } catch {
+      // 列表重拉失败不影响已选中的新建存储（本地已合并）
+    }
+  }
 
   const handleHostRunning = async (host: CloudHostData) => {
     runningHostRef.current = host
@@ -226,6 +294,9 @@ export default function NewCloudHostDialog({
           harnessTypes: selectedHarnesses,
           githubAccountId: projectForm.accountId,
           ...(selectedWorkloadIds.length > 0 ? { workloadIds: selectedWorkloadIds } : {}),
+          ...(storageAttachEnabled && selectedStorageId
+            ? { storageId: selectedStorageId }
+            : {}),
           project: {
             accountId: projectForm.accountId,
             repoFullName: projectForm.repoFullName,
@@ -246,8 +317,11 @@ export default function NewCloudHostDialog({
           input: {
             name: trimmedName,
             harnessTypes: selectedHarnesses,
-            // 未勾选时不传 workloadIds，保持旧报文形状
+            // 未勾选时不传 workloadIds / storageId，保持旧报文形状
             ...(selectedWorkloadIds.length > 0 ? { workloadIds: selectedWorkloadIds } : {}),
+            ...(storageAttachEnabled && selectedStorageId
+              ? { storageId: selectedStorageId }
+              : {}),
           },
         },
       })
@@ -401,6 +475,72 @@ export default function NewCloudHostDialog({
             )}
           </div>
 
+          {storageFeatureEnabled && (
+            <div className="min-w-0 rounded-md border p-3">
+              <label className="flex cursor-pointer items-center gap-2">
+                <input
+                  type="checkbox"
+                  aria-label="挂载云存储"
+                  checked={storageAttachEnabled}
+                  onChange={(event) => {
+                    const checked = event.target.checked
+                    setStorageAttachEnabled(checked)
+                    if (!checked) setSelectedStorageId('')
+                  }}
+                  className="h-4 w-4"
+                />
+                <span className="text-sm font-medium">云存储（可选）</span>
+              </label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                将云电脑主目录 /home/worker 挂载到云存储，停止云电脑时自动归档数据
+              </p>
+              {storageAttachEnabled && (
+                <div className="mt-3 space-y-2">
+                  {attachableStorages.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      暂无可用云存储，可先新建
+                    </p>
+                  ) : (
+                    <div className="min-w-0">
+                      <label htmlFor="cloud-host-storage" className="mb-1 block text-sm font-medium">
+                        云存储
+                      </label>
+                      <select
+                        id="cloud-host-storage"
+                        aria-label="云存储"
+                        value={selectedStorageId}
+                        onChange={(event) => setSelectedStorageId(event.target.value)}
+                        className="w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
+                      >
+                        <option value="">请选择云存储</option>
+                        {attachableStorages.map((storage) => (
+                          <option key={storage.id} value={storage.id}>
+                            {storage.name} · {storage.sizeGi}Gi ·{' '}
+                            {cloudStorageStatusLabel(storage.status)} ·{' '}
+                            {storage.hourlyCredits} credits/小时 · {storage.createdBy.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setNewStorageOpen(true)}
+                  >
+                    新建…
+                  </Button>
+                  {isArchivedStorage(selectedStorage) && (
+                    <p className="break-words text-xs text-muted-foreground">
+                      该存储已归档，启动时将先恢复数据，耗时取决于数据量
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="min-w-0 rounded-md border p-3">
             <label className="flex cursor-pointer items-center gap-2">
               <input
@@ -519,6 +659,14 @@ export default function NewCloudHostDialog({
             ) : (
               <p className="text-xs text-muted-foreground">创建与运行将产生费用，详见账单</p>
             )}
+            {storageAttachEnabled && selectedStorage && (
+              <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                <p>
+                  存储费用：{selectedStorage.hourlyCredits} credits/小时（挂载期间按小时计费）
+                </p>
+                {isArchivedStorage(selectedStorage) && <p>该存储已归档，按半价计费</p>}
+              </div>
+            )}
           </div>
 
           {featureDisabled && (
@@ -539,6 +687,11 @@ export default function NewCloudHostDialog({
             </Button>
           </DialogFooter>
         </form>
+        <NewCloudStorageDialog
+          open={newStorageOpen}
+          onClose={() => setNewStorageOpen(false)}
+          onCreated={(storage) => { void handleStorageCreated(storage) }}
+        />
       </DialogContent>
     </Dialog>
   )

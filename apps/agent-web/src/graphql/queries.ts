@@ -238,6 +238,15 @@ export const CLOUD_HOST_FIELDS = gql`
     workloadInstalling
     githubAccountId
     workspaceId
+    storage {
+      id
+      name
+      sizeGi
+      status
+      usageBytes
+      hourlyCredits
+    }
+    storageRestoring
   }
 `
 
@@ -354,9 +363,98 @@ export const CLOUD_HOST_WORKLOAD_CATALOG = gql`
   }
 `
 
+export const CLOUD_STORAGE_FIELDS = gql`
+  fragment CloudStorageFields on CloudStorage {
+    id
+    name
+    sizeGi
+    status
+    usageBytes
+    usageUpdatedAt
+    hourlyCredits
+    hourlyCreditsFull
+    hourlyCreditsArchived
+    createdBy {
+      id
+      name
+    }
+    createdAt
+    attachedCloudHostId
+    attachedCloudHostName
+    attachedAt
+    currentArchive {
+      id
+      fileName
+      status
+      cloudHostId
+      cloudHostName
+      usageBytes
+      startedAt
+      finishedAt
+      failureReason
+    }
+    archiveSpace {
+      capacityGi
+      usedGi
+    }
+    failureReason
+    destroyedAt
+  }
+`
+
+/** 当前工作区云存储列表（includeDestroyed=false 主列表；true 用于「已销毁」折叠区） */
+export const CLOUD_STORAGES = gql`
+  query CloudStorages($onlyAttachable: Boolean, $includeDestroyed: Boolean) {
+    cloudStorages(onlyAttachable: $onlyAttachable, includeDestroyed: $includeDestroyed) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+export const CLOUD_STORAGE = gql`
+  query CloudStorage($id: ID!) {
+    cloudStorage(id: $id) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+/** 存储容量阶梯报价（不传 sizeGi 时服务端按默认 10Gi） */
+export const CLOUD_STORAGE_BILLING_QUOTE = gql`
+  query CloudStorageBillingQuote($sizeGi: Int) {
+    cloudStorageBillingQuote(sizeGi: $sizeGi) {
+      sizeGi
+      full {
+        hourlyCredits
+        tiers {
+          label
+          amountCredits
+        }
+      }
+      archived {
+        hourlyCredits
+        tiers {
+          label
+          amountCredits
+        }
+      }
+      availableBalance
+    }
+  }
+`
+
+export const CLOUD_STORAGE_CAPABILITIES = gql`
+  query CloudStorageCapabilities {
+    cloudStorageCapabilities {
+      enabled
+    }
+  }
+`
+
 /** 设置操作字段（进度对话框 1.5s 轮询） */
-export const CLOUD_HOST_SETUP_OPERATION_FIELDS = gql`
-  fragment CloudHostSetupOperationFields on CloudHostSetupOperation {
+export const CLOUD_HOST_SETUP_OPERATION_FIELDS = gql`  fragment CloudHostSetupOperationFields on CloudHostSetupOperation {
     id
     kind
     status

@@ -17,6 +17,20 @@ export function cloudHostStatusLabel(status?: CloudHostStatus | null): string {
   return status ? (CLOUD_HOST_STATUS_LABELS[status] ?? status) : ''
 }
 
+/**
+ * 带存储恢复提示的状态文案（裁决 10）：
+ * STARTING 且 storageRestoring=true 时追加「（正在恢复数据）」。
+ */
+export function cloudHostStatusText(
+  cloudHost?: Pick<CloudHostData, 'status' | 'storageRestoring'> | null,
+): string {
+  const base = cloudHostStatusLabel(cloudHost?.status)
+  if (cloudHost?.status === 'STARTING' && cloudHost.storageRestoring) {
+    return `${base}（正在恢复数据）`
+  }
+  return base
+}
+
 /** 活跃状态（STARTING/RUNNING/STOPPING）；仅用于状态展示/只读判定，不再限制数量 */
 export function isActiveCloudHost(cloudHost?: CloudHostData | null): boolean {
   return Boolean(cloudHost && !cloudHost.deletedAt && CLOUD_HOST_ACTIVE_STATUSES.includes(cloudHost.status))

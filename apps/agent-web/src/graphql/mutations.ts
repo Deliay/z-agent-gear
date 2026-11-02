@@ -1,5 +1,5 @@
 import { gql } from '@apollo/client'
-import { CLOUD_HOST_SETUP_OPERATION_FIELDS } from './queries'
+import { CLOUD_HOST_SETUP_OPERATION_FIELDS, CLOUD_STORAGE_FIELDS } from './queries'
 
 export const CREATE_PROVIDER = gql`
   mutation CreateProvider($input: ProviderInput!) {
@@ -519,6 +519,44 @@ export const RETRY_CLOUD_HOST_SETUP_OPERATION = gql`
     }
   }
   ${CLOUD_HOST_SETUP_OPERATION_FIELDS}
+`
+
+// ---------- 云存储（contracts/cloud-storage.graphql） ----------
+
+export const CREATE_CLOUD_STORAGE = gql`
+  mutation CreateCloudStorage($input: CreateCloudStorageInput!) {
+    createCloudStorage(input: $input) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+export const DESTROY_CLOUD_STORAGE = gql`
+  mutation DestroyCloudStorage($id: ID!) {
+    destroyCloudStorage(id: $id) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+export const RETRY_CLOUD_STORAGE_ARCHIVE = gql`
+  mutation RetryCloudStorageArchive($id: ID!) {
+    retryCloudStorageArchive(id: $id) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+export const REFRESH_CLOUD_STORAGE_USAGE = gql`
+  mutation RefreshCloudStorageUsage($id: ID!) {
+    refreshCloudStorageUsage(id: $id) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
 `
 
 // ---------- 控制器默认 MCP / ACP 选项刷新 ----------
