@@ -18,6 +18,7 @@ import { sessionStreamRouter } from './routes/session-stream.js';
 import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
 import { internalCloudHostRouter } from './routes/internal-cloud-host.js';
+import { internalCloudStorageRouter } from './routes/internal-cloud-storage.js';
 import { eventCallbackRouter } from './routes/event-callback.js';
 import { githubWebhookRouter } from './routes/github-webhook.js';
 import { runMigrations } from './migrations/runner.js';
@@ -41,6 +42,7 @@ import * as migration016GithubInstallationGithubUserId from './migrations/016-gi
 import * as migration017NormalizeStringWorkspaceId from './migrations/017-normalize-string-workspace-id.js';
 import * as migration018DropLegacyUniqueIndexes from './migrations/018-drop-legacy-tenantless-unique-indexes.js';
 import * as migration019CommitSettingsPerMember from './migrations/019-commit-settings-per-member.js';
+import * as migration020CloudStorageIndexes from './migrations/020-cloud-storage-indexes.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -143,6 +145,7 @@ app.use('/api', sessionStreamRouter);
 app.use('/api', gatewayProxyRouter);
 app.use('/api', githubRouter);
 app.use('/internal/cloud-hosts', internalCloudHostRouter);
+app.use('/internal/cloud-storages', internalCloudStorageRouter);
 app.use('/internal/users', internalUsersRouter);
 app.use('/internal/tenants', internalTenantsRouter);
 
@@ -192,6 +195,7 @@ async function start() {
       migration017NormalizeStringWorkspaceId,
       migration018DropLegacyUniqueIndexes,
       migration019CommitSettingsPerMember,
+      migration020CloudStorageIndexes,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');

@@ -36,6 +36,8 @@ export const config = {
   internalApiToken: process.env.INTERNAL_API_TOKEN || '',
   // 前台云电脑（harness）：默认关闭，由发布参数/灰度打开
   harnessEnabled: toBool(process.env.HARNESS_ENABLED, false),
+  // 云存储能力开关：默认开启；关闭时隐藏入口并拦截创建/挂载（存量仍可只读展示）
+  cloudStorageEnabled: toBool(process.env.CLOUD_STORAGE_ENABLED, true),
   harnessContainerTtlSeconds: toPositiveInt(process.env.HARNESS_CONTAINER_TTL_SECONDS, 86400),
   // cloud-controller 内部 API
   cloudControllerUrl: process.env.CLOUD_CONTROLLER_URL || '',
