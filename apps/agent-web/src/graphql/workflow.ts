@@ -16,6 +16,8 @@ export type WorkflowNodeStatus =
   | 'REJECT'
   | 'REWORK'
   | 'FAILED'
+  /** 中断自动重试 10 次用尽（阻断流程，可重启节点或会话内指示后恢复） */
+  | 'RETRY_FAILED'
 
 export interface WorkflowTemplateNodeData {
   nodeKey: string
@@ -105,6 +107,10 @@ export interface WorkflowNodeData {
   startedAt: string | null
   reworkedAt: string | null
   reworkCount: number
+  /** 当前中断 episode 已排期的自动重试次数（0~10） */
+  retryCount: number
+  /** 下次自动重试计划时间（ISO）；null = 无排期 */
+  nextRetryAt: string | null
   rejectInfo: WorkflowNodeRejectInfoData | null
   failInfo: WorkflowNodeFailInfoData | null
 }
@@ -383,6 +389,8 @@ export const GET_WORKFLOW_INSTANCE = gql`
         startedAt
         reworkedAt
         reworkCount
+        retryCount
+        nextRetryAt
         rejectInfo {
           reason
           fromNodeId

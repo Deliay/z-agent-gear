@@ -15,7 +15,7 @@ import {
 import EditInstanceNodeDialog from './EditInstanceNodeDialog'
 import HumanNodeActions from './HumanNodeActions'
 import { artifactsOf } from '@/lib/artifact-owners'
-import { NODE_TYPE_LABELS, NODE_STATUS_LABELS, NODE_STATUS_BADGE } from './WorkflowNodeTreeConstants'
+import { NODE_TYPE_LABELS, NODE_STATUS_LABELS, NODE_STATUS_BADGE, retryProgressText } from './WorkflowNodeTreeConstants'
 import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil, RefreshCw, PanelRight } from 'lucide-react'
 
 interface WorkflowNodeTreeProps {
@@ -138,6 +138,12 @@ function NodeCard({
             返工 {node.reworkCount} 次
           </span>
         )}
+        {retryProgressText(node) && (
+          <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="node-retry-progress">
+            <RefreshCw className="size-3" />
+            {retryProgressText(node)}
+          </span>
+        )}
         {(node.status === 'INITIALIZING' || node.status === 'READY') && (
           <Button size="xs" variant="outline" onClick={() => onEdit(node)}>
             <Pencil className="size-3" />
@@ -145,7 +151,10 @@ function NodeCard({
           </Button>
         )}
         {node.type === 'AI' &&
-          (node.status === 'RUNNING' || node.status === 'REWORK' || node.status === 'FAILED') && (
+          (node.status === 'RUNNING' ||
+            node.status === 'REWORK' ||
+            node.status === 'FAILED' ||
+            node.status === 'RETRY_FAILED') && (
             <Button size="xs" variant="outline" onClick={() => onEdit(node, true)}>
               <RefreshCw className="size-3" />
               重启
@@ -193,11 +202,15 @@ function NodeCard({
           打回理由：{node.rejectInfo.reason}
         </p>
       )}
-      {node.failInfo && node.status === 'FAILED' && (
+      {node.failInfo && (node.status === 'FAILED' || node.status === 'RETRY_FAILED') && (
         <div className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
-          <p>失败原因：{node.failInfo.reason}</p>
+          <p>
+            {node.status === 'RETRY_FAILED' ? '重试失败原因' : '失败原因'}：{node.failInfo.reason}
+          </p>
           <p className="mt-0.5 text-destructive/80">
-            需要人工介入：打开节点会话说明处理方式，AI 确认后会将节点恢复为运行状态。
+            {node.status === 'RETRY_FAILED'
+              ? '中断自动重试已用尽：可重启节点，或在节点会话中给出处理指示后由 AI 恢复运行。'
+              : '需要人工介入：打开节点会话说明处理方式，AI 确认后会将节点恢复为运行状态。'}
           </p>
         </div>
       )}

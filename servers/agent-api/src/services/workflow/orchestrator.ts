@@ -2,7 +2,6 @@ import { sessionService } from '../session.js';
 import { logger as rootLogger } from '../../observability/logger.js';
 import { withSpan } from '../../observability/trace.js';
 import { todoService } from '../todo-service.js';
-import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { McpServer } from '../../models/mcp-server.js';
 import {
@@ -14,24 +13,15 @@ import {
 import { getArtifactKeys, getValue } from './blackboard.js';
 import { PLATFORM_SERVER_NAME } from './tool-handlers.js';
 import { ADMIN_PLATFORM_SERVER_NAME, ensureAdminToolsServer } from './admin-tools.js';
+import { initialModeModel, loadNodeConfig } from './node-config.js';
+import { scheduleInterruptionRetry } from './interrupt-retry.js';
+import { isReentrantLockError } from '../keyed-mutex.js';
+import { WORKFLOW_SYSTEM_PROMPT, FALLBACK_PROMPT, IDLE_NUDGE_PROMPT } from './prompts.js';
 
 const logger = rootLogger.child({ component: 'workflow-orchestrator' });
 
-/** 工作流系统提示（注入到每个 AI 节点会话提示词首位） */
-export const WORKFLOW_SYSTEM_PROMPT =
-  '你身处一个工作流系统，你需要合理使用工具拿到你需要的信息，然后在完成工作时也需要使用工具对当前节点进行操作。';
-
-/** 会话兜底提示词（面向 LLM：会话结束但节点未转移时 resume 并发送） */
-export const FALLBACK_PROMPT =
-  '你身处一个自动化工作流系统，当前会话绑定到一个工作流节点。系统检测到会话已结束，但节点状态仍未推进。' +
-  '你必须使用提供的工作流 MCP 工具对当前节点执行操作：工作已完成时调用 completeCurrentNode（产物通过黑板工具写入）；' +
-  '需要上游返工时调用 rejectCurrentNode 并给出明确原因。不要只输出文本而不调用工具。';
-
-/** 空闲停滞提醒：turn 结束（如权限审批超时）但节点未推进时使用（会话仍存活，无需 resume） */
-export const IDLE_NUDGE_PROMPT =
-  '你身处一个自动化工作流系统，当前会话绑定到一个工作流节点。系统检测到本轮执行已停止（可能因权限审批超时），但节点状态仍未推进。' +
-  '你必须继续执行任务，并使用提供的工作流 MCP 工具对当前节点执行操作：工作已完成时调用 completeCurrentNode（产物通过黑板工具写入）；' +
-  '需要上游返工时调用 rejectCurrentNode 并给出明确原因；确实无法继续时调用 failCurrentNode 说明原因。不要只输出文本而不调用工具。';
+// 提示词常量从 prompts.ts 统一导出（interrupt-retry 复用，避免循环依赖）；此处重导出保持既有引用口径
+export { WORKFLOW_SYSTEM_PROMPT, FALLBACK_PROMPT, IDLE_NUDGE_PROMPT };
 
 /** 转为 slug（小写字母/数字/连字符）；无 ASCII 字符时返回空串由调用方兜底 */
 export function slugify(text: string): string {
@@ -41,25 +31,9 @@ export function slugify(text: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-interface ConfiguredNodeLike {
-  nodeKey: string;
-  prompts?: string[] | null;
-  requiresWorktree: boolean;
-  agentConfig?: {
-    acpServerType: string;
-    modeId?: string | null;
-    modelId?: string | null;
-    initNewWorktree: boolean;
-  } | null;
-}
-
 /** N-4：锁内兜底回环的延迟重试上限与退避基数（100ms/200ms/400ms） */
 const FALLBACK_RETRY_MAX = 3;
 const FALLBACK_RETRY_BASE_MS = 100;
-
-function isReentrantLockError(err: unknown): boolean {
-  return (err as Error)?.message?.includes('KeyedMutex re-entrant lock detected') === true;
-}
 
 class WorkflowOrchestrator {
   /** 注册为引擎 hook + 会话结束兜底回调（服务启动时调用一次） */
@@ -79,11 +53,9 @@ class WorkflowOrchestrator {
   /**
    * 空闲停滞检测：工作流节点会话 turn 结束（promptCompleted→idling）但节点未推进时触发。
    * 典型场景：权限审批超时 → harness 取消当前 turn → 会话空闲，节点停在 RUNNING。
-   * 首次补发提醒提示词让 AI 继续（若卡在权限，重试会再次弹出审批待办，即现场提醒）；
-   * 再次停滞（与 handleSessionEnded 共享 fallbackSent 计数）→ 升级 FAILED 并创建
-   * immediate 优先级「人工介入」待办（强提醒）。
+   * 统一走中断自动重试排期（10 次预算 + 指数退避），超限后由 retryExhausted 转 RETRY_FAILED。
    */
-  async handleSessionIdled(sessionId: string, attempt = 0): Promise<void> {
+  async handleSessionIdled(sessionId: string, _attempt = 0): Promise<void> {
     const instance = (await WorkflowInstance.findOne({
       'nodes.sessionId': sessionId,
       deletedAt: null,
@@ -92,55 +64,11 @@ class WorkflowOrchestrator {
     const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
     if (!node || (node.status !== 'RUNNING' && node.status !== 'REWORK')) return;
 
-    if (node.fallbackSent) {
-      const transitioned = await this.transitionOrDefer(
-        'idled',
-        sessionId,
-        instance,
-        node,
-        'fail',
-        {
-          reason: '会话再次进入空闲且节点未推进（可能因权限审批超时等原因停止），需要人工介入',
-          source: 'SESSION_STUCK',
-        },
-        attempt,
-      );
-      if (!transitioned) return;
-      await todoService.createWorkflowInterventionTodo({
-        userId: instance.userId.toString(),
-        instanceId: instance._id.toString(),
-        instanceName: instance.name,
-        nodeId: node.nodeId,
-        nodeName: node.name,
-        sessionId,
-        reason: '会话再次进入空闲且节点未推进（可能因权限审批超时等原因停止）',
-      });
-      return;
-    }
-
-    // N-5：与 handleSessionEnded 共享 fallbackSent 计数，必须同样使用字段级条件更新，
-    // 避免整文档 save() 覆盖并发转移（idled 分支允许 RUNNING/REWORK）。
-    const updated = await WorkflowInstance.updateOne(
-      {
-        _id: instance._id,
-        deletedAt: null,
-        nodes: {
-          $elemMatch: {
-            nodeId: node.nodeId,
-            sessionId: node.sessionId,
-            status: { $in: ['RUNNING', 'REWORK'] },
-          },
-        },
-      },
-      { $set: { 'nodes.$.fallbackSent': true } },
-    );
-    if (!updated?.modifiedCount) return;
-    node.fallbackSent = true;
-    // 会话仍存活（idling，映射仍在）：直接补发提醒提示词即可，无需 resume
-    await sessionService.addMessage(sessionId, {
-      direction: 'input',
-      type: 'text',
-      content: IDLE_NUDGE_PROMPT,
+    await scheduleInterruptionRetry({
+      instanceId: instance._id.toString(),
+      nodeId: node.nodeId,
+      sessionId,
+      trigger: 'IDLED',
     });
   }
 
@@ -182,7 +110,7 @@ class WorkflowOrchestrator {
   }
 
   private async startNodeSessionInner(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
-    const configuredNode = await this.loadNodeConfig(instance, node);
+    const configuredNode = await loadNodeConfig(instance, node);
     const agentConfig = configuredNode.agentConfig;
     if (!agentConfig) {
       throw new Error(`节点「${node.name}」（${node.nodeKey}）缺少 Agent 配置，无法拉起会话`);
@@ -256,15 +184,6 @@ class WorkflowOrchestrator {
     });
   }
 
-  /** 提取节点配置的初始 mode/model（随 acp:start/acp:resume 带内下发）；无配置返回 undefined */
-  private initialModeModel(agentConfig?: ConfiguredNodeLike['agentConfig']): { modeId?: string; modelId?: string } | undefined {
-    if (!agentConfig || (!agentConfig.modeId && !agentConfig.modelId)) return undefined;
-    return {
-      ...(agentConfig.modeId ? { modeId: agentConfig.modeId } : {}),
-      ...(agentConfig.modelId ? { modelId: agentConfig.modelId } : {}),
-    };
-  }
-
   /** 节点进入 REWORK：resume 原会话（初始 mode/model 带内下发）、重发打回原因 */
   async reworkNodeSession(
     instance: WorkflowInstanceDoc,
@@ -273,11 +192,11 @@ class WorkflowOrchestrator {
   ): Promise<void> {
     if (!node.sessionId) return;
     const sessionId = node.sessionId.toString();
-    const configuredNode = await this.loadNodeConfig(instance, node);
+    const configuredNode = await loadNodeConfig(instance, node);
     await sessionService.resume(
       sessionId,
       instance.userId.toString(),
-      this.initialModeModel(configuredNode.agentConfig),
+      initialModeModel(configuredNode.agentConfig),
     );
     await sessionService.addMessage(sessionId, {
       direction: 'input',
@@ -433,7 +352,7 @@ class WorkflowOrchestrator {
     sessionId: string,
     instance: WorkflowInstanceDoc,
     node: WorkflowNodeDoc,
-    event: 'fail',
+    event: 'fail' | 'retryExhausted',
     payload: { reason: string; source: string },
     attempt: number,
   ): Promise<boolean> {
@@ -449,10 +368,10 @@ class WorkflowOrchestrator {
 
   /**
    * 会话兜底：会话 ended 且绑定节点仍 RUNNING（存续期内未转移）时，
-   * resume 会话并发送兜底提示词。每节点仅提醒 1 次（fallbackSent）；
-   * 提醒后仍停止 → 节点升级为 FAILED，阻断流程等待人工介入。
+   * 进入中断自动重试排期（close→resume→等待空闲→重发兜底提示词）。
+   * 第 N 次失败按退避重排；10 次用尽 → retryExhausted（RETRY_FAILED）+ 人工介入待办。
    */
-  async handleSessionEnded(sessionId: string, attempt = 0): Promise<void> {
+  async handleSessionEnded(sessionId: string, _attempt = 0): Promise<void> {
     const instance = (await WorkflowInstance.findOne({
       'nodes.sessionId': sessionId,
       deletedAt: null,
@@ -461,51 +380,11 @@ class WorkflowOrchestrator {
     const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
     if (!node || node.status !== 'RUNNING') return;
 
-    if (node.fallbackSent) {
-      await this.transitionOrDefer(
-        'ended',
-        sessionId,
-        instance,
-        node,
-        'fail',
-        {
-          reason: '会话在系统提醒后再次停止，节点未能推进',
-          source: 'SESSION_STUCK',
-        },
-        attempt,
-      );
-      return;
-    }
-
-    // N-1④：只做字段级更新，避免整文档 save() 与并发转移互覆
-    const updated = await WorkflowInstance.updateOne(
-      {
-        _id: instance._id,
-        deletedAt: null,
-        nodes: {
-          $elemMatch: {
-            nodeId: node.nodeId,
-            sessionId: node.sessionId,
-            status: 'RUNNING',
-          },
-        },
-      },
-      { $set: { 'nodes.$.fallbackSent': true } },
-    );
-    if (!updated?.modifiedCount) return;
-    node.fallbackSent = true;
-    // 兜底 resume 同样带内下发节点配置的初始 mode/model；
-    // 配置读取失败不阻断兜底（仍以默认配置 resume）
-    let initial: { modeId?: string; modelId?: string } | undefined;
-    try {
-      const configuredNode = await this.loadNodeConfig(instance, node);
-      initial = this.initialModeModel(configuredNode.agentConfig);
-    } catch { /* ignore — fallback resume must not be blocked by config lookup */ }
-    await sessionService.resume(sessionId, instance.userId.toString(), initial);
-    await sessionService.addMessage(sessionId, {
-      direction: 'input',
-      type: 'text',
-      content: FALLBACK_PROMPT,
+    await scheduleInterruptionRetry({
+      instanceId: instance._id.toString(),
+      nodeId: node.nodeId,
+      sessionId,
+      trigger: 'ENDED',
     });
   }
 
@@ -585,45 +464,6 @@ class WorkflowOrchestrator {
       }
       throw err;
     }
-  }
-
-  /**
-   * 读取节点配置：优先使用实例节点快照（prompts/agentConfig/requiresWorktree）；
-   * 快照字段缺失（一期旧实例）时回退 loadConfiguredNode 按 nodeKey 回查配置。
-   */
-  private async loadNodeConfig(
-    instance: WorkflowInstanceDoc,
-    node: WorkflowNodeDoc,
-  ): Promise<ConfiguredNodeLike> {
-    const nodeWithSnapshot = node as unknown as {
-      prompts?: string[] | null;
-      requiresWorktree?: boolean;
-      agentConfig?: ConfiguredNodeLike['agentConfig'];
-    };
-    if (nodeWithSnapshot.prompts !== undefined || nodeWithSnapshot.agentConfig !== undefined) {
-      return {
-        nodeKey: node.nodeKey,
-        prompts: nodeWithSnapshot.prompts ?? null,
-        requiresWorktree: nodeWithSnapshot.requiresWorktree ?? false,
-        agentConfig: nodeWithSnapshot.agentConfig ?? null,
-      };
-    }
-    return this.loadConfiguredNode(instance, node);
-  }
-
-  private async loadConfiguredNode(
-    instance: WorkflowInstanceDoc,
-    node: WorkflowNodeDoc,
-  ): Promise<ConfiguredNodeLike> {
-    const configured = await ConfiguredWorkflow.findById(instance.configuredWorkflowId.toString()).lean();
-    if (!configured) {
-      throw new Error(`实例引用的已配置工作流不存在：${instance.configuredWorkflowId.toString()}`);
-    }
-    const configuredNode = (configured.nodes as ConfiguredNodeLike[]).find((n) => n.nodeKey === node.nodeKey);
-    if (!configuredNode) {
-      throw new Error(`已配置工作流中不存在节点「${node.name}」（${node.nodeKey}）`);
-    }
-    return configuredNode;
   }
 }
 
