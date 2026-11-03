@@ -778,8 +778,8 @@ describe('Admin Cloud Workload API', () => {
       expect(['STANDARD', 'HARNESS']).toContain(workload.workloadKind);
     }
 
-    // T-IA：工作负载全局安装统一 pnpm（迁移 017）——四条脚本含统一回退块 + pnpm add -g，
-    // 不含旧 npm 全局安装形态（预制计数仍为 10，名称清单不变）。
+    // T-IA：工作负载全局安装统一 pnpm（迁移 017 引入，018 升级到 12.16.1）——
+    // 四条脚本含统一回退块 + pnpm add -g，不含旧 npm 全局安装形态（预制计数仍为 10，名称清单不变）。
     const pnpmWorkloads = [
       byName.get('OpenCode（Harness）')!,
       byName.get('Kimi Code（Harness）')!,
@@ -789,7 +789,8 @@ describe('Admin Cloud Workload API', () => {
     for (const workload of pnpmWorkloads) {
       const script = workload.initScript ?? '';
       expect(script, workload.name).toContain('command -v pnpm >/dev/null 2>&1');
-      expect(script, workload.name).toContain('npm install -g "pnpm@9.15.9"');
+      expect(script, workload.name).toContain('npm install -g "pnpm@12.16.1"');
+      expect(script, workload.name).not.toContain('pnpm@9.15.9');
       expect(script, workload.name).toContain('export PNPM_HOME="${PNPM_HOME:-$HOME/.local/share/pnpm}"');
       expect(script, workload.name).toContain('pnpm add -g');
       expect(script, workload.name).not.toContain('npm install -g "@opencode');
