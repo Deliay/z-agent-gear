@@ -139,6 +139,24 @@ describe('internal cloud host routes', () => {
     });
   });
 
+  it('forwards terminal storage {id, archiveStatus} (T-CS-AR1)', async () => {
+    vi.mocked(cloudHostService.findRawHost).mockResolvedValue({
+      harnessTypes: ['OPENCODE'],
+    } as never);
+    vi.mocked(cloudHostService.handleTerminal).mockResolvedValue({ status: 'STOPPED' } as never);
+
+    const response = await post(`/internal/cloud-hosts/${HOST_ID}/terminal`, undefined, {
+      status: 'stopped',
+      storage: { id: '507f1f77bcf86cd7994390d1', archiveStatus: 'pending' },
+    });
+    expect(response.status).toBe(200);
+    expect(cloudHostService.handleTerminal).toHaveBeenCalledWith(HOST_ID, {
+      status: 'stopped',
+      reason: undefined,
+      storage: { id: '507f1f77bcf86cd7994390d1', archiveStatus: 'pending' },
+    });
+  });
+
   describe('POST /:controllerId/github-credential', () => {
     const CONTROLLER_ID = '507f1f77bcf86cd799439022';
     const USER_ID = '507f1f77bcf86cd799439023';

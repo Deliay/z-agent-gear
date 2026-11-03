@@ -16,7 +16,7 @@ import NewCloudHostDialog from './cloud-host/NewCloudHostDialog';
 import GithubProjectSetupDialog from './cloud-host/GithubProjectSetupDialog';
 import {
   cloudHostStatusDotClass,
-  cloudHostStatusLabel,
+  cloudHostStatusText,
   isTerminalCloudHost,
 } from './cloud-host/cloud-host-status';
 import { getStatusDotColor } from './session/status-colors';
@@ -353,7 +353,7 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
                               title={cloudHost.failureReason || undefined}
                               data-testid="cloud-host-status"
                             >
-                              {cloudHostStatusLabel(cloudHost.status)}
+                              {cloudHostStatusText(cloudHost)}
                               {cloudHost.status === 'FAILED' && cloudHost.failureReason
                                 ? ` · ${cloudHost.failureReason}`
                                 : ''}

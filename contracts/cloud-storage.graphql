@@ -1,0 +1,160 @@
+# 前台云存储契约（工作区级持久存储）
+#
+# 鉴权：Authorization: Bearer <front user JWT>；未认证返回 Not authenticated。
+# 归属：创建时取当前工作区（x-workspace-id 上下文，缺省个人全局工作区）；
+#       跨工作区不可见、不可挂载。
+# 计费：按容量阶梯、按小时结算，创建成功（IDLE/待挂载）起算；
+#       已挂载（含待挂载/归档中）全价，已归档半价，销毁后停止。
+#
+# 状态机：
+#   CREATING → IDLE（PVC Bound，开始计费）
+#   CREATING → CREATE_FAILED（PVC 创建失败，归入已销毁折叠区，不计费）
+#   IDLE/ARCHIVED → ATTACHING → ATTACHED（创建云电脑挂载；ATTACHING 失败回滚到来源状态）
+#   ATTACHED → ARCHIVING → ARCHIVED（销毁云电脑时归档；失败保持 ARCHIVING，可重试）
+#   IDLE/ARCHIVED（以及 ARCHIVING 且最近归档失败）→ DESTROYING → DESTROYED（停止计费）
+#
+# 计费口径（credits/小时，累计分档）：
+#   ≤10Gi 固定 5；10~25Gi 部分每 Gi 1；25~30Gi 部分每 Gi 3；
+#   已归档半价（同容量全价 × 50%）；一小时内状态切换按结算时刻费率计费。
+
+enum CloudStorageStatus {
+  CREATING        # 创建中（瞬态）
+  IDLE            # 待挂载：刚创建成功，相当于一个待用的 claim
+  ATTACHING       # 挂载中（瞬态，创建云电脑同步链路/恢复中）
+  ATTACHED        # 已挂载
+  ARCHIVING       # 归档中（含归档失败待重试）
+  ARCHIVED        # 已归档，可用于下次挂载
+  DESTROYING      # 销毁中（瞬态）
+  DESTROYED       # 已销毁
+  CREATE_FAILED   # 创建失败（归入已销毁类别展示）
+}
+
+enum CloudStorageArchiveStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+# 当前归档（每块存储只保留一份最新归档）
+type CloudStorageArchive {
+  id: ID!
+  fileName: String!
+  status: CloudStorageArchiveStatus!
+  cloudHostId: ID
+  cloudHostName: String
+  usageBytes: Float
+  startedAt: String
+  finishedAt: String
+  failureReason: String
+  # 归档成功时源 PVC 是否已释放（false 表示删除失败、源卷仍存在，供运维排查；
+  # 再次挂载时 cloud-controller 会先删除同名残留 PVC 再重建）
+  sourcePvcReleased: Boolean
+}
+
+# 创建人摘要（只暴露展示所需字段）
+type CloudStorageCreator {
+  id: ID!
+  name: String!
+}
+
+type CloudStorage {
+  id: ID!
+  name: String!
+  sizeGi: Int!
+  status: CloudStorageStatus!
+  # 实际占用（归档时采集；已挂载期间可经 refreshCloudStorageUsage 刷新）；
+  # 待挂载（从未写入）为 0；未知为 null
+  usageBytes: Float
+  usageUpdatedAt: String
+  # 当前状态费率下的每小时费用（credits）
+  hourlyCredits: Float!
+  # 全价/归档半价每小时费用（展示用）
+  hourlyCreditsFull: Float!
+  hourlyCreditsArchived: Float!
+  createdBy: CloudStorageCreator!
+  createdAt: String!
+  # 当前挂载的云电脑；未挂载为 null
+  attachedCloudHostId: ID
+  attachedCloudHostName: String
+  attachedAt: String
+  currentArchive: CloudStorageArchive
+  # 归档空间使用概况（工作区级 100Gi 上限）
+  archiveSpace: CloudStorageArchiveSpace!
+  # CREATE_FAILED 原因
+  failureReason: String
+  destroyedAt: String
+}
+
+type CloudStorageArchiveSpace {
+  capacityGi: Int!
+  # 本期无法精确统计归档体积，返回 null 表示未知（UI 提示“由平台管理”）
+  usedGi: Float
+}
+
+# 容量阶梯报价
+type CloudStoragePriceTier {
+  # 例如 “1-10Gi 固定 5 credits/小时”
+  label: String!
+  amountCredits: Float!
+}
+
+type CloudStorageRateQuote {
+  hourlyCredits: Float!
+  tiers: [CloudStoragePriceTier!]!
+}
+
+type CloudStorageBillingQuote {
+  sizeGi: Int!
+  # 全价（待挂载/已挂载/归档中）与归档半价
+  full: CloudStorageRateQuote!
+  archived: CloudStorageRateQuote!
+  # 当前工作区计费账户可用余额；计费不可用时为 null（仅提示，不阻断）
+  availableBalance: Float
+}
+
+# 能力开关（CLOUD_STORAGE_ENABLED）；false 时前端隐藏入口，服务端仍为权威拦截
+type CloudStorageCapabilities {
+  enabled: Boolean!
+}
+
+input CreateCloudStorageInput {
+  # trim 后 1~64；同一工作区唯一（已销毁/创建失败释放名称）
+  name: String!
+  # 1~30（Gi）
+  sizeGi: Int!
+}
+
+extend type Query {
+  # 当前工作区云存储列表；onlyAttachable=true 时仅返回 IDLE + ARCHIVED（创建云电脑下拉用）；
+  # includeDestroyed=false（默认）时不返回 DESTROYED/CREATE_FAILED（主列表）；=true 用于「已销毁」折叠区
+  cloudStorages(onlyAttachable: Boolean = false, includeDestroyed: Boolean = false): [CloudStorage!]!
+  cloudStorage(id: ID!): CloudStorage
+  # 不传 sizeGi 时按默认 10Gi 报价
+  cloudStorageBillingQuote(sizeGi: Int): CloudStorageBillingQuote!
+  cloudStorageCapabilities: CloudStorageCapabilities!
+}
+
+extend type Mutation {
+  createCloudStorage(input: CreateCloudStorageInput!): CloudStorage!
+  # 仅 IDLE/ARCHIVED 可销毁；ARCHIVING 且最近归档失败时允许销毁（前端额外警示）；
+  # 销毁后停止计费，存储数据与当前归档一并删除
+  destroyCloudStorage(id: ID!): CloudStorage!
+  # 最近一次归档失败时重试（复用最后一次容器；无容器可重试时返回契约错误）
+  retryCloudStorageArchive(id: ID!): CloudStorage!
+  # 刷新实际占用（仅 ATTACHED；由 cloud-controller 在云电脑所在节点执行 du）
+  refreshCloudStorageUsage(id: ID!): CloudStorage!
+}
+
+# 错误文案（服务端权威、前端原样或映射展示）：
+#   storage name is required / storage name is too long
+#   storage name already exists
+#   storage size must be between 1 and 30 Gi
+#   storage not found
+#   storage is not attachable / storage is attached / storage is archiving / storage is not destroyable
+#   not allowed to destroy storage
+#   global workspace is read-only
+#   insufficient balance
+#   no archive to retry
+#   storage is not attached
+#   storage feature is disabled

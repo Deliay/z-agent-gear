@@ -531,3 +531,8 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 > `OTEL_*` 环境变量**可选**：未配置 `OTEL_EXPORTER_OTLP_ENDPOINT` = SDK 完全不启动、零外发，日志 JSON 冒烟不依赖采集端即通过（日志不受采样/导出影响）；trace 贯通用例在检测不到 SDK（请求后日志全量无 `trace_id`）时**明确 skip 并输出指引**；如需验证 span 导出，另行配置 endpoint 并查看 collector 输出。字段字典 / 传播规则见 `contracts/observability.md`。
 
 > 日志获取（任一可用即跑，全部不可得时用例**明确 skip 并输出指引**）：`AGENT_API_LOG_FILE` / `ADMIN_API_LOG_FILE` / `CONTROLLER_API_LOG_FILE` / `CLOUD_CONTROLLER_LOG_FILE`（日志文件路径），或 `OBSERVABILITY_LOG_DIR`（目录下 `<service>.log`），或 `docker compose logs <service>`（`OBS_LOGS_DISABLE_DOCKER=1` 关闭该回落，`COMPOSE_FILE` 指定 compose 文件）。trace 关联用例另需 `INTERNAL_API_TOKEN`（或 `ADMIN_INITIAL_PASSWORD` / `MONGODB_URI` 归一化管理员口令）以构造跨服务请求链。
+
+## 云存储（`src/cloud-storage.spec.ts`）
+
+- E2E-CS1/CS2：设置-云存储创建（报价全价/归档半价）→ 新建云电脑挂载 → 已挂载存储不再出现在可挂载下拉且无销毁入口 → 停止云电脑归档（`ARCHIVED` 且半价）→ 销毁 → 主列表移除、「已销毁」折叠区默认折叠、展开后可见。
+- 依赖：`HARNESS_ENABLED=true`、`CLOUD_STORAGE_ENABLED`（缺省 true）、`INTERNAL_API_TOKEN`（ready/归档回调模拟）、`MONGODB_URI`（测试用户充值）；`K8S_ENABLED=false` 时归档由 InMemory Job 完成，真实恢复/压缩由内网集群手工验收覆盖。

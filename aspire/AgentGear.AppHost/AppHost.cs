@@ -196,6 +196,16 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
     .WithEnvironment("WORKLOAD_LOG_MAX_BYTES", "262144")
     // 云电脑 Job 临时存储上限（仅 limits，不设 requests）
     .WithEnvironment("JOB_EPHEMERAL_STORAGE", "10Gi")
+    // 云存储（需求 #405）：dev 默认 K8S_ENABLED=false 走 InMemory，补齐 env 便于 API/E2E 全链路 mock；
+    // 空 StorageClass → 省略 storageClassName（集群默认，dev 无真实集群亦不影响）。
+    .WithEnvironment("CLOUD_STORAGE_CLASS", "")
+    .WithEnvironment("CLOUD_ARCHIVE_STORAGE_CLASS", "")
+    .WithEnvironment("CLOUD_ARCHIVE_PVC_SIZE", "100Gi")
+    .WithEnvironment("CLOUD_ARCHIVE_ACCESS_MODE", "ReadWriteOnce")
+    .WithEnvironment("ARCHIVER_IMAGE", "core.harbor.internal.fffdan.com/zero-tools/archiver:latest")
+    .WithEnvironment("ARCHIVE_TIMEOUT_MS", "1800000")
+    .WithEnvironment("STORAGE_PVC_PREFIX", "zag-storage-")
+    .WithEnvironment("ARCHIVE_PVC_PREFIX", "zag-archive-")
     // 本地开发默认不依赖真实集群（InMemoryK8sClient）；publish 覆盖为 true
     .WithEnvironment("K8S_ENABLED", "false")
     .WithReference(mongodb)

@@ -131,4 +131,78 @@ describe('AgentApiClient', () => {
 
     expect(requests[0]!.url).toBe('/internal/cloud-hosts/host%2Fwith%20space/ready');
   });
+
+  it('T-CC-AR2: terminal 回调携带 storage{id,archiveStatus}；未挂载时不携带', async () => {
+    const { baseUrl, requests } = await startServer((_req, res) => {
+      res.statusCode = 200;
+      res.end('{}');
+    });
+    const client = new AgentApiClient({ baseUrl, token: TOKEN });
+
+    await client.notifyTerminal('host-1', 'stopped', '强制销毁', {
+      id: 'storage-1',
+      archiveStatus: 'pending',
+    });
+    expect(JSON.parse(requests[0]!.body)).toEqual({
+      status: 'stopped',
+      reason: '强制销毁',
+      storage: { id: 'storage-1', archiveStatus: 'pending' },
+    });
+
+    await client.notifyTerminal('host-1', 'stopped');
+    expect(JSON.parse(requests[1]!.body)).toEqual({ status: 'stopped' });
+  });
+
+  it('T-CC-AR2/U1: 归档/用量回调路径 + Bearer', async () => {
+    const { baseUrl, requests } = await startServer((_req, res) => {
+      res.statusCode = 200;
+      res.end('{}');
+    });
+    const client = new AgentApiClient({ baseUrl, token: TOKEN });
+
+    await client.notifyStorageArchive('s/1', {
+      archiveId: 'a1',
+      status: 'SUCCEEDED',
+    });
+    await client.notifyStorageUsage('s1', { usageBytes: 10 });
+
+    expect(requests[0]!.url).toBe('/internal/cloud-storages/s%2F1/archives');
+    expect(requests[1]!.url).toBe('/internal/cloud-storages/s1/usage');
+    expect(requests[0]!.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(requests[0]!.body)).toEqual({ archiveId: 'a1', status: 'SUCCEEDED' });
+  });
+
+  it('T-CC-AR2: 存储回调 4 次退避重试后成功', async () => {
+    let attempts = 0;
+    const { baseUrl, requests } = await startServer((_req, res) => {
+      attempts += 1;
+      res.statusCode = attempts < 3 ? 500 : 200;
+      res.end('{}');
+    });
+    const client = new AgentApiClient({
+      baseUrl,
+      token: TOKEN,
+      storageRetryDelaysMs: [0, 0, 0, 0],
+    });
+
+    await client.notifyStorageArchive('s1', { archiveId: 'a1' });
+    expect(requests).toHaveLength(3);
+  });
+
+  it('T-CC-AR2: 存储回调超过重试次数后抛错（仅告警）', async () => {
+    let attempts = 0;
+    const { baseUrl } = await startServer((_req, res) => {
+      attempts += 1;
+      res.statusCode = 500;
+      res.end('boom');
+    });
+    const client = new AgentApiClient({
+      baseUrl,
+      token: TOKEN,
+      storageRetryDelaysMs: [0, 0],
+    });
+
+    await expect(client.notifyStorageUsage('s1', { usageBytes: 1 })).rejects.toThrow(/500/);
+    expect(attempts).toBe(2);
+  });
 });

@@ -111,6 +111,17 @@ vi.mock('./cloud-host-issues-linkage.js', () => ({
   cloudHostIssuesLinkageService: { deleteByController: vi.fn().mockResolvedValue(0) },
 }));
 
+vi.mock('./cloud-storage-service.js', () => ({
+  cloudStorageService: {
+    attachStorage: vi.fn(),
+    releaseStorage: vi.fn(),
+    markAttached: vi.fn(),
+    markArchiving: vi.fn(),
+    reconcileFromTerminal: vi.fn().mockResolvedValue(false),
+    recordContainer: vi.fn(),
+  },
+}));
+
 import { CloudHostService, toCloudHostGraphQLError } from './cloud-host-service.js';
 import { runWithWorkspace } from './workspace-context.js';
 import { CloudHost } from '../models/cloud-host.js';
@@ -129,6 +140,7 @@ import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
 import { GitHubAccount } from '../models/github-account.js';
 import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
+import { cloudStorageService } from './cloud-storage-service.js';
 
 const HOST_ID = '507f1f77bcf86cd799439011';
 const CONTROLLER_ID = '507f1f77bcf86cd799439012';
@@ -1189,6 +1201,261 @@ describe('CloudHostService', () => {
       );
       await service.handleTerminal(HOST_ID, { status: 'failed' });
       expect(billingClient.refundCharge).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('cloud storage attachment (T-CS-A1..A5)', () => {
+    const STORAGE_ID = '507f1f77bcf86cd7994390a9';
+
+    beforeEach(() => {
+      vi.mocked(cloudStorageService.attachStorage).mockReset();
+      vi.mocked(cloudStorageService.recordContainer).mockResolvedValue(undefined as never);
+      vi.mocked(cloudStorageService.markAttached).mockResolvedValue(null as never);
+      vi.mocked(cloudStorageService.markArchiving).mockResolvedValue(null as never);
+      vi.mocked(cloudStorageService.releaseStorage).mockResolvedValue(null as never);
+    });
+
+    function attachedStorage(overrides: Record<string, unknown> = {}) {
+      return {
+        _id: STORAGE_ID,
+        pvcName: `zag-storage-${STORAGE_ID}`,
+        sizeGi: 20,
+        resourceWorkspaceId: WORKSPACE_ID,
+        storageClass: 'ceph-rbd',
+        currentArchive: null,
+        ...overrides,
+      };
+    }
+
+    it('T-CS-A0: 未传 storageId 时请求体不含 storage（零回归）', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload).not.toHaveProperty('storage');
+      expect(cloudStorageService.attachStorage).not.toHaveBeenCalled();
+    });
+
+    it('T-CS-A1/A3: IDLE 挂载 → 先占用再扣费，startHarness 带 storage，成功后 ATTACHED', async () => {
+      setupCreateSuccess();
+      vi.mocked(cloudStorageService.attachStorage).mockResolvedValue({
+        storage: attachedStorage(),
+        fromStatus: 'IDLE',
+      } as never);
+
+      await service.create('user-1', {
+        name: 'my-cloud',
+        harnessTypes: ['OPENCODE'],
+        storageId: STORAGE_ID,
+      });
+
+      const attach = vi.mocked(cloudStorageService.attachStorage).mock.calls[0][0];
+      expect(attach).toMatchObject({
+        storageId: STORAGE_ID,
+        userId: 'user-1',
+        cloudHostId: expect.any(String),
+      });
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload.storage).toEqual({
+        id: STORAGE_ID,
+        pvcName: `zag-storage-${STORAGE_ID}`,
+        sizeGi: 20,
+        workspaceId: WORKSPACE_ID,
+        storageClass: 'ceph-rbd',
+      });
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({ storageId: STORAGE_ID }),
+      );
+      expect(cloudStorageService.recordContainer).toHaveBeenCalled();
+      expect(cloudStorageService.markAttached).toHaveBeenCalledWith(
+        STORAGE_ID,
+        expect.any(String),
+      );
+      // 占用发生在扣费之前
+      const attachOrder = vi.mocked(cloudStorageService.attachStorage).mock.invocationCallOrder[0];
+      const chargeOrder = vi.mocked(billingClient.createCharge).mock.invocationCallOrder[0];
+      expect(attachOrder).toBeLessThan(chargeOrder);
+    });
+
+    it('T-CS-A1b: ARCHIVED 挂载携带 restore.archivePath 与 storageClass', async () => {
+      setupCreateSuccess();
+      vi.mocked(cloudStorageService.attachStorage).mockResolvedValue({
+        storage: attachedStorage({
+          currentArchive: {
+            archiveId: 'a1',
+            status: 'FAILED',
+            path: `/archive/${WORKSPACE_ID}/${STORAGE_ID}/host.tar.gz2`,
+          },
+        }),
+        fromStatus: 'ARCHIVED',
+      } as never);
+
+      await service.create('user-1', {
+        name: 'my-cloud',
+        harnessTypes: ['OPENCODE'],
+        storageId: STORAGE_ID,
+      });
+
+      const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
+      expect(payload.storage).toMatchObject({
+        storageClass: 'ceph-rbd',
+        restore: {
+          archivePath: `/archive/${WORKSPACE_ID}/${STORAGE_ID}/host.tar.gz2`,
+        },
+      });
+    });
+
+    it('T-CS-A2: 存储不可挂载 → 拒绝且不扣费、不建云电脑', async () => {
+      setupCreateSuccess();
+      vi.mocked(cloudStorageService.attachStorage).mockRejectedValue(
+        new Error('storage is not attachable'),
+      );
+
+      await expect(
+        service.create('user-1', {
+          name: 'my-cloud',
+          harnessTypes: ['OPENCODE'],
+          storageId: STORAGE_ID,
+        }),
+      ).rejects.toThrow('storage is not attachable');
+      expect(billingClient.createCharge).not.toHaveBeenCalled();
+      expect(CloudHost.create).not.toHaveBeenCalled();
+      expect(cloudControllerClient.startHarness).not.toHaveBeenCalled();
+    });
+
+    it('T-CS-A4: 拉起失败 → 退款、回滚并 releaseStorage 回挂载前状态', async () => {
+      setupCreateSuccess();
+      vi.mocked(cloudStorageService.attachStorage).mockResolvedValue({
+        storage: attachedStorage(),
+        fromStatus: 'IDLE',
+      } as never);
+      vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
+
+      await expect(
+        service.create('user-1', {
+          name: 'my-cloud',
+          harnessTypes: ['OPENCODE'],
+          storageId: STORAGE_ID,
+        }),
+      ).rejects.toThrow('control plane unavailable');
+
+      expect(billingClient.refundCharge).toHaveBeenCalled();
+      expect(cloudStorageService.releaseStorage).toHaveBeenCalledWith(
+        STORAGE_ID,
+        expect.any(String),
+      );
+    });
+
+    it('T-CS-A4b: 占用后扣费失败 → 释放存储（不残留占用）', async () => {
+      setupCreateSuccess();
+      vi.mocked(cloudStorageService.attachStorage).mockResolvedValue({
+        storage: attachedStorage(),
+        fromStatus: 'IDLE',
+      } as never);
+      const err = Object.create(InsufficientBalanceError.prototype);
+      err.message = 'insufficient balance';
+      vi.mocked(billingClient.createCharge).mockRejectedValue(err as never);
+
+      await expect(
+        service.create('user-1', {
+          name: 'my-cloud',
+          harnessTypes: ['OPENCODE'],
+          storageId: STORAGE_ID,
+        }),
+      ).rejects.toThrow('insufficient balance');
+      expect(cloudStorageService.releaseStorage).toHaveBeenCalledWith(
+        STORAGE_ID,
+        expect.any(String),
+      );
+      expect(CloudHost.create).not.toHaveBeenCalled();
+    });
+
+    it('T-CS-A5: 未 ready 即终止 → 释放存储', async () => {
+      const host = hostDoc({ storageId: STORAGE_ID, readyAt: null, status: 'STARTING' });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(host) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(hostDoc({ storageId: STORAGE_ID, status: 'STOPPED', readyAt: null })) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: 'pending' },
+      });
+
+      expect(cloudStorageService.releaseStorage).toHaveBeenCalledWith(STORAGE_ID, HOST_ID);
+      expect(cloudStorageService.markArchiving).not.toHaveBeenCalled();
+    });
+
+    it('T-CS-AR1: 已 ready 终止 + archiveStatus=pending → ATTACHED→ARCHIVING', async () => {
+      const host = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: new Date('2026-10-20T01:00:00.000Z'),
+        status: 'RUNNING',
+      });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(host) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(
+          hostDoc({
+            storageId: STORAGE_ID,
+            readyAt: new Date('2026-10-20T01:00:00.000Z'),
+            status: 'STOPPED',
+          }),
+        ) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: 'pending' },
+      });
+
+      expect(cloudStorageService.markArchiving).toHaveBeenCalledWith(STORAGE_ID, HOST_ID, null);
+      expect(cloudStorageService.releaseStorage).not.toHaveBeenCalled();
+    });
+
+    it('T-CS-AR1b: 已 ready 终止但 archiveStatus=null（未触发归档）→ 释放存储，不永久卡已挂载', async () => {
+      const host = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: new Date('2026-10-20T01:00:00.000Z'),
+        status: 'RUNNING',
+      });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(host) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(
+          hostDoc({
+            storageId: STORAGE_ID,
+            readyAt: new Date('2026-10-20T01:00:00.000Z'),
+            status: 'STOPPED',
+          }),
+        ) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+      vi.mocked(cloudStorageService.reconcileFromTerminal).mockResolvedValueOnce(false);
+
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: null },
+      });
+
+      expect(cloudStorageService.reconcileFromTerminal).toHaveBeenCalledWith(
+        STORAGE_ID,
+        'container-1',
+      );
+      expect(cloudStorageService.releaseStorage).toHaveBeenCalledWith(STORAGE_ID, HOST_ID);
+      expect(cloudStorageService.markArchiving).not.toHaveBeenCalled();
+    });
+
+    it('ready 幂等兜底 ATTACHING→ATTACHED（含重复 ready）', async () => {
+      const running = hostDoc({
+        storageId: STORAGE_ID,
+        status: 'RUNNING',
+        readyAt: new Date('2026-10-20T01:00:00.000Z'),
+      });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(running) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await service.handleReady(HOST_ID);
+      expect(cloudStorageService.markAttached).toHaveBeenCalledWith(STORAGE_ID, HOST_ID);
     });
   });
 

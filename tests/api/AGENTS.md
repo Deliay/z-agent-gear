@@ -59,7 +59,7 @@ pnpm test
 
 | 脚本 | 说明 |
 |------|------|
-| `pnpm test` | 运行全部常规测试文件（49 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `pnpm test` | 运行全部常规测试文件（52 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `pnpm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `pnpm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -807,3 +807,14 @@ pnpm test
 - `src/agent-api/cloud-host.test.ts`：新增创建期 `workloadIds` 用例（T-CH-API-W2/W3/W4：Docker 可创建、超 5 个 → `too many workloads (max 5)`、不存在 ID → `invalid workload`、harness ID → `workload is not installable`）；不传 `workloadIds` 的历史路径由既有创建用例覆盖。
 - `src/admin-api/cloud-workload.test.ts`：`adminCloudWorkloads` 断言 `workloadKind`/`harnessType`（standard → `STANDARD`/null，harness → `HARNESS`/`opencode`，T-ADM-WL-API1）。
 - 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖；`GET /api/github/setup` 的 upsert 冲突回归由 `tests/api/src/agent-api/github-setup-upsert.test.ts` 覆盖。
+
+## 云存储（云电脑支持申请存储）
+
+| 文件 | 说明 |
+|------|------|
+| `src/agent-api/cloud-storage.test.ts` | T-CS-CAP / T-BILL-S1 / T-CS1 / T-CS2 / T-CS4 / T-CS5 / T-CS6 / T-CS7 / T-CS-A2 / T-CS-AR5；`HARNESS_ENABLED=true` 时追加 T-CS-A1 / A3 / AR1 / AR2（挂载占用、并发抢挂拒绝、已挂载不可销毁、停止后归档半价）。需要 Aspire（cloud-controller 以 `K8S_ENABLED=false` 的 InMemory PVC/Job 承接） |
+| `src/agent-api/cloud-storage-billing.test.ts` | T-BILL-S1/S6：`storage-quote` 阶梯边界（1/10/11/20/25/30Gi 全价/半价）、`storage-charges` 的 FULL/HALF 账单（`category=storage`、三档 items、归档半价描述）、幂等重放与参数校验；需要 `INTERNAL_API_TOKEN` |
+| `src/cloud-controller/cloud-storage.test.ts` | T-CC-P2/P3/D1/AR1/AR2/J3：PVC 幂等/规格冲突、cleanup、归档端点无存储 409、harness `storage` 校验（pvcName/sizeGi/restore 路径）；需要 `CLOUD_CONTROLLER_INTERNAL_TOKEN` |
+| `src/agent-api/workspace.test.ts` | 工作区资源口径 10→11 由 `servers/agent-api/src/services/workspace-service.test.ts` 的 `T-WSP-CS1` 覆盖（存在未销毁云存储时拒绝删除工作区） |
+
+> 存储相关 E2E 使用 `CLOUD_STORAGE_ENABLED=true`（缺省）+ `HARNESS_ENABLED=true` + `MONGODB_URI`；关闭能力时用例显式 skip。

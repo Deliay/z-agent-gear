@@ -42,9 +42,14 @@ ARG DOTNET_APT_UPGRADE=1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 运行时环境变量：ARG 仅构建期可见，这里把 npm 源固化进镜像运行时，
-# 供「Node.js」预制工作负载脚本（`REGISTRY="${NPM_REGISTRY:-...}"`）读取。
-ENV NPM_REGISTRY=${NPM_REGISTRY}
+# 运行时环境变量：ARG 仅构建期可见，这里把 npm 源与主目录自举所需的下载源固化进镜像运行时：
+# - NPM_REGISTRY 供「Node.js」预制工作负载脚本（`REGISTRY="${NPM_REGISTRY:-...}"`）与自举后
+#   `npm config set registry` 读取；
+# - NVM_INSTALL_URL / NODE_VERSION 供 entrypoint `bootstrap_home`（挂载云存储遮蔽 /home/worker 后
+#   重建 nvm/Node）读取。不改变下方既有 nvm/pnpm/agent-gear 安装流程。
+ENV NPM_REGISTRY=${NPM_REGISTRY} \
+    NVM_INSTALL_URL=${NVM_INSTALL_URL} \
+    NODE_VERSION=${NODE_VERSION}
 
 # 运行时环境变量：.NET 预制工作负载脚本（apt 版）读取；默认 dotnet10 / 执行 apt-get upgrade。
 # 可按内网源覆盖包名（DOTNET_APT_PACKAGE）或排障/提速时关闭 upgrade（DOTNET_APT_UPGRADE=0）。

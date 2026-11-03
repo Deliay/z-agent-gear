@@ -37,6 +37,17 @@ rules:
   - apiGroups: ['batch']
     resources: ['jobs']
     verbs: ['get', 'list', 'watch', 'create', 'delete']
+  # 云存储（需求 #405）：PVC 全生命周期 + Pod/Pod 日志只读（归档/用量标记行解析）。
+  # 不授予 PV / StorageClass 写权限（动态供给由 StorageClass 负责）。
+  - apiGroups: ['']
+    resources: ['persistentvolumeclaims']
+    verbs: ['get', 'list', 'watch', 'create', 'delete']
+  - apiGroups: ['']
+    resources: ['pods']
+    verbs: ['get', 'list']
+  - apiGroups: ['']
+    resources: ['pods/log']
+    verbs: ['get', 'list']
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -124,6 +135,29 @@ spec:
             # 云电脑（harness）Job 临时存储上限（仅 limits，不设 requests；默认 10Gi）。
             - name: JOB_EPHEMERAL_STORAGE
               value: '10Gi'
+            # 云存储（需求 #405 / 计划期裁决 19）：
+            # - CLOUD_STORAGE_CLASS：源 PVC 默认 StorageClass（空 = 集群默认，整段省略）
+            # - CLOUD_ARCHIVE_STORAGE_CLASS：归档 PVC StorageClass（空 = 集群默认）
+            # - CLOUD_ARCHIVE_PVC_SIZE / CLOUD_ARCHIVE_ACCESS_MODE：每工作区归档卷规格
+            # - ARCHIVER_IMAGE：归档/恢复/用量/清理 Job 镜像（缺失启动告警）
+            # - ARCHIVE_TIMEOUT_MS：归档超时（默认 30 分钟）
+            # - STORAGE_PVC_PREFIX / ARCHIVE_PVC_PREFIX：PVC 名称前缀
+            - name: CLOUD_STORAGE_CLASS
+              value: ''
+            - name: CLOUD_ARCHIVE_STORAGE_CLASS
+              value: ''
+            - name: CLOUD_ARCHIVE_PVC_SIZE
+              value: '100Gi'
+            - name: CLOUD_ARCHIVE_ACCESS_MODE
+              value: 'ReadWriteOnce'
+            - name: ARCHIVER_IMAGE
+              value: 'core.harbor.internal.fffdan.com/zero-tools/archiver:latest'
+            - name: ARCHIVE_TIMEOUT_MS
+              value: '1800000'
+            - name: STORAGE_PVC_PREFIX
+              value: 'zag-storage-'
+            - name: ARCHIVE_PVC_PREFIX
+              value: 'zag-archive-'
             # 云电脑（harness）内部回调与模型 Key 撤销（可空；缺失时只告警不阻断容器生命周期）。
             # 按实际命名空间/Service 端口调整；示例假设 agent-api/admin-api 同命名空间且端口 8000/8002。
             - name: AGENT_API_URL
