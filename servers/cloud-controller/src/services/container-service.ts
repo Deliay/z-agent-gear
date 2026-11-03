@@ -13,6 +13,9 @@ import type { K8sJobManager } from './k8s-job-manager.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import type { TokenService } from './token-service.js';
 import { SecretStore, type HarnessSecrets } from './secret-store.js';
+import type { StorageService, StartStorageInput } from './storage-service.js';
+import { type ObservationLogger } from '../observability/logger.js';
+import { injectTraceparent, withSpan } from '../observability/trace.js';
 
 export class ContainerNotFoundError extends Error {
   constructor(public readonly containerId: string) {
@@ -46,11 +49,6 @@ export interface ContainerServiceConfig {
   shutdownGraceMs: number;
   /** agent-api 内部地址（harness Job env `ZAG_AGENT_API_ENDPOINT`；缺失则仅告警）。 */
   agentApiUrl?: string;
-}
-
-interface Logger {
-  error?: (...args: unknown[]) => void;
-  warn?: (...args: unknown[]) => void;
 }
 
 /** 允许被生命周期转移覆写的状态（非终态）。 */
@@ -152,6 +150,8 @@ export interface StartHarnessOptions {
   expiresAt?: Date | null;
   /** 云电脑运行期 secret（仅内存，不落库）。 */
   secrets?: HarnessSecrets | null;
+  /** 云存储挂载（可选；缺省时 Job manifest 与现状逐字节一致）。 */
+  storage?: StartStorageInput | null;
 }
 
 /** 兼容既有调用方命名。 */
@@ -181,9 +181,10 @@ export class ContainerService {
     private readonly tokenService: TokenService,
     private readonly jobManager: K8sJobManager,
     private readonly cfg: ContainerServiceConfig,
-    private readonly logger: Logger = console,
+    private readonly logger: ObservationLogger,
     private readonly hooks: ContainerServiceHooks = {},
     private readonly secretStore: SecretStore = new SecretStore(),
+    private readonly storageService?: StorageService,
   ) {}
 
   /** 在途计费钩子（O-1：停机前必须排空，避免 outbox 写入被 SIGTERM 截断）。 */
@@ -216,7 +217,10 @@ export class ContainerService {
           lastError = err;
         }
       }
-      this.logger.error?.(`[billing] ${name} hook failed for ${container.id}`, lastError);
+      this.logger.error(
+        { component: 'billing', hook: name, containerId: container.id, err: lastError },
+        'billing hook failed',
+      );
     })();
     this.billingHookTasks.add(task);
     void task.finally(() => this.billingHookTasks.delete(task));
@@ -228,7 +232,10 @@ export class ContainerService {
     const pending = [...this.billingHookTasks];
     const timeout = new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
-        this.logger.warn?.(`[billing] drain hooks timeout with ${this.billingHookTasks.size} pending`);
+        this.logger.warn(
+          { component: 'billing', pending: this.billingHookTasks.size },
+          'drain hooks timeout',
+        );
         resolve();
       }, timeoutMs);
       timer.unref?.();
@@ -253,7 +260,7 @@ export class ContainerService {
       try {
         await handler(containerId, reason);
       } catch (err) {
-        this.logger.warn?.(`shutdown handler failed for ${containerId}`, err);
+        this.logger.warn({ containerId, err }, 'shutdown handler failed');
       }
     }
   }
@@ -281,7 +288,7 @@ export class ContainerService {
     try {
       exists = (await this.jobManager.getJob(name)) !== null;
     } catch (err) {
-      this.logger.error?.(`Failed to check job ${name}`, err);
+      this.logger.error({ jobName: name, err }, 'Failed to check job');
       return 'failed';
     }
     if (!exists) return 'absent';
@@ -289,7 +296,7 @@ export class ContainerService {
       await this.jobManager.deleteJob(name);
       return 'deleted';
     } catch (err) {
-      this.logger.error?.(`Failed to delete residual job ${name}`, err);
+      this.logger.error({ jobName: name, err }, 'Failed to delete residual job');
       return 'failed';
     }
   }
@@ -342,6 +349,12 @@ export class ContainerService {
       workloadIds: effectiveWorkloadIds,
       workloadPlan: plan,
       billingAccountId: options.billingAccountId ?? null,
+      storageId: options.storage?.id ?? null,
+      storagePvcName: options.storage?.pvcName ?? null,
+      storageSizeGi: options.storage?.sizeGi ?? null,
+      storageWorkspaceId: options.storage?.workspaceId ?? null,
+      storageStorageClass: options.storage?.storageClass ?? null,
+      storageRestorePath: options.storage?.restore?.archivePath ?? null,
     });
 
     // 云电脑 secret 仅内存持有（不落库、不打印）；Job/初始化下发需要它，失败时随终态清理。
@@ -353,14 +366,69 @@ export class ContainerService {
       return await this.mutex.runExclusive(created.id, async () => {
         const token = await this.tokenService.issue(created.id);
 
+        // 云存储：ensure PVC（恢复时先删同名残留 PVC 再按原容量/StorageClass 重建）。
+        const storage = options.storage ?? null;
+        if (storage) {
+          if (!this.storageService) {
+            const failed = await this.markFailed(created.id, '存储服务未配置');
+            throw new JobCreationError(
+              created.id,
+              'storage service not configured',
+              failed ?? (await this.repo.findById(created.id)),
+            );
+          }
+          try {
+            await this.storageService.prepareForStart(storage, options.tenantId ?? null);
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            const failed = await this.markFailed(
+              created.id,
+              `存储 PVC 准备失败: ${reason}`,
+            );
+            throw new JobCreationError(
+              created.id,
+              reason,
+              failed ?? (await this.repo.findById(created.id)),
+            );
+          }
+        }
+
         try {
-          await this.jobManager.createJob({
-            jobName: name,
-            containerId: created.id,
-            token,
-            // 最长运行时间无限制（不设置 activeDeadlineSeconds）；expiresAt 仅落库留存。
-            ...(purpose === 'harness' ? { env: this.buildHarnessJobEnv(options) } : {}),
-          });
+          await withSpan(
+            'container.start',
+            {
+              'zag.container.purpose': purpose,
+              ...(options.hostId ? { 'zag.cloud.host.id': options.hostId } : {}),
+              ...(options.userId ? { 'zag.user.id': options.userId } : {}),
+              ...(options.tenantId ? { 'zag.tenant.id': options.tenantId } : {}),
+              ...(options.workspaceId ? { 'zag.workspace.id': options.workspaceId } : {}),
+            },
+            async (span) => {
+              // span 内取创建链路 traceparent，随 Job env 注入容器（无活跃 span 时不注入）
+              const carrier: { traceparent?: string } = injectTraceparent({});
+              await this.jobManager.createJob({
+                jobName: name,
+                containerId: created.id,
+                token,
+                // 最长运行时间无限制（不设置 activeDeadlineSeconds）；expiresAt 仅落库留存。
+                ...(purpose === 'harness'
+                  ? { env: this.buildHarnessJobEnv(options, created.id, carrier.traceparent) }
+                  : {}),
+                ...(storage
+                  ? {
+                      storage: {
+                        pvcName: storage.pvcName,
+                        archivePvcName: storage.restore
+                          ? this.storageService?.archivePvcName(storage.workspaceId) ?? null
+                          : null,
+                        restorePath: storage.restore?.archivePath ?? null,
+                      },
+                    }
+                  : {}),
+              });
+              span.setAttribute('zag.container.id', created.id);
+            },
+          );
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err);
           // R7：统一走 markFailed（含终态钩子一致性），不再裸写 failed。
@@ -401,11 +469,23 @@ export class ContainerService {
   }
 
   /**
-   * harness Job env（契约 A.2.2）：`ZAG_SERVER_ENDPOINT`/`ZAG_CONTROLLER_KEY` 由 job manager
-   * 固定注入；此处仅返回追加项。模型 Key/BaseURL/模型列表**不进入 Job env**（只走
+   * harness Job env（契约 A.2.2 + observability.md §8）：`ZAG_SERVER_ENDPOINT`/`ZAG_CONTROLLER_KEY`
+   * 由 job manager 固定注入；此处仅返回追加项。模型 Key/BaseURL/模型列表**不进入 Job env**（只走
    * `workload:run.env`），避免容器环境变量长期暴露模型凭据。
+   *
+   * 注入顺序：先 9 项业务 env，再追加观测 env（F12/T-OBS15）：
+   * - 已配置采集端（`OTEL_EXPORTER_OTLP_ENDPOINT` 非空且 `OTEL_SDK_DISABLED !== 'true'`）：
+   *   `OTEL_*` 透传 + `OTEL_RESOURCE_ATTRIBUTES`（容器/宿主/用户/租户/工作区五维），
+   *   且仅当 `traceparent` 非空（`container.start` span 存在）时注入 `ZAG_INIT_TRACEPARENT`；
+   * - 否则仅注入 `OTEL_SDK_DISABLED=true`（容器内 SDK 完全不启动）。
+   *
+   * `OTEL_EXPORTER_OTLP_HEADERS` 仅经 env 传递，**禁止出现在任何日志输出**。
    */
-  private buildHarnessJobEnv(options: StartHarnessOptions): Record<string, string> {
+  private buildHarnessJobEnv(
+    options: StartHarnessOptions,
+    containerId: string,
+    traceparent: string | undefined,
+  ): Record<string, string> {
     const env: Record<string, string> = {};
     const secrets = options.secrets;
     if (secrets?.hostEndpoint) env.ZAG_HOST_ENDPOINT = secrets.hostEndpoint;
@@ -417,13 +497,40 @@ export class ContainerService {
     if (secrets?.defaultWorkspace) env.ZAG_DEFAULT_WORKSPACE = secrets.defaultWorkspace;
     env.ZAG_USER_TYPE = 'front_user';
     if (options.userId) env.ZAG_USER_ID = options.userId;
+    // 云存储挂载：entrypoint 据此执行严格自举（fail-fast；提案实现点 4）。
+    if (options.storage) env.ZAG_STORAGE_HOME = '1';
     if (options.controllerId) env.ZAG_CONTROLLER_ID = options.controllerId;
     if (this.cfg.agentApiUrl) {
       env.ZAG_AGENT_API_ENDPOINT = this.cfg.agentApiUrl.replace(/\/+$/, '');
     } else {
-      this.logger.warn?.(
-        '[harness] AGENT_API_URL 未配置：Github 凭据申请不可用（Git 项目设置会失败）',
+      this.logger.warn(
+        { component: 'harness' },
+        'AGENT_API_URL 未配置：Github 凭据申请不可用（Git 项目设置会失败）',
       );
+    }
+
+    const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    if (endpoint && endpoint.trim().length > 0 && process.env.OTEL_SDK_DISABLED !== 'true') {
+      env.OTEL_EXPORTER_OTLP_ENDPOINT = endpoint;
+      env.OTEL_EXPORTER_OTLP_PROTOCOL = 'http/protobuf';
+      const headers = process.env.OTEL_EXPORTER_OTLP_HEADERS;
+      if (headers) env.OTEL_EXPORTER_OTLP_HEADERS = headers;
+      env.OTEL_SERVICE_NAME = 'agent-gear';
+      const sampler = (process.env.OTEL_TRACES_SAMPLER ?? '').trim();
+      env.OTEL_TRACES_SAMPLER = sampler === '' ? 'parentbased_traceidratio' : sampler;
+      const samplerArg = (process.env.OTEL_TRACES_SAMPLER_ARG ?? '').trim();
+      env.OTEL_TRACES_SAMPLER_ARG = samplerArg === '' ? '1.0' : samplerArg;
+      env.OTEL_RESOURCE_ATTRIBUTES = [
+        `zag.container.id=${containerId}`,
+        `zag.cloud.host.id=${options.hostId ?? ''}`,
+        `zag.user.id=${options.userId ?? ''}`,
+        `zag.tenant.id=${options.tenantId ?? ''}`,
+        `zag.workspace.id=${options.workspaceId ?? ''}`,
+      ].join(',');
+      // 仅在 `container.start` span 存在时注入（SDK 关闭/无 span 不注入，避免容器内建出无效 link）
+      if (traceparent) env.ZAG_INIT_TRACEPARENT = traceparent;
+    } else {
+      env.OTEL_SDK_DISABLED = 'true';
     }
     return env;
   }
@@ -432,7 +539,7 @@ export class ContainerService {
     try {
       await this.jobManager.deleteJob(name);
     } catch (err) {
-      this.logger.error?.(`Failed to reclaim orphaned job ${name}`, err);
+      this.logger.error({ jobName: name, err }, 'Failed to reclaim orphaned job');
     }
   }
 
@@ -519,6 +626,9 @@ export class ContainerService {
       { fromStatuses: [...ACTIVE_STATUSES] },
     );
     if (updated) {
+      // 先触发归档 CAS（pending），再投递终态回调，使 terminal 报文携带 archiveStatus=pending
+      // （契约 A.2.10）；归档 Job 本身在容器锁外异步执行。
+      await this.prepareStorageArchive(updated);
       // 非 destroy 路径的终态（Job 自退/异常退出）同样投递 destroyed，避免尾结与冻结释放被拖延
       this.finalizeTerminal(updated);
     }
@@ -543,7 +653,10 @@ export class ContainerService {
       },
       { fromStatuses: [...ACTIVE_STATUSES] },
     );
-    if (updated) this.finalizeTerminal(updated);
+    if (updated) {
+      await this.prepareStorageArchive(updated);
+      this.finalizeTerminal(updated);
+    }
     return updated ?? this.repo.findById(containerId);
   }
 
@@ -570,7 +683,41 @@ export class ContainerService {
     if (!container) {
       throw new ContainerNotFoundError(containerId);
     }
-    return this.mutex.runExclusive(containerId, () => this.destroyLocked(containerId, options));
+    const result = await this.mutex.runExclusive(containerId, () =>
+      this.destroyLocked(containerId, options),
+    );
+    // 归档触发在容器互斥锁**外**（KeyedMutex 非可重入；裁决 12）。
+    // 卡死的 destroying（Job 删除失败）不在此触发，由终态巡检 reclaim 成功后补触发。
+    const current = await this.repo.findById(containerId);
+    if (current && current.status !== 'destroying') this.triggerStorageArchive(current);
+    return result;
+  }
+
+  /**
+   * 云存储归档触发（裁决 12）：仅已挂载存储且**曾经就绪**（`connectedAt` 非空）的容器。
+   *
+   * `connectedAt` 为空表示容器从未完成注册（创建/恢复失败），此时源卷可能为空或仅部分恢复，
+   * 归档会覆盖已有可用归档；由 agent-api 回滚到挂载前状态（IDLE/ARCHIVED）。
+   */
+  private triggerStorageArchive(container: CloudContainerEntity): void {
+    void this.prepareStorageArchive(container).catch((err) => {
+      this.logger.error(
+        { component: 'cloud-storage', containerId: container.id, err },
+        'failed to trigger storage archive',
+      );
+    });
+  }
+
+  private async prepareStorageArchive(container: CloudContainerEntity): Promise<void> {
+    if (!this.storageService || !container.storageId || container.connectedAt === null) return;
+    try {
+      await this.storageService.maybeStartArchive(container.id);
+    } catch (err) {
+      this.logger.error(
+        { component: 'cloud-storage', containerId: container.id, err },
+        'failed to trigger storage archive',
+      );
+    }
   }
 
   private async destroyLocked(
@@ -612,6 +759,7 @@ export class ContainerService {
         );
         const current = exited ?? (await this.repo.findById(containerId));
         if (exited && current) {
+          await this.prepareStorageArchive(current);
           this.finalizeTerminal(current);
         }
         return {
@@ -658,7 +806,7 @@ export class ContainerService {
       await this.jobManager.deleteJob(container.name);
       deletedJob = true;
     } catch (err) {
-      this.logger.error?.(`Failed to delete job ${container.name}`, err);
+      this.logger.error({ jobName: container.name, err }, 'Failed to delete job');
     }
 
     // Job 删除失败时显式告警，便于运维发现残留 Job（不静默）
@@ -688,6 +836,8 @@ export class ContainerService {
       };
     }
 
+    // Job 删除失败时不归档（容器可能仍在读写源卷；由终态巡检 reclaim 成功后补触发）。
+    if (deletedJob) await this.prepareStorageArchive(exited);
     this.finalizeTerminal(exited);
 
     return { success: true, id: containerId, status: 'exited', deletedJob };
@@ -750,7 +900,10 @@ export class ContainerService {
           },
           { fromStatuses: ['destroying'] },
         );
-        if (exited) this.finalizeTerminal(exited);
+        if (exited) {
+          await this.prepareStorageArchive(exited);
+          this.finalizeTerminal(exited);
+        }
       } else if (deletion === 'deleted') {
         await this.repo.update(containerId, { tokenHash: null });
       }

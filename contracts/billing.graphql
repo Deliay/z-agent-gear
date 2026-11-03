@@ -24,6 +24,9 @@ enum BillingCategory {
   container
   model
   manual
+  # 云存储按小时结算（3 档 per_unit 价目，items 含分档明细；已归档小时单价/金额减半，
+  # description 追加「（归档半价）」，refType=cloud_storage、refId=<storageId>）
+  storage
 }
 
 enum BillingRollupGranularity {

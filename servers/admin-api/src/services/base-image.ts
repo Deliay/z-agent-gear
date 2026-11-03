@@ -39,7 +39,7 @@ export class BaseImageService {
         description: input.description,
         dockerfile: input.dockerfile,
       },
-      { new: true, lean: true },
+      { returnDocument: 'after', lean: true },
     );
     if (!image) return null;
 

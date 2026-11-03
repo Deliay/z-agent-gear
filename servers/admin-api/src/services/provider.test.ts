@@ -194,7 +194,7 @@ describe('ProviderService (admin / global scope)', () => {
       expect(Provider.findOneAndUpdate).toHaveBeenCalledWith(
         { _id: OID, scope: 'global' },
         expect.objectContaining({ endpoint: 'https://custom.openai.com/v1' }),
-        { new: true, lean: true },
+        { returnDocument: 'after', lean: true },
       );
     });
 

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { logger as rootLogger } from '../observability/logger.js';
 import { Account } from '../models/account.js';
 import { Tenant } from '../models/tenant.js';
 import { User } from '../models/user.js';
@@ -22,8 +23,9 @@ export interface TenantMemberView {
 }
 
 function audit(action: string, operator: string, tenantId: string, target: string, role?: string): void {
-  console.log(
-    `[audit] action=${action} operator=${operator} tenant=${tenantId} target=${target} role=${role ?? '-'}`,
+  rootLogger.info(
+    { component: 'audit', action, operator, tenantId, target, role: role ?? null },
+    'tenant member audit',
   );
 }
 

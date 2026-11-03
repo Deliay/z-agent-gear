@@ -70,22 +70,25 @@ docker compose -f aspire/manifest/docker-compose.yaml down
 
 ### 手动启动
 
+> 包管理器统一使用 **pnpm 12**（`packageManager` 已固定为 `pnpm@12.16.1`）。首次使用先执行
+> `corepack enable`；也可以直接 `npm install -g pnpm@12.16.1`。
+
 ```bash
 # 安装依赖
-cd servers/agent-api && npm install
-cd servers/admin-api && npm install
-cd servers/controller-api && npm install
-cd servers/cloud-controller && npm install
-cd apps/agent-web && npm install
-cd apps/admin-web && npm install
+cd servers/agent-api && pnpm install
+cd servers/admin-api && pnpm install
+cd servers/controller-api && pnpm install
+cd servers/cloud-controller && pnpm install
+cd apps/agent-web && pnpm install
+cd apps/admin-web && pnpm install
 
 # 启动服务
-cd servers/agent-api && npm run dev
-cd servers/admin-api && npm run dev
-cd servers/controller-api && npm run dev
-cd servers/cloud-controller && npm run dev
-cd apps/agent-web && npm run dev
-cd apps/admin-web && npm run dev
+cd servers/agent-api && pnpm run dev
+cd servers/admin-api && pnpm run dev
+cd servers/controller-api && pnpm run dev
+cd servers/cloud-controller && pnpm run dev
+cd apps/agent-web && pnpm run dev
+cd apps/admin-web && pnpm run dev
 ```
 
-> **本地地址说明**：手动启动（`npm run dev`，未注入任何 `VITE_API_URL` / `VITE_CONTROLLER_API_URL`）时，前端处于 Vite 开发模式，会**跳过线上入口探测**并直接使用本地默认地址：agent-api `http://localhost:4000`、controller-api `http://localhost:4001`，请求全程留在本地，不会误连生产环境。如需指向其他地址（如 Aspire 编排注入），显式设置 `VITE_API_URL` / `VITE_CONTROLLER_API_URL` 即可覆盖默认值。
+> **本地地址说明**：手动启动（`pnpm run dev`，未注入任何 `VITE_API_URL` / `VITE_CONTROLLER_API_URL`）时，前端处于 Vite 开发模式，会**跳过线上入口探测**并直接使用本地默认地址：agent-api `http://localhost:4000`、controller-api `http://localhost:4001`，请求全程留在本地，不会误连生产环境。如需指向其他地址（如 Aspire 编排注入），显式设置 `VITE_API_URL` / `VITE_CONTROLLER_API_URL` 即可覆盖默认值。

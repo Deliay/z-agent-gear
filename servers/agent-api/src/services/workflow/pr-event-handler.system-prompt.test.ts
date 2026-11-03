@@ -113,7 +113,7 @@ describe('系统键写入通道（不 mock instance.ts）', () => {
           'additionalPrompts.github-pr-review': expect.stringContaining('Pull Request审核通过'),
         },
       },
-      { new: true },
+      { returnDocument: 'after' },
     );
     expect(workflowEngine.transition).toHaveBeenCalledWith('inst-1', 'n2', 'complete', {
       artifacts: [],

@@ -9,6 +9,7 @@ import { ConfiguredWorkflow } from './configured-workflow.js';
 import { WorkflowInstance } from './workflow-instance.js';
 import { WorkflowTemplate } from './workflow-template.js';
 import { GitHubAccount } from './github-account.js';
+import { CloudStorage } from './cloud-storage.js';
 import { UserCommitSetting } from './user-commit-setting.js';
 import { Provider } from './provider.js';
 import { Model } from './model.js';
@@ -79,7 +80,6 @@ const CASES: Case[] = [
   { name: 'workflowinstances', model: WorkflowInstance as unknown as mongoose.Model<unknown>, field: 'resourceWorkspaceId' },
   { name: 'workflowtemplates', model: WorkflowTemplate as unknown as mongoose.Model<unknown>, field: 'resourceWorkspaceId', builtin: true },
   { name: 'githubaccounts', model: GitHubAccount as unknown as mongoose.Model<unknown>, field: 'workspaceId', shared: true },
-  { name: 'user_commit_settings', model: UserCommitSetting as unknown as mongoose.Model<unknown>, field: 'workspaceId' },
   { name: 'providers', model: Provider as unknown as mongoose.Model<unknown>, field: 'workspaceId', shared: true },
   { name: 'models', model: Model as unknown as mongoose.Model<unknown>, field: 'workspaceId', shared: true },
 ];
@@ -116,13 +116,18 @@ function uniqueSeedFields(name: string, seed: number): Record<string, unknown> {
  * 内置模板全工作区可见；角色不放大可见集（admin 通过切换工作区上下文直达）。
  */
 describe('workspace-isolation 矩阵（T-WS，真库）', () => {
-  it('迁移清单覆盖 11 个资源集合，且集合名与模型一致', () => {
+  it('迁移清单覆盖资源集合，且集合名与模型一致（Commit 设置已成员级，仅 015 历史回填保留）', () => {
     const modelCollections = CASES.map((item) => item.model.collection.name).sort();
-    const migrationCollections = WORKSPACE_ID_COLLECTIONS.map((entry) => entry.collection).sort();
+    const migrationCollections = WORKSPACE_ID_COLLECTIONS.map((entry) => entry.collection)
+      .filter((name) => name !== 'user_commit_settings')
+      .sort();
     expect(migrationCollections).toEqual(
-      modelCollections.filter((name) => name !== 'providers' && name !== 'models'),
+      modelCollections.filter(
+        (name) => name !== 'providers' && name !== 'models' && name !== 'user_commit_settings',
+      ),
     );
-    expect(CASES).toHaveLength(11);
+    // user_commit_settings 自本需求起为成员级（键 userId、无工作区维度），不参与工作区隔离矩阵
+    expect(CASES).toHaveLength(10);
   });
 
   it.each(CASES)('$name：工作区 / 角色两档可见集', async (testCase) => {
@@ -171,6 +176,79 @@ describe('workspace-isolation 矩阵（T-WS，真库）', () => {
     // 全局上下文：共享型/模板只看到全局（+内置），独占型只看到全局
     const expectedGlobal = testCase.builtin ? 2 : 1;
     expect(await count(devGlobal)).toBe(expectedGlobal);
+  });
+
+  it('user_commit_settings 为成员级：无 workspaceId 维度、不挂 workspace-scope（T-WS 矩阵例外）', async () => {
+    expect(UserCommitSetting.schema.path('workspaceId')).toBeUndefined();
+    const collection = mongoose.connection.collection('user_commit_settings');
+    await collection.insertMany([
+      { userId: 'member-a', tenantId: String(TENANT), committerType: 'custom', customName: 'A', customEmail: 'a@example.com' },
+      { userId: 'member-b', tenantId: String(TENANT), committerType: 'unset', customName: null, customEmail: null },
+    ]);
+    const count = () =>
+      runWithWorkspace(devA, async () =>
+        UserCommitSetting.countDocuments({ tenantId: TENANT }),
+      );
+    // 任意工作区上下文都看到同一份（成员级，不随工作区过滤）
+    expect(await count()).toBe(2);
+  });
+
+  it('CloudStorage 工作区隔离（T-WSP2）：跨工作区不可见/不可写，且不修改迁移回填清单', async () => {
+    // 计划期裁决 2：不修改 015 的 WORKSPACE_ID_COLLECTIONS，也不加入 TENANT_ID_COLLECTIONS
+    expect(WORKSPACE_ID_COLLECTIONS.map((entry) => entry.collection)).not.toContain(
+      'cloudstorages',
+    );
+
+    const collection = mongoose.connection.collection('cloudstorages');
+    const tenantId = new mongoose.Types.ObjectId(TENANT);
+    const insert = (workspaceId: string, nameKey: string) =>
+      collection.insertOne({
+        _id: new mongoose.Types.ObjectId(),
+        name: nameKey,
+        nameKey,
+        sizeGi: 10,
+        status: 'IDLE',
+        tenantId,
+        resourceWorkspaceId: new mongoose.Types.ObjectId(workspaceId),
+        createdBy: new mongoose.Types.ObjectId(),
+        pvcName: `zag-storage-${nameKey}`,
+        destroyedAt: null,
+      });
+    await insert(WS_A, 'a');
+    await insert(WS_B, 'b');
+    await insert(WS_GLOBAL, 'g');
+    const bDoc = await collection.findOne({ nameKey: 'b' });
+
+    const count = (context: WorkspaceContext) =>
+      runWithWorkspace(context, async () =>
+        CloudStorage.countDocuments({ tenantId }),
+      );
+    expect(await count(adminA)).toBe(1);
+    expect(await count(devB)).toBe(1);
+    expect(await count(devGlobal)).toBe(1);
+
+    // 跨工作区写入：save 路径拒绝（workspace not found）
+    await expect(
+      runWithWorkspace(devA, async () =>
+        new CloudStorage({
+          name: 'cross',
+          nameKey: 'cross',
+          sizeGi: 10,
+          status: 'IDLE',
+          tenantId,
+          resourceWorkspaceId: new mongoose.Types.ObjectId(WS_B),
+          createdBy: new mongoose.Types.ObjectId(),
+          pvcName: 'zag-storage-cross',
+        }).save(),
+      ),
+    ).rejects.toThrow('workspace not found');
+
+    // 跨工作区更新：写过滤收敛到当前工作区（匹配为空）
+    const updated = await runWithWorkspace(devA, async () =>
+      CloudStorage.updateOne({ _id: bDoc?._id }, { $set: { name: 'hacked' } }),
+    );
+    expect(updated.modifiedCount).toBe(0);
+    expect((await collection.findOne({ _id: bDoc?._id }))?.name).toBe('b');
   });
 
   it('工作流域字段名与项目工作区语义零冲突', () => {

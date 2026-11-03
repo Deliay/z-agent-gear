@@ -100,7 +100,7 @@ describe('BaseImageService', () => {
       expect(BaseImage.findByIdAndUpdate).toHaveBeenCalledWith(
         'img-1',
         { name: 'renamed', description: 'desc', dockerfile: 'FROM y' },
-        { new: true, lean: true },
+        { returnDocument: 'after', lean: true },
       );
     });
 

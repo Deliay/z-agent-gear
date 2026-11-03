@@ -26,6 +26,10 @@ const USER_ID = '507f1f77bcf86cd799439011';
  * T-ISO 等价层级：19 个带 userId 的集合逐一验证
  * ① schema 同时声明 userId + tenantId；② 实际查询（countDocuments）经插件注入 tenantId=userId。
  * 这覆盖了 mock 掉 model 的 service 单测无法验证的「Mongoose 编译期注入」路径。
+ *
+ * **例外（成员级集合）**：`user_commit_settings` 的键是全局成员标识 `userId`、`tenantId` 仅留档，
+ * 不挂作用域插件（ALS 注入会让「同一成员在不同工作区」读写互相不可见，见模型注释与
+ * `commit-settings-service.real.test.ts`）；仅在 schema 维度参与本矩阵。
  */
 const CASES = [
   ['Session', Session, 'sessions'],
@@ -48,6 +52,8 @@ const CASES = [
   ['UserCommitSetting', UserCommitSetting, 'user_commit_settings'],
   ['GitHubAccount', GitHubAccount, 'githubaccounts'],
 ] as const;
+
+const TENANT_SCOPED_CASES = CASES.filter(([, model]) => model.modelName !== 'UserCommitSetting');
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -91,7 +97,7 @@ describe('19 collections tenantId isolation (T-ISO)', () => {
     expect(new Set(constantModels)).toEqual(new Set(CASES.map(([, model]) => model.modelName)));
   });
 
-  it.each(CASES)('%s declares userId + tenantId and queries tenantId+userId', async (_name, model, collection) => {
+  it.each(TENANT_SCOPED_CASES)('%s declares userId + tenantId and queries tenantId+userId', async (_name, model, collection) => {
     expect(model.collection.name).toBe(collection);
     expect(model.schema.path('userId')).toBeTruthy();
     expect(model.schema.path('tenantId')).toBeTruthy();
@@ -111,7 +117,7 @@ describe('19 collections tenantId isolation (T-ISO)', () => {
     expect(String(filter.tenantId)).toBe(USER_ID);
   });
 
-  it.each(CASES)('%s injects tenantId into $or userId branches', async (_name, model) => {
+  it.each(TENANT_SCOPED_CASES)('%s injects tenantId into $or userId branches', async (_name, model) => {
     const spy = vi
       .spyOn(model.collection, 'countDocuments')
       .mockResolvedValue(0 as never);
@@ -125,5 +131,19 @@ describe('19 collections tenantId isolation (T-ISO)', () => {
     expect(String(filter.$or[0].userId)).toBe(USER_ID);
     expect(String(filter.$or[0].tenantId)).toBe(USER_ID);
     expect(filter.$or[1]).toEqual({ isBuiltin: true });
+  });
+
+  it('T-ISO 豁免：user_commit_settings 为成员级集合，查询不注入 tenantId（tenantId 仅留档）', async () => {
+    expect(UserCommitSetting.schema.path('userId')).toBeTruthy();
+    expect(UserCommitSetting.schema.path('tenantId')).toBeTruthy();
+
+    const spy = vi
+      .spyOn(UserCommitSetting.collection, 'countDocuments')
+      .mockResolvedValue(0 as never);
+    await UserCommitSetting.countDocuments({ userId: USER_ID });
+
+    const filter = spy.mock.calls[0][0] as Record<string, unknown>;
+    // 不注入 tenantId：任何工作区上下文（含无上下文）都能命中同一成员行
+    expect(filter).toEqual({ userId: USER_ID });
   });
 });

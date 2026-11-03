@@ -1,14 +1,17 @@
 import http from 'node:http';
 import { McpRelay } from './relay.js';
+import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 
 const MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 export class LocalMcpServer {
   private relay: McpRelay;
   private server: http.Server;
+  private log: ObservationLogger;
 
-  constructor(relay: McpRelay) {
+  constructor(relay: McpRelay, logger?: ObservationLogger) {
     this.relay = relay;
+    this.log = logger ?? rootLogger.child({ component: 'mcp-local' });
     this.server = http.createServer((req, res) => void this.handle(req, res));
   }
 
@@ -28,16 +31,16 @@ export class LocalMcpServer {
 
   private handle(req: http.IncomingMessage, res: http.ServerResponse): void {
     const startedAt = Date.now();
-    console.log(`[MCP local] ${req.method} ${req.url} accept=${req.headers.accept ?? '-'}`);
+    this.log.debug({ event: 'mcp_request', method: req.method, url: req.url, accept: req.headers.accept ?? null }, 'mcp request');
     if (req.method !== 'POST') {
-      console.log(`[MCP local] -> 405 (method not allowed)`);
+      this.log.debug({ event: 'mcp_request_rejected', status: 405, reason: 'method_not_allowed' }, 'mcp request rejected');
       res.writeHead(405);
       res.end();
       return;
     }
     const match = /^\/mcp\/([^/]+)\/([^/]+)\/?$/.exec(req.url ?? '');
     if (!match) {
-      console.log(`[MCP local] -> 404 (bad path)`);
+      this.log.debug({ event: 'mcp_request_rejected', status: 404, reason: 'bad_path' }, 'mcp request rejected');
       res.writeHead(404);
       res.end();
       return;
@@ -46,19 +49,28 @@ export class LocalMcpServer {
     const serverName = decodeURIComponent(match[2]);
 
     if (!this.relay.hasSession(sessionId)) {
-      console.log(`[MCP local] ${sessionId}/${serverName} -> 404 (session not registered in relay)`);
+      this.log.debug(
+        { event: 'mcp_request_rejected', status: 404, reason: 'session_not_registered', sessionId, serverName },
+        'mcp request rejected',
+      );
       res.writeHead(404);
       res.end();
       return;
     }
     if (!this.relay.hasServer(sessionId, serverName)) {
-      console.log(`[MCP local] ${sessionId}/${serverName} -> 404 (server not assembled in session)`);
+      this.log.debug(
+        { event: 'mcp_request_rejected', status: 404, reason: 'server_not_assembled', sessionId, serverName },
+        'mcp request rejected',
+      );
       res.writeHead(404);
       res.end();
       return;
     }
     if (!req.headers.authorization) {
-      console.log(`[MCP local] ${sessionId}/${serverName} -> 401 (missing Authorization)`);
+      this.log.debug(
+        { event: 'mcp_request_rejected', status: 401, reason: 'missing_authorization', sessionId, serverName },
+        'mcp request rejected',
+      );
       res.writeHead(401);
       res.end();
       return;
@@ -93,11 +105,21 @@ export class LocalMcpServer {
       try {
         const rpcMethod = (body as { method?: string })?.method ?? '?';
         const result = await this.relay.forward(sessionId, serverName, body);
-        console.log(`[MCP local] ${sessionId}/${serverName} ${rpcMethod} -> ${result.status} (${Date.now() - startedAt}ms)`);
+        this.log.debug(
+          {
+            event: 'mcp_request_completed',
+            sessionId,
+            serverName,
+            method: rpcMethod,
+            status: result.status,
+            durationMs: Date.now() - startedAt,
+          },
+          'mcp request completed',
+        );
         res.writeHead(result.status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(result.body));
       } catch (err) {
-        console.error(`[MCP local] forward failed: session=${sessionId} server=${serverName}: ${(err as Error).message}`);
+        this.log.error({ event: 'mcp_forward_failed', sessionId, serverName, err }, 'mcp forward failed');
         res.writeHead(502, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: 'FORWARD_ERROR', message: 'MCP forward failed' } }));
       }

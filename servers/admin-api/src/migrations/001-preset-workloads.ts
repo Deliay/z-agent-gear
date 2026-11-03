@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
+
+const log = logger.child({ component: 'migration/001-preset-workloads' });
 
 /**
  * 001-preset-workloads：一次性写入 Docker / Node.js / .NET / Aspire 四个预制工作负载
@@ -35,7 +38,10 @@ tail -n 50 /var/log/dockerd.log >&2 || true
 exit 1
 `;
 
-const NODEJS_SCRIPT = `#!/usr/bin/env bash
+/**
+ * Node.js 初始版本脚本（001 落库文本）：内容逐字不变，供 018 迁移做「未定制」比对与刷新。
+ */
+export const NODEJS_SCRIPT_V1 = `#!/usr/bin/env bash
 set -euo pipefail
 
 export NVM_DIR="\${NVM_DIR:-/usr/local/nvm}"
@@ -66,7 +72,7 @@ while IFS= read -r pm; do
     pnpm|yarn|bun) npm install -g "$pm" ;;
     *) echo "未知包管理器: $pm" >&2; exit 2 ;;
   esac
-done < <(node -e 'const v = JSON.parse(process.argv[1] || "[]"); for (const x of v) console.log(x)' "$PACKAGE_MANAGERS")
+done < <(node -e 'const v = JSON.parse(process.argv[1] || "[]"); for (const x of v) process.stdout.write(x + "\\n")' "$PACKAGE_MANAGERS")
 
 node -v
 npm -v
@@ -178,7 +184,7 @@ const PRESETS: PresetDefinition[] = [
   {
     presetKey: 'nodejs',
     name: 'Node.js',
-    initScript: NODEJS_SCRIPT,
+    initScript: NODEJS_SCRIPT_V1,
     paramSchema: [
       {
         key: 'version',
@@ -217,14 +223,15 @@ const PRESETS: PresetDefinition[] = [
 async function findExistingId(preset: PresetDefinition): Promise<string | null> {
   const byKey = await CloudWorkload.findOne({ presetKey: preset.presetKey });
   if (byKey) {
-    console.warn(
-      `[Migration 001] preset workload "${preset.presetKey}" already exists (by presetKey), skipping`,
+    log.warn(
+      { presetKey: preset.presetKey },
+      'preset workload already exists (by presetKey), skipping',
     );
     return String((byKey as { _id: unknown })._id);
   }
   const byName = await CloudWorkload.findOne({ name: preset.name });
   if (byName) {
-    console.warn(`[Migration 001] workload named "${preset.name}" already exists, skipping`);
+    log.warn({ name: preset.name }, 'workload with the same name already exists, skipping');
     return String((byName as { _id: unknown })._id);
   }
   return null;
@@ -246,8 +253,9 @@ export async function run(): Promise<void> {
       if (dependencyId) {
         dependsOnWorkloadIds.push(dependencyId);
       } else {
-        console.warn(
-          `[Migration 001] dependency "${dependencyName}" for "${preset.name}" not found, leaving it out`,
+        log.warn(
+          { dependencyName, name: preset.name },
+          'preset dependency not found, leaving it out',
         );
       }
     }
@@ -262,6 +270,6 @@ export async function run(): Promise<void> {
       isPreset: true,
     });
     idByName.set(preset.name, String((created as { _id: unknown })._id));
-    console.log(`[Migration 001] preset workload "${preset.presetKey}" created`);
+    log.info({ presetKey: preset.presetKey }, 'preset workload created');
   }
 }

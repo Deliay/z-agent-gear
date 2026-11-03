@@ -61,7 +61,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `hostname` | `string` | 是 | 容器主机名 |
-| `version` | `string` | 是 | `agent-gear` semver 版本号：普通容器须为三段数字且 `>=2.2.0`、major 为 `2`；`purpose=harness` 按逐容器 `agentGearMinVersion`（下限 `>=2.10.0`；含 `deepseek_harness` 的运行 `>=2.11.0`，见 §3.4） |
+| `version` | `string` | 是 | `agent-gear` semver 版本号：普通容器须为三段数字且 `>=2.2.0`、major 为 `2`；`purpose=harness` 按逐容器 `agentGearMinVersion`（下限 `>=2.12.0`；各 harness 类型与 2.12.0 基线取 max 后恒为 `2.12.0`，见 §3.4） |
 | `platform` | `string` | 否 | 容器平台标识（`linux`） |
 | `key` | `string` | 否 | **兼容字段，服务端忽略**。容器鉴权由握手 token 完成（`agent-gear` 现有参数体系仍会发送该字段，不破坏既有握手） |
 | `homeDir` | `string` | 否 | 容器内 `os.homedir()`，服务端忽略 |
@@ -69,7 +69,7 @@
 **服务端行为：**
 
 1. 从握手阶段已鉴权的 socket 上取得 `containerId`（见 §3.1），不读取 `key`。
-2. 读取容器 `purpose`，校验 `version` 完整版本：普通容器 `>=2.2.0`；`purpose=harness` 按逐容器 `agentGearMinVersion`（下限 `>=2.10.0`；含 `deepseek_harness` 的运行 `>=2.11.0`）；major 均须为 `2`（见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
+2. 读取容器 `purpose`，校验 `version` 完整版本：普通容器 `>=2.2.0`；`purpose=harness` 按逐容器 `agentGearMinVersion`（下限 `>=2.12.0`；各 harness 类型与 2.12.0 基线取 max 后恒为 `2.12.0`）；major 均须为 `2`（见 §3.4）；缺失、非法、低于最低版本或 major 不符时返回 `error`（`VERSION_MISMATCH`，载荷含当前/最低版本元数据）并断开。
 3. 查询是否存在待执行初始化脚本（`hasInitScripts`），据此计算 `initializing`。
 4. 将 socket 绑定到 `containerId`；无初始化脚本时容器状态置 `online` 并写入 `connectedAt`。
 5. 回复 `registered`（含可选 `initializing`）。
@@ -120,7 +120,7 @@
 | `INVALID_TOKEN` | 握手 token 校验失败（仅在 `connect_error` 中返回，不会进入 `register` 阶段） |
 | `RATE_LIMITED` | 握手频率超限（按一次性 token 的 `containerId` 前缀滑动窗口限速，无 token 时回退来源 IP；另有更高上限的 per-IP 兜底桶，仅在 `connect_error` 中返回） |
 
-> `INVALID_KEY` / `KEY_ALREADY_ONLINE` 为本地 controller 场景错误码，本契约不使用。
+> `INVALID_KEY` / `KEY_ALREADY_ONLINE` / `SESSION_REPLACED` 为本地 controller 场景错误码，本契约不使用。
 
 ### 2.5 `heartbeat`（Worker → Server）
 
@@ -328,14 +328,14 @@ Worker                              cloud-controller
   1. **形态**：严格三段数字 `^\d+\.\d+\.\d+$`，每段 1~9 位且无前导零；缺失、前后空白、`v` 前缀、缺段/多段、prerelease/build 后缀、非字符串或超长（> 64 字符）均视为不兼容。
   2. **major**：须等于当前支持的 major（本期 `2`）。
   3. **最低版本**：完整版本须 `>=2.2.0`（按数字段比较，`2.10.0 > 2.2.0`）。
-- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.10.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
-- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.10.0`（worker 用户 + 保活退出码 42 约定自 2.10.0 起），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
+- 最低版本与 supported major 是与服务端协议能力绑定的代码常量（`MIN_WORKER_VERSION = '2.2.0'`、`MIN_HARNESS_WORKER_VERSION = '2.12.0'`、`SUPPORTED_MAJOR = 2`），不通过环境变量配置。
+- **按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION=2.12.0`（worker 用户 + 保活退出码 42、Worktree 级提交人写入等能力随基线提升），普通容器（idle 等）维持 `MIN_WORKER_VERSION=2.2.0`，不上调全局门禁。
 - **按 `harnessTypes` 细分的最低版本**：`agentGearMinVersion` 落库值 =
   `max(请求值, MIN_HARNESS_WORKER_VERSION, 按 harnessTypes 取最大)`；本期
-  `MIN_HARNESS_VERSION_BY_TYPE = { kimi_code: '2.8.0', deepseek_harness: '2.11.0' }`
+  `MIN_HARNESS_VERSION_BY_TYPE = { kimi_code: '2.8.0', deepseek_harness: '2.12.0' }`
   （`MIN_KIMI_HARNESS_WORKER_VERSION` / `MIN_DEEPSEEK_HARNESS_WORKER_VERSION`），
-  仅 `opencode` 的运行仍为 2.10.0；含 `deepseek_harness` 的运行取 2.11.0（原 2.9.0 口径替换，
-  header-masq 会话标识配置注入自 agent-gear 2.11.0 起）——max 语义自动收编。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
+  以 2.12.0 为底取 max 后 `opencode` / `kimi_code` / `deepseek_harness` 及其组合恒为 2.12.0
+  （`kimi_code` 的 2.8.0 低于基线；`deepseek_harness` 的 2.12.0 与基线同值）——max 语义自动收编。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
 - **支持类型白名单**：`SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code', 'deepseek_harness']`；非白名单类型返回
   `400 INVALID_HARNESS`，不创建 Job。
 - **预置工作负载映射**：`opencode → presetKey 'harness-opencode'`（迁移 006）、
@@ -407,7 +407,7 @@ Content-Type: application/json
   "harnessTypes": ["opencode", "deepseek_harness"],
   "containerApiKeyId": "<运行专用模型 Key ID>",
   "expiresAt": "2026-10-21T00:00:00.000Z",
-  "agentGearMinVersion": "2.11.0",
+  "agentGearMinVersion": "2.12.0",
   "secrets": {
     "hostEndpoint": "wss://<controller-api>",
     "hostKey": "zag_k_1_…",
@@ -417,14 +417,31 @@ Content-Type: application/json
     "modelContextLengths": "{\"model-a\":128000}",
     "defaultWorkspace": "/home/worker/workspace"
   },
-  "workloadPlan": [{ "workloadId": "<objectId>", "params": {}, "implicit": false, "required": true }]
+  "workloadPlan": [{ "workloadId": "<objectId>", "params": {}, "implicit": false, "required": true }],
+  "storage": {
+    "id": "<cloudStorageId>",
+    "pvcName": "zag-storage-<storageId>",
+    "sizeGi": 20,
+    "workspaceId": "<tenantWorkspaceId>",
+    "storageClass": "ceph-rbd",
+    "restore": { "archivePath": "/archive/<workspaceId>/<storageId>/<fileName>" }
+  }
 }
 ```
 
-- `hostId`/`refId`/`userId`/`hostName`/`harnessTypes`/`expiresAt`/`agentGearMinVersion`/`secrets`/`workloadPlan` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
+- `storage`（harness，可选）：挂载云存储为 worker 主目录 `/home/worker`。
+  - 缺省/`null` → 不挂载，行为与现状完全一致（Job manifest 无 `volumes`/`volumeMounts`/`securityContext`/`initContainers`）；
+  - `id`/`pvcName`/`workspaceId` 非空字符串；`sizeGi` 为 1~30 整数；`pvcName` 必须匹配 `^zag-storage-[a-z0-9-]+$`；
+  - `storageClass` 可选：1~63 字符且匹配 `^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`；空/缺省回退 `CLOUD_STORAGE_CLASS`，二者皆空时省略 `storageClassName`（使用集群默认 StorageClass）；
+  - `restore` 缺省/`null` = 全新挂载（不注入 initContainer）；携带时 `archivePath` 必须匹配 `^/archive/[a-f0-9]{24}/[a-f0-9]{24}/[A-Za-z0-9._-]{1,120}\.tar\.gz2$` 且不含 `..`（恢复前先删除同名残留 PVC 再按原容量/StorageClass 重建）；
+  - 非法返回 `400 INVALID_HARNESS`，不创建 Job；同一存储同时被两个活跃容器引用返回 `409 STORAGE_IN_USE`（纵深防御，互斥权威在 agent-api 的 CAS + 唯一索引）。
+
+- `hostId`/`refId`/`userId`/`hostName`/`expiresAt`/`agentGearMinVersion`/`secrets` 为 harness 必填（`refId` 即标准连接 ControllerKey ID，`containerApiKeyId` 为运行专用模型 Key ID；`secrets` 各字段非空）；缺失或非法返回 `400 INVALID_HARNESS`，不创建 Job。
+- `harnessTypes`（harness）**允许空数组**：0 个 harness 的云电脑合法（harness 为可选工作负载，可在设置-工作负载中后期补装）；非空时仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选），白名单外返回 `400 INVALID_HARNESS`。
+- `workloadPlan`（harness）**允许为空**（省略或空数组）：0 harness + 0 standard 场景合法，容器无初始化脚本直接 `online`；显式下发时校验规则同下方 `workloadPlan` 通用条款。
 - `tenantId` **可选**（滚动升级兼容）：前台用户所属租户 id，落库到 `cloudcontainers.tenantId`；旧版 agent-api 未下发时回退为 `tenantId = userId` 并记录 warn（个人租户恒等，发布顺序已保证新版 agent-api 先上线，回退仅兜底）。显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
 - `workspaceId` **可选**（多租户二期新增）：前台用户当前租户工作区 id，落库到 `cloudcontainers.workspaceId`；缺失时按同库 `workspaces` 集合以 `{tenantId, type:'global'}` 解析全局工作区回退，解析不到置 `null` 并记录 warn；显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
-- `harnessTypes` 仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 下限恒为 `2.10.0`（以 2.10.0 为底取 max），含 `deepseek_harness` 时为 `2.11.0`（见 §3.4）。
+- `harnessTypes` 非空时仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 下限恒为 `2.12.0`（以 2.12.0 为底取 max），并按 `harnessTypes` 细分类型常量上调（见 §3.4）。
 - `expiresAt` 仅落库留存（容器 TTL 留档，不再关联模型 Key 有效期；模型 Key 改为随容器回收）；Job **不再设置 `activeDeadlineSeconds`**，工作容器最长运行时间无限制，不会因到期被 K8s 强制销毁。
 - `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
 - `secrets.modelContextLengths` 为**可选**字段：`模型 ID → 最长上下文（token，正整数）` 的 JSON object 字符串（无有效条目时为 `{}`）；缺省/空串表示无上下文信息（滚动升级期间旧调用方不下发），不纳入「secrets 各字段非空」必填校验；携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传给 worker。
@@ -439,7 +456,7 @@ Content-Type: application/json
 
 **错误：**
 - `400` —— `purpose` 非法（仅接受 `idle|harness`；其余用途返回 `UNSUPPORTED_PURPOSE`「该任务类型暂未开放」）。
-- `400` `INVALID_HARNESS` —— `purpose=harness` 时缺字段/`secrets` 不完整/`harnessTypes` 为空或非白名单。
+- `400` `INVALID_HARNESS` —— `purpose=harness` 时缺字段/`secrets` 不完整/`harnessTypes` 非数组或含白名单外类型（空数组合法）。
 - `400` `INVALID_WORKLOAD` —— `workloadIds` 非数组 / 超过 10 个 / 含不存在的 ID；或 `workloadPlan` 非数组 / 超过 10 个 / `workloadId` 重复或不存在 / `params` 非对象 / `implicit` 非布尔 / `required` 非布尔。
 - `500` —— 创建 Job 失败（容器记录标记 `failed` 并保留，可被强制销毁清理）。
 
@@ -491,6 +508,14 @@ Content-Type: application/json
 
 - `source` 可选：`user` | `mcp`（缺省 `user`）。
 - 服务端按只读定义做后序 DFS 展开（依赖先行、去重、≤10），显式工作负载合并用户参数并按 `paramSchema` 校验；隐式依赖取默认参数。`required` 固定 `false`。
+- `workloadId` 可为 harness 负载（`workloadKind=harness`，可选工作负载）：安装成功后容器读模型 `harnessTypes` **追加**该负载的 `harnessType`（去重，仅成功结果；失败不追加；standard 负载不动）。
+- harness 负载安装前做**逐类型版本门禁**：所需版本 =
+  `max(MIN_HARNESS_VERSION_BY_TYPE[harnessType] ?? MIN_HARNESS_WORKER_VERSION, MIN_HARNESS_WORKER_VERSION)`，
+  与在线 worker 上报版本（`register` 的 `version`）比较；不满足返回 `400 INVALID_WORKLOAD`（可读原因）。
+  在线版本不可得（未注册/注册信息缺失）时放行并 `warn` 留痕。
+- runtime 批次与 init 批次**同口径注入云电脑初始化 env**（§2.9：`ZAG_HARNESS_TYPES` / `ZAG_MODEL_*` /
+  `ZAG_DEFAULT_WORKSPACE` 等，`purpose=harness` 时）；env 无法构建（secret 缺失/模型配置不完整）时该次安装判失败
+  并返回可读原因，不下发 `undefined` 或半套配置（沿用 T-CC13 口径）。
 - 已安装仍允许重复执行（脚本幂等）；成功结果的 `installedWorkloads` 按 `workloadId` 去重（保留首次记录）。
 
 **响应 200：** `{ "batchId": "...", "items": [{ "logId": "...", "workloadId": "...", "workloadName": "..." }] }`
@@ -527,6 +552,114 @@ Content-Type: application/json
 
 **错误：** 同 A.2.5（`INVALID_SCRIPT` 用于脚本非法）。
 
+### A.2.7 云存储 PVC 管理
+
+```
+POST /internal/storages
+Content-Type: application/json
+
+{ "storageId": "<id>", "tenantId": "<tenant>", "workspaceId": "<workspace>", "sizeGi": 20, "storageClass": "ceph-rbd" }
+```
+
+- PVC 名称由服务端生成 `zag-storage-<storageId>`（`STORAGE_PVC_PREFIX` 可配）；标签 `app=zag-storage`、`zag.cloud/storage-id|workspace-id|tenant-id`。
+- `storageId` / `tenantId` / `workspaceId` 均必填（缺失 400 `INVALID_BODY`，避免产生缺标签 PVC）。
+- 幂等：PVC 已存在且容量/StorageClass 与请求一致 → `created:false`；容量或 StorageClass 不一致 → `409 STORAGE_PVC_CONFLICT`（本期不支持扩容）。
+- `storageClass` 空则回退 `CLOUD_STORAGE_CLASS`；二者皆空时省略 `storageClassName`。
+
+**响应 200：** `{ "storageId": "...", "pvcName": "zag-storage-...", "created": true }`
+**错误：** `400 INVALID_BODY`、`409 STORAGE_PVC_CONFLICT`。
+
+```
+GET /internal/storages/:storageId
+```
+
+**响应 200：** `{ "storageId": "...", "pvcName": "zag-storage-...", "exists": true, "capacity": "20Gi", "phase": "Bound" }`
+
+```
+DELETE /internal/storages/:storageId
+```
+
+- 仍有活跃容器引用（`cloudcontainers.storageId` + 活跃状态）→ `409 STORAGE_IN_USE`；PVC 不存在按成功处理。
+
+**响应 200：** `{ "storageId": "...", "deleted": true }`
+
+```
+POST /internal/storages/:storageId/cleanup
+{ "workspaceId": "<id>", "deleteArchive": true }
+```
+
+- 删除源 PVC（若存在）并在 `deleteArchive=true` 时删除归档目录 `/archive/<workspaceId>/<storageId>/`；归档进行中 → `409 ARCHIVE_RUNNING`。
+- 与归档/恢复/用量共用按工作区归档 PVC 的串行锁。
+
+**响应 200：** `{ "accepted": true }`
+
+### A.2.8 归档触发与查询
+
+```
+POST /internal/containers/:id/archive
+{ "archiveId": "<id>", "fileName": "<hostName>-<YYYYMMDD-HHmmss>.tar.gz2" }
+```
+
+- 归档只在销毁云电脑后触发；容器仍活跃 → `409 CONTAINER_ACTIVE`；已有 `pending/running` 归档 → `409 ARCHIVE_RUNNING`（幂等返回已有 archiveId）；容器未挂载存储 → `409 NO_STORAGE`。
+- `fileName` 由 agent-api 生成（ASCII 安全化），cloud-controller 原样落库并用于归档路径。
+
+**响应 200：** `{ "accepted": true, "archiveId": "<id>" }`
+**错误：** `404 NOT_FOUND`、`409 CONTAINER_ACTIVE`、`409 ARCHIVE_RUNNING`、`409 NO_STORAGE`。
+
+```
+GET /internal/containers/:id/archive
+```
+
+**响应 200：**
+
+```jsonc
+{ "status": "NONE|PENDING|RUNNING|SUCCEEDED|FAILED",
+  "archiveId": "...", "fileName": "...", "usageBytes": 123,
+  "startedAt": "...", "finishedAt": "...", "failureReason": null }
+```
+
+### A.2.9 用量刷新
+
+```
+POST /internal/storages/:storageId/usage-refresh
+{ "containerId": "<id>" }
+```
+
+- 从云电脑 Pod 读取 `nodeName`，以 `nodeName` 直指该节点创建 du Job（只读挂载源 PVC，`du -sb` 输出 `ZAG_ARCHIVE_RESULT` 标记行），完成后回调 `/internal/cloud-storages/:id/usage`。
+- 仅 `ATTACHED` 且源 PVC 存在；容器非活跃 → `409 CONTAINER_NOT_ACTIVE`；无存储 → `409 NO_STORAGE`。
+
+**响应 200：** `{ "accepted": true }`
+
+### A.2.10 归档/用量回调（cloud-controller → agent-api）
+
+```
+POST /internal/cloud-storages/:storageId/archives
+Content-Type: application/json
+
+{
+  "archiveId": "<id>", "storageId": "<id>",
+  "cloudHostId": "<id>", "containerId": "<id>", "cloudHostName": "我的云电脑",
+  "fileName": "my-host-20261102-153012.tar.gz2",
+  "path": "/archive/<workspaceId>/<storageId>/<fileName>",
+  "status": "RUNNING|SUCCEEDED|FAILED",
+  "usageBytes": 5368709120,
+  "startedAt": "...", "finishedAt": "...", "failureReason": null,
+  // SUCCEEDED 时必填：源 PVC 是否已释放（删除失败/false 由 agent-api 记入 currentArchive 留痕）
+  "sourcePvcReleased": true
+}
+```
+
+```
+POST /internal/cloud-storages/:storageId/usage
+{ "usageBytes": 5368709120, "measuredAt": "..." }
+```
+
+- 均 Bearer `INTERNAL_API_TOKEN`；按 `archiveId` 幂等，终态单调（SUCCEEDED 后迟到的 RUNNING 忽略）；回调失败按 `0/250ms/1s/3s` 退避重试，最终失败只记 error（agent-api 以 `GET /internal/containers/:id/archive` 兜底对账）。
+- terminal 回调（websocket `container:terminal` → agent-api `/internal/cloud-hosts/:id/terminal`）报文新增
+  `storage: { "id": "<storageId>", "archiveStatus": "pending|running|succeeded|failed|null", "archiveId": "<本次归档 id>" }`；agent-api 据此把存储
+  `ATTACHED → ARCHIVING`（避免「云电脑已 STOPPED、存储仍显示已挂载」）；`archiveStatus=null` 表示未触发归档，
+  agent-api 走 `releaseStorage` 回滚；`archiveId` 用于开启新归档周期（旧周期迟到回调忽略）。未挂载存储时不携带该字段。
+
 ### A.3 CloudContainer JSON 结构
 
 | 字段 | 类型 | 说明 |
@@ -550,11 +683,23 @@ Content-Type: application/json
 | `billingStartedAt` | `string \| null` | 就绪计费起点（首次 `markOnline` 的时刻，ISO 时间戳）；`null` 表示未就绪/不计费 |
 | `hostId` | `string \| null` | 云电脑 ID（`purpose=harness`） |
 | `hostName` | `string \| null` | 云电脑用户命名 |
-| `harnessTypes` | `string[]` | harness 类型（`purpose=harness`，缺省 `[]`） |
+| `harnessTypes` | `string[]` | harness 类型（`purpose=harness`，缺省 `[]`）；读模型口径 =「创建时选定 ∪ 运行期成功安装的 harness 负载」（去重） |
 | `controllerKeyId` | `string \| null` | 标准连接使用的 ControllerKey ID |
 | `containerApiKeyId` | `string \| null` | 运行专用模型 Key ID |
 | `expiresAt` | `string \| null` | 容器 TTL 留档时间（不驱动模型 Key 失效） |
 | `installedWorkloads` | `object[]` | 容器内已安装工作负载（只增不删）；每项 `{ workloadId, name, installedAt, source }` |
+| `storageId` | `string \| null` | 挂载的云存储 ID |
+| `storagePvcName` | `string \| null` | 源 PVC 名称 |
+| `storageSizeGi` | `number \| null` | 存储容量（Gi） |
+| `storageWorkspaceId` | `string \| null` | 存储归属工作区 |
+| `storageRestorePath` | `string \| null` | 本次启动恢复的归档路径；全新挂载为 `null` |
+| `storageArchiveStatus` | `string \| null` | `pending` / `running` / `succeeded` / `failed` / `null` |
+| `storageArchiveId` | `string \| null` | 最近一次归档 ID |
+| `storageArchiveFileName` | `string \| null` | 最近一次归档文件名 |
+| `storageArchiveUsageBytes` | `number \| null` | 归档时采集的实际占用（字节） |
+| `storageArchiveStartedAt` | `string \| null` | 归档开始时间 |
+| `storageArchiveFinishedAt` | `string \| null` | 归档结束时间 |
+| `storageArchiveFailure` | `string \| null` | 归档失败原因 |
 
 > `secrets` 永不出现在列表/详情响应中。
 
@@ -655,3 +800,45 @@ cloud-controller 在容器生命周期节点写入集合 `billingoutbox`（与 a
 | `startedAt` | `string \| null` | 开始时间（ISO） |
 | `finishedAt` | `string \| null` | 结束时间（ISO） |
 | `createdAt` | `string` | 记录创建时间（ISO，用于排序） |
+
+---
+
+## 附录 B：worker 事件 `_meta` 可选字段与 Job env 注入
+
+### B.1 worker 事件报文 `_meta`（可选）
+
+`workload:run`、`workload:result`、`shutdown`、`registered`、`unregistered` 报文允许携带顶层 `_meta` 字段，用于 W3C Trace Context 传播（详见 [`observability.md`](./observability.md) §4）：
+
+```jsonc
+{
+  "…事件既有字段…": "…",
+  "_meta": {
+    "traceparent": "00-<32位trace-id>-<16位span-id>-<2位flags>"
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `_meta.traceparent` | `string` | 否 | W3C `traceparent`；无效 / 缺失时忽略（视为无链路上下文），不得报错 |
+
+- `_meta` 为平台保留位，**不写入 ACP payload**。
+- **旧 worker 忽略未知字段**：不理解 `_meta` 的 worker 行为不变；服务端发送时不得依赖 worker 回传 `_meta`。
+- 消费方**必须容忍 `_meta` 缺失**（历史报文兼容）。
+
+### B.2 Job env 注入表
+
+cloud-controller 创建云电脑（`purpose=harness`）Job 时经 `buildHarnessJobEnv` 注入以下观测相关环境变量：
+
+| 变量 | 注入条件 | 说明 |
+|------|----------|------|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | cloud-controller 已配置 `OTEL_EXPORTER_OTLP_ENDPOINT` | 采集端地址透传 |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | 同上 | 固定 `http/protobuf` |
+| `OTEL_EXPORTER_OTLP_HEADERS` | 同上且配置了 headers | 采集端鉴权；**禁止出现在任何日志** |
+| `OTEL_SERVICE_NAME` | 同上 | 固定 `agent-gear` |
+| `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` | 同上 | 采样口径与平台一致 |
+| `OTEL_RESOURCE_ATTRIBUTES` | 同上 | 追加 `zag.container.id`、`zag.cloud.host.id`、`zag.user.id`、`zag.tenant.id`、`zag.workspace.id` |
+| `ZAG_INIT_TRACEPARENT` | 同上且 `container.start` span 存在 | 创建链路 `traceparent`；容器内 `agent-gear` 将 `startup` span 以 **link**（非 parent）关联 |
+| `OTEL_SDK_DISABLED` | **未配置采集端** | 固定 `true`（容器内 SDK 完全不启动，仅注入此一项） |
+
+- 旧容器（未适配观测的 worker 版本）不识别以上变量，行为不变；不提升版本门禁。

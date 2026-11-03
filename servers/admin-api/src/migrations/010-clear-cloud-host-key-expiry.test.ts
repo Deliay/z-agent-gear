@@ -1,16 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/billing-api-key.js', () => ({
   BillingApiKey: { updateMany: vi.fn() },
 }));
 
 import { BillingApiKey } from '../models/billing-api-key.js';
-import * as migration from './010-clear-cloud-host-key-expiry';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./010-clear-cloud-host-key-expiry.js');
+childSpy.mockRestore();
 
 describe('migration 010-clear-cloud-host-key-expiry', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    testLog.reset();
     (BillingApiKey.updateMany as any).mockResolvedValue({ modifiedCount: 0 });
   });
 

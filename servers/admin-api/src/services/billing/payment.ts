@@ -165,7 +165,7 @@ export class PaymentService {
       BillingAppliedLedger.findOneAndUpdate(
         { accountId, ledgerId, walletApplied: false, claimedAt: null },
         { $set: { claimedAt: now } },
-        { new: true },
+        { returnDocument: 'after' },
       ).lean<{ walletApplied?: boolean; claimedAt?: Date | null } | null>();
 
     if (await tryClaim()) return { state: 'claimed' };
@@ -207,7 +207,7 @@ export class PaymentService {
     const takenOver = await BillingAppliedLedger.findOneAndUpdate(
       { accountId, ledgerId, walletApplied: false, claimedAt: existing.claimedAt ?? null },
       { $set: { claimedAt: now } },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean();
     return takenOver ? { state: 'stale' } : { state: 'in-flight' };
   }
@@ -239,7 +239,7 @@ export class PaymentService {
           frozenAmount: derived.frozenAmount,
         },
       },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean<IBillingAccount | null>();
     if (!doc) throw new Error('账户不存在');
     return {
@@ -289,7 +289,7 @@ export class PaymentService {
           },
         },
       ],
-      { new: true, updatePipeline: true } as never,
+      { returnDocument: 'after', updatePipeline: true } as never,
     ).lean<IBillingAccount | null>();
 
     if (!doc) {

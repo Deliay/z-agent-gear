@@ -2,24 +2,27 @@ import { config } from '../../config/index.js';
 import type { AdminOutboxPublisher } from './mq/publisher.js';
 import type { ReconciliationService } from './reconciliation.js';
 import type { SettlementTickService } from './settlement-tick.js';
+import type { MqLogger } from './mq/connection.js';
 
 export interface BillingSchedulerOptions {
   publisher: AdminOutboxPublisher;
   settlementTick: SettlementTickService;
   reconciliation: ReconciliationService;
-  logger?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void };
+  logger: MqLogger;
+  /** 云存储整点结算 tick（可选，缺省不注册，兼容既有单测构造）。 */
+  storageTick?: { tick(): Promise<unknown> };
 }
 
 /** 统一注册周期任务：outbox relay、reservation 兜底扫描、每日对账 cron。 */
 export class BillingScheduler {
   private readonly timers: NodeJS.Timeout[] = [];
-  private readonly logger: NonNullable<BillingSchedulerOptions['logger']>;
+  private readonly logger: MqLogger;
   /** 上次**成功**执行每日对账的时间（R10-11：错过 cron 分钟后按间隔补跑）。 */
   private lastReconAt: number | null = null;
   private reconRunning = false;
 
   constructor(private readonly options: BillingSchedulerOptions) {
-    this.logger = options.logger ?? console;
+    this.logger = options.logger;
   }
 
   start(): void {
@@ -28,7 +31,7 @@ export class BillingScheduler {
     // 结算兜底扫描：间隔 = 一个计费周期
     const scanTimer = setInterval(() => {
       void this.options.settlementTick.tick().catch((err) => {
-        this.logger.warn?.('[billing-scheduler] settlement sweep failed', (err as Error).message);
+        this.logger.warn({ err }, '[billing-scheduler] settlement sweep failed');
       });
     }, Math.max(5000, config.billingCycleSeconds * 1000));
     scanTimer.unref?.();
@@ -50,7 +53,7 @@ export class BillingScheduler {
         })
         .catch((err) => {
           // 失败不更新 lastReconAt：下一分钟继续补跑。
-          this.logger.warn?.('[billing-scheduler] reconciliation failed', (err as Error).message);
+          this.logger.warn({ err }, '[billing-scheduler] reconciliation failed');
         })
         .finally(() => {
           this.reconRunning = false;
@@ -58,6 +61,17 @@ export class BillingScheduler {
     }, 60_000);
     reconTimer.unref?.();
     this.timers.push(reconTimer);
+
+    // 云存储整点结算：默认 5 分钟扫描一次（STORAGE_BILLING_TICK_MS），失败不阻断后续 tick。
+    if (this.options.storageTick) {
+      const storageTimer = setInterval(() => {
+        void this.options.storageTick!.tick().catch((err) => {
+          this.logger.warn({ err }, '[billing-scheduler] storage billing tick failed');
+        });
+      }, Math.max(5000, config.storageBillingTickMs));
+      storageTimer.unref?.();
+      this.timers.push(storageTimer);
+    }
   }
 
   async stop(): Promise<void> {

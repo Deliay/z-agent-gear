@@ -23,10 +23,9 @@ describe('CommandService', () => {
 
       await commandService.sendShutdown('key123');
 
-      expect(mockRedis.publish).toHaveBeenCalledWith(
-        'controller:command',
-        JSON.stringify({ type: 'shutdown', keyId: 'key123' }),
-      );
+      expect(mockRedis.publish).toHaveBeenCalledWith('controller:command', expect.any(String));
+      const { _meta, ...shutdownBody } = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      expect(shutdownBody).toEqual({ type: 'shutdown', keyId: 'key123' });
     });
 
     it('should throw when Redis publish fails', async () => {

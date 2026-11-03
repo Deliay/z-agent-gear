@@ -14,17 +14,20 @@ import {
   canDeleteCloudHost,
   canStopCloudHost,
   cloudHostStatusDotClass,
-  cloudHostStatusLabel,
+  cloudHostStatusText,
 } from '@/components/cloud-host/cloud-host-status';
+import { cloudStorageStatusLabel } from '@/lib/cloud-storage';
 import { useHomeOverview } from '@/stores/homeOverview';
 import { useIsMobile } from '../hooks/useIsMobile';
 import MobileBackButton from '../components/MobileBackButton';
 import { Button } from '@/components/ui/button';
-import { Cloud, GitBranch } from 'lucide-react';
+import { Cloud, GitBranch, HardDrive } from 'lucide-react';
 
 interface ControllerConfigPageProps {
   controllerId: string;
   onBack: () => void;
+  /** 跳转到设置页「云存储」区块（云电脑配置页已挂载存储入口） */
+  onOpenStorage?: () => void;
 }
 
 /**
@@ -35,13 +38,18 @@ function CloudHostPanel({
   cloudHost,
   onStop,
   onDelete,
+  onOpenStorage,
 }: {
   cloudHost: CloudHostData;
   onStop: () => void;
   onDelete: () => void;
+  onOpenStorage: () => void;
 }) {
   const stoppable = canStopCloudHost(cloudHost);
   const deletable = canDeleteCloudHost(cloudHost);
+  const showStorage =
+    Boolean(cloudHost.storage) &&
+    (cloudHost.status === 'RUNNING' || cloudHost.status === 'STOPPED');
 
   return (
     <div data-testid="cloud-host-panel" className="mb-4 rounded-lg border border-border p-4">
@@ -51,7 +59,7 @@ function CloudHostPanel({
           <span className="font-medium">云电脑</span>
           <span className="flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs">
             <span className={`h-2 w-2 rounded-full ${cloudHostStatusDotClass(cloudHost.status)}`} />
-            {cloudHostStatusLabel(cloudHost.status)}
+            {cloudHostStatusText(cloudHost)}
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -82,6 +90,28 @@ function CloudHostPanel({
           <dd className="break-words">{cloudHost.harnessTypes.join(', ') || '—'}</dd>
         </div>
       </dl>
+      {showStorage && cloudHost.storage && (
+        <div
+          className="mt-3 flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-border p-3 text-sm"
+          data-testid="cloud-host-storage"
+        >
+          <HardDrive className="size-4 shrink-0" />
+          <span className="font-medium">云存储</span>
+          <span className="min-w-0 break-words text-muted-foreground">
+            {cloudHost.storage.name} · {cloudHost.storage.sizeGi}Gi ·{' '}
+            {cloudStorageStatusLabel(cloudHost.storage.status)}
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="ml-auto"
+            onClick={onOpenStorage}
+          >
+            查看云存储设置
+          </Button>
+        </div>
+      )}
       {cloudHost.failureReason && (
         <p className="mt-2 break-words text-sm text-destructive" data-testid="cloud-host-failure-reason">
           失败原因：{cloudHost.failureReason}
@@ -91,7 +121,7 @@ function CloudHostPanel({
   );
 }
 
-export default function ControllerConfigPage({ controllerId, onBack }: ControllerConfigPageProps) {
+export default function ControllerConfigPage({ controllerId, onBack, onOpenStorage }: ControllerConfigPageProps) {
   const { data: controllerData, refetch } = useQuery<GetControllersQuery>(GET_CONTROLLERS);
   const { refetch: refetchHome } = useHomeOverview();
   const controller = controllerData?.controllers.find((c) => c.id === controllerId);
@@ -148,6 +178,7 @@ export default function ControllerConfigPage({ controllerId, onBack }: Controlle
       cloudHost={cloudHost}
       onStop={() => setStopDialogOpen(true)}
       onDelete={() => setDeleteDialogOpen(true)}
+      onOpenStorage={() => (onOpenStorage ?? onBack)()}
     />
   ) : null;
 

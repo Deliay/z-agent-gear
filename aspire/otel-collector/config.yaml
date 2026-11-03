@@ -1,0 +1,32 @@
+# OTel Collector（dev/compose 共用）：OTLP 4317(gRPC)/4318(HTTP) → debug exporter。
+# debug exporter 直接把 span/metric 打到 collector stdout，`aspire start` / compose logs 直读。
+# 生产导出：取消下方 otlphttp 段注释并配置 endpoint/headers（鉴权头不入库、不入日志）。
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  debug:
+    verbosity: basic
+  # otlphttp:
+  #   endpoint: https://otlp.example.com
+  #   headers:
+  #     authorization: Bearer ${OTLP_AUTH_TOKEN}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

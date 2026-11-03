@@ -172,7 +172,7 @@ export class AccountService {
     const doc = await BillingAccount.findOneAndUpdate(
       { ownerType, ownerId },
       { $setOnInsert: { cashBalance: 0, giftBalance: 0, creditLimit: 0, frozenAmount: 0, invoiceSeq: 0, status: 'active' }, $set: { ownerName: name } },
-      { new: true, upsert: true, setDefaultsOnInsert: true },
+      { returnDocument: 'after', upsert: true, setDefaultsOnInsert: true },
     ).lean<IBillingAccount | null>();
     if (!doc) throw new Error(`failed to get-or-create billing account for ${ownerType}:${ownerId}`);
     return toAccountDTO(doc as IBillingAccount & { _id: unknown });
@@ -218,7 +218,7 @@ export class AccountService {
     const doc = await BillingAccount.findByIdAndUpdate(
       accountId,
       { $set: { creditLimit: Math.round(creditLimitCents) } },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean<IBillingAccount | null>();
     if (!doc) throw new Error('账户不存在');
     return toAccountDTO(doc as IBillingAccount & { _id: unknown });
@@ -229,7 +229,7 @@ export class AccountService {
     const doc = await BillingAccount.findByIdAndUpdate(
       accountId,
       { $set: { status } },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean<IBillingAccount | null>();
     if (!doc) throw new Error('账户不存在');
     return toAccountDTO(doc as IBillingAccount & { _id: unknown });

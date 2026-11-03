@@ -46,7 +46,7 @@ ADMIN_API_URL=http://localhost:10003/graphql \
 ADMIN_WEB_URL=http://localhost:<admin-web-port> \
 API_URL=http://localhost:10001/graphql \
 CONTROLLER_API_URL=http://localhost:35273 \
-npx playwright test
+pnpm exec playwright test
 ```
 
 > admin 套件（`admin-*.spec.ts`）需要 admin-web 与 admin-api：`aspire start && aspire wait admin-web admin-api agent-api`。
@@ -71,12 +71,13 @@ npx playwright test
 | `GITHUB_API_BASE` | Check Runs 同步展示用例（E2E-CR*）不依赖出站调用；出站行为由 `tests/api` mock GitHub 覆盖 | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 HMAC 验签密钥（可选，API 套件 HMAC 用例使用） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 地址（admin-cloud-container 套件相关断言） | `http://localhost:10004` |
+| `OTEL_*` | 可观测性导出（**可选**）：`OTEL_EXPORTER_OTLP_ENDPOINT` 未配置 = SDK 完全不启动、**零外发**，T-OBS20 日志 JSON 冒烟不依赖采集端即通过；trace 贯通用例在 SDK 未启用（日志全量无 `trace_id`）时**明确 skip 并输出指引**；完整 env 契约见 `contracts/observability.md` §3 | -（可选） |
 
 > 所有套件共享同一套服务与 Mongo：admin 套件会轮换共享管理员（admin）口令、清理全局供应商，因此**必须在 `playwright.config.ts` 中强制 `workers: 1`、`fullyParallel: false` 串行执行**（已写死，勿覆盖为并发），否则用例互相污染：
 
 ```bash
 ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-uri> \
-  npx playwright test admin-*.spec.ts --workers=1
+  pnpm exec playwright test admin-*.spec.ts --workers=1
 ```
 
 > 注意: 所有端口由 Aspire 动态分配，请在 `aspire describe` 输出中查看实际端口。
@@ -137,10 +138,10 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-WS3 工作区管理仅 admin | admin 在 `/workspaces` 可新建工作区并即时出现在列表；developer 直达该页显示「仅租户管理员可访问工作区管理（开发角色无入口）」且无新建按钮 |
 | E2E-WS4 租户成员管理 | admin 在 `/tenants/:id/members` 搜索帐号并添加（默认开发）→ 尝试移除唯一管理员提示「至少保留一名管理员」→ 变更角色为管理员；developer 直达显示无权限提示 |
 | E2E-WS5 个人用户零感知 | 仅个人租户用户登录后无 `workspace-switcher`、无工作区管理入口 |
-| E2E-WS6 developer 全局只读 | developer 选择团队全局工作区后，设置页 `workspace-context-banner` 展示「全局工作区 / 只读」与「编辑入口已隐藏」，Commit 设置提示不可修改 |
-| E2E-WS2b 改名 / 非空删除 / 成员 | 工作区行「改名」→ 重命名后列表即时更新；「成员」弹窗添加 developer（列表出现 `@username`）→ 移除后消失；写入本工作区 Commit 设置后「删除」被拒并提示「工作区非空（仍持有资源），无法删除」，工作区保留 |
+| E2E-WS6 developer 全局只读 | developer 选择团队全局工作区后，设置页 `workspace-context-banner` 展示「全局工作区 / 只读」与「编辑入口已隐藏」；Commit 设置已为成员级，`#git-section` 仍可见且「保存 Git 设置」可用（旧文案「不可修改 Commit 设置」不再出现） |
+| E2E-WS2b 改名 / 非空删除 / 成员 | 工作区行「改名」→ 重命名后列表即时更新；「成员」弹窗添加 developer（列表出现 `@username`）→ 移除后消失；在本工作区创建供应商后「删除」被拒并提示「工作区非空（仍持有资源），无法删除」，工作区保留（Commit 设置已非工作区资源，不再用于构造非空） |
 | E2E-WS3b 资源来源徽标 | 团队全局工作区创建的供应商在普通工作区设置页展示 `resource-source-badge`「全局工作区」；本工作区创建的供应商展示「本工作区」 |
-| E2E-WS4b Commit 三态 | 普通工作区设置页 `commit-settings-source`：双未设置 →「未设置」；仅全局设置 →「继承自全局工作区」；本工作区设置 →「本工作区」 |
+| E2E-WS4b 成员级 Commit 设置一致 | 在普通工作区保存自定义提交人 → 设置页回显；切到团队全局工作区仍回显同一份成员设置（无「继承自全局工作区/本工作区」三段语义，`commit-settings-source` 已下线） |
 
 ### 后台 team 租户 E2E (`admin-team-tenant.spec.ts` E2E-TT)
 
@@ -152,17 +153,20 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-TT2 成员协作可见资源 | 后台 API 建 team + owner(admin)/member(developer) → owner 在团队全局创建普通工作区、把 member 加入并创建供应商（mock LLM 校验连通性）→ member 登录后切换器含该工作区，设置页可见 owner 创建的供应商且徽标「本工作区」 |
 | E2E-TT3 团队计费口径 | 后台为 team 租户充值 10 credits → owner 在团队全局「我的费用」看到「可用余额 10.00」；切回个人工作区显示 0.00（个人余额不受团队扣费影响）。最小断言：真实创建云电脑扣费依赖 HARNESS_ENABLED，已由 tests/api T-B2 / cloud-host-charges / cloud-host-billing-quote 覆盖 |
 
-### Settings Commit 作者 E2E (`settings-commit-author.spec.ts`)
+### Settings Git E2E (`settings-git.spec.ts`)
 
-> 仅前端交互与文案；`commitSettings` / `updateCommitSettings` / `githubAccounts` 经 `page.route` mock，
-> 不依赖真实 GitHub 与云容器。容器内真实提交身份由 `agent-controller` 单测与人工验收覆盖。
+> 仅前端交互与文案；`commitSettings` / `updateCommitSettings` / `personalGithubAccounts` 经 `page.route` mock，
+> 不依赖真实 GitHub 与云容器。区块为 `#git-section`（标题「Git」+ 提示「仅对云电脑环境生效」），
+> 提交人为成员级二选一（自定义 / 未设置），并有「与 bot 共同提交」勾选项（仅自定义可用），样式对齐 `settings-github-binding.spec.ts`。
 
 | 测试 | 描述 |
 |------|------|
-| E2E-1 | 「GitHub 绑定」下方出现「Commit 设置」与常驻提示「设置只对云容器环境生效」；四模式 / 三提交人可切换并保存成功 toast |
-| E2E-2 | Co-Author / 仅人类 + 提交人未设置 → 禁用保存并提示「请先设置提交人」；自定义空用户名 / 非法邮箱拦截 |
-| E2E-3 | 提交人条件渲染：Github帐号下拉（org 不出现）、未绑定引导「请先绑定 Github 帐号」、自定义用户名 + 邮箱输入 |
-| E2E-4 | 双未设置保存 / 刷新回显一致（未设置零回归） |
+| E2E-GIT1 | 「Git」区块与云电脑提示可见；`提交人` 自定义/未设置可切换并保存成功 toast「对成员的会话/工作流 Worktree 生效」；页面不再出现「Commit 设置」与「提交人模式」 |
+| E2E-GIT2 | 「导入Github帐号信息」弹窗列出 `personalGithubAccounts`（头像 + 帐号名）→ 选择后回填用户名=login、邮箱=`<githubUserId>+<login>@users.noreply.github.com`，可继续编辑并保存 |
+| E2E-GIT2b | 无个人绑定时弹窗空态「先到『GitHub 绑定』绑定帐号」，不渲染帐号列表 |
+| E2E-GIT3 | 自定义校验：空用户名 / 非法邮箱 / 双空 → 提示「提交人用户名或邮箱格式不正确」且保存禁用，不发起 `updateCommitSettings` |
+| E2E-GIT4 | 存量等价回显：`commitSettings` 返回 custom 的 login + noreply 邮箱 → 表单回显一致，直接保存提交值与回显值相同（刷新后仍一致） |
+| E2E-CB1 | 「与 bot 共同提交」默认不勾选；未设置提交人时置灰并提示「设置提交人后可勾选」；自定义勾选后保存 `commitWithBot=true`，刷新后回显勾选 |
 
 ### Settings LLM E2E (`settings-llm.spec.ts`)
 
@@ -280,6 +284,36 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-CREN7 窄视口溢出 | 375px 下超长代码/差异 → `scrollWidth - clientWidth ≤ 1` |
 | E2E-CREN8 导出 | 点击导出对话 → download 事件触发、文件名 `session-*.md` 且内容包含会话文本 |
 | E2E-CREN9 长会话导出拉全历史 | 注入 30 条后重载（首帧仅 25 条）→ 导出文件包含全部 30 条，验证分页补历史 |
+
+### Sidebar Phase 4 E2E (`sidebar-phase4.spec.ts`)
+
+> UI 优化四期侧边栏套件：fake controller + GraphQL setup（`phase4-helpers.ts` 统一注册主机/工作区/会话/实例）；分区展开态与宽度持久化走 localStorage。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-UI4S1 折叠分区默认态 | 四分区存在；「工作流」「会话」默认展开、「主机」「网关」默认折叠；点击标题行切换且刷新后保持 |
+| E2E-UI4S2 跨环境聚合 | 两主机的会话/工作流出现在同一「会话」「工作流」列表；条目点击直达对应会话 |
+| E2E-UI4S3 空态收敛 | 无会话/无工作流/无网关时展开后内容区为空，无「无会话」等占位文字 |
+| E2E-UI4S4 拖拽调宽 | 拖动分界线宽度变化且 clamp 在 240–448px；刷新后保持；双击恢复默认 320px |
+| E2E-UI4S5 主机树层级 | 下级缩进为 8px（0.5rem）；设置按钮可点击进入配置页 |
+| E2E-UI4S6 移动端不回归 | 移动视口无 Resizer，且 `scrollWidth - clientWidth ≤ 1` |
+
+### Workflow Graph Phase 4 E2E (`workflow-graph.spec.ts`)
+
+> 工作流图表套件：BLANK 来源实例化三节点图（人类 → 人类 → AI），状态/黑板/追加提示词/PR 关联用 MONGODB_URI 直写构造；动态行与 token 用 fake controller `acp:message` 注入 `SessionUpdate`，完成节点经 `completeCurrentNode` MCP relay。缺少 MONGODB_URI 时整体跳过。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-UI4G1 竖向布局与画布占满 | 默认图表视图节点自上而下（y 坐标单调）；画布高度 ≥ 480px 且占视图区主要高度 |
+| E2E-UI4G2 卡片主题跟随 | 深色主题下节点卡片计算样式背景非纯白；切回浅色即时跟随 |
+| E2E-UI4G3 状态整体配色 | REJECT 与 FAILED 脊色互异；REWORK 徽标带 `animate-pulse`，REJECT 静态 |
+| E2E-UI4G4 连线 | 边 strokeWidth ≥ 2 且 marker-end 箭头存在 |
+| E2E-UI4G5 人类节点就地操作 | 图表卡片输入 → 「完成」→ 节点推进；「打回」填理由 → 上游节点返工 |
+| E2E-UI4G6 人类节点详情抽屉 | 点击节点头部 → 侧边抽屉展示详情；Esc 关闭后回到原视图 |
+| E2E-UI4G7 进行中动态行 | 注入 `agent_thought_chunk`/`tool_call`/`agent_message_chunk` → 动态行分别显示「思考中」/工具调用标题/「总结中」；无消息显示「等待消息」 |
+| E2E-UI4G8 完成态 token | 注入 `usage_update` 后经 MCP 完成节点 → 「已完成 · 消耗 N tokens」 |
+| E2E-UI4G9 资源上图 | 黑板/PR/追加提示词小卡片与所属节点关联；未归属条目进实例资源行；垃圾桶不渲染；图表视图右栏资源树隐藏；点击开抽屉 |
+| E2E-UI4G10 徽标行 | 有 PR/检查项/返工记录的节点徽标可见且 PR 可点；无对应信息不渲染 |
 
 ### Port Forward E2E (`port-forward.spec.ts`)
 
@@ -469,7 +503,8 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| T-AW2/T-AW3/T-AW4 | 新建入口、名称/harness 必填、无存储参数、选 1 提示「就绪后不会自动创建会话，需先创建或绑定工作区」、提交后 Sidebar 云图标 + 启动中 |
+| T-AW2/T-AW3/T-AW4 | 新建入口、名称必填、harness 可选（0 个可提交，提示「可不选，之后在设置-工作负载中补装」）、无存储参数、选 1 提示「就绪后不会自动创建会话，需先创建或绑定工作区」、提交后 Sidebar 云图标 + 启动中 |
+| T-AW-HARNESS | 创建 0-harness 云电脑成功（`harnessTypes=[]`、不默认建会话）；设置-工作负载展示「云电脑（Harness）」分组与「可选」徽标，运行中未安装可发起安装、无卸载入口（需 `MONGODB_URI` 推进 RUNNING） |
 | E2E-1 | 普通创建不预置默认工作区、不自动建会话；ready 后展示无工作区提示，defaultSessionId/workspaceId 为 null |
 | P10-CH1 | 未选 Github 项目 → 不弹四阶段进度框；ready 后 phase2 语义（无默认工作区/无默认会话，sessions=0） |
 | P10-CH2 | 选 Github 项目 → 四阶段进度；成功后进入项目会话、回填 defaultSessionId、无空默认会话 |
@@ -486,3 +521,18 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 - `src/github-workload.spec.ts`：`HARNESS_ENABLED=true` 时通过 API 创建云主机，验证工作区 Github 图标、设置弹窗默认前缀 `~/workspace`（无默认工作区时预填，预览展开为 `/home/worker/workspace`）、前缀语义文案（最终地址 = `<前缀>/<owner>/<repo>`）、Github 工作负载固定勾选与未绑定账号引导；不调用真实 GitHub，成功 clone/凭据/会话链路依赖单测与部署侧手工验收。
 - `src/cloud-host.spec.ts`：新建云电脑弹窗断言 `cloudHostWorkloadCatalog` 的真实数据（Aspire/Docker/.NET 可见、Aspire 依赖文案、勾选 Docker 出现耗时提示），再提交创建；K8S 关闭时只断言到「启动中」，不做就绪断言。
+
+## 日志与可观测性（T-OBS20，`src/observability.spec.ts`）
+
+| 测试 | 描述 |
+|------|------|
+| T-OBS20 日志 JSON 冒烟 | compose/Aspire 启动后四服务（agent-api / controller-api / admin-api / cloud-controller）首屏日志**每行可 `JSON.parse`**（字段 `level/time/service/msg` 齐备）；一次 GraphQL 请求的 `trace_id` 在 agent-api 与 admin-api 日志中**同时出现**（跨服务链路串通；SDK 未启用即日志全量无 `trace_id` 时该用例**明确 skip 并输出指引**，不假装通过）。最坏耗时（多次 `docker compose logs` 回落）超默认 30s，文件级 `test.setTimeout(60000)` |
+
+> `OTEL_*` 环境变量**可选**：未配置 `OTEL_EXPORTER_OTLP_ENDPOINT` = SDK 完全不启动、零外发，日志 JSON 冒烟不依赖采集端即通过（日志不受采样/导出影响）；trace 贯通用例在检测不到 SDK（请求后日志全量无 `trace_id`）时**明确 skip 并输出指引**；如需验证 span 导出，另行配置 endpoint 并查看 collector 输出。字段字典 / 传播规则见 `contracts/observability.md`。
+
+> 日志获取（任一可用即跑，全部不可得时用例**明确 skip 并输出指引**）：`AGENT_API_LOG_FILE` / `ADMIN_API_LOG_FILE` / `CONTROLLER_API_LOG_FILE` / `CLOUD_CONTROLLER_LOG_FILE`（日志文件路径），或 `OBSERVABILITY_LOG_DIR`（目录下 `<service>.log`），或 `docker compose logs <service>`（`OBS_LOGS_DISABLE_DOCKER=1` 关闭该回落，`COMPOSE_FILE` 指定 compose 文件）。trace 关联用例另需 `INTERNAL_API_TOKEN`（或 `ADMIN_INITIAL_PASSWORD` / `MONGODB_URI` 归一化管理员口令）以构造跨服务请求链。
+
+## 云存储（`src/cloud-storage.spec.ts`）
+
+- E2E-CS1/CS2：设置-云存储创建（报价全价/归档半价）→ 新建云电脑挂载 → 已挂载存储不再出现在可挂载下拉且无销毁入口 → 停止云电脑归档（`ARCHIVED` 且半价）→ 销毁 → 主列表移除、「已销毁」折叠区默认折叠、展开后可见。
+- 依赖：`HARNESS_ENABLED=true`、`CLOUD_STORAGE_ENABLED`（缺省 true）、`INTERNAL_API_TOKEN`（ready/归档回调模拟）、`MONGODB_URI`（测试用户充值）；`K8S_ENABLED=false` 时归档由 InMemory Job 完成，真实恢复/压缩由内网集群手工验收覆盖。

@@ -121,7 +121,18 @@ export function injectUpdate(query: AnyQuery): void {
   const setOnInsert = doc.$setOnInsert;
   if (setOnInsert && typeof setOnInsert === 'object') {
     const insertObj = setOnInsert as Record<string, unknown>;
-    if (insertObj.userId !== undefined && insertObj.tenantId === undefined) {
+    // `$set` / 顶层 / `$setOnInsert` 已显式写 tenantId 时不得再注入，
+    // 否则同一路径出现在两个操作符里会触发 MongoDB ConflictingUpdateOperators（code 40），
+    // 例如 GitHub 绑定：$set.tenantId + $setOnInsert.userId。
+    const tenantIdAlreadySet =
+      setObj?.tenantId !== undefined ||
+      doc.tenantId !== undefined ||
+      insertObj.tenantId !== undefined;
+    if (
+      insertObj.userId !== undefined &&
+      insertObj.userId !== null &&
+      !tenantIdAlreadySet
+    ) {
       doc.$setOnInsert = { ...insertObj, tenantId: resolveTenantId(insertObj.userId) };
     }
   }

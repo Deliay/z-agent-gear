@@ -67,6 +67,18 @@ var redis = builder.AddRedis("redis")
         service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/redis:8.6";
     });
 
+// OTel 采集端（dev 与 compose 共用）：OTLP 4317(gRPC)/4318(HTTP) → debug exporter（dev 直读
+// collector stdout）。配置挂载 aspire/otel-collector/config.yaml（otlphttp 生产导出段为注释态）。
+builder.AddContainer("otel-collector", "otel/opentelemetry-collector-contrib", "latest")
+    .WithBindMount("../otel-collector/config.yaml", "/etc/otelcol-contrib/config.yaml", isReadOnly: true)
+    .WithEndpoint(targetPort: 4317, port: 4317, name: "otlp-grpc", scheme: "http")
+    .WithEndpoint(targetPort: 4318, port: 4318, name: "otlp-http", scheme: "http")
+    .PublishAsDockerComposeService((resource, service) =>
+    {
+        service.Name = "otel-collector";
+        service.Restart = "unless-stopped";
+    });
+
 // 计费事件骨干（费用中心）：topic exchange + 重试/DLQ；本地 dev 与 compose 均复用同一 RabbitMQ。
 // 仅当显式 RABBITMQ_DISABLED=true 时跳过（无镜像的受限环境跑其余服务；MQ 客户端会自行重试并降级）。
 var rabbitmqDisabled = string.Equals(
@@ -109,8 +121,20 @@ var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app
 var githubAppPrivateKeyValue = File.Exists(githubAppPrivateKeyPath) ? File.ReadAllText(githubAppPrivateKeyPath) : "";
 var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret: true, value: githubAppPrivateKeyValue);
 
+// 可观测性（contracts/observability.md）：otel-endpoint 空 = SDK 完全关闭、零外发；
+// 本地 dev 默认指向 otel-collector 的 4318（publish 默认空，由部署方显式配置）。
+var otelEndpoint = builder.AddParameter(
+    "otel-endpoint",
+    value: builder.ExecutionContext.IsPublishMode ? "" : "http://localhost:4318");
+var otelSampleArg = builder.AddParameter("otel-sample-arg", value: "1.0");
+var logLevel = builder.AddParameter("log-level", value: "info");
+
 var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controller-api", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
@@ -122,7 +146,11 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
     });
 
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
     .WithEnvironment("JWT_SECRET", jwtSecret)
     .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret)
@@ -144,7 +172,7 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     });
 
 var internalApiToken = builder.AddParameter("internal-api-token", secret: true, value: SecretOrDefault("internal-api-token"));
-var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zag/worker:latest");
+var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zero-tools/worker:latest");
 var publicWsEndpoint = builder.AddParameter("public-ws-endpoint", value: "localhost:10004");
 // 前台云电脑开关：publish 默认关闭（灰度时置 true）；dev 固定 true 便于联调。
 var harnessEnabled = builder.AddParameter("harness-enabled", value: "false");
@@ -154,7 +182,11 @@ var adminApiUrl = builder.AddParameter("admin-api-url", value: "http://localhost
 // cloud-controller / admin-api 的发布镜像已构建为 dist（见各自 Dockerfile），
 // 运行时不依赖 tsx；NODE_OPTIONS=--import tsx 仅在本地 dev（直跑 TS 源码）时注入。
 var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/cloud-controller", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("K8S_NAMESPACE", "zag-cloud")
     .WithEnvironment("WORKER_IMAGE", workerImage)
     .WithEnvironment("PUBLIC_WS_ENDPOINT", publicWsEndpoint)
@@ -164,6 +196,16 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
     .WithEnvironment("WORKLOAD_LOG_MAX_BYTES", "262144")
     // 云电脑 Job 临时存储上限（仅 limits，不设 requests）
     .WithEnvironment("JOB_EPHEMERAL_STORAGE", "10Gi")
+    // 云存储（需求 #405）：dev 默认 K8S_ENABLED=false 走 InMemory，补齐 env 便于 API/E2E 全链路 mock；
+    // 空 StorageClass → 省略 storageClassName（集群默认，dev 无真实集群亦不影响）。
+    .WithEnvironment("CLOUD_STORAGE_CLASS", "")
+    .WithEnvironment("CLOUD_ARCHIVE_STORAGE_CLASS", "")
+    .WithEnvironment("CLOUD_ARCHIVE_PVC_SIZE", "100Gi")
+    .WithEnvironment("CLOUD_ARCHIVE_ACCESS_MODE", "ReadWriteOnce")
+    .WithEnvironment("ARCHIVER_IMAGE", "core.harbor.internal.fffdan.com/zero-tools/archiver:latest")
+    .WithEnvironment("ARCHIVE_TIMEOUT_MS", "1800000")
+    .WithEnvironment("STORAGE_PVC_PREFIX", "zag-storage-")
+    .WithEnvironment("ARCHIVE_PVC_PREFIX", "zag-archive-")
     // 本地开发默认不依赖真实集群（InMemoryK8sClient）；publish 覆盖为 true
     .WithEnvironment("K8S_ENABLED", "false")
     .WithReference(mongodb)
@@ -176,14 +218,22 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
 if (rabbitmq is not null) cloudController.WithReference(rabbitmq);
 
 var agentController = builder.AddNodeApp("agent-controller", "../../packages/agent-controller", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("ZAG_SERVER_ENDPOINT", controllerApi.GetEndpoint("http"))
     .WithExplicitStart()
     .WaitFor(controllerApi)
     .ExcludeFromManifest();
 
 var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/index.ts")
+    .WithPnpm()
     .WithEnvironment("ADMIN_JWT_SECRET", adminJwtSecret)
+    .WithEnvironment("LOG_LEVEL", logLevel)
+    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
+    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("CREDENTIAL_ENCRYPTION_KEY", credentialEncryptionKey)
     .WithEnvironment("ADMIN_INITIAL_PASSWORD", adminInitialPassword)
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
@@ -224,6 +274,7 @@ if (!builder.ExecutionContext.IsPublishMode)
     adminApi.WithEnvironment("NODE_OPTIONS", "--import tsx");
 
     var agentWeb = builder.AddViteApp("agent-web", "../../apps/agent-web")
+        .WithPnpm()
         .WithEnvironment("VITE_CONTROLLER_API_URL", controllerApi.GetEndpoint("http"))
         .WithEnvironment("VITE_API_URL", agentApi.GetEndpoint("http"))
         .WithReference(agentApi)
@@ -240,6 +291,7 @@ if (!builder.ExecutionContext.IsPublishMode)
     adminApi.WithHttpEndpoint(port: 10003, env: "PORT");
     cloudController.WithHttpEndpoint(port: 10004, env: "PORT");
     var adminWeb = builder.AddViteApp("admin-web", "../../apps/admin-web")
+        .WithPnpm()
         .WithEnvironment("VITE_ADMIN_API_URL", adminApi.GetEndpoint("http"));
 }
 else

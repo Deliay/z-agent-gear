@@ -44,6 +44,8 @@ export const config = {
   containerDepositCredits: parsePositiveInt(process.env.CONTAINER_DEPOSIT_CREDITS, 5),
   // 欠费宽限（毫秒，默认 10 分钟）
   billingArrearsGraceMs: parsePositiveInt(process.env.BILLING_ARREARS_GRACE_MS, 600000),
+  // 云存储整点结算扫描间隔（毫秒，默认 5 分钟）
+  storageBillingTickMs: parsePositiveInt(process.env.STORAGE_BILLING_TICK_MS, 300000),
   // 计量缺失兜底：输出 token 估算上限
   modelDefaultMaxOutputTokens: parsePositiveInt(process.env.MODEL_DEFAULT_MAX_OUTPUT_TOKENS, 1024),
   // 网关预检输入估算（R10-1）：按 UTF-8 字节数 / 该倍率估算 token。

@@ -12,6 +12,7 @@ import { workflowTypeDefs } from './workflow.js';
 import { homeTypeDefs } from './home.js';
 import { billingTypeDefs } from './billing.js';
 import { cloudHostTypeDefs } from './cloud-host.js';
+import { cloudStorageTypeDefs } from './cloud-storage.js';
 import { workspaceTypeDefs } from './workspace.js';
 
 const baseTypeDefs = `#graphql
@@ -20,4 +21,4 @@ const baseTypeDefs = `#graphql
   type Mutation
 `;
 
-export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, gatewayTypeDefs, todoTypeDefs, mcpServerTypeDefs, githubTypeDefs, workflowTypeDefs, homeTypeDefs, billingTypeDefs, cloudHostTypeDefs, workspaceTypeDefs];
+export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, gatewayTypeDefs, todoTypeDefs, mcpServerTypeDefs, githubTypeDefs, workflowTypeDefs, homeTypeDefs, billingTypeDefs, cloudHostTypeDefs, cloudStorageTypeDefs, workspaceTypeDefs];

@@ -1,4 +1,8 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+import { ensureIndex } from './index-utils.js';
+
+const log = logger.child({ component: 'migration/015-team-workspaces' });
 
 export const name = '015-team-workspaces';
 
@@ -14,6 +18,8 @@ export interface WorkspaceIdCollection {
   field: 'workspaceId' | 'resourceWorkspaceId';
   /** 仅回填自定义行（内置模板 resourceWorkspaceId 恒 null，F9） */
   customOnly?: boolean;
+  /** 工作区字段存储类型（String 口径集合写字符串，其余写 ObjectId） */
+  idType?: 'string';
 }
 
 /**
@@ -28,8 +34,8 @@ export const WORKSPACE_ID_COLLECTIONS: readonly WorkspaceIdCollection[] = [
   { collection: 'configuredworkflows', model: 'ConfiguredWorkflow', field: 'resourceWorkspaceId' },
   { collection: 'workflowinstances', model: 'WorkflowInstance', field: 'resourceWorkspaceId' },
   { collection: 'workflowtemplates', model: 'WorkflowTemplate', field: 'resourceWorkspaceId', customOnly: true },
-  { collection: 'githubaccounts', model: 'GitHubAccount', field: 'workspaceId' },
-  { collection: 'user_commit_settings', model: 'UserCommitSetting', field: 'workspaceId' },
+  { collection: 'githubaccounts', model: 'GitHubAccount', field: 'workspaceId', idType: 'string' },
+  { collection: 'user_commit_settings', model: 'UserCommitSetting', field: 'workspaceId', idType: 'string' },
 ];
 
 /**
@@ -125,7 +131,7 @@ export async function run(): Promise<void> {
   for (const workspace of globalWorkspaces) {
     globalByTenant.set(stringifyId(workspace.tenantId), stringifyId(workspace._id));
   }
-  console.log(`[Migration 015] global workspaces: ${globalByTenant.size}`);
+  log.info({ globalWorkspaces: globalByTenant.size }, 'global workspaces counted');
 
   // ---- 步骤 2：tenantmembers 回填 ----
   const adminSeeded = new Set<string>();
@@ -162,15 +168,19 @@ export async function run(): Promise<void> {
       { $set: { role: 'admin', updatedAt: new Date() } },
     );
   }
-  console.log('[Migration 015] tenantmembers backfilled');
+  log.info('tenantmembers backfilled');
 
   // ---- 步骤 3：9 集合工作区维度 backfill ----
   for (const target of WORKSPACE_ID_COLLECTIONS) {
     const collection = mongoose.connection.collection(target.collection);
     const backfilled = await backfillWorkspaceField(collection, target, globalByTenant);
-    // 索引：租户+工作区复合索引（幂等）
-    await collection.createIndex({ tenantId: 1, [target.field]: 1 });
-    console.log(`[Migration 015] ${target.collection}: backfilled ${backfilled} rows`);
+    // 索引：租户+工作区复合索引（幂等，兼容 Mongoose 默认名抢先建索）
+    await ensureIndex(
+      collection,
+      { tenantId: 1, [target.field]: 1 },
+      { name: `tenantId_1_${target.field}_1` },
+    );
+    log.debug({ collection: target.collection, backfilled }, 'collection workspace backfilled');
   }
 
   // ---- 步骤 4：索引切换（先建新 → 再删旧）----
@@ -179,7 +189,7 @@ export async function run(): Promise<void> {
   // ---- 步骤 5：providers/models 按租户复制 ----
   await copyProvidersAndModels(globalByTenant);
 
-  console.log('[Migration 015] completed');
+  log.info('migration completed');
 }
 
 async function backfillWorkspaceField(
@@ -207,10 +217,14 @@ async function backfillWorkspaceField(
       const tenantId = row.tenantId ?? row.userId;
       const workspaceId = globalByTenant.get(stringifyId(tenantId));
       if (!workspaceId) continue;
+      // githubaccounts / user_commit_settings 的 workspaceId 是 String 口径（F8），
+      // 其余集合是 ObjectId；写错类型会让 workspace-scope 的字符串过滤匹配不到。
+      const workspaceValue =
+        target.idType === 'string' ? workspaceId : new mongoose.Types.ObjectId(workspaceId);
       operations.push({
         updateOne: {
           filter: { _id: row._id },
-          update: { $set: { [target.field]: new mongoose.Types.ObjectId(workspaceId) } },
+          update: { $set: { [target.field]: workspaceValue } },
         },
       });
     }
@@ -224,21 +238,26 @@ async function backfillWorkspaceField(
 
 async function switchIndexes(): Promise<void> {
   const providers = mongoose.connection.collection('providers');
-  await providers.createIndex(
+  await ensureIndex(
+    providers,
     { tenantId: 1, workspaceId: 1, name: 1 },
     { unique: true, name: 'uniq_provider_tenant_workspace_name', partialFilterExpression: { scope: 'user' } },
   );
-  await providers.createIndex(
+  await ensureIndex(
+    providers,
     { name: 1 },
     { unique: true, name: 'uniq_provider_global_name', partialFilterExpression: { scope: 'global' } },
   );
   await dropIndexSafe(providers, 'scope_1_name_1');
 
   const models = mongoose.connection.collection('models');
-  await models.createIndex({ tenantId: 1, workspaceId: 1 }, { name: 'tenantId_1_workspaceId_1' });
+  await ensureIndex(models, { tenantId: 1, workspaceId: 1 }, { name: 'tenantId_1_workspaceId_1' });
 
   const commitSettings = mongoose.connection.collection('user_commit_settings');
-  await commitSettings.createIndex(
+  // Mongoose 的字段级 index:true 可能已用默认名（userId_1 / workspaceId_1）建过同键索引，
+  // ensureIndex 会先清理同键旧索引再按固定名重建，避免 IndexOptionsConflict（code 85）。
+  await ensureIndex(
+    commitSettings,
     { workspaceId: 1 },
     { unique: true, name: 'uniq_workspace_commit_setting' },
   );
@@ -247,19 +266,20 @@ async function switchIndexes(): Promise<void> {
   await dropIndexSafe(commitSettings, 'tenantId_1_userId_1');
 
   const githubAccounts = mongoose.connection.collection('githubaccounts');
-  await githubAccounts.createIndex(
+  await ensureIndex(
+    githubAccounts,
     { tenantId: 1, workspaceId: 1, githubUserId: 1 },
     { unique: true, name: 'uniq_github_account_tenant_workspace_user' },
   );
   await dropIndexSafe(githubAccounts, 'tenantId_1_userId_1_githubUserId_1');
 
-  console.log('[Migration 015] indexes switched');
+  log.info('indexes switched');
 }
 
 async function dropIndexSafe(collection: Collection, indexName: string): Promise<void> {
   try {
     await collection.dropIndex(indexName);
-    console.log(`[Migration 015] dropped index ${indexName}`);
+    log.debug({ indexName }, 'dropped index');
   } catch (err) {
     const message = (err as Error).message ?? '';
     if (!/index not found|ns not found/i.test(message)) {
@@ -285,14 +305,15 @@ async function copyProvidersAndModels(globalByTenant: Map<string, string>): Prom
     : [];
 
   if (sourceProviders.length === 0 && sourceModels.length === 0) {
-    console.log('[Migration 015] providers/models: no shared rows to copy');
+    log.info('providers/models: no shared rows to copy');
     return;
   }
 
   const expectedProviders = sourceProviders.length;
   const expectedModels = sourceModels.length;
-  console.log(
-    `[Migration 015] providers/models copy: providers=${expectedProviders} models=${expectedModels} tenantWorkspaces=${globalByTenant.size}`,
+  log.info(
+    { providers: expectedProviders, models: expectedModels, tenantWorkspaces: globalByTenant.size },
+    'providers/models copy expected counts',
   );
 
   const legacyProviderIds = new Set(sourceProviders.map((p) => stringifyId(p._id)));
@@ -378,7 +399,8 @@ async function copyProvidersAndModels(globalByTenant: Map<string, string>): Prom
   if (originalProviderIds.length > 0) {
     await providers.deleteMany({ _id: { $in: originalProviderIds } });
   }
-  console.log(
-    `[Migration 015] deleted shared rows: providers=${originalProviderIds.length} models=${originalModelIds.length}`,
+  log.info(
+    { providers: originalProviderIds.length, models: originalModelIds.length },
+    'deleted shared rows',
   );
 }

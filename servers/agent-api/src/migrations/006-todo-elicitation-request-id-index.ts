@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/006-todo-elicitation-request-id-index' });
 
 export const name = '006-todo-elicitation-request-id-index';
 
@@ -14,5 +17,5 @@ export async function run(): Promise<void> {
     { 'elicitationData.requestId': 1 },
     { name: 'elicitation_request_id' },
   );
-  console.log('[Migration 006] Ensured index elicitation_request_id on todoitems');
+  log.info('ensured index elicitation_request_id on todoitems');
 }

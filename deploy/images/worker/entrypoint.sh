@@ -5,9 +5,16 @@
 # - 退出码 42（服务端终止：unregistered / 非失败类 shutdown / INVALID_TOKEN）→ 停止保活、入口 0；
 # - 其余退出（0 / 1 / 信号 / 被误杀）→ 退避 1/2/5/10/30s → 自更新 → 重启；
 # - PID 1 保持 root；agent-gear / npm / node 一律经 run_as_worker() 以 worker 身份执行
-#   （root 环境没有 nodejs），显式构造 HOME/USER/LOGNAME/NVM_DIR/PATH；
+#   （root 环境没有 nodejs），显式构造 HOME/USER/LOGNAME/NVM_DIR/PNPM_HOME/PATH；
 # - stdout/stderr 实时透传；stderr 流式扫描仅记录 VERSION_MISMATCH 标记（0 字节）；
 # - 作为 PID 1 向当前子进程转发 SIGTERM/SIGINT，销毁后不重启、不自更新。
+#
+# pnpm 口径（docs/engineering/plan/20261029-feat-pnpm-workload-and-harness-optional.md）：
+# - 启动时 ensure_pnpm 预装固定版本 pnpm（幂等、失败仅告警不阻断保活；工作负载脚本自带
+#   npm 自举回退兜底存量容器）；
+# - PNPM_HOME/bin（pnpm 12 的全局 bin）与 PNPM_HOME 并入 WORKER_PATH，并写 /etc/profile.d/pnpm.sh
+#   （登录 shell）与 `pnpm setup`（交互 shell ~/.bashrc）双入口；agent-gear 预装与自更新统一走
+#   pnpm（`pnpm add -g`），npm 仅保留为 pnpm 自举通道（存量容器 `npm install -g pnpm@12.16.1`）。
 #
 # 连接参数：
 #   ZAG_SERVER_ENDPOINT / ZAG_CONTROLLER_KEY（cloud-controller /worker）
@@ -15,35 +22,159 @@
 # 可选开关：
 #   ZAG_SKIP_AGENT_GEAR_UPDATE=1  跳过全部自更新（启动与每轮），但仍保活重启
 #   ZAG_KEEPALIVE_BACKOFF_MS      退避整体缩放（毫秒；仅测试用）
+#   ZAG_STORAGE_HOME=1            当前容器挂载了云存储（/home/worker 为 PVC）：自举失败即非零退出
+#
+# 云存储自举口径（docs/engineering/plan/20261102-feat-cloud-storage.md Phase 2 / 提案实现点 4）：
+# - PVC 挂载 /home/worker 会遮蔽镜像烘焙的 .nvm（Node/npm）与 .local/share/pnpm（pnpm/agent-gear）；
+#   入口在 ensure_pnpm 之前由 bootstrap_home 按「产物存在且可执行」幂等重建（归档恢复的完整主目录直接跳过）；
+# - ZAG_STORAGE_HOME=1 时任一步失败 → fail-fast（Job 失败 → 创建云电脑失败 → 存储回滚）；
+# - 未设置时失败仅告警，沿用镜像环境继续保活（镜像内容完整时自举为 no-op）。
 set -euo pipefail
 
 WORKER_UID=1000
 WORKER_GID=1000
 WORKER_HOME=/home/worker
-WORKER_NVM_DIR="$WORKER_HOME/.nvm"
-WORKER_PATH="$WORKER_NVM_DIR/current/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+# nvm 落点；仅测试用 ZAG_WORKER_NVM_DIR 指向临时目录（避免触碰真实 /home/worker）。
+WORKER_NVM_DIR="${ZAG_WORKER_NVM_DIR:-$WORKER_HOME/.nvm}"
+# pnpm 固定版本与全局 bin 目录（决策 1/2）：与迁移 017/018 脚本内自举回退块同版本。
+PNPM_VERSION="${PNPM_VERSION:-12.16.1}"
+# pnpm 可执行文件（测试可指向不存在的命令，用于验证存量容器自举分支）。
+PNPM_CMD="${ZAG_PNPM_CMD:-pnpm}"
+PNPM_HOME="$WORKER_HOME/.local/share/pnpm"
+# pnpm 12 的全局 bin 目录为 $PNPM_HOME/bin（pnpm 9 为 $PNPM_HOME，两者都保留以兼容存量）。
+PNPM_BIN_DIR="$PNPM_HOME/bin"
+# /etc/profile.d 写入目标（登录 shell 全局生效）；仅测试可用环境变量改写到临时目录。
+PNPM_PROFILE_FILE="${ZAG_PNPM_PROFILE_FILE:-/etc/profile.d/pnpm.sh}"
+# 既有顺序不变，仅在 nvm bin 之后追加 pnpm 全局 bin。
+WORKER_PATH="$WORKER_NVM_DIR/current/bin:$PNPM_BIN_DIR:$PNPM_HOME:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 CHILD_PID=""
 SCAN_PID=""
 shutting_down=0
 
-log() { echo "[worker] $*"; }
+# 单行 JSON 日志（契约 contracts/observability.md / 裁决 D6）：纯 printf + sed 转义，
+# 不引 jq/python。字段与 pino 对齐；service 固定 zag-worker，serviceVersion 取
+# ZAG_WORKER_VERSION（缺省 unknown）。控制字符直接剔除保证单行可解析。
+json_escape() { printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+log() {
+  local esc time ver env_name host_name
+  esc=$(json_escape "$*")
+  # 契约 T-OBS16「每行可 JSON.parse」：字段值与 msg 一样必须过 json_escape（env/主机名含引号或
+  # 反斜杠时裸插会产生非法 JSON）。pid 为数字，安全。
+  ver=$(json_escape "${ZAG_WORKER_VERSION:-unknown}")
+  env_name=$(json_escape "${NODE_ENV:-development}")
+  host_name=$(json_escape "$(hostname 2>/dev/null || echo unknown)")
+  time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  printf '{"level":"info","time":"%s","service":"zag-worker","serviceVersion":"%s","env":"%s","hostname":"%s","pid":%s,"component":"worker-entrypoint","msg":"%s"}\n' \
+    "$time" "$ver" "$env_name" "$host_name" "$$" "$esc"
+}
 
 # 以 worker 身份执行：setpriv 降权 + 显式构造环境（root 环境无 nodejs）。
 run_as_worker() {
   setpriv --reuid="$WORKER_UID" --regid="$WORKER_GID" --init-groups \
     env HOME="$WORKER_HOME" USER=worker LOGNAME=worker \
-        NVM_DIR="$WORKER_NVM_DIR" PATH="$WORKER_PATH" "$@"
+        NVM_DIR="$WORKER_NVM_DIR" PNPM_HOME="$PNPM_HOME" PATH="$WORKER_PATH" "$@"
 }
 
 # 后台子进程专用：exec 替换当前 shell，保证 PID 1 的转发信号直达子进程本体。
 run_as_worker_exec() {
   exec setpriv --reuid="$WORKER_UID" --regid="$WORKER_GID" --init-groups \
     env HOME="$WORKER_HOME" USER=worker LOGNAME=worker \
-        NVM_DIR="$WORKER_NVM_DIR" PATH="$WORKER_PATH" "$@"
+        NVM_DIR="$WORKER_NVM_DIR" PNPM_HOME="$PNPM_HOME" PATH="$WORKER_PATH" "$@"
 }
 
-# 启动 / 每轮自更新：npm install -g agent-gear（写入 worker 的 per-user nvm 前缀）。
+# 重写 /etc/profile.d/pnpm.sh 的幂等标记块（登录 shell 生效）：先清旧块再追加。
+# 写失败（非 root/只读文件系统）仅告警——交互/登录 shell 接线是双保险之一。
+write_pnpm_profile() {
+  {
+    if [ -f "$PNPM_PROFILE_FILE" ]; then
+      sed -i '/^# >>> pnpm >>>$/,/^# <<< pnpm <<<$/d' "$PNPM_PROFILE_FILE" 2>/dev/null || true
+    fi
+    printf '# >>> pnpm >>>\nexport PNPM_HOME="%s"\ncase ":$PATH:" in *":$PNPM_HOME/bin:"*) ;; *) export PATH="$PNPM_HOME/bin:$PATH" ;; esac\ncase ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac\n# <<< pnpm <<<\n' \
+      "$PNPM_HOME" >> "$PNPM_PROFILE_FILE"
+  } 2>/dev/null || log "WARN: cannot write pnpm profile ($PNPM_PROFILE_FILE)"
+}
+
+# 自举失败处理：挂载云存储（ZAG_STORAGE_HOME=1）时 fail-fast 非零退出（不进入保活循环）；
+# 未挂载时仅告警，沿用镜像既有环境继续保活（镜像内容完整时各锚点命中，不会走到这里）。
+bootstrap_fail() {
+  if [ "${ZAG_STORAGE_HOME:-0}" = "1" ]; then
+    log "bootstrap_home failed ($1); ZAG_STORAGE_HOME=1 so exiting non-zero"
+    exit 1
+  fi
+  log "WARN: bootstrap_home failed ($1); continuing with the image environment"
+  return 0
+}
+
+# 主目录工具链自举（幂等，位于 ensure_pnpm 之前）：
+# 1) nvm.sh 不存在/不可 source → 用内网安装脚本（NVM_INSTALL_URL，构建期 ARG 已固化为运行时 ENV）重装；
+# 2) current/bin/node 不可执行 → nvm install --default + nvm alias default + 重建 current 软链 + npm registry；
+# 3) pnpm / agent-gear 交给既有 ensure_pnpm / update_agent_gear 幂等补齐。
+# 判定只基于「产物存在且可执行」，已完成的主目录（镜像自带或归档恢复）直接跳过。
+# 下载/安装输出统一转 stderr，保持入口 stdout 只有单行 JSON 日志（契约 observability）。
+bootstrap_home() {
+  local node_version="${NODE_VERSION:-24}"
+  local nvm_install_url="${NVM_INSTALL_URL:-}"
+
+  if ! run_as_worker bash -c '. "$NVM_DIR/nvm.sh" >/dev/null 2>&1'; then
+    if [ -z "$nvm_install_url" ]; then
+      bootstrap_fail "nvm.sh is unavailable and NVM_INSTALL_URL is not set"
+      return 0
+    fi
+    log "bootstrap_home: nvm not available, installing (NVM_INSTALL_URL=$nvm_install_url)"
+    # curl 与安装脚本同处一条管道：set -o pipefail 保证下载失败即整条管道非零。
+    if ! { curl -fsSL "$nvm_install_url" | run_as_worker env PROFILE=/dev/null METHOD=script bash; } 1>&2; then
+      bootstrap_fail "nvm install failed (NVM_INSTALL_URL=$nvm_install_url)"
+      return 0
+    fi
+    if ! run_as_worker bash -c '. "$NVM_DIR/nvm.sh" >/dev/null 2>&1'; then
+      bootstrap_fail "nvm.sh is still unavailable after install"
+      return 0
+    fi
+    log "bootstrap_home: nvm installed"
+  fi
+
+  if [ ! -x "$WORKER_NVM_DIR/current/bin/node" ]; then
+    log "bootstrap_home: node not available, installing Node.js $node_version"
+    if ! run_as_worker env NODE_VERSION="$node_version" bash -c '
+        set -eu
+        . "$NVM_DIR/nvm.sh"
+        nvm install --default "$NODE_VERSION"
+        nvm alias default "$NODE_VERSION"
+        ln -sfn "$(dirname "$(dirname "$(nvm which default)")")" "$NVM_DIR/current"
+      ' 1>&2; then
+      bootstrap_fail "Node.js install failed (version=$node_version)"
+      return 0
+    fi
+    if [ -n "${NPM_REGISTRY:-}" ] && ! run_as_worker npm config set registry "$NPM_REGISTRY" 1>&2; then
+      bootstrap_fail "npm registry configuration failed (NPM_REGISTRY=$NPM_REGISTRY)"
+      return 0
+    fi
+    if [ ! -x "$WORKER_NVM_DIR/current/bin/node" ]; then
+      bootstrap_fail "current/bin/node is still unavailable after install"
+      return 0
+    fi
+    log "bootstrap_home: node installed ($("$WORKER_NVM_DIR/current/bin/node" --version 2>/dev/null || echo 'version unknown'))"
+  fi
+  return 0
+}
+
+# 预装固定版本 pnpm（幂等）：优先 `command -v pnpm` 命中即跳过；安装固定版本 pin。
+# 失败仅告警不阻断（工作负载脚本内的自举回退块兜底存量容器）；不受自更新 skip 开关影响。
+ensure_pnpm() {
+  if run_as_worker sh -c "command -v '$PNPM_CMD' >/dev/null 2>&1"; then
+    log "pnpm already installed: $(run_as_worker "$PNPM_CMD" --version 2>/dev/null || echo 'version unknown')"
+  elif run_as_worker npm install -g "pnpm@${PNPM_VERSION}" --no-fund --no-audit; then
+    log "pnpm installed: $(run_as_worker "$PNPM_CMD" --version 2>/dev/null || echo 'version unknown')"
+  else
+    log "WARN: pnpm install failed; workload scripts will fall back to npm bootstrap"
+  fi
+  write_pnpm_profile
+  run_as_worker "$PNPM_CMD" setup >/dev/null 2>&1 || true
+}
+
+# 启动 / 每轮自更新：pnpm add -g agent-gear（写入 PNPM_HOME 全局 bin）。
 # 失败不阻断保活；skip 开关跳过全部自更新。
 update_agent_gear() {
   if [ "${ZAG_SKIP_AGENT_GEAR_UPDATE:-0}" = "1" ]; then
@@ -51,10 +182,10 @@ update_agent_gear() {
     return 0
   fi
   local registry
-  registry=$(run_as_worker npm config get registry 2>/dev/null || echo unknown)
-  log "updating agent-gear via npm (registry=$registry)"
+  registry=$(run_as_worker "$PNPM_CMD" config get registry 2>/dev/null || echo unknown)
+  log "updating agent-gear via pnpm (registry=$registry)"
   local rc=0
-  run_as_worker_exec npm install -g agent-gear --no-fund --no-audit &
+  run_as_worker_exec "$PNPM_CMD" add -g agent-gear &
   CHILD_PID=$!
   wait "$CHILD_PID" || rc=$?
   CHILD_PID=""
@@ -169,6 +300,12 @@ shutdown() {
 main() {
   trap 'shutdown SIGTERM' SIGTERM
   trap 'shutdown SIGINT' SIGINT
+
+  # 先重建被云存储卷遮蔽的主目录工具链（幂等；未挂载时为 no-op），再确保 pnpm 就绪
+  # （任何工作负载脚本下发前），最后进入自更新/保活链路。
+  bootstrap_home
+
+  ensure_pnpm
 
   update_agent_gear
 

@@ -458,7 +458,7 @@ export class CloudWorkloadService {
     const doc = await CloudWorkload.findByIdAndUpdate(
       id,
       { name, initScript, postScript, paramSchema, dependsOnWorkloadIds },
-      { new: true, lean: true },
+      { returnDocument: 'after', lean: true },
     );
     if (!doc) return null;
     return this.mapWorkload(doc as unknown as Record<string, unknown>);

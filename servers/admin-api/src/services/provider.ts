@@ -200,7 +200,7 @@ export class ProviderService {
           credentialType: (input.credentialType || 'api_key') as 'api_key',
           encryptedCredential: encrypted,
         },
-        session ? { new: true, lean: true, session } : { new: true, lean: true },
+        session ? { returnDocument: 'after', lean: true, session } : { returnDocument: 'after', lean: true },
       );
       if (!provider) return null;
 

@@ -174,6 +174,7 @@ describe('migration 015-team-workspaces（T-MIG15）', () => {
     const githubRows = await db().collection('githubaccounts').find({}).toArray();
     for (const row of githubRows) {
       expect(String(row.workspaceId)).toBe(globalByTenant.get(String(row.tenantId)));
+      expect(typeof row.workspaceId).toBe('string');
     }
     const templates = await db().collection('workflowtemplates').find({}).toArray();
     const builtin = templates.find((row) => row.isBuiltin);
@@ -229,7 +230,28 @@ describe('migration 015-team-workspaces（T-MIG15）', () => {
     for (const row of settings) {
       expect(row.userId).toBeTruthy();
       expect(row.workspaceId).toBeTruthy();
+      expect(typeof row.workspaceId).toBe('string');
     }
+  });
+
+  it('T-MIG15i: 兼容 Mongoose autoIndex 默认名索引（userId_1 / workspaceId_1）', async () => {
+    await seed();
+    // 模拟存量库：Mongoose 字段级 index:true 抢先用默认名建过索引
+    await db().collection('user_commit_settings').dropIndex('uniq_user_commit_setting');
+    await db()
+      .collection('user_commit_settings')
+      .createIndex({ userId: 1 }, { unique: true, name: 'userId_1' });
+    await db()
+      .collection('user_commit_settings')
+      .createIndex({ workspaceId: 1 }, { name: 'workspaceId_1' });
+
+    await migration.run();
+
+    const commitIndexes = await db().collection('user_commit_settings').indexes();
+    expect(commitIndexes.some((index) => index.name === 'uniq_workspace_commit_setting')).toBe(true);
+    expect(commitIndexes.some((index) => index.name === 'uniq_user_commit_setting')).toBe(false);
+    expect(commitIndexes.some((index) => index.name === 'userId_1')).toBe(false);
+    expect(commitIndexes.some((index) => index.name === 'workspaceId_1')).toBe(false);
   });
 
   it('T-MIG15f: 幂等重跑零变更', async () => {

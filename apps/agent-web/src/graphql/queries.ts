@@ -238,6 +238,15 @@ export const CLOUD_HOST_FIELDS = gql`
     workloadInstalling
     githubAccountId
     workspaceId
+    storage {
+      id
+      name
+      sizeGi
+      status
+      usageBytes
+      hourlyCredits
+    }
+    storageRestoring
   }
 `
 
@@ -350,6 +359,97 @@ export const CLOUD_HOST_WORKLOAD_CATALOG = gql`
       installed
       installedAt
       source
+    }
+  }
+`
+
+export const CLOUD_STORAGE_FIELDS = gql`
+  fragment CloudStorageFields on CloudStorage {
+    id
+    name
+    sizeGi
+    status
+    usageBytes
+    usageUpdatedAt
+    hourlyCredits
+    hourlyCreditsFull
+    hourlyCreditsArchived
+    createdBy {
+      id
+      name
+    }
+    createdAt
+    attachedCloudHostId
+    attachedCloudHostName
+    attachedAt
+    currentArchive {
+      id
+      fileName
+      status
+      cloudHostId
+      cloudHostName
+      usageBytes
+      startedAt
+      finishedAt
+      failureReason
+      sourcePvcReleased
+    }
+    archiveSpace {
+      capacityGi
+      usedGi
+    }
+    failureReason
+    destroyedAt
+  }
+`
+
+/** 当前工作区云存储列表（includeDestroyed=false 主列表；true 用于「已销毁」折叠区） */
+export const CLOUD_STORAGES = gql`
+  query CloudStorages($onlyAttachable: Boolean, $includeDestroyed: Boolean) {
+    cloudStorages(onlyAttachable: $onlyAttachable, includeDestroyed: $includeDestroyed) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+export const CLOUD_STORAGE = gql`
+  query CloudStorage($id: ID!) {
+    cloudStorage(id: $id) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+/** 存储容量阶梯报价（不传 sizeGi 时服务端按默认 10Gi） */
+export const CLOUD_STORAGE_BILLING_QUOTE = gql`
+  query CloudStorageBillingQuote($sizeGi: Int) {
+    cloudStorageBillingQuote(sizeGi: $sizeGi) {
+      sizeGi
+      full {
+        hourlyCredits
+        tiers {
+          label
+          amountCredits
+        }
+      }
+      archived {
+        hourlyCredits
+        tiers {
+          label
+          amountCredits
+        }
+      }
+      availableBalance
+    }
+  }
+`
+
+export const CLOUD_STORAGE_CAPABILITIES = gql`
+  query CloudStorageCapabilities {
+    cloudStorageCapabilities {
+      enabled
     }
   }
 `
@@ -585,16 +685,26 @@ export const GET_GITHUB_APP_URL = gql`
   }
 `
 
+/** 当前成员的提交人设置（成员独立、无共享/继承；仅对云容器环境生效） */
 export const GET_COMMIT_SETTINGS = gql`
   query GetCommitSettings {
     commitSettings {
-      committerMode
       committerType
-      githubAccountId
       customName
       customEmail
-      source
-      readOnly
+      commitWithBot
+    }
+  }
+`
+
+/** 「导入Github帐号信息」弹窗数据源：当前账户个人租户绑定的全部 GitHub 帐号 */
+export const GET_PERSONAL_GITHUB_ACCOUNTS = gql`
+  query GetPersonalGithubAccounts {
+    personalGithubAccounts {
+      id
+      githubUserId
+      githubLogin
+      githubAvatarUrl
     }
   }
 `

@@ -1,7 +1,10 @@
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useQuery } from '@apollo/client/react';
 import { useAuth } from '@/stores/auth';
 import MobileBackButton from '../components/MobileBackButton';
 import { Button } from '@/components/ui/button';
+import { CLOUD_STORAGE_CAPABILITIES } from '@/graphql/queries';
+import type { CloudStorageCapabilitiesQuery } from '@/graphql/types';
 import {
   Card,
   CardContent,
@@ -23,9 +26,10 @@ import ControllerListSection from '@/components/settings/ControllerListSection';
 import McpProxyKeySection from '@/components/settings/McpProxyKeySection';
 import McpRegistrySection from '@/components/settings/McpRegistrySection';
 import GithubBindingSection from '@/components/settings/GithubBindingSection';
-import CommitSettingsSection from '@/components/settings/CommitSettingsSection';
+import GitSettingsSection from '@/components/settings/GitSettingsSection';
 import WorkflowSection from '@/components/settings/WorkflowSection';
 import WorkspaceContextBanner from '@/components/settings/WorkspaceContextBanner';
+import CloudStorageSection from '@/components/settings/CloudStorageSection';
 import ControllerConfigPage from './ControllerConfigPage';
 import {
   User,
@@ -35,11 +39,13 @@ import {
   Server,
   Puzzle,
   Workflow,
+  HardDrive,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
   { id: 'account-section', label: '帐号', icon: User },
   { id: 'github-section', label: 'GitHub 绑定', icon: GitBranch },
+  { id: 'git-section', label: 'Git', icon: GitBranch },
   { id: 'provider-section', label: '供应商设置', icon: Boxes },
   { id: 'model-section', label: '可用模型', icon: Cpu },
   { id: 'controller-section', label: '控制器管理', icon: Server },
@@ -47,13 +53,15 @@ const NAV_ITEMS = [
   { id: 'workflow-section', label: '工作流', icon: Workflow },
 ];
 
+const STORAGE_NAV_ITEM = { id: 'storage-section', label: '云存储', icon: HardDrive };
+
 const NAV_GROUPS = [
   { label: '帐号', items: [NAV_ITEMS[0]] },
-  { label: 'GitHub', items: [NAV_ITEMS[1]] },
-  { label: '模型设置', items: [NAV_ITEMS[2], NAV_ITEMS[3]] },
-  { label: '本地控制器', items: [NAV_ITEMS[4]] },
-  { label: 'MCP 代理', items: [NAV_ITEMS[5]] },
-  { label: '工作流', items: [NAV_ITEMS[6]] },
+  { label: 'Git', items: [NAV_ITEMS[1], NAV_ITEMS[2]] },
+  { label: '模型设置', items: [NAV_ITEMS[3], NAV_ITEMS[4]] },
+  { label: '本地控制器', items: [NAV_ITEMS[5]] },
+  { label: 'MCP 代理', items: [NAV_ITEMS[6]] },
+  { label: '工作流', items: [NAV_ITEMS[7]] },
 ];
 
 export default function SettingsPage() {
@@ -62,6 +70,16 @@ export default function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const controllerId = searchParams.get('controllerId');
+
+  const { data: storageCapabilitiesData } = useQuery<CloudStorageCapabilitiesQuery>(
+    CLOUD_STORAGE_CAPABILITIES,
+  );
+  const storageEnabled =
+    storageCapabilitiesData?.cloudStorageCapabilities?.enabled === true;
+  const navItems = storageEnabled ? [...NAV_ITEMS, STORAGE_NAV_ITEM] : NAV_ITEMS;
+  const navGroups = storageEnabled
+    ? [...NAV_GROUPS, { label: '云存储', items: [STORAGE_NAV_ITEM] }]
+    : NAV_GROUPS;
 
   const handleLogout = () => {
     logout();
@@ -77,11 +95,19 @@ export default function SettingsPage() {
     setSearchParams({ controllerId: id });
   };
 
+  const handleOpenStorage = () => {
+    setSearchParams({});
+    setTimeout(() => {
+      document.getElementById('storage-section')?.scrollIntoView({ behavior: 'smooth' });
+    }, 0);
+  };
+
   if (controllerId) {
     return (
       <ControllerConfigPage
         controllerId={controllerId}
         onBack={() => setSearchParams({})}
+        onOpenStorage={handleOpenStorage}
       />
     );
   }
@@ -94,7 +120,7 @@ export default function SettingsPage() {
       </div>
 
       <div className="flex gap-1 overflow-x-auto border-b px-4 py-2 md:hidden">
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <button
             key={item.id}
             type="button"
@@ -109,7 +135,7 @@ export default function SettingsPage() {
       <div className="flex flex-1 overflow-hidden md:grid md:grid-cols-[200px_1fr]">
         <nav className="hidden border-r p-4 md:block" aria-label="Settings navigation">
           <div className="space-y-1">
-            {NAV_GROUPS.map((group) => (
+            {navGroups.map((group) => (
               <div key={group.label} className="pt-2 first:pt-0">
                 {group.items.length > 1 && (
                   <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
@@ -166,7 +192,10 @@ export default function SettingsPage() {
 
           <section id="github-section" className="mb-8 md:mb-10">
             <GithubBindingSection />
-            <CommitSettingsSection />
+          </section>
+
+          <section id="git-section" className="mb-8 md:mb-10">
+            <GitSettingsSection />
           </section>
 
           <section id="provider-section" className="mb-8 md:mb-10">
@@ -193,6 +222,12 @@ export default function SettingsPage() {
             <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">工作流</h2>
             <WorkflowSection />
           </section>
+
+          {storageEnabled && (
+            <section id="storage-section" className="mb-8 md:mb-10">
+              <CloudStorageSection />
+            </section>
+          )}
         </div>
       </div>
     </div>

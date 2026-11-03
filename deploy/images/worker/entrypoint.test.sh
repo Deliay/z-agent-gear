@@ -9,7 +9,15 @@ pass() { PASS=$((PASS + 1)); echo "ok - $*"; }
 fail() { FAIL=$((FAIL + 1)); echo "FAIL - $*" >&2; }
 assert_eq() { if [ "$1" = "$2" ]; then pass "$3"; else fail "$3 (expected=$1 actual=$2)"; fi; }
 assert_contains() { if [ -f "$1" ] && grep -qF -- "$2" "$1"; then pass "$3"; else fail "$3 (missing '$2' in $1)"; fi; }
+assert_not_contains() { if [ -f "$1" ] && grep -qF -- "$2" "$1"; then fail "$3 (unexpected '$2' in $1)"; else pass "$3"; fi; }
 count_lines() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
+count_agent_gear_updates() {
+  if [ -f "$STUB_DIR/pnpm_invocations" ]; then
+    grep -c 'add -g agent-gear' "$STUB_DIR/pnpm_invocations" 2>/dev/null || true
+  else
+    echo 0
+  fi
+}
 
 write_stubs() {
   mkdir -p "$STUB_DIR"
@@ -40,11 +48,33 @@ STUB
 #!/usr/bin/env bash
 set -u
 if [ "${1:-}" = "config" ]; then
+  if [ "${2:-}" = "set" ]; then
+    echo "$*" >> "$STUB_DIR/npm_config"
+    exit 0
+  fi
   echo "https://npm.internal.fffdan.com/repository/npm-proxy/"
   exit 0
 fi
-date +%s%N >> "$STUB_DIR/npm_installs"
-case "${STUB_NPM_MODE:-ok}" in fail) exit 1 ;; *) echo "2.10.0" > "$STUB_DIR/version" ;; esac
+# 分桶记录：完整参数（区分 pnpm 自举与 agent-gear 自更新）
+echo "$*" >> "$STUB_DIR/npm_installs"
+case "${STUB_NPM_FAIL_PNPM:-0}" in
+  1) case "$*" in *"pnpm@"*) exit 1 ;; esac ;;
+esac
+case "${STUB_NPM_MODE:-ok}" in fail) exit 1 ;; *) echo "2.13.0" > "$STUB_DIR/version" ;; esac
+exit 0
+STUB
+  cat > "$STUB_DIR/pnpm" <<'STUB'
+#!/usr/bin/env bash
+set -u
+echo "$*" >> "$STUB_DIR/pnpm_invocations"
+if [ "${1:-}" = "--version" ]; then echo "12.16.1"; exit 0; fi
+if [ "${1:-}" = "config" ] && [ "${2:-}" = "get" ]; then
+  echo "https://npm.internal.fffdan.com/repository/npm-proxy/"
+  exit 0
+fi
+case "${STUB_PNPM_MODE:-ok}" in
+  fail) case "$*" in *"add -g agent-gear"*) exit 1 ;; esac ;;
+esac
 exit 0
 STUB
   cat > "$STUB_DIR/agent-gear" <<'STUB'
@@ -67,7 +97,54 @@ for code in "$@"; do
 done
 exit 0
 STUB
+  # 云存储自举（bootstrap_home）stub：内网 nvm 安装脚本 + 假 nvm.sh。
+  # STUB_CURL_MODE=fail 模拟下载不可达（curl 非零退出）。
+  cat > "$STUB_DIR/nvm.sh.fixture" <<'STUB'
+# 假 nvm.sh：被 entrypoint `. "$NVM_DIR/nvm.sh"` source；nvm 是 shell 函数（与真实 nvm 一致）
+nvm() {
+  printf 'nvm %s\n' "$*" >> "$STUB_DIR/nvm_invocations"
+  case "${1:-}" in
+    install)
+      local version="${3:-24}"
+      mkdir -p "$NVM_DIR/versions/node/v$version/bin"
+      printf '#!/usr/bin/env bash\necho "v%s"\n' "$version" > "$NVM_DIR/versions/node/v$version/bin/node"
+      chmod +x "$NVM_DIR/versions/node/v$version/bin/node"
+      ;;
+    which)
+      printf '%s\n' "$NVM_DIR/versions/node/v${NODE_VERSION:-24}/bin/node"
+      ;;
+  esac
+  return 0
+}
+STUB
+  cat > "$STUB_DIR/nvm-install.fixture" <<'STUB'
+#!/usr/bin/env bash
+# 假 nvm install.sh：METHOD=script 非交互、PROFILE=/dev/null 不写 profile（与 Dockerfile 口径一致）
+set -eu
+[ "${METHOD:-}" = "script" ]
+[ "${PROFILE:-}" = "/dev/null" ]
+[ -n "${NVM_DIR:-}" ]
+mkdir -p "$NVM_DIR"
+cp "$STUB_DIR/nvm.sh.fixture" "$NVM_DIR/nvm.sh"
+STUB
+  cat > "$STUB_DIR/curl" <<'STUB'
+#!/usr/bin/env bash
+set -u
+echo "$*" >> "$STUB_DIR/curl_invocations"
+case "${STUB_CURL_MODE:-ok}" in fail) exit 22 ;; esac
+cat "$STUB_DIR/nvm-install.fixture"
+STUB
   chmod +x "$STUB_DIR"/*
+}
+
+# 生成「自举完成」的主目录夹具：nvm.sh 可 source、current/bin/node 可执行（对应镜像烘焙产物）。
+write_fake_nvm() {
+  local dir="$1"
+  mkdir -p "$dir/versions/node/v24/bin"
+  cp "$STUB_DIR/nvm.sh.fixture" "$dir/nvm.sh"
+  printf '#!/usr/bin/env bash\necho "v24"\n' > "$dir/versions/node/v24/bin/node"
+  chmod +x "$dir/versions/node/v24/bin/node"
+  ln -sfn "$dir/versions/node/v24" "$dir/current"
 }
 
 setup_env() {
@@ -76,20 +153,40 @@ setup_env() {
   RUN_TMP="$TEST_DIR/run"
   mkdir -p "$STUB_DIR" "$RUN_TMP"
   write_stubs
-  echo "2.10.0" > "$STUB_DIR/version"
+  : > "$STUB_DIR/npm_installs"
+  : > "$STUB_DIR/pnpm_invocations"
+  : > "$STUB_DIR/npm_config"
+  : > "$STUB_DIR/curl_invocations"
+  : > "$STUB_DIR/nvm_invocations"
+  echo "2.13.0" > "$STUB_DIR/version"
+  # profile.d 落到临时目录（测试非 root，不写 /etc）；默认假定 pnpm 已装（T-EP13 显式移除）
+  mkdir -p "$TEST_DIR/etc/profile.d"
+  export PNPM_PROFILE_PATH="$TEST_DIR/etc/profile.d/pnpm.sh"
+  export ZAG_PNPM_PROFILE_FILE="$PNPM_PROFILE_PATH"
+  # 默认模拟「镜像烘焙完成的主目录」：nvm.sh 可 source、current/bin/node 可执行（T-EP15 no-op；
+  # T-EP16/T-EP17 显式移除产物触发自举）。
+  export ZAG_WORKER_NVM_DIR="$TEST_DIR/nvm"
+  write_fake_nvm "$ZAG_WORKER_NVM_DIR"
+  export NVM_INSTALL_URL="https://nexus.internal.invalid/repository/github-raw-proxy/nvm-sh/nvm/v0.40.8/install.sh"
+  export NODE_VERSION=24
+  export NPM_REGISTRY="https://nexus.internal.fffdan.com/repository/npm-proxy/"
   export STUB_DIR TMPDIR="$RUN_TMP"
   export PATH="$STUB_DIR:$ORIGINAL_PATH"
   export ZAG_SERVER_ENDPOINT="wss://cloud.example.invalid/worker"
   export STUB_RUN_FOREVER=0
   export STUB_NPM_MODE=ok
+  export STUB_NPM_FAIL_PNPM=0
+  export STUB_PNPM_MODE=ok
+  export STUB_CURL_MODE=ok
   export STUB_AGENT_EXITS="42"
-  unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS STUB_RUN_FOREVER
+  unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS STUB_PNPM_MODE ZAG_PNPM_CMD ZAG_STORAGE_HOME
 }
 
 teardown_env() {
   rm -rf "$TEST_DIR"
-  unset STUB_DIR TMPDIR ZAG_SERVER_ENDPOINT STUB_AGENT_EXITS STUB_NPM_MODE STUB_RUN_FOREVER
-  unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS
+  unset STUB_DIR TMPDIR ZAG_SERVER_ENDPOINT STUB_AGENT_EXITS STUB_NPM_MODE STUB_NPM_FAIL_PNPM STUB_RUN_FOREVER
+  unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS ZAG_PNPM_PROFILE_FILE PNPM_PROFILE_PATH
+  unset ZAG_STORAGE_HOME STUB_CURL_MODE ZAG_WORKER_NVM_DIR NVM_INSTALL_URL NODE_VERSION NPM_REGISTRY
   export PATH="$ORIGINAL_PATH"
 }
 
@@ -119,19 +216,19 @@ export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP1 42 后入口 0 退出"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP1 agent-gear 启动 2 次"
-assert_eq 2 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP1 启动自更新 1 + 每轮自更新 1"
+assert_eq 2 "$(count_agent_gear_updates)" "T-EP1 启动自更新 1 + 每轮自更新 1"
 assert_contains "$TEST_DIR/stdout.log" "self-update then restarting" "T-EP1 日志记录自更新后重启"
 teardown_env
 
 echo "== T-EP2: 自更新失败被容忍，仍保活重启 =="
 setup_env
 export STUB_AGENT_EXITS="1 42"
-export STUB_NPM_MODE=fail
+export STUB_PNPM_MODE=fail
 export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP2 更新失败不阻断保活"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP2 仍然重启"
-assert_eq 2 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP2 启动与每轮各尝试一次"
+assert_eq 2 "$(count_agent_gear_updates)" "T-EP2 启动与每轮各尝试一次"
 assert_contains "$TEST_DIR/stdout.log" "WARN: agent-gear update failed" "T-EP2 日志 WARN 容忍失败"
 teardown_env
 
@@ -142,7 +239,7 @@ export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP3 收敛退出 0"
 assert_eq 3 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP3 启动 3 次"
-assert_eq 3 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP3 每轮均自更新"
+assert_eq 3 "$(count_agent_gear_updates)" "T-EP3 每轮均自更新"
 teardown_env
 
 echo "== T-EP4: skip 开关跳过全部自更新但仍重启 =="
@@ -152,7 +249,7 @@ export ZAG_SKIP_AGENT_GEAR_UPDATE=1
 export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP4 skip 后仍收敛 0"
-assert_eq 0 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP4 不执行任何 npm 安装"
+assert_eq 0 "$(count_agent_gear_updates)" "T-EP4 不执行任何 agent-gear 自更新"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP4 仍然重启"
 assert_contains "$TEST_DIR/stdout.log" "skipping agent-gear update" "T-EP4 日志说明跳过"
 teardown_env
@@ -164,7 +261,7 @@ export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP5 42 后收敛 0"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP5 非零退出后重启"
-assert_eq 2 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP5 重启前自更新"
+assert_eq 2 "$(count_agent_gear_updates)" "T-EP5 重启前自更新"
 teardown_env
 
 echo "== T-EP6: 正常退出 0（非 42）→ 自更新并重启 =="
@@ -174,7 +271,7 @@ export ZAG_KEEPALIVE_BACKOFF_MS=10
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP6 42 后收敛 0"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP6 正常退出也重启"
-assert_eq 2 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP6 重启前自更新"
+assert_eq 2 "$(count_agent_gear_updates)" "T-EP6 重启前自更新"
 teardown_env
 
 signal_case() {
@@ -200,7 +297,7 @@ signal_case() {
   assert_eq 0 "$rc" "T-EP7($signal) 入口退出码 0"
   assert_contains "$STUB_DIR/signals" "TERM" "T-EP7($signal) setpriv 链下子进程收到信号"
   assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP7($signal) 销毁后不重启"
-  assert_eq 1 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP7($signal) 不触发每轮自更新"
+  assert_eq 1 "$(count_agent_gear_updates)" "T-EP7($signal) 不触发每轮自更新"
   teardown_env
 }
 echo "== T-EP7: 信号转发 =="
@@ -226,7 +323,7 @@ export STUB_AGENT_EXITS="42"
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP9 入口 0 退出"
 assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP9 不重启"
-assert_eq 1 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP9 仅启动自更新 1 次"
+assert_eq 1 "$(count_agent_gear_updates)" "T-EP9 仅启动自更新 1 次"
 assert_contains "$TEST_DIR/stdout.log" "server shutdown; stopping keepalive" "T-EP9 日志说明服务端终止"
 teardown_env
 
@@ -237,7 +334,7 @@ export ZAG_KEEPALIVE_BACKOFF_MS=40
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP10 收敛退出 0"
 assert_eq 4 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP10 启动 4 次"
-assert_eq 4 "$(count_lines "$STUB_DIR/npm_installs")" "T-EP10 每轮自更新"
+assert_eq 4 "$(count_agent_gear_updates)" "T-EP10 每轮自更新"
 t1=$(sed -n '2p' "$STUB_DIR/agent_starts" | awk '{print $2}')
 t2=$(sed -n '3p' "$STUB_DIR/agent_starts" | awk '{print $2}')
 t3=$(sed -n '4p' "$STUB_DIR/agent_starts" | awk '{print $2}')
@@ -254,8 +351,193 @@ assert_eq 0 "$rc" "T-EP11 入口正常退出"
 assert_contains "$STUB_DIR/setpriv_args" "--reuid=1000 --regid=1000 --init-groups" "T-EP11 setpriv 降权参数"
 assert_contains "$STUB_DIR/setpriv_env" "HOME=/home/worker" "T-EP11 HOME"
 assert_contains "$STUB_DIR/setpriv_env" "USER=worker" "T-EP11 USER"
-assert_contains "$STUB_DIR/setpriv_env" "NVM_DIR=/home/worker/.nvm" "T-EP11 NVM_DIR"
-assert_contains "$STUB_DIR/setpriv_env" "PATH=/home/worker/.nvm/current/bin" "T-EP11 PATH 以 worker nvm 打头"
+assert_contains "$STUB_DIR/setpriv_env" "NVM_DIR=$ZAG_WORKER_NVM_DIR" "T-EP11 NVM_DIR 注入 worker env"
+assert_contains "$STUB_DIR/setpriv_env" "PNPM_HOME=/home/worker/.local/share/pnpm" "T-EP11 PNPM_HOME 注入 worker env"
+assert_contains "$STUB_DIR/setpriv_env" "PATH=$ZAG_WORKER_NVM_DIR/current/bin:/home/worker/.local/share/pnpm/bin:/home/worker/.local/share/pnpm:" "T-EP11 PATH 以 worker nvm 打头并含 pnpm 全局 bin"
+assert_contains "$ENTRYPOINT" 'WORKER_NVM_DIR="${ZAG_WORKER_NVM_DIR:-$WORKER_HOME/.nvm}"' "T-EP11 默认 nvm 目录为 /home/worker/.nvm"
+teardown_env
+echo "== T-EP12: 单行 JSON 日志（T-OBS16） =="
+setup_env
+# 提取 log/json_escape 函数做单元级验证（source 整个 entrypoint 会执行主流程）
+sed -n '/^json_escape()/p; /^log()/,/^}/p' "$ENTRYPOINT" > "$TEST_DIR/logfns.sh"
+assert_json_line() {
+  if printf '%s' "$1" | node -e '
+let d = "";
+process.stdin.on("data", (c) => (d += c)).on("end", () => {
+  const o = JSON.parse(d);
+  for (const k of ["level", "time", "service", "serviceVersion", "env", "hostname", "pid", "component", "msg"]) {
+    if (!(k in o)) { console.error("missing field " + k); process.exit(2); }
+  }
+  if (Number.isNaN(Date.parse(o.time))) process.exit(3);
+});' 2>/dev/null; then pass "$2"; else fail "$2"; fi
+}
+# a. 含引号/反斜杠/控制字符（tab/换行/NUL 邻近控制符）仍可解析
+weird=$(bash -c "source '$TEST_DIR/logfns.sh'; log \"quote=\\\" backslash=\\\\ tab=$(printf '\t') nl=$(printf '\a') end\"")
+assert_json_line "$weird" "T-EP12 含引号/反斜杠/控制字符仍可 JSON.parse"
+case "$weird" in *'quote=\"'*) pass "T-EP12 引号已转义" ;; *) fail "T-EP12 引号未转义: $weird" ;; esac
+case "$weird" in *$'\n'*) fail "T-EP12 输出含裸换行（非单行）" ;; *) pass "T-EP12 单行输出" ;; esac
+# b. 字段口径：service 固定 zag-worker、serviceVersion 取 ZAG_WORKER_VERSION（缺省 unknown）
+v1=$(bash -c "source '$TEST_DIR/logfns.sh'; log hello")
+assert_json_line "$v1" "T-EP12 缺省形态字段齐备"
+case "$v1" in *'"service":"zag-worker"'*) pass "T-EP12 service=zag-worker" ;; *) fail "T-EP12 service 口径: $v1" ;; esac
+case "$v1" in *'"serviceVersion":"unknown"'*) pass "T-EP12 serviceVersion 缺省 unknown" ;; *) fail "T-EP12 serviceVersion 缺省口径: $v1" ;; esac
+v2=$(bash -c "source '$TEST_DIR/logfns.sh'; ZAG_WORKER_VERSION=9.9.9; log hello")
+case "$v2" in *'"serviceVersion":"9.9.9"'*) pass "T-EP12 serviceVersion 取 ZAG_WORKER_VERSION" ;; *) fail "T-EP12 serviceVersion 注入: $v2" ;; esac
+# c. 整个入口的 stdout 每行均可 JSON.parse（退出码/自更新/信号语义由 T-EP0~T-EP11 保障不变）
+setup_env
+export STUB_AGENT_EXITS="1 42"
+export ZAG_KEEPALIVE_BACKOFF_MS=10
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP12 入口收敛退出"
+bad_line=$(node -e '
+const fs = require("fs");
+const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.trim());
+for (const line of lines) {
+  try {
+    const o = JSON.parse(line);
+    for (const k of ["level", "time", "service", "serviceVersion", "env", "hostname", "pid", "component", "msg"]) {
+      if (!(k in o)) { console.log(line); process.exit(0); }
+    }
+  } catch { console.log(line); process.exit(0); }
+}
+console.log("");' "$TEST_DIR/stdout.log")
+if [ -z "$bad_line" ]; then pass "T-EP12 stdout 每行可 JSON.parse 且字段齐备"; else fail "T-EP12 非 JSON 行: $bad_line"; fi
+teardown_env
+
+# 说明：计划/提案中的 T-EP9/T-EP10 编号已被本文件更早的「退出码 42 / 退避」用例占用，
+# pnpm 预装用例顺延为 T-EP13/T-EP14（语义与计划 §Phase 2 一致）。
+# 云存储主目录自举用例按裁决 20 顺延为 T-EP15~T-EP18（T-EP15 no-op / T-EP16 缺 nvm /
+# T-EP17 仅缺 node / T-EP18 下载失败与失败语义）。
+echo "== T-EP13: pnpm 预装幂等（已装不重复；缺失恰好装一次；profile.d 幂等） =="
+setup_env
+export STUB_AGENT_EXITS="42"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP13 入口正常退出"
+assert_eq 0 "$(grep -c 'pnpm@' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP13 已装 pnpm 不重复安装"
+assert_contains "$STUB_DIR/pnpm_invocations" "--version" "T-EP13 读取已装 pnpm 版本"
+assert_contains "$STUB_DIR/pnpm_invocations" "setup" "T-EP13 执行 pnpm setup 接线交互 shell"
+assert_eq 1 "$(grep -c '^# >>> pnpm >>>$' "$PNPM_PROFILE_PATH" 2>/dev/null || true)" "T-EP13 profile.d 写入标记块"
+assert_contains "$PNPM_PROFILE_PATH" "export PNPM_HOME=\"/home/worker/.local/share/pnpm\"" "T-EP13 profile.d 注入 PNPM_HOME"
+assert_contains "$PNPM_PROFILE_PATH" 'export PATH="$PNPM_HOME/bin:$PATH"' "T-EP13 profile.d 追加 PNPM_HOME/bin 到 PATH"
+teardown_env
+
+setup_env
+export ZAG_PNPM_CMD=pnpm-missing
+export STUB_AGENT_EXITS="42"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP13 未装 pnpm 时入口正常退出"
+assert_eq 1 "$(grep -c 'install -g pnpm@12.16.1' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP13 缺失时恰好安装一次固定版本 pnpm"
+# 重跑幂等：标记块不重复追加（重置 stub 计数，避免第二次启动命中第 2 次退出编排）
+rm -f "$STUB_DIR/agent_starts"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP13 重跑入口正常退出"
+assert_eq 1 "$(grep -c '^# >>> pnpm >>>$' "$PNPM_PROFILE_PATH" 2>/dev/null || true)" "T-EP13 profile.d 重跑幂等（标记块不重复）"
+teardown_env
+
+echo "== T-EP14: pnpm 预装失败仅告警、保活链路正常 =="
+setup_env
+export ZAG_PNPM_CMD=pnpm-missing
+export STUB_NPM_FAIL_PNPM=1
+export STUB_AGENT_EXITS="1 42"
+export ZAG_KEEPALIVE_BACKOFF_MS=10
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP14 pnpm 失败不阻断保活"
+assert_contains "$TEST_DIR/stdout.log" "WARN: pnpm install failed" "T-EP14 日志 WARN 容忍 pnpm 失败"
+assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP14 agent-gear 照常拉起并重启"
+assert_contains "$TEST_DIR/stdout.log" "updating agent-gear via pnpm" "T-EP14 agent-gear 自更新仍按轮尝试"
+teardown_env
+
+setup_env
+export ZAG_PNPM_CMD=pnpm-missing
+export STUB_NPM_FAIL_PNPM=1
+export ZAG_SKIP_AGENT_GEAR_UPDATE=1
+export STUB_AGENT_EXITS="42"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP14 skip 自更新后仍收敛"
+assert_eq 1 "$(grep -c 'install -g pnpm@12.16.1' "$STUB_DIR/npm_installs" 2>/dev/null || true)" "T-EP14 skip 自更新不影响 pnpm 预装尝试"
+assert_contains "$TEST_DIR/stdout.log" "skipping agent-gear update" "T-EP14 自更新按开关跳过"
+teardown_env
+
+echo "== T-EP15: 完整镜像环境 → bootstrap_home 为 no-op =="
+setup_env
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP15 入口正常退出"
+assert_eq 0 "$(count_lines "$STUB_DIR/curl_invocations")" "T-EP15 不下载 nvm 安装脚本"
+assert_eq 0 "$(count_lines "$STUB_DIR/nvm_invocations")" "T-EP15 不调用 nvm install/alias"
+assert_eq 0 "$(count_lines "$STUB_DIR/npm_config")" "T-EP15 不改写 npm registry"
+assert_not_contains "$TEST_DIR/stdout.log" "bootstrap_home" "T-EP15 无自举日志（no-op）"
+teardown_env
+
+echo "== T-EP16: 缺 nvm → 下载安装 + 补 Node/current 软链/registry，重跑幂等 =="
+setup_env
+export ZAG_STORAGE_HOME=1
+rm -rf "$ZAG_WORKER_NVM_DIR"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP16 自举后入口正常退出"
+assert_eq 1 "$(count_lines "$STUB_DIR/curl_invocations")" "T-EP16 恰好下载一次 nvm 安装脚本"
+assert_eq 1 "$(grep -c '^nvm install --default 24$' "$STUB_DIR/nvm_invocations" 2>/dev/null || true)" "T-EP16 nvm install --default \$NODE_VERSION 一次"
+assert_eq 1 "$(grep -c '^nvm alias default 24$' "$STUB_DIR/nvm_invocations" 2>/dev/null || true)" "T-EP16 nvm alias default 一次"
+assert_eq 1 "$(grep -c '^config set registry https://nexus.internal.fffdan.com/repository/npm-proxy/$' "$STUB_DIR/npm_config" 2>/dev/null || true)" "T-EP16 以 worker 身份设置 npm registry"
+if [ -L "$ZAG_WORKER_NVM_DIR/current" ] && [ -x "$ZAG_WORKER_NVM_DIR/current/bin/node" ]; then
+  pass "T-EP16 重建 current 软链且 node 可执行"
+else
+  fail "T-EP16 current 软链未重建或 node 不可执行"
+fi
+assert_contains "$TEST_DIR/stdout.log" "bootstrap_home: nvm not available" "T-EP16 日志含 nvm 自举锚点"
+assert_contains "$TEST_DIR/stdout.log" "bootstrap_home: node installed" "T-EP16 日志含 node 自举锚点"
+# 重跑幂等：不再下载/安装
+rm -f "$STUB_DIR/agent_starts"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP16 重跑入口正常退出"
+assert_eq 1 "$(count_lines "$STUB_DIR/curl_invocations")" "T-EP16 重跑不再下载 nvm"
+assert_eq 1 "$(grep -c '^nvm install --default 24$' "$STUB_DIR/nvm_invocations" 2>/dev/null || true)" "T-EP16 重跑不再安装 Node"
+teardown_env
+
+echo "== T-EP17: 仅缺 node（nvm 在）→ 不重装 nvm，只补 Node/current/registry =="
+setup_env
+export ZAG_STORAGE_HOME=1
+rm -rf "$ZAG_WORKER_NVM_DIR/versions" "$ZAG_WORKER_NVM_DIR/current"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP17 入口正常退出"
+assert_eq 0 "$(count_lines "$STUB_DIR/curl_invocations")" "T-EP17 nvm 在时不重复下载安装脚本"
+assert_eq 1 "$(grep -c '^nvm install --default 24$' "$STUB_DIR/nvm_invocations" 2>/dev/null || true)" "T-EP17 补装 Node 一次"
+assert_eq 1 "$(grep -c '^config set registry https://nexus.internal.fffdan.com/repository/npm-proxy/$' "$STUB_DIR/npm_config" 2>/dev/null || true)" "T-EP17 重新设置 npm registry"
+if [ -L "$ZAG_WORKER_NVM_DIR/current" ] && [ -x "$ZAG_WORKER_NVM_DIR/current/bin/node" ]; then
+  pass "T-EP17 重建 current 软链且 node 可执行"
+else
+  fail "T-EP17 current 软链未重建或 node 不可执行"
+fi
+assert_contains "$TEST_DIR/stdout.log" "bootstrap_home: node not available" "T-EP17 日志含 node 分支说明"
+teardown_env
+
+echo "== T-EP18: 下载失败 → 挂载存储 fail-fast；未挂载时容忍 =="
+setup_env
+export ZAG_STORAGE_HOME=1
+export STUB_CURL_MODE=fail
+rm -rf "$ZAG_WORKER_NVM_DIR"
+rc=$(run_entrypoint)
+assert_eq 1 "$rc" "T-EP18 ZAG_STORAGE_HOME=1 且下载失败 → 入口非零退出"
+assert_eq 0 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP18 不进入保活循环"
+assert_contains "$TEST_DIR/stdout.log" "bootstrap_home failed" "T-EP18 日志说明自举失败"
+assert_contains "$TEST_DIR/stdout.log" "ZAG_STORAGE_HOME=1" "T-EP18 日志说明 fail-fast 原因"
+teardown_env
+
+# 未挂载存储且镜像完整（自举 no-op）：下载源不可达也不受影响
+setup_env
+export STUB_CURL_MODE=fail
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP18 未挂载且镜像完整时不受下载失败影响"
+assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP18 未挂载仍进入保活"
+teardown_env
+
+# 未挂载存储但主目录残缺：仅告警，不因自举失败退出
+setup_env
+export STUB_CURL_MODE=fail
+rm -rf "$ZAG_WORKER_NVM_DIR"
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP18 未设置 ZAG_STORAGE_HOME 时自举失败不退出"
+assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP18 未设置时仍拉起 agent-gear"
+assert_contains "$TEST_DIR/stdout.log" "WARN: bootstrap_home failed" "T-EP18 未设置时仅告警"
 teardown_env
 
 echo

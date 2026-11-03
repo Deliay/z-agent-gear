@@ -1,8 +1,8 @@
-# 默认工作容器镜像构建与自验（内网环境）
+# 默认工作容器镜像构建与自验
 
-> 该镜像依赖内网 Nexus（Ubuntu / GitHub raw / Node.js 发行包 / npm 代理）与 Harbor 镜像代理，
-> **不在 GitHub CI 构建**（runner 不可达内网）。请在可访问内网的机器上执行构建与自验。
-> 构建过程**不回退公网**：Node.js 与 npm 由 nvm 安装，nvm 及其发行包全部取自内网代理。
+> 构建期使用**官方公网源**（Ubuntu archive / raw.githubusercontent.com / nodejs.org / registry.npmjs.org），
+> 因此可在 GitHub Actions 等公网环境构建；所有依赖安装完成后，镜像内的 apt / nvm(Node.js) / npm 源
+> 会切换为**内网 Nexus**，供容器运行时与预制工作负载使用。
 
 ## 构建
 
@@ -10,16 +10,23 @@
 cd deploy/images/worker
 docker build -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 
-# 内网地址变化时通过 --build-arg 覆盖
+# 运行期内网源变化时通过 --build-arg 覆盖（不影响构建期使用的官方源）
 docker build \
   --build-arg UBUNTU_MIRROR=https://nexus.internal.fffdan.com/repository/ubuntu-proxy/ \
-  --build-arg GITHUB_RAW_PROXY=https://nexus.internal.fffdan.com/repository/github-raw-proxy \
   --build-arg NVM_VERSION=v0.40.8 \
   --build-arg NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy \
-  --build-arg NODE_VERSION=22 \
+  --build-arg NODE_VERSION=24 \
   --build-arg NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/ \
   -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 ```
+
+| 参数 | 生效阶段 | 默认 | 说明 |
+|------|---------|------|------|
+| `UBUNTU_MIRROR` | 运行期 | 内网 `ubuntu-proxy` | 构建完成后写入 `/etc/apt/sources.list.d/ubuntu.sources` |
+| `NODEJS_DIST_MIRROR` | 运行期 | 内网 `node-proxy` | 以 `NVM_NODEJS_ORG_MIRROR` 固化，运行时 nvm 安装 Node.js 使用 |
+| `NPM_REGISTRY` | 运行期 | 内网 `npm-proxy` | 构建完成后写入 worker `~/.npmrc` 并固化为 ENV |
+| `NVM_INSTALL_URL` | 构建期 | 官方 `raw.githubusercontent.com` | 仅在构建期安装 nvm 时使用 |
+| `NODE_VERSION` | 构建期 | `24` | 由 nvm 安装的 Node.js 主版本 |
 
 ### .NET（apt）相关构建参数
 
@@ -32,7 +39,8 @@ docker build \
 | `DOTNET_APT_SOURCE` | build-arg（可选） | 空 | 内网 Ubuntu 源不含 `dotnet10` 时的 Microsoft feed 代理源 |
 | `DOTNET_APT_KEY_URL` | build-arg（可选） | 空 | 与 `DOTNET_APT_SOURCE` 配套的签名密钥地址 |
 
-`DOTNET_APT_SOURCE` 与 `DOTNET_APT_KEY_URL` 同时提供时，构建期会追加 `/etc/apt/sources.list.d/dotnet.list`；未提供则仅使用内网 Ubuntu 源（不阻断构建）。例如：
+`DOTNET_APT_SOURCE` 与 `DOTNET_APT_KEY_URL` 同时提供时，会写入 `/etc/apt/sources.list.d/dotnet.list`
+（供运行时工作负载使用）；未提供则运行时仅使用 `UBUNTU_MIRROR`（不阻断构建）。例如：
 
 ```bash
 docker build \
@@ -43,49 +51,57 @@ docker build \
 
 构建完成后将镜像 `WORKER_IMAGE` 配置为 `core.harbor.internal.fffdan.com/zero-tools/worker:dev`（或推送后使用正式 tag）。
 
-## 前置条件（nvm 走内网代理）
+> `NVM_INSTALL_URL` 与 `NODE_VERSION` 除构建期 `ARG` 外，还以同名 `ENV` 固化进运行时：挂载云存储
+> 遮蔽 `/home/worker` 后，入口 `bootstrap_home` 用它们重装 nvm/Node（见下文「云存储主目录自举自验」）。
+> 内网地址变化时同样可通过 `--build-arg` 覆盖，无需改 `entrypoint.sh`。
 
-镜像内**不存在** apt 的 `nodejs`/`npm`，Node.js 与 npm 全部由 nvm 提供，且 nvm 安装脚本、nvm 脚本本体、
-Node.js 发行包均只取自内网代理。构建前请确认以下地址可访问（应返回 200）：
+## 前置条件（构建期公网 / 运行期内网）
+
+镜像内**不存在** apt 的 `nodejs`/`npm`，Node.js 与 npm 全部由 nvm 提供。构建期需要可访问：
+`archive.ubuntu.com` / `security.ubuntu.com` / `raw.githubusercontent.com` / `nodejs.org` / `registry.npmjs.org`。
+构建完成后镜像内的源已切换为内网 Nexus；运行时无需公网。
 
 ```bash
-BASE=https://nexus.internal.fffdan.com/repository/github-raw-proxy/nvm-sh/nvm/v0.40.8
-for f in install.sh nvm.sh nvm-exec bash_completion; do
-  printf '%s  %s\n' "$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$BASE/$f")" "$f"
+for u in \
+  http://archive.ubuntu.com/ubuntu/dists/noble/Release \
+  https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh \
+  https://nodejs.org/dist/index.tab \
+  https://registry.npmjs.org/pnpm; do
+  printf '%s  %s\n' "$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$u")" "$u"
 done
-curl -s -o /dev/null -m 20 -w 'node-proxy/index.tab: %{http_code}\n' \
-  https://nexus.internal.fffdan.com/repository/node-proxy/index.tab
 ```
 
-其中 `install.sh`（nvm 安装脚本）与 `nvm.sh`/`nvm-exec`/`bash_completion`（脚本内容）由 `GITHUB_RAW_PROXY`
-提供，Node.js 的 `index.tab`/`SHASUMS256.txt`/`node-*.tar.xz` 由 `NODEJS_DIST_MIRROR` 提供。
-
-> 若上述地址返回 404 / 提示 `Remote Auto Blocked`，说明 Nexus 侧到上游（raw.githubusercontent.com）
-> 的通道不可用，需先恢复该代理仓库或预热缓存后再构建（Dockerfile 已用 `. "$NVM_DIR/nvm.sh"` 断言，
-> nvm 脚本缺失会直接构建失败，不会静默产出残缺镜像）。
+> nvm 安装脚本缺失会直接构建失败（Dockerfile 用 `. "$NVM_DIR/nvm.sh"` 断言），不会静默产出残缺镜像。
 
 ## 自验（PRD 功能点 1 验收标准：瘦身后通用能力可用）
 
 ```bash
-docker run --rm -it --entrypoint bash \
+docker run --rm --entrypoint bash \
   -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker \
   -e ZAG_CONTROLLER_KEY=dummy \
-  core.harbor.internal.fffdan.com/zero-tools/worker:dev -lc '
-    nvm --version && nvm ls && \
-    which node npm && node -v && npm -v && npm config get registry && \
-    git --version && gh --version && \
-    agent-gear --version && agent-gear harness --help && \
-    { command -v claude-agent-acp || echo "claude-agent-acp not preinstalled (expected)"; } && \
-    { command -v codex-acp || echo "codex-acp not preinstalled (expected)"; }
+  core.harbor.internal.fffdan.com/zero-tools/worker:dev -c '
+    sudo -u worker env HOME=/home/worker \
+      PATH="/home/worker/.nvm/current/bin:/home/worker/.local/share/pnpm/bin:/home/worker/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+      bash -c "
+        node -v && npm -v && pnpm -v && npm config get registry && \
+        git --version && gh --version && \
+        agent-gear --version && agent-gear harness --help >/dev/null && \
+        { command -v claude-agent-acp || echo \"claude-agent-acp not preinstalled (expected)\"; } && \
+        { command -v codex-acp || echo \"codex-acp not preinstalled (expected)\"; }
+      "
   '
 ```
 
+> root 环境没有 nodejs（按设计由 worker 用户承载），因此自验命令统一经 `sudo -u worker` 并显式构造
+> `PATH`（nvm current/bin + pnpm 全局 bin + PNPM_HOME）。
+
 逐项核对：
 
-- [ ] `node`、`git`、`gh` 可用；且 `which node` 指向 `/usr/local/nvm/current/bin/node`（已弃用 apt 的 node/npm）
-- [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 22.x）
+- [ ] `node`、`git`、`gh` 可用；且 worker 下 `which node` 指向 `/home/worker/.nvm/current/bin/node`（root 环境无 node/npm）
+- [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 24.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
-- [ ] **镜像唯一 npm 全局包**为 `agent-gear`（固定 `2.11.x`）；**不预装** `@agentclientprotocol/claude-agent-acp`（`command -v claude-agent-acp` 应无输出）与 `@agentclientprotocol/codex-acp`（`command -v codex-acp` 应无输出），二者由用户按需安装（agent-controller 仍保留探测与启动能力）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
+- [ ] `pnpm -v` 为 `12.16.1`，且 `PATH` 含 `/home/worker/.local/share/pnpm/bin`（pnpm 12 全局 bin 目录）
+- [ ] **镜像唯一预装全局包**为 `agent-gear`（固定 `2.16.x`，通过 `npm install -g pnpm` 自举 pnpm 后由 `pnpm add -g` 安装）；**不预装** `@agentclientprotocol/claude-agent-acp`（`command -v claude-agent-acp` 应无输出）与 `@agentclientprotocol/codex-acp`（`command -v codex-acp` 应无输出），二者由用户按需安装（agent-controller 仍保留探测与启动能力）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
 - [ ] `agent-gear --version` ≥ `2.11.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起，`cordis.patch.yml` 的 insert 受管条目 `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
 
 - [ ] `agent-gear harness --help` 可见 `prepare` 子命令
@@ -212,7 +228,7 @@ test -d "${ZAG_DEFAULT_WORKSPACE:-/home/worker/workspace}" && echo workspace-ok
 镜像**不预装** `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-acp-app`；二者由「DeepSeek Harness（Harness）」工作负载
 （admin-api 迁移 013）在 `init` 阶段**双包同版本安装**：`@deepseek-ai/dsh` 提供 `dsh` bin，
 `@deepseek-ai/dsh-acp-app` 是 profile 组合包（无 bin）。随后执行 `dsh --version` 硬校验、会话标识插件安装
-（`dsh plugin --profile acp add Deliay/dsh-header-masq`；镜像未预装 pnpm，脚本内固定版本引导安装）与按类型限定的
+（`dsh plugin --profile acp add Deliay/dsh-header-masq`；镜像预装 pnpm，脚本内仍保留固定版本自举兜底）与按类型限定的
 `ZAG_HARNESS_TYPES=deepseek_harness agent-gear harness prepare`（`ZAG_HARNESS_TYPES` 前缀限定本类型，
 多 harness 主机顺序安装 CLI 时裸调用会对尚未安装的类型硬校验而误失败）。任一失败以非零退出，
 `required=true` 会触发 cloud-controller 强制注销容器。
@@ -291,6 +307,29 @@ ls "$HOME/.cache/ms-playwright" | grep '^chromium-'   # 默认仅 Chromium（Fir
 echo "$PLAYWRIGHT_DOWNLOAD_HOST"                      # 安装时已持久化到用户环境
 ```
 
+pnpm 预装与工作负载安装口径（entrypoint `ensure_pnpm` + 迁移 017/018 脚本）：
+
+```bash
+# 镜像构建期：npm 仅用于自举 pnpm，agent-gear 由 pnpm 安装
+npm install -g pnpm@12.16.1
+pnpm add -g agent-gear@2.16.x
+# entrypoint 预装（新容器；固定版本 12.16.1）
+pnpm --version                       # 12.16.1
+echo "$PNPM_HOME"                    # /home/worker/.local/share/pnpm
+echo "$PATH" | tr ':' '\n' | grep -F "$PNPM_HOME/bin"   # pnpm 12 全局 bin 必须在 PATH
+login_shell_path=$(bash -lc 'echo "$PATH"'); case ":$login_shell_path:" in *":$PNPM_HOME/bin:"*) echo ok ;; *) echo missing ;; esac
+# 交互 shell（pnpm setup 接线）：登录 worker 后
+bash -lc 'command -v pnpm'
+# worker 身份（run_as_worker 口径）可直接使用
+sudo -u worker env HOME=/home/worker PNPM_HOME=/home/worker/.local/share/pnpm \
+  PATH="/home/worker/.nvm/current/bin:/home/worker/.local/share/pnpm/bin:/home/worker/.local/share/pnpm:$PATH" pnpm --version
+# 安装来源走内网代理（pnpm 读同一 ~/.npmrc）
+pnpm config get registry             # https://nexus.internal.fffdan.com/repository/npm-proxy/
+# 工作负载脚本安装行统一 `pnpm add -g`（OpenCode/Kimi Code/DeepSeek Harness/Playwright）；
+# 存量容器（无 pnpm）由脚本内自举回退块 `npm install -g pnpm@12.16.1` 兜底（迁移 018 刷新）
+# 预装失败仅告警：保活/agent-gear 链路正常，工作负载脚本回退块兜底（无阻断）
+```
+
 MongoDB（原生 apt 安装；成功判据仅 `mongod --version`，不拉起实例）：
 
 ```bash
@@ -328,6 +367,10 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 - [ ] **地址已持久化到双用户环境**：root 与 worker 用户登录/交互 shell 均能读到 `PLAYWRIGHT_DOWNLOAD_HOST`（`/etc/profile.d/playwright.sh` + 各自 `~/.bashrc` 标记块）；两用户执行 `playwright install firefox` 补装走内网代理
 - [ ] 清空 `playwright_download_host` 参数（且未提供 `PLAYWRIGHT_DOWNLOAD_HOST`）且 Playwright 尚未安装时：该工作负载**快速失败**并在执行记录中给出含正确地址形态的明确指引（容器仍继续后续初始化并上线）
 - [ ] 下载地址不可达/Chromium 未就绪时该工作负载记录失败与日志，容器仍继续后续初始化并上线
+- [ ] 新容器 `pnpm --version` 为 `12.16.1`；`PNPM_HOME/bin`（pnpm 12 全局 bin）与 `PNPM_HOME` 经 `WORKER_PATH` 与 `/etc/profile.d/pnpm.sh` 双入口生效
+- [ ] 四个工作负载（OpenCode / Kimi Code / DeepSeek Harness / Playwright）安装行均为 `pnpm add -g`，来源走内网 npm 代理，结尾硬校验通过
+- [ ] 存量容器（镜像无 pnpm）由脚本内自举回退块安装 pnpm 后安装成功
+- [ ] 预装 pnpm 失败仅告警：`agent-gear` 保活/自更新链路正常，工作负载脚本回退块兜底
 - [ ] Playwright 重复执行幂等（已安装直接校验通过、不重复下载）；工具与 Chromium 任一缺失时整体判失败
 
 > **安装来源（重要）**：默认来源由「Docker」工作负载参数 `docker_apt_url` 提供——迁移 003 默认填入内网
@@ -376,7 +419,7 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 
 容器默认 `ENTRYPOINT` 为 `entrypoint.sh`，启动流程：
 
-1. 执行 `npm install -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
+1. 执行 `pnpm add -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
 2. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
 
 > 云电脑（harness）容器额外注入标准连接凭据：`ZAG_HOST_ENDPOINT` + `ZAG_HOST_KEY`（controller-api），
@@ -390,9 +433,9 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 受监督运行的行为（版本门禁与自恢复，见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
 
 - `cloud-controller` 要求普通 worker 版本 `>=2.2.0` 且 major 为 `2`、harness（云电脑）worker 版本 `>=2.10.0`（含 `deepseek_harness` 的运行 `>=2.11.0`，header-masq 会话标识配置注入）；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
-- 入口对 agent-gear 的 stderr 做流式扫描（实时透传、不落盘完整日志），仅在「非零退出 + 出现 `VERSION_MISMATCH` + 本轮未升级 + 未设置 `ZAG_SKIP_AGENT_GEAR_UPDATE=1`」时执行**一次** `npm install -g agent-gear --no-fund --no-audit`，升级成功后重启并重连。
+- 入口对 agent-gear 的 stderr 做流式扫描（实时透传、不落盘完整日志），仅在「非零退出 + 出现 `VERSION_MISMATCH` + 本轮未升级 + 未设置 `ZAG_SKIP_AGENT_GEAR_UPDATE=1`」时执行**一次** `pnpm add -g agent-gear`，升级成功后重启并重连。
 - 安装失败、升级后仍不匹配、第二次不匹配、普通非零退出、正常退出均不会形成升级/重连循环；失败时容器非零退出，管理员可用既有强制销毁回收。
-- 入口作为 PID 1 向 agent-gear / npm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
+- 入口作为 PID 1 向 agent-gear / pnpm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
 - 启动更新与版本不匹配恢复都受 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 控制（离线/排障出口）。
 
 ## 版本门禁与自升级自验
@@ -405,7 +448,7 @@ bash -n entrypoint.sh
 bash entrypoint.test.sh
 ```
 
-自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`agent-gear`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），因此不会启动真实 dockerd、不访问网络。
+自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）、单行 JSON 日志（T-EP12）、pnpm 预装幂等与失败容忍（T-EP13/T-EP14）、云存储主目录自举（T-EP15 完整镜像 no-op / T-EP16 缺 nvm / T-EP17 仅缺 node / T-EP18 下载失败与 fail-fast）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`pnpm`/`curl`/`agent-gear` 与假 `nvm.sh`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），`curl`/`nvm` stub 只在临时目录内落地夹具产物，因此不会启动真实 dockerd、不访问网络、不触碰真实 `/home/worker`。
 
 > **镜像升级要求**：云电脑双连接 / `harness prepare` 依赖 `agent-gear` ≥ `2.10.0`（harness 容器门禁），含 `deepseek_harness` 的运行需 ≥ `2.11.0`（`header-masq` 配置注入）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.10.0`（DeepSeek Harness 云电脑 ≥ `2.11.0`）的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
@@ -456,3 +499,64 @@ docker rm -f worker-keepalive
 - [ ] `kill`/`pkill` agent-gear 后容器不销毁，日志出现自更新 + 重启（退出码非 42）
 - [ ] 服务端终止（`shutdown`/`unregistered`/`INVALID_TOKEN`）时 agent-gear 退出码 `42`，入口直接 0 退出、不重启
 - [ ] worker 用户 `kill` PID 1 被拒（root 监督进程）
+
+## 云存储主目录自举自验（`bootstrap_home` / `ZAG_STORAGE_HOME`）
+
+挂载云存储时 K8s 把 PVC 挂到 **`/home/worker`**，会遮蔽镜像烘焙的 `.nvm`（Node/npm）与
+`.local/share/pnpm`（pnpm/agent-gear）。入口在 `ensure_pnpm` 之前执行 `bootstrap_home`：按「产物存在且
+可执行」幂等重建（nvm.sh 可 source、`current/bin/node` 可执行），随后由既有 `ensure_pnpm` /
+`update_agent_gear` 补齐 pnpm 与 agent-gear。运行时依赖 `NVM_INSTALL_URL` / `NODE_VERSION` /
+`NPM_REGISTRY`（Dockerfile 已由同名 `ARG` 固化为 `ENV`）；未挂载存储时镜像内容完整，自举为 no-op。
+
+### 1) 空 `/home/worker` 起容器 → 自举成功
+
+用 tmpfs 覆盖 `/home/worker`（等价于首次挂载空卷），保留 uid/gid 1000 可写：
+
+```bash
+IMG=core.harbor.internal.fffdan.com/zero-tools/worker:dev
+docker run -d --name worker-empty-home \
+  --tmpfs /home/worker:rw,exec,uid=1000,gid=1000 \
+  -e ZAG_STORAGE_HOME=1 \
+  -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker \
+  -e ZAG_CONTROLLER_KEY=dummy "$IMG"
+docker logs -f worker-empty-home
+# 期望日志锚点（JSON msg）：
+#   bootstrap_home: nvm not available, installing (NVM_INSTALL_URL=https://nexus.internal.../install.sh)
+#   bootstrap_home: nvm installed
+#   bootstrap_home: node not available, installing Node.js 24
+#   bootstrap_home: node installed (v24.x)
+#   随后 pnpm installed / updating agent-gear via pnpm
+docker exec worker-empty-home bash -lc \
+  'runuser -l worker -c "node -v && npm -v && npm config get registry && pnpm --version && agent-gear --version"'
+docker rm -f worker-empty-home
+```
+
+逐项核对：
+
+- [ ] 空主目录下 `bootstrap_home` 依次命中 nvm → Node 两个锚点，`current` 软链由 `nvm which default` 重建
+- [ ] `runuser -l worker` 下 `node -v` 符合 `NODE_VERSION`（默认 24.x）、`npm config get registry` 为内网 npm 代理
+- [ ] `pnpm --version` 为 `12.16.1`、`agent-gear --version` 与镜像预装口径一致（pnpm/agent-gear 由既有链路补齐）
+- [ ] `/home/worker/.nvm`、`/home/worker/.local` 属主为 `worker`（自举以 `run_as_worker` 身份执行，不产生 root 属主文件）
+- [ ] 归档恢复场景（主目录已有完整环境）重跑：无 `bootstrap_home` 日志、无下载、无重复安装（no-op）
+
+### 2) `ZAG_STORAGE_HOME=1` 且下载源不可达 → 入口非零退出（fail-fast）
+
+```bash
+docker run --rm \
+  --tmpfs /home/worker:rw,exec,uid=1000,gid=1000 \
+  -e ZAG_STORAGE_HOME=1 \
+  -e NVM_INSTALL_URL=https://unreachable.invalid/install.sh \
+  -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker \
+  -e ZAG_CONTROLLER_KEY=dummy \
+  core.harbor.internal.fffdan.com/zero-tools/worker:dev; echo "exit=$?"
+```
+
+逐项核对：
+
+- [ ] 日志出现 `bootstrap_home failed (... NVM_INSTALL_URL=...); ZAG_STORAGE_HOME=1 so exiting non-zero`
+- [ ] `exit=1`，**不**出现 `connecting to cloud-controller` / agent-gear 拉起（不进入保活循环）
+- [ ] cloud-controller 侧 Job 失败 → 创建云电脑失败 → 存储回滚到挂载前状态
+- [ ] 同一场景去掉 `ZAG_STORAGE_HOME`（未挂载存储）时仅 `WARN: bootstrap_home failed ...`，入口继续保活
+
+> 自举失败不会重试/退避：挂载存储时以非零退出交给 K8s Job 失败语义（`backoffLimit` 与创建失败回滚由
+> cloud-controller 裁决），避免容器在残缺主目录上"假上线"。

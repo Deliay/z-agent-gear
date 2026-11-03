@@ -97,7 +97,7 @@ describe('Todo Resolvers', () => {
       );
 
       expect(result).toBe(true);
-      const published = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      const { _meta, ...published } = JSON.parse(mockRedis.publish.mock.calls[0][1]);
       expect(mockRedis.publish).toHaveBeenCalledWith('elicitation:response', expect.any(String));
       expect(published).toEqual({
         requestId: 'elic-1',
@@ -114,7 +114,7 @@ describe('Todo Resolvers', () => {
         mockContext,
       );
 
-      const published = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      const { _meta, ...published } = JSON.parse(mockRedis.publish.mock.calls[0][1]);
       expect(published).toEqual({ requestId: 'elic-2', action: 'decline' });
       expect(published.content).toBeUndefined();
     });
@@ -126,7 +126,7 @@ describe('Todo Resolvers', () => {
         mockContext,
       );
 
-      const published = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      const { _meta, ...published } = JSON.parse(mockRedis.publish.mock.calls[0][1]);
       expect(published).toEqual({ requestId: 'elic-3', action: 'cancel' });
     });
   });
@@ -228,10 +228,9 @@ describe('Todo Resolvers - elicitation resolution', () => {
       );
 
       expect(result).toBe(true);
-      expect(mockRedis.publish).toHaveBeenCalledWith(
-        'harness:login:cancel',
-        JSON.stringify({ requestId: 'hl-1' }),
-      );
+      expect(mockRedis.publish).toHaveBeenCalledWith('harness:login:cancel', expect.any(String));
+      const { _meta, ...hlPublished } = JSON.parse(mockRedis.publish.mock.calls[0][1]);
+      expect(hlPublished).toEqual({ requestId: 'hl-1' });
       expect(todoService.markTodoAsResponded).toHaveBeenCalledWith('hl-1', 'user1');
       expect(todoService.markHarnessLoginResolved).toHaveBeenCalledWith('hl-1', 'cancelled', { userId: 'user1' });
     });

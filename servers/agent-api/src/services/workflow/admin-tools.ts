@@ -476,7 +476,7 @@ export async function ensureAdminToolsServer(userId: string): Promise<string> {
         tools: getAdminToolDefinitions().map((t) => ({ name: t.name, description: t.description })),
       },
     },
-    { upsert: true, new: true },
+    { upsert: true, returnDocument: 'after' },
   );
   return server._id.toString();
 }

@@ -15,7 +15,7 @@ import {
  * - 工作区管理页仅 team admin 可操作，developer 只读提示；
  * - 租户成员管理页：搜索添加 / 指定角色 / 变更角色 / last-admin 提示 / developer 无入口；
  * - 个人租户用户无切换器（零感知）；
- * - 团队全局工作区 + developer：设置页只读收敛。
+ * - 团队全局工作区 + developer：设置页只读收敛（Commit 设置为成员级，不受工作区只读约束）。
  *
  * 数据经 admin-api（adminCreateTeamTenant / adminAddTenantMember）+ agent-api GraphQL 准备，
  * 需要 INTERNAL_API_TOKEN 或 MONGODB_URI（开户 helper 口径）。
@@ -24,6 +24,8 @@ import {
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const FRONT_WEB_URL = process.env.BASE_URL || 'http://localhost:35273';
 const sidebar = () => 'nav[aria-label="Sidebar"]';
+/** 设置页「Git」区块（成员级提交人设置，与工作区只读无关）。 */
+const gitSectionFor = (page: Page) => page.locator('#git-section');
 
 /** 测试内需要第二个干净登录态（localStorage 隔离）；新 context 必须显式带上 baseURL。 */
 function newIsolatedPage(page: Page): Promise<Page> {
@@ -301,9 +303,14 @@ test.describe('多租户二期工作区 E2E（E2E-WS）', () => {
     await expect(
       page.getByText('全局工作区对开发者只读，编辑入口已隐藏'),
     ).toBeVisible();
+    // Commit 设置已收敛为成员级：只读工作区不再禁写（旧文案「不可修改 Commit 设置」下线）
     await expect(
       page.getByText('全局工作区对开发者只读，不可修改 Commit 设置'),
-    ).toBeVisible();
+    ).toHaveCount(0);
+    await expect(gitSectionFor(page).getByText('仅对云电脑环境生效')).toBeVisible();
+    await expect(
+      gitSectionFor(page).getByRole('button', { name: '保存 Git 设置' }),
+    ).toBeEnabled();
   });
 
   test('E2E-WS2b 工作区改名 / 非空删除拦截 / 成员添加移除', async ({ page }) => {
@@ -345,34 +352,43 @@ test.describe('多租户二期工作区 E2E（E2E-WS）', () => {
     ).toHaveCount(0, { timeout: 15000 });
     await membersDialog.getByRole('button', { name: '关闭' }).click();
 
-    // 3) 非空删除拦截：写入本工作区 Commit 设置（计入资源集合）后删除被拒
-    const saved = await gqlAs(
-      page,
-      `mutation UpdateCommitSettings($input: CommitSettingsInput!) {
-        updateCommitSettings(input: $input) { source }
-      }`,
-      {
-        input: {
-          committerMode: 'HUMAN_ONLY',
-          committerType: 'CUSTOM',
-          customName: 'Non Empty E2E',
-          customEmail: 'non-empty-e2e@example.com',
+    // 3) 非空删除拦截：在本工作区写入供应商（工作区资源）后删除被拒
+    //    Commit 设置已收敛为成员级、不再计入工作区资源，故改用供应商构造「非空」。
+    const mock = await startMockLlmServer();
+    try {
+      const providerName = `non-empty-${Date.now().toString(36)}`;
+      const providerSaved = await gqlAs(
+        page,
+        `mutation CreateProvider($input: ProviderInput!) {
+          createProvider(input: $input) { id name workspaceId scope }
+        }`,
+        {
+          input: {
+            name: providerName,
+            type: 'OpenAI',
+            endpoint: `http://127.0.0.1:${mock.port}/v1`,
+            credentialType: 'api_key',
+            credentialValue: 'sk-e2e-non-empty',
+          },
         },
-      },
-      fixture.owner.token,
-      fixture.normalWorkspaceId,
-    );
-    expect(saved.errors, JSON.stringify(saved.errors)).toBeUndefined();
+        fixture.owner.token,
+        fixture.normalWorkspaceId,
+      );
+      expect(providerSaved.errors, JSON.stringify(providerSaved.errors)).toBeUndefined();
+      expect(providerSaved.data!.createProvider.workspaceId).toBe(fixture.normalWorkspaceId);
 
-    await row.getByRole('button', { name: '删除' }).click();
-    const confirm = page.getByRole('dialog');
-    await expect(confirm.getByText('删除工作区')).toBeVisible();
-    await confirm.getByRole('button', { name: '删除' }).click();
-    await expect(
-      page.getByText('工作区非空（仍持有资源），无法删除'),
-    ).toBeVisible({ timeout: 15000 });
-    // 工作区保留，未被删除
-    await expect(page.getByTestId(`workspace-row-${fixture.normalWorkspaceId}`)).toBeVisible();
+      await row.getByRole('button', { name: '删除' }).click();
+      const confirm = page.getByRole('dialog');
+      await expect(confirm.getByText('删除工作区')).toBeVisible();
+      await confirm.getByRole('button', { name: '删除' }).click();
+      await expect(
+        page.getByText('工作区非空（仍持有资源），无法删除'),
+      ).toBeVisible({ timeout: 15000 });
+      // 工作区保留，未被删除
+      await expect(page.getByTestId(`workspace-row-${fixture.normalWorkspaceId}`)).toBeVisible();
+    } finally {
+      await mock.close();
+    }
   });
 
   test('E2E-WS3b 资源来源徽标：全局工作区资源 / 本工作区资源', async ({ page }) => {
@@ -429,60 +445,50 @@ test.describe('多租户二期工作区 E2E（E2E-WS）', () => {
     }
   });
 
-  test('E2E-WS4b Commit 设置三态：未设置 / 继承自全局工作区 / 本工作区', async ({ page }) => {
+  test('E2E-WS4b 成员级 Commit 设置：任一工作区保存后切到其他工作区回显一致（无三段继承）', async ({
+    page,
+  }) => {
     const fixture = await createTeamFixture(page);
-    const updateCommitSettings = `
-      mutation UpdateCommitSettings($input: CommitSettingsInput!) {
-        updateCommitSettings(input: $input) { source committerMode }
-      }
-    `;
+    const settingsInput = {
+      committerType: 'CUSTOM',
+      customName: 'Member Committer E2E',
+      customEmail: 'member-committer-e2e@example.com',
+    };
 
-    await loginViaUI(page, fixture.owner.username);
-    await page.locator('#workspace-switcher-select').selectOption(fixture.normalWorkspaceId);
-    await expect(page.locator('#workspace-switcher-select')).toHaveValue(fixture.normalWorkspaceId);
-
-    await page.goto('/settings');
-    // ① 本工作区与全局均未设置
-    await expect(page.getByTestId('commit-settings-source')).toHaveText('未设置', { timeout: 15000 });
-
-    // ② 全局工作区设置 → 普通工作区继承
-    const globalSaved = await gqlAs(
+    const saved = await gqlAs(
       page,
-      updateCommitSettings,
-      {
-        input: {
-          committerMode: 'HUMAN_ONLY',
-          committerType: 'CUSTOM',
-          customName: 'Global Committer E2E',
-          customEmail: 'global-committer-e2e@example.com',
-        },
-      },
-      fixture.owner.token,
-      fixture.globalWorkspaceId,
-    );
-    expect(globalSaved.errors, JSON.stringify(globalSaved.errors)).toBeUndefined();
-    await page.reload();
-    await expect(page.getByTestId('commit-settings-source')).toHaveText('继承自全局工作区', {
-      timeout: 15000,
-    });
-
-    // ③ 本工作区设置 → 覆盖继承
-    const ownSaved = await gqlAs(
-      page,
-      updateCommitSettings,
-      {
-        input: {
-          committerMode: 'AGENT_ONLY',
-          committerType: 'UNSET',
-        },
-      },
+      `mutation UpdateCommitSettings($input: CommitSettingsInput!) {
+        updateCommitSettings(input: $input) { committerType customName customEmail }
+      }`,
+      { input: settingsInput },
       fixture.owner.token,
       fixture.normalWorkspaceId,
     );
-    expect(ownSaved.errors, JSON.stringify(ownSaved.errors)).toBeUndefined();
-    await page.reload();
-    await expect(page.getByTestId('commit-settings-source')).toHaveText('本工作区', {
-      timeout: 15000,
-    });
+    expect(saved.errors, JSON.stringify(saved.errors)).toBeUndefined();
+    expect(saved.data!.updateCommitSettings).toEqual(settingsInput);
+
+    await loginViaUI(page, fixture.owner.username);
+
+    const expectEcho = async () => {
+      const git = gitSectionFor(page);
+      await expect(
+        git.getByRole('radiogroup', { name: '提交人' }).getByRole('radio', { name: '自定义' }),
+      ).toBeChecked({ timeout: 15000 });
+      await expect(git.getByLabel('用户名')).toHaveValue(settingsInput.customName);
+      await expect(git.getByLabel('邮箱')).toHaveValue(settingsInput.customEmail);
+    };
+
+    // ① 保存所在的工作区：回显本成员设置
+    await page.locator('#workspace-switcher-select').selectOption(fixture.normalWorkspaceId);
+    await expect(page.locator('#workspace-switcher-select')).toHaveValue(fixture.normalWorkspaceId);
+    await page.goto('/settings');
+    await expectEcho();
+
+    // ② 切到团队全局工作区：仍是同一份成员设置（不存在「继承自全局工作区 / 本工作区」三段语义）
+    await page.locator('#workspace-switcher-select').selectOption(fixture.globalWorkspaceId);
+    await expect(page.locator('#workspace-switcher-select')).toHaveValue(fixture.globalWorkspaceId);
+    await page.goto('/settings');
+    await expectEcho();
+    await expect(page.getByTestId('commit-settings-source')).toHaveCount(0);
   });
 });

@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
+
+const log = logger.child({ component: 'migration/016-preset-mongodb' });
 
 /**
  * 016-preset-mongodb：写入预制工作负载「MongoDB」（原生 apt 安装 mongodb-org 8.0）。
@@ -48,14 +51,15 @@ mongod --version
 export async function run(): Promise<void> {
   const byKey = await CloudWorkload.findOne({ presetKey: MONGODB_PRESET_KEY });
   if (byKey) {
-    console.warn(
-      `[Migration 016] preset workload "${MONGODB_PRESET_KEY}" already exists (by presetKey), skipping`,
+    log.warn(
+      { presetKey: MONGODB_PRESET_KEY },
+      'preset workload already exists (by presetKey), skipping',
     );
     return;
   }
   const byName = await CloudWorkload.findOne({ name: MONGODB_PRESET_NAME });
   if (byName) {
-    console.warn(`[Migration 016] workload named "${MONGODB_PRESET_NAME}" already exists, skipping`);
+    log.warn({ name: MONGODB_PRESET_NAME }, 'workload with the same name already exists, skipping');
     return;
   }
 
@@ -70,5 +74,5 @@ export async function run(): Promise<void> {
     workloadKind: 'standard',
     harnessType: null,
   });
-  console.log(`[Migration 016] preset workload "${MONGODB_PRESET_KEY}" created`);
+  log.info({ presetKey: MONGODB_PRESET_KEY }, 'preset workload created');
 }

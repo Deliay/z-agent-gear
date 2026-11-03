@@ -10,6 +10,8 @@ const cloudHostSchema = new mongoose.Schema(
   {
     // agent-api 侧为 ObjectId；对账/鉴权只按 _id 查
     userId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    // 多租户二期：agent-api 写入的租户维度；tenant 计费归属按此校验（历史行可能为 null）
+    tenantId: { type: mongoose.Schema.Types.ObjectId, default: null },
     status: {
       type: String,
       enum: ['STARTING', 'RUNNING', 'STOPPING', 'STOPPED', 'FAILED'],

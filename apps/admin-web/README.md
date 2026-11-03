@@ -14,14 +14,14 @@
 ## 开发命令
 
 ```bash
-npm install
-npm run dev        # Vite dev server（本地可独立运行，代理 /graphql → localhost:10003）
-npm run build      # tsc -b && vite build
-npm run lint       # eslint
-npm test           # vitest run
+pnpm install
+pnpm run dev        # Vite dev server（本地可独立运行，代理 /graphql → localhost:10003）
+pnpm run build      # tsc -b && vite build
+pnpm run lint       # eslint
+pnpm test           # vitest run
 ```
 
-本项目由 Aspire 编排启动，`VITE_ADMIN_API_URL` 由 Aspire 注入；也可单独 `npm run dev`。
+本项目由 Aspire 编排启动，`VITE_ADMIN_API_URL` 由 Aspire 注入；也可单独 `pnpm run dev`。
 
 ## admin-api 接入地址（endpoint 四级优先）
 
@@ -34,7 +34,7 @@ npm test           # vitest run
 
 ## 容器部署
 
-- `Dockerfile`：多阶段构建（`node:24-alpine` 构建 → `nginx:1.27-alpine` 托管），构建参数 `VITE_ADMIN_API_URL` 透传给 `npm run build`。
+- `Dockerfile`：多阶段构建（`node:24-alpine` 构建 → `nginx:1.27-alpine` 托管），构建参数 `VITE_ADMIN_API_URL` 透传给 `pnpm run build`。
 - `nginx.conf`：SPA history fallback（`try_files $uri $uri/ /index.html`）+ `/assets/` 长缓存，不硬编码 `/graphql` 上游。
 - `docker-entrypoint.d/40-generate-config-js.sh`：容器启动时按 `ADMIN_API_URL` 生成 `/usr/share/nginx/html/config.js`；未设置时生成空配置。
 

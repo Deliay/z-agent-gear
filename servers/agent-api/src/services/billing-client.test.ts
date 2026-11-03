@@ -67,4 +67,24 @@ describe('BillingClient 一次性扣费/退款', () => {
       '/internal/billing/price-quote?productIds=cloud_host.create',
     );
   });
+
+  it('T-BC-SQ1: getStorageQuote 走 /internal/billing/storage-quote?sizeGi=', async () => {
+    const quote = {
+      sizeGi: 20,
+      full: { hourlyCredits: 15, items: [] },
+      archived: { hourlyCredits: 7.5, items: [] },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(quote), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new BillingClient('http://admin-api', 'token');
+    await expect(client.getStorageQuote(20)).resolves.toEqual(quote);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      'http://admin-api/internal/billing/storage-quote?sizeGi=20',
+    );
+  });
 });

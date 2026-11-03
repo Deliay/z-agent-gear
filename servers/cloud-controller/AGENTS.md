@@ -28,6 +28,8 @@ src/
 │   ├── token-service.ts        # 一次性 token 签发/校验（bcrypt，tokenHash）
 │   ├── k8s-client.ts           # K8sClient 接口 + Real/InMemory 实现 + 工厂
 │   ├── k8s-job-manager.ts      # Job manifest + CRUD + Foreground→Background 回退
+│   ├── k8s-storage-manager.ts  # 云存储 PVC manifest/ensure/删除 + 归档文件名安全化
+│   ├── storage-service.ts      # 云存储编排：归档 Job/恢复准备/用量/清理/巡检/回调
 │   ├── container-service.ts    # 生命周期状态机（creating→connecting→initializing?→online→destroying→exited/failed），落库 workloadPlan；显式下发 plan 时由其派生 workloadIds，仅 workloadIds 的旧版请求按选择顺序落库
 │   ├── workload-dispatcher.ts  # 工作负载编排：按 workloadPlan（无 plan 回退 workloadIds）下发脚本与参数/required/结果落库/当前脚本/看门狗/post 批次 + 必须失败裁决（中断 + 锁外强制注销）
 │   ├── workload-plan.ts        # 兜底展开纯函数（仅无 workloadPlan 时用 workloadIds + 只读定义做后序 DFS + 默认参数归一，校验口径镜像 admin-api）
@@ -53,18 +55,18 @@ src/
 
 - **单一事实源**：容器状态/生命周期全部由本服务持有；`admin-api` 不直连 K8s、不双写 Mongo（降级只读除外）。
 - **鉴权**：容器经 Socket.IO 握手 `auth.token`（遗留 query 兼容）的一次性 token（`<containerId>.<secret>`，bcrypt 哈希存 `cloudcontainers.tokenHash`）鉴权，`register` 的 `key` 字段被忽略；握手限速按 token 的 `containerId` 前缀（无 token 回退 peer IP），另有更高上限的 per-IP 兜底桶——worker 经共享 Ingress IP 回连时不共享同一令牌桶；内部 REST 走 `Bearer INTERNAL_API_TOKEN`。**绝不读写 `controllerkeys` 集合**。
-- **工作负载仅 Job**：`restartPolicy: Never`、`backoffLimit: 0`、`ttlSecondsAfterFinished: 600`、label `app=zag-worker` + `zag.cloud/container-id=<id>`；另含资源 limits（4 vCPU / 16Gi，不设置 requests）。**不设置 `activeDeadlineSeconds`**：最长运行时间无限制，避免活跃容器被 K8s 到期强杀。
+- **工作负载仅 Job**：`restartPolicy: Never`、`backoffLimit: 0`、`ttlSecondsAfterFinished: 600`、label `app=zag-worker` + `zag.cloud/container-id=<id>`；另含资源约束（requests 0.1 vCPU / memory 256Mi；limits 4 vCPU / 8Gi）。**不设置 `activeDeadlineSeconds`**：最长运行时间无限制，避免活跃容器被 K8s 到期强杀。
 - **工作负载脚本经 Socket.IO 下发（不经 K8s env / manifest 注入）**：`cloudworkloads` 由 admin-api 管理、本服务只读；启动请求可携带已展开的 `workloadPlan:[{workloadId,params,implicit,required}]`（落库到容器并由 plan 派生 `workloadIds`；缺省 `params`/`implicit`/`required` 归一为 `{}`/`false`/`false`），无 plan 时以只读定义对 `workloadIds` 做兜底展开（依赖先于依赖方、去重、参数取默认值；默认参数校验口径镜像 admin-api，非法默认值 → 400 `INVALID_WORKLOAD`），此时容器 `workloadIds` 按选择顺序落库、兜底展开的 plan 仅用于执行（`required` 一律 `false`）。容器 register 后由 `workload-dispatcher` 按计划顺序下发 `workload:run{phase:"init"}`（items 携带 `workloadId`/`params`/`required`，同时建 `cloudworkloadlogs` 记录并写入脚本与参数快照、CAS 置 `initializing`、写 `currentWorkloadName`），逐条 `workload:result` 推进，全部终态后收口 `online`（有活跃 socket）或 `connecting`。销毁时先下发 `workload:run{phase:"post"}` 并等待结果/预算耗尽，再发 `shutdown`。旧 worker 忽略新事件，由看门狗标 `TIMEOUT` 兜底；旧容器无 plan 时回退 `workloadIds → {workloadId,params:{},implicit:false,required:false}`。
 - **工作流只初始化一次**：起始 `init` 批次收口（首次 `markOnline`）时落库 `initCompletedAt`；此后 `online → connecting → 再次 register` 的断线重连（含 agent-gear 进程重启）由 `hasSettledInit` 拦截，`hasInitScripts=false`（`registered.initializing=false`）且 `startInit` 不下发批次。历史容器无该字段时，以 `connectedAt` 非空的 `connecting` 状态兜底识别为已初始化；`initializing` 期间掉线保持原状态、由看门狗收口，同样不重放。单测 T-WD13b/T-WD13c/T-WG1d 锚定。
 - **工作负载「必须」失败裁决（工作负载三期）**：`required` 缺省 `false`、仅 `=== true` 生效（非布尔 `400 INVALID_WORKLOAD`）；`init` 阶段必须项结果为 `failed`/`timeout`（含看门狗判定、执行前被删除的 `failed` 占位）时，`workload-dispatcher` **不 advance**，把该容器剩余非终态 `init` 记录标 `timeout` 并追加说明「必须工作负载初始化失败，已中断」，随后**在容器互斥锁外**调用注入的 `forceDestroy(containerId, '必须工作负载「<name>」初始化失败')` 复用既有销毁链路强制注销（先 CAS `destroying` 使一次性 token 失效 → post 批次 + `shutdown` → 删除 Job → `exited`），**不重试、不退避**；`KeyedMutex` 非可重入，注销会触发 gateway 的 `runPostBatch`（需同一把锁），故必须锁外消费信号（单测 T-WD23 锚定防自锁）。`post` 批次与新占位日志 `required` 固定 `false`；注销后 `finishInit` 对非 `initializing` 直接返回，迟到结果按终态幂等忽略，不会回到 `online`。
 - **必须失败标记与注销失败兜底**：产生必须失败信号时，dispatcher **在容器互斥锁内**先落持久化标记 `cloudcontainers.mustFailure=true` 并写入 `exitReason`（关闭「锁外销毁前被看门狗收口为 online/connecting」的窗口）；`finishInit` 对 `mustFailure` 容器拒绝收口。锁外 `forceDestroy` 失败（如瞬时 Mongo/网络故障）时，把容器 CAS 为终态 `failed` 并保留必须失败 `exitReason`（残留 Job 交由既有巡检回收），`mustFailure` 使看门狗也绝不将其置 `online`；若注销仍未完成（容器停在 `initializing` 且 `mustFailure`），`onWatchdog` 会**重试销毁**（重试的是销毁而非初始化，不构成 backoff）。单测 T-WD26/T-WD27/T-WD28 锚定。
 - **带原因的销毁**：`ContainerService.destroy(containerId, options?: { reason?: string })`，活跃路径 `exitReason = options?.reason ?? '强制销毁'`（Job 删除失败再追加「（Job 删除失败，需人工清理）」）；`forceDestroy(id, reason)` 为 `destroy(id, {reason})` 的语义封装（spi `WorkloadContainerStatePort.forceDestroy`），不新增独立删除路径。`adminDestroyCloudContainer` 不传 reason，行为与现状一致。销毁时 `shutdown` 事件透传真实 reason（必须失败 = `mustFailure` 写入的 `exitReason`），worker 据此非零退出，不得硬编码「强制销毁」。
 - **worker 参数注入版本要求**：`MIN_WORKER_VERSION` 保持 `2.2.0`（2.2.0 worker 仍可执行不带参数的脚本）；参数注入（`WORKLOAD_PARAMS`/`WORKLOAD_PARAM_*`）需 worker 镜像内 agent-gear `>=2.3.0`。
-- **worker 注册版本门禁**：`register.version` 必须是严格三段数字且 `>=2.2.0`、major 为 `2`（代码常量 `MIN_WORKER_VERSION`/`SUPPORTED_MAJOR`，见 `services/worker-version.ts`，不通过环境变量配置）。**按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION='2.10.0'`（worker 用户 + 保活退出码 42；云电脑双连接 / `harness prepare`），普通容器维持 `2.2.0`；`harnessMinVersion` 按 `harnessTypes` 与 `MIN_HARNESS_VERSION_BY_TYPE`（`kimi_code: 2.8.0`、`deepseek_harness: 2.11.0`——`header-masq` 会话标识配置注入）取最大：仅 opencode / 含 `kimi_code` 的组合仍 `2.10.0`，含 `deepseek_harness` 为 `2.11.0`；`register` 先读取容器 purpose 再校验。校验必须位于**全部注册副作用之前**：拒绝路径只 `emit('error', { code: 'VERSION_MISMATCH', currentVersion, minimumVersion, supportedMajor })` + `disconnect(true)`，不写 `socket.data.registered`、不 `heartbeatTracker.record`、不 `hasInitScripts`/`startInit`、不 `markOnline`/`markInitializing`，也不写 `connectedAt`。因此版本被拒的容器销毁时走「未完成兼容注册」路径：不发送 shutdown、不等待宽限，直接删除 Job。版本串写日志前须经 `sanitizeVersionForLog`（去控制字符、截断 64）。`registered` 携带 `initializing`（= `hasInitScripts` 结果），agent-gear 据此在 init 完成后才建立标准连接（缺省/false 立即连接，向后兼容）。
+- **worker 注册版本门禁**：`register.version` 必须是严格三段数字且 `>=2.2.0`、major 为 `2`（代码常量 `MIN_WORKER_VERSION`/`SUPPORTED_MAJOR`，见 `services/worker-version.ts`，不通过环境变量配置）。**按 purpose 分流**：`purpose=harness` 使用 `MIN_HARNESS_WORKER_VERSION='2.12.0'`（worker 用户 + 保活退出码 42、云电脑双连接 / `harness prepare`、Worktree 级提交人写入基线），普通容器维持 `2.2.0`；`harnessMinVersion` 按 `harnessTypes` 与 `MIN_HARNESS_VERSION_BY_TYPE`（`kimi_code: 2.8.0`、`deepseek_harness: 2.12.0`——`header-masq` 会话标识配置注入；两项与 2.12.0 基线取 max）取最大：opencode / `kimi_code` / `deepseek_harness` 及其组合恒为 `2.12.0`；`register` 先读取容器 purpose 再校验。校验必须位于**全部注册副作用之前**：拒绝路径只 `emit('error', { code: 'VERSION_MISMATCH', currentVersion, minimumVersion, supportedMajor })` + `disconnect(true)`，不写 `socket.data.registered`、不 `heartbeatTracker.record`、不 `hasInitScripts`/`startInit`、不 `markOnline`/`markInitializing`，也不写 `connectedAt`。因此版本被拒的容器销毁时走「未完成兼容注册」路径：不发送 shutdown、不等待宽限，直接删除 Job。版本串写日志前须经 `sanitizeVersionForLog`（去控制字符、截断 64）。`registered` 携带 `initializing`（= `hasInitScripts` 结果），agent-gear 据此在 init 完成后才建立标准连接（缺省/false 立即连接，向后兼容）。
 - **runtimeClass + hostUsers**：配置了 `RUNTIME_CLASS_NAME`（默认 `sysbox-runc`）时，同时下发 `hostUsers: false`——sysbox 要求 Pod 停用宿主 user namespace，否则 sandbox 创建失败（写 `net.ipv4.ip_unprivileged_port_start` 被拒）；未配置 runtimeClass 时不设置该字段。
 - **env 通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker`（**不含 token**）与 `ZAG_CONTROLLER_KEY=<token>`（agent-gear 连接时经握手 `auth.token` 携带）。
 - **K8s 客户端可注入**：`K8S_ENABLED=false` 时使用 `InMemoryK8sClient`（本地/测试/E2E 全 mock，不依赖真实集群）。
-- **用途白名单**：`POST /internal/containers` 仅接受 `idle|harness`；其余用途返回 400「该任务类型暂未开放」。`purpose=harness` 必填 `hostId/refId(controllerKeyId)/userId/tenantId/hostName/harnessTypes(非空、白名单)/expiresAt/agentGearMinVersion(三段版本)/secrets/workloadPlan`，且 **workloadPlan 必须显式下发**（不允许仅 workloadIds 兜底展开）；缺失或非法返回 `400 INVALID_HARNESS` 且不创建 Job；`GET /containers?hostId=&userId=` 可选过滤（无参数保持全量）。`tenantId` 与 `userId` 同值（个人专属租户 `_id` 复用 userId）并落库到 `cloudcontainers.tenantId`；滚动升级兜底：旧版 agent-api 未下发 `tenantId` 时回退 `tenantId = userId` 并 `console.warn`（显式下发但空串/非字符串仍 400）。多租户二期起同链路口径追加 `workspaceId`（见「多租户二期」段）。
+- **用途白名单**：`POST /internal/containers` 仅接受 `idle|harness`；其余用途返回 400「该任务类型暂未开放」。`purpose=harness` 必填 `hostId/refId(controllerKeyId)/userId/tenantId/hostName/expiresAt/agentGearMinVersion(三段版本)/secrets`；`harnessTypes` 允许空数组（0-harness 云电脑，非空时须白名单）、`workloadPlan` 允许为空（0 harness + 0 standard 直接 online）；缺失或非法返回 `400 INVALID_HARNESS` 且不创建 Job；`GET /containers?hostId=&userId=` 可选过滤（无参数保持全量）。`tenantId` 与 `userId` 同值（个人专属租户 `_id` 复用 userId）并落库到 `cloudcontainers.tenantId`；滚动升级兜底：旧版 agent-api 未下发 `tenantId` 时回退 `tenantId = userId` 并 `console.warn`（显式下发但空串/非字符串仍 400）。多租户二期起同链路口径追加 `workspaceId`（见「多租户二期」段）。
 - **云电脑 secret 与 TTL**：`secrets{hostEndpoint,hostKey,modelApiKey,modelBaseUrl,modelIds,defaultWorkspace}` 仅存入 `SecretStore`（进程内 Map，不落库、不返回、不打印），容器终态时删除；可选 `secrets.modelContextLengths`（模型 ID → 最长上下文 JSON object 字符串，不参与必填校验），携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传；`expiresAt` 仅落库留存（容器 TTL 留档，**不再关联模型 Key 有效期**——模型 Key 随容器回收：宿主非 `RUNNING`/删除/缺失由网关拒绝并对账撤销），**不再换算 Job 硬截止**（Job 不设 `activeDeadlineSeconds`，最长运行时间无限制）。
 - **云电脑 env**：Job env 仅追加 `ZAG_HOST_ENDPOINT/ZAG_HOST_KEY/ZAG_HOST_NAME/ZAG_HARNESS_TYPES/ZAG_DEFAULT_WORKSPACE/ZAG_USER_TYPE/ZAG_USER_ID`（`ZAG_CONTROLLER_KEY` 仍为 `/worker` 一次性 token）；模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发（仅 harness，idle 不携带 `env`）。harness secret/模型配置缺失时 dispatcher 判 init 失败、容器不 online。
 - **云电脑生命周期回调**：`onReady` 对 harness（首次 online）与计费事件共用时机，调用 agent-api `POST /internal/cloud-hosts/:hostId/ready`；`onDestroyed` 对 harness 终态调用 `/terminal`（exited→stopped、failed→failed）并按 hostId 调 admin-api `revoke-by-host`。回调均 Bearer `INTERNAL_API_TOKEN`，单次回调内置 4 次退避重试（0/250ms/1s/3s），外层容器钩子再重试 3 次；最终失败记录 error 日志（降级：agent-api 可用过期/对账与容器状态兜底，不阻断容器回收）。`AGENT_API_URL`/`ADMIN_API_URL` 未配置时启动即告警，回调 no-op。**SecretStore 为进程内存**：cloud-controller 重启会丢失在途 harness 的 secrets（该容器初始化将失败/不 online），需通过巡检/重建云电脑恢复；本期不引入持久化 secret。
@@ -86,22 +88,30 @@ src/
 | `WORKLOAD_LOG_MAX_BYTES` | 单条执行日志存储上限（默认 262144，写入前尾部截断） |
 | `K8S_ENABLED` | 是否使用真实 K8s 客户端（默认 `true`；本地/测试设 `false`） |
 | `RUNTIME_CLASS_NAME` | 容器 runtimeClass（默认 `sysbox-runc`） |
-| `LOG_LEVEL` | 日志级别（`debug`/`info`/`warn`/`error`，默认 `info`）。排查 worker 回连时设 `debug` 看逐请求日志 |
+| `LOG_LEVEL` | 日志级别（`debug`/`info`/`warn`/`error`，默认 `info`）。回连排查的逐请求/逐事件级别见「回连失败排查」（engine path `http-request` 等默认 `info` 已可见，仅非 engine-path `http-request` 需 `debug`） |
 | `AGENT_API_URL` | agent-api 内部地址（可空；配置后启用云电脑 ready/terminal 回调） |
 | `AGENT_API_TIMEOUT_MS` | 内部回调超时（默认 5000，正数） |
 | `ADMIN_API_URL` | admin-api 内部地址（可空；配置后启用云电脑模型 Key `revoke-by-host`） |
+| `CLOUD_STORAGE_CLASS` | 源 PVC 默认 StorageClass（空 = 集群默认；空时 `storageClassName` 整段省略） |
+| `CLOUD_ARCHIVE_STORAGE_CLASS` | 归档 PVC StorageClass（空 = 集群默认） |
+| `CLOUD_ARCHIVE_PVC_SIZE` | 每工作区归档卷容量（默认 `100Gi`） |
+| `CLOUD_ARCHIVE_ACCESS_MODE` | 归档卷访问模式（默认 `ReadWriteOnce`，可逗号分隔） |
+| `ARCHIVER_IMAGE` | archiver 镜像（归档/恢复/用量/清理 Job；缺失启动告警） |
+| `ARCHIVE_TIMEOUT_MS` | 归档超时（默认 1800000，正整数） |
+| `STORAGE_PVC_PREFIX` | 源 PVC 名称前缀（默认 `zag-storage-`） |
+| `ARCHIVE_PVC_PREFIX` | 归档 PVC 名称前缀（默认 `zag-archive-`） |
 
 ## 回连失败排查（worker 连不上 cloud-controller）
 
-worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日志」时，按下面顺序定位（`LOG_LEVEL=info` 即可，无需改代码）：
+worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日志」时，按下面顺序定位（`LOG_LEVEL=info` 即可，无需改代码）。日志为 pino 单行 JSON（`"component"`/`"event"` 字段化），直接 `grep` 字段或 `msg` 即可命中。
 
-1. **确认 cloud-controller 在跑且日志可见**：`kubectl -n zag-cloud logs deploy/cloud-controller`。进程启动必定打印 `cloud-controller listening on :<port> (engine path /socket.io/ ...)` 与一条 worker 回连提示；若这条都没有，说明看错了 Pod/容器，或服务未启动。
-2. **请求是否到达 Pod**：websocket 握手走 HTTP **upgrade**，不经过 express；命中时会打印
-   `[ws] upgrade accepted path=/socket.io/ ... host=... xfp=... xff=...`。
+1. **确认 cloud-controller 在跑且日志可见**：`kubectl -n zag-cloud logs deploy/cloud-controller`。进程启动必定打印一条启动日志（`grep '"port":'` 或 `grep 'cloud-controller listening'` 命中），`msg` 为 `cloud-controller listening；worker 回连地址为 wss://<PUBLIC_WS_ENDPOINT>/worker，握手实际打到 engine path，Ingress 必须放行该路径`，字段 `port`/`enginePath`/`logLevel`/`publicWsEndpoint`；若这条都没有，说明看错了 Pod/容器，或服务未启动。
+2. **请求是否到达 Pod**：websocket 握手走 HTTP **upgrade**，不经过 express；命中时 `socket-diagnostics` 组件会打印 `"event":"ws-upgrade-accepted"`（`grep '"event":"ws-upgrade-accepted"'`），`msg` 为 `ws upgrade accepted`，字段 `path`/`host`/`xForwardedProto`/`xForwardedFor`/`userAgent`/`remoteAddress`。
    - 完全没有该行 → 请求没到 Pod，问题在入口层（Ingress 路径/TLS/host/DNS/Service）。看 Ingress 控制器日志：`kubectl -n <ingress-ns> logs <ingress-pod>`。
-   - 出现 `[ws] upgrade path mismatch: got "/worker", expected "/socket.io/"` → Ingress 误配成 `/worker`（`/worker` 是 namespace，不是路径）；把 Ingress `spec.rules[].http.paths[].path` 改为 `/socket.io`（Prefix）。
-   - 出现 `[ws] engine connection_error code=... message=...` → 到 Pod 了但被 engine 拒绝（协议版本/CORS/传输不匹配），按 message 处理。
-3. **握手鉴权是否通过**：到达后依次打印 `[worker] handshake attempt ... token=present|MISSING` → `handshake accepted/rejected (INVALID_TOKEN)` → `connected` → `registered`。卡在哪一步即问题所在（token 失效/版本不兼容/register 失败等）。
+   - 出现 `"event":"ws-upgrade-path-mismatch"`（`grep '"event":"ws-upgrade-path-mismatch"'`，字段 `path`/`expectedPath`）→ Ingress 误配成 `/worker`（`/worker` 是 namespace，不是路径）；把 Ingress `spec.rules[].http.paths[].path` 改为 `/socket.io`（Prefix）。误打 `/worker` 的普通 HTTP 请求另有一条 `"event":"worker-path-request"` warn（msg `"/worker" 是 Socket.IO namespace，不是 URL 路径；Ingress 应放行 engine path`）。
+   - 出现 `"event":"engine-connection-error"`（`grep '"event":"engine-connection-error"'`，msg `engine connection_error`，字段 `code`/`err.message`/`context`）→ 到 Pod 了但被 engine 拒绝（协议版本/CORS/传输不匹配），按 message 处理。
+   - **逐请求细节分级**（级别决定要不要调 `LOG_LEVEL`，与 `socket-diagnostics.ts` 逐条一致）：`ws-upgrade-accepted`=info（msg `ws upgrade accepted`）、`ws-upgrade-path-mismatch`=warn、`upgrade-socket-error`=warn、engine path 的 `"event":"http-request"`（msg `engine path http request`）=**info**、`worker-path-request`=warn、`engine-connection-error`=warn——以上默认 `LOG_LEVEL=info` 均可见；仅**非** engine-path 的 `"event":"http-request"`（msg `http request`）是 **debug**，需 `LOG_LEVEL=debug` 查看。
+3. **握手鉴权是否通过**：到达后 `worker-gateway` 组件依次打印 `"event":"handshake_attempt"`（msg `handshake attempt`，字段 `tokenPresent`/`from`/`transport`）→ `"event":"handshake_accepted"` 或 `"event":"handshake_rejected"`（msg `handshake accepted`/`handshake rejected`，拒绝带 `reason: 'INVALID_TOKEN'`、`tokenPresent`）→ `"event":"connected"`（msg `connected`）→ `"event":"registered"`（msg `registered`，字段 `version`/`platform` 经 `sanitizeVersionForLog`）。卡在哪一步即问题所在（token 失效/版本不兼容/register 失败等）；限流看 `"event":"handshake_rate_limited"`、版本/载荷不符看 `"event":"register_rejected"`（`reason: 'VERSION_MISMATCH'|'INVALID_PAYLOAD'`）。
 4. **worker 侧细节**：`Connection error: websocket error` 现在会追加 `(type=... description=... context=...)`，其中 `context` 常含真实 HTTP 状态（如 `unexpected server response (404)`），据此判断是入口层 404 还是 TLS 问题。
 
 > 说明：`/worker` 是 Socket.IO **namespace**，握手实际打 engine path `/socket.io/`；`ZAG_SERVER_ENDPOINT=wss://<host>/worker` 是本仓库既定约定，**不是**让 Ingress 暴露 `/worker`（见契约 `contracts/cloud-controller-websocket.md` §1.2）。
@@ -111,21 +121,37 @@ worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日�
 - 新增内部端点：`POST /internal/containers/:id/workloads`（依赖展开 + 参数校验 + 单批次安装）与 `POST /internal/containers/:id/runtime-scripts`（系统内联单脚本，Git 设置用）。错误码：`404 NOT_FOUND`、`409 CONTAINER_NOT_ONLINE|CONTAINER_BUSY`、`400 INVALID_WORKLOAD|INVALID_SCRIPT`。
 - `WorkloadDispatcher.startRuntimeBatch`：入口要求 `online`，CAS 到 `initializing` 并写 `initTrigger='runtime'`；完成后直接 `markOnline`，不回 `connecting`；同一容器同时只允许一个 runtime 批次。`workload:run` 仅在该批次携带 `githubAuth:true`，普通批次报文形状不变。
 - 已安装集合：`cloudcontainers.installedWorkloads[{workloadId,name,installedAt,source}]` 只在 `success` 时回填（start→`start`，runtime→`user|mcp`），按 workloadId 去重保留首次；`source=system` 的 Git 脚本不写。失败不注销容器（`required=false`）。
+- **runtime harness 安装配套**：`startRuntimeBatch` 对 `purpose=harness` 的容器与 init 同源注入 `workload:run.env`（`resolveRunEnv`；secret/模型配置缺失 → `HarnessEnvironmentUnavailableError`，400 `INVALID_WORKLOAD` 可读原因、不下发半套 env）；harness 负载安装前由 internal-api 做逐类型版本门禁（在线版本取自 gateway `register` 上报值，不可得则放行 + warn）；安装成功且负载 `harnessType` 非空时对 `cloudcontainers.harnessTypes` `$addToSet`（`ContainerRepository.addHarnessType`，standard 不动）。
 - 日志：`cloudworkloadlogs.trigger`（`start|runtime`）与 `source`（`admin|user|mcp|system`），历史记录读取缺省 `start/admin`。
-- 门禁：harness `MIN_HARNESS_WORKER_VERSION=2.10.0`（worker 用户 + 保活退出码 42），含 `deepseek_harness` 的运行 `2.11.0`（`header-masq` 配置注入）；普通容器仍 `2.2.0`。harness Job env 新增 `ZAG_AGENT_API_ENDPOINT`（`AGENT_API_URL`）与 `ZAG_CONTROLLER_ID`（请求可选 `controllerId`）；缺失 `AGENT_API_URL` 仅告警。
+- 门禁：harness `MIN_HARNESS_WORKER_VERSION=2.12.0`（worker 用户 + 保活退出码 42、Worktree 级提交人写入基线），按类型常量（`kimi_code 2.8.0` / `deepseek_harness 2.12.0`）与基线取 max 后恒为 `2.12.0`；普通容器仍 `2.2.0`。harness Job env 新增 `ZAG_AGENT_API_ENDPOINT`（`AGENT_API_URL`）与 `ZAG_CONTROLLER_ID`（请求可选 `controllerId`）；缺失 `AGENT_API_URL` 仅告警。
 
 ## Dev Commands
 
 ```bash
 aspire start        # Aspire 编排（注入 K8S_ENABLED=false）
-npm run build       # tsc strict
-npm test            # vitest run
-npm run test:coverage
+pnpm run build       # tsc strict
+pnpm test            # vitest run
+pnpm run test:coverage
 ```
 
 ## TDD Workflow
 
 本项目采用测试驱动开发（TDD）模式，遵循红-绿-重构循环。详细指南参考 [TDD Skill](../../.agents/skills/tdd/SKILL.md)。
+
+## 日志与可观测性
+
+- **日志形态**：pino 单行 JSON（`packages/observability` vendored 副本 `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。
+- **span 清单**（另有 `httpContext()` 的 HTTP SERVER span）：
+  - `container.start` — 创建 Job 全程（`container-service.ts`）；span 内 `injectTraceparent()` 取 traceparent 注入 Job env `ZAG_INIT_TRACEPARENT`（SDK 关闭时为空 → 不注入）；
+  - `socket.handshake` — `/worker` namespace 握手 middleware（`socketio-gateway.ts`，提取 `auth.traceparent`，`containerId` 写入日志上下文）；
+  - `status.sync.tick` — 状态对账**每轮一个 span**（属性记 `checked`/`changed` 条数，不逐容器开 span）；
+  - `workload.dispatch` — `workload:run` **批次一个 span**（属性 `workload.count`，不逐条脚本开 span）。
+- **Socket.IO 握手 / `_meta` 封套位置**：worker 事件报文顶层 `_meta: { traceparent? }` 与云电脑 Job env 注入表见 [`contracts/cloud-controller-websocket.md`](../../contracts/cloud-controller-websocket.md) **附录 B**（B.1 `_meta` 可选字段 / B.2 Job env 注入表）；`emitToContainer()` 统一注入 `_meta.traceparent`，消费者必须容忍 `_meta` 缺失。agent-gear 侧握手 `auth.traceparent` 见 `contracts/agent-session-websocket.md` §7。
+- **env 变量**：`LOG_LEVEL`（默认 `info`；仅非 engine-path 逐请求 `http-request` 为 `debug` 级需提升，级别口径见「回连失败排查」）/ `LOG_PRETTY`（仅非生产生效）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 不启用导出、零外发**）/ `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS`（仅经 env 传递，**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` / `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORT_TIMEOUT_MS`，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。harness Job 注入的 `OTEL_*` + `ZAG_INIT_TRACEPARENT` 由 `buildHarnessJobEnv` 生成（附录 B.2）。
+- **排障**：
+  - `LOG_LEVEL=debug pnpm run dev`（或部署 env）补看非 engine-path 的逐请求 `http-request` 日志（upgrade/握手/engine path `http-request` 等默认 `info` 已可见）；`LOG_PRETTY=1` 非生产看人类可读输出。
+  - `OTEL_SDK_DISABLED=true` 可在不回滚的情况下关闭追踪导出（日志不受影响）。
+  - JSON 单行日志可直接 `grep`：按级别 `grep '"level":"error"'`、按组件 `grep '"component":"…"'`、按链路 `grep '"trace_id":"<trace-id>"'` 串起一次请求的全链路（配合 `kubectl -n zag-cloud logs deploy/cloud-controller`）。
 
 ## Related Rules
 
@@ -137,7 +163,7 @@ npm run test:coverage
 
 - **数据口径**：`cloudcontainers.tenantId`（String，`default: null`、`index: true`）为**复制新增**字段，与 `userId` 同类型；personal 期恒等于 `userId`，原 `userId` 字段与筛选维度全保留（不 rename）。写入口径：仅 `purpose=harness` 写入（来自 harness 请求 `tenantId`），`idle` 等未接入租户的容器保持 `null`；读取层对历史行容忍 `null`。
 - **写入校验（F8）**：`parseHarnessRequest` 校验 `tenantId` 为非空字符串并透传 `ContainerService.start → repo.create`；旧版 agent-api 缺省时回退 `tenantId = userId` 并 `console.warn`（发布顺序已保证新 agent-api 先上线，回退仅兜底）；显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
-- **迁移基建（F1）**：`src/migrations/` 按 admin-api 改进版复刻——独立账本集合 `cloud_controller_migrations`（不与 agent-api `migrations`、admin-api `admin_migrations` 混用）、锁 `_lock=migration_lock` 带 `owner` 归属（只释放自己的锁）、5 分钟锁 TTL（过期锁启动时清理后可接管）、**逐迁移吞错**（失败仅 `console.error`、不写账本、继续后续迁移，下次启动重试）。`index.ts` 在 `mongoose.connect` 之后、`httpServer.listen` 之前 `await runMigrations([...])`；runner 整体异常只 warn，不阻断启动（与既有服务一致）。
+- **迁移基建（F1）**：`src/migrations/` 按 admin-api 改进版复刻——独立账本集合 `cloud_controller_migrations`（不与 agent-api `migrations`、admin-api `admin_migrations` 混用）、锁 `_lock=migration_lock` 带 `owner` 归属（只释放自己的锁）、5 分钟锁 TTL（过期锁启动时清理后可接管）、**逐迁移吞错**（失败仅记 `logger.error`（`event: 'migration-failed'`，`component: 'migration/runner'`）、不写账本、继续后续迁移，下次启动重试）。`index.ts` 在 `mongoose.connect` 之后、`httpServer.listen` 之前 `await runMigrations([...])`；runner 整体异常只 warn，不阻断启动（与既有服务一致）。
 - **迁移 001**：`001-cloudcontainers-tenant-id-backfill` 以聚合管线 `updateMany({userId 存在且非空, tenantId 缺失/null}, [{$set:{tenantId:'$userId'}}])` 回填存量行（单次库内更新，无需拉回应用侧），随后显式 `createIndex({tenantId:1})`；已回填行不再命中，幂等可重跑。`userId` 缺失的行跳过、不改动。
 - **只读镜像**：`servers/agent-api/src/models/cloud-container.ts` 同步 `tenantId` 字段（schema 注释标注与 cloud-controller 同步演进），写方仍仅本服务。
 
@@ -162,3 +188,15 @@ npm run test:coverage
 - **迁移 002**：`002-cloudcontainers-workspace-id` 按 `tenantId`（存储原值精确命中）逐租户解析同库全局工作区，回填缺失 `workspaceId` 的行（字段不存在或 `null`）；解析不到置 `null` 并 warn；`tenantId` 缺失的行**跳过不改动**（与 001 的 `userId` 缺失行同口径）；随后显式 `createIndex({ workspaceId: 1 })`。已回填行不再命中，幂等可重跑（二次 run 数据零变更）。`index.ts` 在 001 之后登记（发布顺序：agent-api 迁移 015 → 本服务 002）。
 - **只读镜像**：`servers/agent-api/src/models/cloud-container.ts` 同步 `workspaceId` 字段（Phase 4/7 纪律：读取层经该只读模型透出 `CloudContainer.workspaceId`），写方仍仅本服务。
 - **契约**：`contracts/cloud-controller-websocket.md` 附录 A.2.2（`workspaceId` 可选 + 回退口径）与 A.3 响应结构（本期**不新增** `workspaceId` 字段，读侧直连集合）。
+
+## 云存储编排（需求 #405 / 契约附录 A.2.7 ~ A.2.10）
+
+- **K8s 单一事实源**：PVC 只由本服务创建/删除；agent-api 经内部端点 `POST/GET/DELETE /internal/storages`、`POST /internal/storages/:id/usage-refresh|cleanup`、`POST/GET /internal/containers/:id/archive` 驱动，不直连 K8s。
+- **源卷/归档卷**：源卷 `zag-storage-<storageId>`（RWO，容量 `<sizeGi>Gi`，标签 `app=zag-storage` + `zag.cloud/storage-id|workspace-id|tenant-id`）；归档卷 `zag-archive-<workspaceId>`（默认 100Gi，每工作区一块，全部存储共用）。`storageClassName` 为空时字段整段省略（使用集群默认）。`ensure()` 幂等：已存在且容量/StorageClass 一致返回 `created:false`，不一致 `409 STORAGE_PVC_CONFLICT`；删除 404 视为成功。
+- **云电脑挂载（零回归）**：`storage` 缺省时 Job manifest 与改动前逐字节一致（无 `volumes`/`volumeMounts`/`securityContext`/`initContainers`）。携带时挂 `/home/worker` + Pod `securityContext{fsGroup:1000,fsGroupChangePolicy:'OnRootMismatch'}` + env `ZAG_STORAGE_HOME=1`；`restore.archivePath` 存在时注入 `storage-restore` initContainer（archive 卷 RO、target RW、`tar -xjf`），并在 Job 创建前**先删同名残留 PVC 再按原容量/StorageClass 重建**（裁决 13）。
+- **归档触发**（裁决 12）：收敛到 `ContainerService` 在终态转移前调用 `storageService.maybeStartArchive`（`destroy`/`markExited`/`markFailed`/巡检收口），条件 `storageId != null && connectedAt != null && storageArchiveStatus ∈ {null, failed}`；归档 Job 在容器 `KeyedMutex` 外异步执行。`terminal` 回调携带 `storage{id, archiveStatus}`。
+- **归档 Job**：source PVC RO + archive PVC RW；执行镜像入口 `MODE=archive`（`set -euo pipefail`，pbzip2→bzip2 回退；脚本顺序 `rm -f *.tmp` → `tar|pbzip2 -9 > .tmp` → `du -sb` → `rm -f *.tar.gz2` → `mv` → `ZAG_ARCHIVE_RESULT` 标记行）；成功解析标记行后**先 CAS succeeded 再删源 PVC（最多 3 次）并回调**（删除失败/重投均按实际存在性上报 `sourcePvcReleased:false`）；标记行缺失/Job 失败/超时 → `failed` 且不删源 PVC、不替换旧归档。归档/恢复/用量/清理按工作区归档卷 `KeyedMutex` 串行。
+- **用量**：du Job 固定容器 Pod 的 `nodeName`（RWO 同节点）、只读挂载，解析标记行后回调 `/internal/cloud-storages/:id/usage`；失败保留上次值。
+- **巡检**：`status-sync` 每轮调用 `reconcileArchives`：`pending/running` 超 `ARCHIVE_TIMEOUT_MS` → `failed` + 回调；重启后补跑（源 PVC 未删，原子替换保证旧归档不丢）；`succeeded/failed` 未送达回调重投（进程内记录，重启后每容器一次，agent-api 幂等）。
+- **模型**：`cloudcontainers` 新增 `storageId/storagePvcName/storageSizeGi/storageWorkspaceId/storageStorageClass/storageRestorePath/storageArchive*`（历史行 null 容忍）；读取层（agent-api 只读镜像）同步透出。
+- **部署**：`deploy/k8s/cloud-controller.yaml` RBAC 增加 `persistentvolumeclaims` get/list/watch/create/delete 与 `pods`/`pods/log` get/list；env 见上表。archiver 镜像 `deploy/images/archiver/`（ubuntu + tar + pbzip2 + bzip2 回退，`MODE=archive|restore|usage|cleanup`）。Aspire dev 仍 `K8S_ENABLED=false`（InMemory）但补齐存储 env。

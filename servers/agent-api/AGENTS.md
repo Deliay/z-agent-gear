@@ -49,11 +49,11 @@ src/
 
 ```bash
 aspire start    # Start all services via Aspire orchestration
-npm run build   # Compile TypeScript
-npm run start   # Start production server
+pnpm run build   # Compile TypeScript
+pnpm run start   # Start production server
 ```
 
-本项目由 Aspire 编排启动，无需单独运行 `npm run dev`。使用 `aspire describe` 查看 agent-api 的 HTTP endpoint。
+本项目由 Aspire 编排启动，无需单独运行 `pnpm run dev`。使用 `aspire describe` 查看 agent-api 的 HTTP endpoint。
 
 ## TDD Workflow
 
@@ -75,7 +75,7 @@ npm run start   # Start production server
 
 - 领域入口：`services/cloud-host-service.ts`；GraphQL：`graphql/schemas/cloud-host.ts` + `graphql/resolvers/cloud-host.ts`；契约 `contracts/cloud-host.graphql`。
 - 生命周期：创建即启动 → 停止即销毁（`STARTING/RUNNING/STOPPING/STOPPED/FAILED`，无 `startCloudHost`）。数量无限制（PRD v1.0：创建收费 5 credits、失败退款；`userMutex` 仅串行化创建，需单实例部署）。
-- 版本映射：`HARNESS_MIN_AGENT_GEAR_VERSION`（`OPENCODE: 2.6.0` / `KIMI_CODE: 2.8.0` / `DEEPSEEK_HARNESS: 2.11.0`——`cordis.patch.yml` 的 `header-masq` 会话标识配置注入自 agent-gear 2.11.0 起）与基线 `CLOUD_HOST_AGENT_GEAR_MIN_VERSION='2.10.0'` 取**最大值**后随 `startHarness` 下发 `agentGearMinVersion`；cloud-controller 注册门禁再按 `harnessTypes` 取最大（含 `deepseek_harness` → `2.11.0`）。
+- 版本映射：`HARNESS_MIN_AGENT_GEAR_VERSION`（`OPENCODE: 2.6.0` / `KIMI_CODE: 2.8.0` / `DEEPSEEK_HARNESS: 2.12.0`——`cordis.patch.yml` 的 `header-masq` 注入自 2.11.0 起，2.12.0 起随 Worktree 级提交人写入能力提升）与基线 `CLOUD_HOST_AGENT_GEAR_MIN_VERSION='2.12.0'` 取**最大值**后随 `startHarness` 下发 `agentGearMinVersion`（0 harness 同样为基线 2.12.0）；cloud-controller 注册门禁再按 `harnessTypes` 取最大（与 2.12.0 基线取 max 后恒为 `2.12.0`）。
 - 创建编排：校验开关/名称/harnessTypes/配置 → 读取 `cloudworkloads` preset → 计费账户 → 预生成 cloudHostId/controllerId → **`/internal/billing/charges` 先扣一次性创建费（幂等键 `cloud_host.create:<hostId>`）** → `ControllerKey(type=cloud)` → 预创建 `Controller(type=cloud,registering,name=用户命名)` → `CloudHost(STARTING)`（`githubAccountId` 可选锁定；创建期不预置默认工作区，`workspaceId` 留空）→ 铸造 `scope=cloud_host` 模型 Key（**无固定有效期，随容器回收**）→ `POST /internal/containers{purpose:harness}`。失败逆序回滚并 best-effort 退款（`cloud_host.create.refund:<hostId>`）；cloud-controller 成功后不再回滚。未 ready 即终态同样自动退款，已 ready 后销毁不退款。
 - 只读模型：`models/cloud-container.ts`（cloudcontainers）、`models/cloud-workload.ts`（cloudworkloads）、admin-api 只读 `cloudhosts`；写方各自单一。
 - 内部回调：`routes/internal-cloud-host.ts`（Bearer `INTERNAL_API_TOKEN`）。ready → **单 harness 默认会话在 STARTING 窗口创建后与 RUNNING/readyAt 合并为一次 CAS 落库**（避免 `RUNNING+defaultSessionId=null` 竞态；失败只告警）；`CreateCloudHostInput.createDefaultSession=false` 时跳过默认会话（由 Git 项目 setup 的 session 步骤建项目会话）；terminal → STOPPED/FAILED + 批量 ENDED + 撤销模型 Key；均幂等。
@@ -87,9 +87,9 @@ npm run start   # Start production server
 
 ## 云主机工作负载与 Github 项目设置（本期）
 
-- 工作负载目录：`services/cloud-workload-catalog.ts`（只读 `cloudworkloads`，`listStandard` 排除 harness）；Github 预制项 `presetKey=github`，参数 `repoFullName`/`targetPath`。
-- 创建期预装负载：`CreateCloudHostInput.workloadIds`（可选，去重后 ≤5）。`services/cloud-host-workload-plan.ts` 的纯函数 `resolveCreateWorkloadPlan` 做后序 DFS 展开（依赖先行、去重、环检测、`implicit` 由是否在显式集合中决定 = 显式优先于隐式；harness presets 在前 `required=true`，standard 项 `required=false`，展开后 ≤10 条）；默认参数归一与 cloud-controller `normalizeDefaultParamValue` 同口径（MULTI_SELECT 去重保留首序、TEXT ≤1024、SELECT 必须属于 options、未知类型报错）。agent-api 在**落库前**完成校验与展开，并随 `startHarness` 下发**非空显式 workloadPlan**（cloud-controller 的 `hadExplicitPlan` 校验）。错误文案：`too many workloads (max 5)` / `invalid workload: <id>` / `workload is not installable: <name>` / `invalid workload parameter: <key>` / `dependency workload not found: <id>` / `dependency cycle detected` / `workloads exceed 10`（均在 `toCloudHostGraphQLError` 白名单内原样透传）。不传 `workloadIds` 时计划与历史完全一致。
-- 创建弹窗数据源：`cloudHostWorkloadCatalog` 查询（`cloudHostWorkloadService.listCatalog()`）无主机上下文，返回全部 standard 且 `installed=false`；与 `cloudHostWorkloads` 共用 `CloudHostWorkloadItem`（含 `workloadKind`，standard 固定 `STANDARD`）。
+- 工作负载目录：`services/cloud-workload-catalog.ts`（只读 `cloudworkloads`）：`listAll()` 返回 standard + harness（设置-工作负载与 MCP `workload_list`），`listStandard()` 仅 standard（创建期预装勾选，决策 10）；Github 预制项 `presetKey=github`，参数 `repoFullName`/`targetPath`。
+- 创建期预装负载：`CreateCloudHostInput.workloadIds`（可选，去重后 ≤5）。`services/cloud-host-workload-plan.ts` 的纯函数 `resolveCreateWorkloadPlan` 做后序 DFS 展开（依赖先行、去重、环检测、`implicit` 由是否在显式集合中决定 = 显式优先于隐式；harness presets 在前 `required=false`（harness 为可选工作负载，安装失败不销毁容器，可事后在设置-工作负载补装），standard 项同样 `required=false`，展开后 ≤10 条）；默认参数归一与 cloud-controller `normalizeDefaultParamValue` 同口径（MULTI_SELECT 去重保留首序、TEXT ≤1024、SELECT 必须属于 options、未知类型报错）。agent-api 在**落库前**完成校验与展开，并随 `startHarness` 下发显式 `workloadPlan`——**允许为空数组**（契约 A.2.2 放宽：0 harness + 0 standard 场景，cloud-controller 无初始化脚本直接 online；`hadExplicitPlan` 仅用于 `workloadIds` 派生口径，空 plan 不再 400）。错误文案：`too many workloads (max 5)` / `invalid workload: <id>` / `workload is not installable: <name>` / `invalid workload parameter: <key>` / `dependency workload not found: <id>` / `dependency cycle detected` / `workloads exceed 10`（均在 `toCloudHostGraphQLError` 白名单内原样透传）。不传 `workloadIds` 时计划与历史完全一致。
+- 创建弹窗数据源：`cloudHostWorkloadCatalog` 查询（`cloudHostWorkloadService.listCatalog()`）无主机上下文，返回全部 standard 且 `installed=false`；与 `cloudHostWorkloads` 共用 `CloudHostWorkloadItem`（含 `workloadKind`）；`cloudHostWorkloads` 返回 standard + harness 且按库内真实 `workloadKind` 映射（`STANDARD`/`HARNESS`），`cloudHostWorkloadCatalog` 固定 `STANDARD`。
 - Github clone 路径：`SetupCloudHostGithubProjectInput.targetPath` 是**前缀地址（工作根目录）**，不是最终目录。`services/workspace-path.ts` 的 `normalizeWorkspacePrefix`（绝对路径或以 `~`/`~/` 开头（展开为容器主目录 `/home/worker`，仅首字符生效，`~abc` 拒绝）、拒绝 `..`/反斜杠/NUL、`path.posix.normalize` 规整）+ `resolveClonePath`（`path.posix.join`，repo 必须 `owner/repo` 且两段非 `.`/`..`）在 `CloudHostGithubService.createOperation` 内权威计算 finalPath；operation/binding/脚本参数/`ensureWorkspace` 一律使用 finalPath，旧绑定记录保持原值。`~` 展开矩阵见 `workspace-path.test.ts` 的 T-PATH8/T-PATH9。
 - 编排：`services/cloud-host-workload-service.ts`（列表、单步安装、`cloud_host_setup_operations` runner、`pollBatch` 1s 轮询、单步超时 `CLOUD_HOST_SETUP_STEP_TIMEOUT_MS`）；`services/cloud-host-github-service.ts`（三步：Github 工作负载 → Git 项目设置 → 会话创建）。操作创建后立即返回，前端/ MCP 轮询终态；查询时 RUNNING 超过 `CLOUD_HOST_SETUP_STALE_MS` 标记 FAILED「操作已中断，请重试」。
 - 凭据：`POST /internal/cloud-hosts/:controllerId/github-credential` 双鉴权（`INTERNAL_API_TOKEN` 或 Controller key），仅返回本机 `cloud_host_github_bindings` 绑定仓库的 `{token,expiresAt}`；`GitHubService.createRepoScopedToken` 使用 installation token + `repositories`，权限对齐 App 安装授权（actions/contents/deployments/environments/issues/pull_requests/workflows 均 write）。token 不落库/不写日志/不进 operation error（统一 `sanitizeOperationError`）。
@@ -99,28 +99,70 @@ npm run start   # Start production server
 - MCP：平台服务 `agent-cloud-host-tools`（`transport/source=platform`），工具 `workload_list`/`workload_install`；云会话 `sessionService.create` 自动装配，非云会话不装配；`workload_install` 等待终态（上限 10 分钟），执行记录 `source=mcp`。
 - 会话：`controllerWorkspaceService.ensureWorkspace` 按路径幂等 upsert（不触发 10 个工作区上限）；Git 设置成功后自动建会话，失败仅 session 步骤 FAILED、operation 仍 SUCCEEDED 并提示手动建会话；`createSession=false` 时 session 步骤记 SKIPPED（多 Harness 不自动建会话）。
 
-## Commit 设置与提交身份（本期）
+## Commit 设置与提交身份（成员级）
 
-- 数据：`models/user-commit-setting.ts`（集合 `user_commit_settings`，`userId` String 唯一）+
-  迁移 `011-user-commit-settings-index` 显式创建唯一索引；按 userId upsert，每用户单行。
-- 契约：`contracts/github.graphql` 的 `CommitSettings` / `CommitSettingsInput` /
-  `CommitterMode` / `CommitterType`，GraphQL `commitSettings` / `updateCommitSettings`
+- 数据：`models/user-commit-setting.ts`（集合 `user_commit_settings`，`userId` String 唯一键
+  `uniq_user_commit_setting`）；**成员独立、无共享/继承**，任何工作区下同一份设置。
+  字段仅 `userId / tenantId（留档）/ committerType(custom|unset) / customName / customEmail /
+  commitWithBot`（布尔，默认 false，仅 custom 生效）；`committerMode` / `githubAccountId` / `workspaceId` 已下线。
+- **作用域插件豁免（返工修正）**：该集合**既不挂 `applyWorkspaceScope` 也不挂 `applyTenantScope`**。
+  `applyTenantScope` 会在查询编译期把 `tenantId` 注入为当前 ALS 工作区租户，导致同一成员
+  「团队工作区保存 / 个人工作区读取」互相不可见、二次保存撞 `uniq_user_commit_setting` 后回读落空
+  而**静默丢失**、Issue 链路（无 ALS）解析不到——与「成员独立、任何工作区同一份」矛盾。
+  跨租户泄漏不成立（`userId` 是全局唯一主键）；`models/tenant-isolation.test.ts` 对该集合显式豁免
+  并断言「查询不注入 tenantId」，`services/commit-settings-service.real.test.ts` 用真库 + 真实插件
+  覆盖跨上下文读写（T-CS-R1~R4）。
+- 读写口径：一律 `{ userId }` 点查/upsert，**不读取 ALS 工作区上下文**；`tenantId` 恒写成员归属租户
+  （`users.tenantId`，personal 租户 `_id`=userId），与迁移 019 `cleanFields` 的刷新口径一致。
+- 迁移：`019-commit-settings-per-member`（编号 017/018 已被占用）：`github_account` → `custom`
+  等价转换（`login` + `<githubUserId>+<login>@users.noreply.github.com`，帐号缺失 → unset）、
+  归属重键（personal → tenantId=owner userId；team → 行内 userId；碰撞保留最新非 unset）、
+  字段清洗（` committerMode/githubAccountId/workspaceId`）、索引「先建后删」。
+  注意顺序：**先建新唯一索引再删旧索引，最后才 ` workspaceId`**（旧唯一索引下多行置空会撞键）。
+  归属判定按**租户**`type`（`workspaces.type` 只有 global/normal，不是归属依据）。
+- 契约：`contracts/github.graphql` 的 `CommitterType { CUSTOM UNSET }` / `CommitSettings` /
+  `CommitSettingsInput` / `commitSettings` / `updateCommitSettings` / `personalGithubAccounts`
   （`schemas/github.ts` + `resolvers/github.ts`，未登录 `Not authenticated`）。
-- `services/commit-settings-service.ts`：服务端权威校验白名单（三行逐字：
-  `committer is required for the selected mode` / `invalid github account` /
-  `invalid custom committer`）；归一仅按 `committerType`（`committerMode=UNSET` 不清空提交人）；
-  自定义校验 trim / ≤100 / ≤254 / 禁 `\n\r\0` / 邮箱正则 `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`。
-- `resolveCommitIdentity(controllerId)` 五步：云主机（未删）→ userId → 设置（未保存 unset）→
-  提交人归一（解绑 / 越权 / 非法 → unset）→ 模式门控（`agent_only` 需
-  `cloud_host_github_bindings` 或 `cloudcontainers.installedWorkloads[].name==='Github'`；
-  `human_only` = 提交人；`co_author` = 提交人 + bot）→ bot 失败降级 unset。
-  任一异常一律 `{mode:'unset'}`，响应按字段存在性缺省（unset 仅 mode；co_author 才含 coAuthor*）。
-- 内部端点：`POST /internal/cloud-hosts/:controllerId/commit-identity`，与 `github-credential`
-  双鉴权一致（`INTERNAL_API_TOKEN` 或本机 Controller key，鉴权失败 401/403），**永不 404**。
+  服务端校验白名单**仅一条** `invalid custom committer`（trim 后 name ∈ (0,100]、email ≤254、
+  禁 `\n\r\0`、邮箱正则 `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`）。
+- `personalGithubAccounts`：`User.accountId` → 同账户 users → personal 租户 id（`_id` 复用 userId）
+  → `GitHubAccount` 按 `tenantId ∈ personal` 且 `workspaceId ∈ {null, 本租户全局工作区}` 过滤
+  （排除普通工作区副本）；实现为 `githubService.getPersonalAccounts`（直查 collection，绕 workspace-scope）。
+- `commit-settings-service`：`getCommitSettings/updateCommitSettings`（userId upsert，`UNSET` 归一
+  `commitWithBot=false`）、`resolveWorktreeCommitter(userId) → {name,email,coAuthorName?,coAuthorEmail?}|null`
+  （custom 且合法才返回；`commitWithBot=true` 时解析 `resolveAppBotIdentity` 追加 bot 身份，失败降级为
+  仅成员署名）、`resolveCloudHostIdentity()` = **恒 bot**（`resolveAppBotIdentity` → `{mode:'agent_only'}`；
+  bot 失败 `{mode:'unset'}`）。`mode` 包络仅为兼容 2.11.x 容器 `consume()`，不再有 co_author/human_only。
+- 内部端点：`POST /internal/cloud-hosts/:controllerId/commit-identity` 与 `github-credential` 双鉴权一致
+  （`INTERNAL_API_TOKEN` 或本机 Controller key，401/403），**永不 404**，恒 200；**有效主机无视个人设置恒 bot**；
+  主机不存在 / 已软删返回 `{mode:'unset'}` 且不解析 bot（无主机的容器不写身份）。
+- 下发链：`git:worktree:add` 可选 `committer {name,email,coAuthorName?,coAuthorEmail?}`；
+  `workflow/instance.ts` 实例化时解析一次并落 `WorkflowInstance.worktreeCommitterName/Email` +
+  `worktreeCoAuthorName/Email` 快照（issue 触发人覆盖 > 创建者设置），实例级与节点级
+  worktree（`orchestrator.startNodeSession → session.create`）复用同一快照；独立会话在 `session.create` 内
+  实时解析创建者设置。缺省不写身份 = 沿用容器级 bot；旧 worker（<2.12.0）忽略未知字段优雅降级，
+  <2.13.0 忽略 `coAuthor*`（仅缺失共同作者 trailer）。
+- Issue 触发人：`github-issues-webhook-payload` 解析 `sender {id,login}` → `IssueWorkflowTrigger`
+  落 `triggerSenderId/triggerSenderLogin/triggerUserId`（`GitHubAccount.githubUserId` 匹配）；
+  `IssuesTriggerRunner.createInstance` 身份优先级「触发人提交人 → sender 的 GitHub 身份
+  （login + noreply）→ bot」。
 - bot 身份：`githubService.resolveAppBotIdentity()`（`GET /app` → `GET /users/{slug}[bot]`，裸 fetch），
-  Redis `github:app-bot-identity` 成功 24h、失败 sentinel 60s，进程内 Map 兜底；
-  GitHub 帐号 / bot 邮箱均使用 `{id}+{login}@users.noreply.github.com`。
-- 仅云容器生效；本地控制器链路零改动；不改 `MIN_HARNESS_WORKER_VERSION`（旧 worker 行为即未设置）。
+  Redis `github:app-bot-identity` 成功 24h、失败 sentinel 60s，进程内 Map 兜底。
+- 仅云容器生效；本地控制器链路零改动；agent-gear ≥2.12.0 提供 worktree 身份能力（门禁见 cloud-controller）。
+
+## 日志与可观测性
+
+- **日志形态**：pino 单行 JSON（vendored `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。`httpContext()` 挂在既有 `runWithRequestAuth` ALS 外层（`x-request-id` 归一化 + 响应头回写 + HTTP SERVER span + 访问日志；`/health` 与 SSE 只在连接建立/断开各记一条）。
+- **span 清单**：
+  - `cloudhost.create` / `cloudhost.start` / `cloudhost.destroy` — 云电脑创建/启动/销毁编排（`cloud-host-service.ts`，属性含 `cloudHostId`/`userId` 等）；
+  - `workflow.node.advance` — 工作流**每节点推进一个 span**（`workflow/orchestrator.ts`，属性 `workflowInstanceId`/`nodeId`）；
+  - `issues-trigger.scan` — Issues 联动**每轮扫描一个 span**（属性 `candidateCount`；另有 `issues-event handle` / `pr-event handle` 事件入口 span）；
+  - 订阅 `<channel> handle` — Redis 订阅回调入口各一个 span（`permission`/`elicitation`/`harness-login`/`mcp-endpoint`/`session-lifecycle`/`session-sse`，如 `<SESSION_STATUS_CHANNEL> handle`），父上下文取 `extractTraceparent(payload._meta)`；
+  - **高频豁免**：`workflow/pr-check-run-subscriber` 订阅 `session:message`，按契约 §7 高频通道口径**不逐条开 span**（回调仅结构化日志，`component: 'pr-check-run-subscriber'`，不进 span 清单）。
+- **Socket.IO / Redis `_meta` 封套位置**：Redis 频道报文顶层 `_meta: { traceparent? }` 见 [`contracts/mcp-forward-redis.md`](../../contracts/mcp-forward-redis.md) §7 与 [`contracts/agent-session-websocket.md`](../../contracts/agent-session-websocket.md) §7；39 处发布点一律经 `publishJson(publish, channel, payload)` 注入（`src/middleware/publish.ts`）。
+- **env 变量**：`LOG_LEVEL` / `LOG_PRETTY`（仅非生产）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 零外发**）/ `OTEL_EXPORTER_OTLP_HEADERS`（**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` 等，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。
+- **排障**：`LOG_LEVEL=debug` 看高频细节（`session:message` 逐条为 debug）；`OTEL_SDK_DISABLED=true` 关追踪导出；JSON 单行日志可直接 `grep`（`grep '"requestId":"<id>"'` 串一次请求、`grep '"trace_id":"<trace-id>"'` 跨服务串链路、`grep '"level":"error"'`）。
+- **审计例外**：`bootstrapAdminPassword` 为契约 §6.2 唯一明文例外（admin-api 首次 seed）；本服务其余 `password`/`token`/`secret` 类键一律经 `REDACT_PATHS` 脱敏，`sanitizeOperationError` 语义保持不变。
 
 ## Related Rules
 
@@ -155,7 +197,7 @@ npm run start   # Start production server
 - **三层帐号模型**：`accounts`（登录凭据，不 ref User，username 唯一）→ `users`（身份主体，`accountId` 引用账户、`tenantId` 引用租户，保留原 `username/passwordHash` 一期不下线）→ `tenants`（`type=personal`，`_id` 复用 userId，无成员列表；成员关系由 `users.tenantId` 承载）。写方仅 agent-api；admin-api 为只读镜像。
 - **认证**：`login` 走 `Account.findOne({username})` → bcrypt → `User.findOne({accountId})` → 签发 token（载荷仍是 userId，已发 token 不失效）；`me`/`AuthPayload.user` 返回 `{id,name,tenant}`；`User.tenant` 为**字段级 resolver（已登记 `graphql/resolvers/index.ts` 的 `User` 键）**，`memberCount=User.countDocuments({tenantId})`（一期恒 1）。前台注册已硬关闭（契约/resolver/前端三层移除）。
 - **AuthContext**：`authenticateUser` 一次 `findById` 取 `{id,tenantId,name}`，`context.tenantId` 同步下发；`requireTenantId(context)` 回退链 `context.tenantId → currentUser.tenantId → currentUser.id`（personal 期恒等）。
-- **租户隔离（双条件）**：带 `userId` 的 19 个集合均**复制新增**同值 `tenantId`（`userId` 字段与筛选全部保留）；`services/tenant-scope.ts` 的 Mongoose 插件在查询编译前为 `{userId}` 过滤注入 `tenantId`（显式 tenantId 不覆盖；递归处理 `$or`/`$and`/`$nor` 内的 userId 分支）、写入（save/insertMany/`$set.userId`）自动补齐 `tenantId`。**例外**：`userId` 为操作符对象（如 `$in`/`$nin`）时不复制（值语义不同；一期运行时无此类过滤点，二期放开 userId 维度前需显式处理）。T-ISO 矩阵（`models/tenant-isolation.test.ts`）对 19 集合逐一走真实 Mongoose 查询中间件（驱动层 `countDocuments` spy），并与 `TENANT_ID_COLLECTIONS` 的集合名互校；Mongoose v9 的查询/文档中间件必须写成**同步钩子（无 next 参数）**，否则运行期抛 `next is not a function`。新增带 userId 的模型必须声明 `tenantId` 并 `applyTenantScope(schema)`；唯一索引保留 userId 维度：`{tenantId,userId,name}` / `{tenantId,userId,githubUserId}` / `{tenantId,userId}`。
+- **租户隔离（双条件）**：带 `userId` 的 19 个集合均**复制新增**同值 `tenantId`（`userId` 字段与筛选全部保留）；`services/tenant-scope.ts` 的 Mongoose 插件在查询编译前为 `{userId}` 过滤注入 `tenantId`（显式 tenantId 不覆盖；递归处理 `$or`/`$and`/`$nor` 内的 userId 分支）、写入（save/insertMany/`$set.userId`）自动补齐 `tenantId`。**例外**：`userId` 为操作符对象（如 `$in`/`$nin`）时不复制（值语义不同；一期运行时无此类过滤点，二期放开 userId 维度前需显式处理）。T-ISO 矩阵（`models/tenant-isolation.test.ts`）对 19 集合逐一走真实 Mongoose 查询中间件（驱动层 `countDocuments` spy），并与 `TENANT_ID_COLLECTIONS` 的集合名互校；Mongoose v9 的查询/文档中间件必须写成**同步钩子（无 next 参数）**，否则运行期抛 `next is not a function`。新增带 userId 的模型必须声明 `tenantId` 并 `applyTenantScope(schema)`（**例外**：`user_commit_settings` 为成员级集合，`userId` 为全局成员主键、`tenantId` 仅留档，显式豁免插件，见「Commit 设置与提交身份」段）；唯一索引保留 userId 维度：`{tenantId,userId,name}` / `{tenantId,userId,githubUserId}` / `{tenantId,userId}`。
 - **迁移**：`012-account-user-tenant` 逐 user 幂等拆分三件套（只复制不删除原登录字段）；`013-tenant-id-backfill` 19 集合复制清洗 + 索引（只新增不删除）。**集合名以模型 `model.collection.name` 为单一来源**（如 `issue_workflow_triggers`），由 T-ISO 互校 + `013-...real.test.ts` 真库兜底；历史环境若误建空集合 `issueworkflowtriggers`，确认无数据后可手工 drop。启动后 `services/tenant-self-check.ts` 以带索引 count + `limit(100)` 抽样异步自检，仅告警不阻塞。
 - **计费**：`billing-client` ownerType 使用 `tenant`（ownerId=tenantId；`front_user` 仅兼容期旧调用方）；`startHarness` 下发 `tenantId`（=userId）。
 - **开户**：`POST /internal/users`（Bearer `INTERNAL_API_TOKEN`）创建账户+用户+个人租户+零余额租户计费账户；按 username 幂等（200 既有视图 / 201 新建 / 400 规则 / 409 重名 / 503 计费不可达并回滚）。

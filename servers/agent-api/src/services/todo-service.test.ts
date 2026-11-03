@@ -774,7 +774,7 @@ describe('TodoService - elicitation resolution', () => {
           }),
         }),
       });
-      expect(options).toMatchObject({ upsert: true, new: true });
+      expect(options).toMatchObject({ upsert: true, returnDocument: 'after' });
       expect(result.created).toBe(true);
     });
 

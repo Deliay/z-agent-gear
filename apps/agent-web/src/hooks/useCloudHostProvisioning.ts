@@ -22,6 +22,8 @@ export interface StartCloudHostProvisioningInput {
   workloadIds?: string[]
   /** 勾选 Github 项目时锁定帐号（未勾选保持旧报文形状） */
   githubAccountId?: string
+  /** 可选：创建时挂载云存储；未勾选保持旧报文形状 */
+  storageId?: string
   project: CloudHostProjectSelection
 }
 
@@ -71,6 +73,7 @@ export function useCloudHostProvisioning() {
               ? { workloadIds: input.workloadIds }
               : {}),
             ...(input.githubAccountId ? { githubAccountId: input.githubAccountId } : {}),
+            ...(input.storageId ? { storageId: input.storageId } : {}),
             createDefaultSession: false,
           },
         },

@@ -12,14 +12,14 @@
 ## Dev Commands
 
 ```bash
-npm install
-npm run build    # tsc -b && vite build
-npm run lint
-npm test
-npm run preview
+pnpm install
+pnpm run build    # tsc -b && vite build
+pnpm run lint
+pnpm test
+pnpm run preview
 ```
 
-本项目由 Aspire 编排启动，无需单独运行 `npm run dev`；单独开发时 Vite dev 代理 `/graphql` → `http://localhost:10003`。
+本项目由 Aspire 编排启动，无需单独运行 `pnpm run dev`；单独开发时 Vite dev 代理 `/graphql` → `http://localhost:10003`。
 
 ## 认证与路由
 
@@ -54,6 +54,12 @@ npm run preview
   - **personal 租户维持只读**：无添加/移除/变更角色入口，成员列表仅展示。
 - **工作区只读列表**：`adminTenant.workspaces`（`AdminWorkspace`：名称/类型/成员数），无任何新建/改名/删除入口（工作区管理在前台由租户 admin 完成）。
 - 错误文案以服务端为准，前端只做展示映射；组件位于 `src/components/tenants/`（`AddMemberDialog`、`ChangeMemberRoleDialog`、`roles.ts`）。
+
+## 日志
+
+- `src/lib/logger.ts` 是全包**唯一 console 出口**：业务代码一律 `logger.debug/info/warn/error(objOrMsg, msg?)`（签名与后端 pino 一致，变量进对象字段、错误进 `err` 字段），禁止直接调用 `console.*`（`vite.config.ts` 的构建期提示为登记例外）。
+- **DEV 或 `VITE_LOG_LEVEL` 门控**：仅当 `import.meta.env.DEV` 或显式设置 `VITE_LOG_LEVEL`（`debug|info|warn|error`，非法值回落 `info`；DEV 缺省 `debug`）时输出；**生产默认静默**（不设置 `VITE_LOG_LEVEL` 即零输出）。
+- 前端日志为开发期排障输出，不适用后端契约的字段要求（见 [`contracts/observability.md`](../../contracts/observability.md) §1）；禁止在前端日志中打印 token/密码等敏感值。
 
 ## TDD Workflow
 

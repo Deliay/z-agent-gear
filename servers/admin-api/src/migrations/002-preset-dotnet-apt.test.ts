@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/cloud-workload.js', () => ({
   CloudWorkload: { findOne: vi.fn(), updateOne: vi.fn() },
@@ -6,7 +8,17 @@ vi.mock('../models/cloud-workload.js', () => ({
 
 import { CloudWorkload } from '../models/cloud-workload.js';
 import { DOTNET_SCRIPT } from './001-preset-workloads';
-import * as migration from './002-preset-dotnet-apt';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./002-preset-dotnet-apt.js');
+childSpy.mockRestore();
 
 function existing(initScript: unknown, id = 'dotnet-id') {
   return { _id: id, initScript };
@@ -15,8 +27,7 @@ function existing(initScript: unknown, id = 'dotnet-id') {
 describe('migration 002-preset-dotnet-apt', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
-    vi.spyOn(console, 'log').mockImplementation(() => {});
+    testLog.reset();
     (CloudWorkload.updateOne as any).mockResolvedValue({ modifiedCount: 1 });
   });
 
@@ -47,7 +58,7 @@ describe('migration 002-preset-dotnet-apt', () => {
     await migration.run();
 
     expect(CloudWorkload.updateOne).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('T-MIG2-3: skips (with a warning) when the preset .NET does not exist (no rebuild, no error)', async () => {
@@ -55,7 +66,7 @@ describe('migration 002-preset-dotnet-apt', () => {
 
     await expect(migration.run()).resolves.toBeUndefined();
     expect(CloudWorkload.updateOne).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('falls back to the exact name when presetKey is absent', async () => {

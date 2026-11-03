@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { logger as rootLogger } from '../observability/logger.js';
 import { Account } from '../models/account.js';
 import { User } from '../models/user.js';
 import { Tenant } from '../models/tenant.js';
@@ -9,13 +10,13 @@ import { Session } from '../models/session.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { CloudHost } from '../models/cloud-host.js';
+import { CloudStorage } from '../models/cloud-storage.js';
 import { ConfiguredWorkflow } from '../models/configured-workflow.js';
 import { WorkflowInstance } from '../models/workflow-instance.js';
 import { WorkflowTemplate } from '../models/workflow-template.js';
 import { Provider } from '../models/provider.js';
 import { Model } from '../models/model.js';
 import { GitHubAccount } from '../models/github-account.js';
-import { UserCommitSetting } from '../models/user-commit-setting.js';
 import type { TenantRole, WorkspaceContext } from './workspace-context.js';
 
 /** 错误文案白名单（提案 §3.1，逐字；不新增变体）。 */
@@ -64,8 +65,9 @@ function toView(doc: Record<string, unknown>): WorkspaceView {
 }
 
 function audit(action: string, operator: string, tenantId: string, target: string, role?: string): void {
-  console.log(
-    `[audit] action=${action} operator=${operator} tenant=${tenantId} target=${target} role=${role ?? '-'}`,
+  rootLogger.info(
+    { component: 'audit', action, operator, tenantId, target, role: role ?? null },
+    'workspace audit',
   );
 }
 
@@ -91,7 +93,7 @@ export class WorkspaceService {
             createdBy: null,
           },
         },
-        { upsert: true, new: true, setDefaultsOnInsert: true },
+        { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true },
       );
     } catch (err) {
       // 并发开户：部分唯一索引冲突视为已就绪
@@ -244,7 +246,7 @@ export class WorkspaceService {
       const updated = await Workspace.findByIdAndUpdate(
         id,
         { $set: { name: trimmed } },
-        { new: true, lean: true },
+        { returnDocument: 'after', lean: true },
       );
       if (!updated) throw new Error(WORKSPACE_ERRORS.notFound);
       audit('workspace.rename', userId, String(workspace.tenantId), id, 'admin');
@@ -268,7 +270,8 @@ export class WorkspaceService {
     return result.deletedCount > 0;
   }
 
-  /** 删除保护：11 集合任一持有资源即拒绝（接受与资源创建的既有 TOCTOU 窗口）。 */
+  /** 删除保护：11 集合任一持有资源即拒绝（接受与资源创建的既有 TOCTOU 窗口）。
+   *  注：Commit 设置自本需求起为成员级（键 userId、无 workspaceId 维度），不再计入工作区资源。 */
   async hasResources(workspaceId: string): Promise<boolean> {
     const objectId = new mongoose.Types.ObjectId(workspaceId);
     const counts = await Promise.all([
@@ -276,13 +279,13 @@ export class WorkspaceService {
       Controller.countDocuments({ workspaceId: objectId }),
       ControllerKey.countDocuments({ workspaceId: objectId }),
       CloudHost.countDocuments({ resourceWorkspaceId: objectId }),
+      CloudStorage.countDocuments({ resourceWorkspaceId: objectId, destroyedAt: null }),
       ConfiguredWorkflow.countDocuments({ resourceWorkspaceId: objectId }),
       WorkflowInstance.countDocuments({ resourceWorkspaceId: objectId }),
       WorkflowTemplate.countDocuments({ resourceWorkspaceId: objectId }),
       Provider.countDocuments({ workspaceId: objectId }),
       Model.countDocuments({ workspaceId: objectId }),
       GitHubAccount.countDocuments({ workspaceId }),
-      UserCommitSetting.countDocuments({ workspaceId }),
     ]);
     return counts.some((count) => count > 0);
   }
@@ -463,6 +466,32 @@ export class WorkspaceService {
       role,
       readOnly: type === 'global' && role === 'developer',
       globalWorkspaceId: global ? String(global._id) : String(workspace._id),
+    };
+  }
+
+  /**
+   * 系统链路（事件回调 / 后台 runner）按工作区 id 构造上下文。
+   *
+   * 不做成员校验：调用方已完成归属判定（事件按实例 / 联动记录反查）。
+   * 角色固定 `admin`、`readOnly=false`：系统事件推进不受「全局工作区 + developer 只读」拦截，
+   * 同时让下游 `tenant-scope` 用工作区所属租户（而非 `userId`）注入 `tenantId`。
+   */
+  async systemWorkspaceContext(workspaceId: string): Promise<WorkspaceContext | undefined> {
+    if (!workspaceId || !mongoose.isValidObjectId(workspaceId)) return undefined;
+    const workspace = await Workspace.findById(workspaceId).select('_id tenantId type').lean();
+    if (!workspace) return undefined;
+    const tenantId = String(workspace.tenantId);
+    const type = workspace.type === 'global' ? 'global' : 'normal';
+    const global = await Workspace.findOne({ tenantId, type: 'global' })
+      .select('_id')
+      .lean();
+    return {
+      id: String(workspace._id),
+      tenantId,
+      type,
+      role: 'admin',
+      readOnly: false,
+      globalWorkspaceId: global ? String(global._id) : type === 'global' ? String(workspace._id) : '',
     };
   }
 }

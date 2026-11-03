@@ -1,3 +1,4 @@
+import './observability/register.js';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -6,6 +7,8 @@ import { GraphQLError } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import mongoose from 'mongoose';
 import { config } from './config/index.js';
+import { logger as rootLogger } from './observability/logger.js';
+import { httpContext } from './observability/http-context.js';
 import { typeDefs } from './graphql/schemas/index.js';
 import { resolvers } from './graphql/resolvers/index.js';
 import { authenticateUser, resolveWorkspaceAccess } from './middleware/auth.js';
@@ -15,6 +18,7 @@ import { sessionStreamRouter } from './routes/session-stream.js';
 import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
 import { internalCloudHostRouter } from './routes/internal-cloud-host.js';
+import { internalCloudStorageRouter } from './routes/internal-cloud-storage.js';
 import { eventCallbackRouter } from './routes/event-callback.js';
 import { githubWebhookRouter } from './routes/github-webhook.js';
 import { runMigrations } from './migrations/runner.js';
@@ -35,10 +39,15 @@ import * as migration013TenantIdBackfill from './migrations/013-tenant-id-backfi
 import * as migration014TenantIdRebackfill from './migrations/014-tenant-id-rebackfill.js';
 import * as migration015TeamWorkspaces from './migrations/015-team-workspaces.js';
 import * as migration016GithubInstallationGithubUserId from './migrations/016-github-installation-github-user-id.js';
+import * as migration017NormalizeStringWorkspaceId from './migrations/017-normalize-string-workspace-id.js';
+import * as migration018DropLegacyUniqueIndexes from './migrations/018-drop-legacy-tenantless-unique-indexes.js';
+import * as migration019CommitSettingsPerMember from './migrations/019-commit-settings-per-member.js';
+import * as migration020CloudStorageIndexes from './migrations/020-cloud-storage-indexes.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
 import { scheduleTenantSelfCheck } from './services/tenant-self-check.js';
+import { scheduleCloudStorageReconcile } from './services/cloud-storage-service.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { harnessLoginSubscriberService } from './services/harness-login-subscriber.js';
@@ -54,7 +63,12 @@ import { seedBuiltinWorkflowTemplate } from './services/workflow/seed.js';
 
 const app = express();
 
+const logger = rootLogger.child({ component: 'agent-api' });
+
 app.use(cors({ origin: config.corsOrigin }));
+// HTTP 请求上下文（requestId/traceparent/SERVER span/访问日志）：挂在 cors 之后、
+// webhook/事件回调路由之前（F10：webhook 需在 express.json() 前验签，httpContext 只读 header）。
+app.use(httpContext());
 app.use(compressionMiddleware());
 app.use(cookieParser());
 // 事件回调需读取原始报文验签：必须在全局 express.json() 之前挂载
@@ -132,6 +146,7 @@ app.use('/api', sessionStreamRouter);
 app.use('/api', gatewayProxyRouter);
 app.use('/api', githubRouter);
 app.use('/internal/cloud-hosts', internalCloudHostRouter);
+app.use('/internal/cloud-storages', internalCloudStorageRouter);
 app.use('/internal/users', internalUsersRouter);
 app.use('/internal/tenants', internalTenantsRouter);
 
@@ -149,14 +164,14 @@ async function start() {
 
   try {
     await mongoose.connect(config.mongodbUri);
-    console.log('Connected to MongoDB');
+    logger.info({}, 'connected to MongoDB');
     // 幂等 upsert 内置「开发工作流」模板
     await seedBuiltinWorkflowTemplate();
     // 重建 PR 联动进程内索引（失败只告警，不阻断启动）
     const rebuilt = await prHandlerRegistry.rebuild();
-    console.log(`PR handler registry rebuilt: ${rebuilt}`);
+    logger.info({ component: 'workflow', rebuilt }, 'PR handler registry rebuilt');
   } catch (err) {
-    console.warn('MongoDB not available, starting without database:', (err as Error).message);
+    logger.warn({ err }, 'MongoDB not available, starting without database');
   }
 
   try {
@@ -178,9 +193,13 @@ async function start() {
       migration014TenantIdRebackfill,
       migration015TeamWorkspaces,
       migration016GithubInstallationGithubUserId,
+      migration017NormalizeStringWorkspaceId,
+      migration018DropLegacyUniqueIndexes,
+      migration019CommitSettingsPerMember,
+      migration020CloudStorageIndexes,
     ]);
   } catch (err) {
-    console.warn('[Migration] Runner failed:', (err as Error).message);
+    logger.warn({ component: 'migration', err }, 'migration runner failed');
   }
 
   // Issues 联动触发状态机：启动扫描 + 1s 定时（Redis 不可用也照常运行）
@@ -188,43 +207,45 @@ async function start() {
 
   try {
     getRedisClient();
-    console.log('Connected to Redis');
-    
+    logger.info({}, 'connected to Redis');
+
     // Start permission subscriber
     permissionSubscriberService.start();
-    console.log('Permission subscriber started');
+    logger.info({ component: 'permission-subscriber' }, 'permission subscriber started');
 
     // Start elicitation subscriber
     elicitationSubscriberService.start();
-    console.log('Elicitation subscriber started');
+    logger.info({ component: 'elicitation-subscriber' }, 'elicitation subscriber started');
 
     // Start harness login subscriber (Kimi Code login guidance)
     harnessLoginSubscriberService.start();
-    console.log('Harness login subscriber started');
+    logger.info({ component: 'harness-login-subscriber' }, 'harness login subscriber started');
 
     // Revoke session MCP endpoints when sessions reach a terminal status
     mcpEndpointRevokeSubscriber.start();
-    console.log('MCP endpoint revoke subscriber started');
+    logger.info({ component: 'mcp-endpoint-subscriber' }, 'MCP endpoint revoke subscriber started');
 
     // Consume MCP requests bridged from controller-api over Redis
     mcpRelayConsumer.start();
-    console.log('MCP relay consumer started');
+    logger.info({ component: 'mcp-relay-consumer' }, 'MCP relay consumer started');
 
     // Workflow session lifecycle events (removed / prompt-completed idling)
     sessionLifecycleSubscriber.start();
-    console.log('Session lifecycle subscriber started');
+    logger.info({ component: 'session-lifecycle-subscriber' }, 'session lifecycle subscriber started');
 
     // Workflow todo panel → check-run 子项同步
     prCheckRunSubscriber.start();
-    console.log('PR check-run subscriber started');
+    logger.info({ component: 'pr-check-run-subscriber' }, 'PR check-run subscriber started');
   } catch (err) {
-    console.warn('Redis not available:', (err as Error).message);
+    logger.warn({ err }, 'Redis not available');
   }
 
   app.listen(config.port, () => {
-    console.log(`Agent Gear API running at http://localhost:${config.port}/graphql`);
+    logger.info({ port: config.port }, 'Agent Gear API running');
     // 多租户一期：启动后轻量异步自检（不阻塞对外服务，异常仅告警）
     scheduleTenantSelfCheck();
+    // 云存储 ARCHIVING 对账（回调最终丢失兜底；定时器 unref，不阻塞退出）
+    scheduleCloudStorageReconcile(config.cloudStorageReconcileMs);
   });
 }
 

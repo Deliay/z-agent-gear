@@ -57,13 +57,13 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.11.0`（major 保持 2；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.16.0`（major 保持 2；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
-  注册门禁同步为 `2.11.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
+  注册门禁自 2.11.0 起提升，当前基线 `2.12.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
   OpenCode v2 配置形态 `providers.zag`（`package`/`settings`，替代废弃的 `provider`/`npm`/`options`）；Github 凭据管理器 /
-  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 为 `2.10.0`——
-  上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
+  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 当前为 `2.12.0`
+  （2.11.0 及更早版本为 `2.10.0`）——上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
   `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
   仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。
 
@@ -173,7 +173,8 @@ hook 抛错时本批每个 item 直接回报 `failed` + `Github 凭据申请失�
 - 云电脑两端连接均 `persistConfig=false`：**不读写** `~/.zag/config.toml`（不落 resumeToken/Key）；
   本地单连接保持原行为，配置写入使用权限 `0600`。
 - 任一端 `shutdown` → 关闭两端并退出：服务端终止（非失败类 shutdown / `unregistered` / `INVALID_TOKEN`）退出 42（入口不重启）；信号退出 0（入口保活重启）；`version_mismatch:*` / 其它 `error:*` / 必须工作负载初始化失败退出 1（entrypoint 自愈与失败语义）；**不发送 `unregister`**（容器销毁由 agent-api 编排）。
-- `KEY_ALREADY_ONLINE` 在云电脑模式按 1s→2s→…→30s 退避手动重连；**仅在 `registered` 成功后重置退避计数**（connect 先于 register 结果，不能作为成功信号）。退避定时器不 `unref`，避免双端断开时进程静默退出。
+- `KEY_ALREADY_ONLINE`（旧服务端兼容）在云电脑模式按 1s→2s→…→30s 退避手动重连；**仅在 `registered` 成功后重置退避计数**（connect 先于 register 结果，不能作为成功信号）。退避定时器不 `unref`，避免双端断开时进程静默退出。
+- `SESSION_REPLACED`（服务端 2.16.0 起下发）：同一 Key 的新登录已接管本连接。客户端**不重连、不清除本地 Key/resumeToken**；本地模式直接 `exit(42)`，云电脑模式 `notifyShutdown({ reason: 'session_replaced' })` 由 supervisor 按服务端终止语义收尾（最终 42、入口不重启）。
 - 双连接只启动一个 `LocalMcpServer`：`/worker` 连接 `skipLocalMcpStart=true`，标准连接负责启动。
 - 未检测到云电脑模式时保持本地控制器单连接旧行为不变。
 
@@ -201,9 +202,9 @@ init 脚本（admin-api 迁移 006）在安装固定版本 OpenCode 后执行
 
 ```bash
 aspire start     # 启动 Aspire 编排（拉起全部服务）
-npm run build    # Compile TypeScript
-npm run start    # Start production controller
-npm run test     # Run tests
+pnpm run build    # Compile TypeScript
+pnpm run start    # Start production controller
+pnpm run test     # Run tests
 ```
 
 ## Development with Aspire
@@ -222,17 +223,17 @@ aspire start
 #    mutation { createControllerKey(input: { name: "dev", type: local }) { rawKey } }
 
 # 4. 使用生成的 Key 启动 agent-gear
-npm run dev -- --key <rawKey> --server <controller-api-endpoint>
+pnpm run dev -- --key <rawKey> --server <controller-api-endpoint>
 ```
 
 ### 示例
 
 ```bash
 # Aspire 启动后 controller-api 在 4001 端口
-npm run dev -- --key zag_k_1_abc123... --server http://localhost:4001
+pnpm run dev -- --key zag_k_1_abc123... --server http://localhost:4001
 
 # 或使用环境变量
-ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 npm run dev
+ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 pnpm run dev
 ```
 
 ## Config Priority
@@ -281,6 +282,38 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 n
   会话关闭/进程退出/断线/对账后不得再出现 65s 迟到的 `timeout` 事件。
 - 同步链路仍自动 `cancel` 问询，但声明相同的 `CLIENT_CAPABILITIES` 并记录告警（无用户通道的合法降级）。
 - 回归：`capabilities.test.ts`（映射/三档合并/raw 保真）、`bridge.test.ts`（快照、resolved）、`elicitation.integration.test.ts`（真实 SDK + 假 Agent 进程验证 `elicitation/create` 路由）、`socketio-client.test.ts`（旧 payload 零退化）。
+
+## Worktree 级提交人（agent-gear 2.12.0；共同作者 2.13.0）
+
+- `WorktreeHandler.add(repoPath, worktreePath, branch, committer?)`：`git worktree add` 成功后，若传入
+  `committer {name,email}`，以 `git -C <worktreePath>` 依次执行
+  `git config extensions.worktreeConfig true` → `git config --worktree user.name <name>` →
+  `git config --worktree user.email <email>`；**仅作用于该 worktree**（`.git/worktrees/<name>/config.worktree`），
+  主仓与兄弟 worktree 不受污染。
+- **共同作者（2.13.0）**：`committer.coAuthorName/coAuthorEmail` 成对合法时，
+  `git rev-parse --path-format=absolute --git-common-dir` → 写 `<common>/zag-hooks/prepare-commit-msg`
+  （`# zag-managed`，0755，内容固定不含用户数据）→ `--worktree core.hooksPath` +
+  `--worktree zag.coAuthorName/Email`。hook 从 worktree 生效配置读取 trailer，`grep -qF` exact-trailer
+  幂等（重复提交 / `--amend` 不叠加），无配置直接放行；任一步失败仅告警，不阻断 worktree 创建。
+- **安全**：name/email 用户可控，拼接进 `execAsync` 前必须 `shellQuote`（单引号包裹 + 内嵌 `'` 转义为
+  `'\''`）；禁止未转义插值。单条命令失败仅 `this.log.warn`（不打印值），结果仍 `success`。
+- 缺省不写身份（沿用容器级 bot，后者恒为平台 bot）；非法载荷（非字符串/空值）按「未提供」处理。
+- 载荷来源：`git:worktree:add` 可选字段 `committer`（契约 `contracts/agent-session-websocket.md` §3.12）。
+- 版本口径：2.12.0 起提供该能力；cloud-controller harness 门禁与 worker 镜像（`agent-gear@2.12.x`）同步提升，
+  旧 worker 忽略未知字段 → 优雅降级（不写身份、沿用 bot，不报错）。
+
+## 日志与可观测性
+
+- **日志形态**：pino 单行 JSON（vendored `src/observability/`，agent-gear 2.13.0 起），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。**CLI 用户可见输出（如 `mcp-proxy` 代理地址、`harness prepare` 进度结果）保持纯文本 stdout 不变**；给运维的排障信息才走 logger。
+- **span 清单**（精简手动埋点，不加 auto-instrumentations）：
+  - `startup` — 进程启动（`startup-span.ts`）；`ZAG_INIT_TRACEPARENT`（cloud-controller 创建云电脑 Job 时注入，**非人工配置**）合法时以 **link**（不是 parent）关联 `container.start` 创建链路（T-OBS18）；
+  - `acp.child.spawn` / `acp.child.exit` — ACP 子进程拉起/退出（`acp/bridge.ts`）；
+  - `session.prompt` — 每条 prompt 一个 span（`acp/bridge.ts`）；
+  - `mcp.tool.call` — MCP 工具调用（`mcp/relay.ts`）；
+  - `cloud-host.reconnect` — 云电脑保活/重连**每轮一个 span**（属性 `attempt`，`socketio-client.ts`，不逐 socket/进程事件开 span）。
+- **Socket.IO 握手 / `_meta` 封套位置**：握手 `io(url, { auth: { token, traceparent } })` 把当前活跃 span 的 `traceparent` 注入 `auth.traceparent`（`socketio-client.ts`，T-OBS13；重连时新 span 重新注入）；事件报文顶层 `_meta: { traceparent? }` 见 [`contracts/agent-session-websocket.md`](../../contracts/agent-session-websocket.md) §7 与 [`contracts/cloud-controller-websocket.md`](../../contracts/cloud-controller-websocket.md) 附录 B。无活跃 span 时不注入无效值。
+- **env 变量**：`LOG_LEVEL` / `LOG_PRETTY`（仅非生产）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 零外发**）/ `OTEL_EXPORTER_OTLP_HEADERS`（**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `ZAG_INIT_TRACEPARENT`（平台注入）等，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。云电脑 Job env 注入由 cloud-controller `buildHarnessJobEnv` 负责（附录 B.2）。
+- **排障**：`LOG_LEVEL=debug` 看逐事件细节；`OTEL_SDK_DISABLED=true` 关追踪导出（不影响业务与 CLI 输出）；JSON 单行日志可直接 `grep`（`grep '"level":"error"'`、`grep '"trace_id":"<trace-id>"'` 串链路、`grep '"component":"socketio-client"'`）。
 
 ## Related Rules
 

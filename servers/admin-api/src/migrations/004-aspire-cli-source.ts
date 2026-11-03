@@ -1,5 +1,8 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
 import { ASPIRE_SCRIPT_V1 } from './001-preset-workloads.js';
+
+const log = logger.child({ component: 'migration/004-aspire-cli-source' });
 
 /**
  * 004-aspire-cli-source：把存量（管理员未定制过的）「Aspire」预制工作负载脚本从 v1（经官方安装脚本
@@ -10,7 +13,7 @@ import { ASPIRE_SCRIPT_V1 } from './001-preset-workloads.js';
  * 出网受限时初始化失败。本期把内网代理地址做成工作负载参数默认值，脚本 v2 直接消费该参数。
  *
  * 刷新口径（提案 §5.2 实现点 2、计划期裁决 8/9/10）：
- * - 未定制判定严格相等：`initScript ∈ {V1, V2}` 才处理；其余视为管理员定制，`console.warn`
+ * - 未定制判定严格相等：`initScript ∈ {V1, V2}` 才处理；其余视为管理员定制，打 `warn`
  *   且不覆盖、不补参数（定制脚本不消费该参数）。
  * - `initScript` 非 V2 则刷新为 V2；`paramSchema` 缺 `aspire_cli_url`（只按 key 判定）则追加参数；
  *   有变更才 `save()`，参数已存在则完全不动（含管理员改过的默认值）。
@@ -130,8 +133,9 @@ export async function run(): Promise<void> {
     // 防御：001 可能因同名冲突跳过，这里按精确 name 再查一次，避免创建重名项。
     const byName = await CloudWorkload.findOne({ name: ASPIRE_PRESET_NAME });
     if (byName) {
-      console.warn(
-        `[Migration 004] workload named "${ASPIRE_PRESET_NAME}" already exists without presetKey, skipping`,
+      log.warn(
+        { name: ASPIRE_PRESET_NAME },
+        'workload already exists without presetKey, skipping',
       );
       return;
     }
@@ -144,7 +148,7 @@ export async function run(): Promise<void> {
       presetKey: ASPIRE_PRESET_KEY,
       isPreset: true,
     });
-    console.log('[Migration 004] aspire preset workload created (v2)');
+    log.info('aspire preset workload created (v2)');
     return;
   }
 
@@ -152,7 +156,7 @@ export async function run(): Promise<void> {
   const script = doc.initScript;
   const isStock = script === ASPIRE_SCRIPT_V1 || script === ASPIRE_SCRIPT_V2;
   if (!isStock) {
-    console.warn('[Migration 004] aspire preset script modified by admin, skipping');
+    log.warn('aspire preset script modified by admin, skipping');
     return;
   }
 
@@ -171,8 +175,8 @@ export async function run(): Promise<void> {
 
   if (changed) {
     await doc.save();
-    console.log('[Migration 004] aspire preset script refreshed to v2 / aspire_cli_url ensured');
+    log.info('aspire preset script refreshed to v2 / aspire_cli_url ensured');
   } else {
-    console.log('[Migration 004] aspire preset already up-to-date, skipping');
+    log.info('aspire preset already up-to-date, skipping');
   }
 }

@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/010-issues-linkage-indexes' });
 
 export const name = '010-issues-linkage-indexes';
 
@@ -28,5 +31,5 @@ export async function run(): Promise<void> {
   await triggers.createIndex({ controllerId: 1, status: 1 });
   await triggers.createIndex({ status: 1, updatedAt: -1 });
 
-  console.log('[Migration 010] Ensured issues linkage indexes');
+  log.info('ensured issues linkage indexes');
 }

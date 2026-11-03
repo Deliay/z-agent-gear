@@ -1,7 +1,25 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
+import { logger } from '../observability/logger.js';
 import * as migration from './002-cloudcontainers-workspace-id.js';
+
+// 迁移日志走 pino（console 清零）：mock logger.child() 产出的记录器供断言/静音。
+vi.mock('../observability/logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../observability/logger.js')>();
+  const child = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  return {
+    ...actual,
+    logger: { child: () => child, debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  };
+});
+
+const childLog = logger.child({}) as unknown as {
+  debug: ReturnType<typeof vi.fn>;
+  info: ReturnType<typeof vi.fn>;
+  warn: ReturnType<typeof vi.fn>;
+  error: ReturnType<typeof vi.fn>;
+};
 
 /**
  * 真库用例（T-MIG002a~c）：workspaceId 回填 / 幂等重跑 / 解析不到跳过，口径与 001 同款。
@@ -98,27 +116,27 @@ describe('migration 002 cloudcontainers workspaceId (real db)', () => {
   });
 
   it('T-MIG002c: 解析不到 global 工作区 → workspaceId 置 null；tenantId 缺失的行跳过', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      await collection().insertMany([
-        // 租户存在但没有 global 工作区（半完成开户）
-        { name: 'c-no-global', userId: 'u-2', tenantId: 'tenant-without-global', purpose: 'harness' },
-        // 同库完全没有该租户
-        { name: 'c-no-tenant', userId: 'u-3', tenantId: 'tenant-absent', purpose: 'harness' },
-        // 无租户归属的存量行（如 idle 容器）：与 001 同口径跳过、不改动
-        { name: 'c-no-tenant-id', purpose: 'idle' },
-      ]);
+    childLog.warn.mockClear();
+    await collection().insertMany([
+      // 租户存在但没有 global 工作区（半完成开户）
+      { name: 'c-no-global', userId: 'u-2', tenantId: 'tenant-without-global', purpose: 'harness' },
+      // 同库完全没有该租户
+      { name: 'c-no-tenant', userId: 'u-3', tenantId: 'tenant-absent', purpose: 'harness' },
+      // 无租户归属的存量行（如 idle 容器）：与 001 同口径跳过、不改动
+      { name: 'c-no-tenant-id', purpose: 'idle' },
+    ]);
 
-      await migration.run();
+    await migration.run();
 
-      const rows = await collection().find({}).toArray();
-      const byName = (name: string) => rows.find((row) => row.name === name);
-      expect(byName('c-no-global')?.workspaceId ?? null).toBeNull();
-      expect(byName('c-no-tenant')?.workspaceId ?? null).toBeNull();
-      expect(byName('c-no-tenant-id')).not.toHaveProperty('workspaceId');
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining('无法解析全局工作区'));
-    } finally {
-      warn.mockRestore();
-    }
+    const rows = await collection().find({}).toArray();
+    const byName = (name: string) => rows.find((row) => row.name === name);
+    expect(byName('c-no-global')?.workspaceId ?? null).toBeNull();
+    expect(byName('c-no-tenant')?.workspaceId ?? null).toBeNull();
+    expect(byName('c-no-tenant-id')).not.toHaveProperty('workspaceId');
+    // 结构化告警（warn 级 + 字段），不再 console.warn
+    expect(childLog.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'workspace-unresolved', tenantId: 'tenant-without-global' }),
+      expect.stringContaining('无法解析全局工作区'),
+    );
   });
 });

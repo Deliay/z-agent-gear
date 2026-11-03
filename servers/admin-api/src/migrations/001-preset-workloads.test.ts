@@ -1,11 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
 
 vi.mock('../models/cloud-workload.js', () => ({
   CloudWorkload: { findOne: vi.fn(), create: vi.fn() },
 }));
 
 import { CloudWorkload } from '../models/cloud-workload.js';
-import * as migration from './001-preset-workloads';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `logger.child(...)`，迁移日志写入内存 sink，
+ * 断言 `records` 的结构化字段（`level`/`component` 等，见 contracts/observability.md）。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const migration = await import('./001-preset-workloads.js');
+childSpy.mockRestore();
 
 type CreateArg = {
   name: string;
@@ -24,7 +36,7 @@ function createdArgs(): CreateArg[] {
 describe('migration 001-preset-workloads', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    testLog.reset();
     // 默认：没有任何同名/presetKey 已存在项
     (CloudWorkload.findOne as any).mockResolvedValue(null);
     (CloudWorkload.create as any).mockImplementation((doc: { name: string }) =>
@@ -95,7 +107,7 @@ describe('migration 001-preset-workloads', () => {
     expect(args.map((arg) => arg.presetKey)).toEqual(['dotnet', 'aspire']);
     // Aspire 的依赖解析到已存在的 Docker / 本次插入的 .NET
     expect(args[1].dependsOnWorkloadIds).toEqual(['existing-docker', 'id-.NET']);
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 
   it('T-MIG4: leaves dependencies empty (with a warning) when a dependency is missing', async () => {
@@ -112,6 +124,6 @@ describe('migration 001-preset-workloads', () => {
 
     const aspire = createdArgs().find((arg) => arg.presetKey === 'aspire');
     expect(aspire?.dependsOnWorkloadIds).toEqual(['existing-docker']);
-    expect(console.warn).toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(true);
   });
 });
