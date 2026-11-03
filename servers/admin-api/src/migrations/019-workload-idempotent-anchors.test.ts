@@ -17,7 +17,7 @@ const testLog = createTestLogger();
 const childSpy = vi
   .spyOn(rootLogger, 'child')
   .mockImplementation((bindings) => testLog.logger.child(bindings));
-const migration = await import('./018-workload-idempotent-anchors.js');
+const migration = await import('./019-workload-idempotent-anchors.js');
 childSpy.mockRestore();
 
 const TARGETS = migration.WORKLOAD_IDEMPOTENCY_TARGETS;
@@ -83,14 +83,14 @@ const HARD_CHECKS: Record<string, RegExp> = {
   mongodb: /mongod --version/,
 };
 
-describe('migration 018-workload-idempotent-anchors', () => {
+describe('migration 019-workload-idempotent-anchors', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     testLog.reset();
   });
 
   it('暴露迁移名、10 个预制目标与 Node.js V2 新脚本', () => {
-    expect(migration.name).toBe('018-workload-idempotent-anchors');
+    expect(migration.name).toBe('019-workload-idempotent-anchors');
     expect(TARGETS).toHaveLength(10);
     expect(TARGETS.map((target) => target.presetKey)).toEqual([
       'docker',
@@ -134,6 +134,27 @@ describe('migration 018-workload-idempotent-anchors', () => {
     await migration.run();
     await migration.run();
 
+    for (const doc of docs.values()) expect(doc.save).not.toHaveBeenCalled();
+    expect(testLog.records.some((record) => record.level === 'warn')).toBe(false);
+  });
+
+  it('T-MIG-I2b: 与 018-pnpm-12-upgrade 组合 → 四条脚本标准版本即 018 输出（018→019 不回退、无告警）', async () => {
+    const pnpm12 = await import('./018-pnpm-12-upgrade.js');
+    const expected: Record<string, string> = {
+      'harness-opencode': pnpm12.HARNESS_OPENCODE_SCRIPT_V4,
+      'harness-kimi-code': pnpm12.HARNESS_KIMI_CODE_SCRIPT_V4,
+      'harness-deepseek-harness': pnpm12.HARNESS_DEEPSEEK_SCRIPT_V5,
+      playwright: pnpm12.PLAYWRIGHT_SCRIPT_V3,
+    };
+    for (const [presetKey, script] of Object.entries(expected)) {
+      const target = TARGETS.find((item) => item.presetKey === presetKey)!;
+      expect(target.newScript, `${presetKey}: 019 标准版本落后于 018`).toBe(script);
+    }
+
+    // 018 已执行（库内为 pnpm 12 版本）后跑 019：全部 no-op 且无告警
+    const docs = seed();
+    finder(docs);
+    await migration.run();
     for (const doc of docs.values()) expect(doc.save).not.toHaveBeenCalled();
     expect(testLog.records.some((record) => record.level === 'warn')).toBe(false);
   });
