@@ -223,6 +223,7 @@ flowchart LR
 - [[proposals/20261030-feat-unified-logging-and-otel.md]] — 规范化日志与全链路可观测性（单源 vendored 观测模块 + pino JSON 日志与 no-console 不变量、OTel NodeSDK 以入口首个 import 启动、auto-instrumentations 与手工 span 分工、W3C traceparent 经 HTTP/Socket.IO/Redis 封套/Job env 四通道传播、云电脑 Job `OTEL_*` 注入与 agent-gear 2.12.0 手动埋点、名单脱敏与审计例外、Aspire collector 编排）
 - [[proposals/20261031-feat-commit-with-bot-coauthor.md]] — Commit 与 bot 共同提交（user_commit_settings 新增 commitWithBot、CommitSettings 契约扩展、resolveWorktreeCommitter 追加 bot user/noreply email、`git:worktree:add` committer 扩展 coAuthorName/coAuthorEmail 并在 instance/orchestrator/session/issues 快照透传、agent-gear 2.13.0 worktree 级 core.hooksPath + prepare-commit-msg 幂等 trailer、agent-web Git 区块勾选项）
 - [[proposals/20261102-feat-cloud-storage.md]] — 云电脑支持申请存储（工作区级 cloudstorages 与迁移 020、cloud-controller PVC CRUD + Job 卷挂载 /home/worker 主目录/fsGroup/initContainer 恢复、entrypoint bootstrap_home 幂等自举与工作负载幂等标准（迁移 018）、destroy 后独立 archiver Job 压缩 .tar.gz2 原子替换写入每工作区 100Gi 归档 PVC 并释放源 PVC、状态机 IDLE/ATTACHED/ARCHIVING/ARCHIVED/DESTROYED/CREATE_FAILED、3 档 per_unit 小时计费 + 已归档半价 + storagebillingcursors + BillingCategory.storage、T-CS/T-CC/T-BOOT/T-WL/T-BILL/T-WEB/E2E 用例矩阵）
+- [[proposals/20261103-feat-workflow-node-interrupt-retry.md]] — 工作流节点中断处理迭代（中断自动重试 1→10 次 + 指数退避 0/1/2/4/8/16/30m 封顶、重试管线 close→resume→等待 idling→addMessage 带 5 分钟空闲超时、重试计划持久化 retryCount/nextRetryAt/retryPhase + 30s 周期扫描器抗进程重启、新状态 RETRY_FAILED 与事件 retryExhausted、restart/resumeFailed 开放来源、通用会话状态回调、迁移 021 fallbackSent→retryCount、check-run action_required 映射）
 
 ### 实现计划（`plan/`）
 
