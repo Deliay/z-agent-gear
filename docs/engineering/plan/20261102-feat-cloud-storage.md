@@ -153,7 +153,7 @@ bash deploy/images/worker/entrypoint.test.sh   # T-EP0~T-EP18 全绿
 
 ## Phase 3: admin-api 计费与工作负载幂等迁移
 
-开发分支：`feat/cloud-storage-impl`。TDD：先写 `storage-pricing.test.ts` / `storage-charge.test.ts` / `storage-tick.test.ts` / `018-workload-idempotent-anchors.test.ts`（RED）→ 实现（GREEN）。
+开发分支：`feat/cloud-storage-impl`。TDD：先写 `storage-pricing.test.ts` / `storage-charge.test.ts` / `storage-tick.test.ts` / `019-workload-idempotent-anchors.test.ts`（RED）→ 实现（GREEN）。
 
 ### 文件修改
 
@@ -170,9 +170,9 @@ bash deploy/images/worker/entrypoint.test.sh   # T-EP0~T-EP18 全绿
 | `servers/admin-api/src/graphql/schemas/billing.ts` | 修改 | `enum BillingCategory` 增加 `storage` |
 | `servers/admin-api/src/routes/internal-billing.ts` | 修改 | `GET /internal/billing/storage-quote?sizeGi=`（返回 full/archived 与 items）；`POST /internal/billing/storage-charges`（校验 `periodEnd - periodStart === 1h`、`rate ∈ FULL/HALF`、`sizeGi 1..30`；映射 `404 ACCOUNT_NOT_FOUND`/`409 INSUFFICIENT_BALANCE`/`400 INVALID_BODY`） |
 | `servers/admin-api/src/config/index.ts` | 修改 | `STORAGE_BILLING_TICK_MS`（正整数，默认 300000） |
-| `servers/admin-api/src/migrations/018-workload-idempotent-anchors.ts` | 新增 | 按 017 形态的字节匹配 `refresh()`：逐条核查 10 个预制脚本（001/002/003/004/006/007/009/010/012/013/015/016/017 的当前导出常量），对不满足「锚点判定 + 结尾硬校验 + 可重复执行」的脚本按字节匹配刷新；`oldScripts` 含全部已知历史版本；定制/删除 warn 跳过；全部合规时为空操作并记录说明 |
-| `servers/admin-api/src/migrations/018-workload-idempotent-anchors.test.ts` | 新增 | T-MIG-I1~I4 |
-| `servers/admin-api/src/index.ts` | 修改 | `runMigrations([...])` 追加 `018-workload-idempotent-anchors`（顺序在 017 之后） |
+| `servers/admin-api/src/migrations/019-workload-idempotent-anchors.ts` | 新增 | 按 017 形态的字节匹配 `refresh()`：逐条核查 10 个预制脚本（001/002/003/004/006/007/009/010/012/013/015/016/017 的当前导出常量），对不满足「锚点判定 + 结尾硬校验 + 可重复执行」的脚本按字节匹配刷新；`oldScripts` 含全部已知历史版本；定制/删除 warn 跳过；全部合规时为空操作并记录说明 |
+| `servers/admin-api/src/migrations/019-workload-idempotent-anchors.test.ts` | 新增 | T-MIG-I1~I4 |
+| `servers/admin-api/src/index.ts` | 修改 | `runMigrations([...])` 追加 `019-workload-idempotent-anchors`（顺序在 017 之后） |
 
 ### 测试用例
 
@@ -195,7 +195,7 @@ bash deploy/images/worker/entrypoint.test.sh   # T-EP0~T-EP18 全绿
 
 ```bash
 cd servers/admin-api
-npx vitest run src/services/billing/storage-pricing.test.ts src/services/billing/storage-charge.test.ts src/services/billing/storage-tick.test.ts src/migrations/018-workload-idempotent-anchors.test.ts
+npx vitest run src/services/billing/storage-pricing.test.ts src/services/billing/storage-charge.test.ts src/services/billing/storage-tick.test.ts src/migrations/019-workload-idempotent-anchors.test.ts
 npm run build && npx vitest run
 ```
 

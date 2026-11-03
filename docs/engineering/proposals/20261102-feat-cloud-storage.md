@@ -145,7 +145,7 @@ graph TB
 | `servers/cloud-controller/src/models/cloud-container.ts` | 修改 | `storage*` / `storageArchive*` 字段 |
 | `deploy/images/worker/entrypoint.sh` | 修改 | `bootstrap_home` 幂等自举 + `ZAG_STORAGE_HOME` 开关 |
 | `deploy/images/worker/Dockerfile` | 修改 | `NVM_INSTALL_URL` / `NODE_VERSION` 固化为运行时 ENV |
-| `servers/admin-api/src/migrations/018-workload-idempotent-anchors.ts` | 新增 | 刷新不满足幂等标准的预制工作负载脚本（核查后按字节匹配刷新） |
+| `servers/admin-api/src/migrations/019-workload-idempotent-anchors.ts` | 新增 | 刷新不满足幂等标准的预制工作负载脚本（核查后按字节匹配刷新） |
 | `servers/admin-api/src/services/billing/storage-pricing.ts`、`storage-charge.ts`、`storage-tick.ts` | 新增 | 阶梯报价（全价/半价）、整点结算、欠费策略 |
 | `servers/admin-api/src/services/billing/pricing.ts` | 修改 | 3 个存储价目默认档 |
 | `servers/admin-api/src/services/billing/scheduler.ts` | 修改 | 注册存储结算 tick |
@@ -638,7 +638,7 @@ archivedCents = fullCents / 2        // 各档单价均为 100 的整数倍，�
 ### 4.5 迁移
 
 - **agent-api `020-cloud-storage-indexes`**：显式创建上列索引（避免生产 `autoIndex=false` 时缺索引），幂等；不涉及存量数据回填。编号说明：当前最新为 `019-commit-settings-per-member`，故 020。
-- **admin-api `018-workload-idempotent-anchors`**：按「锚点跳过 + 结尾硬校验 + 可重复执行」标准核查预制工作负载脚本，对不满足项按字节匹配刷新脚本内容（与迁移 017 同模式）；核查结果为全部满足时迁移为空操作并记录说明。编号说明：当前最新为 `017-workload-pnpm-scripts`，故 018。
+- **admin-api `019-workload-idempotent-anchors`**：按「锚点跳过 + 结尾硬校验 + 可重复执行」标准核查预制工作负载脚本，对不满足项按字节匹配刷新脚本内容（与迁移 017 同模式）；核查结果为全部满足时迁移为空操作并记录说明。编号说明：合并 release 时 `018` 已被 `018-pnpm-12-upgrade` 占用（release 优先保留原编号），本迁移顺延为 `019`。
 - **cloud-controller**：无需迁移（新字段对历史行容忍 null）；存量容器不回填 `storageArchiveStatus`。
 
 ## 5. 技术实现方案
@@ -1149,7 +1149,7 @@ servers/cloud-controller/src/
 servers/admin-api/src/
 ├── models/cloud-storage.ts              # 只读镜像
 ├── models/storage-billing-cursor.ts     # 计费进度游标
-├── migrations/018-workload-idempotent-anchors.ts  # 新增
+├── migrations/019-workload-idempotent-anchors.ts  # 新增
 ├── services/billing/storage-pricing.ts  # 新增
 ├── services/billing/storage-charge.ts   # 新增
 ├── services/billing/storage-tick.ts     # 新增
