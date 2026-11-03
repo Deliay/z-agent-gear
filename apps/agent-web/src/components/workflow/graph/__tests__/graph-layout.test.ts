@@ -4,6 +4,7 @@ import {
   buildGraphViewModel,
   estimateNodeHeight,
   layoutGraphNodes,
+  pickFocusWindow,
 } from '../graph-layout'
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow'
 
@@ -115,8 +116,7 @@ describe('layoutGraphNodes', () => {
 })
 
 describe('buildGraphViewModel', () => {
-  it('连线加粗（strokeWidth=2）且带箭头指向下游', () => {
-    const view = buildGraphViewModel(instance([node({ id: 'a' }), node({ id: 'b', dependsOn: ['a'] })]))
+  it('连线加粗（strokeWidth=2）且带箭头指向下游', () => {    const view = buildGraphViewModel(instance([node({ id: 'a' }), node({ id: 'b', dependsOn: ['a'] })]))
     expect(view.edges).toHaveLength(1)
     const edge = view.edges[0]
     expect(edge.source).toBe('a')
@@ -157,5 +157,44 @@ describe('buildGraphViewModel', () => {
     )
     expect(view.nodes.find((n) => n.id === 'h1')!.data.actionable).toBe(true)
     expect(view.nodes.find((n) => n.id === 'h2')!.data.actionable).toBe(false)
+  })
+})
+
+describe('pickFocusWindow（执行中节点前后各 2 卡片窗口）', () => {
+  /** 竖向排列 7 个节点：n1..n7（y 递增） */
+  const vertical = Array.from({ length: 7 }, (_, index) => ({
+    id: `n${index + 1}`,
+    position: { x: 0, y: index * 150 },
+  }))
+
+  it('T-WFI1 执行中节点居中：取前后各 2 个', () => {
+    expect(pickFocusWindow(vertical, ['n4'])).toEqual(['n2', 'n3', 'n4', 'n5', 'n6'])
+  })
+
+  it('T-WFI2 执行中在首/尾时索引越界自动收敛', () => {
+    expect(pickFocusWindow(vertical, ['n1'])).toEqual(['n1', 'n2', 'n3'])
+    expect(pickFocusWindow(vertical, ['n7'])).toEqual(['n5', 'n6', 'n7'])
+  })
+
+  it('T-WFI3 多执行中节点取布局序最靠前者作为中心', () => {
+    expect(pickFocusWindow(vertical, ['n6', 'n3'])).toEqual(['n1', 'n2', 'n3', 'n4', 'n5'])
+  })
+
+  it('T-WFI4 无执行中节点返回空数组', () => {
+    expect(pickFocusWindow(vertical, [])).toEqual([])
+    expect(pickFocusWindow(vertical, ['ghost'])).toEqual([])
+  })
+
+  it('T-WFI5 同层（y 相同）按 x 稳定排序', () => {
+    const sameLayer = [
+      { id: 'a', position: { x: 400, y: 0 } },
+      { id: 'b', position: { x: 0, y: 0 } },
+      { id: 'c', position: { x: 200, y: 0 } },
+      { id: 'd', position: { x: 0, y: 150 } },
+    ]
+    expect(pickFocusWindow(sameLayer, ['c'], 0, 0)).toEqual(['c'])
+    // 同层按 x 升序：b(x=0) < c(x=200) < a(x=400)
+    expect(pickFocusWindow(sameLayer, ['c'], 1, 0)).toEqual(['b', 'c'])
+    expect(pickFocusWindow(sameLayer, ['a'], 0, 1)).toEqual(['a', 'd'])
   })
 })

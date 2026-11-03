@@ -6,11 +6,17 @@ import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow'
 
 const mockUseQuery = vi.fn();
 const mockDelete = vi.fn().mockResolvedValue({});
+const mockRename = vi.fn().mockResolvedValue({});
 const mockNavigate = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
-  useMutation: () => [mockDelete],
+  // 按 mutation 文档名区分：改名用独立 mock，其余沿用 mockDelete（删除/归档）
+  useMutation: (doc: { definitions?: Array<{ name?: { value?: string } }> }) => {
+    const name = doc?.definitions?.[0]?.name?.value;
+    if (name === 'RenameWorkflowInstance') return [mockRename];
+    return [mockDelete];
+  },
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -269,6 +275,77 @@ describe('WorkflowInstancePage 实例状态与归档', () => {
       ),
     );
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('WorkflowInstancePage 实例改名（T-RNWEB）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRename.mockResolvedValue({});
+  });
+
+  it('T-RNWEB1 点击重命名入口弹出对话框并预填当前名称', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain('重命名实例');
+    expect(screen.getByLabelText('实例名称')).toHaveValue('测试实例');
+  });
+
+  it('T-RNWEB2 空白名称禁用提交并提示', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+    fireEvent.change(screen.getByLabelText('实例名称'), { target: { value: '   ' } });
+
+    expect(screen.getByText('名称不能为空')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+  });
+
+  it('T-RNWEB2b 超长名称禁用提交并提示', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+    fireEvent.change(screen.getByLabelText('实例名称'), { target: { value: 'a'.repeat(65) } });
+
+    expect(screen.getByText('名称最多 64 个字符')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+  });
+
+  it('T-RNWEB3 提交 trim 后名称、成功 toast、对话框关闭', async () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+    fireEvent.change(screen.getByLabelText('实例名称'), { target: { value: '  新名称  ' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() =>
+      expect(mockRename).toHaveBeenCalledWith({
+        variables: { id: 'inst-1', name: '新名称' },
+      }),
+    );
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('实例名称已更新'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('T-RNWEB4 服务端错误文案展示且对话框保持打开', async () => {
+    mockRename.mockRejectedValue(new Error('invalid workflow name'));
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+    fireEvent.change(screen.getByLabelText('实例名称'), { target: { value: '新名称' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(screen.getByText('invalid workflow name')).toBeInTheDocument());
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });
 
