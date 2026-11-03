@@ -18,7 +18,6 @@
 | cloud-controller| Node.js    | cloud-controller|
 | controller-api  | Node.js    | controller-api  |
 | mongodb         | Container  | mongodb         |
-| otel-collector  | Container  | otel-collector  |
 | redis           | Container  | redis           |
 | rabbitmq        | Container  | rabbitmq        |
 
@@ -36,11 +35,8 @@
 > 受限环境无镜像时可设 `RABBITMQ_DISABLED=true` 跳过 RabbitMQ 资源（其余服务照常启动，MQ 客户端自行重试并降级，
 > 计费事件保留在 outbox 待恢复后补投）。compose 部署需在 `.env` 提供 `RABBITMQ_PASSWORD`。
 >
-> 可观测性（contracts/observability.md）：`otel-collector` 为 OTLP 4317/4318 采集端（配置挂载
-> `aspire/otel-collector/config.yaml`，debug exporter 直读 stdout）。5 个运行时（4 服务 + agent-controller）
-> 统一注入 `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_TRACES_SAMPLER_ARG` / `LOG_LEVEL`：
-> 参数 `otel-endpoint` **空 = 追踪完全关闭、零外发**（publish 默认空）；dev 默认 `http://localhost:4318`。
-> 采集端鉴权头 `OTEL_EXPORTER_OTLP_HEADERS` 仅经 env/Secret 传递，禁止进入日志。
+> 可观测性：OTel 由 Aspire 自带能力提供，AppHost 不再编排采集端或注入 `OTEL_*` 环境变量；
+> 部署环境自行按 `contracts/observability.md` 配置 `OTEL_EXPORTER_OTLP_ENDPOINT`。
 
 ## Dev Commands
 
@@ -50,9 +46,7 @@ aspire start        # Start all services
 aspire stop         # Stop orchestration
 aspire describe     # List resources and status
 
-# 可观测性排障
-docker compose -f ../manifest/docker-compose.yaml logs -f otel-collector   # 看 collector 输出（debug exporter）
-OTEL_SDK_DISABLED=true aspire start                                       # 关闭追踪（只验证日志形态、零外发）
+# 日志排障
 LOG_LEVEL=debug LOG_PRETTY=1 aspire start                                 # 开发环境人类可读日志
 
 # Docker Compose (alternative)
