@@ -201,3 +201,10 @@ pnpm run start   # Start production server
 - **迁移**：`012-account-user-tenant` 逐 user 幂等拆分三件套（只复制不删除原登录字段）；`013-tenant-id-backfill` 19 集合复制清洗 + 索引（只新增不删除）。**集合名以模型 `model.collection.name` 为单一来源**（如 `issue_workflow_triggers`），由 T-ISO 互校 + `013-...real.test.ts` 真库兜底；历史环境若误建空集合 `issueworkflowtriggers`，确认无数据后可手工 drop。启动后 `services/tenant-self-check.ts` 以带索引 count + `limit(100)` 抽样异步自检，仅告警不阻塞。
 - **计费**：`billing-client` ownerType 使用 `tenant`（ownerId=tenantId；`front_user` 仅兼容期旧调用方）；`startHarness` 下发 `tenantId`（=userId）。
 - **开户**：`POST /internal/users`（Bearer `INTERNAL_API_TOKEN`）创建账户+用户+个人租户+零余额租户计费账户；按 username 幂等（200 既有视图 / 201 新建 / 400 规则 / 409 重名 / 503 计费不可达并回滚）。
+
+## 工作流实例改名（工作流迭代）
+
+- **契约**：`contracts/workflow.graphql` 的 `type Mutation` 新增 `renameWorkflowInstance(id: ID!, name: String!): WorkflowInstance!`；`graphql/schemas/workflow.ts` 为**手写 schema 串**，契约与 schema 必须双写（漏改即运行时 `Cannot query field`）。
+- **服务**：`services/workflow/instance.ts` 的 `normalizeWorkflowName(raw)`（trim 后 1~64，非法抛 `invalid workflow name`）与 `workflowInstanceService.rename(userId, id, rawName)` 为**唯一名称规则来源**；归属口径与归档/删除一致（`actorFilter`），查询**不过滤 `deletedAt`** 以便区分「不存在/无权限」（`Workflow instance not found`）与「已删除」（`Workflow instance is deleted`）；更新带 `deletedAt:null` 并兜底 `matchedCount===0` 按已删除处理。名称规则仅作用于改名入口，实例化历史行为不变。
+- **入口**：GraphQL `renameWorkflowInstance`（`graphql/resolvers/workflow.ts`，`wrap()` 原样透传文案）；平台 MCP `agent-workflow-tools.renameCurrentWorkflow`（`services/workflow/tool-handlers.ts`，工具总数 **14**）复用同一 service，错误映射 `invalid workflow name → INVALID_PARAMS`、`not found → NOT_FOUND`、其余（含已删除）→ `INVALID_STATE`。
+- **已归档实例允许改名**（仅禁止已删除）；团队工作区非创建人场景与既有 13 个工具同口径，不在本期扩大范围。
