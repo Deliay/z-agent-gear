@@ -1,7 +1,10 @@
 import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useQuery } from '@apollo/client/react';
 import { useAuth } from '@/stores/auth';
 import MobileBackButton from '../components/MobileBackButton';
 import { Button } from '@/components/ui/button';
+import { CLOUD_STORAGE_CAPABILITIES } from '@/graphql/queries';
+import type { CloudStorageCapabilitiesQuery } from '@/graphql/types';
 import {
   Card,
   CardContent,
@@ -26,6 +29,7 @@ import GithubBindingSection from '@/components/settings/GithubBindingSection';
 import GitSettingsSection from '@/components/settings/GitSettingsSection';
 import WorkflowSection from '@/components/settings/WorkflowSection';
 import WorkspaceContextBanner from '@/components/settings/WorkspaceContextBanner';
+import CloudStorageSection from '@/components/settings/CloudStorageSection';
 import ControllerConfigPage from './ControllerConfigPage';
 import {
   User,
@@ -35,6 +39,7 @@ import {
   Server,
   Puzzle,
   Workflow,
+  HardDrive,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -47,6 +52,8 @@ const NAV_ITEMS = [
   { id: 'mcp-section', label: 'MCP 管理', icon: Puzzle },
   { id: 'workflow-section', label: '工作流', icon: Workflow },
 ];
+
+const STORAGE_NAV_ITEM = { id: 'storage-section', label: '云存储', icon: HardDrive };
 
 const NAV_GROUPS = [
   { label: '帐号', items: [NAV_ITEMS[0]] },
@@ -64,6 +71,16 @@ export default function SettingsPage() {
 
   const controllerId = searchParams.get('controllerId');
 
+  const { data: storageCapabilitiesData } = useQuery<CloudStorageCapabilitiesQuery>(
+    CLOUD_STORAGE_CAPABILITIES,
+  );
+  const storageEnabled =
+    storageCapabilitiesData?.cloudStorageCapabilities?.enabled === true;
+  const navItems = storageEnabled ? [...NAV_ITEMS, STORAGE_NAV_ITEM] : NAV_ITEMS;
+  const navGroups = storageEnabled
+    ? [...NAV_GROUPS, { label: '云存储', items: [STORAGE_NAV_ITEM] }]
+    : NAV_GROUPS;
+
   const handleLogout = () => {
     logout();
     navigate('/login', { replace: true });
@@ -78,11 +95,19 @@ export default function SettingsPage() {
     setSearchParams({ controllerId: id });
   };
 
+  const handleOpenStorage = () => {
+    setSearchParams({});
+    setTimeout(() => {
+      document.getElementById('storage-section')?.scrollIntoView({ behavior: 'smooth' });
+    }, 0);
+  };
+
   if (controllerId) {
     return (
       <ControllerConfigPage
         controllerId={controllerId}
         onBack={() => setSearchParams({})}
+        onOpenStorage={handleOpenStorage}
       />
     );
   }
@@ -95,7 +120,7 @@ export default function SettingsPage() {
       </div>
 
       <div className="flex gap-1 overflow-x-auto border-b px-4 py-2 md:hidden">
-        {NAV_ITEMS.map((item) => (
+        {navItems.map((item) => (
           <button
             key={item.id}
             type="button"
@@ -110,7 +135,7 @@ export default function SettingsPage() {
       <div className="flex flex-1 overflow-hidden md:grid md:grid-cols-[200px_1fr]">
         <nav className="hidden border-r p-4 md:block" aria-label="Settings navigation">
           <div className="space-y-1">
-            {NAV_GROUPS.map((group) => (
+            {navGroups.map((group) => (
               <div key={group.label} className="pt-2 first:pt-0">
                 {group.items.length > 1 && (
                   <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
@@ -197,6 +222,12 @@ export default function SettingsPage() {
             <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">工作流</h2>
             <WorkflowSection />
           </section>
+
+          {storageEnabled && (
+            <section id="storage-section" className="mb-8 md:mb-10">
+              <CloudStorageSection />
+            </section>
+          )}
         </div>
       </div>
     </div>

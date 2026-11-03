@@ -403,6 +403,7 @@ export default function BillingPage() {
                     <option value="container">容器</option>
                     <option value="model">模型</option>
                     <option value="manual">手工</option>
+                    <option value="storage">存储</option>
                   </select>
                 </label>
               </div>

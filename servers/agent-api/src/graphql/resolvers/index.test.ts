@@ -18,4 +18,19 @@ describe('graphql resolver registry', () => {
     expect(fields.controllerType.resolve).toEqual(expect.any(Function));
     expect(fields.cloudHost.resolve).toEqual(expect.any(Function));
   });
+
+  it('registers CloudHost.storage / storageRestoring and CloudStorage.hourlyCredits', () => {
+    const hostFields = (schema.getType('CloudHost') as GraphQLObjectType).getFields();
+    expect(hostFields.storage.resolve).toEqual(expect.any(Function));
+    expect(hostFields.storageRestoring.resolve).toEqual(expect.any(Function));
+
+    const storageFields = (schema.getType('CloudStorage') as GraphQLObjectType).getFields();
+    expect(storageFields.hourlyCredits.resolve).toEqual(expect.any(Function));
+    expect(storageFields.hourlyCreditsFull.resolve).toEqual(expect.any(Function));
+    expect(storageFields.hourlyCreditsArchived.resolve).toEqual(expect.any(Function));
+    expect(storageFields.archiveSpace.resolve).toEqual(expect.any(Function));
+
+    const summaryFields = (schema.getType('CloudStorageSummary') as GraphQLObjectType).getFields();
+    expect(summaryFields.hourlyCredits.resolve).toEqual(expect.any(Function));
+  });
 });

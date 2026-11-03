@@ -1,5 +1,14 @@
 import { config } from '../config/index.js';
 
+export interface StartHarnessStorageInput {
+  id: string;
+  pvcName: string;
+  sizeGi: number;
+  workspaceId: string;
+  storageClass?: string | null;
+  restore?: { archivePath: string } | null;
+}
+
 export interface StartHarnessInput {
   hostId: string;
   /** 云电脑 controllerId（Job env `ZAG_CONTROLLER_ID`）。 */
@@ -23,6 +32,8 @@ export interface StartHarnessInput {
     implicit: boolean;
     required: boolean;
   }>;
+  /** 可选：挂载云存储（缺省不发送该字段，报文与历史逐字段一致）。 */
+  storage?: StartHarnessStorageInput | null;
   secrets: {
     hostEndpoint: string;
     hostKey: string;
@@ -89,6 +100,32 @@ export interface CloudWorkloadLogSummary {
   exitCode: number | null;
 }
 
+export interface StorageCreateResponse {
+  storageId: string;
+  pvcName: string;
+  created: boolean;
+}
+
+export interface StorageInfoResponse {
+  storageId: string;
+  pvcName: string;
+  exists: boolean;
+  capacity?: string | null;
+  phase?: string | null;
+}
+
+export type StorageArchiveStatusWire = 'NONE' | 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+
+export interface StorageArchiveInfoResponse {
+  status: StorageArchiveStatusWire;
+  archiveId?: string | null;
+  fileName?: string | null;
+  usageBytes?: number | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  failureReason?: string | null;
+}
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** cloud-controller 内部管理 API 客户端（原生 fetch + 超时 + Bearer 内部 token）。 */
@@ -132,6 +169,16 @@ export class CloudControllerClient {
   }
 
   async startHarness(input: StartHarnessInput): Promise<CloudContainerSummary> {
+    const storage = input.storage
+      ? {
+          id: input.storage.id,
+          pvcName: input.storage.pvcName,
+          sizeGi: input.storage.sizeGi,
+          workspaceId: input.storage.workspaceId,
+          ...(input.storage.storageClass ? { storageClass: input.storage.storageClass } : {}),
+          ...(input.storage.restore ? { restore: input.storage.restore } : {}),
+        }
+      : undefined;
     const body = {
       purpose: 'harness',
       hostId: input.hostId,
@@ -148,6 +195,7 @@ export class CloudControllerClient {
       containerApiKeyId: input.containerApiKeyId,
       secrets: input.secrets,
       workloadPlan: input.workloadPlan,
+      ...(storage ? { storage } : {}),
     };
     const result = await this.request<{ id?: string; status?: string }>('/internal/containers', {
       method: 'POST',
@@ -250,6 +298,85 @@ export class CloudControllerClient {
   async getWorkloadLogs(containerId: string): Promise<CloudWorkloadLogSummary[]> {
     return this.requestWithError<CloudWorkloadLogSummary[]>(
       `/internal/containers/${encodeURIComponent(containerId)}/workload-logs`,
+    );
+  }
+
+  // ---- 云存储（contracts/cloud-controller-websocket.md 附录 A.2.7 ~ A.2.9） ----
+
+  async createStorage(input: {
+    storageId: string;
+    tenantId: string;
+    workspaceId: string;
+    sizeGi: number;
+    storageClass?: string | null;
+  }): Promise<StorageCreateResponse> {
+    return this.requestWithError<StorageCreateResponse>('/internal/storages', {
+      method: 'POST',
+      body: JSON.stringify({
+        storageId: input.storageId,
+        tenantId: input.tenantId,
+        workspaceId: input.workspaceId,
+        sizeGi: input.sizeGi,
+        ...(input.storageClass ? { storageClass: input.storageClass } : {}),
+      }),
+    });
+  }
+
+  async getStorage(storageId: string): Promise<StorageInfoResponse> {
+    return this.requestWithError<StorageInfoResponse>(
+      `/internal/storages/${encodeURIComponent(storageId)}`,
+    );
+  }
+
+  async deleteStorage(storageId: string): Promise<{ storageId: string; deleted: boolean }> {
+    return this.requestWithError<{ storageId: string; deleted: boolean }>(
+      `/internal/storages/${encodeURIComponent(storageId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  async cleanupStorage(
+    storageId: string,
+    input: { workspaceId: string; deleteArchive?: boolean },
+  ): Promise<{ accepted: boolean }> {
+    return this.requestWithError<{ accepted: boolean }>(
+      `/internal/storages/${encodeURIComponent(storageId)}/cleanup`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: input.workspaceId,
+          deleteArchive: input.deleteArchive !== false,
+        }),
+      },
+    );
+  }
+
+  async triggerArchive(
+    containerId: string,
+    input: { archiveId: string; fileName: string },
+  ): Promise<{ accepted: boolean; archiveId?: string }> {
+    return this.requestWithError<{ accepted: boolean; archiveId?: string }>(
+      `/internal/containers/${encodeURIComponent(containerId)}/archive`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ archiveId: input.archiveId, fileName: input.fileName }),
+      },
+    );
+  }
+
+  async getArchive(containerId: string): Promise<StorageArchiveInfoResponse> {
+    return this.requestWithError<StorageArchiveInfoResponse>(
+      `/internal/containers/${encodeURIComponent(containerId)}/archive`,
+    );
+  }
+
+  async refreshUsage(
+    storageId: string,
+    input: { containerId: string },
+  ): Promise<{ accepted: boolean }> {
+    return this.requestWithError<{ accepted: boolean }>(
+      `/internal/storages/${encodeURIComponent(storageId)}/usage-refresh`,
+      { method: 'POST', body: JSON.stringify({ containerId: input.containerId }) },
     );
   }
 }

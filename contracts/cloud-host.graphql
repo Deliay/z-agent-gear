@@ -44,6 +44,16 @@ enum CloudHostStatus {
   FAILED
 }
 
+# 云电脑挂载的云存储摘要（见 contracts/cloud-storage.graphql）
+type CloudStorageSummary {
+  id: ID!
+  name: String!
+  sizeGi: Int!
+  status: CloudStorageStatus!
+  usageBytes: Float
+  hourlyCredits: Float!
+}
+
 type CloudHost {
   id: ID!
   name: String!
@@ -71,9 +81,14 @@ type CloudHost {
   githubAccountId: ID
   # 所属租户工作区 id（多租户二期）；创建时由服务端取当前工作区上下文，不在入参暴露
   workspaceId: ID!
+  # 创建时挂载的云存储；未挂载为 null
+  storage: CloudStorageSummary
+  # STARTING 且存储正在从归档恢复数据时为 true（仅字段级展示，不新增容器状态）
+  storageRestoring: Boolean!
 }
 
 # 云电脑创建/运行报价（金额单位 credits，来自 admin-api 价目档）
+# 注：挂载云存储的每小时存储费用不计入创建报价，由 cloudStorageBillingQuote 单独展示。
 type CloudHostBillingQuote {
   # 一次性创建费（credits）；创建确认即扣费
   createCredits: Float!
@@ -192,6 +207,10 @@ input CreateCloudHostInput {
   # 可选：创建时锁定 Github 帐号（勾选「配置 Github 项目」时前端必传）；必须是当前用户已绑定帐号；
   # 缺省 = 创建时未选定（后续首次 Git 项目设置时选定并锁定）
   githubAccountId: ID
+  # 可选：创建时挂载当前工作区 IDLE/ARCHIVED 云存储；必须与云电脑同一工作区。
+  # 缺省 = 不挂载，报文与现状完全一致。挂载失败（被抢占/状态变化）抛 `storage is not attachable`，
+  # 已扣的创建费按既有「拉起失败自动退款」路径退回。
+  storageId: ID
 }
 
 # 支持 `workloadKind=HARNESS` 负载（可选工作负载；幂等：已安装返回 SKIPPED；不提供卸载入口）

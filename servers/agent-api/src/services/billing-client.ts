@@ -101,6 +101,25 @@ export interface BillingApiKeyPayloadWire {
   secret: string;
 }
 
+/** 存储容量阶梯报价条目（admin-api `/internal/billing/storage-quote`）。 */
+export interface StorageQuoteItemWire {
+  productId: string;
+  quantity: number;
+  unitPriceCredits: number;
+  amountCredits: number;
+}
+
+export interface StorageRateQuoteWire {
+  hourlyCredits: number;
+  items: StorageQuoteItemWire[];
+}
+
+export interface StorageQuoteWire {
+  sizeGi: number;
+  full: StorageRateQuoteWire;
+  archived: StorageRateQuoteWire;
+}
+
 const TIMEOUT_MS = 10_000;
 
 export class BillingServiceUnavailableError extends Error {
@@ -419,6 +438,17 @@ export class BillingClient {
     const params = new URLSearchParams({ productIds: productIds.join(',') });
     return this.request<Array<{ productId: string; unitPrice: number; currency: string }>>(
       `/internal/billing/price-quote?${params.toString()}`,
+    );
+  }
+
+  /**
+   * 云存储容量阶梯报价（全价 + 归档半价，单位 credits）。
+   * 不计入云电脑创建报价；计费不可用时由调用方降级到本地默认阶梯。
+   */
+  async getStorageQuote(sizeGi: number): Promise<StorageQuoteWire> {
+    const params = new URLSearchParams({ sizeGi: String(sizeGi) });
+    return this.request<StorageQuoteWire>(
+      `/internal/billing/storage-quote?${params.toString()}`,
     );
   }
 

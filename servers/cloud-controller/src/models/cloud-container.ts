@@ -134,6 +134,36 @@ const cloudContainerSchema = new mongoose.Schema(
     initTrigger: { type: String, enum: ['start', 'runtime', null], default: null },
     // 起始初始化已收口（首次 online）时间：非空后断线重连不得再次执行 init 批次（工作流只初始化一次）
     initCompletedAt: { type: Date, default: null },
+    // ---- 云存储（云电脑挂载；历史行 null 容忍，契约 A.3 / 提案 §4.2） ----
+    /** 挂载的云存储 ID。 */
+    storageId: { type: String, default: null, index: true },
+    /** 源 PVC 名称（`zag-storage-<storageId>`）。 */
+    storagePvcName: { type: String, default: null },
+    /** 存储容量（Gi）。 */
+    storageSizeGi: { type: Number, default: null },
+    /** 存储归属工作区（归档卷按工作区复用）。 */
+    storageWorkspaceId: { type: String, default: null },
+    /** 创建时 StorageClass 快照（已归档重建时沿用，裁决 4）。 */
+    storageStorageClass: { type: String, default: null },
+    /** 本次启动恢复的归档路径；全新挂载为 null。 */
+    storageRestorePath: { type: String, default: null },
+    /** 归档状态：pending/running/succeeded/failed；null = 未触发。 */
+    storageArchiveStatus: {
+      type: String,
+      enum: ['pending', 'running', 'succeeded', 'failed', null],
+      default: null,
+    },
+    /** 最近一次归档 ID。 */
+    storageArchiveId: { type: String, default: null },
+    /** 最近一次归档文件名（ASCII 安全化）。 */
+    storageArchiveFileName: { type: String, default: null },
+    /** 归档时采集的实际占用（字节）。 */
+    storageArchiveUsageBytes: { type: Number, default: null },
+    /** 归档开始/结束时间。 */
+    storageArchiveStartedAt: { type: Date, default: null },
+    storageArchiveFinishedAt: { type: Date, default: null },
+    /** 归档失败原因。 */
+    storageArchiveFailure: { type: String, default: null },
   },
   { timestamps: true, collection: 'cloudcontainers' },
 );

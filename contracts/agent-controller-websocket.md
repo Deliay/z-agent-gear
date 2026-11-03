@@ -49,6 +49,8 @@
 | `platform` | `string` | 否 | 控制器本机 `os.platform()`（`linux`/`darwin`/`win32`，用于路径归一化比较；旧版本控制器可不上报） |
 
 > 注：`homeDir`/`platform` 为可选字段，旧版本控制器不上报时服务端按字段缺失处理，不破坏既有握手。GraphQL 契约（`CreateSessionInput.existingWorktreePath`、错误码 `BAD_USER_INPUT`）不变。
+>
+> **接管语义**：服务端完成 key / bcrypt / major 版本校验后，新连接**原子接管**该 Key 的既有 session（`session:<keyId>` 覆盖为新 socketId），不再用 `resumeToken` 作为抢占判据。旧 socket 若仍存在，服务端下发 `SESSION_REPLACED` 后断开；若为重启后残留的已死 socketId，则仅覆盖并继续注册。注册流程随后照常返回 `registered`。
 
 ### 2.3 `registered`（Server → Controller）
 
@@ -78,7 +80,8 @@
 | 值 | 含义 |
 |----|------|
 | `INVALID_KEY` | Key 无效（缓存中不存在或 bcrypt 验证失败） |
-| `KEY_ALREADY_ONLINE` | 该 Key 已有活跃 session |
+| `KEY_ALREADY_ONLINE` | **Deprecated**：旧服务端在 Key 已有活跃 session 时返回；新服务端不再下发（改为新连接接管） |
+| `SESSION_REPLACED` | 当前连接已被同一 Key 的新登录接管；客户端应停止重连、不清除本地 Key，按服务端终止语义退出 |
 | `VERSION_MISMATCH` | 控制器版本不兼容；客户端应输出明确升级指引后退出 |
 | `RATE_LIMITED` | 注册频率超限 |
 
@@ -102,10 +105,11 @@
 
 **服务端行为：**
 
-1. 删除 Controller 记录
-2. 删除 Key 记录
-3. 清理 session
-4. 回复 `unregistered`
+1. 校验会话所有权（`session:<keyId>` 仍指向本 socket）；已被接管的旧连接直接断开，不执行后续删除
+2. 删除 Controller 记录
+3. 删除 Key 记录
+4. 清理 session
+5. 回复 `unregistered`
 
 ### 2.7 `unregistered`（Server → Controller）
 
@@ -165,9 +169,12 @@ Controller                 controller-api
 
 ### 3.3 单 session 控制
 
-- 注册时检查该 Key 是否已有活跃 session
-- 已存在则拒绝新连接，返回 `KEY_ALREADY_ONLINE`
-- 断开时清理 session
+- 每个 Key 同一时间只有一个在线 session（新连接接管，旧连接退出）
+- 注册校验通过后由新连接原子接管既有 session
+- 旧 socket 若仍存活：服务端下发 `SESSION_REPLACED` 后断开连接
+- 旧 socket 已不存在（如服务端重启后的残留 session）：直接覆盖，不影响新连接
+- 断开 / 注销 / 心跳巡检均校验会话所有权（`session:<keyId>` 是否仍指向该 socket），被接管的旧连接不得删除新 session 或把 Controller 置为 offline
+- 心跳巡检使用条件状态迁移（CAS），避免过期快照把刚接管的新连接再次下线
 
 ### 3.4 版本兼容
 
@@ -210,7 +217,7 @@ Controller 重连注册成功后，Server 立即下发此事件。
 
 | 退出码 | 语义 | 容器入口行为 |
 |--------|------|--------------|
-| `42` | **服务端终止**：`unregistered`、`shutdown`（非失败类）、`connect_error(INVALID_TOKEN)`（token 已失效 = 已被服务端注销） | 正常结束容器，**不重启** |
+| `42` | **服务端终止**：`unregistered`、`shutdown`（非失败类）、`connect_error(INVALID_TOKEN)`（token 已失效 = 已被服务端注销）、`error(SESSION_REPLACED)`（已被新登录接管） | 正常结束容器，**不重启** |
 | `0` | **自发 / 信号退出**：`SIGINT` / `SIGTERM`、服务端主动 shutdown 收尾外的正常收尾 | 保活重启（被 `SIGTERM` 命中时与 K8s 删除 Pod 的入口信号并发，入口自身置位后不再重启） |
 | `1` | **失败类**：`version_mismatch:*`、`error:*`（除 `INVALID_TOKEN`）、必须工作负载初始化失败 | 退避后自更新并重启 |
 

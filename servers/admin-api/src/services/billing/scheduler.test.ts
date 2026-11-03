@@ -59,4 +59,32 @@ describe('BillingScheduler', () => {
     expect(reconciliation.run).toHaveBeenCalledTimes(2);
     await scheduler.stop();
   });
+
+  it('注册云存储结算 tick（STORAGE_BILLING_TICK_MS 默认 300s），stop 清理', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-18T02:59:30Z'));
+    const publisher = { start: vi.fn(), stop: vi.fn(async () => undefined) };
+    const settlementTick = { tick: vi.fn(async () => 1) };
+    const reconciliation = { run: vi.fn(async () => []) };
+    const storageTick = { tick: vi.fn(async () => ({ scanned: 0, chargedHours: 0, closed: 0 })) };
+    const scheduler = new BillingScheduler({
+      publisher: publisher as never,
+      settlementTick: settlementTick as never,
+      reconciliation: reconciliation as never,
+      storageTick: storageTick as never,
+      logger: silentLogger,
+    });
+    scheduler.start();
+
+    await vi.advanceTimersByTimeAsync(299_000);
+    expect(storageTick.tick).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(storageTick.tick).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(storageTick.tick).toHaveBeenCalledTimes(2);
+
+    await scheduler.stop();
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(storageTick.tick).toHaveBeenCalledTimes(2);
+  });
 });

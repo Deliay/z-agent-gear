@@ -22,12 +22,20 @@
 # 可选开关：
 #   ZAG_SKIP_AGENT_GEAR_UPDATE=1  跳过全部自更新（启动与每轮），但仍保活重启
 #   ZAG_KEEPALIVE_BACKOFF_MS      退避整体缩放（毫秒；仅测试用）
+#   ZAG_STORAGE_HOME=1            当前容器挂载了云存储（/home/worker 为 PVC）：自举失败即非零退出
+#
+# 云存储自举口径（docs/engineering/plan/20261102-feat-cloud-storage.md Phase 2 / 提案实现点 4）：
+# - PVC 挂载 /home/worker 会遮蔽镜像烘焙的 .nvm（Node/npm）与 .local/share/pnpm（pnpm/agent-gear）；
+#   入口在 ensure_pnpm 之前由 bootstrap_home 按「产物存在且可执行」幂等重建（归档恢复的完整主目录直接跳过）；
+# - ZAG_STORAGE_HOME=1 时任一步失败 → fail-fast（Job 失败 → 创建云电脑失败 → 存储回滚）；
+# - 未设置时失败仅告警，沿用镜像环境继续保活（镜像内容完整时自举为 no-op）。
 set -euo pipefail
 
 WORKER_UID=1000
 WORKER_GID=1000
 WORKER_HOME=/home/worker
-WORKER_NVM_DIR="$WORKER_HOME/.nvm"
+# nvm 落点；仅测试用 ZAG_WORKER_NVM_DIR 指向临时目录（避免触碰真实 /home/worker）。
+WORKER_NVM_DIR="${ZAG_WORKER_NVM_DIR:-$WORKER_HOME/.nvm}"
 # pnpm 固定版本与全局 bin 目录（决策 1/2）：与迁移 017/018 脚本内自举回退块同版本。
 PNPM_VERSION="${PNPM_VERSION:-12.16.1}"
 # pnpm 可执行文件（测试可指向不存在的命令，用于验证存量容器自举分支）。
@@ -86,6 +94,70 @@ write_pnpm_profile() {
     printf '# >>> pnpm >>>\nexport PNPM_HOME="%s"\ncase ":$PATH:" in *":$PNPM_HOME/bin:"*) ;; *) export PATH="$PNPM_HOME/bin:$PATH" ;; esac\ncase ":$PATH:" in *":$PNPM_HOME:"*) ;; *) export PATH="$PNPM_HOME:$PATH" ;; esac\n# <<< pnpm <<<\n' \
       "$PNPM_HOME" >> "$PNPM_PROFILE_FILE"
   } 2>/dev/null || log "WARN: cannot write pnpm profile ($PNPM_PROFILE_FILE)"
+}
+
+# 自举失败处理：挂载云存储（ZAG_STORAGE_HOME=1）时 fail-fast 非零退出（不进入保活循环）；
+# 未挂载时仅告警，沿用镜像既有环境继续保活（镜像内容完整时各锚点命中，不会走到这里）。
+bootstrap_fail() {
+  if [ "${ZAG_STORAGE_HOME:-0}" = "1" ]; then
+    log "bootstrap_home failed ($1); ZAG_STORAGE_HOME=1 so exiting non-zero"
+    exit 1
+  fi
+  log "WARN: bootstrap_home failed ($1); continuing with the image environment"
+  return 0
+}
+
+# 主目录工具链自举（幂等，位于 ensure_pnpm 之前）：
+# 1) nvm.sh 不存在/不可 source → 用内网安装脚本（NVM_INSTALL_URL，构建期 ARG 已固化为运行时 ENV）重装；
+# 2) current/bin/node 不可执行 → nvm install --default + nvm alias default + 重建 current 软链 + npm registry；
+# 3) pnpm / agent-gear 交给既有 ensure_pnpm / update_agent_gear 幂等补齐。
+# 判定只基于「产物存在且可执行」，已完成的主目录（镜像自带或归档恢复）直接跳过。
+# 下载/安装输出统一转 stderr，保持入口 stdout 只有单行 JSON 日志（契约 observability）。
+bootstrap_home() {
+  local node_version="${NODE_VERSION:-24}"
+  local nvm_install_url="${NVM_INSTALL_URL:-}"
+
+  if ! run_as_worker bash -c '. "$NVM_DIR/nvm.sh" >/dev/null 2>&1'; then
+    if [ -z "$nvm_install_url" ]; then
+      bootstrap_fail "nvm.sh is unavailable and NVM_INSTALL_URL is not set"
+      return 0
+    fi
+    log "bootstrap_home: nvm not available, installing (NVM_INSTALL_URL=$nvm_install_url)"
+    # curl 与安装脚本同处一条管道：set -o pipefail 保证下载失败即整条管道非零。
+    if ! { curl -fsSL "$nvm_install_url" | run_as_worker env PROFILE=/dev/null METHOD=script bash; } 1>&2; then
+      bootstrap_fail "nvm install failed (NVM_INSTALL_URL=$nvm_install_url)"
+      return 0
+    fi
+    if ! run_as_worker bash -c '. "$NVM_DIR/nvm.sh" >/dev/null 2>&1'; then
+      bootstrap_fail "nvm.sh is still unavailable after install"
+      return 0
+    fi
+    log "bootstrap_home: nvm installed"
+  fi
+
+  if [ ! -x "$WORKER_NVM_DIR/current/bin/node" ]; then
+    log "bootstrap_home: node not available, installing Node.js $node_version"
+    if ! run_as_worker env NODE_VERSION="$node_version" bash -c '
+        set -eu
+        . "$NVM_DIR/nvm.sh"
+        nvm install --default "$NODE_VERSION"
+        nvm alias default "$NODE_VERSION"
+        ln -sfn "$(dirname "$(dirname "$(nvm which default)")")" "$NVM_DIR/current"
+      ' 1>&2; then
+      bootstrap_fail "Node.js install failed (version=$node_version)"
+      return 0
+    fi
+    if [ -n "${NPM_REGISTRY:-}" ] && ! run_as_worker npm config set registry "$NPM_REGISTRY" 1>&2; then
+      bootstrap_fail "npm registry configuration failed (NPM_REGISTRY=$NPM_REGISTRY)"
+      return 0
+    fi
+    if [ ! -x "$WORKER_NVM_DIR/current/bin/node" ]; then
+      bootstrap_fail "current/bin/node is still unavailable after install"
+      return 0
+    fi
+    log "bootstrap_home: node installed ($("$WORKER_NVM_DIR/current/bin/node" --version 2>/dev/null || echo 'version unknown'))"
+  fi
+  return 0
 }
 
 # 预装固定版本 pnpm（幂等）：优先 `command -v pnpm` 命中即跳过；安装固定版本 pin。
@@ -229,7 +301,10 @@ main() {
   trap 'shutdown SIGTERM' SIGTERM
   trap 'shutdown SIGINT' SIGINT
 
-  # 先确保 pnpm 就绪（任何工作负载脚本下发前），再进入自更新/保活链路。
+  # 先重建被云存储卷遮蔽的主目录工具链（幂等；未挂载时为 no-op），再确保 pnpm 就绪
+  # （任何工作负载脚本下发前），最后进入自更新/保活链路。
+  bootstrap_home
+
   ensure_pnpm
 
   update_agent_gear

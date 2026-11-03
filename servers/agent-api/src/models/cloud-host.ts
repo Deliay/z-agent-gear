@@ -58,6 +58,14 @@ const cloudHostSchema = new mongoose.Schema(
       index: true,
     },
     containerId: { type: String, default: null },
+    // 创建时挂载的云存储；null=未挂载（缺省时创建报文与历史完全一致）
+    storageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CloudStorage',
+      required: false,
+      default: null,
+      index: true,
+    },
     defaultSessionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Session', default: null },
     // 锁定的 Github 帐号；null=未选定（创建时可选定，或首次 Git 项目设置时 CAS 绑定一次）
     githubAccountId: {

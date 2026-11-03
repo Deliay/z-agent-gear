@@ -353,7 +353,7 @@ export interface AdminDestroyCloudContainerMutation {
 
 export type BillingOwnerType = 'front_user' | 'admin_user' | 'tenant';
 export type BillingLedgerType = 'charge' | 'recharge' | 'adjust';
-export type BillingCategory = 'container' | 'model' | 'manual';
+export type BillingCategory = 'container' | 'model' | 'manual' | 'storage';
 export type BillingRollupGranularity = 'minute' | 'hour' | 'day';
 export type ReservationStatus = 'PENDING' | 'ACTIVE' | 'SETTLING' | 'SETTLED' | 'RELEASE_PENDING';
 

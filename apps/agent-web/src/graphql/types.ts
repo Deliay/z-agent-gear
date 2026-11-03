@@ -119,6 +119,132 @@ export type CloudWorkloadKind = 'STANDARD' | 'HARNESS'
 
 export type CloudHostStatus = 'STARTING' | 'RUNNING' | 'STOPPING' | 'STOPPED' | 'FAILED'
 
+// ---------- 云存储（contracts/cloud-storage.graphql） ----------
+
+export type CloudStorageStatus =
+  | 'CREATING'
+  | 'IDLE'
+  | 'ATTACHING'
+  | 'ATTACHED'
+  | 'ARCHIVING'
+  | 'ARCHIVED'
+  | 'DESTROYING'
+  | 'DESTROYED'
+  | 'CREATE_FAILED'
+
+export type CloudStorageArchiveStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+
+export interface CloudStorageCreatorData {
+  id: string
+  name: string
+}
+
+export interface CloudStorageArchiveData {
+  id: string
+  fileName: string
+  status: CloudStorageArchiveStatus
+  cloudHostId?: string | null
+  cloudHostName?: string | null
+  usageBytes?: number | null
+  startedAt?: string | null
+  finishedAt?: string | null
+  failureReason?: string | null
+  sourcePvcReleased?: boolean | null
+}
+
+export interface CloudStorageArchiveSpaceData {
+  capacityGi: number
+  /** 本期无法精确统计归档体积时为 null（UI 提示「由平台管理」） */
+  usedGi: number | null
+}
+
+export interface CloudStorageData {
+  id: string
+  name: string
+  sizeGi: number
+  status: CloudStorageStatus
+  /** 实际占用（归档时采集；已挂载期间可刷新）；待挂载为 0，未知为 null */
+  usageBytes: number | null
+  usageUpdatedAt: string | null
+  /** 当前状态费率下的每小时费用（credits） */
+  hourlyCredits: number
+  /** 全价/归档半价（展示用） */
+  hourlyCreditsFull: number
+  hourlyCreditsArchived: number
+  createdBy: CloudStorageCreatorData
+  createdAt: string
+  attachedCloudHostId: string | null
+  attachedCloudHostName: string | null
+  attachedAt: string | null
+  currentArchive: CloudStorageArchiveData | null
+  archiveSpace: CloudStorageArchiveSpaceData
+  failureReason: string | null
+  destroyedAt: string | null
+}
+
+/** 云电脑挂载的云存储摘要（contracts/cloud-host.graphql） */
+export interface CloudStorageSummaryData {
+  id: string
+  name: string
+  sizeGi: number
+  status: CloudStorageStatus
+  usageBytes: number | null
+  hourlyCredits: number
+}
+
+export interface CloudStoragePriceTierData {
+  label: string
+  amountCredits: number
+}
+
+export interface CloudStorageRateQuoteData {
+  hourlyCredits: number
+  tiers: CloudStoragePriceTierData[]
+}
+
+export interface CloudStorageBillingQuoteData {
+  sizeGi: number
+  full: CloudStorageRateQuoteData
+  archived: CloudStorageRateQuoteData
+  availableBalance: number | null
+}
+
+export interface CloudStorageCapabilitiesData {
+  enabled: boolean
+}
+
+export interface GetCloudStoragesQuery {
+  cloudStorages: CloudStorageData[]
+}
+
+export interface GetCloudStorageQuery {
+  cloudStorage: CloudStorageData | null
+}
+
+export interface CloudStorageBillingQuoteQuery {
+  cloudStorageBillingQuote: CloudStorageBillingQuoteData
+}
+
+export interface CloudStorageCapabilitiesQuery {
+  cloudStorageCapabilities: CloudStorageCapabilitiesData
+}
+
+export interface CreateCloudStorageMutation {
+  createCloudStorage: CloudStorageData
+}
+
+export interface DestroyCloudStorageMutation {
+  destroyCloudStorage: CloudStorageData
+}
+
+export interface RetryCloudStorageArchiveMutation {
+  retryCloudStorageArchive: CloudStorageData
+}
+
+export interface RefreshCloudStorageUsageMutation {
+  refreshCloudStorageUsage: CloudStorageData
+}
+
 /** 前台云电脑（contracts/cloud-host.graphql）；非云电脑控制器为 null */
 export interface CloudHostData {
   id: string
@@ -146,6 +272,10 @@ export interface CloudHostData {
   githubAccountId?: string | null
   /** 所属租户工作区 id（多租户二期）；缺失/未选择时为 undefined */
   workspaceId?: string | null
+  /** 创建时挂载的云存储；未挂载为 null */
+  storage?: CloudStorageSummaryData | null
+  /** STARTING 且存储正在从归档恢复数据 */
+  storageRestoring?: boolean
 }
 
 /** 云电脑创建/运行报价（金额单位 credits） */
@@ -1030,7 +1160,7 @@ export interface MyBillingInvoiceData {
   accountId: string
   seq: number
   type: 'charge' | 'recharge' | 'adjust'
-  category: 'container' | 'model' | 'manual'
+  category: 'container' | 'model' | 'manual' | 'storage'
   amount: number
   balanceAfter: number
   refType: string | null

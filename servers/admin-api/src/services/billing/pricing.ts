@@ -35,6 +35,17 @@ const DEFAULT_CONTAINER_MINUTE_CENTS = 100; // 1 credit / 分钟
 /** 云电脑创建一次性费用：5 credits（价目档存在时不覆盖既有调价）。 */
 export const DEFAULT_CLOUD_HOST_CREATE_CENTS = 500;
 
+/** 云存储价目（分）：前 10Gi 固定档 5 credits/小时。 */
+export const DEFAULT_CLOUD_STORAGE_BASE_CENTS = 500;
+/** 云存储价目（分）：10~25Gi 每 Gi 1 credit/小时。 */
+export const DEFAULT_CLOUD_STORAGE_TIER1_CENTS = 100;
+/** 云存储价目（分）：25~30Gi 每 Gi 3 credits/小时。 */
+export const DEFAULT_CLOUD_STORAGE_TIER2_CENTS = 300;
+
+export const CLOUD_STORAGE_BASE_PRODUCT_ID = 'cloud_storage.base.hour';
+export const CLOUD_STORAGE_TIER1_PRODUCT_ID = 'cloud_storage.tier1.gib_hour';
+export const CLOUD_STORAGE_TIER2_PRODUCT_ID = 'cloud_storage.tier2.gib_hour';
+
 /** 定价：按消费时段取生效价目（effectiveFrom <= at 的最新档），产出单价快照。 */
 export class PricingService {
   async ensureDefaultPrices(): Promise<void> {
@@ -68,6 +79,41 @@ export class PricingService {
       },
       { upsert: true },
     );
+    // 云存储三档价目（§4.3）：`$setOnInsert` 保证不覆盖管理员既有调价。
+    const storagePrices: Array<{ productId: string; productName: string; unitPrice: number }> = [
+      {
+        productId: CLOUD_STORAGE_BASE_PRODUCT_ID,
+        productName: '云存储（前 10Gi 固定档/小时）',
+        unitPrice: DEFAULT_CLOUD_STORAGE_BASE_CENTS,
+      },
+      {
+        productId: CLOUD_STORAGE_TIER1_PRODUCT_ID,
+        productName: '云存储（10~25Gi 每 Gi/小时）',
+        unitPrice: DEFAULT_CLOUD_STORAGE_TIER1_CENTS,
+      },
+      {
+        productId: CLOUD_STORAGE_TIER2_PRODUCT_ID,
+        productName: '云存储（25~30Gi 每 Gi/小时）',
+        unitPrice: DEFAULT_CLOUD_STORAGE_TIER2_CENTS,
+      },
+    ];
+    for (const price of storagePrices) {
+      await ProductPrice.updateOne(
+        { productId: price.productId },
+        {
+          $setOnInsert: {
+            productId: price.productId,
+            productName: price.productName,
+            pricingModel: 'per_unit',
+            unitPrice: price.unitPrice,
+            rates: { inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0 },
+            isBillable: true,
+            effectiveFrom: new Date(0),
+          },
+        },
+        { upsert: true },
+      );
+    }
   }
 
   async getPrice(productId: string, at: Date): Promise<PriceSnapshot | null> {

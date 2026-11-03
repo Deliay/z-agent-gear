@@ -28,6 +28,8 @@ src/
 │   ├── token-service.ts        # 一次性 token 签发/校验（bcrypt，tokenHash）
 │   ├── k8s-client.ts           # K8sClient 接口 + Real/InMemory 实现 + 工厂
 │   ├── k8s-job-manager.ts      # Job manifest + CRUD + Foreground→Background 回退
+│   ├── k8s-storage-manager.ts  # 云存储 PVC manifest/ensure/删除 + 归档文件名安全化
+│   ├── storage-service.ts      # 云存储编排：归档 Job/恢复准备/用量/清理/巡检/回调
 │   ├── container-service.ts    # 生命周期状态机（creating→connecting→initializing?→online→destroying→exited/failed），落库 workloadPlan；显式下发 plan 时由其派生 workloadIds，仅 workloadIds 的旧版请求按选择顺序落库
 │   ├── workload-dispatcher.ts  # 工作负载编排：按 workloadPlan（无 plan 回退 workloadIds）下发脚本与参数/required/结果落库/当前脚本/看门狗/post 批次 + 必须失败裁决（中断 + 锁外强制注销）
 │   ├── workload-plan.ts        # 兜底展开纯函数（仅无 workloadPlan 时用 workloadIds + 只读定义做后序 DFS + 默认参数归一，校验口径镜像 admin-api）
@@ -90,6 +92,14 @@ src/
 | `AGENT_API_URL` | agent-api 内部地址（可空；配置后启用云电脑 ready/terminal 回调） |
 | `AGENT_API_TIMEOUT_MS` | 内部回调超时（默认 5000，正数） |
 | `ADMIN_API_URL` | admin-api 内部地址（可空；配置后启用云电脑模型 Key `revoke-by-host`） |
+| `CLOUD_STORAGE_CLASS` | 源 PVC 默认 StorageClass（空 = 集群默认；空时 `storageClassName` 整段省略） |
+| `CLOUD_ARCHIVE_STORAGE_CLASS` | 归档 PVC StorageClass（空 = 集群默认） |
+| `CLOUD_ARCHIVE_PVC_SIZE` | 每工作区归档卷容量（默认 `100Gi`） |
+| `CLOUD_ARCHIVE_ACCESS_MODE` | 归档卷访问模式（默认 `ReadWriteOnce`，可逗号分隔） |
+| `ARCHIVER_IMAGE` | archiver 镜像（归档/恢复/用量/清理 Job；缺失启动告警） |
+| `ARCHIVE_TIMEOUT_MS` | 归档超时（默认 1800000，正整数） |
+| `STORAGE_PVC_PREFIX` | 源 PVC 名称前缀（默认 `zag-storage-`） |
+| `ARCHIVE_PVC_PREFIX` | 归档 PVC 名称前缀（默认 `zag-archive-`） |
 
 ## 回连失败排查（worker 连不上 cloud-controller）
 
@@ -178,3 +188,15 @@ pnpm run test:coverage
 - **迁移 002**：`002-cloudcontainers-workspace-id` 按 `tenantId`（存储原值精确命中）逐租户解析同库全局工作区，回填缺失 `workspaceId` 的行（字段不存在或 `null`）；解析不到置 `null` 并 warn；`tenantId` 缺失的行**跳过不改动**（与 001 的 `userId` 缺失行同口径）；随后显式 `createIndex({ workspaceId: 1 })`。已回填行不再命中，幂等可重跑（二次 run 数据零变更）。`index.ts` 在 001 之后登记（发布顺序：agent-api 迁移 015 → 本服务 002）。
 - **只读镜像**：`servers/agent-api/src/models/cloud-container.ts` 同步 `workspaceId` 字段（Phase 4/7 纪律：读取层经该只读模型透出 `CloudContainer.workspaceId`），写方仍仅本服务。
 - **契约**：`contracts/cloud-controller-websocket.md` 附录 A.2.2（`workspaceId` 可选 + 回退口径）与 A.3 响应结构（本期**不新增** `workspaceId` 字段，读侧直连集合）。
+
+## 云存储编排（需求 #405 / 契约附录 A.2.7 ~ A.2.10）
+
+- **K8s 单一事实源**：PVC 只由本服务创建/删除；agent-api 经内部端点 `POST/GET/DELETE /internal/storages`、`POST /internal/storages/:id/usage-refresh|cleanup`、`POST/GET /internal/containers/:id/archive` 驱动，不直连 K8s。
+- **源卷/归档卷**：源卷 `zag-storage-<storageId>`（RWO，容量 `<sizeGi>Gi`，标签 `app=zag-storage` + `zag.cloud/storage-id|workspace-id|tenant-id`）；归档卷 `zag-archive-<workspaceId>`（默认 100Gi，每工作区一块，全部存储共用）。`storageClassName` 为空时字段整段省略（使用集群默认）。`ensure()` 幂等：已存在且容量/StorageClass 一致返回 `created:false`，不一致 `409 STORAGE_PVC_CONFLICT`；删除 404 视为成功。
+- **云电脑挂载（零回归）**：`storage` 缺省时 Job manifest 与改动前逐字节一致（无 `volumes`/`volumeMounts`/`securityContext`/`initContainers`）。携带时挂 `/home/worker` + Pod `securityContext{fsGroup:1000,fsGroupChangePolicy:'OnRootMismatch'}` + env `ZAG_STORAGE_HOME=1`；`restore.archivePath` 存在时注入 `storage-restore` initContainer（archive 卷 RO、target RW、`tar -xjf`），并在 Job 创建前**先删同名残留 PVC 再按原容量/StorageClass 重建**（裁决 13）。
+- **归档触发**（裁决 12）：收敛到 `ContainerService` 在终态转移前调用 `storageService.maybeStartArchive`（`destroy`/`markExited`/`markFailed`/巡检收口），条件 `storageId != null && connectedAt != null && storageArchiveStatus ∈ {null, failed}`；归档 Job 在容器 `KeyedMutex` 外异步执行。`terminal` 回调携带 `storage{id, archiveStatus}`。
+- **归档 Job**：source PVC RO + archive PVC RW；执行镜像入口 `MODE=archive`（`set -euo pipefail`，pbzip2→bzip2 回退；脚本顺序 `rm -f *.tmp` → `tar|pbzip2 -9 > .tmp` → `du -sb` → `rm -f *.tar.gz2` → `mv` → `ZAG_ARCHIVE_RESULT` 标记行）；成功解析标记行后**先 CAS succeeded 再删源 PVC（最多 3 次）并回调**（删除失败/重投均按实际存在性上报 `sourcePvcReleased:false`）；标记行缺失/Job 失败/超时 → `failed` 且不删源 PVC、不替换旧归档。归档/恢复/用量/清理按工作区归档卷 `KeyedMutex` 串行。
+- **用量**：du Job 固定容器 Pod 的 `nodeName`（RWO 同节点）、只读挂载，解析标记行后回调 `/internal/cloud-storages/:id/usage`；失败保留上次值。
+- **巡检**：`status-sync` 每轮调用 `reconcileArchives`：`pending/running` 超 `ARCHIVE_TIMEOUT_MS` → `failed` + 回调；重启后补跑（源 PVC 未删，原子替换保证旧归档不丢）；`succeeded/failed` 未送达回调重投（进程内记录，重启后每容器一次，agent-api 幂等）。
+- **模型**：`cloudcontainers` 新增 `storageId/storagePvcName/storageSizeGi/storageWorkspaceId/storageStorageClass/storageRestorePath/storageArchive*`（历史行 null 容忍）；读取层（agent-api 只读镜像）同步透出。
+- **部署**：`deploy/k8s/cloud-controller.yaml` RBAC 增加 `persistentvolumeclaims` get/list/watch/create/delete 与 `pods`/`pods/log` get/list；env 见上表。archiver 镜像 `deploy/images/archiver/`（ubuntu + tar + pbzip2 + bzip2 回退，`MODE=archive|restore|usage|cleanup`）。Aspire dev 仍 `K8S_ENABLED=false`（InMemory）但补齐存储 env。

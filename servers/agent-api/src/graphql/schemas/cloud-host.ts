@@ -45,6 +45,10 @@ export const cloudHostTypeDefs = `#graphql
     githubAccountId: ID
     # 所属租户工作区 id（多租户二期；服务端取当前上下文，不入参）
     workspaceId: ID!
+    # 创建时挂载的云存储；未挂载为 null
+    storage: CloudStorageSummary
+    # STARTING 且存储正在从归档恢复数据时为 true（仅字段级展示，不新增容器状态）
+    storageRestoring: Boolean!
   }
 
   # 云电脑创建/运行报价（金额单位 credits，来自 admin-api 价目档）
@@ -153,6 +157,8 @@ export const cloudHostTypeDefs = `#graphql
     createDefaultSession: Boolean = true
     # 可选：创建时锁定 Github 帐号（必须是当前用户已绑定帐号；缺省 = 未选定）
     githubAccountId: ID
+    # 可选：创建时挂载当前工作区 IDLE/ARCHIVED 云存储；缺省 = 不挂载（报文与现状一致）
+    storageId: ID
   }
 
   input InstallCloudHostWorkloadInput {

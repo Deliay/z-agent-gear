@@ -37,6 +37,11 @@ export interface StatusSyncOptions {
   creatingGraceMs?: number;
   /** 工作负载看门狗（并入 15s 巡检，裁决 10）：推进超时/卡死的 init 记录。 */
   dispatcher?: { onWatchdog(now?: number): Promise<void> };
+  /**
+   * 云存储归档巡检（并入 15s 巡检）：`pending/running` 超时收口、重启补跑、
+   * 已完成未回调重投（提案实现点 9）。
+   */
+  storageService?: { reconcileArchives(now?: number): Promise<unknown> };
   logger: ObservationLogger;
 }
 
@@ -109,6 +114,14 @@ export class StatusSyncService {
             () => dispatcher.onWatchdog(),
             'workload-watchdog-failed',
             'workload watchdog failed',
+          );
+        }
+        const storageService = this.opts.storageService;
+        if (storageService) {
+          await this.runScanStep(
+            () => storageService.reconcileArchives(),
+            'storage-archive-scan-failed',
+            'storage archive scan failed',
           );
         }
         span.setAttribute('checked', stats.checked);
