@@ -26,6 +26,12 @@ import {
   InvalidChargeInputError,
   oneTimeChargeService,
 } from '../services/billing/one-time-charge.js';
+import { centsToCredits } from '../services/billing/money.js';
+import {
+  storagePricingService,
+  type StorageRateQuote,
+} from '../services/billing/storage-pricing.js';
+import { storageChargeService } from '../services/billing/storage-charge.js';
 import { isCloudHostOwnedBy } from '../services/billing/cloud-host-ownership.js';
 
 const logger = rootLogger.child({ component: 'internal-billing' });
@@ -62,6 +68,19 @@ function toDate(value: unknown): Date | undefined {
   if (typeof value !== 'string' || !value) return undefined;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+/** 存储报价 wire：金额统一换算为 credits（分 → credits 仅在边界）。 */
+function toStorageRateWire(rate: StorageRateQuote) {
+  return {
+    hourlyCredits: rate.hourlyCredits,
+    items: rate.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPriceCredits: centsToCredits(item.unitPrice),
+      amountCredits: centsToCredits(item.amount),
+    })),
+  };
 }
 
 /** API Key DTO → 内部 REST wire（时间 ISO；含 scope/cloudHostId/expiresAt；expiresAt 仅历史数据可能非空）。 */
@@ -216,6 +235,95 @@ export function createInternalBillingRouter(): Router {
       res.json(await oneTimeChargeService.getPriceQuote(productIds));
     } catch (err) {
       logger.error({ err }, '[internal-billing] GET /price-quote failed');
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /** 云存储容量阶梯报价（全价/归档半价）；单位 credits，items 供账单页展示分档。 */
+  router.get('/storage-quote', async (req: Request, res: Response) => {
+    const raw = req.query.sizeGi;
+    const sizeGi =
+      typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : Number.NaN;
+    if (!Number.isInteger(sizeGi) || sizeGi < 1 || sizeGi > 30) {
+      res.status(400).json({ error: 'INVALID_BODY' });
+      return;
+    }
+    try {
+      const quote = await storagePricingService.quote(sizeGi);
+      res.json({
+        sizeGi: quote.sizeGi,
+        full: toStorageRateWire(quote.full),
+        archived: toStorageRateWire(quote.archived),
+      });
+    } catch (err) {
+      logger.error({ err }, '[internal-billing] GET /storage-quote failed');
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /** 云存储整点出账：单次只结算 1 小时（periodEnd - periodStart === 1h）。 */
+  router.post('/storage-charges', async (req: Request, res: Response) => {
+    const {
+      accountId,
+      storageId,
+      sizeGi,
+      rate,
+      periodStart,
+      periodEnd,
+      idempotentKey,
+      description,
+    } = req.body ?? {};
+    const start = toDate(periodStart);
+    const end = toDate(periodEnd);
+    if (
+      typeof accountId !== 'string' ||
+      !mongoose.isValidObjectId(accountId) ||
+      typeof storageId !== 'string' ||
+      !storageId ||
+      !Number.isInteger(sizeGi) ||
+      sizeGi < 1 ||
+      sizeGi > 30 ||
+      (rate !== 'FULL' && rate !== 'HALF') ||
+      !start ||
+      !end ||
+      end.getTime() - start.getTime() !== 60 * 60 * 1000 ||
+      typeof idempotentKey !== 'string' ||
+      !idempotentKey ||
+      (description !== undefined && description !== null && typeof description !== 'string')
+    ) {
+      res.status(400).json({ error: 'INVALID_BODY' });
+      return;
+    }
+    try {
+      const result = await storageChargeService.chargeHour({
+        accountId,
+        storageId,
+        sizeGi,
+        rate,
+        periodStart: start,
+        periodEnd: end,
+        idempotentKey,
+        description: typeof description === 'string' ? description : undefined,
+      });
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof InvalidChargeInputError) {
+        res.status(400).json({ error: 'INVALID_BODY' });
+        return;
+      }
+      if (err instanceof AccountNotFoundError) {
+        res.status(404).json({ error: 'ACCOUNT_NOT_FOUND' });
+        return;
+      }
+      if (err instanceof AccountFrozenError) {
+        res.status(403).json({ error: 'ACCOUNT_FROZEN' });
+        return;
+      }
+      if (err instanceof InsufficientBalanceError) {
+        res.status(409).json({ error: 'INSUFFICIENT_BALANCE', available: err.available });
+        return;
+      }
+      logger.error({ err }, '[internal-billing] POST /storage-charges failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });

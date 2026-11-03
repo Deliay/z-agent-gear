@@ -15,13 +15,15 @@ import { MongoWorkloadLogRepository } from './repositories/workload-log-reposito
 import { TokenService } from './services/token-service.js';
 import { createK8sClient } from './services/k8s-client.js';
 import { K8sJobManager } from './services/k8s-job-manager.js';
+import { K8sStorageManager } from './services/k8s-storage-manager.js';
+import { StorageService } from './services/storage-service.js';
 import { ContainerService } from './services/container-service.js';
 import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
 import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
 import { WorkloadDispatcher } from './services/workload-dispatcher.js';
 import { SecretStore } from './services/secret-store.js';
-import { AgentApiClient } from './services/agent-api-client.js';
+import { AgentApiClient, type TerminalStorageState } from './services/agent-api-client.js';
 import { AdminBillingClient } from './services/admin-billing-client.js';
 import { wireSocketDiagnostics } from './services/socket-diagnostics.js';
 import {
@@ -123,6 +125,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     runtimeClassName: config.runtimeClassName,
     publicWsEndpoint: config.publicWsEndpoint,
     ephemeralStorage: config.jobEphemeralStorage,
+    archiverImage: config.archiverImage,
   });
   // 云电脑运行期 secret（仅内存）与内部回调客户端；地址为空时对应回调为 no-op。
   const secretStore = new SecretStore();
@@ -148,6 +151,35 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
       'ADMIN_API_URL 未配置：容器终态撤销运行专用模型 Key 将不会发送（依赖 Key 过期/对账兜底）',
     );
   }
+  if (!config.archiverImage) {
+    logger.warn(
+      { component: 'cloud-storage' },
+      'ARCHIVER_IMAGE 未配置：云存储归档/恢复/用量/清理 Job 将无法拉取镜像',
+    );
+  }
+
+  // 云存储编排（PVC + 归档/恢复/用量/清理）：K8s 单一事实源，agent-api 不直连集群。
+  const storageManager = new K8sStorageManager(k8sClient, {
+    namespace: config.k8sNamespace,
+    storagePvcPrefix: config.storagePvcPrefix,
+    archivePvcPrefix: config.archivePvcPrefix,
+    storageClass: config.cloudStorageClass,
+    archiveStorageClass: config.cloudArchiveStorageClass,
+    archivePvcSize: config.cloudArchivePvcSize,
+    archiveAccessMode: config.cloudArchiveAccessMode,
+  });
+  const storageService = new StorageService({
+    repo,
+    k8sClient,
+    storageManager,
+    agentApiClient,
+    logger: logger.child({ component: 'cloud-storage' }),
+    config: {
+      namespace: config.k8sNamespace,
+      archiverImage: config.archiverImage,
+      archiveTimeoutMs: config.archiveTimeoutMs,
+    },
+  });
 
   /**
    * harness 生命周期回调重试：agent-api 短暂不可达时自动退避重试。
@@ -224,6 +256,19 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
           // 终态映射（契约 A19）：exited→stopped、failed→failed、其它（destroyed）→stopped；
           // 必须工作负载失败（destroy 链路终态 exited + mustFailure）按 failed 上报并保留原因（C-1）。
           const status = harnessTerminalStatus(container.status, container.mustFailure);
+          // 存储归档状态随 terminal 报文下发（契约 A.2.10）：读取终态落库后的最新值
+          // （归档触发 CAS 先于本钩子执行，故通常为 pending）。
+          let terminalStorage: TerminalStorageState | null = null;
+          if (container.storageId) {
+            const fresh = (await containerService.getById(container.id)) ?? container;
+            terminalStorage = {
+              id: container.storageId,
+              // 透传真实归档状态：null = 未触发归档（agent-api 据此 releaseStorage 回滚），
+              // 不得强改写为 pending（契约 A.2.10）。
+              archiveStatus: fresh.storageArchiveStatus ?? null,
+              archiveId: fresh.storageArchiveId ?? null,
+            };
+          }
           try {
             await retryHarnessCallback(
               `terminal callback hostId=${container.hostId}`,
@@ -232,6 +277,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
                   container.hostId!,
                   status,
                   container.exitReason ?? undefined,
+                  terminalStorage,
                 ),
               logger,
             );
@@ -253,6 +299,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
       },
     },
     secretStore,
+    storageService,
   );
   const billingPublisher = new BillingEventPublisher({
     intervalMs: config.outboxRelayIntervalMs,
@@ -297,6 +344,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     connectTimeoutMs: config.connectTimeoutMs,
     image: config.workerImage,
     dispatcher,
+    storageService,
     logger: logger.child({ component: 'status-sync' }),
   });
 
@@ -319,6 +367,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
       workloadLogRepository,
       workloadDispatcher: dispatcher,
       getWorkerVersion: (containerId) => gatewayBridge.getWorkerVersion(containerId),
+      storageService,
     }),
   );
 
@@ -367,6 +416,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     statusSync.stop();
     // O-1：先排空在途计费钩子（outbox enqueue），再停 publisher，避免 SIGTERM 截断事件写入。
     await containerService.drainBillingHooks();
+    await storageService.drainArchiveTasks();
     await billingPublisher.stop();
     io.close();
     await new Promise<void>((resolve) => {

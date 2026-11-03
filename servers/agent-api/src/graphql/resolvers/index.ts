@@ -13,6 +13,7 @@ import { workflowResolvers } from './workflow.js';
 import { homeResolvers } from './home.js';
 import { billingResolvers } from './billing.js';
 import { cloudHostResolvers } from './cloud-host.js';
+import { cloudStorageResolvers } from './cloud-storage.js';
 import { workspaceResolvers } from './workspace.js';
 
 export const resolvers = {
@@ -32,6 +33,7 @@ export const resolvers = {
     ...homeResolvers.Query,
     ...billingResolvers.Query,
     ...cloudHostResolvers.Query,
+    ...cloudStorageResolvers.Query,
     ...workspaceResolvers.Query,
   },
   Mutation: {
@@ -48,6 +50,7 @@ export const resolvers = {
     ...workflowResolvers.Mutation,
     ...billingResolvers.Mutation,
     ...cloudHostResolvers.Mutation,
+    ...cloudStorageResolvers.Mutation,
     ...workspaceResolvers.Mutation,
   },
   User: {
@@ -78,6 +81,12 @@ export const resolvers = {
   },
   CloudHost: {
     ...cloudHostResolvers.CloudHost,
+  },
+  CloudStorage: {
+    ...cloudStorageResolvers.CloudStorage,
+  },
+  CloudStorageSummary: {
+    ...cloudStorageResolvers.CloudStorageSummary,
   },
   ControllerWorkspace: {
     ...homeResolvers.ControllerWorkspace,

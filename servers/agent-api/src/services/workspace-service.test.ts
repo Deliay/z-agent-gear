@@ -8,6 +8,7 @@ import { Workspace } from './../models/workspace.js';
 import { TenantMember } from './../models/tenant-member.js';
 import { WorkspaceMember } from './../models/workspace-member.js';
 import { Session } from './../models/session.js';
+import { CloudStorage } from './../models/cloud-storage.js';
 import { WorkflowInstance } from './../models/workflow-instance.js';
 import { workspaceService, WORKSPACE_ERRORS } from './workspace-service.js';
 import { runWithWorkspace } from './workspace-context.js';
@@ -144,6 +145,41 @@ describe('WorkspaceService（T-WSP，真库）', () => {
       WORKSPACE_ERRORS.notEmpty,
     );
     await Session.deleteMany({});
+    expect(await workspaceService.deleteWorkspace(String(user._id), workspace.id)).toBe(true);
+  });
+
+  it('T-WSP-CS1: 删除保护包含未销毁云存储（资源集合 10→11）；已销毁不阻塞', async () => {
+    const tenant = await createTeam('team-cs');
+    const user = await createUser('cs-owner');
+    await TenantMember.create({ tenantId: tenant._id, userId: user._id, role: 'admin' });
+    const workspace = await workspaceService.createWorkspace(
+      String(user._id),
+      String(tenant._id),
+      'storage-ws',
+    );
+    const storageId = new mongoose.Types.ObjectId();
+    await CloudStorage.create({
+      _id: storageId,
+      name: 'my-data',
+      nameKey: 'my-data',
+      sizeGi: 10,
+      status: 'IDLE',
+      tenantId: tenant._id,
+      resourceWorkspaceId: new mongoose.Types.ObjectId(workspace.id),
+      createdBy: user._id,
+      pvcName: `zag-storage-${String(storageId)}`,
+      billingRate: 'FULL',
+      billingStartedAt: new Date(),
+    });
+
+    await expect(workspaceService.deleteWorkspace(String(user._id), workspace.id)).rejects.toThrow(
+      WORKSPACE_ERRORS.notEmpty,
+    );
+
+    await CloudStorage.updateOne(
+      { _id: storageId },
+      { $set: { status: 'DESTROYED', destroyedAt: new Date() } },
+    );
     expect(await workspaceService.deleteWorkspace(String(user._id), workspace.id)).toBe(true);
   });
 

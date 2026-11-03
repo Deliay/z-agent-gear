@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 
 export const INVOICE_TYPES = ['charge', 'recharge', 'adjust'] as const;
-export const INVOICE_CATEGORIES = ['container', 'model', 'manual'] as const;
+export const INVOICE_CATEGORIES = ['container', 'model', 'manual', 'storage'] as const;
 
 const invoiceItemSchema = new mongoose.Schema(
   {

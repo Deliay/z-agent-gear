@@ -9,6 +9,7 @@ import { ConfiguredWorkflow } from './configured-workflow.js';
 import { WorkflowInstance } from './workflow-instance.js';
 import { WorkflowTemplate } from './workflow-template.js';
 import { GitHubAccount } from './github-account.js';
+import { CloudStorage } from './cloud-storage.js';
 import { UserCommitSetting } from './user-commit-setting.js';
 import { Provider } from './provider.js';
 import { Model } from './model.js';
@@ -190,6 +191,64 @@ describe('workspace-isolation 矩阵（T-WS，真库）', () => {
       );
     // 任意工作区上下文都看到同一份（成员级，不随工作区过滤）
     expect(await count()).toBe(2);
+  });
+
+  it('CloudStorage 工作区隔离（T-WSP2）：跨工作区不可见/不可写，且不修改迁移回填清单', async () => {
+    // 计划期裁决 2：不修改 015 的 WORKSPACE_ID_COLLECTIONS，也不加入 TENANT_ID_COLLECTIONS
+    expect(WORKSPACE_ID_COLLECTIONS.map((entry) => entry.collection)).not.toContain(
+      'cloudstorages',
+    );
+
+    const collection = mongoose.connection.collection('cloudstorages');
+    const tenantId = new mongoose.Types.ObjectId(TENANT);
+    const insert = (workspaceId: string, nameKey: string) =>
+      collection.insertOne({
+        _id: new mongoose.Types.ObjectId(),
+        name: nameKey,
+        nameKey,
+        sizeGi: 10,
+        status: 'IDLE',
+        tenantId,
+        resourceWorkspaceId: new mongoose.Types.ObjectId(workspaceId),
+        createdBy: new mongoose.Types.ObjectId(),
+        pvcName: `zag-storage-${nameKey}`,
+        destroyedAt: null,
+      });
+    await insert(WS_A, 'a');
+    await insert(WS_B, 'b');
+    await insert(WS_GLOBAL, 'g');
+    const bDoc = await collection.findOne({ nameKey: 'b' });
+
+    const count = (context: WorkspaceContext) =>
+      runWithWorkspace(context, async () =>
+        CloudStorage.countDocuments({ tenantId }),
+      );
+    expect(await count(adminA)).toBe(1);
+    expect(await count(devB)).toBe(1);
+    expect(await count(devGlobal)).toBe(1);
+
+    // 跨工作区写入：save 路径拒绝（workspace not found）
+    await expect(
+      runWithWorkspace(devA, async () =>
+        new CloudStorage({
+          name: 'cross',
+          nameKey: 'cross',
+          sizeGi: 10,
+          status: 'IDLE',
+          tenantId,
+          resourceWorkspaceId: new mongoose.Types.ObjectId(WS_B),
+          createdBy: new mongoose.Types.ObjectId(),
+          pvcName: 'zag-storage-cross',
+        }).save(),
+      ),
+    ).rejects.toThrow('workspace not found');
+
+    // 跨工作区更新：写过滤收敛到当前工作区（匹配为空）
+    const updated = await runWithWorkspace(devA, async () =>
+      CloudStorage.updateOne({ _id: bDoc?._id }, { $set: { name: 'hacked' } }),
+    );
+    expect(updated.modifiedCount).toBe(0);
+    expect((await collection.findOne({ _id: bDoc?._id }))?.name).toBe('b');
   });
 
   it('工作流域字段名与项目工作区语义零冲突', () => {

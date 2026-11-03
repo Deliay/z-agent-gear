@@ -10,6 +10,7 @@ import { Session } from '../models/session.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { CloudHost } from '../models/cloud-host.js';
+import { CloudStorage } from '../models/cloud-storage.js';
 import { ConfiguredWorkflow } from '../models/configured-workflow.js';
 import { WorkflowInstance } from '../models/workflow-instance.js';
 import { WorkflowTemplate } from '../models/workflow-template.js';
@@ -269,7 +270,7 @@ export class WorkspaceService {
     return result.deletedCount > 0;
   }
 
-  /** 删除保护：10 集合任一持有资源即拒绝（接受与资源创建的既有 TOCTOU 窗口）。
+  /** 删除保护：11 集合任一持有资源即拒绝（接受与资源创建的既有 TOCTOU 窗口）。
    *  注：Commit 设置自本需求起为成员级（键 userId、无 workspaceId 维度），不再计入工作区资源。 */
   async hasResources(workspaceId: string): Promise<boolean> {
     const objectId = new mongoose.Types.ObjectId(workspaceId);
@@ -278,6 +279,7 @@ export class WorkspaceService {
       Controller.countDocuments({ workspaceId: objectId }),
       ControllerKey.countDocuments({ workspaceId: objectId }),
       CloudHost.countDocuments({ resourceWorkspaceId: objectId }),
+      CloudStorage.countDocuments({ resourceWorkspaceId: objectId, destroyedAt: null }),
       ConfiguredWorkflow.countDocuments({ resourceWorkspaceId: objectId }),
       WorkflowInstance.countDocuments({ resourceWorkspaceId: objectId }),
       WorkflowTemplate.countDocuments({ resourceWorkspaceId: objectId }),

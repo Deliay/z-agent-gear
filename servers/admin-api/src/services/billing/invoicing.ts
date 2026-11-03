@@ -21,7 +21,7 @@ export interface InvoiceItemInput {
 export interface CreateInvoiceInput {
   accountId: string;
   type: 'charge' | 'recharge' | 'adjust';
-  category: 'container' | 'model' | 'manual';
+  category: 'container' | 'model' | 'manual' | 'storage';
   /** 金额（分）：充值为正、消费为负。 */
   amount: number;
   balanceAfter: number;

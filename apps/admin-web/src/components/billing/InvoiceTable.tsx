@@ -38,7 +38,7 @@ export default function InvoiceTable({ invoices, onViewReceipt }: Props) {
                 </Badge>
               </td>
               <td className="py-2 pr-3">
-                {invoice.category === 'container' ? '容器' : invoice.category === 'model' ? '模型' : '手工'}
+                {invoice.category === 'container' ? '容器' : invoice.category === 'model' ? '模型' : invoice.category === 'storage' ? '存储' : '手工'}
               </td>
               <td className="max-w-[260px] truncate py-2 pr-3" title={invoice.description}>
                 {invoice.description}

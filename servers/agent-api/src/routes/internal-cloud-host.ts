@@ -247,6 +247,29 @@ internalCloudHostRouter.post('/:id/terminal', async (req: Request, res: Response
     const result = await cloudHostService.handleTerminal(id, {
       status,
       reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined,
+      storage:
+        req.body?.storage && typeof req.body.storage === 'object'
+          ? {
+              id:
+                typeof req.body.storage.id === 'string'
+                  ? req.body.storage.id
+                  : req.body.storage.id === null
+                    ? null
+                    : undefined,
+              archiveStatus:
+                typeof req.body.storage.archiveStatus === 'string'
+                  ? req.body.storage.archiveStatus
+                  : req.body.storage.archiveStatus === null
+                    ? null
+                    : undefined,
+              archiveId:
+                typeof req.body.storage.archiveId === 'string'
+                  ? req.body.storage.archiveId
+                  : req.body.storage.archiveId === null
+                    ? null
+                    : undefined,
+            }
+          : undefined,
     });
     res.json(result);
   } catch (err) {

@@ -30,6 +30,7 @@ import {
   resolveCreateWorkloadPlan,
   type CreateWorkloadPlanEntry,
 } from './cloud-host-workload-plan.js';
+import { cloudStorageService, type CloudStorageService } from './cloud-storage-service.js';
 
 export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.12.0';
 
@@ -78,6 +79,8 @@ export interface CreateCloudHostInput {
   createDefaultSession?: boolean;
   /** 可选：创建时锁定 Github 帐号（必须是当前用户已绑定帐号）。 */
   githubAccountId?: string | null;
+  /** 可选：挂载当前工作区 IDLE/ARCHIVED 云存储（缺省 = 不挂载，报文与历史一致）。 */
+  storageId?: string | null;
 }
 
 export interface CloudHostStopImpact {
@@ -94,6 +97,13 @@ export interface CloudHostStopImpact {
 export interface TerminalCallbackInput {
   status: 'stopped' | 'failed';
   reason?: string;
+  /** terminal 报文新增：挂载存储与归档状态（未挂载时不携带）。 */
+  storage?: {
+    id?: string | null;
+    archiveStatus?: string | null;
+    /** cloud-controller 本次归档 id（新周期占位/旧回调判定用，可缺省）。 */
+    archiveId?: string | null;
+  } | null;
 }
 
 type Doc = Record<string, unknown>;
@@ -103,6 +113,7 @@ interface CloudHostServiceDeps {
   workloadReader?: typeof cloudWorkloadReader;
   catalog?: typeof cloudWorkloadCatalog;
   ttlSeconds?: number;
+  storageService?: CloudStorageService;
 }
 
 function iso(value: unknown): string | null {
@@ -159,12 +170,14 @@ export class CloudHostService {
   private readonly workloadReader: typeof cloudWorkloadReader;
   private readonly catalog: typeof cloudWorkloadCatalog;
   private readonly ttlSeconds: number;
+  private readonly storageService: CloudStorageService;
 
   constructor(deps: CloudHostServiceDeps = {}) {
     this.controllerClient = deps.controllerClient ?? cloudControllerClient;
     this.workloadReader = deps.workloadReader ?? cloudWorkloadReader;
     this.catalog = deps.catalog ?? cloudWorkloadCatalog;
     this.ttlSeconds = deps.ttlSeconds ?? config.harnessContainerTtlSeconds;
+    this.storageService = deps.storageService ?? cloudStorageService;
   }
 
   async getCapabilities(): Promise<{ enabled: boolean; supportedHarnesses: HarnessType[] }> {
@@ -212,6 +225,7 @@ export class CloudHostService {
     workloadIds: string[];
     createDefaultSession: boolean;
     githubAccountId: string | null;
+    storageId: string | null;
   } {
     const name = (input.name ?? '').trim();
     if (!name) throw new Error('name is required');
@@ -223,19 +237,27 @@ export class CloudHostService {
     if (rawAccountId && !mongoose.isValidObjectId(rawAccountId)) {
       throw new Error('Github 账号不存在或不属于当前用户');
     }
+    const rawStorageId =
+      input.storageId === undefined || input.storageId === null
+        ? ''
+        : String(input.storageId).trim();
+    if (rawStorageId && !mongoose.isValidObjectId(rawStorageId)) {
+      throw new Error('storage not found');
+    }
     return {
       name,
       harnessTypes: parseHarnessTypes(input.harnessTypes),
       workloadIds: parseWorkloadIds(input.workloadIds),
       createDefaultSession: input.createDefaultSession !== false,
       githubAccountId: rawAccountId || null,
+      storageId: rawStorageId || null,
     };
   }
 
   async create(userId: string, input: CreateCloudHostInput): Promise<Doc> {
     this.assertFeature();
     this.assertConfigured();
-    const { name, harnessTypes, workloadIds, createDefaultSession, githubAccountId } =
+    const { name, harnessTypes, workloadIds, createDefaultSession, githubAccountId, storageId } =
       this.validateInput(input);
     if (githubAccountId) {
       const account = await GitHubAccount.findOne({
@@ -279,6 +301,18 @@ export class CloudHostService {
       const expiresAt = new Date(Date.now() + this.ttlSeconds * 1000);
       const chargeKey = `cloud_host.create:${cloudHostId}`;
 
+      // 存储占用先于扣费（计划期裁决 11）：校验/余额 → CAS IDLE/ARCHIVED→ATTACHING。
+      // 失败不扣费、不落库；成功后的扣费失败在下方逆序释放。
+      let attachment: Awaited<ReturnType<CloudStorageService['attachStorage']>> | null = null;
+      if (storageId) {
+        attachment = await this.storageService.attachStorage({
+          storageId,
+          cloudHostId,
+          userId,
+          controllerId,
+        });
+      }
+
       // 服务端权威扣费：先扣费再落库/拉起；余额不足直接外抛（不产生任何落库与账单）。
       try {
         await billingClient.createCharge({
@@ -291,6 +325,11 @@ export class CloudHostService {
           description: `创建云电脑 ${name}`,
         });
       } catch (err) {
+        if (attachment) {
+          await this.storageService
+            .releaseStorage(storageId as string, cloudHostId)
+            .catch(() => undefined);
+        }
         if (err instanceof InsufficientBalanceError) throw new Error('insufficient balance');
         if (err instanceof BillingServiceUnavailableError) {
           throw new Error('billing service unavailable');
@@ -329,6 +368,7 @@ export class CloudHostService {
           resourceWorkspaceId: ownerWorkspaceId,
           createDefaultSession,
           githubAccountId,
+          storageId,
           startedAt: new Date(),
         });
 
@@ -377,6 +417,9 @@ export class CloudHostService {
             billingAccountId: account.id,
             agentGearMinVersion: resolveAgentGearMinVersion(harnessTypes),
             workloadPlan,
+            ...(attachment
+              ? { storage: this.buildStoragePayload(attachment.storage, attachment.fromStatus) }
+              : {}),
             secrets: {
               hostEndpoint: config.controllerApiPublicEndpoint,
               hostKey: createdKey.rawKey,
@@ -403,9 +446,27 @@ export class CloudHostService {
         ).lean();
         if (!updated) {
           await this.reclaimStartedContainer(cloudHostId, container.id);
+          if (attachment) {
+            await this.storageService
+              .releaseStorage(storageId as string, cloudHostId)
+              .catch(() => undefined);
+          }
           const current = await CloudHost.findById(cloudHostId).lean();
           if (!current) throw new Error('Cloud host not found');
           return this.mapCloudHost(current as Doc, 0);
+        }
+        if (attachment) {
+          await this.storageService
+            .recordContainer(storageId as string, cloudHostId, container.id)
+            .catch(() => undefined);
+          await this.storageService
+            .markAttached(storageId as string, cloudHostId)
+            .catch((err) => {
+              logger.warn(
+                { event: 'storage-attach-confirm-failed', cloudHostId, err },
+                'confirm storage attached failed',
+              );
+            });
         }
         return this.mapCloudHost(updated as Doc, 0);
       } catch (err) {
@@ -430,6 +491,16 @@ export class CloudHostService {
             keyId,
             workspaceId,
           });
+          if (attachment) {
+            await this.storageService
+              .releaseStorage(storageId as string, cloudHostId)
+              .catch((releaseErr) => {
+                logger.warn(
+                  { event: 'storage-release-rollback-failed', cloudHostId, err: releaseErr },
+                  'release storage on rollback failed',
+                );
+              });
+          }
         }
         if (err instanceof CloudControllerUnavailableError) {
           throw new Error('control plane unavailable');
@@ -444,6 +515,30 @@ export class CloudHostService {
   }
 
   /** 创建失败逆序回滚（best-effort；原始错误优先，回滚失败只记录日志）。 */
+  private buildStoragePayload(
+    storage: Doc,
+    fromStatus: 'IDLE' | 'ARCHIVED',
+  ): {
+    id: string;
+    pvcName: string;
+    sizeGi: number;
+    workspaceId: string;
+    storageClass?: string | null;
+    restore?: { archivePath: string } | null;
+  } {
+    const archive = storage.currentArchive as Doc | null;
+    const restorePath =
+      fromStatus === 'ARCHIVED' && archive?.path ? String(archive.path) : null;
+    return {
+      id: String(storage._id),
+      pvcName: String(storage.pvcName),
+      sizeGi: Number(storage.sizeGi),
+      workspaceId: String(storage.resourceWorkspaceId),
+      ...(storage.storageClass ? { storageClass: String(storage.storageClass) } : {}),
+      ...(restorePath ? { restore: { archivePath: restorePath } } : {}),
+    };
+  }
+
   private async rollback(input: {
     userId: string;
     cloudHostId: string;
@@ -717,6 +812,7 @@ export class CloudHostService {
       ).lean();
       const fetched = updated ?? (await this.findRawHost(id));
       if (!fetched) return null;
+      await this.confirmStorageAttached(fetched as Doc);
       return this.mapCloudHost(fetched as Doc, await this.countActive(fetched as Doc));
     }
 
@@ -757,6 +853,7 @@ export class CloudHostService {
       );
     }
     const refreshed = (await this.findRawHost(id)) ?? current;
+    await this.confirmStorageAttached(refreshed);
     return this.mapCloudHost(refreshed, await this.countActive(refreshed));
   }
 
@@ -776,6 +873,7 @@ export class CloudHostService {
     if (host.status === 'STOPPED' || host.status === 'FAILED') {
       // A-4：早退分支仍需幂等补做副作用收尾（回调重试可能命中早退）。
       await this.refundUnreadyHost(host, id, 'cloud host terminal before ready (retry)');
+      await this.syncStorageOnTerminal(host, id, input);
       await sessionService.endByController(String(host.controllerId), String(host.userId));
       await billingClient.revokeApiKeysByHost(id).catch((err) => {
         logger.warn({ event: 'revoke-key-terminal-retry-failed', err }, 'revoke model key on terminal retry failed');
@@ -800,6 +898,7 @@ export class CloudHostService {
     if (!current) return null;
 
     await this.refundUnreadyHost(current, id, input.reason ?? 'cloud host terminal before ready');
+    await this.syncStorageOnTerminal(current, id, input);
     await sessionService.endByController(String(current.controllerId), String(current.userId));
     await billingClient.revokeApiKeysByHost(id).catch((err) => {
       logger.warn({ event: 'revoke-key-terminal-failed', err }, 'revoke model key on terminal failed');
@@ -821,6 +920,65 @@ export class CloudHostService {
       .catch((err) => {
         logger.warn({ event: 'refund-terminal-failed', err }, 'refund create charge on terminal failed');
       });
+  }
+
+  /** ready 幂等兜底：`ATTACHING → ATTACHED`（已 ATTACHED 时不重复推进）。 */
+  private async confirmStorageAttached(host: Doc): Promise<void> {
+    const storageId = host.storageId ? String(host.storageId) : null;
+    if (!storageId) return;
+    await this.storageService.markAttached(storageId, String(host._id ?? '')).catch((err) => {
+      logger.warn(
+        { event: 'storage-attach-confirm-failed', cloudHostId: String(host._id ?? ''), err },
+        'confirm storage attached failed',
+      );
+    });
+  }
+
+  /**
+   * terminal 回调的存储联动：
+   * - 未 ready 即终态：释放存储回 `attachFromStatus`（不留「已挂载」）；
+   * - 已 ready 且归档已开始（pending/running）：`ATTACHED → ARCHIVING`。
+   */
+  private async syncStorageOnTerminal(
+    host: Doc,
+    id: string,
+    input: TerminalCallbackInput,
+  ): Promise<void> {
+    const storageId = input.storage?.id
+      ? String(input.storage.id)
+      : host.storageId
+        ? String(host.storageId)
+        : null;
+    if (!storageId) return;
+    try {
+      if (!host.readyAt) {
+        await this.storageService.releaseStorage(storageId, id);
+        return;
+      }
+      const archiveStatus = input.storage?.archiveStatus;
+      if (archiveStatus === 'pending' || archiveStatus === 'running') {
+        await this.storageService.markArchiving(
+          storageId,
+          id,
+          input.storage?.archiveId ? String(input.storage.archiveId) : null,
+        );
+        return;
+      }
+      // succeeded/failed/null：回调可能丢失，按最近容器查询归档终态补齐；
+      // 无归档可收口时释放存储，避免永久卡在「已挂载」（不可销毁/不可再挂载）。
+      const reconciled = await this.storageService.reconcileFromTerminal(
+        storageId,
+        host.containerId ? String(host.containerId) : null,
+      );
+      if (!reconciled) {
+        await this.storageService.releaseStorage(storageId, id);
+      }
+    } catch (err) {
+      logger.warn(
+        { event: 'storage-terminal-sync-failed', cloudHostId: id, storageId, err },
+        'sync storage on terminal failed',
+      );
+    }
   }
 
   /** 内部路由用于区分「不存在」「非云电脑」。 */
@@ -898,6 +1056,8 @@ export class CloudHostService {
       // 契约 CloudHost.workspaceId = 租户工作区（模型字段 resourceWorkspaceId，计划期裁决对齐 F1）
       workspaceId: host.resourceWorkspaceId ? String(host.resourceWorkspaceId) : null,
       hasDefaultWorkspace: Boolean(host.workspaceId),
+      // CloudHost.storage / storageRestoring 的字段级 resolver 数据源
+      storageId: host.storageId ? String(host.storageId) : null,
     };
   }
 }
@@ -918,6 +1078,12 @@ const CLOUD_HOST_PUBLIC_ERRORS = new Set([
   'stop the cloud host before deleting',
   'stopping this cloud host will permanently lose all active sessions',
   'session is ended',
+  // 云存储（创建云电脑挂载）
+  'storage feature is disabled',
+  'storage not found',
+  'storage is not attachable',
+  'storage size must be between 1 and 30 Gi',
+  'global workspace is read-only',
   // Issues 联动配置
   'cloud host not found',
   'workflow must contain a human node',

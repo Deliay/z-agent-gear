@@ -38,7 +38,10 @@ tail -n 50 /var/log/dockerd.log >&2 || true
 exit 1
 `;
 
-const NODEJS_SCRIPT = `#!/usr/bin/env bash
+/**
+ * Node.js 初始版本脚本（001 落库文本）：内容逐字不变，供 018 迁移做「未定制」比对与刷新。
+ */
+export const NODEJS_SCRIPT_V1 = `#!/usr/bin/env bash
 set -euo pipefail
 
 export NVM_DIR="\${NVM_DIR:-/usr/local/nvm}"
@@ -181,7 +184,7 @@ const PRESETS: PresetDefinition[] = [
   {
     presetKey: 'nodejs',
     name: 'Node.js',
-    initScript: NODEJS_SCRIPT,
+    initScript: NODEJS_SCRIPT_V1,
     paramSchema: [
       {
         key: 'version',

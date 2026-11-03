@@ -8,6 +8,7 @@ import { config } from '../config/index.js';
 import { BillingApiKey } from '../models/billing-api-key.js';
 import { BillingAccount } from '../models/billing-account.js';
 import { apiKeyService } from '../services/billing/api-key-service.js';
+import { pricingService } from '../services/billing/pricing.js';
 import { connectTestDb, clearTestDb, disconnectTestDb } from '../services/billing/testing/mongo.js';
 
 const TOKEN = 'internal-test-token';
@@ -465,5 +466,150 @@ describe('internal-billing /api-keys（云电脑 Key 铸造与撤销）', () => 
     expect(keys).toHaveLength(1);
     expect(keys[0].name).toBe('key');
     expect(await BillingApiKey.countDocuments({ ownerType: 'tenant', ownerId: base.ownerId })).toBe(1);
+  });
+});
+
+describe('internal-billing /storage-quote 与 /storage-charges（云存储计费）', () => {
+  beforeAll(async () => {
+    await connectTestDb();
+    config.internalApiToken = TOKEN;
+    await startServer();
+  }, 60000);
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await disconnectTestDb();
+  });
+
+  beforeEach(async () => {
+    await clearTestDb();
+    await pricingService.ensureDefaultPrices();
+  });
+
+  async function account(cashBalance = 100_000): Promise<string> {
+    const doc = await BillingAccount.create({
+      ownerType: 'tenant',
+      ownerId: new mongoose.Types.ObjectId().toString(),
+      ownerName: 'tenant',
+      cashBalance,
+    });
+    return String(doc._id);
+  }
+
+  const storageId = () => new mongoose.Types.ObjectId().toString();
+  const period = {
+    periodStart: '2026-11-02T15:00:00.000Z',
+    periodEnd: '2026-11-02T16:00:00.000Z',
+  };
+
+  it('GET /storage-quote 返回全价/归档半价与分档明细（credits）', async () => {
+    const res = await get('/storage-quote?sizeGi=20');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      sizeGi: number;
+      full: { hourlyCredits: number; items: unknown[] };
+      archived: { hourlyCredits: number; items: unknown[] };
+    };
+    expect(body.sizeGi).toBe(20);
+    expect(body.full.hourlyCredits).toBe(15);
+    expect(body.archived.hourlyCredits).toBe(7.5);
+    expect(body.full.items).toEqual([
+      {
+        productId: 'cloud_storage.base.hour',
+        quantity: 1,
+        unitPriceCredits: 5,
+        amountCredits: 5,
+      },
+      {
+        productId: 'cloud_storage.tier1.gib_hour',
+        quantity: 10,
+        unitPriceCredits: 1,
+        amountCredits: 10,
+      },
+    ]);
+    expect(body.archived.items[0]).toMatchObject({
+      unitPriceCredits: 2.5,
+      amountCredits: 2.5,
+    });
+  });
+
+  it('GET /storage-quote 非法容量 → 400', async () => {
+    for (const query of ['sizeGi=0', 'sizeGi=31', 'sizeGi=abc', '']) {
+      expect((await get(`/storage-quote?${query}`)).status).toBe(400);
+    }
+  });
+
+  it('POST /storage-charges 结算 1 小时（category=storage）', async () => {
+    const accountId = await account();
+    const res = await post('/storage-charges', {
+      accountId,
+      storageId: storageId(),
+      sizeGi: 20,
+      rate: 'FULL',
+      ...period,
+      idempotentKey: 'cloud_storage.hour:test:1',
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      charged: boolean;
+      invoice: { category: string; amount: number; refType: string };
+    };
+    expect(body.charged).toBe(true);
+    expect(body.invoice.category).toBe('storage');
+    expect(body.invoice.amount).toBe(-1500);
+    expect(body.invoice.refType).toBe('cloud_storage');
+  });
+
+  it('POST /storage-charges 账期/费率/容量非法 → 400 INVALID_BODY', async () => {
+    const accountId = await account();
+    const base = {
+      accountId,
+      storageId: storageId(),
+      sizeGi: 20,
+      rate: 'FULL',
+      ...period,
+      idempotentKey: 'cloud_storage.hour:test:2',
+    };
+    const invalidBodies = [
+      { ...base, periodEnd: '2026-11-02T17:00:00.000Z' },
+      { ...base, rate: 'THIRD' },
+      { ...base, sizeGi: 31 },
+      { ...base, accountId: 'not-an-object-id' },
+      { ...base, idempotentKey: '' },
+    ];
+    for (const body of invalidBodies) {
+      const res = await post('/storage-charges', body);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('INVALID_BODY');
+    }
+  });
+
+  it('POST /storage-charges 余额不足 409 / 账户不存在 404', async () => {
+    const poor = await account(100);
+    const insufficient = await post('/storage-charges', {
+      accountId: poor,
+      storageId: storageId(),
+      sizeGi: 20,
+      rate: 'FULL',
+      ...period,
+      idempotentKey: 'cloud_storage.hour:test:poor',
+    });
+    expect(insufficient.status).toBe(409);
+    expect((await insufficient.json()) as { error: string }).toMatchObject({
+      error: 'INSUFFICIENT_BALANCE',
+    });
+
+    const missing = await post('/storage-charges', {
+      accountId: new mongoose.Types.ObjectId().toString(),
+      storageId: storageId(),
+      sizeGi: 20,
+      rate: 'FULL',
+      ...period,
+      idempotentKey: 'cloud_storage.hour:test:missing',
+    });
+    expect(missing.status).toBe(404);
+    expect((await missing.json()) as { error: string }).toMatchObject({
+      error: 'ACCOUNT_NOT_FOUND',
+    });
   });
 });
