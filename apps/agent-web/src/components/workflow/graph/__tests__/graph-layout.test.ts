@@ -116,7 +116,8 @@ describe('layoutGraphNodes', () => {
 })
 
 describe('buildGraphViewModel', () => {
-  it('连线加粗（strokeWidth=2）且带箭头指向下游', () => {    const view = buildGraphViewModel(instance([node({ id: 'a' }), node({ id: 'b', dependsOn: ['a'] })]))
+  it('连线加粗（strokeWidth=2）且带箭头指向下游', () => {
+    const view = buildGraphViewModel(instance([node({ id: 'a' }), node({ id: 'b', dependsOn: ['a'] })]))
     expect(view.edges).toHaveLength(1)
     const edge = view.edges[0]
     expect(edge.source).toBe('a')
