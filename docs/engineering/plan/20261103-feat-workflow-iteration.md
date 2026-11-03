@@ -252,8 +252,8 @@ useEffect(() => {
 | 文件 | 变更 |
 |------|------|
 | `tests/e2e/src/workflow-graph.spec.ts` | ① **G2** 补「背景不透明」断言：卡片 `backgroundColor` 为 `rgb(...)`（禁止 `rgba(..., <1)`）；② **G4** 保留 strokeWidth/marker-end，补 `toBeVisible()` 与 `.react-flow__edge` 数量 2；③ **G7** 改写为「动态行恒为『正在思考』」：注入 thinking/tool_call/text 后文案不变，负向断言不含注入文本（替代原「思考中/Tool Call/总结中」）；④ **G8** 文案改「已完成 · 4321 tokens」并负向断言不含「消耗」；⑤ 新增 **G11 自动定位窗口**（7 节点实例，中间节点 RUNNING）：执行中卡片中心落在画布中心 ±15% 内、前 2/后 2 可见、首尾节点被裁出视口；⑥ 新增 **G12 执行中切换重新定位**（直写状态从 n3 RUNNING 切到 n4 RUNNING，视图中心跟随）；⑦ 新增 **G13 抽屉 PR 前置**（同时 seed PR 与产物，断言「关联 Pull Request」区块在「产物」之前） |
-| `tests/api/src/agent-api/workflow.test.ts` | 新增 describe `Workflow Instance Rename (A35)`：A35a GraphQL 改名成功（trim 落库、`workflowInstance`/`workflowInstances` 均返回新名）；A35b 空白与 65 字符返回 `invalid workflow name` 且名称不变；A35c 他人实例 `Workflow instance not found`；A35d 软删实例 `Workflow instance is deleted`；A35e 节点会话 MCP `renameCurrentWorkflow` 成功改名（`callWorkflowTool`） |
-| `tests/api/AGENTS.md` | 工作流表格补 A35 行（GraphQL + MCP 双入口、非法名称、已删除拒绝） |
+| `tests/api/src/agent-api/workflow.test.ts` | 新增 describe `Workflow Instance Rename (A51-A55)`（A35-A50 已被「工作流优化特性」套件占用，故编号顺延）：A51 GraphQL 改名成功（trim 落库、`workflowInstance`/`workflowInstances` 均返回新名）；A52 空白与 65 字符返回 `invalid workflow name` 且名称不变；A53 他人实例 `Workflow instance not found`；A54 软删实例 `Workflow instance is deleted`；A55 节点会话 MCP `renameCurrentWorkflow` 成功改名（`callWorkflowTool`） |
+| `tests/api/AGENTS.md` | 工作流表格补 A51-A55 行（GraphQL + MCP 双入口、非法名称、已删除拒绝），并注明计划中 A35a~e 的编号映射 |
 | `tests/e2e/AGENTS.md` | Workflow Graph 表格更新 G2/G4/G7/G8 口径，新增 G11/G12/G13 |
 | `servers/agent-api/AGENTS.md` | 工作流段补「实例改名」：`renameWorkflowInstance` + `agent-workflow-tools.renameCurrentWorkflow`，共用 `normalizeWorkflowName` 与软删除门禁 |
 | `apps/agent-web/AGENTS.md` | 新增「工作流迭代」小节：详情页改名入口、卡片动态行静态化与 token 文案口径、Handle 连接点（勿删）、tint `bg-card`、图表自动定位窗口与防抖动约束（effect 依赖仅执行中集合） |
@@ -290,11 +290,11 @@ useEffect(() => {
 
 | 编号 | 文件 | 断言 |
 |------|------|------|
-| A35a | `tests/api/src/agent-api/workflow.test.ts` | GraphQL `renameWorkflowInstance` 成功，`workflowInstance`/`workflowInstances` 返回新名 |
-| A35b | 同上 | 空白 / 65 字符 → `invalid workflow name`，名称不变 |
-| A35c | 同上 | 他人实例 → `Workflow instance not found` |
-| A35d | 同上 | 软删实例 → `Workflow instance is deleted` |
-| A35e | 同上 | 节点会话 MCP `renameCurrentWorkflow` 成功改名 |
+| A51 | `tests/api/src/agent-api/workflow.test.ts` | GraphQL `renameWorkflowInstance` 成功，`workflowInstance`/`workflowInstances` 返回新名 |
+| A52 | 同上 | 空白 / 65 字符 → `invalid workflow name`，名称不变 |
+| A53 | 同上 | 他人实例 → `Workflow instance not found` |
+| A54 | 同上 | 软删实例 → `Workflow instance is deleted` |
+| A55 | 同上 | 节点会话 MCP `renameCurrentWorkflow` 成功改名 |
 
 ### 4.3 E2E
 
