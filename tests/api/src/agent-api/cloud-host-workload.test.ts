@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { createFrontUser } from '../support/front-users.js';
+import { personalGlobalWorkspaceId } from '../support/workspace-fixtures.js';
 
 // 云主机工作负载/ Github 设置 API（需要 Aspire 全量服务 + MONGODB_URI + HARNESS_ENABLED=true）。
 // 不调用真实 GitHub：成功签发 token 由 services/github.test.ts 覆盖。
@@ -81,10 +82,12 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
     const hostId = new mongoose.Types.ObjectId();
     const workspaceId = new mongoose.Types.ObjectId();
     const keyId = new mongoose.Types.ObjectId();
+    const globalWorkspaceId = await personalGlobalWorkspaceId(db, userId);
     await db.collection('controllers').insertOne({
       _id: controllerId,
       userId: new mongoose.Types.ObjectId(userId),
       tenantId: new mongoose.Types.ObjectId(userId),
+      workspaceId: globalWorkspaceId,
       name: 'e2e-cloud',
       hostname: 'e2e-cloud',
       type: 'cloud',
@@ -115,6 +118,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
       controllerId,
       keyId,
       workspaceId,
+      resourceWorkspaceId: globalWorkspaceId,
       containerId: new mongoose.Types.ObjectId().toString(),
       startedAt: new Date(),
       readyAt: new Date(),
@@ -149,6 +153,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
       _id: accountId,
       userId,
       tenantId: userId,
+      workspaceId: (await personalGlobalWorkspaceId(db, userId)).toString(),
       githubUserId: installationId,
       githubLogin: `gh-${accountId.toString()}`,
       accessToken: 'encrypted',
@@ -386,7 +391,10 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
         },
         token,
       );
-      expect(unauthorized.errors?.[0]?.message).toBe('Github 账号不存在或不属于当前用户');
+      // 进入授权阶段即视为前缀校验通过（账号不可见/不可用文案随作用域实现，均属该阶段）
+      expect(unauthorized.errors?.[0]?.message).toMatch(
+        /Github 账号不存在或(不属于当前用户|不可用)/,
+      );
     } finally {
       await seeded.cleanup();
     }
@@ -413,8 +421,8 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host Workload & Github AP
       // 合法 ~ 形态通过归一，进入 Github 账号归属校验
       for (const targetPath of ['~/workspace', '~', '~/', '~//a', '/a/~']) {
         const result = await setup(targetPath);
-        expect(result.errors?.[0]?.message).toBe(
-          'Github 账号不存在或不属于当前用户',
+        expect(result.errors?.[0]?.message).toMatch(
+          /Github 账号不存在或(不属于当前用户|不可用)/,
         );
       }
 

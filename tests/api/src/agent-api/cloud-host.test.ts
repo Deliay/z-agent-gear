@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { fundFrontUser } from './funding.js';
 import { createFrontUser } from '../support/front-users.js';
+import { personalGlobalWorkspaceId } from '../support/workspace-fixtures.js';
 
 // 前台云电脑 API（需要 Aspire 全量服务 + HARNESS_ENABLED=true）。
 // `K8S_ENABLED=false` 下 create 只能停在 STARTING；在线/默认会话由单测与真实集群验收覆盖。
@@ -418,6 +419,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       const hostId = new mongoose.Types.ObjectId();
       const controllerId = new mongoose.Types.ObjectId();
       const now = new Date();
+      const globalWorkspaceId = await personalGlobalWorkspaceId(db, userId);
       try {
         await db.collection('cloudhosts').insertOne({
           _id: hostId,
@@ -429,6 +431,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
           controllerId,
           keyId: new mongoose.Types.ObjectId(),
           workspaceId: new mongoose.Types.ObjectId(),
+          resourceWorkspaceId: globalWorkspaceId,
           containerId: null,
           defaultSessionId: null,
           startedAt: now,
@@ -442,6 +445,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
         await db.collection('sessions').insertOne({
           userId: new mongoose.Types.ObjectId(userId),
           tenantId: new mongoose.Types.ObjectId(userId),
+          workspaceId: globalWorkspaceId,
           controllerId,
           controllerName: 'cloud',
           acpServerType: 'opencode',
@@ -484,6 +488,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
         _id: controllerId,
         userId: new mongoose.Types.ObjectId(userId),
         tenantId: new mongoose.Types.ObjectId(userId),
+        workspaceId: await personalGlobalWorkspaceId(db, userId),
         name: 'local-host',
         hostname: 'local-host',
         type: 'local',
@@ -705,10 +710,12 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
     const workspaceId = new mongoose.Types.ObjectId();
     const keyId = new mongoose.Types.ObjectId();
     const now = new Date();
+    const globalWorkspaceId = await personalGlobalWorkspaceId(db, userId);
     await db.collection('controllers').insertOne({
       _id: controllerId,
       userId: new mongoose.Types.ObjectId(userId),
       tenantId: new mongoose.Types.ObjectId(userId),
+      workspaceId: globalWorkspaceId,
       name: `phase9-${hostId.toString()}`,
       hostname: `phase9-${hostId.toString()}`,
       type: 'cloud',
@@ -739,6 +746,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       controllerId,
       keyId,
       workspaceId,
+      resourceWorkspaceId: globalWorkspaceId,
       containerId: new mongoose.Types.ObjectId().toString(),
       defaultSessionId: null,
       startedAt: now,
@@ -771,6 +779,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       _id: accountId,
       userId,
       tenantId: userId,
+      workspaceId: (await personalGlobalWorkspaceId(db, userId)).toString(),
       githubUserId: Date.now(),
       githubLogin: 'phase9-owner',
       accessToken: 'encrypted-token',

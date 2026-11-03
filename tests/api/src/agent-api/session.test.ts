@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import mongoose from 'mongoose';
 import { createFrontUser } from '../support/front-users.js';
+import { personalGlobalWorkspaceId } from '../support/workspace-fixtures.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -2411,6 +2412,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
         controllerId: new mongoose.Types.ObjectId(controllerId),
         keyId: new mongoose.Types.ObjectId(),
         workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        resourceWorkspaceId: await personalGlobalWorkspaceId(db, userId),
         containerId: `container-${hostId.toString()}`,
         defaultSessionId: null,
         createDefaultSession: true,
@@ -2471,6 +2473,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
         controllerId: new mongoose.Types.ObjectId(controllerId),
         keyId: new mongoose.Types.ObjectId(),
         workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        resourceWorkspaceId: await personalGlobalWorkspaceId(db, userId),
         containerId: `container-${hostId.toString()}`,
         defaultSessionId: null,
         createDefaultSession: false,
