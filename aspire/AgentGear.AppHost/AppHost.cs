@@ -18,6 +18,20 @@ string SecretOrDefault(string name, int bytes = 32)
         .Replace("=", string.Empty);
 }
 
+// 需要「固定长度 hex」语义的密钥（如 AES-256 的 32 字节 = 64 位 hex）。
+// 不能用 SecretOrDefault：base64 去符号后的随机串长度不恒定，agent-api 按 hex 解析会得到
+// ERR_CRYPTO_INVALID_KEYLEN（GitHub 帐号绑定必然 500）。
+string HexSecretOrDefault(string name, int bytes = 32)
+{
+    var configured = builder.Configuration[$"Parameters:{name}"];
+    if (!string.IsNullOrWhiteSpace(configured))
+    {
+        return configured;
+    }
+    return Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(bytes))
+        .ToLowerInvariant();
+}
+
 var compose = builder.AddDockerComposeEnvironment("z-agent-gear")
     .WithProperties(env =>
     {
@@ -97,7 +111,7 @@ var adminInitialPassword = builder.AddParameter("admin-initial-password", secret
 var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
 var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
 var githubSetupUrl = builder.AddParameter("github-setup-url", value: "http://localhost:10001/api/github/setup");
-var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: SecretOrDefault("github-token-encryption-key"));
+var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: HexSecretOrDefault("github-token-encryption-key"));
 // GitHub API base：本地/API 测试可指向进程内 mock（`GITHUB_API_BASE=http://127.0.0.1:<port>`）
 var githubApiBase = builder.AddParameter(
     "github-api-base",
