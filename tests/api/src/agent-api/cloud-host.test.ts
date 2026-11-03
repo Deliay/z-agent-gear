@@ -135,7 +135,10 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       { input: { name: 'cloud', harnessTypes: ['UNKNOWN'] } },
       token,
     );
-    expect(unsupported.errors?.[0].message).toBe('unsupported harness type: UNKNOWN');
+    // GraphQL 枚举校验会在 resolver 前拒绝非法 HarnessType（服务层文案仅在枚举外类型可达时出现）
+    expect(unsupported.errors?.[0].message).toMatch(
+      /unsupported harness type: UNKNOWN|does not exist in "HarnessType" enum/,
+    );
   });
 
   it('T-AH-CREATE: harness 可选——0 个 harness 创建成功并先扣费', async () => {
