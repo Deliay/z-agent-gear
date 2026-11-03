@@ -223,6 +223,7 @@ flowchart LR
 - [[proposals/20261030-feat-unified-logging-and-otel.md]] — 规范化日志与全链路可观测性（单源 vendored 观测模块 + pino JSON 日志与 no-console 不变量、OTel NodeSDK 以入口首个 import 启动、auto-instrumentations 与手工 span 分工、W3C traceparent 经 HTTP/Socket.IO/Redis 封套/Job env 四通道传播、云电脑 Job `OTEL_*` 注入与 agent-gear 2.12.0 手动埋点、名单脱敏与审计例外、Aspire collector 编排）
 - [[proposals/20261031-feat-commit-with-bot-coauthor.md]] — Commit 与 bot 共同提交（user_commit_settings 新增 commitWithBot、CommitSettings 契约扩展、resolveWorktreeCommitter 追加 bot user/noreply email、`git:worktree:add` committer 扩展 coAuthorName/coAuthorEmail 并在 instance/orchestrator/session/issues 快照透传、agent-gear 2.13.0 worktree 级 core.hooksPath + prepare-commit-msg 幂等 trailer、agent-web Git 区块勾选项）
 - [[proposals/20261102-feat-cloud-storage.md]] — 云电脑支持申请存储（工作区级 cloudstorages 与迁移 020、cloud-controller PVC CRUD + Job 卷挂载 /home/worker 主目录/fsGroup/initContainer 恢复、entrypoint bootstrap_home 幂等自举与工作负载幂等标准（迁移 018）、destroy 后独立 archiver Job 压缩 .tar.gz2 原子替换写入每工作区 100Gi 归档 PVC 并释放源 PVC、状态机 IDLE/ATTACHED/ARCHIVING/ARCHIVED/DESTROYED/CREATE_FAILED、3 档 per_unit 小时计费 + 已归档半价 + storagebillingcursors + BillingCategory.storage、T-CS/T-CC/T-BOOT/T-WL/T-BILL/T-WEB/E2E 用例矩阵）
+- [[proposals/20261103-feat-workflow-iteration.md]] — 工作流迭代（契约新增 renameWorkflowInstance、agent-api 实例改名与 agent-workflow-tools 新增 renameCurrentWorkflow 工具；agent-web 详情页改名入口、节点卡片动态行收敛为「正在思考」静态指示、WorkflowNodeCard 补 React Flow Handle 修复依赖连线不可见、详情抽屉 PR 区块前置、token 文案改「{} tokens」、tint 改不透明 bg-card、图表视图按执行中节点前后各 2 卡片窗口 fitView 自动居中）
 
 ### 实现计划（`plan/`）
 
