@@ -467,6 +467,13 @@ pnpm test
 | A16 非 RUNNING 状态提示 | REJECT 状态调用 completeCurrentNode 返回 INVALID_STATE 可读提示 |
 | A17 removeBlackboardKey | 移除后黑板无、blackboardTrash 有 |
 | A18 权限隔离 | 他人 workflowInstance 查询为 null、列表为空、mutation 报「不存在或无权限」 |
+| A51 实例改名（GraphQL） | `renameWorkflowInstance` 成功（trim 落库），`workflowInstance` 与 `workflowInstances` 均返回新名称 |
+| A52 非法名称 | 空白 / 65 字符 → `invalid workflow name`，实例名称不变 |
+| A53 他人实例改名 | 非创建者 → `Workflow instance not found`，名称不变 |
+| A54 已删除实例改名 | 软删除实例 → `Workflow instance is deleted` |
+| A55 MCP 改名 | 节点会话 `callWorkflowTool('renameCurrentWorkflow')` 成功，GraphQL 查询到新名称（与 GraphQL 共用同一服务） |
+
+> 实例改名用例编号从 **A51** 起（A35-A50 已被「工作流优化特性」套件占用）；实现计划中写作 A35a~e，以本节编号为准。
 
 ### 工作流 GitHub PR 联动回调 (`agent-api/workflow-pr-callback.test.ts` T-PR*)
 
