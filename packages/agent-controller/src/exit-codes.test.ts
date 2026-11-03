@@ -61,6 +61,11 @@ describe('exit codes (contract §3.7)', () => {
     expect(isFailureShutdownReason('error: INVALID_TOKEN')).toBe(true);
     expect(resolveShutdownExitCode('error: INVALID_TOKEN')).toBe(42);
   });
+
+  it('T-ST10b: session_replaced is a server termination (42), not a failure', () => {
+    expect(isFailureShutdownReason('session_replaced')).toBe(false);
+    expect(resolveShutdownExitCode('session_replaced')).toBe(42);
+  });
 });
 
 describe('contract anchor', () => {

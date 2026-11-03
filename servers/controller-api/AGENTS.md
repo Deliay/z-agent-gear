@@ -61,6 +61,22 @@ pnpm run test    # Run tests
 - worker 不发送 `unregister`；容器销毁由 agent-api 编排。断开/心跳超时只影响 `Controller.status`（offline），云电脑生命周期以 `CloudHost.status` 为准。
 - 心跳超时/断线恢复沿用既有标准会话语义；普通本地/云主机行为不变。
 
+## 重复登录接管（SESSION_REPLACED）
+
+- **新登录优先**：`register` 通过 key / bcrypt / major 版本校验后调用 `SessionService.takeoverSession(keyId, socket.id)`，
+  用 Lua 原子 `GET + SET EX 90` 覆盖 `session:<keyId>` 并返回旧 socketId；`resumeToken` 仅兼容下发，**不再作为抢占判据**
+  （云电脑 `persistConfig=false` 的重启重连必须能直接接管）。
+- **旧连接处理**：旧 socket 若仍在本进程，记录 `event: 'session_replaced'`，下发 `error { code: 'SESSION_REPLACED' }` 后
+  `disconnect(true)`；若为重启后残留的已死 socketId（`io.sockets.sockets.get` 为空），仅覆盖 session 并继续注册。
+  `KEY_ALREADY_ONLINE` 枚举保留在契约中（旧服务端兼容），本服务不再下发。
+- **所有权收敛**：`disconnect` 调 `releaseSession(keyId, socket.id)`（Lua compare-and-delete），仅释放成功才把 Controller 置
+  `offline`；`unregister` 先校验 `getSocketId(keyId)` 是否仍指向本 socket，旧连接无权注销新连接。
+- **心跳巡检**：先捕获 `session:<keyId>` 的 socketId，再对候选执行 `findOneAndUpdate({ _id, status: 'online',
+  lastHeartbeatAt: { $lt: threshold } })` CAS；未命中直接跳过。命中的只断开/释放捕获的 socketId，`releaseSession === true`
+  才清 heartbeat/resume；捕获不到 socketId 时只清 heartbeat/resume，**不删 session**（避免误删并发写入的新会话）。
+- **单实例约束**：`io.sockets.sockets.get(previousSocketId)` 仅能寻址本实例。当前 Aspire / deploy 均为单副本；扩容到多副本需
+  引入 Redis adapter 或按实例路由（另立提案），否则跨实例旧连接无法通知/断开。
+
 ## TDD Workflow
 
 本项目采用测试驱动开发（TDD）模式，遵循红-绿-重构循环：
