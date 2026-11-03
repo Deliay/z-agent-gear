@@ -15,10 +15,11 @@ export const DELETE_MAX_ATTEMPTS = 3;
 
 /**
  * 工作容器资源约束：容器内含 dockerd，必须显式限制以免吃满节点。
- * 仅声明 limit 为资源耗尽时的硬上限；不设置 request（由 K8s 按 limit 处理）。
+ * request 为调度预留（1 vCPU / 2Gi），limit 为资源耗尽时的硬上限（4 vCPU / 8Gi）。
  */
 export const JOB_RESOURCES = {
-  limits: { cpu: '4', memory: '16Gi' },
+  requests: { cpu: '1', memory: '2Gi' },
+  limits: { cpu: '4', memory: '8Gi' },
 } as const;
 
 /**
@@ -121,7 +122,7 @@ export class K8sJobManager {
                 ...Object.entries(input.env ?? {}).map(([name, value]) => ({ name, value })),
               ],
               resources: {
-                // 与 PR #268 口径一致：不设置 requests，仅声明 limits 硬上限
+                requests: { ...JOB_RESOURCES.requests },
                 limits: {
                   ...JOB_RESOURCES.limits,
                   'ephemeral-storage': this.cfg.ephemeralStorage ?? '10Gi',

@@ -17,7 +17,7 @@ export interface K8sResourceList {
 }
 
 export interface K8sResourceRequirements {
-  /** 不设置时由 K8s 处理（当前工作容器只声明 limits）。 */
+  /** 调度预留（当前声明 1 vCPU / 2Gi）。 */
   requests?: K8sResourceList;
   limits: K8sResourceList;
 }
