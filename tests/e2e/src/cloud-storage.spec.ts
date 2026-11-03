@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import mongoose from 'mongoose';
 import { gqlRequest, loginViaUI, registerFundedUser } from './helpers';
 
 // 云存储 E2E：设置页创建 → 新建云电脑挂载 → 停止归档（半价）→ 销毁 → 已销毁折叠区。
@@ -6,6 +7,7 @@ import { gqlRequest, loginViaUI, registerFundedUser } from './helpers';
 const HARNESS_ENABLED = process.env.HARNESS_ENABLED === 'true';
 const STORAGE_ENABLED = process.env.CLOUD_STORAGE_ENABLED !== 'false';
 const INTERNAL_TOKEN = process.env.INTERNAL_API_TOKEN;
+const MONGO_URI = process.env.MONGODB_URI;
 const AGENT_BASE = (process.env.API_URL || 'http://localhost:10001/graphql').replace(
   /\/graphql\/?$/,
   '',
@@ -27,10 +29,24 @@ const CREATE_HOST = `
 const STOP_HOST = `mutation Stop($id: ID!, $force: Boolean) { stopCloudHost(id: $id, force: $force) { id status } }`;
 const DELETE_HOST = `mutation Delete($id: ID!) { deleteCloudHost(id: $id) }`;
 
+/**
+ * 模拟 cloud-controller 的归档 CAS（ATTACHED → ARCHIVING）。
+ * K8S_ENABLED=false 无真实 worker（容器 connectedAt 恒 null），控制器不会投递 archiveStatus=pending，
+ * agent-api 在终态回调里会直接释放存储；此处直写状态机中间态以覆盖后续 ARCHIVED 流程。
+ */
+async function markStorageArchiving(storageId: string): Promise<void> {
+  if (mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URI!);
+  await mongoose.connection.collection('cloudstorages').updateOne(
+    { _id: new mongoose.Types.ObjectId(storageId) },
+    { $set: { status: 'ARCHIVING', currentArchive: null } },
+  );
+}
+
 test.describe('Cloud Storage E2E', () => {
   test.skip(!HARNESS_ENABLED, 'HARNESS_ENABLED=false：云电脑入口关闭');
   test.skip(!STORAGE_ENABLED, 'CLOUD_STORAGE_ENABLED=false：云存储入口关闭');
   test.skip(!INTERNAL_TOKEN, 'INTERNAL_API_TOKEN 缺失：无法模拟 ready/归档回调');
+  test.skip(!MONGO_URI, 'MONGODB_URI 缺失：无法模拟控制器侧归档 CAS');
 
   test('E2E-CS1/CS2: create → mount → archive → destroy → folded', async ({ page }) => {
     const { token, username } = await registerFundedUser(page);
@@ -42,7 +58,8 @@ test.describe('Cloud Storage E2E', () => {
 
     try {
       // 设置页入口可见并进入云存储区块
-      await page.getByRole('button', { name: '设置' }).click();
+      // 桌面端侧边栏设置入口为 link（aria-label=Settings）
+      await page.getByRole('link', { name: 'Settings' }).click();
       await page.getByRole('button', { name: '云存储', exact: true }).click();
       const section = page.getByTestId('cloud-storage-section');
       await expect(section).toBeVisible();
@@ -87,8 +104,7 @@ test.describe('Cloud Storage E2E', () => {
         storageId,
       );
 
-      // 设置页刷新后展示「已挂载」且无销毁入口
-      await section.getByRole('button', { name: '云存储', exact: true }).click();
+      // 设置页刷新后展示「已挂载」且无销毁入口（重新加载后随设置页数据刷新）
       await page.reload();
       await page.getByTestId('cloud-storage-section').getByText(storageName).waitFor({ timeout: 15000 });
       await expect(page.getByTestId('cloud-storage-section').getByText('已挂载')).toBeVisible();
@@ -105,6 +121,14 @@ test.describe('Cloud Storage E2E', () => {
       });
       expect(ready.status()).toBe(200);
       await gqlRequest(page, STOP_HOST, { id: hostId, force: true }, token);
+      // 等待终态回调落库（cloud host STOPPED），否则晚到的 terminal 会覆盖归档中间态
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const hostsRes = await (await gqlRequest(page, 'query { myCloudHosts { id status } }', undefined, token)).json();
+        const current = (hostsRes.data?.myCloudHosts ?? []).find((item: { id: string }) => item.id === hostId);
+        if (current?.status === 'STOPPED') break;
+        await page.waitForTimeout(500);
+      }
+      await markStorageArchiving(storageId);
       const archive = await page.request.post(
         `${AGENT_BASE}/internal/cloud-storages/${storageId}/archives`,
         {
@@ -141,7 +165,7 @@ test.describe('Cloud Storage E2E', () => {
       await expect(sectionAfter.getByText('已归档')).toBeVisible({ timeout: 15000 });
       await page.getByRole('button', { name: `销毁 ${storageName}` }).click();
       const confirm = page.getByRole('dialog');
-      await expect(confirm.getByText('销毁云存储')).toBeVisible();
+      await expect(confirm.getByRole('heading', { name: '销毁云存储' })).toBeVisible();
       await confirm.getByRole('button', { name: '确认销毁' }).click();
       await expect(sectionAfter.getByText(storageName)).toHaveCount(0, { timeout: 15000 });
 
