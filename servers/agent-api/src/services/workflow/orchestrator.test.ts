@@ -46,6 +46,11 @@ vi.mock('./admin-tools.js', () => ({
   ensureAdminToolsServer: vi.fn().mockResolvedValue('mcp-admin-1'),
 }));
 
+// 中断自动重试核心：orchestrator 只负责识别中断并排期，管线由 interrupt-retry 单测覆盖
+vi.mock('./interrupt-retry.js', () => ({
+  scheduleInterruptionRetry: vi.fn().mockResolvedValue('scheduled'),
+}));
+
 import { logger as rootLogger } from '../../observability/logger.js';
 import { createTestLogger } from '../../observability/testing.js';
 
@@ -66,6 +71,7 @@ import { todoService } from '../todo-service.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { McpServer } from '../../models/mcp-server.js';
+import { scheduleInterruptionRetry } from './interrupt-retry.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -402,37 +408,24 @@ describe('WorkflowOrchestrator', () => {
     );
   });
 
-  it('O6: 兜底——会话 ended 且节点仍 RUNNING 时 resume 并发送兜底提示词（每节点仅 1 次）', async () => {
+  it('O6: 会话 ended 且节点仍 RUNNING → 进入中断自动重试排期（ENDED）', async () => {
     const instance = makeInstance([
       makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
     ]);
     vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
-    vi.mocked(sessionService.resume).mockResolvedValue({ success: true, status: 'connecting' } as never);
-    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
 
     await workflowOrchestrator.handleSessionEnded('sess-2');
 
-    // 兜底 resume 同样带内下发初始配置（无配置时为 undefined）
-    expect(sessionService.resume).toHaveBeenCalledWith('sess-2', 'user-1', undefined);
-    const content = lastInputMessage();
-    expect(content).toContain('工作流');
-    expect(content).toContain('工具');
-    expect(instance.nodes[0].fallbackSent).toBe(true);
-    // N-1④：fallbackSent 用字段级更新，避免整文档 save 与并发转移互覆
-    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ _id: instance._id }),
-      { $set: { 'nodes.$.fallbackSent': true } },
-    );
-
-    // 第二次停止：不再 resume（防死循环），节点升级为 FAILED（阻断流程等待人工介入）
-    vi.clearAllMocks();
-    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
-    await workflowOrchestrator.handleSessionEnded('sess-2');
+    // 管线（close→resume→等空闲→重发）由 interrupt-retry 单测覆盖；编排器只负责识别与排期
+    expect(scheduleInterruptionRetry).toHaveBeenCalledWith({
+      instanceId: 'inst-1',
+      nodeId: 'n2',
+      sessionId: 'sess-2',
+      trigger: 'ENDED',
+    });
     expect(sessionService.resume).not.toHaveBeenCalled();
     expect(sessionService.addMessage).not.toHaveBeenCalled();
-    expect(instance.nodes[0].status).toBe('FAILED');
-    expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_STUCK' });
-    expect(instance.save).toHaveBeenCalled();
+    expect(instance.nodes[0].status).toBe('RUNNING');
   });
 
   it('O7: 兜底——会话 ended 但节点已转移（非 RUNNING）时不发送兜底提示词', async () => {
@@ -475,7 +468,7 @@ describe('WorkflowOrchestrator', () => {
     expect(instance.save).not.toHaveBeenCalled();
   });
 
-  it('O10: 空闲停滞（turn 结束节点未推进）首次 → 置 fallbackSent 并补发提醒提示词（不 resume）', async () => {
+  it('O10: 空闲停滞（turn 结束节点未推进）→ 进入中断自动重试排期（IDLED），不直接补发', async () => {
     const instance = makeInstance([
       makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
     ]);
@@ -483,45 +476,31 @@ describe('WorkflowOrchestrator', () => {
 
     await workflowOrchestrator.handleSessionIdled('sess-2');
 
-    // 会话仍存活（idling），无需 resume；直接补发提醒让 AI 继续
-    expect(sessionService.resume).not.toHaveBeenCalled();
-    expect(sessionService.addMessage).toHaveBeenCalled();
-    expect(lastInputMessage()).toContain('工作流');
-    expect(instance.nodes[0].fallbackSent).toBe(true);
-    // N-5：字段级条件更新，且不整文档 save（避免覆盖并发转移）
-    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        _id: instance._id,
-        nodes: {
-          $elemMatch: expect.objectContaining({
-            nodeId: 'n2',
-            sessionId: 'sess-2',
-            status: { $in: ['RUNNING', 'REWORK'] },
-          }),
-        },
-      }),
-      { $set: { 'nodes.$.fallbackSent': true } },
-    );
+    expect(scheduleInterruptionRetry).toHaveBeenCalledWith({
+      instanceId: 'inst-1',
+      nodeId: 'n2',
+      sessionId: 'sess-2',
+      trigger: 'IDLED',
+    });
+    // 是否 resume / 补发由重试管线决定（会话已 idle 时跳过 close 直接 resume）
+    expect(sessionService.addMessage).not.toHaveBeenCalled();
     expect(instance.save).not.toHaveBeenCalled();
-    // 未升级失败
     expect(instance.nodes[0].status).toBe('RUNNING');
   });
 
-  it('O10b: 再次空闲停滞 → 节点升级 FAILED（SESSION_STUCK）并创建人工介入强提醒待办', async () => {
+  it('O10b: 再次空闲停滞仍交由重试排期（计数与用尽判定在 interrupt-retry 内）', async () => {
     const instance = makeInstance([
-      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', retryCount: 9 }),
     ]);
     vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
-    vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
 
     await workflowOrchestrator.handleSessionIdled('sess-2');
 
-    expect(sessionService.addMessage).not.toHaveBeenCalled();
-    expect(instance.nodes[0].status).toBe('FAILED');
-    expect(instance.nodes[0].failInfo).toMatchObject({ source: 'SESSION_STUCK' });
-    expect(todoService.createWorkflowInterventionTodo).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'user-1', nodeName: '技术方案' }),
+    expect(scheduleInterruptionRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: 'n2', sessionId: 'sess-2', trigger: 'IDLED' }),
     );
+    expect(sessionService.addMessage).not.toHaveBeenCalled();
+    expect(instance.nodes[0].status).toBe('RUNNING');
   });
 
   it('O10c: 空闲事件但节点已转移（DONE）→ 忽略', async () => {
@@ -545,11 +524,12 @@ describe('WorkflowOrchestrator', () => {
       .mockResolvedValue({} as never);
     try {
       const instance = makeInstance([
-        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
       ]);
       vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
 
-      await workflowOrchestrator.handleSessionEnded('sess-2');
+      // removed 路径仍走 transitionOrDefer（会话已删除 → FAILED）
+      await workflowOrchestrator.handleSessionRemoved('sess-2');
       expect(transition).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(100);
@@ -568,11 +548,11 @@ describe('WorkflowOrchestrator', () => {
     testLog.reset();
     try {
       const instance = makeInstance([
-        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
       ]);
       vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
 
-      await workflowOrchestrator.handleSessionEnded('sess-2');
+      await workflowOrchestrator.handleSessionRemoved('sess-2');
       await vi.advanceTimersByTimeAsync(100);
       await vi.advanceTimersByTimeAsync(200);
       await vi.advanceTimersByTimeAsync(400);
@@ -673,11 +653,11 @@ describe('WorkflowOrchestrator', () => {
     testLog.reset();
     try {
       const instance = makeInstance([
-        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2', fallbackSent: true }),
+        makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
       ]);
       vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
 
-      await workflowOrchestrator.handleSessionEnded('sess-2');
+      await workflowOrchestrator.handleSessionRemoved('sess-2');
       expect(transition).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(100); // 第一次 runDetached 失败 → 重排
       await vi.advanceTimersByTimeAsync(200); // 第二次执行成功
@@ -737,29 +717,20 @@ describe('WorkflowOrchestrator', () => {
     }
   });
 
-  it('N-5: idling 兜底与并发转移不互覆（字段级条件更新，无整文档 save）', async () => {
+  it('N-5: idling 排期不写整文档（交由 interrupt-retry 字段级 CAS）', async () => {
     const instance = makeInstance([
-      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'REWORK', dependsOn: [], sessionId: 'sess-2', fallbackSent: false }),
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'REWORK', dependsOn: [], sessionId: 'sess-2' }),
     ]);
     vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
 
     await workflowOrchestrator.handleSessionIdled('sess-2');
 
-    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({
-        _id: instance._id,
-        nodes: {
-          $elemMatch: expect.objectContaining({
-            nodeId: 'n2',
-            sessionId: 'sess-2',
-            status: { $in: ['RUNNING', 'REWORK'] },
-          }),
-        },
-      }),
-      { $set: { 'nodes.$.fallbackSent': true } },
+    expect(scheduleInterruptionRetry).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: 'n2', sessionId: 'sess-2', trigger: 'IDLED' }),
     );
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
     expect(instance.save).not.toHaveBeenCalled();
-    expect(sessionService.addMessage).toHaveBeenCalled();
+    expect(sessionService.addMessage).not.toHaveBeenCalled();
   });
 
   it('O10d: 非工作流会话的空闲事件 → 忽略', async () => {
@@ -864,7 +835,7 @@ describe('WorkflowOrchestrator', () => {
     expect(instance.nodes[0].failInfo).toBeNull();
   });
 
-  it('N-1: restart(RUNNING + fallbackSent=true) 不触发同步兜底嵌套，且恰拉起一个新会话', async () => {
+  it('N-1: restart(RUNNING + 历史重试计数) 不触发同步兜底嵌套，且恰拉起一个新会话', async () => {
     const instance = makeInstance([
       makeNode({
         nodeId: 'n3',
@@ -875,7 +846,6 @@ describe('WorkflowOrchestrator', () => {
         status: 'RUNNING',
         dependsOn: [],
         sessionId: 'sess-old',
-        fallbackSent: true,
       }),
     ]);
     vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);
@@ -898,7 +868,7 @@ describe('WorkflowOrchestrator', () => {
     expect(instance.nodes[0].status).toBe('RUNNING');
   });
 
-  it('N-1: restart(RUNNING + fallbackSent=false) 不复活旧会话、不发兜底提示词', async () => {
+  it('N-1: restart(RUNNING + 未重试) 不复活旧会话、不发兜底提示词', async () => {
     const instance = makeInstance([
       makeNode({
         nodeId: 'n3',
@@ -909,7 +879,6 @@ describe('WorkflowOrchestrator', () => {
         status: 'RUNNING',
         dependsOn: [],
         sessionId: 'sess-old',
-        fallbackSent: false,
       }),
     ]);
     vi.mocked(WorkflowInstance.findById).mockResolvedValue(instance as never);

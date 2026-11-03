@@ -495,6 +495,24 @@ pnpm test
 
 > MCP 工具调用：MCP 传递重构一期后 agent-api 公网 `POST /mcp/*` 入口已下线，平台 MCP 统一经控制器 relay。fake controller 在主 WebSocket 上发 `mcp:request`（`{requestId, sessionId, serverName, token, body}`，body 为 JSON-RPC `tools/call`），按 requestId 匹配 `mcp:response`（带超时与监听器清理，参考 workflow.test.ts 的 `callWorkflowTool`）；token 从 fake controller 收到的 `acp:start.mcpEndpoint.token` 获取。
 
+### 工作流节点中断自动重试 (`agent-api/workflow-interrupt-retry.test.ts` T-WFIR*)
+
+> 需要 agent-api + controller-api 就绪且直连 `MONGODB_URI`（缺失时整套跳过）。退避窗口约 2 小时不可真实等待：T-WFIR4/6/7/8 通过直连 Mongo 预置 `retryCount` / `retryPhase` / `nextRetryAt` / `retryDeadlineAt` / `deletedAt` 等价覆盖扫描与用尽语义（实现计划 D11）。
+
+| 测试 | 描述 |
+|------|------|
+| T-WFIR1 契约透出 | `workflowInstance` 节点 `retryCount=0` / `nextRetryAt=null` |
+| T-WFIR2 立即重试 | closeSession → acp:stop（ack）→ acp:resume → 会话消息含兜底提示词；节点 RUNNING、`retryCount=1`、`nextRetryAt=null` |
+| T-WFIR3 退避排期 | 再次 ended → `retryCount=2`、`nextRetryAt` 为未来约 1 分钟；未到点不产生新的 acp:resume |
+| T-WFIR4 用尽 | 预置 `retryCount=10` → ended → `RETRY_FAILED` + `failInfo.source=RETRY_EXHAUSTED` + `workflow_intervention`（immediate）；不再 resume |
+| T-WFIR5 restart | `restartNode` 于 RETRY_FAILED → RUNNING、`retryCount=0`、拉起新会话 |
+| T-WFIR6 扫描 A | 预置 `SCHEDULED` + `nextRetryAt=now-1s` → 30s 内执行管线（resume + 清调度字段） |
+| T-WFIR7 扫描 B | 预置 `RECONNECTING` + `retryDeadlineAt=now-1s` → 重排（`retryCount+1`、`nextRetryAt` 未来） |
+| T-WFIR8 软删除跳过 | `deletedAt` 非空的实例即使排期到期也不执行、无 acp:resume |
+| T-WFIR9 MCP 恢复 | `resumeFailedNode` 于 RETRY_FAILED → RUNNING、`retryCount=0`、`failInfo=null` |
+
+> 回归改写：`workflow.test.ts` 的 A23（二次停止即 FAILED）与 A34（二次停滞即 FAILED + 待办）已按新语义改写为「首次立即重试管线 / 二次排期 1 分钟后」；超限用例由 T-WFIR4 覆盖。
+
 ### GitHub 原生 Webhook 入口 (`agent-api/github-webhook.test.ts` T-GHWH*)
 
 > 需要 agent-api + controller-api 就绪且配置 `GITHUB_WEBHOOK_SECRET`（缺失时整套跳过；CI 下缺参且未 `SKIP_GITHUB_WEBHOOK=1` 即红）。端点 `POST /api/events/github/webhook` 仅接受 `X-Hub-Signature-256` 验签（平台 token 无效），仅处理 `pull_request_review`（action=submitted），归一化后复用 PR 联动判定链；eventId 取 `gh:pull_request_review:{review.id}`。
