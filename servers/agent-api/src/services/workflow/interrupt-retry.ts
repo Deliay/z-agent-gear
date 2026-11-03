@@ -51,7 +51,8 @@ function triggerOf(node: WorkflowNodeDoc): InterruptionTrigger {
 export async function scheduleInterruptionRetry(args: {
   instanceId: string;
   nodeId: string;
-  sessionId: string;
+  /** 绑定的节点会话 id；`null` = 会话已丢失（按计划「计为本次失败」消耗一次重试预算） */
+  sessionId: string | null;
   trigger: InterruptionTrigger;
   expectedPhase?: null | 'RECONNECTING';
 }): Promise<'scheduled' | 'exhausted' | 'skipped'> {
@@ -62,13 +63,14 @@ export async function scheduleInterruptionRetry(args: {
   if (!instance || instance.deletedAt) return 'skipped';
   const node = instance.nodes.find((item) => item.nodeId === nodeId);
   if (!node) return 'skipped';
-  if (node.sessionId?.toString() !== sessionId) return 'skipped';
+  const nodeSessionId = node.sessionId ? node.sessionId.toString() : null;
+  if (nodeSessionId !== sessionId) return 'skipped';
   if (node.status !== 'RUNNING' && node.status !== 'REWORK') return 'skipped';
   if (expectedPhase === 'RECONNECTING' && node.retryPhase !== 'RECONNECTING') return 'skipped';
 
   const currentCount = node.retryCount ?? 0;
   if (currentCount >= INTERRUPT_RETRY_MAX) {
-    await exhaustInterruptionRetry({ instanceId, nodeId, sessionId, retryCount: currentCount });
+    await exhaustInterruptionRetry({ instanceId, nodeId, sessionId: sessionId ?? '', retryCount: currentCount });
     return 'exhausted';
   }
 
@@ -81,7 +83,8 @@ export async function scheduleInterruptionRetry(args: {
       nodes: {
         $elemMatch: {
           nodeId,
-          sessionId,
+          // null 同时匹配「会话字段缺失/为 null」的节点（会话已丢失的失败重排）
+          sessionId: sessionId ?? null,
           status: { $in: ['RUNNING', 'REWORK'] },
           // null 同时匹配「字段为 null」与「字段缺失」的旧实例
           retryPhase: expectedPhase,
@@ -157,23 +160,23 @@ export async function executeScheduledRetry(instanceId: string, nodeId: string):
   const node = instance.nodes.find((item) => item.nodeId === nodeId);
   if (!node) return;
 
-  const sessionId = node.sessionId?.toString();
+  const sessionId = node.sessionId?.toString() ?? null;
   const trigger = triggerOf(node);
-  if (!sessionId) {
-    // 会话已丢失：无法 close→resume，直接按用尽处理（人工介入）
-    await exhaustInterruptionRetry({ instanceId, nodeId, sessionId: '', retryCount: node.retryCount ?? 0 });
-    return;
-  }
 
   let outcome: RetryOutcome = 'retry';
-  try {
-    outcome = await runRetryPipeline(instance, node, sessionId, trigger);
-  } catch (err) {
-    logger.warn({ event: 'retry-pipeline-failed', instanceId, nodeId, sessionId, err }, 'interrupt retry pipeline failed');
-    outcome = 'retry';
+  if (!sessionId) {
+    // 会话已丢失：按实现计划 §5.5 步骤 2 计为本次失败（消耗一次重试预算；重排不需要会话 id）
+    logger.info({ event: 'retry-step', step: 'session-missing', instanceId, nodeId }, 'interrupt retry session id missing');
+  } else {
+    try {
+      outcome = await runRetryPipeline(instance, node, sessionId, trigger);
+    } catch (err) {
+      logger.warn({ event: 'retry-pipeline-failed', instanceId, nodeId, sessionId, err }, 'interrupt retry pipeline failed');
+      outcome = 'retry';
+    }
   }
 
-  if (outcome === 'success') {
+  if (outcome === 'success' && sessionId) {
     await clearRetrySchedule(instanceId, nodeId, sessionId);
     logger.info({ event: 'retry-executed', instanceId, nodeId, sessionId, retryCount: node.retryCount ?? 0, trigger }, 'interrupt retry executed');
     return;

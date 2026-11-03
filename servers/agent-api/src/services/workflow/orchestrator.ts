@@ -48,6 +48,19 @@ class WorkflowOrchestrator {
     sessionService.onSessionEnded((sessionId) => this.handleSessionEnded(sessionId));
     sessionService.onSessionRemoved((sessionId) => this.handleSessionRemoved(sessionId));
     sessionService.onSessionIdled((sessionId) => this.handleSessionIdled(sessionId));
+    // 控制器上报的 `session:status` 全量事件：`ended` 是「Agent 进程异常退出 / 控制器失败 / 断连超时」
+    // 等意外结束的唯一来源（controller-api 直接写库并 publish，不经过 agent-api 的 close/updateStatus）。
+    // 与 close() 回调、stop ack、重试管线自身 close 产生的 ended 由排期 CAS（retryCount 快照 +
+    // retryPhase 预期值）与前置过滤天然去重。
+    sessionService.onSessionStatus((event) => this.handleSessionStatusEvent(event));
+  }
+
+  /** 通用状态通道分流：ended → 中断自动重试排期（其余状态不处理） */
+  private handleSessionStatusEvent(event: { sessionId: string; status: string }): void {
+    if (event.status !== 'ended') return;
+    void this.handleSessionEnded(event.sessionId).catch((err) => {
+      logger.warn({ event: 'session-ended-handle-failed', sessionId: event.sessionId, err }, 'handle ended session failed');
+    });
   }
 
   /**

@@ -76,19 +76,22 @@ export default function WorkflowInstancePage() {
     .filter((c) => c.available && c.type)
     .map((c) => c.type)
 
-  // 失败/重试用尽节点强提醒：toast 每个节点仅一次（轮询会反复返回同一状态）
+  // 失败/重试用尽节点强提醒：toast 每个状态仅一次（轮询会反复返回同一状态；
+  // 同一节点先 FAILED 后 RETRY_FAILED 属不同事件，键带 status 保证各自提醒）
   const toastedFailedRef = useRef<Set<string>>(new Set())
   useEffect(() => {
     if (!nodes) return
     for (const node of nodes) {
-      if (node.status === 'FAILED' && !toastedFailedRef.current.has(node.id)) {
-        toastedFailedRef.current.add(node.id)
-        toast.error(`工作流节点「${node.name}」失败，需要人工介入`, { duration: 10000 })
-      }
-      if (node.status === 'RETRY_FAILED' && !toastedFailedRef.current.has(node.id)) {
-        toastedFailedRef.current.add(node.id)
-        toast.error(`工作流节点「${node.name}」中断自动重试用尽，需要人工介入`, { duration: 10000 })
-      }
+      if (node.status !== 'FAILED' && node.status !== 'RETRY_FAILED') continue
+      const toastKey = `${node.id}:${node.status}`
+      if (toastedFailedRef.current.has(toastKey)) continue
+      toastedFailedRef.current.add(toastKey)
+      toast.error(
+        node.status === 'RETRY_FAILED'
+          ? `工作流节点「${node.name}」中断自动重试用尽，需要人工介入`
+          : `工作流节点「${node.name}」失败，需要人工介入`,
+        { duration: 10000 },
+      )
     }
   }, [nodes])
 

@@ -427,3 +427,45 @@ describe('executeScheduledRetry', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// 会话已丢失（sessionId 缺失）：按计划「计为本次失败」消耗一次预算后再重排
+// ---------------------------------------------------------------------------
+
+describe('executeScheduledRetry 会话已丢失', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(workflowEngine.runOutsideTransitionLock).mockImplementation(((_id: string, task: () => Promise<unknown>) => task()) as never);
+  });
+
+  it('T-RETRY14: sessionId 缺失 → 不直接失败，重排（retryCount+1、SCHEDULED）并在用尽时 retryExhausted', async () => {
+    stubInstance(
+      makeInstance({ retryPhase: 'RECONNECTING', retryCount: 1, sessionId: undefined }),
+    );
+    stubClaim(1);
+
+    await executeScheduledRetry(INSTANCE_ID, NODE_ID);
+
+    expect(sessionService.getSessionStatusRaw).not.toHaveBeenCalled();
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    const reschedule = updateSet(1);
+    expect(reschedule['nodes.$.retryCount']).toBe(2);
+    expect(reschedule['nodes.$.retryPhase']).toBe('SCHEDULED');
+
+    // 已达上限：再次失败 → retryExhausted + 待办
+    vi.clearAllMocks();
+    vi.mocked(workflowEngine.transition).mockResolvedValue({} as never);
+    stubInstance(
+      makeInstance({ retryPhase: 'RECONNECTING', retryCount: INTERRUPT_RETRY_MAX, sessionId: undefined }),
+    );
+    stubClaim(1);
+    await executeScheduledRetry(INSTANCE_ID, NODE_ID);
+    expect(workflowEngine.transition).toHaveBeenCalledWith(
+      INSTANCE_ID,
+      NODE_ID,
+      'retryExhausted',
+      expect.objectContaining({ reason: expect.stringContaining('10 次') }),
+    );
+    expect(todoService.createWorkflowInterventionTodo).toHaveBeenCalled();
+  });
+});

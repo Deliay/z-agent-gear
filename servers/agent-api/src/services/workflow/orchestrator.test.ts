@@ -11,6 +11,7 @@ vi.mock('../session.js', () => ({
     onSessionEnded: vi.fn(),
     onSessionRemoved: vi.fn(),
     onSessionIdled: vi.fn(),
+    onSessionStatus: vi.fn(),
   },
 }));
 
@@ -1002,5 +1003,80 @@ describe('assemblePrompt 追加提示词', () => {
     const text = workflowOrchestrator.assemblePrompt(instanceWith({ 'github-pr': '指引' }), node, []);
     expect(text).toContain('## 追加提示词');
     expect(text).toContain('### github-pr\n指引');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 控制器上报的 ended 事件（意外中断）→ 自动重试排期
+// ---------------------------------------------------------------------------
+
+describe('WorkflowOrchestrator 通用状态通道 ended', () => {
+  type StatusEvent = { sessionId: string; status: string; promptCompleted?: boolean; error?: string };
+  let listeners: Array<(event: StatusEvent) => void | Promise<void>>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listeners = [];
+    vi.mocked(sessionService.onSessionStatus).mockImplementation(((cb: (event: StatusEvent) => void | Promise<void>) => {
+      listeners.push(cb);
+      return () => {
+        listeners = listeners.filter((item) => item !== cb);
+      };
+    }) as never);
+    workflowOrchestrator.register();
+  });
+
+  async function emit(event: StatusEvent): Promise<void> {
+    for (const listener of [...listeners]) await listener(event);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  it('O11: ended（Agent 异常退出/控制器失败）→ 排期 ENDED 自动重试', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+    await emit({ sessionId: 'sess-2', status: 'ended' });
+
+    expect(scheduleInterruptionRetry).toHaveBeenCalledTimes(1);
+    expect(scheduleInterruptionRetry).toHaveBeenCalledWith({
+      instanceId: 'inst-1',
+      nodeId: 'n2',
+      sessionId: 'sess-2',
+      trigger: 'ENDED',
+    });
+  });
+
+  it('O12: 非 ended 状态（idling/connecting）不分流到中断排期', async () => {
+    await emit({ sessionId: 'sess-2', status: 'idling' });
+    await emit({ sessionId: 'sess-2', status: 'connecting' });
+    expect(scheduleInterruptionRetry).not.toHaveBeenCalled();
+  });
+
+  it('O13: 受控/已推进场景（节点 DONE、节点已换会话、非工作流会话）→ 不排期', async () => {
+    const done = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'DONE', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(done as never);
+    await emit({ sessionId: 'sess-2', status: 'ended' });
+    expect(scheduleInterruptionRetry).not.toHaveBeenCalled();
+
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(null as never);
+    await emit({ sessionId: 'sess-normal', status: 'ended' });
+    expect(scheduleInterruptionRetry).not.toHaveBeenCalled();
+  });
+
+  it('O14: 重复 ended 事件（close 回调 + stop ack 双投递）→ 均交给排期去重（CAS）', async () => {
+    const instance = makeInstance([
+      makeNode({ nodeId: 'n2', nodeKey: 'design', type: 'AI', name: '技术方案', stage: 'design', status: 'RUNNING', dependsOn: [], sessionId: 'sess-2' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+    await emit({ sessionId: 'sess-2', status: 'ended' });
+    await emit({ sessionId: 'sess-2', status: 'ended' });
+
+    // 编排器不做状态记忆，幂等由 interrupt-retry 的 retryCount 快照 + retryPhase CAS 保证（见 T-RETRY4）
+    expect(scheduleInterruptionRetry).toHaveBeenCalledTimes(2);
   });
 });

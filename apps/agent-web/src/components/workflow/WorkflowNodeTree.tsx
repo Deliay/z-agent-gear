@@ -53,6 +53,7 @@ function NodeCard({
   const collapsed = toggled ?? DEFAULT_COLLAPSED_STATUSES.includes(node.status)
   const nodeArtifacts = artifactsOf(node, blackboard)
   const nodeLinks = pullRequestLinks.filter((link) => link.nodeId === node.id)
+  const retryProgress = retryProgressText(node)
 
   // 头部行折叠/展开均展示（类型、标题、状态 badge、返工次数、会话按钮）；折叠仅隐藏内容区
   return (
@@ -138,10 +139,10 @@ function NodeCard({
             返工 {node.reworkCount} 次
           </span>
         )}
-        {retryProgressText(node) && (
+        {retryProgress && (
           <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid="node-retry-progress">
             <RefreshCw className="size-3" />
-            {retryProgressText(node)}
+            {retryProgress}
           </span>
         )}
         {(node.status === 'INITIALIZING' || node.status === 'READY') && (

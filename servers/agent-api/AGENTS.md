@@ -166,12 +166,14 @@ pnpm run start   # Start production server
 
 ## 工作流节点中断自动重试
 
-- **触发源**：`orchestrator.handleSessionEnded`（`session:status ended` 且节点仍 `RUNNING`）与 `handleSessionIdled`（turn 结束空闲且节点 `RUNNING/REWORK`）都只做一件事——`scheduleInterruptionRetry({ trigger })`（`services/workflow/interrupt-retry.ts`）。`removed` 仍是立即 `FAILED`（`SESSION_START_FAILED`，会话已删除无法 resume）。
+- **触发源**：`orchestrator.handleSessionEnded`（`session:status ended` 且节点仍 `RUNNING`）与 `handleSessionIdled`（turn 结束空闲且节点 `RUNNING/REWORK`）都只做一件事——`scheduleInterruptionRetry({ trigger })`（`services/workflow/interrupt-retry.ts`）。`ended` 有两个来源：① agent-api `closeSession`（人工关闭，close 回调）；② controller-api 直接写库并 publish（Agent 进程异常退出/控制器失败/断连超时）。**两者都必须经 `sessionService.onSessionStatus` 通用通道接入排期**（`orchestrator.register` 注册；只分流 `ended`），否则 PRD 功能点 1 的「会话被意外结束」不会触发重试。`removed` 仍是立即 `FAILED`（`SESSION_START_FAILED`，会话已删除无法 resume）。
+- **去重**：close 回调、stop ack 重复事件、重试管线自身 `close(suppressFallback)` 引发的 ended 可能多次投递；排期 CAS（`retryPhase` 预期值 + `retryCount` 快照）与 `handleSessionEnded` 前置过滤（实例未删 / 节点 `RUNNING` / `sessionId` 匹配）保证只计一次。
 - **预算与退避**：最多 10 次，`delay(N) = N===1 ? 0 : min(2^(N-2), 30) * 60_000` 分钟（0/1/2/4/8/16/30/30/30/30，总窗口约 2 小时）。10 次用尽 → 引擎 `retryExhausted` → `RETRY_FAILED` + `failInfo.source='RETRY_EXHAUSTED'` + immediate 人工介入待办。
 - **节点字段**（替代旧 `fallbackSent`）：`retryCount`（本 episode 已排期次数）、`nextRetryAt`、`retryPhase`（`SCHEDULED`/`RECONNECTING`）、`retryDeadlineAt`、`retryTrigger`（`ENDED`/`IDLED`）。`complete/completeRework/reject/rework/resume/resumeFailed/restart` 复位全部 5 字段；`fail`/`retryExhausted` 只清调度字段、保留 `retryCount`。**重试成功发送提示词不复位 `retryCount`**（D1 防「提示词无效→再中断→计数归零」死循环）。
 - **排期 CAS**：`{nodeId, sessionId, status∈RUNNING/REWORK, retryPhase=expectedPhase, retryCount=快照}` 字段级 `updateOne`；`expectedPhase` 为 `null`（首次）或 `'RECONNECTING'`（本次重试失败重排）。人工 restart/rework/删除后 CAS 自然不命中，绝不误发。
 - **管线**：占位（`SCHEDULED→RECONNECTING`，`retryDeadlineAt=now+5m`）→ 会话非 ended/disconnected 才 `close(suppressFallback:true, reason:'workflow_interruption_retry')` → **先布防等待器再 resume** → `resume(带内 mode/model)` → 等 `idling` → 发送前双校验（未删除 / 状态 / sessionId / phase）→ `addMessage(FALLBACK_PROMPT | IDLE_NUDGE_PROMPT)` → 清调度字段。
-- **空闲等待器**（`services/session-idle-waiter.ts`）：事件优先 + `ended.error` 快判 + 15s DB 心跳兜底，5 分钟截止；close 引起的不带 error 的 `ended` 在未见 `connecting` 前忽略（F11）。
+- **空闲等待器**（`services/session-idle-waiter.ts`）：事件优先 + `ended.error` 快判 + 15s DB 心跳兜底，5 分钟截止；close 引起的不带 error 的 `ended` 在未见 `connecting` 前忽略（F11）；**心跳同口径**：DB 仍为 `ended/disconnected` 时，只有已见 `connecting/running` 或临近 deadline（≤30s）才判失败，避免 close→resume 间隙慢控制器误耗一次预算。
+- **会话已丢失**：`sessionId` 缺失时按「本次失败」消耗一次重试预算后重排（不再直接 retryExhausted）。
 - **调度器**（`services/workflow/interrupt-retry-scheduler.ts`）：30s 扫描 A（到期 `SCHEDULED` 执行）与扫描 B（`RECONNECTING` 且 `retryDeadlineAt` 过期 → 重排，兜底进程重启丢等待器）；`scanning` 互斥 + 每节点 `KeyedMutex` + `timer.unref()`。
 - **单实例部署约束**：调度器与 `KeyedMutex` 同为进程内锁，多副本会重复执行同一节点的重试；必须单实例运行。
 - **会话通用状态通道**：`sessionService.onSessionStatus/notifySessionStatus`（多监听者，注册返回注销函数）在 `session-lifecycle-subscriber` 的 `handled` 过滤**之前**透传全量 `session:status`；按高频豁免口径只记结构化日志、不逐条开 span。

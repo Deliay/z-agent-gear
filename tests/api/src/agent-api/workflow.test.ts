@@ -1391,7 +1391,7 @@ describe('Workflow Node Failure (A22-A23)', () => {
 
     // 第一次停止：中断自动重试第 1 次（立即执行）→ close → resume → 等 idle → 兜底提示词
     await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
-    const resumeEvent = await waitForEvent<{ requestId: string; sessionId: string }>(fake.client, 'acp:resume', 15000);
+    const resumeEvent = await waitForResume<{ requestId: string; sessionId: string }>(fake.client, sessionId, 15000);
     fake.client.emit('acp:resume:result', { requestId: resumeEvent.requestId, sessionId, success: true });
     const inst1 = await waitFor(
       async () => {
@@ -1405,8 +1405,8 @@ describe('Workflow Node Failure (A22-A23)', () => {
     expect(inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').status).toBe('RUNNING');
 
     let resumeEvents = 0;
-    const countResume = () => {
-      resumeEvents += 1;
+    const countResume = (data: { sessionId?: string }) => {
+      if (data.sessionId === sessionId) resumeEvents += 1;
     };
     fake.client.on('acp:resume', countResume);
 
@@ -1438,7 +1438,7 @@ describe('Workflow Node Failure (A22-A23)', () => {
     // 模拟审批超时自动停止：prompt:start（running）→ prompt:complete（idling）
     fake.client.emit('acp:prompt:start', { sessionId });
     await sleep(500);
-    const resumeEvent = waitForEvent<{ requestId: string; sessionId: string }>(fake.client, 'acp:resume', 15000);
+    const resumeEvent = waitForResume<{ requestId: string; sessionId: string }>(fake.client, sessionId, 15000);
     fake.client.emit('acp:prompt:complete', { sessionId, stopReason: 'cancelled' });
     const resumeData = await resumeEvent;
     fake.client.emit('acp:resume:result', { requestId: resumeData.requestId, sessionId, success: true });
@@ -1466,8 +1466,8 @@ describe('Workflow Node Failure (A22-A23)', () => {
 
     // 再次停滞：排到下一档退避（retryCount=2），不再立即 resume
     let resumeEvents = 0;
-    const countResume = () => {
-      resumeEvents += 1;
+    const countResume = (data: { sessionId?: string }) => {
+      if (data.sessionId === sessionId) resumeEvents += 1;
     };
     fake.client.on('acp:resume', countResume);
     fake.client.emit('acp:prompt:start', { sessionId });

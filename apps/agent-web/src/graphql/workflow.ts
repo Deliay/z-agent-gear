@@ -81,7 +81,10 @@ export interface WorkflowNodeRejectInfoData {
 
 export interface WorkflowNodeFailInfoData {
   reason: string
-  /** SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode） */
+  /**
+   * SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）/
+   * SESSION_START_FAILED（节点会话启动失败或被移除）/ RETRY_EXHAUSTED（中断自动重试 10 次用尽）
+   */
   source: string
   at: string
 }

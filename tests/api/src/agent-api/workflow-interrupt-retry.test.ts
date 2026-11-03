@@ -424,23 +424,51 @@ describe.skipIf(!HAS_MONGO)('Workflow Node Interrupt Retry API (T-WFIR1~9)', () 
     expect(exec.nextRetryAt).toBeNull();
   }, 60_000);
 
-  it('T-WFIR2: 会话 ended → 立即重试（acp:stop + acp:resume + FALLBACK_PROMPT），节点保持 RUNNING', async () => {
+  /** 模拟 controller-api 上报 `session:status`（意外结束等由控制器直接写库并 publish） */
+  async function publishSessionStatus(sessionId: string, status: string, error?: string): Promise<void> {
+    await redis.publish('session:status', JSON.stringify({ sessionId, status, ...(error ? { error } : {}) }));
+  }
+
+  /** 直接写 sessions.status（模拟 controller-api 在 Agent 异常退出时先落库再 publish） */
+  async function setSessionStatusInDb(sessionId: string, status: string): Promise<void> {
+    await mongoose.connection.db!.collection('sessions').updateOne(
+      { _id: new mongoose.Types.ObjectId(sessionId) },
+      { $set: { status, ...(status === 'ended' ? { endedAt: new Date() } : {}) } },
+    );
+  }
+
+  function countResumes(sessionId: string): number {
+    return fake.resumes.filter((r) => r.sessionId === sessionId).length;
+  }
+
+  function countStops(sessionId: string): number {
+    return fake.stops.filter((s) => s === sessionId).length;
+  }
+
+  function promptCount(messages: string[]): number {
+    return messages.filter((m) => m.includes('系统检测到会话已结束') || m.includes('系统检测到本轮执行已停止')).length;
+  }
+
+  it('T-WFIR2: controller 上报 ended（会话未落库结束）→ 管线 close（acp:stop）+ resume + FALLBACK_PROMPT', async () => {
     const { instanceId, sessionId } = await advanceToExecRunning('wfir2');
-    const beforeResumes = fake.resumes.filter((r) => r.sessionId === sessionId).length;
+    const beforeResumes = countResumes(sessionId);
+    const beforeStops = countStops(sessionId);
 
-    await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
+    // 计划口径：publish session:status ended 触发自动重试（此时 DB 仍为 idling → 管线必须自行 close）
+    await publishSessionStatus(sessionId, 'ended');
 
-    const resumed = await waitFor(
-      async () => (fake.resumes.filter((r) => r.sessionId === sessionId).length > beforeResumes ? true : undefined),
+    await waitFor(
+      async () => (countResumes(sessionId) > beforeResumes ? true : undefined),
       20_000,
       'retry acp:resume',
     );
-    expect(resumed).toBe(true);
+    // acp:stop 来自重试管线的 close 步骤（本用例未调用 closeSession，任何 stop 都只能来自管线）
+    expect(countStops(sessionId)).toBeGreaterThan(beforeStops);
 
     const fallback = await waitFor(
       async () => {
         const messages = await getSessionMessagesText(token, sessionId);
-        return messages.find((m) => m.includes('你身处一个自动化工作流系统') && m.includes('completeCurrentNode'));
+        return messages.find((m) => m.includes('系统检测到会话已结束') && m.includes('completeCurrentNode'));
       },
       20_000,
       'fallback prompt',
@@ -457,15 +485,66 @@ describe.skipIf(!HAS_MONGO)('Workflow Node Interrupt Retry API (T-WFIR1~9)', () 
       'retryCount=1 & schedule cleared',
     );
     expect(exec.status).toBe('RUNNING');
-    expect(fake.stops).toContain(sessionId);
+  }, 90_000);
+
+  it('T-WFIR2b: Agent 异常退出（控制器先落库 ended 再 publish）→ 跳过 close 直接 resume 恢复', async () => {
+    const { instanceId, sessionId } = await advanceToExecRunning('wfir2b');
+    const beforeResumes = countResumes(sessionId);
+    const beforeStops = countStops(sessionId);
+
+    await setSessionStatusInDb(sessionId, 'ended');
+    await publishSessionStatus(sessionId, 'ended');
+
+    await waitFor(
+      async () => (countResumes(sessionId) > beforeResumes ? true : undefined),
+      20_000,
+      'abnormal-exit retry resume',
+    );
+    // 会话已 ended：PRD 3.2.2 要求跳过关闭步骤（不再产生新的 acp:stop）
+    expect(countStops(sessionId)).toBe(beforeStops);
+    const fallback = await waitFor(
+      async () => {
+        const messages = await getSessionMessagesText(token, sessionId);
+        return messages.find((m) => m.includes('系统检测到会话已结束'));
+      },
+      20_000,
+      'abnormal-exit fallback prompt',
+    );
+    expect(fallback).toContain('completeCurrentNode');
+
+    const exec = await waitFor(
+      async () => {
+        const inst = await getInstance(token, instanceId);
+        const node = inst.nodes.find((n) => n.nodeKey === 'exec')!;
+        return node.retryCount === 1 && node.nextRetryAt === null ? node : undefined;
+      },
+      20_000,
+      'abnormal-exit retryCount=1',
+    );
+    expect(exec.status).toBe('RUNNING');
+  }, 90_000);
+
+  it('T-WFIR2c: closeSession 与控制器 ended 双投递 → 去重只计 1 次重试', async () => {
+    const { instanceId, sessionId } = await advanceToExecRunning('wfir2c');
+
+    // 人工关闭：close() 回调 + 控制器 ended 事件都会触发处理，排期 CAS 只允许一个赢家
+    await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
+    await waitFor(
+      async () => (countResumes(sessionId) > 0 ? true : undefined),
+      20_000,
+      'dedupe retry resume',
+    );
+    await sleep(1_500);
+    const inst = await getInstance(token, instanceId);
+    const exec = inst.nodes.find((n) => n.nodeKey === 'exec')!;
+    expect(exec.retryCount).toBe(1);
   }, 90_000);
 
   it('T-WFIR3: 再次 ended → retryCount=2、nextRetryAt 为未来 1 分钟且不再立即 resume', async () => {
     const { instanceId, sessionId } = await advanceToExecRunning('wfir3');
-    const beforeResumes = fake.resumes.length;
 
     // 第一次：立即重试（完成一次 episode）
-    await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
+    await publishSessionStatus(sessionId, 'ended');
     await waitFor(
       async () => {
         const node = (await getInstance(token, instanceId)).nodes.find((n) => n.nodeKey === 'exec')!;
@@ -475,9 +554,9 @@ describe.skipIf(!HAS_MONGO)('Workflow Node Interrupt Retry API (T-WFIR1~9)', () 
       'first retry done',
     );
 
-    const resumesAfterFirst = fake.resumes.length;
+    const resumesAfterFirst = countResumes(sessionId);
     // 第二次：排到 1 分钟后，不立刻 resume
-    await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
+    await publishSessionStatus(sessionId, 'ended');
     const node = await waitFor(
       async () => {
         const n = (await getInstance(token, instanceId)).nodes.find((x) => x.nodeKey === 'exec')!;
@@ -491,16 +570,17 @@ describe.skipIf(!HAS_MONGO)('Workflow Node Interrupt Retry API (T-WFIR1~9)', () 
     expect(delayMs).toBeGreaterThan(30_000);
     expect(delayMs).toBeLessThanOrEqual(61_000);
     await sleep(1_500);
-    expect(fake.resumes.length).toBe(resumesAfterFirst);
-    expect(fake.resumes.length).toBeGreaterThanOrEqual(beforeResumes + 1);
+    // 只对本会话计数：其他用例遗留排期可能补发 resume，不能影响本断言
+    expect(countResumes(sessionId)).toBe(resumesAfterFirst);
+    expect(resumesAfterFirst).toBeGreaterThan(0);
   }, 90_000);
 
   it('T-WFIR4: retryCount=10 → retryExhausted（RETRY_FAILED）+ 人工介入待办，不再 resume', async () => {
     const { instanceId, nodeId, sessionId } = await advanceToExecRunning('wfir4');
     await patchNode(instanceId, nodeId, { retryCount: 10 });
-    const beforeResumes = fake.resumes.length;
+    const beforeResumes = countResumes(sessionId);
 
-    await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
+    await publishSessionStatus(sessionId, 'ended');
 
     const node = await waitFor(
       async () => {
@@ -519,7 +599,7 @@ describe.skipIf(!HAS_MONGO)('Workflow Node Interrupt Retry API (T-WFIR1~9)', () 
     expect(intervention?.priority).toBe('immediate');
 
     await sleep(1_500);
-    expect(fake.resumes.length).toBe(beforeResumes);
+    expect(countResumes(sessionId)).toBe(beforeResumes);
   }, 90_000);
 
   it('T-WFIR5: restartNode 于 RETRY_FAILED → RUNNING、retryCount=0、拉起新会话', async () => {
@@ -574,8 +654,10 @@ describe.skipIf(!HAS_MONGO)('Workflow Node Interrupt Retry API (T-WFIR1~9)', () 
     );
   }, 120_000);
 
-  it('T-WFIR7: 预置 RECONNECTING + deadline 过期 → 扫描 B 重排（retryCount+1 / nextRetryAt 未来）', async () => {
-    const { instanceId, nodeId } = await advanceToExecRunning('wfir7');
+  it('T-WFIR7: 预置 RECONNECTING + deadline 过期 → 扫描 B 重排（retryCount+1 / nextRetryAt 未来 / 无重复提示词）', async () => {
+    const { instanceId, nodeId, sessionId } = await advanceToExecRunning('wfir7');
+    const resumesBefore = countResumes(sessionId);
+    const promptsBefore = promptCount(await getSessionMessagesText(token, sessionId));
     await patchNode(instanceId, nodeId, {
       retryCount: 1,
       retryPhase: 'RECONNECTING',
@@ -593,6 +675,11 @@ describe.skipIf(!HAS_MONGO)('Workflow Node Interrupt Retry API (T-WFIR1~9)', () 
     );
     expect(node.nextRetryAt).toBeTruthy();
     expect(new Date(node.nextRetryAt!).getTime()).toBeGreaterThan(Date.now());
+
+    // 重排路径只重新排队，不得补发 FALLBACK/IDLE_NUDGE，也不得 resume
+    await sleep(1_500);
+    expect(countResumes(sessionId)).toBe(resumesBefore);
+    expect(promptCount(await getSessionMessagesText(token, sessionId))).toBe(promptsBefore);
   }, 120_000);
 
   it('T-WFIR8: deletedAt 非空的实例 → 扫描不执行、无 acp:resume', async () => {

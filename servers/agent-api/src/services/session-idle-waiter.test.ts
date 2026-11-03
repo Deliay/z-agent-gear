@@ -97,17 +97,26 @@ describe('armSessionIdleWaiter', () => {
     await expect(timedOut.promise).resolves.toBe(false);
   });
 
-  it('T-IDLE6: 事件丢失时 15s DB 心跳兜底（idling→true、ended→false）', async () => {
+  it('T-IDLE6: 事件丢失时 15s DB 心跳兜底（idling→true；ended 仅在见 connecting 或临近 deadline 时判失败）', async () => {
     vi.useFakeTimers();
     const ok = armSessionIdleWaiter('sess-1', 120_000);
     vi.mocked(sessionService.getSessionStatusRaw).mockResolvedValue('idling');
     await vi.advanceTimersByTimeAsync(SESSION_IDLE_HEARTBEAT_MS);
     await expect(ok.promise).resolves.toBe(true);
 
-    const failed = armSessionIdleWaiter('sess-2', 120_000);
+    // close→resume 间隙 DB 仍为 ended：未见 connecting 且远未到 deadline → 不误判
+    const pending = armSessionIdleWaiter('sess-2', 120_000);
+    let pendingSettled = false;
+    void pending.promise.then(() => {
+      pendingSettled = true;
+    });
     vi.mocked(sessionService.getSessionStatusRaw).mockResolvedValue('ended');
     await vi.advanceTimersByTimeAsync(SESSION_IDLE_HEARTBEAT_MS);
-    await expect(failed.promise).resolves.toBe(false);
+    expect(pendingSettled).toBe(false);
+
+    // 临近 deadline（<=30s）仍为 ended → 兜底判失败，避免空等满 5 分钟
+    await vi.advanceTimersByTimeAsync(90_000);
+    await expect(pending.promise).resolves.toBe(false);
   });
 
   it('T-IDLE7: cancel() 后不再 settle，监听器与定时器全部清理', async () => {

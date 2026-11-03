@@ -27,7 +27,13 @@ interface IdleWaiter {
   resolve: (value: boolean) => void;
   timeoutTimer: ReturnType<typeof setTimeout> | null;
   heartbeatTimer: ReturnType<typeof setInterval> | null;
+  /** 布防时刻与截止时刻（心跳判失败用：临近 deadline 才把 ended 视为失败） */
+  startedAt: number;
+  deadline: number;
 }
+
+/** 心跳把 ended 判为失败前，至少已接近该截止（避免 close→resume 间隙误判） */
+const HEARTBEAT_ENDED_FAIL_MARGIN_MS = 30_000;
 
 const waiters = new Map<string, IdleWaiter>();
 let unsubscribeStatus: (() => void) | null = null;
@@ -115,6 +121,7 @@ export function armSessionIdleWaiter(
   });
 
   const heartbeatMs = options.heartbeatMs ?? SESSION_IDLE_HEARTBEAT_MS;
+  const now = Date.now();
   const waiter: IdleWaiter = {
     sessionId,
     sawConnecting: false,
@@ -122,6 +129,8 @@ export function armSessionIdleWaiter(
     resolve: resolveFn,
     timeoutTimer: null,
     heartbeatTimer: null,
+    startedAt: now,
+    deadline: now + timeoutMs,
   };
 
   waiter.timeoutTimer = setTimeout(() => settle(waiter, false), timeoutMs);
@@ -135,8 +144,16 @@ export function armSessionIdleWaiter(
           settle(waiter, true);
           return;
         }
-        if (!status || status === 'ended' || status === 'removed' || status === 'disconnected') {
+        if (!status || status === 'removed') {
           settle(waiter, false);
+          return;
+        }
+        if (status === 'ended' || status === 'disconnected') {
+          // 事件路径：「close 引起的 ended 未见 connecting」忽略；心跳同口径——
+          // 只有已见 connecting/running，或临近 deadline（慢控制器/事件丢失兜底）才判失败，
+          // 避免 close→resume 间隙 DB 仍为 ended 时白耗一次重试预算。
+          const nearDeadline = Date.now() >= waiter.deadline - HEARTBEAT_ENDED_FAIL_MARGIN_MS;
+          if (waiter.sawConnecting || nearDeadline) settle(waiter, false);
         }
       })
       .catch(() => undefined);

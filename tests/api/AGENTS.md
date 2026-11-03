@@ -502,12 +502,14 @@ pnpm test
 | 测试 | 描述 |
 |------|------|
 | T-WFIR1 契约透出 | `workflowInstance` 节点 `retryCount=0` / `nextRetryAt=null` |
-| T-WFIR2 立即重试 | closeSession → acp:stop（ack）→ acp:resume → 会话消息含兜底提示词；节点 RUNNING、`retryCount=1`、`nextRetryAt=null` |
-| T-WFIR3 退避排期 | 再次 ended → `retryCount=2`、`nextRetryAt` 为未来约 1 分钟；未到点不产生新的 acp:resume |
+| T-WFIR2 控制器上报 ended | publish `session:status {status:'ended'}`（DB 仍 idling）→ 管线 `acp:stop`（来自管线，未调用 closeSession）+ `acp:resume` → 会话消息含 FALLBACK（「系统检测到会话已结束」）；节点 RUNNING、`retryCount=1`、`nextRetryAt=null` |
+| T-WFIR2b Agent 异常退出 | 控制器先落库 ended 再 publish ended（`acp-session-manager` 真实路径）→ 跳过 close、直接 resume 并重发兜底提示词；`retryCount=1` |
+| T-WFIR2c 双投递去重 | `closeSession`（close 回调）与控制器 ended 事件双投递 → 排期 CAS 只允许一个赢家，`retryCount=1` |
+| T-WFIR3 退避排期 | 再次 ended → `retryCount=2`、`nextRetryAt` 为未来约 1 分钟；未到点不产生新的 acp:resume（按 sessionId 计数） |
 | T-WFIR4 用尽 | 预置 `retryCount=10` → ended → `RETRY_FAILED` + `failInfo.source=RETRY_EXHAUSTED` + `workflow_intervention`（immediate）；不再 resume |
 | T-WFIR5 restart | `restartNode` 于 RETRY_FAILED → RUNNING、`retryCount=0`、拉起新会话 |
 | T-WFIR6 扫描 A | 预置 `SCHEDULED` + `nextRetryAt=now-1s` → 30s 内执行管线（resume + 清调度字段） |
-| T-WFIR7 扫描 B | 预置 `RECONNECTING` + `retryDeadlineAt=now-1s` → 重排（`retryCount+1`、`nextRetryAt` 未来） |
+| T-WFIR7 扫描 B | 预置 `RECONNECTING` + `retryDeadlineAt=now-1s` → 重排（`retryCount+1`、`nextRetryAt` 未来）；**不补发 FALLBACK/IDLE_NUDGE、不 resume** |
 | T-WFIR8 软删除跳过 | `deletedAt` 非空的实例即使排期到期也不执行、无 acp:resume |
 | T-WFIR9 MCP 恢复 | `resumeFailedNode` 于 RETRY_FAILED → RUNNING、`retryCount=0`、`failInfo=null` |
 
