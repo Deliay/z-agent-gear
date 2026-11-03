@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 import Redis from 'ioredis';
 import { startMockGitHubServer, type MockGitHubServer } from '../mock-github-server.js';
 import { createFrontUser } from '../support/front-users.js';
+import { personalGlobalWorkspaceId } from '../support/workspace-fixtures.js';
 
 /**
  * 工作流节点状态 → GitHub Check Runs 同步 —— API 用例 T-CR02 ~ T-CR12。
@@ -418,6 +419,8 @@ async function seedGithubAccount(userId: string) {
     _id: accountId,
     userId: String(userId),
     tenantId: String(userId),
+    // 多租户二期：共享型账号按工作区可见，缺省会因作用域过滤不可见（repository is not authorized）
+    workspaceId: (await personalGlobalWorkspaceId(db, String(userId))).toString(),
     githubUserId: Date.now(),
     githubLogin: 'check-run-owner',
     accessToken: 'encrypted-token',
