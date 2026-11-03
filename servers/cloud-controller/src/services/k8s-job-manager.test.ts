@@ -87,7 +87,7 @@ describe('K8sJobManager', () => {
     // 最长运行时间无限制：不设置 activeDeadlineSeconds，避免活跃容器被 K8s 到期强杀
     expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toEqual({ cpu: '1', memory: '2Gi' });
+    expect(resources.requests).toEqual({ cpu: '0.1', memory: '256Mi' });
     expect(resources.limits).toEqual({ cpu: '4', memory: '8Gi', 'ephemeral-storage': '10Gi' });
   });
 
@@ -99,7 +99,7 @@ describe('K8sJobManager', () => {
       token: 'container-1.secret',
     });
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toEqual({ cpu: '1', memory: '2Gi' });
+    expect(resources.requests).toEqual({ cpu: '0.1', memory: '256Mi' });
     expect(resources.limits['ephemeral-storage']).toBe('5Gi');
   });
 
@@ -111,7 +111,7 @@ describe('K8sJobManager', () => {
       token: 'container-1.secret',
     });
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toEqual({ cpu: '1', memory: '2Gi' });
+    expect(resources.requests).toEqual({ cpu: '0.1', memory: '256Mi' });
     expect(resources.limits['ephemeral-storage']).toBe('10Gi');
   });
 

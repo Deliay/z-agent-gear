@@ -15,10 +15,10 @@ export const DELETE_MAX_ATTEMPTS = 3;
 
 /**
  * 工作容器资源约束：容器内含 dockerd，必须显式限制以免吃满节点。
- * request 为调度预留（1 vCPU / 2Gi），limit 为资源耗尽时的硬上限（4 vCPU / 8Gi）。
+ * request 为调度预留（0.1 vCPU / 256Mi），limit 为资源耗尽时的硬上限（4 vCPU / 8Gi）。
  */
 export const JOB_RESOURCES = {
-  requests: { cpu: '1', memory: '2Gi' },
+  requests: { cpu: '0.1', memory: '256Mi' },
   limits: { cpu: '4', memory: '8Gi' },
 } as const;
 
