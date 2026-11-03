@@ -25,7 +25,7 @@ describe('controller-api tenantId dual-write', () => {
     await queryable.findOneAndUpdate(
       { userId },
       { userId, hostname: 'h', status: 'online', $setOnInsert: { name: 'h' } } as never,
-      { upsert: true, new: true },
+      { upsert: true, returnDocument: 'after' },
     );
 
     const update = spy.mock.calls[0][1] as Record<string, unknown>;

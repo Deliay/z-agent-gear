@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { Session } from '../../models/session.js';
 import { CloudContainer } from '../../models/cloud-container.js';
 import { CloudHost } from '../../models/cloud-host.js';
@@ -16,14 +17,25 @@ import {
 } from '../../services/cloud-host-workload-service.js';
 import { cloudHostGithubService } from '../../services/cloud-host-github-service.js';
 import { billingClient } from '../../services/billing-client.js';
-import {
-  cloudHostIssuesLinkageService,
-  type CloudHostIssuesLinkageInput,
-} from '../../services/cloud-host-issues-linkage.js';
+import { cloudHostIssuesLinkageService, type CloudHostIssuesLinkageInput } from '../../services/cloud-host-issues-linkage.js';
+import { cloudStorageService } from '../../services/cloud-storage-service.js';
 import type { AuthContext } from './auth.js';
 import { actorFilter } from '../../services/workspace-context.js';
 
 type Doc = Record<string, unknown>;
+
+/** 同一 GraphQL 请求内 CloudHost.storage / storageRestoring 共享一次查询。 */
+const hostStorageCache = new WeakMap<object, Promise<Doc | null>>();
+
+async function loadHostStorage(parent: Doc): Promise<Doc | null> {
+  const storageId = parent.storageId ? String(parent.storageId) : '';
+  if (!storageId) return null;
+  const cached = hostStorageCache.get(parent);
+  if (cached) return cached;
+  const promise = cloudStorageService.getSummary(storageId);
+  hostStorageCache.set(parent, promise);
+  return promise;
+}
 
 /** 报价降级默认值（价目档以 admin-api pricing.ts 为准）。 */
 const FALLBACK_CREATE_CREDITS = 5;
@@ -62,12 +74,18 @@ export const cloudHostResolvers = {
           if (item.productId === 'container.minute') perMinuteCredits = item.unitPrice;
         }
       } else {
-        console.warn('[cloud-host] billing quote price fallback:', prices.reason);
+        rootLogger.warn(
+          { component: 'cloud-host', event: 'price-fallback', err: prices.reason },
+          'billing quote price fallback',
+        );
       }
       if (account.status === 'fulfilled') {
         availableBalance = account.value.availableBalance;
       } else {
-        console.warn('[cloud-host] billing quote balance unavailable:', account.reason);
+        rootLogger.warn(
+          { component: 'cloud-host', event: 'balance-unavailable', err: account.reason },
+          'billing quote balance unavailable',
+        );
       }
       return { createCredits, perMinuteCredits, availableBalance };
     },
@@ -173,7 +191,7 @@ export const cloudHostResolvers = {
   Mutation: {
     createCloudHost: async (
       _parent: unknown,
-      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[]; createDefaultSession?: boolean | null; githubAccountId?: string | null } },
+      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[]; createDefaultSession?: boolean | null; githubAccountId?: string | null; storageId?: string | null } },
       context: AuthContext,
     ) => {
       const userId = requireUser(context);
@@ -183,6 +201,7 @@ export const cloudHostResolvers = {
           harnessTypes: args.input.harnessTypes,
           workloadIds: args.input.workloadIds,
           githubAccountId: args.input.githubAccountId,
+          storageId: args.input.storageId,
           ...(args.input.createDefaultSession === undefined || args.input.createDefaultSession === null
             ? {}
             : { createDefaultSession: args.input.createDefaultSession }),
@@ -340,6 +359,12 @@ export const cloudHostResolvers = {
   },
   CloudHost: {
     defaultWorkspace: async (parent: Doc) => cloudHostService.defaultWorkspace(parent),
+    storage: async (parent: Doc) => loadHostStorage(parent),
+    storageRestoring: async (parent: Doc) => {
+      if (parent.status !== 'STARTING') return false;
+      const storage = await loadHostStorage(parent);
+      return Boolean(storage && storage.currentArchive);
+    },
     workloadInstalling: async (parent: Doc) => {
       const hostId = String(parent.id ?? '');
       if (!hostId) return null;

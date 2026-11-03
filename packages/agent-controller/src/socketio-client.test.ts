@@ -19,6 +19,15 @@ vi.mock('socket.io-client', () => ({
   io: vi.fn(() => fake.socket),
 }));
 
+vi.mock('./config.js', () => ({
+  clearConfigKey: vi.fn(),
+  saveKeyToConfig: vi.fn(),
+  saveEndpointToConfig: vi.fn(),
+  getResumeTokenFromConfig: vi.fn(),
+  saveResumeTokenToConfig: vi.fn(),
+  clearResumeTokenFromConfig: vi.fn(),
+}));
+
 // 用可控 fake bridge 验证 reconcile / disconnect 的生命周期接线（不启动真实 ACP 进程）
 const fakeBridges = vi.hoisted(() => ({ instances: [] as Array<Record<string, unknown>> }));
 vi.mock('./acp/bridge.js', async () => {
@@ -50,6 +59,7 @@ vi.mock('./acp/spawner.js', () => ({
 import { buildAcpInitResult, cloudHostReconnectDelay, connectToServer } from './socketio-client.js';
 import { processRegistry } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
+import { clearConfigKey, clearResumeTokenFromConfig } from './config.js';
 
 function errorHandler(): (payload: { code: string; message: string }) => void {
   const handler = fake.handlers.get('error');
@@ -84,8 +94,6 @@ describe('cloud-host reconnect backoff (C-3)', () => {
     fake.socket.disconnect.mockClear();
     fake.socket.connect.mockClear();
     fake.socket.close.mockClear();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers();
   });
 
@@ -184,6 +192,55 @@ describe('cloud-host reconnect backoff (C-3)', () => {
   });
 });
 
+describe('SESSION_REPLACED (session takeover)', () => {
+  beforeEach(() => {
+    fake.handlers.clear();
+    fake.socket.on.mockClear();
+    fake.socket.emit.mockClear();
+    fake.socket.disconnect.mockClear();
+    fake.socket.connect.mockClear();
+    fake.socket.close.mockClear();
+    vi.mocked(clearConfigKey).mockClear();
+    vi.mocked(clearResumeTokenFromConfig).mockClear();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('T-ST10a: local mode does not reconnect, keeps the key, and exits 42', () => {
+    setup(false);
+    vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
+
+    expect(() => errorHandler()({ code: 'SESSION_REPLACED', message: 'replaced' })).toThrow('exit:42');
+
+    expect(fake.socket.disconnect).toHaveBeenCalledTimes(1);
+    expect(clearConfigKey).not.toHaveBeenCalled();
+    expect(clearResumeTokenFromConfig).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(60_000);
+    expect(fake.socket.connect).not.toHaveBeenCalled();
+  });
+
+  it('T-ST10b: cloud-host mode notifies the supervisor with session_replaced and never reconnects', () => {
+    const { onShutdown } = setup(true);
+
+    errorHandler()({ code: 'SESSION_REPLACED', message: 'replaced' });
+
+    expect(onShutdown).toHaveBeenCalledWith({ reason: 'session_replaced' });
+    expect(fake.socket.disconnect).toHaveBeenCalledTimes(1);
+    expect(clearConfigKey).not.toHaveBeenCalled();
+    expect(clearResumeTokenFromConfig).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(60_000);
+    expect(fake.socket.connect).not.toHaveBeenCalled();
+  });
+});
+
 describe('idle-path exit codes (contract §3.7)', () => {
   beforeEach(() => {
     fake.handlers.clear();
@@ -191,8 +248,6 @@ describe('idle-path exit codes (contract §3.7)', () => {
     fake.socket.emit.mockClear();
     fake.socket.disconnect.mockClear();
     fake.socket.close.mockClear();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
       throw new Error(`exit:${code}`);
     }) as never);
@@ -290,8 +345,6 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
     fake.handlers.clear();
     fakeBridges.instances.length = 0;
     fake.socket.emit.mockClear();
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
   afterEach(() => {

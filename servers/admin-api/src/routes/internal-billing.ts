@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from 'express'
 import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { BillingInvoice } from '../models/billing-invoice.js';
 import { BillingLedger } from '../models/billing-ledger.js';
 import { BillingReceipt } from '../models/billing-receipt.js';
@@ -25,6 +26,15 @@ import {
   InvalidChargeInputError,
   oneTimeChargeService,
 } from '../services/billing/one-time-charge.js';
+import { centsToCredits } from '../services/billing/money.js';
+import {
+  storagePricingService,
+  type StorageRateQuote,
+} from '../services/billing/storage-pricing.js';
+import { storageChargeService } from '../services/billing/storage-charge.js';
+import { isCloudHostOwnedBy } from '../services/billing/cloud-host-ownership.js';
+
+const logger = rootLogger.child({ component: 'internal-billing' });
 
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
@@ -58,6 +68,19 @@ function toDate(value: unknown): Date | undefined {
   if (typeof value !== 'string' || !value) return undefined;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+/** 存储报价 wire：金额统一换算为 credits（分 → credits 仅在边界）。 */
+function toStorageRateWire(rate: StorageRateQuote) {
+  return {
+    hourlyCredits: rate.hourlyCredits,
+    items: rate.items.map((item) => ({
+      productId: item.productId,
+      quantity: item.quantity,
+      unitPriceCredits: centsToCredits(item.unitPrice),
+      amountCredits: centsToCredits(item.amount),
+    })),
+  };
 }
 
 /** API Key DTO → 内部 REST wire（时间 ISO；含 scope/cloudHostId/expiresAt；expiresAt 仅历史数据可能非空）。 */
@@ -107,7 +130,7 @@ export function createInternalBillingRouter(): Router {
       res.json({ ...toBillingAccountWire(account), ledgerCount });
     } catch (err) {
       // C2：内部错误详情只记服务端日志，绝不把 Mongo/驱动信息原样吐给调用方/终端用户。
-      console.error('[internal-billing] GET /account failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] GET /account failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -168,7 +191,7 @@ export function createInternalBillingRouter(): Router {
         res.status(409).json({ error: 'INSUFFICIENT_BALANCE', available: err.available });
         return;
       }
-      console.error('[internal-billing] POST /charges failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] POST /charges failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -193,7 +216,7 @@ export function createInternalBillingRouter(): Router {
       });
       res.json(result);
     } catch (err) {
-      console.error('[internal-billing] POST /refunds failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] POST /refunds failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -211,7 +234,96 @@ export function createInternalBillingRouter(): Router {
     try {
       res.json(await oneTimeChargeService.getPriceQuote(productIds));
     } catch (err) {
-      console.error('[internal-billing] GET /price-quote failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] GET /price-quote failed');
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /** 云存储容量阶梯报价（全价/归档半价）；单位 credits，items 供账单页展示分档。 */
+  router.get('/storage-quote', async (req: Request, res: Response) => {
+    const raw = req.query.sizeGi;
+    const sizeGi =
+      typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : Number.NaN;
+    if (!Number.isInteger(sizeGi) || sizeGi < 1 || sizeGi > 30) {
+      res.status(400).json({ error: 'INVALID_BODY' });
+      return;
+    }
+    try {
+      const quote = await storagePricingService.quote(sizeGi);
+      res.json({
+        sizeGi: quote.sizeGi,
+        full: toStorageRateWire(quote.full),
+        archived: toStorageRateWire(quote.archived),
+      });
+    } catch (err) {
+      logger.error({ err }, '[internal-billing] GET /storage-quote failed');
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /** 云存储整点出账：单次只结算 1 小时（periodEnd - periodStart === 1h）。 */
+  router.post('/storage-charges', async (req: Request, res: Response) => {
+    const {
+      accountId,
+      storageId,
+      sizeGi,
+      rate,
+      periodStart,
+      periodEnd,
+      idempotentKey,
+      description,
+    } = req.body ?? {};
+    const start = toDate(periodStart);
+    const end = toDate(periodEnd);
+    if (
+      typeof accountId !== 'string' ||
+      !mongoose.isValidObjectId(accountId) ||
+      typeof storageId !== 'string' ||
+      !storageId ||
+      !Number.isInteger(sizeGi) ||
+      sizeGi < 1 ||
+      sizeGi > 30 ||
+      (rate !== 'FULL' && rate !== 'HALF') ||
+      !start ||
+      !end ||
+      end.getTime() - start.getTime() !== 60 * 60 * 1000 ||
+      typeof idempotentKey !== 'string' ||
+      !idempotentKey ||
+      (description !== undefined && description !== null && typeof description !== 'string')
+    ) {
+      res.status(400).json({ error: 'INVALID_BODY' });
+      return;
+    }
+    try {
+      const result = await storageChargeService.chargeHour({
+        accountId,
+        storageId,
+        sizeGi,
+        rate,
+        periodStart: start,
+        periodEnd: end,
+        idempotentKey,
+        description: typeof description === 'string' ? description : undefined,
+      });
+      res.status(200).json(result);
+    } catch (err) {
+      if (err instanceof InvalidChargeInputError) {
+        res.status(400).json({ error: 'INVALID_BODY' });
+        return;
+      }
+      if (err instanceof AccountNotFoundError) {
+        res.status(404).json({ error: 'ACCOUNT_NOT_FOUND' });
+        return;
+      }
+      if (err instanceof AccountFrozenError) {
+        res.status(403).json({ error: 'ACCOUNT_FROZEN' });
+        return;
+      }
+      if (err instanceof InsufficientBalanceError) {
+        res.status(409).json({ error: 'INSUFFICIENT_BALANCE', available: err.available });
+        return;
+      }
+      logger.error({ err }, '[internal-billing] POST /storage-charges failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -356,12 +468,16 @@ export function createInternalBillingRouter(): Router {
     try {
       // B-5/R2-14：非 admin_user 的 cloud_host Key 必须绑定本人且未软删除的云电脑，避免越权；
       // admin_user 与网关鉴权口径一致保留管理豁免（可代任意宿主铸造）。
-      // 注意：tenant 的 ownerId 即 tenantId（一期 personal 恒等于 userId），与宿主 userId 同口径比较。
+      // 归属口径：tenant 比较 host.tenantId（ownerId=tenantId），front_user 比较 host.userId。
       if (hostId && ownerType !== 'admin_user') {
         const host = await CloudHost.findById(hostId)
-          .select({ userId: 1, deletedAt: 1 })
-          .lean<{ userId?: unknown; deletedAt?: Date | null } | null>();
-        if (!host || host.deletedAt || !host.userId || String(host.userId) !== ownerId) {
+          .select({ userId: 1, tenantId: 1, deletedAt: 1 })
+          .lean<{
+            userId?: unknown;
+            tenantId?: unknown;
+            deletedAt?: Date | null;
+          } | null>();
+        if (!host || host.deletedAt || !isCloudHostOwnedBy(host, ownerType, ownerId)) {
           res.status(404).json({ error: 'CLOUD_HOST_NOT_FOUND' });
           return;
         }
@@ -393,7 +509,7 @@ export function createInternalBillingRouter(): Router {
         res.status(400).json({ error: 'INVALID_BODY' });
         return;
       }
-      console.error('[internal-billing] POST /api-keys failed', message);
+      logger.error({ err }, '[internal-billing] POST /api-keys failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -409,7 +525,7 @@ export function createInternalBillingRouter(): Router {
       const revoked = await apiKeyService.revokeByCloudHost(cloudHostId);
       res.json({ success: true, revoked });
     } catch (err) {
-      console.error('[internal-billing] POST /api-keys/revoke-by-host failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] POST /api-keys/revoke-by-host failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -428,7 +544,7 @@ export function createInternalBillingRouter(): Router {
         res.status(404).json({ error: 'NOT_FOUND' });
         return;
       }
-      console.error('[internal-billing] POST /api-keys/:id/revoke failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] POST /api-keys/:id/revoke failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -455,7 +571,7 @@ export function createInternalBillingRouter(): Router {
         res.status(404).json({ error: 'NOT_FOUND' });
         return;
       }
-      console.error('[internal-billing] DELETE /api-keys failed', (err as Error).message);
+      logger.error({ err }, '[internal-billing] DELETE /api-keys failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });
@@ -463,7 +579,7 @@ export function createInternalBillingRouter(): Router {
   // C2：兜底错误处理——任何端点未捕获异常（Express 5 自动转发 rejected promise）统一返回
   // 通用 INTERNAL_ERROR，绝不把 err.message/堆栈回给调用方。
   router.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
-    console.error('[internal-billing] unhandled error', (err as Error)?.message);
+    logger.error({ err }, '[internal-billing] unhandled error');
     // P3：响应头已发出时不能再写 body，转交 Express 默认处理器关闭连接，避免悬挂 socket。
     if (res.headersSent) {
       next(err);

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createTestLogger } from '../../../observability/testing.js';
 
 const { createChannelMock, connectionCloseMock, startMeteringMock, startSettlementMock } =
   vi.hoisted(() => ({
@@ -25,6 +26,9 @@ vi.mock('./topology.js', () => ({
 
 import { declareBillingTopology } from './topology.js';
 import { BillingMqRuntime } from './runtime.js';
+
+/** 静音 logger（无断言路径注入）。 */
+const silentLogger = createTestLogger('billing-mq').logger;
 
 function channelStub() {
   const handlers: Record<string, (...args: unknown[]) => void> = {};
@@ -53,7 +57,7 @@ describe('BillingMqRuntime（断线自动重连）', () => {
       url: 'amqp://x',
       billing: {} as never,
       ingest: {} as never,
-      logger: { warn: vi.fn(), info: vi.fn() },
+      logger: silentLogger,
     });
     await runtime.start();
     expect(declareBillingTopology).toHaveBeenCalled();
@@ -73,7 +77,7 @@ describe('BillingMqRuntime（断线自动重连）', () => {
       billing: {} as never,
       ingest: {} as never,
       reconnectDelayMs: 1000,
-      logger: { warn: vi.fn(), info: vi.fn() },
+      logger: silentLogger,
     });
     await runtime.start();
     expect(createChannelMock).toHaveBeenCalledTimes(1);
@@ -92,7 +96,7 @@ describe('BillingMqRuntime（断线自动重连）', () => {
       billing: {} as never,
       ingest: {} as never,
       reconnectDelayMs: 500,
-      logger: { warn: vi.fn() },
+      logger: silentLogger,
     });
     await runtime.start();
     await vi.advanceTimersByTimeAsync(3000);

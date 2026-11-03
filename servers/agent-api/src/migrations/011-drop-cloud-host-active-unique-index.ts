@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/011-drop-cloud-host-active-unique-index' });
 
 export const name = '011-drop-cloud-host-active-unique-index';
 
@@ -11,10 +14,10 @@ export async function run(): Promise<void> {
   const collection = mongoose.connection.collection('cloudhosts');
   try {
     await collection.dropIndex('uniq_active_cloud_host_per_user');
-    console.log('[Migration 011] Dropped uniq_active_cloud_host_per_user on cloudhosts');
+    log.info('dropped uniq_active_cloud_host_per_user on cloudhosts');
   } catch (err) {
     if ((err as { code?: number }).code === 27) {
-      console.log('[Migration 011] uniq_active_cloud_host_per_user already absent; skipped');
+      log.info('uniq_active_cloud_host_per_user already absent; skipped');
       return;
     }
     throw err;

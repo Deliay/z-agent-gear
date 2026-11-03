@@ -25,7 +25,10 @@ enum HarnessType {
 # 缺失时 `cloudHostCapabilities.supportedHarnesses` 不列出该类型。
 # 白名单外类型创建报 `unsupported harness type: <type>`；预置缺失报
 # `harness workload preset not found: <slug>`。
-# 就绪后不自动创建会话（创建期不预置工作区）；会话工具须 ∈ 创建时所选 harnessTypes（A-11）。
+# `harnessTypes` **可为空数组**（harness 为可选工作负载，可在云电脑设置-工作负载中后期补装）：
+# 0 个 harness 时容器照常就绪、不默认创建会话、会话工具范围不限制（A-11 门仅在非空时生效）；
+# 恰好 1 个时沿用默认会话规则（有默认工作区时创建并进入会话）。
+# 运行期成功安装 harness 负载后，读模型的 `harnessTypes` 追加该类型（去重）。
 
 # 工作负载分类：standard = 运行环境/工具（Aspire/Docker/.NET/Github 等），harness = 云电脑 harness（如 OpenCode / Kimi Code / DeepSeek Harness）
 enum CloudWorkloadKind {
@@ -39,6 +42,16 @@ enum CloudHostStatus {
   STOPPING
   STOPPED
   FAILED
+}
+
+# 云电脑挂载的云存储摘要（见 contracts/cloud-storage.graphql）
+type CloudStorageSummary {
+  id: ID!
+  name: String!
+  sizeGi: Int!
+  status: CloudStorageStatus!
+  usageBytes: Float
+  hourlyCredits: Float!
 }
 
 type CloudHost {
@@ -68,9 +81,14 @@ type CloudHost {
   githubAccountId: ID
   # 所属租户工作区 id（多租户二期）；创建时由服务端取当前工作区上下文，不在入参暴露
   workspaceId: ID!
+  # 创建时挂载的云存储；未挂载为 null
+  storage: CloudStorageSummary
+  # STARTING 且存储正在从归档恢复数据时为 true（仅字段级展示，不新增容器状态）
+  storageRestoring: Boolean!
 }
 
 # 云电脑创建/运行报价（金额单位 credits，来自 admin-api 价目档）
+# 注：挂载云存储的每小时存储费用不计入创建报价，由 cloudStorageBillingQuote 单独展示。
 type CloudHostBillingQuote {
   # 一次性创建费（credits）；创建确认即扣费
   createCredits: Float!
@@ -178,6 +196,8 @@ type CloudHostIssuesLabelCleanupResult {
 
 input CreateCloudHostInput {
   name: String!
+  # 云电脑 harness 类型（**可为空数组**：harness 为可选工作负载，可在设置-工作负载中后期补装）；
+  # 恰好 1 个时沿用默认会话规则（有默认工作区时创建并进入会话）
   harnessTypes: [HarnessType!]!
   # 可选：创建时附加预装的 standard 负载（去重后 ≤5；依赖由服务端后序展开）
   # 缺省/空数组 = 仅安装 harness 负载（与历史行为一致）
@@ -187,8 +207,13 @@ input CreateCloudHostInput {
   # 可选：创建时锁定 Github 帐号（勾选「配置 Github 项目」时前端必传）；必须是当前用户已绑定帐号；
   # 缺省 = 创建时未选定（后续首次 Git 项目设置时选定并锁定）
   githubAccountId: ID
+  # 可选：创建时挂载当前工作区 IDLE/ARCHIVED 云存储；必须与云电脑同一工作区。
+  # 缺省 = 不挂载，报文与现状完全一致。挂载失败（被抢占/状态变化）抛 `storage is not attachable`，
+  # 已扣的创建费按既有「拉起失败自动退款」路径退回。
+  storageId: ID
 }
 
+# 支持 `workloadKind=HARNESS` 负载（可选工作负载；幂等：已安装返回 SKIPPED；不提供卸载入口）
 input InstallCloudHostWorkloadInput {
   controllerId: ID!
   workloadId: ID!
@@ -216,8 +241,11 @@ extend type Query {
   # 进度对话框轮询云电脑启动状态（1.5s 级）；仅返回当前用户的云电脑（软删除仍返回，供只读回看）
   cloudHost(id: ID!): CloudHost
   cloudHostStopImpact(id: ID!): CloudHostStopImpact!
+  # 返回 standard **与 harness** 全量可安装工作负载；harness 条目为可选（非必须）工作负载，
+  # `installed` 口径与 standard 一致（成功安装后回填）
   cloudHostWorkloads(controllerId: ID!): [CloudHostWorkloadItem!]!
-  # 无主机上下文的 standard 负载目录（创建云电脑时勾选；installed 固定 false）
+  # 无主机上下文的 **standard** 负载目录（创建云电脑时勾选；installed 固定 false）。
+  # 创建期 harness 选择走 `harnessTypes` 多选（不在此目录，避免双入口）
   cloudHostWorkloadCatalog: [CloudHostWorkloadItem!]!
   cloudHostSetupOperation(id: ID!): CloudHostSetupOperation
   # 云电脑 GitHub Issues 联动配置列表（仅本人云电脑；无配置返回 []）

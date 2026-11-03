@@ -1,10 +1,13 @@
 import mongoose from 'mongoose';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { BillingAccount, type IBillingAccount } from '../../models/billing-account.js';
 import {
   BillingInvoice,
   type IBillingInvoice,
 } from '../../models/billing-invoice.js';
 import { rollupService, type RollupService } from './rollup-service.js';
+
+const logger = rootLogger.child({ component: 'billing-invoicing' });
 
 export interface InvoiceItemInput {
   productId: string;
@@ -18,7 +21,7 @@ export interface InvoiceItemInput {
 export interface CreateInvoiceInput {
   accountId: string;
   type: 'charge' | 'recharge' | 'adjust';
-  category: 'container' | 'model' | 'manual';
+  category: 'container' | 'model' | 'manual' | 'storage';
   /** 金额（分）：充值为正、消费为负。 */
   amount: number;
   balanceAfter: number;
@@ -46,7 +49,7 @@ export class InvoicingService {
     const doc = await BillingAccount.findOneAndUpdate(
       { _id: accountId },
       { $inc: { invoiceSeq: 1 } },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean<IBillingAccount | null>();
     if (!doc) throw new Error('账户不存在');
     return Math.max(0, (doc.invoiceSeq ?? 1) - 1);
@@ -97,7 +100,7 @@ export class InvoicingService {
         try {
           await this.rollups.recordInvoice(input.accountId, doc);
         } catch (err) {
-          console.warn(`[billing] rollup update failed (non-fatal): ${(err as Error).message}`);
+          logger.warn({ err }, '[billing] rollup update failed (non-fatal)');
         }
         return doc;
       } catch (err) {

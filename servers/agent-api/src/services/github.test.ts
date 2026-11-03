@@ -52,11 +52,20 @@ vi.mock('../config/index.js', () => ({
   },
 }));
 
-import {
-  githubService,
-  resetRepoTokenCache,
-  resetAppBotIdentityCache,
-} from './github.js';
+import { logger as rootLogger } from '../observability/logger.js';
+import { createTestLogger } from '../observability/testing.js';
+
+/**
+ * 注入 createTestLogger：在被测模块加载前拦截 `rootLogger.child(...)`，把
+ * github 告警写入内存 sink，断言 `records` 的结构化字段。
+ */
+const testLog = createTestLogger();
+const childSpy = vi
+  .spyOn(rootLogger, 'child')
+  .mockImplementation((bindings) => testLog.logger.child(bindings));
+const { githubService, resetRepoTokenCache, resetAppBotIdentityCache } = await import('./github.js');
+childSpy.mockRestore();
+
 import { GitHubAccount } from '../models/github-account.js';
 import { GitHubInstallation } from '../models/github-installation.js';
 import { Workspace } from '../models/workspace.js';
@@ -523,7 +532,6 @@ describe('GitHubService', () => {
     it('T-GB2: 失败写 60s sentinel，窗口内不重试外部调用', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
       vi.stubGlobal('fetch', fetchMock);
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       await expect(githubService.resolveAppBotIdentity()).resolves.toBeNull();
       expect(redisMock.set).toHaveBeenCalledWith(
@@ -535,21 +543,19 @@ describe('GitHubService', () => {
 
       await expect(githubService.resolveAppBotIdentity()).resolves.toBeNull();
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      warn.mockRestore();
       vi.unstubAllGlobals();
     });
 
     it('T-GB3: 失败告警不含 JWT', async () => {
       const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500 });
       vi.stubGlobal('fetch', fetchMock);
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      testLog.reset();
 
       await githubService.resolveAppBotIdentity();
 
-      const logged = warn.mock.calls.flat().join(' ');
+      const logged = testLog.records.map((r) => JSON.stringify(r)).join(' ');
       expect(logged).not.toContain('fake-jwt');
       expect(logged).toContain('GET /app failed: 500');
-      warn.mockRestore();
       vi.unstubAllGlobals();
     });
   });

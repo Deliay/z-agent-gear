@@ -20,6 +20,10 @@ export const githubResolvers = {
       if (!context.currentUser) throw new GraphQLError('Not authenticated');
       return commitSettingsService.getCommitSettings(context.currentUser.id);
     },
+    personalGithubAccounts: async (_parent: unknown, _args: unknown, context: AuthContext) => {
+      if (!context.currentUser) throw new GraphQLError('Not authenticated');
+      return githubService.getPersonalAccounts(context.currentUser.id);
+    },
     githubAppUrl: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       if (!context.currentUser) throw new GraphQLError('Not authenticated');
       // 只读上下文（全局工作区 + developer）不得发起绑定（PRD：开发不能在全局工作区新增资源）
@@ -67,14 +71,11 @@ export const githubResolvers = {
       try {
         return await commitSettingsService.updateCommitSettings(context.currentUser.id, args.input);
       } catch (error) {
-        // 白名单文案原样透传（前端逐字映射）；只读红线与未知错误区分
-        const whitelist = [
-          ...(Object.values(COMMIT_SETTINGS_ERRORS) as string[]),
-          'global workspace is read-only',
-        ];
+        // 白名单文案原样透传（前端逐字映射）；未知错误收敛
+        const whitelist = Object.values(COMMIT_SETTINGS_ERRORS) as string[];
         const message = error instanceof Error ? error.message : '';
         throw new GraphQLError(
-          whitelist.includes(message) ? message : 'invalid commit settings',
+          whitelist.includes(message) ? message : 'invalid custom committer',
         );
       }
     },

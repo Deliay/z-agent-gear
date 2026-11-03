@@ -46,7 +46,7 @@ aspire describe controller-api
 API_URL=http://localhost:10001/graphql \
 ADMIN_API_URL=http://localhost:10003/graphql \
 CONTROLLER_API_URL=http://localhost:35273 \
-npm test
+pnpm test
 ```
 
 > admin 套件（`src/admin-api/**`）与 agent-api scope 回归需要 admin-api 就绪：`aspire start && aspire wait admin-api agent-api && aspire wait controller-api`。
@@ -59,9 +59,9 @@ npm test
 
 | 脚本 | 说明 |
 |------|------|
-| `npm test` | 运行全部常规测试文件（46 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
-| `npm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
-| `npm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
+| `pnpm test` | 运行全部常规测试文件（52 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `pnpm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
+| `pnpm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
 > **注意**: `acp-real-*` 测试会启动真实的 agent-controller 进程，共享 PID 文件 `/tmp/agent-controller.pid` 和端口 34519，因此必须串行执行，且需要干净数据库状态。
 
@@ -87,6 +87,7 @@ npm test
 | `GITHUB_TEST_REPO` | 已绑定 Github 账号的仓库（T-GHIL* 标签同步 / T-GHI* 全链路） | - |
 | `CLOUD_HOST_ISSUES_LABEL` | T-GHI* 全链路使用的联动标签名（需已建配置并同步到仓库） | - |
 | `CLOUD_CONTROLLER_URL` | cloud-controller 服务地址（cloud-controller 套件） | `http://localhost:10004` |
+| `OTEL_*` | 可观测性导出（**可选**）：`OTEL_EXPORTER_OTLP_ENDPOINT` 未配置 = OTel SDK 完全不启动、**零外发**，T-OBS 系列不依赖采集端即通过；需验证导出链路时才配置 endpoint（+ `OTEL_EXPORTER_OTLP_HEADERS`，该值禁止出现在任何日志）。完整 env 契约见 `contracts/observability.md` §3 | -（可选） |
 
 > 套件内含共享账号（admin）口令轮换与 `mustChangePassword` 翻转等用例，**禁止多 worker 并行**；默认 vitest 已串行于同一进程内，如需并行务必隔离环境。
 
@@ -120,19 +121,23 @@ npm test
 
 > T-CR01（绑定即首同步）的出站断言由 `servers/agent-api/src/services/workflow/tool-handlers.test.ts` 与 `pr-check-run-sync.test.ts` 覆盖（本套件不重复建 PR 工具链）。
 
-### Commit 设置与提交身份 (`agent-api/github.test.ts`)
+### Commit 设置与提交身份（成员级）(`agent-api/github.test.ts`)
 
 | 测试 | 描述 |
 |------|------|
-| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回双 UNSET |
-| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人全字段（trim 归一） |
-| T-CS-API3 | 白名单错误逐字：committer required / invalid github account / invalid custom committer |
-| T-CS-API4 | 归一落库：mode=UNSET 不清提交人、type=UNSET 清空冗余字段 |
-| T-CI-API1 | `POST /internal/cloud-hosts/:id/commit-identity` 无 / 非法凭据 401 |
-| T-CI-API2 | `co_author` 返回提交人 + bot 全字段（需 `GITHUB_API_BASE` 指向 mock-github-server） |
-| T-CI-API3 | 主机不存在 / 未保存设置均 200 `{mode:'unset'}`（永不 404） |
-| T-CI-API4 | 帐号解绑 / 越权降级 unset |
-| T-CI-API5 | unset 响应缺省字段（仅 mode） |
+| T-CS-R1~R4（`services/commit-settings-service.real.test.ts`，真库） | 跨工作区上下文成员级：团队保存→个人读取同一份；个人保存→团队二次保存覆盖不撞键不静默丢失；团队保存→无 ALS 解析 `resolveWorktreeCommitter` 正确；迁移 019 存量行在团队上下文可读且署名逐字一致 |
+| T-CS-API1 | `commitSettings` 未认证拒绝；从未保存返回 `{committerType:'UNSET',customName:null,customEmail:null,commitWithBot:false}` |
+| T-CS-API2 | `updateCommitSettings` 保存 / 回读自定义提交人（trim 归一）；落库断言 `tenantId`=成员归属租户、单行、无 `workspaceId`/`committerMode` 残留 |
+| T-CB-API2 | `commitWithBot` 保存 / 回读为 `true`；`committerType=UNSET` 时归一 `false` |
+| T-CS-API3 | 白名单仅 `invalid custom committer` 逐字 + 矩阵（空名 / 非法邮箱 / 换行 / >100）；`GITHUB_ACCOUNT` 已在 GraphQL 枚举层拒绝 |
+| T-CS-API4 | 成员级隔离：A 保存后 B 仍为 UNSET，B 保存不影响 A |
+| T-CS-API5 | `personalGithubAccounts` 仅返回个人租户绑定帐号（排除普通工作区副本） |
+| T-IC-API1 | `POST /internal/cloud-hosts/:id/commit-identity` 无 / 非法凭据 401；已鉴权未知主机仍 200（永不 404） |
+| T-IC-API2 | 恒 bot：个人设置为 custom 也不影响云电脑身份（需 `GITHUB_API_BASE`，缺省时断言 `{mode:'unset'}` 降级） |
+| T-IC-API3 | bot 解析失败 → `{mode:'unset'}`（`failNext` 注入） |
+| T-IC-API4 | 响应恒含 `mode` 包络（兼容 2.11.x 容器 consume） |
+| T-WF-API1/2（`workflow.test.ts`） | 实例化落 worktree 提交人快照并随 `git:worktree:add` 下发 `committer`；节点级 Worktree 复用实例快照（成员中途改设置不生效） |
+| T-GH-API1~3（`github-issues-webhook.test.ts`） | Issue 触发人 sender 落库与 `triggerUserId` 匹配；触发人自定义提交人优先；未识别回退 GitHub 身份（需真实云电脑 + `MONGODB_URI`） |
 
 > `tests/api/src/mock-github-server.ts` 提供 `GET /app`（slug）与 `GET /users/{slug}[bot]`（id）mock，
 > 并支持 `failNext` 注入失败（60s 失败 sentinel / 降级路径）。
@@ -183,9 +188,9 @@ npm test
 |------|------|
 | T-WS-API1 缺省上下文 | 无 `x-workspace-id` 回退个人租户全局工作区（`myWorkspaces` 唯一、role=admin、readOnly=false），providers/models 可直接查询（与一期一致）；显式发送个人全局 id 等价 |
 | T-WS-API2 非法/不可达 | 非法 id / 非成员团队全局 / 非成员普通工作区均 `workspace not found`（不泄露存在性） |
-| T-WS-API3 工作区 CRUD | developer 创建拒绝 `not a tenant admin`；重名 `workspace name already exists`；改名生效；global 改名/删除/加成员 `global workspace is immutable`；非本租户成员 `user is not a tenant member`；空工作区删除返回 true；写入资源（commit 设置）后删除 `workspace is not empty` |
+| T-WS-API3 工作区 CRUD | developer 创建拒绝 `not a tenant admin`；重名 `workspace name already exists`；改名生效；global 改名/删除/加成员 `global workspace is immutable`；非本租户成员 `user is not a tenant member`；空工作区删除返回 true；写入资源（供应商/会话等）后删除 `workspace is not empty`（Commit 设置已成员级，不再计入工作区资源） |
 | T-WS-API4 共享读/写口径 | 普通工作区 `providers`/`models` 含团队全局工作区共享资源（workspaceId=全局）；普通上下文删除全局供应商不生效；admin 在全局上下文删除后普通工作区不可见 |
-| T-WS-API5 Commit 三段矩阵 | 本工作区未设 + 全局未设 → `source=UNSET`；全局设 → 普通工作区 `source=GLOBAL`；本工作区设 → `source=WORKSPACE` |
+| T-WS-API5 Commit 成员级一致（跨上下文回归） | 默认 UNSET；团队工作区保存后团队全局与**个人工作区（缺省 x-workspace-id）**读到同一份（无三段继承）；落库 `tenantId`=成员归属租户（非保存上下文租户）、单成员单行；developer 设置独立于 admin |
 | T-WS-API6 developer 全局只读 | 团队全局上下文写共享资源（provider）被插件拦截 `global workspace is read-only`；创建工作区仍 `not a tenant admin` |
 | T-WS-API7 personal 拒绝 | personal 租户全局上下文 `createTenantWorkspace` → `personal tenant cannot create workspaces` |
 | T-WS-API8 租户成员管理 | `searchAccounts` admin 可搜（结果为 username/name/userId 最小集）、developer `not a tenant admin`；`addTenantMember` 指定/缺省 role、重复幂等不覆盖；`changeTenantMemberRole` 生效；加入工作区后 `removeTenantMember` 立即失去团队/工作区访问并级联清理 workspacemembers，资源保留 |
@@ -296,7 +301,9 @@ npm test
 | register - 版本不匹配 | 应返回 VERSION_MISMATCH 并断开 |
 | heartbeat - 已认证客户端 | 应接受心跳，连接保持在线 |
 | unregister - 主动注销 | 应删除 key 和 controller 记录并断开 |
-| session 独占 - 重复 key | 第二个连接应收到 KEY_ALREADY_ONLINE |
+| session 接管 - 重复 key（T-ST11） | 第二个连接接管并收到 `registered`，第一个连接收到 `SESSION_REPLACED` 并断开；第二个心跳后持续在线 |
+| session 接管 - 重启残留（T-ST12） | Redis 预置 `session:<keyId>` 为死 socketId、客户端不带 `resumeToken` → 注册成功且不出现 `KEY_ALREADY_ONLINE` |
+| 心跳巡检 - 重启后不误伤（T-ST15） | 残留 session 接管并刷新心跳后触发巡检 → controller 保持 online、无 `heartbeat_timeout`、session 仍存在 |
 
 ### Session API (`agent-api/session.test.ts`)
 
@@ -659,7 +666,7 @@ npm test
 | T-ICC6 兜底展开失败映射 | 仅 `workloadIds` 且展开遇环 / 依赖缺失 / 展开 > 10 → 400 `INVALID_WORKLOAD` |
 | T-ICC7 required 归一与校验 | `required` 缺省/`null` → `false`、`true` 保留并回读；非布尔 → 400 `INVALID_WORKLOAD` |
 | T-ICC8 兜底 required=false | 仅 `workloadIds` 兜底展开的 plan 条目 `required` 一律 `false` |
-| T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（全局基线 2.10.0；kimi/deepseek/opencode 组合均为 2.10.0，需 `MONGODB_URI`） |
+| T-IC-HARNESS | `harnessTypes:['kimi_code']` → 201 且回显；`['kimi_code','bogus']` → 400 `INVALID_HARNESS`；落库 `agentGearMinVersion` 按类型取最大（基线 2.12.0；kimi/deepseek/opencode 及其组合与基线取 max 后均为 2.12.0，需 `MONGODB_URI`） |
 | T-IC-HARNESS3 tenantId | harness 创建落库 `cloudcontainers.tenantId`：显式下发=userId；缺省回退=userId（旧版调用方兼容）；显式空串 → 400 `INVALID_HARNESS`（需 `MONGODB_URI`） |
 | T-IC6 日志 params | 直写 `cloudworkloadlogs.params`/`required` 后按记录返回参数快照与必须标记；历史无 `params` 归一为 `{}`、无 `required` 归一为 `false` |
 
@@ -681,7 +688,8 @@ npm test
 | T-IA 依赖保存 | 正常（按配置顺序、去重）、自依赖 `workload cannot depend on itself`、依赖环 `dependency cycle detected`、依赖不存在 `dependency workload not found`、超 5 `too many dependencies` |
 | T-IA 预制项存在性与幂等 | Docker/Node.js/.NET/Aspire/OpenCode（Harness）/Kimi Code（Harness）/DeepSeek Harness（Harness）/Github/MongoDB/Playwright 共 10 项存在且 `isPreset=true`；Kimi Code `workloadKind=HARNESS`/`harnessType=kimi_code`、`paramSchema=[]`、init 脚本固定 2.3.2 且不含 `harness prepare`；DeepSeek Harness `harnessType=deepseek_harness` 且脚本含 header-masq 插件；Aspire 依赖 `[Docker, .NET]`；Node.js 参数（`version` TEXT 默认 `22`、`package_manager` MULTI_SELECT 默认 `["npm"]`）；MongoDB `workloadKind=STANDARD`/`harnessType=null`/零参数零依赖；Playwright `workloadKind=STANDARD`/`harnessType=null`、依赖 `[Node.js]`；重复查询 ID 集合稳定（迁移不重复写入） |
 | T-IA 预制 MongoDB 原生 apt 安装 | 预制「MongoDB」`workloadKind=STANDARD`/`harnessType=null`/`isPreset=true`、`paramSchema=[]`、`dependsOnWorkloadIds=[]`；`initScript` 含 `command -v mongod` 幂等锚点、内网 Nexus `server-8.0.asc` + `mongodb-apt-proxy`、`apt-get install -y mongodb-org`、结尾 `mongod --version` 硬校验；**不含** `--fork`/`nohup`/`runuser`/`systemctl`/`mongosh`（不拉起实例，返工口径） |
-| T-IA 预制 Playwright 参数化下载 | 预制「Playwright」`paramSchema` 仅 `playwright_download_host`（TEXT 默认 = 内网代理地址 `https://nexus.internal.fffdan.com/repository/playwright-proxy/`）；`dependsOnWorkloadIds` 等于 Node.js 预制项；`initScript` 含 `npm install -g playwright`/`playwright install chromium`/`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST`、`/etc/profile.d/playwright.sh` 与 root/worker `~/.bashrc` 持久化写入、结尾 `playwright --version` 与 `chromium-*` 硬校验，**不含**内置浏览器下载地址（`playwright-proxy` 仅出现在失败指引占位形态） |
+| T-IA 预制 Playwright 参数化下载 | 预制「Playwright」`paramSchema` 仅 `playwright_download_host`（TEXT 默认 = 内网代理地址 `https://nexus.internal.fffdan.com/repository/playwright-proxy/`）；`dependsOnWorkloadIds` 等于 Node.js 预制项；`initScript` 含 `pnpm add -g playwright`/`playwright install chromium`/`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST`、`/etc/profile.d/playwright.sh` 与 root/worker `~/.bashrc` 持久化写入、结尾 `playwright --version` 与 `chromium-*` 硬校验，**不含**内置浏览器下载地址（`playwright-proxy` 仅出现在失败指引占位形态） |
+| T-IA pnpm 脚本口径 | 四条预制脚本（OpenCode / Kimi Code / DeepSeek Harness / Playwright）`initScript` 均含统一 pnpm 自举回退块（`command -v pnpm` + `npm install -g "pnpm@9.15.9"` + `PNPM_HOME`/PATH 前置）与 `pnpm add -g` 安装行；**不含**旧 `npm install -g "@opencode`/`"@moonshot`/`"@deepseek`/`playwright` 安装形态；预制项计数仍为 10 |
 | T-IA 预制 Aspire 代理下载 | 预制「Aspire」`paramSchema` 含 `aspire_cli_url`（TEXT 默认 = 内网缓存代理安装包直链 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`）；`initScript` 含 `curl -fsSL`/`tar -xzf` 直连下载解压，**不含** `install.sh`/`aspire.dev`/`aka.ms`/`ASPIRE_INSTALL_URL`（迁移 004 升级结果，脚本内不内置默认地址）；重复查询预制项 ID 集合稳定 |
 | T-IA 日志 params | 直写 `cloudworkloadlogs.params` 后按执行顺序返回参数快照；历史无 `params` 归一为 `{}` |
 
@@ -756,11 +764,12 @@ npm test
 | 文件 | 说明 |
 |------|------|
 | `tests/api/src/admin-api/cloud-host-charges.test.ts` | 内部一次性扣费/退款/报价：401、扣费 5 credits 与账单/收据、余额不足 409 `INSUFFICIENT_BALANCE`（带 `available`）、退款幂等、`price-quote` 5/1（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/admin-api/cloud-host-billing.test.ts` | 云电脑运行 Key：个人租户铸造 → STARTING 拒绝 → RUNNING 放行 → 软删除/过期/撤销失效；**团队租户 `ownerId=tenantId` 铸造 + 网关放行 + userId/其他租户拒绝**（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/cloud-host-billing-quote.test.ts` | `cloudHostBillingQuote` 转发价目（创建 5 credits / 运行 1 credit/分钟；需 `ADMIN_API_URL`） |
-| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/多台并行/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.10.0` |
+| `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/多台并行/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.12.0`（基线 2.12.0）；DEEPSEEK_HARNESS 创建同为 2.12.0 |
 | `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等、未 ready 自动退款留痕、已 ready 不退）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝（需 `MONGODB_URI`） |
-| `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.10.0`（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
+| `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.12.0`（基线 2.12.0）（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
 
 > `K8S_ENABLED=false` 下无法产生真实 RUNNING 容器；在线、OpenCode ACP、真实默认会话链路由单测 + 真实集群手工验收覆盖，不引入测试后门。
 
@@ -771,9 +780,41 @@ npm test
 | T-MB* | 我的费用：账户派生自登录主体、账单/收据/调用记录/汇总、API Key 管理 |
 
 
+### 日志与可观测性（T-OBS*，`src/observability/`）
+
+| 测试 | 描述 |
+|------|------|
+| T-OBS8 / T-OBS21（`src/observability/vendor-consistency.test.ts`） | vendor 一致性与同步幂等：5 包 7 文件与单源 `packages/observability/src` 内容全等（文件头 `GENERATED ... — DO NOT EDIT` 必须存在）；`node scripts/sync-observability.mjs --check` 重复运行输出一致、退出码 0 |
+| T-OBS19（API 横切，`src/observability/http-crosscut.test.ts`，需 live 服务） | 四服务 `/health` 与 GraphQL 响应带 `x-request-id`；入站合法值（`/^[A-Za-z0-9._:-]{8,128}$/`）沿用、非法值重生成为 UUID v4（以响应头回显断言；日志字段 `requestIdReplaced: true` 由单测 T-OBS12 `servers/cloud-controller/src/observability/http-context.test.ts` 的 `normalizeRequestId` 口径覆盖，live 用例不断言日志字段）；错误响应 join 后不含 token/password 明文（以 `INTERNAL_API_TOKEN` / `ADMIN_INITIAL_PASSWORD` 实际值 + 哨兵值断言）。模块加载时探测各服务 `/health`，不可达时对应用例 skip 并输出 `aspire start` 启动指引 |
+| T-OBS22（publishJson 封套巡检，`src/observability/publish-envelope.test.ts`，静态扫描可独立运行） | agent-api / controller-api 发布点全部经 `publishJson`（静态扫描 + 白名单断言：`redis.publish(` 直接调用数为 0，豁免需行内 `// publish-envelope-ok: <原因>`）；报文顶层注入 `_meta.traceparent` 且消费者容忍 `_meta` 缺失（历史报文行为不变） |
+| 全仓验收扫描（`src/observability/invariant-scan.test.ts`，静态扫描可独立运行） | `servers/*/src` console 直出 0 命中（**含 `src/migrations/`**：迁移已全量结构化，任何新增 console 即红）、`packages/agent-controller/src` 命中全部带 `// no-console-allow`、`apps/*/src` 仅 `src/lib/logger.ts` 命中；`interface Logger` 重复声明清零 |
+
+> `OTEL_*` 环境变量**可选**：未配置 `OTEL_EXPORTER_OTLP_ENDPOINT` = SDK 完全不启动、零外发，T-OBS 系列在无采集端环境下即通过；字段字典 / 传播规则 / 脱敏名单见 `contracts/observability.md`。
+
+## 多租户上线回归（2026-10-30）
+
+| 文件 | 说明 |
+|------|------|
+| `tests/api/src/agent-api/mcp-tenant-upsert.test.ts` | T-MCP-API1：个人租户 ensure 内置 `agent-workflow-admin-tools` → 加入团队租户 → 团队全局工作区再 ensure；断言不再触发 `userId_1_name_1` E11000、两条不同 tenantId 行并存、旧索引不存在（需 agent-api + admin-api + `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/agent-api/github-setup-upsert.test.ts` | T-GHS-API1~3：`githubAppUrl` 取 state → `GET /api/github/setup` 首次/重复绑定均 302 success；断言只落一行（不触发 tenantId code 40）、token 密文落库、installation 仓库清单正确（需 `GITHUB_API_BASE` 指向进程内 mock + `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/agent-api/schema-index-invariants.test.ts` | T-IDX-API1~3：`user_commit_settings` 固定名 workspace 唯一索引存在且默认名/旧索引不残留；`mcpservers` / `githubaccounts` 无无租户维度唯一索引；`githubaccounts` / `user_commit_settings.workspaceId` 无 BSON ObjectId 行（需 `MONGODB_URI`） |
+
+> `GITHUB_API_BASE` 同时用于 `agent-api/github.test.ts`（Check Runs）与本套件；agent-api 的 GitHub App 安装信息/仓库清单/卸载调用均走该 base（生产默认 `https://api.github.com`）。
+
 ## 云主机工作负载 / Github 设置
 
-- `src/agent-api/cloud-host-workload.test.ts`：需要 `MONGODB_URI` + `HARNESS_ENABLED=true`，直插 `controllers/controllerworkspaces/cloudhosts` 造一个在线云主机，覆盖 `cloudHostWorkloads` 归属校验、`cloudHostWorkloadCatalog`（鉴权 + standard 列表 + `installed=false`）、Github 帐号锁定（T-GH-API-L1 首绑落库 / L2 异帐号拒绝 `github account is locked` / L3 同帐号换仓库放行）与 Github setup 输入校验（前缀相对路径/`..`/仓库格式与 `~` 展开矩阵：`~/workspace`/`~`/`~//a` 接受并归一、`~abc` 以「前缀地址必须以 / 或 ~ 开头」拒绝、`~/a/../b` 拒绝，T-GH-API-P1~P4）；不调用真实 GitHub。
+- `src/agent-api/cloud-host-workload.test.ts`：需要 `MONGODB_URI` + `HARNESS_ENABLED=true`，直插 `controllers/controllerworkspaces/cloudhosts` 造一个在线云主机，覆盖 `cloudHostWorkloads` 归属校验、**harness 条目（`workloadKind=HARNESS`、`installed` 标记，T-AH-API1）**、**`installCloudHostWorkload` 放行 harness 且已安装走 SKIPPED 幂等（T-AH-API2）**、`cloudHostWorkloadCatalog`（鉴权 + standard 列表 + `installed=false`）、Github 帐号锁定（T-GH-API-L1 首绑落库 / L2 异帐号拒绝 `github account is locked` / L3 同帐号换仓库放行）与 Github setup 输入校验（前缀相对路径/`..`/仓库格式与 `~` 展开矩阵：`~/workspace`/`~`/`~//a` 接受并归一、`~abc` 以「前缀地址必须以 / 或 ~ 开头」拒绝、`~/a/../b` 拒绝，T-GH-API-P1~P4）；不调用真实 GitHub。
 - `src/agent-api/cloud-host.test.ts`：新增创建期 `workloadIds` 用例（T-CH-API-W2/W3/W4：Docker 可创建、超 5 个 → `too many workloads (max 5)`、不存在 ID → `invalid workload`、harness ID → `workload is not installable`）；不传 `workloadIds` 的历史路径由既有创建用例覆盖。
 - `src/admin-api/cloud-workload.test.ts`：`adminCloudWorkloads` 断言 `workloadKind`/`harnessType`（standard → `STANDARD`/null，harness → `HARNESS`/`opencode`，T-ADM-WL-API1）。
-- 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖。
+- 真实 token 签发由 `servers/agent-api/src/services/github.test.ts`（mock fetch）覆盖；凭据接口鉴权/归属/无绑定/状态由 `routes/internal-cloud-host.test.ts` 覆盖；`GET /api/github/setup` 的 upsert 冲突回归由 `tests/api/src/agent-api/github-setup-upsert.test.ts` 覆盖。
+
+## 云存储（云电脑支持申请存储）
+
+| 文件 | 说明 |
+|------|------|
+| `src/agent-api/cloud-storage.test.ts` | T-CS-CAP / T-BILL-S1 / T-CS1 / T-CS2 / T-CS4 / T-CS5 / T-CS6 / T-CS7 / T-CS-A2 / T-CS-AR5；`HARNESS_ENABLED=true` 时追加 T-CS-A1 / A3 / AR1 / AR2（挂载占用、并发抢挂拒绝、已挂载不可销毁、停止后归档半价）。需要 Aspire（cloud-controller 以 `K8S_ENABLED=false` 的 InMemory PVC/Job 承接） |
+| `src/agent-api/cloud-storage-billing.test.ts` | T-BILL-S1/S6：`storage-quote` 阶梯边界（1/10/11/20/25/30Gi 全价/半价）、`storage-charges` 的 FULL/HALF 账单（`category=storage`、三档 items、归档半价描述）、幂等重放与参数校验；需要 `INTERNAL_API_TOKEN` |
+| `src/cloud-controller/cloud-storage.test.ts` | T-CC-P2/P3/D1/AR1/AR2/J3：PVC 幂等/规格冲突、cleanup、归档端点无存储 409、harness `storage` 校验（pvcName/sizeGi/restore 路径）；需要 `CLOUD_CONTROLLER_INTERNAL_TOKEN` |
+| `src/agent-api/workspace.test.ts` | 工作区资源口径 10→11 由 `servers/agent-api/src/services/workspace-service.test.ts` 的 `T-WSP-CS1` 覆盖（存在未销毁云存储时拒绝删除工作区） |
+
+> 存储相关 E2E 使用 `CLOUD_STORAGE_ENABLED=true`（缺省）+ `HARNESS_ENABLED=true` + `MONGODB_URI`；关闭能力时用例显式 skip。

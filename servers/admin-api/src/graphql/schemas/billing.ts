@@ -16,6 +16,7 @@ export const billingTypeDefs = `#graphql
     container
     model
     manual
+    storage
   }
 
   enum BillingRollupGranularity {

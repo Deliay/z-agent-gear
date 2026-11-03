@@ -74,7 +74,7 @@ export class ControllerService {
     const controller = await Controller.findOneAndUpdate(
       { _id: id, ...actorFilter(userId) },
       { name },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean();
     if (!controller) return null;
     return this.mapController(controller);
@@ -103,7 +103,7 @@ export class ControllerService {
     const controller = await Controller.findOneAndUpdate(
       { _id: id, ...actorFilter(userId) },
       { worktreeDir },
-      { new: true },
+      { returnDocument: 'after' },
     ).lean();
     if (!controller) return null;
     return this.mapController(controller);

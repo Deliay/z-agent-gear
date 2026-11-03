@@ -492,7 +492,7 @@ describe.skipIf(!HARNESS_ENABLED)('Harness Login API: capabilities', () => {
 });
 
 describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Harness Login API: version gate', () => {
-  it('T-HL-API9: KIMI_CODE host persists agentGearMinVersion=2.10.0', async () => {
+  it('T-HL-API9: KIMI_CODE host persists agentGearMinVersion=2.12.0', async () => {
     const db = (await mongoDb())!;
     const token = await fundedUserToken();
     const name = `hl-kimi-${Date.now().toString(36)}`;
@@ -519,7 +519,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Harness Login API: version gate
       }
       expect(doc, 'cloud-controller should persist the container').toBeTruthy();
       expect(doc.harnessTypes).toEqual(['kimi_code']);
-      expect(doc.agentGearMinVersion).toBe('2.10.0');
+      expect(doc.agentGearMinVersion).toBe('2.12.0');
     } finally {
       await gqlRequest(STOP_CLOUD_HOST, { id: host.id, force: true }, token);
       await gqlRequest(DELETE_CLOUD_HOST, { id: host.id }, token);

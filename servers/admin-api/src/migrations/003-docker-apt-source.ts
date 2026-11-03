@@ -1,6 +1,9 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
 import { DOCKER_SCRIPT_V1 } from './001-preset-workloads.js';
 import { DOCKER_SCRIPT_V2 } from './002-refresh-docker-preset-script.js';
+
+const log = logger.child({ component: 'migration/003-docker-apt-source' });
 
 /**
  * 003-docker-apt-source：把存量（管理员未定制过的）「Docker」预制工作负载脚本从自包含 v2 刷新为
@@ -10,7 +13,7 @@ import { DOCKER_SCRIPT_V2 } from './002-refresh-docker-preset-script.js';
  * 初始化必然失败。本期把内网代理地址做成工作负载参数默认值，脚本 v3 直接消费该参数。
  *
  * 刷新口径：
- * - 未定制判定严格相等：`initScript ∈ {V1, V2, V3}` 才处理；其余视为管理员定制，`console.warn`
+ * - 未定制判定严格相等：`initScript ∈ {V1, V2, V3}` 才处理；其余视为管理员定制，打 `warn`
  *   且不覆盖、不补参数（定制脚本不消费该参数）。
  * - `initScript` 非 V3 则刷新为 V3；`paramSchema` 缺 `docker_apt_url`（只按 key 判定）则追加参数；
  *   有变更才 `save()`，参数已存在则完全不动（含管理员改过的默认值）。
@@ -166,8 +169,9 @@ export async function run(): Promise<void> {
     // 防御（沿用 002）：001 可能因同名冲突跳过，这里按精确 name 再查一次，避免创建重名项。
     const byName = await CloudWorkload.findOne({ name: DOCKER_PRESET_NAME });
     if (byName) {
-      console.warn(
-        `[Migration 003] workload named "${DOCKER_PRESET_NAME}" already exists without presetKey, skipping`,
+      log.warn(
+        { name: DOCKER_PRESET_NAME },
+        'workload already exists without presetKey, skipping',
       );
       return;
     }
@@ -180,7 +184,7 @@ export async function run(): Promise<void> {
       presetKey: DOCKER_PRESET_KEY,
       isPreset: true,
     });
-    console.log('[Migration 003] docker preset workload created (v3)');
+    log.info('docker preset workload created (v3)');
     return;
   }
 
@@ -189,7 +193,7 @@ export async function run(): Promise<void> {
   const isStock =
     script === DOCKER_SCRIPT_V1 || script === DOCKER_SCRIPT_V2 || script === DOCKER_SCRIPT_V3;
   if (!isStock) {
-    console.warn('[Migration 003] docker preset script modified by admin, skipping');
+    log.warn('docker preset script modified by admin, skipping');
     return;
   }
 
@@ -208,8 +212,8 @@ export async function run(): Promise<void> {
 
   if (changed) {
     await doc.save();
-    console.log('[Migration 003] docker preset script refreshed to v3 / docker_apt_url ensured');
+    log.info('docker preset script refreshed to v3 / docker_apt_url ensured');
   } else {
-    console.log('[Migration 003] docker preset already up-to-date, skipping');
+    log.info('docker preset already up-to-date, skipping');
   }
 }

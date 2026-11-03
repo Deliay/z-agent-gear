@@ -1,10 +1,13 @@
 import express, { type Request, type Response } from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { parseEventCallbackPayload, EventPayloadError } from '../services/workflow/pr-event-payload.js';
 import { handlePullRequestEvent } from '../services/workflow/pr-event-handler.js';
 
 export const eventCallbackRouter = express.Router();
+
+const logger = rootLogger.child({ component: 'event-callback' });
 
 function timingSafeEquals(actual: string, expected: string): boolean {
   if (!actual || !expected) return false;
@@ -48,7 +51,7 @@ eventCallbackRouter.post(
   express.raw({ type: 'application/json', limit: '1mb' }),
   async (req: Request, res: Response) => {
     if (!isAuthorized(req)) {
-      console.warn('[event-callback] unauthorized');
+      logger.warn({ event: 'unauthorized' }, 'unauthorized event callback');
       res.status(401).json({ error: 'unauthorized' });
       return;
     }
@@ -72,7 +75,7 @@ eventCallbackRouter.post(
       const response = await handlePullRequestEvent(event);
       res.json(response);
     } catch (err) {
-      console.error('[event-callback] handler failed:', (err as Error).message);
+      logger.error({ err }, 'event handler failed');
       res.json({ handled: false, reason: 'HANDLER_FAILED', results: [] });
     }
   },

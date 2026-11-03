@@ -76,7 +76,7 @@ export const mcpServerResolvers = {
       const server = await McpServer.findOneAndUpdate(
         { _id: id, userId: context.currentUser.id },
         { $set: { enabled } },
-        { new: true },
+        { returnDocument: 'after' },
       ).lean();
       if (!server) {
         throw new GraphQLError('Server not found');

@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { parseLogLevel, type LogLevel } from '../logger.js';
+import { parseLogLevel, type LogLevel } from '../observability/logger.js';
 
 dotenv.config();
 
@@ -37,6 +37,22 @@ export interface AppConfig {
   adminApiUrl: string;
   /** 云电脑 Job 临时存储上限（`JOB_EPHEMERAL_STORAGE`，默认 10Gi）。 */
   jobEphemeralStorage: string;
+  /** 云存储默认 StorageClass（`CLOUD_STORAGE_CLASS`，空 = 集群默认）。 */
+  cloudStorageClass: string;
+  /** 归档 PVC StorageClass（`CLOUD_ARCHIVE_STORAGE_CLASS`，空 = 集群默认）。 */
+  cloudArchiveStorageClass: string;
+  /** 归档 PVC 容量（`CLOUD_ARCHIVE_PVC_SIZE`，默认 100Gi）。 */
+  cloudArchivePvcSize: string;
+  /** 归档 PVC 访问模式（`CLOUD_ARCHIVE_ACCESS_MODE`，默认 ReadWriteOnce，可逗号分隔）。 */
+  cloudArchiveAccessMode: string;
+  /** archiver 镜像（`ARCHIVER_IMAGE`；缺失启动告警，归档/恢复不可用）。 */
+  archiverImage: string;
+  /** 归档超时（`ARCHIVE_TIMEOUT_MS`，默认 1800000）。 */
+  archiveTimeoutMs: number;
+  /** 源 PVC 名称前缀（`STORAGE_PVC_PREFIX`，默认 `zag-storage-`）。 */
+  storagePvcPrefix: string;
+  /** 归档 PVC 名称前缀（`ARCHIVE_PVC_PREFIX`，默认 `zag-archive-`）。 */
+  archivePvcPrefix: string;
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -111,6 +127,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     ),
     adminApiUrl: env.ADMIN_API_URL ?? '',
     jobEphemeralStorage: (env.JOB_EPHEMERAL_STORAGE ?? '').trim() || '10Gi',
+    cloudStorageClass: (env.CLOUD_STORAGE_CLASS ?? '').trim(),
+    cloudArchiveStorageClass: (env.CLOUD_ARCHIVE_STORAGE_CLASS ?? '').trim(),
+    cloudArchivePvcSize: (env.CLOUD_ARCHIVE_PVC_SIZE ?? '').trim() || '100Gi',
+    cloudArchiveAccessMode:
+      (env.CLOUD_ARCHIVE_ACCESS_MODE ?? '').trim() || 'ReadWriteOnce',
+    archiverImage: (env.ARCHIVER_IMAGE ?? '').trim(),
+    archiveTimeoutMs: toPositiveIntStrict(
+      env.ARCHIVE_TIMEOUT_MS,
+      'ARCHIVE_TIMEOUT_MS',
+      1800000,
+    ),
+    storagePvcPrefix: (env.STORAGE_PVC_PREFIX ?? '').trim() || 'zag-storage-',
+    archivePvcPrefix: (env.ARCHIVE_PVC_PREFIX ?? '').trim() || 'zag-archive-',
   };
 }
 

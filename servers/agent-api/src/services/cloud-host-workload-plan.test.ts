@@ -30,7 +30,7 @@ const CATALOG = [DOCKER, DOTNET, ASPIRE, NODE];
 const HARNESS = [{ id: 'harness-opencode' }];
 
 describe('resolveCreateWorkloadPlan', () => {
-  it('T-WP1: 仅 harness 时保持 required=true、implicit=false', () => {
+  it('T-AH4/T-WP1: harness 为可选负载（required=false、implicit=false、固定在前）', () => {
     const plan = resolveCreateWorkloadPlan({
       harnessPresets: HARNESS,
       selectedIds: [],
@@ -38,8 +38,18 @@ describe('resolveCreateWorkloadPlan', () => {
     });
 
     expect(plan).toEqual([
-      { workloadId: 'harness-opencode', params: {}, implicit: false, required: true },
+      { workloadId: 'harness-opencode', params: {}, implicit: false, required: false },
     ]);
+  });
+
+  it('T-AH4: 0 harness + 0 standard 时 plan 为空数组（契约 A.2.2 放宽）', () => {
+    const plan = resolveCreateWorkloadPlan({
+      harnessPresets: [],
+      selectedIds: [],
+      standardCatalog: CATALOG,
+    });
+
+    expect(plan).toEqual([]);
   });
 
   it('T-WP2: 选中 Aspire 时依赖先行，standard 项 required=false', () => {
@@ -55,7 +65,7 @@ describe('resolveCreateWorkloadPlan', () => {
       'dotnet',
       'aspire',
     ]);
-    expect(plan[0]).toMatchObject({ required: true, implicit: false });
+    expect(plan[0]).toMatchObject({ required: false, implicit: false });
     expect(plan[1]).toMatchObject({ required: false, implicit: true });
     expect(plan[3]).toMatchObject({ required: false, implicit: false });
   });
@@ -313,6 +323,7 @@ describe('resolveCreateWorkloadPlan', () => {
       standardCatalog: CATALOG,
     });
     expect(plan.map((entry) => entry.workloadId)).toEqual(['docker']);
-    expect(plan[0]).toMatchObject({ required: true, implicit: false });
+    // harness 预置优先（required=false）：显式重复 ID 不再追加 standard 项
+    expect(plan[0]).toMatchObject({ required: false, implicit: false });
   });
 });

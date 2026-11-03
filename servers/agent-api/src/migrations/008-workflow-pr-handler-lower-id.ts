@@ -1,4 +1,7 @@
 import mongoose from 'mongoose';
+import { logger } from '../observability/logger.js';
+
+const log = logger.child({ component: 'migration/008-workflow-pr-handler-lower-id' });
 
 export const name = '008-workflow-pr-handler-lower-id';
 
@@ -16,5 +19,5 @@ export async function run(): Promise<void> {
     [{ $set: { pullRequestIdLower: { $toLower: '$pullRequestId' } } }],
   );
   await collection.createIndex({ pullRequestIdLower: 1 });
-  console.log('[Migration 008] Backfilled pullRequestIdLower and ensured index');
+  log.info('backfilled pullRequestIdLower and ensured index');
 }

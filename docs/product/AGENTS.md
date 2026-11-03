@@ -151,10 +151,17 @@ flowchart LR
 - [[draft/20261028-mongodb-workload.md]] — 增加工作负载「MongoDB」（原生 apt 经内网源安装 MongoDB 8.0：工作负载目录新增预制标准工作负载、安装成功以 mongod --version 硬校验且不拉起实例、幂等可重复、失败可恢复）
 - [[draft/20261028-playwright-workload.md]] — 增加工作负载「Playwright」（新增「Playwright」预制工作负载：安装测试工具与内置浏览器 Chromium/Firefox/WebKit、浏览器下载走内网 playwright-proxy 且下载地址可按次调整、三入口安装与幂等可用保障）
 - [[draft/20261029-interrupted-call-token-billing.md]] — 调用中断的 token 计费优化（中断调用输入 token 按 20% 未缓存 + 80% 已缓存计价、输出保持全价，明细保留中断标注并体现输入两段拆分）
+- [[draft/20261030-ui-optimization-phase4.md]] — UI 优化四期（侧边栏与工作流视图：侧边栏 VSCode 风格可折叠分区「主机/工作流/会话/网关」与跨环境聚合、拖拽调宽、主机层级缩进与空态收敛、人类节点侧边抽屉；工作流卡片两行化、图表竖向布局画布占满、节点卡片信息增强与主题跟随、黑板/PR/追加提示词资源上图、节点状态整体配色与加粗箭头连线）
+- [[draft/20261029-pnpm-workload-and-harness-optional.md]] — 云电脑组件安装切换 pnpm 与工作负载 Harness 可选化（云电脑内组件与工作负载（含 harness）安装统一由 npm 改为 pnpm、环境预装 pnpm；已运行云电脑设置-工作负载显示 harness 为可选工作负载、可后期按需安装；创建时 harness 改为可选可补装）
+- [[draft/20261030-unified-logging-and-otel.md]] — 规范化日志与全链路可观测性（全运行时统一结构化日志并取消自由文本打印、跨服务与云电脑 Job 的全链路追踪、请求标识与脱敏、级别/采样/外发开关可控）
+- [[draft/20261031-commit-with-bot-coauthor.md]] — Commit 与 bot 共同提交（设置页「Git」区块新增「与 bot 共同提交」勾选项：仅提交人为自定义时可用，勾选后 Worktree 提交以成员为主作者、平台 bot 为共同作者；云电脑自身提交仍为 bot 单独署名，旧版本云电脑与 bot 不可用时优雅降级）
+- [[draft/20261102-cloud-storage.md]] — 云电脑支持申请存储（设置-云存储按 1~30Gi 创建并阶梯小时计费、归属工作区并记录创建人；整块存储挂载为云电脑主目录且初始化工作负载前完成挂载、工作负载支持重复安装；状态机 待挂载/已挂载/归档中/已归档/已销毁（含创建失败），销毁云电脑时自动压缩为 .tar.gz2 原子替换写入工作区 100Gi 归档空间，已归档半价，已销毁折叠展示）
+- [[draft/20261102-controller-session-takeover.md]] — 云控制器重复登录改为新连接接管（同一 Key 再次登录不再拒绝新连接，改为接受新连接并踢出旧连接；重点修复 controller-api 重启后云容器内客户端自动重连被提示「已在线」的问题，旧连接被替换后不重连、不清 Key、不影响绑定与云电脑生命周期）
 
 ### 实现中文档（`shipping/`）
 
 - [[shipping/20261025-cloud-container-unlimited-lifetime.md]] — 云电脑取消最长运行时间限制（云端工作容器不再因到达时间上限被平台强制销毁）
+- [[shipping/20261029-commit-author-settings-optimization.md]] — Commit 作者设置优化（提交人由团队共享改为成员独立并迁入新增「Git」区块、提交人模式下线；「自定义」增加「导入Github帐号信息」弹窗并移除「Github帐号」类型（存量自动转换）；提交身份按上下文下发：云电脑自身=平台 bot、勾选 Worktree 的会话/工作流=创建者、Issue 拉起的工作流=触发人）
 
 ### 已发布文档（`released/`）
 

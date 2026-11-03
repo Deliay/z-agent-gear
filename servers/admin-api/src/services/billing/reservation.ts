@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { BillingLedger } from '../../models/billing-ledger.js';
 import {
   BillingReservation,
@@ -10,6 +11,8 @@ import { accountService, type AccountService } from './account-service.js';
 import { CreditCheckService, creditCheckService, type PreCheck } from './credit-check.js';
 import { documentId } from './id.js';
 import { ceilMinutes } from './money.js';
+
+const logger = rootLogger.child({ component: 'billing-reservation' });
 import { PaymentService, paymentService } from './payment.js';
 import { PricingService, pricingService } from './pricing.js';
 
@@ -189,7 +192,7 @@ export class ReservationService {
     const activated = await BillingReservation.findOneAndUpdate(
       { _id: reservationId, status: 'PENDING' },
       { $set: { status: 'ACTIVE' }, $inc: { version: 1 } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     return activated ?? (await BillingReservation.findById(reservationId))!;
   }
@@ -465,7 +468,7 @@ export class ReservationService {
     const claimed = await BillingReservation.findOneAndUpdate(
       { _id: reservationId, status: { $in: ['ACTIVE', 'PENDING'] }, version: reservation.version },
       { $set: { status: 'SETTLING' }, $inc: { version: 1 } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!claimed) {
       const latest = await this.findById(reservationId);
@@ -511,8 +514,9 @@ export class ReservationService {
       let billedThrough = Math.max(coverage.coveredEnd ?? from.getTime(), from.getTime());
       if (coverage.coveredEnd === null && !payment.applied) {
         // 历史无编码 final 行（`bizId` 未编码窗口终点）：无法从流水分辨覆盖终点，退回以游标为准（残余风险）。
-        console.warn(
-          `[billing] reservation ${reservationId} final charge lacks window end; falling back to cursor`,
+        logger.warn(
+          { reservationId },
+          '[billing] final charge lacks window end; falling back to cursor',
         );
       }
       if (billedThrough < endedAt.getTime()) {

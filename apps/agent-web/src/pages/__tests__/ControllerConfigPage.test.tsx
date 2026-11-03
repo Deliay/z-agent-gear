@@ -260,6 +260,59 @@ describe('ControllerConfigPage', () => {
       expect(screen.queryByRole('button', { name: '删除云电脑' })).not.toBeInTheDocument();
     });
 
+    it('RUNNING/STOPPED 云电脑展示已挂载云存储并可跳转设置', () => {
+      const onOpenStorage = vi.fn();
+      mockControllers([
+        makeController({
+          type: 'cloud',
+          cloudHost: makeCloudHost({
+            status: 'RUNNING',
+            storage: {
+              id: 'st-1',
+              name: '设计资料',
+              sizeGi: 20,
+              status: 'ATTACHED',
+              usageBytes: 1024,
+              hourlyCredits: 15,
+            },
+          }),
+        }),
+      ]);
+
+      render(
+        <ControllerConfigPage {...defaultProps} onOpenStorage={onOpenStorage} />,
+      );
+
+      expect(screen.getByTestId('cloud-host-storage')).toHaveTextContent('设计资料');
+      expect(screen.getByTestId('cloud-host-storage')).toHaveTextContent('20Gi');
+      expect(screen.getByTestId('cloud-host-storage')).toHaveTextContent('已挂载');
+      fireEvent.click(screen.getByRole('button', { name: '查看云存储设置' }));
+      expect(onOpenStorage).toHaveBeenCalledOnce();
+    });
+
+    it('STARTING 云电脑不展示已挂载云存储', () => {
+      mockControllers([
+        makeController({
+          type: 'cloud',
+          cloudHost: makeCloudHost({
+            status: 'STARTING',
+            storage: {
+              id: 'st-1',
+              name: '设计资料',
+              sizeGi: 20,
+              status: 'ATTACHING',
+              usageBytes: null,
+              hourlyCredits: 15,
+            },
+          }),
+        }),
+      ]);
+
+      render(<ControllerConfigPage {...defaultProps} />);
+
+      expect(screen.queryByTestId('cloud-host-storage')).not.toBeInTheDocument();
+    });
+
     it('T-AW-G1/G12 云电脑展示工作负载页签与 Github 页签入口', () => {
       mockControllers([
         makeController({ type: 'cloud', cloudHost: makeCloudHost({ status: 'RUNNING' }) }),

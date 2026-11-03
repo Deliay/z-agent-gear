@@ -4,6 +4,8 @@ import { BillingDeadLetter } from '../../../models/billing-dead-letter.js';
 import type { BillingService } from '../billing-service.js';
 import type { EventIngestService } from '../event-ingest.js';
 import type { BillingEventMessage } from './publisher.js';
+import type { MqLogger } from './connection.js';
+import { withSpan } from '../../../observability/trace.js';
 import {
   BILLING_DLX,
   BILLING_RETRY_EXCHANGE,
@@ -20,7 +22,7 @@ export interface MeteringConsumerDeps {
   ingest: EventIngestService;
   /** 发布下一期结算延迟消息。 */
   publishSettlement: (reservationId: string, accountId: string, cycleSeq: number) => Promise<void>;
-  logger?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void };
+  logger: MqLogger;
 }
 
 function headerNumber(msg: ConsumeMessage, key: string): number {
@@ -49,7 +51,7 @@ async function recordDeadLetter(
   queue: string,
   error: string,
   attempts: number,
-  logger: NonNullable<MeteringConsumerDeps['logger']>,
+  logger: MqLogger,
 ): Promise<void> {
   try {
     const payload = JSON.parse(msg.content.toString()) as Record<string, unknown>;
@@ -65,8 +67,9 @@ async function recordDeadLetter(
     });
   } catch (err) {
     // B6：留档失败不得静默——DLQ 拷贝有 TTL，Mongo 留档是唯一长期副本。
-    logger.warn?.(
-      `[billing-mq] failed to archive dead letter for ${msg.fields.routingKey}: ${(err as Error).message}`,
+    logger.warn(
+      { err, routingKey: msg.fields.routingKey },
+      '[billing-mq] failed to archive dead letter',
     );
   }
 }
@@ -78,7 +81,7 @@ async function recordDeadLetter(
  */
 function safePublish(
   channel: Channel,
-  logger: NonNullable<MeteringConsumerDeps['logger']>,
+  logger: MqLogger,
   exchange: string,
   routingKey: string,
   content: Buffer,
@@ -94,23 +97,20 @@ function safePublish(
     channel.publish(exchange, routingKey, content, options);
     return true;
   } catch (err) {
-    logger.warn?.(
-      `[billing-mq] publish to ${exchange}/${routingKey} failed (channel unavailable): ${(err as Error).message}`,
+    logger.warn(
+      { err, exchange, routingKey },
+      '[billing-mq] publish failed (channel unavailable)',
     );
     return false;
   }
 }
 
 /** 安全 ack：channel 已关闭时 ack 抛错只告警（原消息保留在 unacked，broker 断连会重投）。 */
-function safeAck(
-  channel: Channel,
-  msg: ConsumeMessage,
-  logger: NonNullable<MeteringConsumerDeps['logger']>,
-): void {
+function safeAck(channel: Channel, msg: ConsumeMessage, logger: MqLogger): void {
   try {
     channel.ack(msg);
   } catch (err) {
-    logger.warn?.(`[billing-mq] ack failed (channel unavailable): ${(err as Error).message}`);
+    logger.warn({ err }, '[billing-mq] ack failed (channel unavailable)');
   }
 }
 
@@ -128,7 +128,7 @@ export async function consumeWithRetry(
     routingKey: string;
     retryQueue: string;
     dlq: string;
-    logger: NonNullable<MeteringConsumerDeps['logger']>;
+    logger: MqLogger;
     handler: () => Promise<void>;
   },
 ): Promise<void> {
@@ -139,7 +139,10 @@ export async function consumeWithRetry(
     const retry = headerNumber(msg, CONSUMER_RETRY_HEADER) + 1;
     const message = err instanceof Error ? err.message : String(err);
     if (retry > config.rabbitmqRetryMax) {
-      options.logger.warn?.(`[billing-mq] ${options.routingKey} exceeded retries (${message}) → DLQ`);
+      options.logger.warn(
+        { err, routingKey: options.routingKey, retry },
+        '[billing-mq] consume exceeded retries → DLQ',
+      );
       await recordDeadLetter(msg, options.retryQueue, message, retry, options.logger);
       const published = safePublish(channel, options.logger, BILLING_DLX, options.dlq, msg.content, {
         persistent: true,
@@ -152,8 +155,9 @@ export async function consumeWithRetry(
       if (published) safeAck(channel, msg, options.logger);
       return;
     }
-    options.logger.warn?.(
-      `[billing-mq] ${options.routingKey} failed (retry ${retry}/${config.rabbitmqRetryMax}): ${message}`,
+    options.logger.warn(
+      { err, routingKey: options.routingKey, retry, maxRetries: config.rabbitmqRetryMax },
+      '[billing-mq] consume failed, re-queued with backoff',
     );
     // per-message expiration 实现指数退避（队列本身不设 TTL）
     const published = safePublish(
@@ -177,67 +181,78 @@ export async function startMeteringConsumer(
   channel: Channel,
   deps: MeteringConsumerDeps,
 ): Promise<void> {
-  const logger = deps.logger ?? console;
+  const logger = deps.logger;
   await channel.prefetch(config.rabbitmqPrefetch);
   await channel.consume(METERING_QUEUE, (msg) => {
     if (!msg) return;
     const routingKey = msg.fields.routingKey;
-    void consumeWithRetry(channel, msg, {
-      routingKey,
-      retryQueue: METERING_QUEUE,
-      dlq: METERING_DLQ,
-      logger,
-      handler: async () => {
-        const event = JSON.parse(msg.content.toString()) as BillingEventMessage;
-        const redelivered = wasRedelivered(msg);
-        const { created } = await deps.ingest.ingest({
-          eventId: event.eventId,
-          eventType: event.eventType,
-          occurredAt: event.occurredAt,
-          accountId: event.accountId,
-          resourceId: event.resourceId,
-          payload: event.payload,
-        });
-        if (event.eventType === 'container.ready') {
-          const startedAt = new Date(
-            String(event.payload?.billingStartedAt ?? event.occurredAt),
-          );
-          const result = await deps.billing.handleContainerReady({
-            accountId: event.accountId,
-            resourceId: event.resourceId,
-            occurredAt: startedAt,
-          });
-          // 门控副作用（阻断项 3）：仅「本次真正建了预留/首期」才投递下一期延迟消息，
-          // 避免重复投递的 container.ready 反复投 settlement 造成链路放大。
-          // R7：若上次投递延迟消息失败（消费侧重投），补投以恢复结算链（缺链兜底）。
-          // R10-2：只认消费侧重投/redelivered，发布侧 attempts 不再误触发。
-          // R-1：乱序门控命中（该资源已 destroyed/已 legacy 计费）时绝不投递结算链。
-          if (
-            !result.skipped &&
-            result.reservationId &&
-            (result.created || redelivered)
-          ) {
-            await deps.publishSettlement(result.reservationId, event.accountId, result.nextCycleSeq);
-          }
-          return;
-        }
-        await deps.billing.handleEvent({
-          eventId: event.eventId,
-          eventType: event.eventType,
-          accountId: event.accountId,
-          resourceId: event.resourceId,
-          occurredAt: new Date(event.occurredAt),
-          payload: event.payload,
-        });
-        // `created=false` 表示该事实此前已接入；记录型副作用本身由各自的幂等键门控，
-        // 此处仅作可观测性提示（不因重复接入而中断必要处理，避免 at-least-once 下漏处理）。
-        if (!created) {
-          logger.warn?.(`[billing-mq] duplicate event delivered: ${event.eventId}`);
-        }
+    // 消费循环每批一个 span（订阅回调入口，F11）：批内不逐消息/逐步骤开 span。
+    void withSpan(
+      'messaging.process',
+      {
+        'messaging.system': 'rabbitmq',
+        'messaging.destination.name': METERING_QUEUE,
+        'messaging.operation.type': 'process',
+        'messaging.batch.message_count': 1,
       },
-    }).catch((err) => {
+      () =>
+        consumeWithRetry(channel, msg, {
+          routingKey,
+          retryQueue: METERING_QUEUE,
+          dlq: METERING_DLQ,
+          logger,
+          handler: async () => {
+            const event = JSON.parse(msg.content.toString()) as BillingEventMessage;
+            const redelivered = wasRedelivered(msg);
+            const { created } = await deps.ingest.ingest({
+              eventId: event.eventId,
+              eventType: event.eventType,
+              occurredAt: event.occurredAt,
+              accountId: event.accountId,
+              resourceId: event.resourceId,
+              payload: event.payload,
+            });
+            if (event.eventType === 'container.ready') {
+              const startedAt = new Date(
+                String(event.payload?.billingStartedAt ?? event.occurredAt),
+              );
+              const result = await deps.billing.handleContainerReady({
+                accountId: event.accountId,
+                resourceId: event.resourceId,
+                occurredAt: startedAt,
+              });
+              // 门控副作用（阻断项 3）：仅「本次真正建了预留/首期」才投递下一期延迟消息，
+              // 避免重复投递的 container.ready 反复投 settlement 造成链路放大。
+              // R7：若上次投递延迟消息失败（消费侧重投），补投以恢复结算链（缺链兜底）。
+              // R10-2：只认消费侧重投/redelivered，发布侧 attempts 不再误触发。
+              // R-1：乱序门控命中（该资源已 destroyed/已 legacy 计费）时绝不投递结算链。
+              if (
+                !result.skipped &&
+                result.reservationId &&
+                (result.created || redelivered)
+              ) {
+                await deps.publishSettlement(result.reservationId, event.accountId, result.nextCycleSeq);
+              }
+              return;
+            }
+            await deps.billing.handleEvent({
+              eventId: event.eventId,
+              eventType: event.eventType,
+              accountId: event.accountId,
+              resourceId: event.resourceId,
+              occurredAt: new Date(event.occurredAt),
+              payload: event.payload,
+            });
+            // `created=false` 表示该事实此前已接入；记录型副作用本身由各自的幂等键门控，
+            // 此处仅作可观测性提示（不因重复接入而中断必要处理，避免 at-least-once 下漏处理）。
+            if (!created) {
+              logger.warn({ eventId: event.eventId }, '[billing-mq] duplicate event delivered');
+            }
+          },
+        }),
+    ).catch((err) => {
       // 双保险：consumeWithRetry 已不抛出，此处兜底防止任何意外 rejection 逃逸为进程崩溃。
-      logger.warn?.('[billing-mq] metering consume failed', (err as Error).message);
+      logger.warn({ err }, '[billing-mq] metering consume failed');
     });
   });
 }
@@ -245,43 +260,54 @@ export async function startMeteringConsumer(
 export interface SettlementConsumerDeps {
   billing: BillingService;
   publishSettlement: (reservationId: string, accountId: string, cycleSeq: number) => Promise<void>;
-  logger?: MeteringConsumerDeps['logger'];
+  logger: MqLogger;
 }
 
 export async function startSettlementConsumer(
   channel: Channel,
   deps: SettlementConsumerDeps,
 ): Promise<void> {
-  const logger = deps.logger ?? console;
+  const logger = deps.logger;
   await channel.prefetch(config.rabbitmqPrefetch);
   await channel.consume(SETTLEMENT_QUEUE, (msg) => {
     if (!msg) return;
-    void consumeWithRetry(channel, msg, {
-      routingKey: msg.fields.routingKey,
-      retryQueue: SETTLEMENT_QUEUE,
-      dlq: SETTLEMENT_DLQ,
-      logger,
-      handler: async () => {
-        const message = JSON.parse(msg.content.toString()) as SettlementMessage;
-        const redelivered = wasRedelivered(msg);
-        const result = await deps.billing.handleSettlementCycle(
-          message.reservationId,
-          message.cycleSeq,
-        );
-        // 门控副作用（阻断项 3）：仅「本轮确实完成结算」才投递下一期。
-        // 重复投递的 cycle 会被 `settleCycle` 去重门判为未结算（settled=false），不再投下一期。
-        // R7：消费侧重投消息补投下一期，恢复「上一轮投递失败」造成的结算链缺链。
-        // R10-2：发布侧 attempts 不再参与判定。
-        if (!result.shouldDestroy && (result.settled || redelivered)) {
-          await deps.publishSettlement(
-            message.reservationId,
-            message.accountId,
-            result.nextCycleSeq,
-          );
-        }
+    // 消费循环每批一个 span（订阅回调入口，F11）：批内不逐消息/逐步骤开 span。
+    void withSpan(
+      'messaging.process',
+      {
+        'messaging.system': 'rabbitmq',
+        'messaging.destination.name': SETTLEMENT_QUEUE,
+        'messaging.operation.type': 'process',
+        'messaging.batch.message_count': 1,
       },
-    }).catch((err) => {
-      logger.warn?.('[billing-mq] settlement consume failed', (err as Error).message);
+      () =>
+        consumeWithRetry(channel, msg, {
+          routingKey: msg.fields.routingKey,
+          retryQueue: SETTLEMENT_QUEUE,
+          dlq: SETTLEMENT_DLQ,
+          logger,
+          handler: async () => {
+            const message = JSON.parse(msg.content.toString()) as SettlementMessage;
+            const redelivered = wasRedelivered(msg);
+            const result = await deps.billing.handleSettlementCycle(
+              message.reservationId,
+              message.cycleSeq,
+            );
+            // 门控副作用（阻断项 3）：仅「本轮确实完成结算」才投递下一期。
+            // 重复投递的 cycle 会被 `settleCycle` 去重门判为未结算（settled=false），不再投下一期。
+            // R7：消费侧重投消息补投下一期，恢复「上一轮投递失败」造成的结算链缺链。
+            // R10-2：发布侧 attempts 不再参与判定。
+            if (!result.shouldDestroy && (result.settled || redelivered)) {
+              await deps.publishSettlement(
+                message.reservationId,
+                message.accountId,
+                result.nextCycleSeq,
+              );
+            }
+          },
+        }),
+    ).catch((err) => {
+      logger.warn({ err }, '[billing-mq] settlement consume failed');
     });
   });
 }

@@ -1,6 +1,9 @@
 import { actorFilter } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { Controller } from '../models/controller.js';
+
+const logger = rootLogger.child({ component: 'acp-options-cache' });
 
 /** acp:options:<controllerId>:<serverType>，由 controller-api 写入 */
 const ACP_OPTIONS_KEY_PREFIX = 'acp:options:';
@@ -31,11 +34,29 @@ async function deleteKeysByPattern(pattern: string): Promise<number> {
     } while (cursor !== '0');
     return deleted;
   } catch (err) {
-    console.warn(
-      `[acp-options-cache] invalidate ${pattern} failed:`,
-      (err as Error).message,
-    );
+    logger.warn({ pattern, err }, 'invalidate acp options cache failed');
     return 0;
+  }
+}
+
+/**
+ * 云电脑运行期新装 harness 成功后失效 ACP 探测缓存（实现计划裁决 16）：
+ * - `acp:capability:<controllerId>`（工具可用性列表）—— 新工具需重新探测才能出现在列表；
+ * - `acp:options:<controllerId>:<acpServerType>`（Mode/模型选项）—— 探测失败的空结果不应继续命中。
+ * 失败只告警，不阻断安装主流程（TTL 兜底）。
+ */
+export async function invalidateAcpHarnessInstall(
+  controllerId: string,
+  acpServerType: string,
+): Promise<void> {
+  try {
+    const redis = getRedisClient();
+    await redis.del(
+      `acp:capability:${controllerId}`,
+      `${ACP_OPTIONS_KEY_PREFIX}${controllerId}:${acpServerType}`,
+    );
+  } catch (err) {
+    logger.warn({ controllerId, acpServerType, err }, 'invalidate acp caches after harness install failed');
   }
 }
 
@@ -56,10 +77,7 @@ export async function invalidateAcpOptionsForUser(userId: string): Promise<numbe
   try {
     controllers = await Controller.find(actorFilter(userId)).select('_id').lean();
   } catch (err) {
-    console.warn(
-      '[acp-options-cache] list controllers failed:',
-      (err as Error).message,
-    );
+    logger.warn({ userId, err }, 'list controllers failed');
     return 0;
   }
   let deleted = 0;

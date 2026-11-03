@@ -87,8 +87,8 @@ describe('K8sJobManager', () => {
     // 最长运行时间无限制：不设置 activeDeadlineSeconds，避免活跃容器被 K8s 到期强杀
     expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toBeUndefined();
-    expect(resources.limits).toEqual({ cpu: '4', memory: '16Gi', 'ephemeral-storage': '10Gi' });
+    expect(resources.requests).toEqual({ cpu: '0.1', memory: '256Mi' });
+    expect(resources.limits).toEqual({ cpu: '4', memory: '8Gi', 'ephemeral-storage': '10Gi' });
   });
 
   it('T-K5b: JOB_EPHEMERAL_STORAGE override applies to limits', () => {
@@ -99,7 +99,7 @@ describe('K8sJobManager', () => {
       token: 'container-1.secret',
     });
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toBeUndefined();
+    expect(resources.requests).toEqual({ cpu: '0.1', memory: '256Mi' });
     expect(resources.limits['ephemeral-storage']).toBe('5Gi');
   });
 
@@ -111,7 +111,7 @@ describe('K8sJobManager', () => {
       token: 'container-1.secret',
     });
     const resources = manifest.spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toBeUndefined();
+    expect(resources.requests).toEqual({ cpu: '0.1', memory: '256Mi' });
     expect(resources.limits['ephemeral-storage']).toBe('10Gi');
   });
 
@@ -232,5 +232,39 @@ describe('K8sJobManager', () => {
       'ZAG_CONTROLLER_KEY',
     ]);
     expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
+  });
+
+  it('T-OBS15: 观测 env（OTEL_*/ZAG_INIT_TRACEPARENT）追加在业务 env 之后（先业务后观测）', () => {
+    const { manager } = setup();
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-otel',
+      containerId: 'container-o',
+      token: 'container-o.secret',
+      env: {
+        ZAG_HOST_NAME: 'my-pc',
+        ZAG_USER_TYPE: 'front_user',
+        OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector:4318',
+        OTEL_EXPORTER_OTLP_PROTOCOL: 'http/protobuf',
+        OTEL_SERVICE_NAME: 'agent-gear',
+        OTEL_TRACES_SAMPLER: 'parentbased_traceidratio',
+        OTEL_TRACES_SAMPLER_ARG: '1.0',
+        OTEL_RESOURCE_ATTRIBUTES: 'zag.container.id=container-o',
+        ZAG_INIT_TRACEPARENT: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+      },
+    });
+
+    expect(manifest.spec.template.spec.containers[0]!.env.map((e) => e.name)).toEqual([
+      'ZAG_SERVER_ENDPOINT',
+      'ZAG_CONTROLLER_KEY',
+      'ZAG_HOST_NAME',
+      'ZAG_USER_TYPE',
+      'OTEL_EXPORTER_OTLP_ENDPOINT',
+      'OTEL_EXPORTER_OTLP_PROTOCOL',
+      'OTEL_SERVICE_NAME',
+      'OTEL_TRACES_SAMPLER',
+      'OTEL_TRACES_SAMPLER_ARG',
+      'OTEL_RESOURCE_ATTRIBUTES',
+      'ZAG_INIT_TRACEPARENT',
+    ]);
   });
 });

@@ -41,6 +41,7 @@ function linkage(overrides: Record<string, unknown> = {}) {
   return {
     _id: 'link-1',
     userId: 'user-1',
+    tenantId: 'team-1',
     controllerId: 'ctrl-1',
     configuredWorkflowId: 'wf-1',
     labelName: 'start-dev',
@@ -91,6 +92,8 @@ describe('handleIssuesEvent 判定链', () => {
     ]);
     expect(createTrigger).toHaveBeenCalledWith(
       expect.objectContaining({
+        // 事件入口无上下文：租户必须显式继承联动配置，否则会被写成 tenantId=userId
+        tenantId: 'team-1',
         issueId: '123',
         issueNumber: 42,
         issueTitle: '接入联动',

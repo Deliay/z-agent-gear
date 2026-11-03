@@ -193,7 +193,7 @@ export class ApiKeyService {
     const doc = await BillingApiKey.findOneAndUpdate(
       { _id: id, ownerType: owner.ownerType, ownerId: owner.ownerId },
       { $set: { status: 'revoked' } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!doc) throw new ApiKeyNotFoundError();
     return toDTO(doc);
@@ -205,7 +205,7 @@ export class ApiKeyService {
     const doc = await BillingApiKey.findOneAndUpdate(
       { _id: id },
       { $set: { status: 'revoked' } },
-      { new: true },
+      { returnDocument: 'after' },
     );
     if (!doc) throw new ApiKeyNotFoundError();
     return toDTO(doc);

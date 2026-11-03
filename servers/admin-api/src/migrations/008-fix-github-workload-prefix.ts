@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
+
+const log = logger.child({ component: 'migration/008-fix-github-workload-prefix' });
 
 /**
  * 008-fix-github-workload-prefix：修正 Github 预制项 `targetPath` 的语义与默认值。
@@ -31,7 +34,8 @@ export async function run(): Promise<void> {
   field.label = GITHUB_PREFIX_LABEL;
   doc.markModified('paramSchema');
   await doc.save();
-  console.log(
-    `[Migration 008] preset workload "${GITHUB_PRESET_KEY}" targetPath default updated to ${GITHUB_PREFIX_DEFAULT}`,
+  log.info(
+    { presetKey: GITHUB_PRESET_KEY, defaultValue: GITHUB_PREFIX_DEFAULT },
+    'preset workload targetPath default updated',
   );
 }

@@ -7,6 +7,7 @@ import { GitFork, Info, Loader2, Download } from 'lucide-react';
 import { AgentCapabilityPanel } from './AgentCapabilityPanel';
 import type { AgentCapabilitiesController } from '../../hooks/useAgentCapabilities';
 import type { SessionData } from '../../graphql/types';
+import { harnessLabel } from '../../lib/harness-labels';
 
 interface Session {
   id: string;
@@ -53,16 +54,6 @@ interface SessionHeaderProps {
 export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline, capabilities, capabilitySession, readOnly, onExport }: SessionHeaderProps) {
   const isMobile = useIsMobile();
   const [capabilityOpen, setCapabilityOpen] = useState(false);
-  const acpServerTypeLabels: Record<string, string> = {
-    opencode: 'OpenCode',
-    github_copilot: 'GitHub Copilot',
-    claude_code: 'Claude Code',
-    gemini_cli: 'Gemini CLI',
-    codex: 'Codex',
-    mimo_code: 'MiMo Code',
-    kimi_code: 'Kimi Code',
-    deepseek_harness: 'DeepSeek Harness',
-  };
 
   const continueBlocked = (capabilities?.isBlocked('session.resume') ?? false)
     && (capabilities?.isBlocked('session.load') ?? false);
@@ -80,7 +71,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
         </span>
         {session?.acpServerType && !isMobile && (
           <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-            {acpServerTypeLabels[session.acpServerType] || session.acpServerType}
+            {harnessLabel(session.acpServerType)}
           </span>
         )}
         {session?.cwd && !isMobile && (

@@ -7,11 +7,19 @@ import { Controller } from '../models/controller.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { McpServer } from '../models/mcp-server.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 import { ensureCloudHostToolsServer, CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
 import { actorFilter } from './workspace-context.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
+import {
+  commitSettingsService,
+  type ResolvedWorktreeCommitter,
+} from './commit-settings-service.js';
+
+const logger = rootLogger.child({ component: 'session' });
 
 const ACP_STOP_ACK_TIMEOUT_MS = 10_000;
 
@@ -150,6 +158,11 @@ export class SessionService {
     /** 初始工作模式/模型（工作流节点配置，harness 会话启动时应用） */
     modeId?: string;
     modelId?: string;
+    /**
+     * Worktree 提交人：`undefined` = 按会话创建者实时解析；显式 `null` = 不下发（bot）；
+     * 工作流节点场景由调用方显式传入实例快照（复用同一身份）。
+     */
+    worktreeCommitter?: ResolvedWorktreeCommitter | null;
     /** 内部编排：允许在云电脑 STARTING 窗口创建默认会话（ready 回调原子写 RUNNING+defaultSessionId） */
     allowStartingCloudHost?: boolean;
   }): Promise<Record<string, unknown>> {
@@ -255,14 +268,21 @@ export class SessionService {
       const wtPath = path.join(worktreeDir, safeName, `${input.worktreeBranchSuffix}-${uniqueSuffix}`);
 
       const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      await redis.publish('session:command', JSON.stringify({
+      // Worktree 提交人：调用方显式传入优先（工作流节点复用实例快照）；
+      // 未传时按会话创建者实时解析；解析失败降级 null（沿用容器级 bot）。
+      const worktreeCommitter =
+        input.worktreeCommitter !== undefined
+          ? input.worktreeCommitter
+          : await this.resolveWorktreeCommitter(userId);
+      await publish('session:command', {
         type: 'git:worktree:add',
         requestId,
         controllerId: input.controllerId,
         repoPath: workspace.path,
         worktreePath: wtPath,
         branch,
-      }));
+        ...(worktreeCommitter ? { committer: worktreeCommitter } : {}),
+      });
 
       let added = false;
       for (let i = 0; i < 30; i++) {
@@ -376,7 +396,7 @@ export class SessionService {
     }
 
     // Notify controller-api to start ACP session via Redis Pub/Sub
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:start',
       sessionId: session._id.toString(),
       controllerId: input.controllerId,
@@ -385,9 +405,21 @@ export class SessionService {
       mcpEndpoint,
       ...(input.modeId ? { modeId: input.modeId } : {}),
       ...(input.modelId ? { modelId: input.modelId } : {}),
-    }));
+    });
 
     return this.mapSession(session.toObject());
+  }
+
+  /** Worktree 提交人实时解析（独立会话）：失败降级 null（沿用容器级 bot），不阻断建会话。 */
+  private async resolveWorktreeCommitter(
+    userId: string,
+  ): Promise<ResolvedWorktreeCommitter | null> {
+    try {
+      return await commitSettingsService.resolveWorktreeCommitter(userId);
+    } catch (err) {
+      logger.warn({ event: 'resolve-committer-failed', err }, 'resolve worktree committer failed');
+      return null;
+    }
   }
 
   /** 云电脑停止/终态：该主机下所有非 ENDED 会话批量结束（只读，消息保留）。 */
@@ -411,7 +443,7 @@ export class SessionService {
     const result = await Session.findOneAndUpdate(
       { _id: id, ...actorFilter(userId) },
       updateData,
-      { new: true },
+      { returnDocument: 'after' },
     );
 
     if (result) {
@@ -434,11 +466,11 @@ export class SessionService {
     if (session.status !== 'idling') return false;
 
     const redis = getRedisClient();
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:set-mode',
       sessionId,
       modeId,
-    }));
+    });
     // 同步更新 Session 文档缓存，保证前端查询为最新值
     await Session.updateOne({ _id: sessionId, ...actorFilter(userId) }, { currentModeId: modeId });
     return true;
@@ -450,11 +482,11 @@ export class SessionService {
     if (session.status !== 'idling') return false;
 
     const redis = getRedisClient();
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:set-model',
       sessionId,
       modelId,
-    }));
+    });
     // 同步更新 Session 文档缓存，保证前端查询为最新值
     await Session.updateOne({ _id: sessionId, ...actorFilter(userId) }, { currentModelId: modelId });
     return true;
@@ -468,12 +500,12 @@ export class SessionService {
     if (!configOptions || configOptions.length === 0) return false;
 
     const redis = getRedisClient();
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:set-config-option',
       sessionId,
       configId,
       value,
-    }));
+    });
     return true;
   }
 
@@ -485,10 +517,10 @@ export class SessionService {
     await this.assertControllerWritable(session.controllerId, userId);
 
     const redis = getRedisClient();
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:cancel',
       sessionId,
-    }));
+    });
     return true;
   }
 
@@ -529,11 +561,11 @@ export class SessionService {
       const reissued = await mcpEndpointService.reissueEndpoint(id, userId);
       if (reissued) mcpEndpoint = reissued;
     } catch (err) {
-      console.error('Failed to reissue MCP endpoint on resume:', err instanceof Error ? err.message : err);
+      logger.error({ event: 'reissue-endpoint-failed', err }, 'failed to reissue MCP endpoint on resume');
     }
 
     const redis = getRedisClient();
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:resume',
       sessionId: id,
       controllerId: session.controllerId.toString(),
@@ -544,7 +576,7 @@ export class SessionService {
       // setMode/setModel 的 idling 守卫在 resume 阶段恒丢弃，不能作为应用通道
       ...(initial?.modeId ? { modeId: initial.modeId } : {}),
       ...(initial?.modelId ? { modelId: initial.modelId } : {}),
-    }));
+    });
     return { success: true, status: 'connecting' };
   }
 
@@ -574,11 +606,11 @@ export class SessionService {
         await mcpEndpointService.revokeEndpoint(id);
       }
       // Notify controller-api to stop ACP session
-      await redis.publish('session:command', JSON.stringify({
+      await publish('session:command', {
         type: 'acp:stop',
         sessionId: id,
         reason: opts?.reason ?? 'user_close',
-      }));
+      });
       // 工作流兜底检查：受控关闭（节点完成/重启/复工）不触发
       if (!opts?.suppressFallback) {
         await this.sessionEndedCallback?.(id);
@@ -601,15 +633,15 @@ export class SessionService {
       // Drop any stale ack (e.g. written by a user_close acp:stopped) so
       // waitForStopAck only consumes an ack produced after this stop request.
       await redis.del(`acp:stop:ack:${id}`);
-      await redis.publish('session:command', JSON.stringify({
+      await publish('session:command', {
         type: 'acp:stop',
         sessionId: id,
         reason: 'user_delete',
-      }));
+      });
       if (!opts?.skipAckWait) {
         const stopAckReceived = await this.waitForStopAck(redis, id);
         if (!stopAckReceived) {
-          console.warn('ACP stop ack timeout, proceeding with cleanup', { sessionId: id });
+          logger.warn({ event: 'stop-ack-timeout', sessionId: id }, 'ACP stop ack timeout, proceeding with cleanup');
         }
       }
     }
@@ -624,12 +656,12 @@ export class SessionService {
 
       // 1. git:status — detect if clean
       const statusReqId = `gs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      await redis.publish('session:command', JSON.stringify({
+      await publish('session:command', {
         type: 'git:status',
         requestId: statusReqId,
         controllerId: session.controllerId.toString(),
         path: (session as any).worktreePath,
-      }));
+      });
 
       let isClean = false;
       for (let i = 0; i < 30; i++) {
@@ -646,13 +678,13 @@ export class SessionService {
       // 2. non-clean → git:commit
       if (!isClean) {
         const commitReqId = `gc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        await redis.publish('session:command', JSON.stringify({
+        await publish('session:command', {
           type: 'git:commit',
           requestId: commitReqId,
           controllerId: session.controllerId.toString(),
           path: (session as any).worktreePath,
           message: 'chore: workspace cleanup code stash',
-        }));
+        });
         for (let i = 0; i < 30; i++) {
           const result = await redis.get(`git:commit:${commitReqId}`);
           if (result) {
@@ -665,13 +697,13 @@ export class SessionService {
 
       // 3. git:worktree:remove
       const rmReqId = `wr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-      await redis.publish('session:command', JSON.stringify({
+      await publish('session:command', {
         type: 'git:worktree:remove',
         requestId: rmReqId,
         controllerId: session.controllerId.toString(),
         repoPath,
         worktreePath: (session as any).worktreePath,
-      }));
+      });
 
       for (let i = 0; i < 30; i++) {
         const result = await redis.get(`git:worktree:remove:${rmReqId}`);
@@ -775,10 +807,10 @@ export class SessionService {
 
     // Publish to Redis for SSE
     const redis = getRedisClient();
-    redis.publish('session:message', JSON.stringify({
+    publish('session:message', {
       sessionId,
       message: mappedMessage,
-    }));
+    });
 
     return mappedMessage;
   }
@@ -800,11 +832,11 @@ export class SessionService {
 
     // Trigger ACP capability detection via Redis Pub/Sub
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:check',
       requestId,
       controllerId,
-    }));
+    });
 
     // Poll Redis cache for result (controller-api will cache it after detection)
     for (let i = 0; i < 20; i++) {
@@ -861,12 +893,12 @@ export class SessionService {
     }
 
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:probe-options',
       requestId,
       controllerId,
       serverType: acpServerType,
-    }));
+    });
 
     for (let i = 0; i < 70; i++) {
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -899,9 +931,9 @@ export class SessionService {
       await getRedisClient().del(`acp:options:${controllerId}:${acpServerType}`);
     } catch (err) {
       // C-9：删除失败不能静默回退到旧缓存（用户点「刷新」却看到陈旧结果）
-      console.warn(
-        `[session] delete acp options cache failed for ${controllerId}:`,
-        (err as Error).message,
+      logger.warn(
+        { event: 'delete-acp-options-failed', controllerId, err },
+        'delete acp options cache failed',
       );
       throw new Error('刷新失败，请重试');
     }
@@ -922,10 +954,10 @@ export class SessionService {
     await redis.del(`acp:capability:${controllerId}`);
 
     // Notify controller-api to invalidate its in-memory cache
-    await redis.publish('session:command', JSON.stringify({
+    await publish('session:command', {
       type: 'acp:cache:invalidate',
       controllerId,
-    }));
+    });
 
     // Trigger fresh detection and return result
     return this.getAcpCapabilities(controllerId, userId);

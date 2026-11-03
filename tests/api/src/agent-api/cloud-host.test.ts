@@ -130,8 +130,29 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     );
     expect(longName.errors?.[0].message).toBe('name is too long');
 
-    const noHarness = await gql(CREATE, { input: { name: 'cloud', harnessTypes: [] } }, token);
-    expect(noHarness.errors?.[0].message).toBe('at least one harness type is required');
+    const unsupported = await gql(
+      CREATE,
+      { input: { name: 'cloud', harnessTypes: ['UNKNOWN'] } },
+      token,
+    );
+    expect(unsupported.errors?.[0].message).toBe('unsupported harness type: UNKNOWN');
+  });
+
+  it('T-AH-CREATE: harness 可选——0 个 harness 创建成功并先扣费', async () => {
+    const token = await fundedUserToken();
+    const name = `cloud-noharness-${Date.now().toString(36)}`;
+    const created = await gql(CREATE, { input: { name, harnessTypes: [] } }, token);
+    expect(created.errors).toBeUndefined();
+    expect(created.data.createCloudHost).toMatchObject({
+      name,
+      harnessTypes: [],
+      defaultSessionId: null,
+      activeSessionCount: 0,
+    });
+    // 请求报文保留空数组（不被服务端改写为其他 harness 类型）
+    const list = await gql(MY_HOSTS, undefined, token);
+    const mine = list.data.myCloudHosts.find((host: { name: string }) => host.name === name);
+    expect(mine?.harnessTypes).toEqual([]);
   });
 
   it('T-CH7/T-CH10/T-CH11: create/list/owner isolation/multi-host/stop/delete', async () => {
@@ -569,9 +590,9 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   });
 });
 
-// Kimi Code（Harness）：创建校验 + 逐容器 2.10.0 版本门禁（T-CH-API-K1）
+// Kimi Code（Harness）：创建校验 + 逐容器 2.12.0 版本门禁（基线 2.12.0；T-CH-API-K1）
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
-  it('T-CH-API-K1: accepts KIMI_CODE (multi-select) and stores agentGearMinVersion=2.10.0', async () => {
+  it('T-CH-API-K1: accepts KIMI_CODE (multi-select) and stores agentGearMinVersion=2.12.0', async () => {
     const token = await fundedUserToken();
     const created = await gql(
       CREATE,
@@ -598,7 +619,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
       }
       expect(doc, 'cloud-controller should persist the container').toBeTruthy();
       expect(doc.harnessTypes).toEqual(['opencode', 'kimi_code']);
-      expect(doc.agentGearMinVersion).toBe('2.10.0');
+      expect(doc.agentGearMinVersion).toBe('2.12.0');
     } finally {
       await gql(STOP, { id: host.id, force: true }, token);
       await gql(DELETE, { id: host.id }, token);
@@ -606,9 +627,9 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
   });
 });
 
-// DeepSeek Harness（Harness）：创建校验 + 逐容器 2.11.0 版本门禁（T-DS-API2/3）
+// DeepSeek Harness（Harness）：创建校验 + 逐容器 2.12.0 版本门禁（T-DS-API2/3）
 describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', () => {
-  it('T-DS-API2/T-DS-API3: accepts DEEPSEEK_HARNESS (single & multi) and stores agentGearMinVersion=2.11.0', async () => {
+  it('T-DS-API2/T-DS-API3: accepts DEEPSEEK_HARNESS (single & multi) and stores agentGearMinVersion=2.12.0', async () => {
     const token = await fundedUserToken();
     const created = await gql(
       CREATE,
@@ -635,7 +656,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', ()
       }
       expect(doc, 'cloud-controller should persist the container').toBeTruthy();
       expect(doc.harnessTypes).toEqual(['opencode', 'deepseek_harness']);
-      expect(doc.agentGearMinVersion).toBe('2.11.0');
+      expect(doc.agentGearMinVersion).toBe('2.12.0');
     } finally {
       await gql(STOP, { id: host.id, force: true }, token);
       await gql(DELETE, { id: host.id }, token);

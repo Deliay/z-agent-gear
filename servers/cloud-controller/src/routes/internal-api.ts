@@ -5,6 +5,7 @@ import {
   SUPPORTED_HARNESS_TYPES,
   type WorkloadPlanEntry,
 } from '../models/cloud-container.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import type { CloudContainerEntity } from '../repositories/container-repository.js';
 import {
   InMemoryWorkloadLogRepository,
@@ -22,11 +23,25 @@ import {
   type ContainerService,
   type StartHarnessOptions,
 } from '../services/container-service.js';
+import {
+  ContainerActiveError,
+  ContainerNotActiveError,
+  NoStorageError,
+  StorageArchiveRunningError,
+  StorageContainerNotFoundError,
+  StorageInUseError,
+  type StartStorageInput,
+  type StorageService,
+} from '../services/storage-service.js';
+import { StoragePvcConflictError } from '../services/k8s-storage-manager.js';
 import type { HarnessSecrets } from '../services/secret-store.js';
 import { resolveGlobalWorkspaceId } from '../services/workspace-resolver.js';
 import {
   harnessMinVersion,
+  isSupportedWorkerVersion,
   maxWorkerVersion,
+  sanitizeVersionForLog,
+  MIN_HARNESS_VERSION_BY_TYPE,
   MIN_HARNESS_WORKER_VERSION,
 } from '../services/worker-version.js';
 import {
@@ -38,10 +53,13 @@ import {
 import {
   ContainerBusyError,
   ContainerNotOnlineError,
+  HarnessEnvironmentUnavailableError,
   InvalidRuntimeBatchError,
   RuntimeContainerNotFoundError,
   type WorkloadDispatcher,
 } from '../services/workload-dispatcher.js';
+
+const log = rootLogger.child({ component: 'internal-api' });
 
 /** 单次启动可挂载的工作负载上限（契约 A.2.2 / 裁决 12）。 */
 export const MAX_WORKLOAD_IDS = 10;
@@ -76,6 +94,19 @@ export interface CloudContainerJson {
   controllerKeyId: string | null;
   containerApiKeyId: string | null;
   expiresAt: string | null;
+  // ---- 云存储（契约 A.3；历史行 null 容忍） ----
+  storageId: string | null;
+  storagePvcName: string | null;
+  storageSizeGi: number | null;
+  storageWorkspaceId: string | null;
+  storageRestorePath: string | null;
+  storageArchiveStatus: string | null;
+  storageArchiveId: string | null;
+  storageArchiveFileName: string | null;
+  storageArchiveUsageBytes: number | null;
+  storageArchiveStartedAt: string | null;
+  storageArchiveFinishedAt: string | null;
+  storageArchiveFailure: string | null;
 }
 
 /** 严格对齐契约附录 A.3 的 JSON 结构。 */
@@ -116,6 +147,22 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
     controllerKeyId: entity.controllerKeyId ?? null,
     containerApiKeyId: entity.containerApiKeyId ?? null,
     expiresAt: entity.expiresAt ? entity.expiresAt.toISOString() : null,
+    storageId: entity.storageId ?? null,
+    storagePvcName: entity.storagePvcName ?? null,
+    storageSizeGi: entity.storageSizeGi ?? null,
+    storageWorkspaceId: entity.storageWorkspaceId ?? null,
+    storageRestorePath: entity.storageRestorePath ?? null,
+    storageArchiveStatus: entity.storageArchiveStatus ?? null,
+    storageArchiveId: entity.storageArchiveId ?? null,
+    storageArchiveFileName: entity.storageArchiveFileName ?? null,
+    storageArchiveUsageBytes: entity.storageArchiveUsageBytes ?? null,
+    storageArchiveStartedAt: entity.storageArchiveStartedAt
+      ? entity.storageArchiveStartedAt.toISOString()
+      : null,
+    storageArchiveFinishedAt: entity.storageArchiveFinishedAt
+      ? entity.storageArchiveFinishedAt.toISOString()
+      : null,
+    storageArchiveFailure: entity.storageArchiveFailure ?? null,
   };
 }
 
@@ -150,6 +197,13 @@ export interface InternalRouterDeps {
    * 可注入用于单测（无需真库）。
    */
   resolveGlobalWorkspaceId?: (tenantId: string) => Promise<string | null>;
+  /**
+   * 在线 worker 上报版本读取（socketio-gateway 注册信息）：runtime 安装 harness 负载的
+   * 逐类型版本门禁使用；不可得（未注入/未注册）时放行并告警留痕（契约 A.2.5）。
+   */
+  getWorkerVersion?: (containerId: string) => string | undefined;
+  /** 云存储编排（PVC / 归档 / 恢复 / 用量 / 清理）；缺省时存储端点返回 503。 */
+  storageService?: StorageService;
 }
 
 /**
@@ -234,6 +288,8 @@ interface ParsedHarnessRequest {
   controllerId: string | null;
   expiresAt: Date;
   secrets: HarnessSecrets;
+  /** 云存储挂载（可选；缺省 null 表示不挂载）。 */
+  storage: StartStorageInput | null;
 }
 
 /** `parseHarnessRequest` 的可注入依赖（单测免真库）。 */
@@ -253,14 +309,14 @@ async function resolveHarnessWorkspaceId(
   try {
     const resolved = await resolver(tenantId);
     if (resolved) return resolved;
-    console.warn(
-      `[internal-api] harness 请求缺少 workspaceId 且未解析到全局工作区（tenantId=${tenantId}），已置 workspaceId=null`,
+    log.warn(
+      { tenantId },
+      'harness 请求缺少 workspaceId 且未解析到全局工作区，已置 workspaceId=null',
     );
   } catch (err) {
-    console.warn(
-      `[internal-api] harness 请求缺少 workspaceId，解析全局工作区失败（tenantId=${tenantId}）：${
-        err instanceof Error ? err.message : String(err)
-      }，已置 workspaceId=null`,
+    log.warn(
+      { tenantId, err: err instanceof Error ? err : new Error(String(err)) },
+      'harness 请求缺少 workspaceId，解析全局工作区失败，已置 workspaceId=null',
     );
   }
   return null;
@@ -268,6 +324,84 @@ async function resolveHarnessWorkspaceId(
 
 function nonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+/** 源 PVC 名称（服务端生成；契约 A.2.2）。 */
+export const STORAGE_PVC_NAME_PATTERN = /^zag-storage-[a-z0-9-]+$/;
+/** StorageClass 名称（DNS-1123 subdomain 子集）。 */
+export const STORAGE_CLASS_PATTERN = /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/;
+/** 归档路径（24 位 hex 工作区/存储 ID + ASCII 安全化文件名；裁决 6）。 */
+export const ARCHIVE_PATH_PATTERN =
+  /^\/archive\/[a-f0-9]{24}\/[a-f0-9]{24}\/[A-Za-z0-9._-]{1,120}\.tar\.gz2$/;
+/** 归档文件名（ASCII 安全化 + 时间戳；agent-api 生成、cloud-controller 原样落库）。 */
+export const ARCHIVE_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]{1,120}\.tar\.gz2$/;
+
+/**
+ * 解析/校验启动请求的 `storage`（契约 A.2.2 / T-CC-J3）：
+ * - 缺省/`null` → `null`（不挂载，行为与现状一致）；
+ * - 非法 → `undefined`（调用方 400 INVALID_HARNESS，不创建 Job）。
+ */
+export function parseStorageRequest(raw: unknown): StartStorageInput | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+
+  const id = nonEmptyString(record.id);
+  const pvcName = nonEmptyString(record.pvcName);
+  const workspaceId = nonEmptyString(record.workspaceId);
+  if (!id || !pvcName || !workspaceId) return undefined;
+  if (!/^[a-f0-9]{24}$/.test(id)) return undefined;
+  // 源卷名必须与 storageId 对应（服务端派生），避免挂载到错误卷。
+  if (pvcName !== `zag-storage-${id}` || !STORAGE_PVC_NAME_PATTERN.test(pvcName)) {
+    return undefined;
+  }
+
+  const sizeGi = record.sizeGi;
+  if (
+    typeof sizeGi !== 'number' ||
+    !Number.isInteger(sizeGi) ||
+    sizeGi < 1 ||
+    sizeGi > 30
+  ) {
+    return undefined;
+  }
+
+  let storageClass: string | null = null;
+  const rawClass = record.storageClass;
+  if (rawClass !== undefined && rawClass !== null && rawClass !== '') {
+    if (
+      typeof rawClass !== 'string' ||
+      rawClass.length > 63 ||
+      !STORAGE_CLASS_PATTERN.test(rawClass)
+    ) {
+      return undefined;
+    }
+    storageClass = rawClass;
+  }
+
+  let restore: { archivePath: string } | null = null;
+  const rawRestore = record.restore;
+  if (rawRestore !== undefined && rawRestore !== null) {
+    if (typeof rawRestore !== 'object' || Array.isArray(rawRestore)) return undefined;
+    const archivePath = nonEmptyString((rawRestore as Record<string, unknown>).archivePath);
+    if (
+      !archivePath ||
+      archivePath.includes('..') ||
+      !ARCHIVE_PATH_PATTERN.test(archivePath)
+    ) {
+      return undefined;
+    }
+    restore = { archivePath };
+  }
+
+  return {
+    id,
+    pvcName,
+    sizeGi,
+    workspaceId,
+    storageClass,
+    restore,
+  };
 }
 
 function isStartablePurpose(value: unknown): value is (typeof STARTABLE_PURPOSES)[number] {
@@ -307,9 +441,7 @@ export async function parseHarnessRequest(
   let tenantId: string;
   if (rawTenantId === undefined || rawTenantId === null) {
     tenantId = userId;
-    console.warn(
-      `[internal-api] harness 请求缺少 tenantId（userId=${userId}），已回退 tenantId=userId（一期恒等）`,
-    );
+    log.warn({ userId }, 'harness 请求缺少 tenantId，已回退 tenantId=userId（一期恒等）');
   } else {
     const parsedTenantId = nonEmptyString(rawTenantId);
     if (!parsedTenantId) return null;
@@ -344,9 +476,9 @@ export async function parseHarnessRequest(
   }
 
   const harnessTypes = body.harnessTypes;
+  // harness 为可选工作负载：允许空数组（0-harness 云电脑）；非空时仍须全部在白名单内。
   if (
     !Array.isArray(harnessTypes) ||
-    harnessTypes.length === 0 ||
     harnessTypes.some(
       (value) =>
         typeof value !== 'string' ||
@@ -381,6 +513,10 @@ export async function parseHarnessRequest(
 
   const controllerId = nonEmptyString(body.controllerId);
 
+  // 云存储（可选）：非法 storage 直接 400 INVALID_HARNESS（不创建 Job）。
+  const storage = parseStorageRequest(body.storage);
+  if (storage === undefined) return null;
+
   return {
     hostId,
     refId,
@@ -391,8 +527,8 @@ export async function parseHarnessRequest(
     harnessTypes: [...new Set(harnessTypes as string[])],
     controllerKeyId,
     containerApiKeyId,
-    // C-4 / A7：落库下限恒为 MIN_HARNESS_WORKER_VERSION（2.10.0）；按类型常量为能力引入历史，
-    // 与 2.10.0 取 max 后不再改变落库值，注册门禁按落库值生效。
+    // C-4 / A7：落库下限恒为 MIN_HARNESS_WORKER_VERSION（2.12.0，worktree committer 能力）；
+    // 按类型常量为能力引入历史，与 2.12.0 取 max 后不再改变落库值，注册门禁按落库值生效。
     agentGearMinVersion: maxWorkerVersion(
       maxWorkerVersion(agentGearMinVersion, harnessMinVersion(harnessTypes as string[])),
       MIN_HARNESS_WORKER_VERSION,
@@ -400,7 +536,66 @@ export async function parseHarnessRequest(
     controllerId,
     expiresAt,
     secrets,
+    storage,
   };
+}
+
+/**
+ * runtime 安装 harness 负载的逐类型版本门禁（契约 A.2.5 第 3 条）。
+ *
+ * - 所需版本 = `max(MIN_HARNESS_VERSION_BY_TYPE[harnessType] ?? MIN_HARNESS_WORKER_VERSION,
+ *   MIN_HARNESS_WORKER_VERSION)`（复用 `worker-version.ts` 语义，不新造比较逻辑）；
+ * - 在线 worker 版本不可得（未注入/未注册）→ 放行并 `warn` 留痕；
+ * - 不满足 → 返回可读错误文案（调用方 400 `INVALID_WORKLOAD`）；满足 → `null`。
+ */
+function checkRuntimeHarnessVersionGate(
+  containerId: string,
+  workload: { name: string; workloadKind?: string | null; harnessType?: string | null } | undefined,
+  getWorkerVersion?: (containerId: string) => string | undefined,
+): string | null {
+  if (!workload) return null;
+  const isHarness =
+    String(workload.workloadKind ?? '').toLowerCase() === 'harness' ||
+    Boolean(workload.harnessType);
+  if (!isHarness) return null;
+
+  const harnessType = workload.harnessType ?? '';
+  const required = harnessType
+    ? maxWorkerVersion(
+        MIN_HARNESS_VERSION_BY_TYPE[harnessType] ?? MIN_HARNESS_WORKER_VERSION,
+        MIN_HARNESS_WORKER_VERSION,
+      )
+    : MIN_HARNESS_WORKER_VERSION;
+  const current = getWorkerVersion?.(containerId);
+  if (!current) {
+    log.warn(
+      {
+        component: 'internal-api',
+        event: 'runtime-harness-version-unknown',
+        containerId,
+        harnessType,
+        required,
+      },
+      'worker version unavailable; allowing harness install',
+    );
+    return null;
+  }
+  const support = isSupportedWorkerVersion(current, required);
+  if (support.supported) return null;
+  const currentVersion = sanitizeVersionForLog(current);
+  log.warn(
+    {
+      component: 'internal-api',
+      event: 'runtime-harness-version-rejected',
+      containerId,
+      harnessType,
+      required,
+      currentVersion,
+      reason: support.reason,
+    },
+    'worker version too low for harness install',
+  );
+  return `agent-gear 版本不兼容：安装「${workload.name}」需要 >= ${required}，当前 ${currentVersion}`;
 }
 
 export function createInternalRouter(
@@ -530,14 +725,8 @@ export function createInternalRouter(
       }
     }
 
-    // 契约 A.2.2：harness 的 workloadPlan 必填（缺失/展开为空均 400 INVALID_HARNESS）。
-    if (isHarness && (!hadExplicitPlan || effectivePlan.length === 0)) {
-      res.status(400).json({
-        error: 'INVALID_HARNESS',
-        message: '云电脑参数非法（workloadPlan 为空）',
-      });
-      return;
-    }
+    // 契约 A.2.2（本期放宽）：harness 的 workloadPlan **允许为空**（0 harness + 0 standard
+    // 场景）；无初始化脚本时容器直接 online，后续可在设置-工作负载补装。
 
     const harnessOptions: StartHarnessOptions = harness
       ? {
@@ -553,6 +742,7 @@ export function createInternalRouter(
           expiresAt: harness.expiresAt,
           controllerId: harness.controllerId,
           secrets: harness.secrets,
+          storage: harness.storage,
         }
       : {};
 
@@ -609,6 +799,11 @@ export function createInternalRouter(
       return;
     }
     if (err instanceof InvalidRuntimeBatchError) {
+      res.status(400).json({ error: 'INVALID_WORKLOAD', message: err.message });
+      return;
+    }
+    if (err instanceof HarnessEnvironmentUnavailableError) {
+      // 云端环境缺失属可读、可重试（用户可稍后重试或联系管理员），不下发半套配置。
       res.status(400).json({ error: 'INVALID_WORKLOAD', message: err.message });
       return;
     }
@@ -689,6 +884,16 @@ export function createInternalRouter(
         );
       if (entries.length === 0) {
         res.status(400).json({ error: 'INVALID_WORKLOAD', message: '工作负载无初始化脚本' });
+        return;
+      }
+      // 契约 A.2.5：harness 负载安装前逐类型版本门禁（版本不可得 → 放行 + 告警留痕）。
+      const gateError = checkRuntimeHarnessVersionGate(
+        containerId,
+        byId.get(workloadId),
+        deps.getWorkerVersion,
+      );
+      if (gateError) {
+        res.status(400).json({ error: 'INVALID_WORKLOAD', message: gateError });
         return;
       }
       const result = await workloadDispatcher.startRuntimeBatch(containerId, {
@@ -794,6 +999,214 @@ export function createInternalRouter(
         message: err instanceof Error ? err.message : String(err),
       });
     }
+  });
+
+  const storageService = deps.storageService;
+
+  function respondStorageError(res: Response, err: unknown): void {
+    if (err instanceof StorageContainerNotFoundError) {
+      res.status(404).json({ error: 'NOT_FOUND', message: err.message });
+      return;
+    }
+    if (err instanceof StoragePvcConflictError) {
+      res.status(409).json({ error: 'STORAGE_PVC_CONFLICT', message: err.message });
+      return;
+    }
+    if (err instanceof StorageInUseError) {
+      res.status(409).json({ error: 'STORAGE_IN_USE', message: err.message });
+      return;
+    }
+    if (err instanceof StorageArchiveRunningError) {
+      res.status(409).json({
+        error: 'ARCHIVE_RUNNING',
+        message: err.message,
+        ...(err.archiveId ? { archiveId: err.archiveId } : {}),
+      });
+      return;
+    }
+    if (err instanceof ContainerActiveError) {
+      res.status(409).json({ error: 'CONTAINER_ACTIVE', message: err.message });
+      return;
+    }
+    if (err instanceof ContainerNotActiveError) {
+      res.status(409).json({ error: 'CONTAINER_NOT_ACTIVE', message: err.message });
+      return;
+    }
+    if (err instanceof NoStorageError) {
+      res.status(409).json({ error: 'NO_STORAGE', message: err.message });
+      return;
+    }
+    res.status(500).json({
+      error: 'INTERNAL_ERROR',
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  function requireStorageService(res: Response): StorageService | null {
+    if (storageService) return storageService;
+    res.status(503).json({ error: 'UNAVAILABLE', message: 'storage service not configured' });
+    return null;
+  }
+
+  function paramString(value: string | string[] | undefined): string {
+    return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+  }
+
+  router.post('/storages', async (req: Request, res: Response) => {
+    const service = requireStorageService(res);
+    if (!service) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const storageId = nonEmptyString(body.storageId);
+    const tenantId = nonEmptyString(body.tenantId);
+    const workspaceId = nonEmptyString(body.workspaceId);
+    const sizeGi = body.sizeGi;
+    if (
+      !storageId ||
+      !tenantId ||
+      !workspaceId ||
+      typeof sizeGi !== 'number' ||
+      !Number.isInteger(sizeGi) ||
+      sizeGi < 1 ||
+      sizeGi > 30
+    ) {
+      res.status(400).json({
+        error: 'INVALID_BODY',
+        message: 'storageId/tenantId/workspaceId 与 sizeGi(1..30 整数) 为必填',
+      });
+      return;
+    }
+    let storageClass: string | null = null;
+    const rawClass = body.storageClass;
+    if (rawClass !== undefined && rawClass !== null && rawClass !== '') {
+      if (
+        typeof rawClass !== 'string' ||
+        rawClass.length > 63 ||
+        !STORAGE_CLASS_PATTERN.test(rawClass)
+      ) {
+        res.status(400).json({ error: 'INVALID_BODY', message: 'storageClass 非法' });
+        return;
+      }
+      storageClass = rawClass;
+    }
+    try {
+      const result = await service.createStorage({
+        storageId,
+        tenantId,
+        workspaceId,
+        sizeGi,
+        storageClass,
+      });
+      res.json(result);
+    } catch (err) {
+      respondStorageError(res, err);
+    }
+  });
+
+  router.get('/storages/:storageId', async (req: Request, res: Response) => {
+    const service = requireStorageService(res);
+    if (!service) return;
+    try {
+      res.json(await service.getStorage(paramString(req.params.storageId)));
+    } catch (err) {
+      respondStorageError(res, err);
+    }
+  });
+
+  router.delete('/storages/:storageId', async (req: Request, res: Response) => {
+    const service = requireStorageService(res);
+    if (!service) return;
+    try {
+      res.json(await service.deleteStorage(paramString(req.params.storageId)));
+    } catch (err) {
+      respondStorageError(res, err);
+    }
+  });
+
+  router.post('/storages/:storageId/usage-refresh', async (req: Request, res: Response) => {
+    const service = requireStorageService(res);
+    if (!service) return;
+    const storageId = paramString(req.params.storageId);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const containerId = nonEmptyString(body.containerId);
+    if (!containerId) {
+      res.status(400).json({ error: 'INVALID_BODY', message: 'containerId 为必填' });
+      return;
+    }
+    try {
+      res.json(await service.refreshUsage(storageId, containerId));
+    } catch (err) {
+      respondStorageError(res, err);
+    }
+  });
+
+  router.post('/storages/:storageId/cleanup', async (req: Request, res: Response) => {
+    const service = requireStorageService(res);
+    if (!service) return;
+    const storageId = paramString(req.params.storageId);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const workspaceId = nonEmptyString(body.workspaceId);
+    if (!workspaceId) {
+      res.status(400).json({ error: 'INVALID_BODY', message: 'workspaceId 为必填' });
+      return;
+    }
+    if (
+      body.deleteArchive !== undefined &&
+      body.deleteArchive !== null &&
+      typeof body.deleteArchive !== 'boolean'
+    ) {
+      res.status(400).json({ error: 'INVALID_BODY', message: 'deleteArchive 非法' });
+      return;
+    }
+    try {
+      const result = await service.cleanup({
+        storageId,
+        workspaceId,
+        deleteArchive: body.deleteArchive === true,
+      });
+      res.json(result);
+    } catch (err) {
+      respondStorageError(res, err);
+    }
+  });
+
+  router.post('/containers/:id/archive', async (req: Request, res: Response) => {
+    const service = requireStorageService(res);
+    if (!service) return;
+    const containerId = paramString(req.params.id);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const archiveId = nonEmptyString(body.archiveId);
+    const fileName = nonEmptyString(body.fileName);
+    if (!archiveId || !fileName || fileName.includes('..') || !ARCHIVE_FILE_NAME_PATTERN.test(fileName)) {
+      res.status(400).json({ error: 'INVALID_BODY', message: 'archiveId/fileName 非法' });
+      return;
+    }
+    try {
+      res.json(await service.startArchive(containerId, { archiveId, fileName }));
+    } catch (err) {
+      respondStorageError(res, err);
+    }
+  });
+
+  router.get('/containers/:id/archive', async (req: Request, res: Response) => {
+    const container = await containerService.getById(paramString(req.params.id));
+    if (!container) {
+      res.status(404).json({ error: 'NOT_FOUND', message: 'container not found' });
+      return;
+    }
+    const status = container.storageArchiveStatus;
+    res.json({
+      status: status ? status.toUpperCase() : 'NONE',
+      archiveId: container.storageArchiveId ?? null,
+      fileName: container.storageArchiveFileName ?? null,
+      usageBytes: container.storageArchiveUsageBytes ?? null,
+      startedAt: container.storageArchiveStartedAt
+        ? container.storageArchiveStartedAt.toISOString()
+        : null,
+      finishedAt: container.storageArchiveFinishedAt
+        ? container.storageArchiveFinishedAt.toISOString()
+        : null,
+      failureReason: container.storageArchiveFailure ?? null,
+    });
   });
 
   return router;

@@ -1,4 +1,7 @@
+import { logger } from '../observability/logger.js';
 import { BillingApiKey } from '../models/billing-api-key.js';
+
+const log = logger.child({ component: 'migration/010-clear-cloud-host-key-expiry' });
 
 /**
  * 010-clear-cloud-host-key-expiry：清空云电脑运行专用 Key 的固定有效期。
@@ -16,7 +19,5 @@ export async function run(): Promise<void> {
     { scope: 'cloud_host', status: 'active', expiresAt: { $ne: null } },
     { $set: { expiresAt: null } },
   );
-  console.log(
-    `[Migration 010] cleared cloud_host key expiry: ${result.modifiedCount ?? 0} key(s)`,
-  );
+  log.info({ clearedCount: result.modifiedCount ?? 0 }, 'cleared cloud_host key expiry');
 }

@@ -1,4 +1,5 @@
 import { cloudControllerClient } from '../cloud-controller-client.js';
+import { logger as rootLogger } from '../../observability/logger.js';
 import { BillingService } from './billing-service.js';
 import { ReconciliationService } from './reconciliation.js';
 import { reservationService } from './reservation.js';
@@ -43,4 +44,5 @@ export const billingRuntime = new BillingService({
 
 export const reconciliationRuntime = new ReconciliationService(billingRuntime, reservationService, {
   listContainers: listCloudContainers,
+  logger: rootLogger.child({ component: 'billing-recon' }),
 });

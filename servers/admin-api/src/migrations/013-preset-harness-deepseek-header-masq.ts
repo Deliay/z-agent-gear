@@ -1,9 +1,12 @@
+import { logger } from '../observability/logger.js';
 import { CloudWorkload } from '../models/cloud-workload.js';
 import {
   HARNESS_DEEPSEEK_INIT_SCRIPT,
   HARNESS_DEEPSEEK_INIT_SCRIPT_V1,
 } from './010-preset-harness-deepseek.js';
 import { HARNESS_DEEPSEEK_SCRIPT_V2 } from './012-worker-user-scripts.js';
+
+const log = logger.child({ component: 'migration/013-preset-harness-deepseek-header-masq' });
 
 /**
  * 013-preset-harness-deepseek-header-masq：把预置工作负载「DeepSeek Harness（Harness）」的
@@ -118,23 +121,23 @@ async function refresh(): Promise<void> {
       harnessType: 'deepseek_harness',
       initScript: HARNESS_DEEPSEEK_SCRIPT_V3,
     });
-    console.log(`[Migration 013] ${PRESET_KEY} created (v4)`);
+    log.info({ presetKey: PRESET_KEY }, 'preset workload created (v4)');
     return;
   }
   const doc = found.doc as unknown as MutableWorkload;
   if (found.viaName && !doc.initScript) {
-    console.warn(`[Migration 013] ${PRESET_NAME} exists without presetKey, skipping`);
+    log.warn({ name: PRESET_NAME }, 'workload exists without presetKey, skipping');
     return;
   }
   if (doc.initScript === HARNESS_DEEPSEEK_SCRIPT_V3) return;
   if (!OLD_SCRIPTS.includes(doc.initScript ?? '')) {
-    console.warn(`[Migration 013] ${PRESET_KEY} script modified by admin, skipping`);
+    log.warn({ presetKey: PRESET_KEY }, 'script modified by admin, skipping');
     return;
   }
   doc.initScript = HARNESS_DEEPSEEK_SCRIPT_V3;
   doc.markModified?.('initScript');
   await doc.save();
-  console.log(`[Migration 013] ${PRESET_KEY} script refreshed (dsh 0.2.1-rc.2 + header-masq plugin)`);
+  log.info({ presetKey: PRESET_KEY }, 'script refreshed (dsh 0.2.1-rc.2 + header-masq plugin)');
 }
 
 /** 未定制过的历史落库文本（010 V1 / 010 V2 / 012 V3）。 */

@@ -10,6 +10,7 @@ import { InMemoryContainerRepository } from '../repositories/container-repositor
 import { InMemoryWorkloadRepository } from '../repositories/workload-repository.js';
 import { InMemoryWorkloadLogRepository } from '../repositories/workload-log-repository.js';
 import type { CloudWorkloadEntity } from '../repositories/workload-repository.js';
+import { createTestLogger } from '../observability/testing.js';
 
 const INIT_TIMEOUT_MS = 1000;
 // 起始时钟取真实当前时间：内存日志仓储以 Date.now() 记录 createdAt，避免注入时钟早于
@@ -19,13 +20,20 @@ const NOW_BASE = Date.now();
 function mkWorkload(
   id: string,
   name: string,
-  opts: { initScript?: string | null; postScript?: string | null } = {},
+  opts: {
+    initScript?: string | null;
+    postScript?: string | null;
+    workloadKind?: string | null;
+    harnessType?: string | null;
+  } = {},
 ): CloudWorkloadEntity {
   return {
     id,
     name,
     initScript: opts.initScript ?? null,
     postScript: opts.postScript ?? null,
+    workloadKind: opts.workloadKind ?? 'standard',
+    harnessType: opts.harnessType ?? null,
     createdAt: new Date(0),
     updatedAt: new Date(0),
   };
@@ -72,6 +80,7 @@ function setup(
     secretStore?: SecretStore;
   } = {},
 ) {
+  const log = createTestLogger('workload-dispatcher');
   const repo = new InMemoryContainerRepository();
   const tokenService = new TokenService(repo);
   const jobManager = new K8sJobManager(new InMemoryK8sClient(), {
@@ -79,17 +88,22 @@ function setup(
     image: 'zero-tools/zag-worker:latest',
     publicWsEndpoint: 'cloud.example.com:4003',
   });
-  const containerService = new ContainerService(repo, tokenService, jobManager, {
-    namespace: 'zag-workers',
-    image: 'zero-tools/zag-worker:latest',
-    connectTimeoutMs: 300000,
-    shutdownGraceMs: 0,
-  });
+  const containerService = new ContainerService(
+    repo,
+    tokenService,
+    jobManager,
+    {
+      namespace: 'zag-workers',
+      image: 'zero-tools/zag-worker:latest',
+      connectTimeoutMs: 300000,
+      shutdownGraceMs: 0,
+    },
+    log.logger,
+  );
   const workloadRepository = new InMemoryWorkloadRepository();
   const workloadLogRepository = new InMemoryWorkloadLogRepository();
   const secretStore = options.secretStore ?? new SecretStore();
   const emitted: Array<{ containerId: string; event: string; payload: RunPayload }> = [];
-  const warnings: unknown[][] = [];
   const forceDestroyCalls: Array<{ containerId: string; reason: string }> = [];
   const connection = { connected: options.connected ?? true };
   let nowMs = NOW_BASE;
@@ -115,11 +129,7 @@ function setup(
     forceDestroy: (containerId, reason) => forceDestroyImpl.fn(containerId, reason),
     secretStore,
     now: () => nowMs,
-    logger: {
-      info: () => {},
-      warn: (...args: unknown[]) => warnings.push(args),
-      error: () => {},
-    },
+    logger: log.logger,
   });
 
   const createContainer = async (
@@ -175,7 +185,7 @@ function setup(
     secretStore,
     dispatcher,
     emitted,
-    warnings,
+    log,
     connection,
     forceDestroyCalls,
     forceDestroyImpl,
@@ -312,7 +322,7 @@ describe('WorkloadDispatcher - init 批次', () => {
 
 describe('WorkloadDispatcher - 结果幂等与串号', () => {
   it('T-WD5: 终态记录忽略重复结果；logId 不属于该容器则拒绝并告警', async () => {
-    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, warnings } =
+    const { dispatcher, workloadRepository, workloadLogRepository, createContainer, log } =
       setup();
     workloadRepository.add(mkWorkload('w1', 'init-a', { initScript: 'echo a' }));
     workloadRepository.add(mkWorkload('w2', 'init-b', { initScript: 'echo b' }));
@@ -333,12 +343,20 @@ describe('WorkloadDispatcher - 结果幂等与串号', () => {
     const secondLog = (await workloadLogRepository.findByContainer(second.id))[0]!;
     await dispatcher.handleResult(second.id, { logId: firstLog.id, status: 'failed' });
     expect((await workloadLogRepository.findById(secondLog.id))?.status).toBe('running');
-    expect(warnings.length).toBeGreaterThan(0);
+    expect(
+      log.records.some((r) => r.level === 'warn' && r.event === 'result-container-mismatch'),
+    ).toBe(true);
 
     // 未知 logId 不崩溃
     await dispatcher.handleResult(first.id, { logId: 'does-not-exist', status: 'success' });
+    expect(
+      log.records.some((r) => r.level === 'warn' && r.event === 'result-unknown-logid'),
+    ).toBe(true);
     // 缺少 logId 也不崩溃（记录告警）
     await dispatcher.handleResult(first.id, { status: 'success' });
+    expect(
+      log.records.some((r) => r.level === 'warn' && r.event === 'result-missing-logid'),
+    ).toBe(true);
   });
 
   it('T-WD5b: 结果日志按 WORKLOAD_LOG_MAX_BYTES 尾部截断', async () => {
@@ -1268,7 +1286,7 @@ describe('WorkloadDispatcher - harness env', () => {
 
   it('T-CC13: harness secret 缺失 → init 失败且不 online，日志不打印 secret', async () => {
     const secretStore = new SecretStore();
-    const { dispatcher, workloadRepository, createHarnessContainer, repo, runs, warnings } = setup({
+    const { dispatcher, workloadRepository, createHarnessContainer, repo, runs, log } = setup({
       secretStore,
     });
     workloadRepository.add(mkWorkload('w1', 'opencode', { initScript: 'echo init' }));
@@ -1282,9 +1300,12 @@ describe('WorkloadDispatcher - harness env', () => {
     const stored = await repo.findById(container.id);
     expect(stored?.status).toBe('failed');
     expect(stored?.exitReason).toContain('环境');
+    expect(
+      log.records.some((r) => r.level === 'warn' && r.event === 'harness-env-unavailable'),
+    ).toBe(true);
     // 告警文本不包含任何 secret 或模型 Key 占位
-    expect(JSON.stringify(warnings)).not.toContain('zag_sk_');
-    expect(JSON.stringify(warnings)).not.toContain('zag_k_');
+    expect(JSON.stringify(log.records)).not.toContain('zag_sk_');
+    expect(JSON.stringify(log.records)).not.toContain('zag_k_');
   });
 
   it('T-CC13: harness model 配置缺失视为错误（host 字段缺失则跳过对应变量）', async () => {
@@ -1427,6 +1448,153 @@ describe('WorkloadDispatcher - harness env', () => {
       expect(updated?.installedWorkloads).toEqual([]);
       expect(updated?.status).toBe('online');
       expect(forceDestroyCalls).toHaveLength(0);
+    });
+
+    it('T-CC-R1: purpose=harness 的 runtime 批次注入与 init 同源 env', async () => {
+      const secretStore = new SecretStore();
+      const { dispatcher, workloadRepository, createHarnessContainer, runs } = setup({
+        secretStore,
+      });
+      workloadRepository.add(
+        mkWorkload('w-h', 'OpenCode（Harness）', {
+          initScript: 'echo install',
+          workloadKind: 'harness',
+          harnessType: 'opencode',
+        }),
+      );
+      const container = await createHarnessContainer([], {
+        status: 'online',
+        harnessTypes: ['opencode'],
+      });
+      secretStore.put(container.id, secrets);
+
+      const result = await dispatcher.startRuntimeBatch(container.id, {
+        entries: [
+          {
+            workloadId: 'w-h',
+            workloadName: 'OpenCode（Harness）',
+            script: 'echo install',
+            params: {},
+          },
+        ],
+        source: 'user',
+      });
+      await dispatcher.handleResult(container.id, {
+        logId: result.items[0].logId,
+        status: 'success',
+      });
+
+      const env = runs('init').at(-1)!.payload.env as Record<string, string>;
+      expect(env).toMatchObject({
+        ZAG_HARNESS_TYPES: 'opencode',
+        ZAG_CONTAINER_ID: container.id,
+        ZAG_MODEL_API_KEY: secrets.modelApiKey,
+        ZAG_MODEL_BASE_URL: secrets.modelBaseUrl,
+        ZAG_MODEL_IDS: secrets.modelIds,
+        ZAG_DEFAULT_WORKSPACE: secrets.defaultWorkspace,
+      });
+
+      // idle 容器 runtime 批次不携带 env（口径不变）
+      const idle = setup();
+      const idleContainer = await idle.repo.create({
+        name: 'zag-worker-runtime-idle',
+        namespace: 'zag-workers',
+        purpose: 'idle',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'online',
+      });
+      await idle.dispatcher.startRuntimeBatch(idleContainer.id, {
+        entries: [{ workloadId: 'w1', workloadName: 'x', script: 'true', params: {} }],
+        source: 'user',
+      });
+      const idlePayload = idle.runs('init').at(-1)!.payload;
+      expect('env' in idlePayload).toBe(false);
+    });
+
+    it('T-CC-R2: harness env 解析失败 → 可读错误、不下发批次与日志、不打印 secret', async () => {
+      const { dispatcher, repo, workloadLogRepository, runs, log } = setup();
+      const container = await repo.create({
+        name: 'zag-worker-runtime-nosecret',
+        namespace: 'zag-workers',
+        purpose: 'harness',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'online',
+        harnessTypes: ['opencode'],
+      });
+
+      await expect(
+        dispatcher.startRuntimeBatch(container.id, {
+          entries: [{ workloadId: 'w1', workloadName: 'x', script: 'true', params: {} }],
+          source: 'user',
+        }),
+      ).rejects.toThrow('云电脑运行环境缺失');
+
+      expect(runs('init')).toHaveLength(0);
+      expect(await workloadLogRepository.findByContainer(container.id)).toEqual([]);
+      expect((await repo.findById(container.id))?.status).toBe('online');
+      expect(
+        log.records.some(
+          (r) => r.level === 'warn' && r.event === 'harness-env-unavailable' && r.phase === 'runtime',
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(log.records)).not.toContain('zag_sk_');
+    });
+
+    it('T-CC-R3: 安装成功追加 harnessTypes（$addToSet 去重）；失败/standard 不追加', async () => {
+      const secretStore = new SecretStore();
+      const { dispatcher, repo, workloadRepository } = setup({ secretStore });
+      workloadRepository.add(
+        mkWorkload('w-kimi', 'Kimi Code（Harness）', {
+          initScript: 'echo install',
+          workloadKind: 'harness',
+          harnessType: 'kimi_code',
+        }),
+      );
+      workloadRepository.add(mkWorkload('w-std', 'Docker', { initScript: 'echo docker' }));
+      const container = await repo.create({
+        name: 'zag-worker-runtime-harness-types',
+        namespace: 'zag-workers',
+        purpose: 'harness',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'online',
+        harnessTypes: ['opencode'],
+      });
+      secretStore.put(container.id, secrets);
+
+      const ok = await dispatcher.startRuntimeBatch(container.id, {
+        entries: [{ workloadId: 'w-kimi', workloadName: 'Kimi Code（Harness）', script: 'x', params: {} }],
+        source: 'user',
+      });
+      await dispatcher.handleResult(container.id, { logId: ok.items[0].logId, status: 'success' });
+      expect((await repo.findById(container.id))?.harnessTypes).toEqual(['opencode', 'kimi_code']);
+
+      // 重复成功不重复追加（$addToSet 去重）
+      const again = await dispatcher.startRuntimeBatch(container.id, {
+        entries: [{ workloadId: 'w-kimi', workloadName: 'Kimi Code（Harness）', script: 'x', params: {} }],
+        source: 'user',
+      });
+      await dispatcher.handleResult(container.id, { logId: again.items[0].logId, status: 'success' });
+      expect((await repo.findById(container.id))?.harnessTypes).toEqual(['opencode', 'kimi_code']);
+
+      // standard 负载成功不追加
+      const std = await dispatcher.startRuntimeBatch(container.id, {
+        entries: [{ workloadId: 'w-std', workloadName: 'Docker', script: 'x', params: {} }],
+        source: 'user',
+      });
+      await dispatcher.handleResult(container.id, { logId: std.items[0].logId, status: 'success' });
+      expect((await repo.findById(container.id))?.harnessTypes).toEqual(['opencode', 'kimi_code']);
+
+      // 失败结果不追加
+      const failed = await dispatcher.startRuntimeBatch(container.id, {
+        entries: [{ workloadId: 'w-kimi', workloadName: 'Kimi Code（Harness）', script: 'x', params: {} }],
+        source: 'mcp',
+      });
+      await dispatcher.handleResult(container.id, {
+        logId: failed.items[0].logId,
+        status: 'failed',
+        exitCode: 1,
+      });
+      expect((await repo.findById(container.id))?.harnessTypes).toEqual(['opencode', 'kimi_code']);
     });
 
     it('T-WD-R5: 非 online 容器拒绝 runtime 批次', async () => {

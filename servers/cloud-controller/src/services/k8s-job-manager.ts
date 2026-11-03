@@ -15,10 +15,11 @@ export const DELETE_MAX_ATTEMPTS = 3;
 
 /**
  * 工作容器资源约束：容器内含 dockerd，必须显式限制以免吃满节点。
- * 仅声明 limit 为资源耗尽时的硬上限；不设置 request（由 K8s 按 limit 处理）。
+ * request 为调度预留（0.1 vCPU / 256Mi），limit 为资源耗尽时的硬上限（4 vCPU / 8Gi）。
  */
 export const JOB_RESOURCES = {
-  limits: { cpu: '4', memory: '16Gi' },
+  requests: { cpu: '0.1', memory: '256Mi' },
+  limits: { cpu: '4', memory: '8Gi' },
 } as const;
 
 /**
@@ -69,6 +70,22 @@ export interface JobManagerConfig {
   publicWsEndpoint: string;
   /** 工作容器临时存储上限（仅 limits，不设 requests）；缺省 `10Gi`，由 `JOB_EPHEMERAL_STORAGE` 注入。 */
   ephemeralStorage?: string;
+  /** archiver 镜像（归档恢复 initContainer 使用；缺省时恢复挂载不可用）。 */
+  archiverImage?: string;
+}
+
+/**
+ * 云存储挂载参数（契约 A.2.2）：携带时 Pod 挂 `/home/worker` + `fsGroup`，
+ * 恢复时注入 `storage-restore` initContainer；**缺省时 manifest 与现状逐字节一致**。
+ */
+export interface JobStorageSpec {
+  pvcName: string;
+  /** 归档卷名称（仅 restore 时使用）。 */
+  archivePvcName?: string | null;
+  /** 本次启动恢复的归档完整路径（`/archive/<ws>/<storage>/<file>`）。 */
+  restorePath?: string | null;
+  /** 覆盖 JobManagerConfig.archiverImage（测试/多镜像场景）。 */
+  archiverImage?: string | null;
 }
 
 export interface CreateJobInput {
@@ -80,7 +97,20 @@ export interface CreateJobInput {
    * `ZAG_CONTROLLER_KEY` 始终由本模块注入且顺序在前。
    */
   env?: Record<string, string>;
+  /** 云存储挂载（可选；缺省不改变 manifest）。 */
+  storage?: JobStorageSpec | null;
 }
+
+/** 云电脑主目录固定挂载点（整块存储即 worker 主目录；提案实现点 3）。 */
+export const STORAGE_HOME_MOUNT_PATH = '/home/worker';
+
+/** 恢复 initContainer 脚本：解压归档到目标卷（`tar -xjf` = bzip2）。
+ *  镜像入口 `MODE=restore` 为唯一生效实现；此常量保留用于文档/单测口径说明。 */
+export const STORAGE_RESTORE_SCRIPT = [
+  'set -euo pipefail',
+  'tar -xjf "$RESTORE_FILE" -C /target',
+  'echo "ZAG_RESTORE_DONE"',
+].join('\n');
 
 export class K8sJobManager {
   /** 规范化后的 worker 对外地址；构造时即校验，非法 PUBLIC_WS_ENDPOINT fail-fast（建议 F）。 */
@@ -121,7 +151,7 @@ export class K8sJobManager {
                 ...Object.entries(input.env ?? {}).map(([name, value]) => ({ name, value })),
               ],
               resources: {
-                // 与 PR #268 口径一致：不设置 requests，仅声明 limits 硬上限
+                requests: { ...JOB_RESOURCES.requests },
                 limits: {
                   ...JOB_RESOURCES.limits,
                   'ephemeral-storage': this.cfg.ephemeralStorage ?? '10Gi',
@@ -137,6 +167,53 @@ export class K8sJobManager {
       // sysbox 要求 Pod 停用 host user namespace，否则 sandbox 创建失败
       // （见 K8sJobManifest.spec.template.spec.hostUsers 注释）。
       spec.template.spec.hostUsers = false;
+    }
+
+    // 云存储挂载（T-CC-J1/J2）：仅在携带 storage 时追加，未携带时 manifest 保持原样。
+    const storage = input.storage;
+    if (storage) {
+      spec.template.spec.securityContext = {
+        fsGroup: 1000,
+        fsGroupChangePolicy: 'OnRootMismatch',
+      };
+      const volumes: NonNullable<K8sJobManifest['spec']['template']['spec']['volumes']> = [
+        {
+          name: 'storage',
+          persistentVolumeClaim: { claimName: storage.pvcName },
+        },
+      ];
+      spec.template.spec.containers[0]!.volumeMounts = [
+        { name: 'storage', mountPath: STORAGE_HOME_MOUNT_PATH },
+      ];
+      const restorePath = storage.restorePath;
+      if (restorePath) {
+        const archiverImage = storage.archiverImage ?? this.cfg.archiverImage ?? '';
+        volumes.push({
+          name: 'archive',
+          persistentVolumeClaim: {
+            claimName: storage.archivePvcName ?? '',
+            readOnly: true,
+          },
+        });
+        spec.template.spec.initContainers = [
+          {
+            name: 'storage-restore',
+            image: archiverImage,
+            command: ['/usr/local/bin/archiver-entrypoint.sh'],
+            env: [
+              { name: 'MODE', value: 'restore' },
+              { name: 'RESTORE_FILE', value: restorePath },
+              { name: 'TARGET_DIR', value: '/target' },
+            ],
+            resources: { limits: { cpu: '2', memory: '2Gi' } },
+            volumeMounts: [
+              { name: 'storage', mountPath: '/target' },
+              { name: 'archive', mountPath: '/archive', readOnly: true },
+            ],
+          },
+        ];
+      }
+      spec.template.spec.volumes = volumes;
     }
 
     return {

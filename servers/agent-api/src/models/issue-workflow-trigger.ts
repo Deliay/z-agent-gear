@@ -38,6 +38,11 @@ const issueWorkflowTriggerSchema = new mongoose.Schema(
     issueTitle: { type: String, required: true },
     issueUrl: { type: String, default: null },
     issueAuthor: { type: String, default: null },
+    /** 触发人（GitHub `sender`，即添加触发标签者）快照 */
+    triggerSenderId: { type: Number, default: null },
+    triggerSenderLogin: { type: String, default: null },
+    /** 触发人经 `GitHubAccount.githubUserId` 匹配到的平台成员（未匹配为 null） */
+    triggerUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     /** Issue 正文快照（首个人类节点输入用；≤64000） */
     issueBody: { type: String, default: null },
     status: { type: String, enum: ISSUE_TRIGGER_STATUSES, default: 'PENDING_WORKSPACE' },

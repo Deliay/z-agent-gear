@@ -1,24 +1,29 @@
+import './observability/register.js';
 import { createServer, type Server as HttpServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import mongoose from 'mongoose';
 import { Server as SocketIOServer } from 'socket.io';
+import type { Logger as PinoLogger } from 'pino';
 import { assertRuntimeConfig, config } from './config/index.js';
-import { createLogger } from './logger.js';
+import { logger as rootLogger, type ObservationLogger } from './observability/logger.js';
+import { httpContext } from './observability/http-context.js';
 import { MongoContainerRepository } from './repositories/container-repository.js';
 import { MongoWorkloadRepository } from './repositories/workload-repository.js';
 import { MongoWorkloadLogRepository } from './repositories/workload-log-repository.js';
 import { TokenService } from './services/token-service.js';
 import { createK8sClient } from './services/k8s-client.js';
 import { K8sJobManager } from './services/k8s-job-manager.js';
+import { K8sStorageManager } from './services/k8s-storage-manager.js';
+import { StorageService } from './services/storage-service.js';
 import { ContainerService } from './services/container-service.js';
 import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
 import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
 import { WorkloadDispatcher } from './services/workload-dispatcher.js';
 import { SecretStore } from './services/secret-store.js';
-import { AgentApiClient } from './services/agent-api-client.js';
+import { AgentApiClient, type TerminalStorageState } from './services/agent-api-client.js';
 import { AdminBillingClient } from './services/admin-billing-client.js';
 import { wireSocketDiagnostics } from './services/socket-diagnostics.js';
 import {
@@ -56,7 +61,7 @@ export function harnessTerminalStatus(status: string, mustFailure = false): 'sto
 export async function retryHarnessCallback(
   label: string,
   task: () => Promise<void>,
-  logger: { warn?: (...args: unknown[]) => void; error?: (...args: unknown[]) => void } = console,
+  logger: ObservationLogger = rootLogger,
   delays: readonly number[] = [0, 250, 1000, 3000],
 ): Promise<void> {
   let lastError: unknown;
@@ -69,19 +74,23 @@ export async function retryHarnessCallback(
       return;
     } catch (err) {
       lastError = err;
-      logger.warn?.(`[harness] ${label} failed (attempt ${attempt + 1}/${delays.length})`, err);
+      logger.warn(
+        { component: 'harness', label, attempt: attempt + 1, maxAttempts: delays.length, err },
+        'harness callback failed, will retry',
+      );
     }
   }
-  logger.error?.(`[harness] ${label} failed after retries`, lastError);
+  logger.error({ component: 'harness', label, err: lastError }, 'harness callback failed after retries');
   throw lastError;
 }
 
-export function createCloudControllerApp(): CloudControllerApp {
+export function createCloudControllerApp(options: { logger?: PinoLogger } = {}): CloudControllerApp {
   assertRuntimeConfig(config);
-  const logger = createLogger(config.logLevel);
+  const logger = (options.logger ?? rootLogger).child({ component: 'cloud-controller' });
 
   const app = express();
   app.use(cors());
+  app.use(httpContext());
   app.use(express.json());
 
   app.get('/health', (_req, res) => {
@@ -98,7 +107,12 @@ export function createCloudControllerApp(): CloudControllerApp {
   });
 
   // 传输层诊断：记录每个 WS upgrade / engine 错误 / 误配路径（worker 经 Ingress 回连排查用）。
-  wireSocketDiagnostics({ httpServer, io, logger, enginePath: ENGINE_PATH });
+  wireSocketDiagnostics({
+    httpServer,
+    io,
+    logger: logger.child({ component: 'socket-diagnostics' }),
+    enginePath: ENGINE_PATH,
+  });
 
   const repo = new MongoContainerRepository();
   const workloadRepository = new MongoWorkloadRepository();
@@ -111,6 +125,7 @@ export function createCloudControllerApp(): CloudControllerApp {
     runtimeClassName: config.runtimeClassName,
     publicWsEndpoint: config.publicWsEndpoint,
     ephemeralStorage: config.jobEphemeralStorage,
+    archiverImage: config.archiverImage,
   });
   // 云电脑运行期 secret（仅内存）与内部回调客户端；地址为空时对应回调为 no-op。
   const secretStore = new SecretStore();
@@ -125,15 +140,46 @@ export function createCloudControllerApp(): CloudControllerApp {
     timeoutMs: config.agentApiTimeoutMs,
   });
   if (!agentApiClient.configured) {
-    logger.warn?.(
-      '[harness] AGENT_API_URL 未配置：云电脑 ready/terminal 回调将不会发送（云电脑可能停在 STARTING/RUNNING）',
+    logger.warn(
+      { component: 'harness' },
+      'AGENT_API_URL 未配置：云电脑 ready/terminal 回调将不会发送（云电脑可能停在 STARTING/RUNNING）',
     );
   }
   if (!adminBillingClient.configured) {
-    logger.warn?.(
-      '[harness] ADMIN_API_URL 未配置：容器终态撤销运行专用模型 Key 将不会发送（依赖 Key 过期/对账兜底）',
+    logger.warn(
+      { component: 'harness' },
+      'ADMIN_API_URL 未配置：容器终态撤销运行专用模型 Key 将不会发送（依赖 Key 过期/对账兜底）',
     );
   }
+  if (!config.archiverImage) {
+    logger.warn(
+      { component: 'cloud-storage' },
+      'ARCHIVER_IMAGE 未配置：云存储归档/恢复/用量/清理 Job 将无法拉取镜像',
+    );
+  }
+
+  // 云存储编排（PVC + 归档/恢复/用量/清理）：K8s 单一事实源，agent-api 不直连集群。
+  const storageManager = new K8sStorageManager(k8sClient, {
+    namespace: config.k8sNamespace,
+    storagePvcPrefix: config.storagePvcPrefix,
+    archivePvcPrefix: config.archivePvcPrefix,
+    storageClass: config.cloudStorageClass,
+    archiveStorageClass: config.cloudArchiveStorageClass,
+    archivePvcSize: config.cloudArchivePvcSize,
+    archiveAccessMode: config.cloudArchiveAccessMode,
+  });
+  const storageService = new StorageService({
+    repo,
+    k8sClient,
+    storageManager,
+    agentApiClient,
+    logger: logger.child({ component: 'cloud-storage' }),
+    config: {
+      namespace: config.k8sNamespace,
+      archiverImage: config.archiverImage,
+      archiveTimeoutMs: config.archiveTimeoutMs,
+    },
+  });
 
   /**
    * harness 生命周期回调重试：agent-api 短暂不可达时自动退避重试。
@@ -151,7 +197,7 @@ export function createCloudControllerApp(): CloudControllerApp {
       shutdownGraceMs: 10000,
       agentApiUrl: config.agentApiUrl,
     },
-    logger,
+    logger.child({ component: 'container-service' }),
     {
       // 生命周期钩子：先计费（只写本地 outbox，relay 异步发布），再云电脑回调；
       // 二者互不影响，各自失败独立告警（计费失败保留既有 3 次重试语义）。
@@ -210,6 +256,19 @@ export function createCloudControllerApp(): CloudControllerApp {
           // 终态映射（契约 A19）：exited→stopped、failed→failed、其它（destroyed）→stopped；
           // 必须工作负载失败（destroy 链路终态 exited + mustFailure）按 failed 上报并保留原因（C-1）。
           const status = harnessTerminalStatus(container.status, container.mustFailure);
+          // 存储归档状态随 terminal 报文下发（契约 A.2.10）：读取终态落库后的最新值
+          // （归档触发 CAS 先于本钩子执行，故通常为 pending）。
+          let terminalStorage: TerminalStorageState | null = null;
+          if (container.storageId) {
+            const fresh = (await containerService.getById(container.id)) ?? container;
+            terminalStorage = {
+              id: container.storageId,
+              // 透传真实归档状态：null = 未触发归档（agent-api 据此 releaseStorage 回滚），
+              // 不得强改写为 pending（契约 A.2.10）。
+              archiveStatus: fresh.storageArchiveStatus ?? null,
+              archiveId: fresh.storageArchiveId ?? null,
+            };
+          }
           try {
             await retryHarnessCallback(
               `terminal callback hostId=${container.hostId}`,
@@ -218,6 +277,7 @@ export function createCloudControllerApp(): CloudControllerApp {
                   container.hostId!,
                   status,
                   container.exitReason ?? undefined,
+                  terminalStorage,
                 ),
               logger,
             );
@@ -239,11 +299,12 @@ export function createCloudControllerApp(): CloudControllerApp {
       },
     },
     secretStore,
+    storageService,
   );
   const billingPublisher = new BillingEventPublisher({
     intervalMs: config.outboxRelayIntervalMs,
-    transport: new RabbitMqTransport(config.rabbitmqUrl, logger),
-    logger,
+    transport: new RabbitMqTransport(config.rabbitmqUrl, logger.child({ component: 'billing-mq' })),
+    logger: logger.child({ component: 'billing-events' }),
   });
   const heartbeatTracker = new HeartbeatTracker();
 
@@ -252,9 +313,11 @@ export function createCloudControllerApp(): CloudControllerApp {
   const gatewayBridge: {
     emitToContainer: (containerId: string, event: string, payload: unknown) => void;
     isConnected: (containerId: string) => boolean;
+    getWorkerVersion: (containerId: string) => string | undefined;
   } = {
     emitToContainer: () => {},
     isConnected: () => false,
+    getWorkerVersion: () => undefined,
   };
   const dispatcher = new WorkloadDispatcher({
     containerRepository: repo,
@@ -270,7 +333,7 @@ export function createCloudControllerApp(): CloudControllerApp {
     // 必须失败通知：锁外强制注销（复用既有 destroy，reason 写入 exitReason；裁决 7）。
     forceDestroy: (containerId, reason) => containerService.destroy(containerId, { reason }),
     secretStore,
-    logger,
+    logger: logger.child({ component: 'workload-dispatcher' }),
   });
 
   const statusSync = new StatusSyncService({
@@ -281,7 +344,8 @@ export function createCloudControllerApp(): CloudControllerApp {
     connectTimeoutMs: config.connectTimeoutMs,
     image: config.workerImage,
     dispatcher,
-    logger,
+    storageService,
+    logger: logger.child({ component: 'status-sync' }),
   });
 
   const gateway = registerWorkerGateway(io, {
@@ -289,15 +353,22 @@ export function createCloudControllerApp(): CloudControllerApp {
     containerService,
     heartbeatTracker,
     workloadDispatcher: dispatcher,
-    logger,
+    logger: logger.child({ component: 'worker-gateway' }),
   });
   gatewayBridge.emitToContainer = gateway.emitToContainer;
   gatewayBridge.isConnected = gateway.isConnected;
+  gatewayBridge.getWorkerVersion = gateway.getWorkerVersion;
 
   app.use(
     '/internal',
     internalAuth(config.internalApiToken),
-    createInternalRouter(containerService, { workloadRepository, workloadLogRepository, workloadDispatcher: dispatcher }),
+    createInternalRouter(containerService, {
+      workloadRepository,
+      workloadLogRepository,
+      workloadDispatcher: dispatcher,
+      getWorkerVersion: (containerId) => gatewayBridge.getWorkerVersion(containerId),
+      storageService,
+    }),
   );
 
   let started = false;
@@ -315,14 +386,14 @@ export function createCloudControllerApp(): CloudControllerApp {
         migration002CloudcontainersWorkspaceId,
       ]);
     } catch (err) {
-      logger.warn?.(`[Migration] runMigrations failed (non-fatal): ${(err as Error).message}`);
+      logger.warn({ err }, 'runMigrations failed (non-fatal)');
     }
     // 计费集合索引（eventId 唯一 / {producer,published,createdAt}）随启动建立。
     // D3：enqueue 去重完全依赖 eventId 唯一索引，索引缺失会导致重复事件——必须 fail-fast。
     try {
       await BillingOutbox.syncIndexes();
     } catch (err) {
-      logger.warn?.(`[billing] syncIndexes failed (fatal): ${(err as Error).message}`);
+      logger.warn({ component: 'billing', err }, 'billing outbox syncIndexes failed (fatal)');
       throw err;
     }
     billingPublisher.start();
@@ -331,12 +402,13 @@ export function createCloudControllerApp(): CloudControllerApp {
       httpServer.listen(config.port, resolve);
     });
     logger.info(
-      `cloud-controller listening on :${config.port} ` +
-        `(engine path ${ENGINE_PATH}, log level ${config.logLevel})`,
-    );
-    logger.info(
-      `[ws] worker 回连地址为 wss://<PUBLIC_WS_ENDPOINT>/worker；握手实际打到 ${ENGINE_PATH}，` +
-        `Ingress 必须放行该路径（PUBLIC_WS_ENDPOINT=${config.publicWsEndpoint || '-'}）。`,
+      {
+        port: config.port,
+        enginePath: ENGINE_PATH,
+        logLevel: config.logLevel,
+        publicWsEndpoint: config.publicWsEndpoint || '-',
+      },
+      'cloud-controller listening；worker 回连地址为 wss://<PUBLIC_WS_ENDPOINT>/worker，握手实际打到 engine path，Ingress 必须放行该路径',
     );
   }
 
@@ -344,6 +416,7 @@ export function createCloudControllerApp(): CloudControllerApp {
     statusSync.stop();
     // O-1：先排空在途计费钩子（outbox enqueue），再停 publisher，避免 SIGTERM 截断事件写入。
     await containerService.drainBillingHooks();
+    await storageService.drainArchiveTasks();
     await billingPublisher.stop();
     io.close();
     await new Promise<void>((resolve) => {
@@ -363,7 +436,7 @@ if (isMain) {
   const application = createCloudControllerApp();
 
   const shutdown = async (): Promise<void> => {
-    console.log('Shutting down cloud-controller...');
+    rootLogger.info({ component: 'cloud-controller' }, 'shutting down cloud-controller');
     try {
       await application.stop();
     } finally {
@@ -375,7 +448,7 @@ if (isMain) {
   process.on('SIGINT', () => void shutdown());
 
   application.start().catch((err) => {
-    console.error(err);
+    rootLogger.error({ component: 'cloud-controller', err }, 'cloud-controller failed to start');
     process.exit(1);
   });
 }

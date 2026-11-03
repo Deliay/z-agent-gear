@@ -5,6 +5,8 @@ import bcrypt from 'bcryptjs';
 import { McpServer } from '../models/mcp-server.js';
 import { McpProxyKey } from '../models/mcp-proxy-key.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { withTraceMeta } from '../middleware/trace-meta.js';
+import { withSpan } from '../observability/trace.js';
 
 const OWNER_TTL_SECONDS = 45;
 
@@ -72,6 +74,18 @@ export class McpProxyRegistry {
   setupNamespace(): void {
     const nsp = this.io.of('/mcp-proxy');
 
+    // T-OBS13：`/mcp-proxy` 握手提取 `auth.traceparent`（可选）作服务端 span parent（与 cloud-controller socketio-gateway 同型）。
+    nsp.use((socket: Socket, next: () => void) => {
+      const raw = socket.handshake.auth?.traceparent;
+      const traceparent = typeof raw === 'string' ? raw : undefined;
+      void withSpan(
+        'socket.handshake',
+        { socketId: socket.id, namespace: nsp.name },
+        () => next(),
+        { parent: traceparent },
+      );
+    });
+
     nsp.on('connection', (socket: Socket) => {
       let proxyId: string | null = null;
 
@@ -82,11 +96,11 @@ export class McpProxyRegistry {
         const server = await McpServer.findByIdAndUpdate(
           serverId,
           { proxyConnectionId: socket.id, status: 'active', lastHeartbeatAt: new Date() },
-          { new: true },
+          { returnDocument: 'after' },
         );
 
         if (!server) {
-          socket.emit('proxy:error', { code: 'PROXY_NOT_FOUND', message: 'Server not found' });
+          socket.emit('proxy:error', withTraceMeta({ code: 'PROXY_NOT_FOUND', message: 'Server not found' }));
           socket.disconnect(true);
           return;
         }
@@ -99,7 +113,7 @@ export class McpProxyRegistry {
         });
 
         await this.setOwner(serverId);
-        socket.emit('proxy:registered', { proxyId, serverId });
+        socket.emit('proxy:registered', withTraceMeta({ proxyId, serverId }));
       });
 
       socket.on('proxy:heartbeat', async (data: { proxyId: string }) => {
@@ -148,7 +162,7 @@ export class McpProxyRegistry {
       }, 30000);
 
       this.pendingRequests.set(requestId, { proxyId, resolve, reject, timeout });
-      conn.socket.emit('proxy:request', { requestId, request });
+      conn.socket.emit('proxy:request', withTraceMeta({ requestId, request }));
     });
   }
 

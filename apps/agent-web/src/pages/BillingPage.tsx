@@ -43,7 +43,7 @@ export default function BillingPage() {
   const [invoiceFrom, setInvoiceFrom] = useState('')
   const [invoiceTo, setInvoiceTo] = useState('')
   const [invoiceType, setInvoiceType] = useState<'charge' | 'recharge' | 'adjust' | ''>('')
-  const [invoiceCategory, setInvoiceCategory] = useState<'container' | 'model' | 'manual' | ''>('')
+  const [invoiceCategory, setInvoiceCategory] = useState<'container' | 'model' | 'manual' | 'storage' | ''>('')
   const pageSize = 20
 
   const accountQuery = useQuery<GetMyBillingAccountQuery>(MY_BILLING_ACCOUNT)
@@ -225,7 +225,7 @@ export default function BillingPage() {
                 className="h-9 rounded-md border border-input bg-background px-3 text-sm"
                 value={invoiceCategory}
                 onChange={(event) => {
-                  setInvoiceCategory(event.target.value as 'container' | 'model' | 'manual' | '')
+                  setInvoiceCategory(event.target.value as 'container' | 'model' | 'manual' | 'storage' | '')
                   setInvoicePage(1)
                 }}
               >
@@ -233,6 +233,7 @@ export default function BillingPage() {
                 <option value="container">容器</option>
                 <option value="model">模型</option>
                 <option value="manual">手工</option>
+                <option value="storage">存储</option>
               </select>
             </label>
           </div>
@@ -272,7 +273,7 @@ export default function BillingPage() {
                       </td>
                       <td className="py-2 pr-3">
                         <Badge variant="outline">
-                          {invoice.category === 'container' ? '容器' : invoice.category === 'model' ? '模型' : '手工'}
+                          {invoice.category === 'container' ? '容器' : invoice.category === 'model' ? '模型' : invoice.category === 'storage' ? '存储' : '手工'}
                         </Badge>
                       </td>
                       <td className="max-w-[220px] truncate py-2 pr-3" title={invoice.description}>

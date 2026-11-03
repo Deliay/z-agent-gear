@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import { config } from '../config/index.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { Controller } from '../models/controller.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { CloudHostGithubBinding } from '../models/cloud-host-github-binding.js';
@@ -10,6 +11,8 @@ import { cloudHostService } from '../services/cloud-host-service.js';
 import { githubService } from '../services/github.js';
 import { commitSettingsService } from '../services/commit-settings-service.js';
 import { lookupKey } from '../services/key-cache.js';
+
+const logger = rootLogger.child({ component: 'internal-cloud-host' });
 
 function authorized(req: Request): boolean {
   if (!config.internalApiToken) return false;
@@ -35,6 +38,8 @@ interface CredentialAuthResult {
   error?: string;
   controllerId?: string;
   userId?: string;
+  /** 鉴权主体所属租户（云电脑/绑定查询的显式隔离维度；团队租户 tenantId != userId）。 */
+  tenantId?: string;
 }
 
 function timingSafeEquals(actual: string, expected: string): boolean {
@@ -61,10 +66,19 @@ async function authenticateCredentialRequest(
   if (config.internalApiToken && timingSafeEquals(credential, config.internalApiToken)) {
     const host = await cloudHostService.findRawHostByController(controllerId);
     if (!host) return { ok: false, status: 404, error: 'NOT_FOUND' };
+    // 租户维度以预先创建的 Controller 为准（controllerId === Controller._id）；
+    // 历史/异常数据缺 Controller 时回退 host.tenantId，避免退化成无隔离条件。
+    const controller = await Controller.findById(controllerId).lean();
+    const tenantId = controller?.tenantId
+      ? String(controller.tenantId)
+      : host.tenantId
+        ? String(host.tenantId)
+        : undefined;
     return {
       ok: true,
       controllerId,
       userId: String(host.userId),
+      tenantId,
     };
   }
 
@@ -82,6 +96,7 @@ async function authenticateCredentialRequest(
     ok: true,
     controllerId,
     userId: String(cached.userId),
+    tenantId: controller.tenantId ? String(controller.tenantId) : undefined,
   };
 }
 
@@ -112,9 +127,13 @@ internalCloudHostRouter.post(
         return;
       }
 
+      // 显式双条件：controllerId + tenantId。
+      // 不能再用 userId：多租户二期团队租户 tenantId != userId，且 binding.userId 是
+      // Git 设置发起者，可能不是云电脑创建者/凭据申请者。
+      const tenantId = auth.tenantId ?? auth.userId;
       const host = await CloudHost.findOne({
         controllerId,
-        userId: auth.userId,
+        ...(tenantId ? { tenantId } : {}),
         deletedAt: null,
       }).lean();
       if (!host) {
@@ -126,9 +145,10 @@ internalCloudHostRouter.post(
         return;
       }
 
+      // 绑定以云主机为边界（controllerId 唯一索引）+ 显式租户隔离。
       const binding = await CloudHostGithubBinding.findOne({
         controllerId,
-        userId: auth.userId,
+        ...(tenantId ? { tenantId } : {}),
       }).lean();
       if (!binding) {
         res.status(404).json({ error: 'NO_BINDING' });
@@ -152,7 +172,8 @@ internalCloudHostRouter.post(
  *
  * - 双鉴权与 `github-credential` 完全一致（`INTERNAL_API_TOKEN` 或本机 Controller key）；
  * - **永不 404**：任何无法下发有效身份的场景一律 `200 {"mode":"unset"}`（鉴权失败仍 401/403）；
- * - 响应按裁决 4 缺省字段：`unset` 仅返回 mode，`co_author` 才含 coAuthor*。
+ *   主机不存在 / 已软删同样返回 `unset`，不再解析 bot（无主机的容器不应写入身份）；
+ * - **恒 bot**：有效云电脑自身的身份无视成员个人设置，恒为平台 bot（保留 `mode` 包络兼容 2.11.x）。
  */
 internalCloudHostRouter.post(
   '/:controllerId/commit-identity',
@@ -167,7 +188,15 @@ internalCloudHostRouter.post(
         return;
       }
 
-      const identity = await commitSettingsService.resolveCommitIdentity(controllerId);
+      // 未知 / 已软删主机没有可写入身份的容器：按 unset 兜底，且不解析 bot。
+      // 服务间 token 路径的 404 已在鉴权阶段判定；Controller key 路径这里补一次存在性校验。
+      const host = await cloudHostService.findRawHostByController(controllerId);
+      if (!host) {
+        res.json({ mode: 'unset' });
+        return;
+      }
+
+      const identity = await commitSettingsService.resolveCloudHostIdentity();
       res.json(identity);
     } catch {
       // 任何解析异常按「未设置」兜底，不阻塞容器启动 / 周期同步。
@@ -200,7 +229,7 @@ internalCloudHostRouter.post('/:id/ready', async (req: Request, res: Response) =
     const result = await cloudHostService.handleReady(id);
     res.json(result);
   } catch (err) {
-    console.error('[internal-cloud-host] ready failed', (err as Error).message);
+    logger.error({ event: 'ready-failed', err }, 'cloud host ready failed');
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });
@@ -218,10 +247,33 @@ internalCloudHostRouter.post('/:id/terminal', async (req: Request, res: Response
     const result = await cloudHostService.handleTerminal(id, {
       status,
       reason: typeof req.body?.reason === 'string' ? req.body.reason : undefined,
+      storage:
+        req.body?.storage && typeof req.body.storage === 'object'
+          ? {
+              id:
+                typeof req.body.storage.id === 'string'
+                  ? req.body.storage.id
+                  : req.body.storage.id === null
+                    ? null
+                    : undefined,
+              archiveStatus:
+                typeof req.body.storage.archiveStatus === 'string'
+                  ? req.body.storage.archiveStatus
+                  : req.body.storage.archiveStatus === null
+                    ? null
+                    : undefined,
+              archiveId:
+                typeof req.body.storage.archiveId === 'string'
+                  ? req.body.storage.archiveId
+                  : req.body.storage.archiveId === null
+                    ? null
+                    : undefined,
+            }
+          : undefined,
     });
     res.json(result);
   } catch (err) {
-    console.error('[internal-cloud-host] terminal failed', (err as Error).message);
+    logger.error({ event: 'terminal-failed', err }, 'cloud host terminal failed');
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }
 });

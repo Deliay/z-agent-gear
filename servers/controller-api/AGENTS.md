@@ -47,12 +47,12 @@ src/
 
 ```bash
 aspire start    # Start all services via Aspire orchestration
-npm run build   # Compile TypeScript
-npm run start   # Start production server
-npm run test    # Run tests
+pnpm run build   # Compile TypeScript
+pnpm run start   # Start production server
+pnpm run test    # Run tests
 ```
 
-本项目由 Aspire 编排启动，无需单独运行 `npm run dev`。使用 `aspire describe` 查看 controller-api 的 HTTP endpoint。
+本项目由 Aspire 编排启动，无需单独运行 `pnpm run dev`。使用 `aspire describe` 查看 controller-api 的 HTTP endpoint。
 
 ## 云电脑标准注册约定
 
@@ -60,6 +60,22 @@ npm run test    # Run tests
 - agent-api 在创建云电脑时预创建 `Controller(type=cloud,status=registering,name=用户命名,version='0.0.0')`；本服务 `register` 的 upsert 使用 `$setOnInsert: { name: hostname }`，不覆盖用户命名。
 - worker 不发送 `unregister`；容器销毁由 agent-api 编排。断开/心跳超时只影响 `Controller.status`（offline），云电脑生命周期以 `CloudHost.status` 为准。
 - 心跳超时/断线恢复沿用既有标准会话语义；普通本地/云主机行为不变。
+
+## 重复登录接管（SESSION_REPLACED）
+
+- **新登录优先**：`register` 通过 key / bcrypt / major 版本校验后调用 `SessionService.takeoverSession(keyId, socket.id)`，
+  用 Lua 原子 `GET + SET EX 90` 覆盖 `session:<keyId>` 并返回旧 socketId；`resumeToken` 仅兼容下发，**不再作为抢占判据**
+  （云电脑 `persistConfig=false` 的重启重连必须能直接接管）。
+- **旧连接处理**：旧 socket 若仍在本进程，记录 `event: 'session_replaced'`，下发 `error { code: 'SESSION_REPLACED' }` 后
+  `disconnect(true)`；若为重启后残留的已死 socketId（`io.sockets.sockets.get` 为空），仅覆盖 session 并继续注册。
+  `KEY_ALREADY_ONLINE` 枚举保留在契约中（旧服务端兼容），本服务不再下发。
+- **所有权收敛**：`disconnect` 调 `releaseSession(keyId, socket.id)`（Lua compare-and-delete），仅释放成功才把 Controller 置
+  `offline`；`unregister` 先校验 `getSocketId(keyId)` 是否仍指向本 socket，旧连接无权注销新连接。
+- **心跳巡检**：先捕获 `session:<keyId>` 的 socketId，再对候选执行 `findOneAndUpdate({ _id, status: 'online',
+  lastHeartbeatAt: { $lt: threshold } })` CAS；未命中直接跳过。命中的只断开/释放捕获的 socketId，`releaseSession === true`
+  才清 heartbeat/resume；捕获不到 socketId 时只清 heartbeat/resume，**不删 session**（避免误删并发写入的新会话）。
+- **单实例约束**：`io.sockets.sockets.get(previousSocketId)` 仅能寻址本实例。当前 Aspire / deploy 均为单副本；扩容到多副本需
+  引入 Redis adapter 或按实例路由（另立提案），否则跨实例旧连接无法通知/断开。
 
 ## TDD Workflow
 
@@ -70,6 +86,31 @@ npm run test    # Run tests
 3. **REFACTOR**: 重构代码，保持测试通过
 
 详细指南请参考：[TDD Skill](../../.agents/skills/tdd/SKILL.md)
+
+## Worktree 提交人透传（committer）
+
+- `session:command` 白名单中的 `git:worktree:add` 支持可选载荷
+  `committer {name,email,coAuthorName?,coAuthorEmail?}`：
+  `session-command.ts` 校验后原样透传给 `worktreeService.handleAdd(requestId, controllerId, repoPath, worktreePath, branch, committer?)`，
+  `emitToController('git:worktree:add', {..., committer})` 仅在非空时携带；`coAuthor*` 成对出现时由 worker
+  追加 `Co-authored-by` trailer。
+- **白名单不扩张**：committer 只是既有事件的字段扩展，不引入任意 git 命令通道；缺省 = 不下发，
+  worker 沿用容器级 bot 身份。
+- 下游 agent-gear ≥2.12.0 在 worktree 初始化后写 worktree 级 `user.name/user.email`（见
+  `packages/agent-controller/AGENTS.md`）；旧版本 worker 忽略未知字段优雅降级。
+- 契约：`contracts/agent-session-websocket.md` §3.12 + Redis relay 附录。
+
+## 日志与可观测性
+
+- **日志形态**：pino 单行 JSON（vendored `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。
+- **span 清单**（另有 `httpContext()` 的 HTTP SERVER span、`socket.register` / `socket.disconnect` 连接生命周期 span）：
+  - `messaging.process` — `session-command` 消费入口**每批/每命令一个 span**（属性 `sessionId`，`agent_message_chunk` 逐条只 `debug` 不开 span）；
+  - `socket.handshake` — `/mcp-proxy` namespace 握手（`mcp-proxy-registry.ts`，提取 `auth.traceparent`）；
+  - `heartbeat.tick` — 心跳扫描**每轮一个 span**，不逐事件；
+  - `<channel> handle` — Redis 订阅回调入口一个 span（`command` / `gateway-relay` 的 `<COMMAND_CHANNEL> handle`、`permission-manager` / `elicitation-manager` / `harness-login-manager` / `mcp-forward-consumer` 各频道同型），父上下文取 `extractTraceparent(payload._meta)`。
+- **Socket.IO / Redis `_meta` 封套位置**：Socket.IO 事件报文顶层 `_meta: { traceparent? }` 与握手 `auth.traceparent` 见 [`contracts/agent-session-websocket.md`](../../contracts/agent-session-websocket.md) §7；Redis 频道报文顶层 `_meta` 见 [`contracts/mcp-forward-redis.md`](../../contracts/mcp-forward-redis.md) §7。发布一律经 `publishJson(publish, channel, payload)`（`src/middleware/publish.ts`）注入 `_meta.traceparent`；所有消费者必须容忍 `_meta` 缺失（旧客户端/历史报文行为不变）。
+- **env 变量**：`LOG_LEVEL` / `LOG_PRETTY`（仅非生产）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 零外发**）/ `OTEL_EXPORTER_OTLP_HEADERS`（**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` 等，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。
+- **排障**：`LOG_LEVEL=debug` 看逐事件日志；`OTEL_SDK_DISABLED=true` 关追踪导出（日志不受影响）；JSON 单行日志可直接 `grep`（`grep '"level":"error"'`、`grep '"trace_id":"<trace-id>"'` 串全链路、`grep '"component":"session-command"'` 按组件）。
 
 ## Related Rules
 

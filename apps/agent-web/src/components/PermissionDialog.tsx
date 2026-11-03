@@ -9,6 +9,7 @@ import {
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { RESPOND_PERMISSION } from '../graphql/mutations';
+import { logger } from '../lib/logger';
 import { GET_SESSION_MESSAGES } from '../graphql/queries';
 import type { TodoItemData, PermissionToolCallData, RespondPermissionMutation, GetSessionMessagesQuery } from '../graphql/types';
 import ToolCallCard from './session/ToolCallCard';
@@ -86,7 +87,7 @@ export function PermissionDialog({ open, onOpenChange, todo }: PermissionDialogP
       });
       onOpenChange(false);
     } catch (error) {
-      console.error('Error responding to permission:', error);
+      logger.error({ err: error }, 'Error responding to permission');
     } finally {
       setResponding(false);
     }
