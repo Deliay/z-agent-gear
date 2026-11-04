@@ -162,7 +162,7 @@ flowchart LR
 - [[draft/20261104-cloud-storage-archive-optimization.md]] — 云存储归档优化（停止云电脑时归档可选：不勾选则存储回「待挂载」继续全价计费、数据原样保留；云存储新增「归档」（待挂载→已归档，与停止勾选归档同逻辑）、「复原到归档」（丢弃当前内容从归档重建，创建人/管理员）、「fork」（从归档复制新存储，规格不可调整）；新增瞬态「复原中」）
 - [[draft/20261104-tool-call-terminal-rendering.md]] — 会话窗口中工具调用展示优化（终端输出按真实终端效果正确渲染：颜色/样式正确呈现、进度条与覆写等动态输出收敛为最终画面、无控制字符乱码；终端渲染区域采用深黑色主题配色）
 - [[draft/20261104-github-project-setup-optimization.md]] — Github 项目设置优化（目标目录已存在时的处理策略：同一仓库直接复用不改动内容、空目录自动清理后继续克隆、其他占用明确提示「目标目录已存在其他项目」且内容不被改动）
-- [[draft/20261104-mcp-valut-iteration.md]] — MCP+Valut 功能迭代（Valut 工作区级加密密钥存储：namespace 聚合、值加密不回显、「工作区」权限、refs 引用展示、对外仅可选 manual；MCP 迭代：前端移除「MCP 代理」入口、新增工作区级自定义 HTTP MCP 支持无验证/Bearer 且 token 落 Valut、删除编辑联动）
+- [[draft/20261104-mcp-valut-iteration.md]] — MCP+Valut 功能迭代（Valut 工作区级加密密钥存储：namespace 聚合、值加密不回显、「工作区」权限、refs 引用展示、对外仅可选 manual；MCP 迭代：前端移除「MCP 代理」入口、新增工作区级自定义 HTTP MCP 支持无验证/Bearer 且 token 落 Valut、删除编辑联动；自定义 MCP 经平台代理转发、访问密钥随会话生灭、删除即全端点失效）
 
 ### 实现中文档（`shipping/`）
 

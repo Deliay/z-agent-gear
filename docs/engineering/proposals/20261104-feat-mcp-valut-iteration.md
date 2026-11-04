@@ -1,16 +1,19 @@
 ---
-description: MCP+Valut 功能迭代技术提案 v1.0：valutnamespaces/valutentries/valutrefs 三集合建模（值 AES-256-GCM 加密、明文不出服务端、refs 独立关联集合、namespace 全局唯一启动自检）；复用 workspace-access 角色/只读判定落地「工作区」权限；custommcpservers 集合承载 HTTP 自定义 MCP（none/bearer 验证，bearer token 写入或引用 Valut，删除/编辑联动）；前端移除 MCP 代理入口；契约新增 valut.graphql 与 custom-mcp.graphql
+description: MCP+Valut 功能迭代技术提案 v1.1（评审返工：自定义 MCP 改为平台代理转发——agent-api MCP 入口新增 custom-mcp-forwarder 服务端直连真实 endpoint，对会话只暴露既有 mcpEndpoint 代理地址+会话级 JWT 密钥（会话在线可用、离线 revoke）；删除自定义 MCP 经转发路径实时存在性校验实现全端点同时失效）：valutnamespaces/valutentries/valutrefs 三集合、workspaceAccess 权限复用、custommcpservers 与 Valut bearer 联动
 type: Permanent
 ---
 
 # MCP+Valut 功能迭代 - 技术提案
 
 **功能名称**: MCP+Valut 功能迭代（Valut 工作区密钥管理 + 自定义 MCP）
-**关联 PRD**: `docs/product/draft/20261104-mcp-valut-iteration.md`（v1.0）
-**技术提案版本**: v1.0
+**关联 PRD**: `docs/product/draft/20261104-mcp-valut-iteration.md`（v1.1）
+**技术提案版本**: v1.1
 **创建日期**: 2026-11-04
 **作者**: z-agent-bot
 **feat-branch**: `feat/mcp-valut-iteration`
+**版本说明**:
+- v1.0（2026-11-04）初版。
+- v1.1（2026-11-04，评审返工）按评审意见「改为做 MCP 代理：由服务器和 MCP 服务通讯，暴露 CustomMCP 代理地址做转发，对外提供代理地址和访问密钥；key 随会话生命周期管理（在线可用、离线失效）；删除自定义 MCP 后所有端点同时失效」重写会话下发方案：自定义 MCP **不再**把真实 endpoint/凭据组装进 ACP `mcpServers` 直连下发，改为复用并扩展既有 `mcp-endpoint` 会话密钥机制（JWT + `mcp_session_endpoints` + Redis 状态 + 终态 revoke），Agent 侧拿到的始终是平台代理地址（容器内 loopback `/mcp/<sessionId>/<name>`）+ 会话 Bearer key；agent-api MCP 入口新增 `custom-mcp-forwarder` 在服务端完成真实 endpoint 的 HTTP 转发与凭据注入。同步修订 §1/§2/§3/§5/§6/§7/§8/§10。
 
 ## 1. 概述
 
@@ -25,33 +28,38 @@ type: Permanent
 
 - agent-api 已有 `services/crypto.ts`：AES-256-GCM（iv/ciphertext/tag），密钥来自环境变量 `CREDENTIAL_ENCRYPTION_KEY`（供应商凭据在用），与本期「指定一个环境变量作为密钥」完全同构，直接复用。
 - 多租户二期已落地 `workspaces`/`tenantmembers.role`/`workspacemembers`、`middleware/auth.ts` 的 `context.workspaceAccess={id,tenantId,type,role,readOnly}`（global+developer ⇒ readOnly）与 `services/workspace-scope.ts` 插件——本期 Valut 的「工作区权限」即复用该体系：全局工作区写操作经 readOnly 拦截（developer 拒绝），普通工作区成员可写。
-- `McpServer`（`mcpservers`）为**个人级**集合（`tenantId+userId`，二期明确不工作区化），承载代理注册/平台内置 MCP；会话注入走 `services/mcp-endpoint.ts`（`mcp_session_endpoints` 按会话签发 endpoint）。
+- `McpServer`（`mcpservers`）为**个人级**集合（`tenantId+userId`，二期明确不工作区化），承载代理注册/平台内置 MCP；会话注入走 `services/mcp-endpoint.ts`（`mcp_session_endpoints` 按会话签发 endpoint：JWT + bcrypt hash 落库 + Redis `mcp:endpoint:<sessionId>` 状态，会话终态经 `mcp-endpoint-subscriber` 兜底 revoke）。
+- 既有 MCP 调用链（评审意见要求对齐的代理形态）：Agent → 容器内 loopback `http://127.0.0.1:<port>/mcp/<sessionId>/<serverName>`（`packages/agent-controller/src/mcp/local-server.ts`，Bearer=会话 token）→ socketio `mcp:request` → controller-api `mcp-relay.ts`（归属校验）→ Redis `mcp:relay:request` → agent-api `mcp-relay-consumer`（MCP 入口：token 状态校验 = 会话在线才可用）→ 按 serverName 路由转发。**真实凭据从不下发容器**。
 - 前端 `SettingsPage` 含 `McpProxyKeySection`（MCP 代理密钥，`api/mcp-proxy.ts` 走 controller-api REST）与 `McpRegistrySection`（MCP 管理列表，空态文案提及代理密钥）；`tests/e2e/src/settings-mcp-proxy.spec.ts` 覆盖代理区块。
 
 ### 1.2 目标
 
 - Valut 三集合建模：`valutnamespaces`（全局唯一，启动自检）、`valutentries`（工作区归属 + 加密值 + 编辑属性）、`valutrefs`（功能点+数据标识的独立关联，多对一）。
-- 明文边界：value 仅 `valut-service` 可解密；GraphQL 契约不含 value 出参；日志脱敏名单覆盖；消费方（本期=MCP bearer 下发）在服务端内取明文。
+- 明文边界：value 仅 `valut-service` 可解密；GraphQL 契约不含 value 出参；日志脱敏名单覆盖；消费方（本期=MCP bearer 转发注入）在服务端内取明文。
 - 「工作区」权限复用 `workspaceAccess`：全局工作区写=仅 admin（readOnly 拦截 developer），普通工作区写=成员。
 - 自定义 MCP：`custommcpservers` 集合（工作区级），属性 = `{name, description?, authType: none|bearer, endpoint, customHeaders: Map<string,string[]>, bearerValutEntryId?}` + tenantId/workspaceId/createdBy/createdAt/updatedAt；bearer 与 Valut 联动（新建/引用/更新/删除级联）。
+- **平台代理转发（v1.1 评审口径）**：自定义 MCP 由服务端与真实 MCP 服务通讯——agent-api MCP 入口新增 `custom-mcp-forwarder`：校验会话 key（在线才可用）→ 作用域含该 MCP → 按 id 实时加载配置（不存在即失效）→ 解密 bearer、合并 customHeaders → 直连真实 endpoint 转发 JSON-RPC。对会话只暴露**代理地址 + 访问密钥**：复用既有 `mcp-endpoint` 会话密钥机制（随会话签发、终态 revoke、离线不可用），`mcp_session_endpoints` 扩展 custom MCP 作用域；Agent 侧协议零新增（沿用 loopback `/mcp/<sessionId>/<name>` 形态）。
+- **删除即全端点失效**：删除自定义 MCP 后，转发路径按 id 存在性实时校验失败（410），所有已签发会话入口同时失效。
 - 前端：移除「MCP 代理」区块与请求封装；设置页新增 Valut 区块与自定义 MCP 区块（标题带「工作区」badge）；编辑 manual 引用给穿透链接。
-- 会话下发：创建会话可选自定义 MCP，agent-api 服务端解密 bearer token 并合并 customHeaders 后以 ACP `mcpServers`（http 形态）随会话下发。
 
 ### 1.3 范围
 
 **做**：
 
-- agent-api：`valutnamespaces`/`valutentries`/`valutrefs` 模型与迁移（播种 `manual`）；`services/valut-service.ts`（加解密、CRUD、refs、权限判定、启动 namespace 自检注册器）；`custommcpservers` 模型与 `services/custom-mcp-service.ts`（bearer 联动、删除级联、穿透链接数据）；GraphQL schemas/resolvers（valut、custom-mcp）；会话创建支持 `customMcpServerIds` 并服务端解密下发。
-- contracts：新增 `contracts/valut.graphql`、`contracts/custom-mcp.graphql`；`contracts/agent-session.graphql` 增补 `customMcpServerIds`。
+- agent-api：`valutnamespaces`/`valutentries`/`valutrefs` 模型与迁移（播种 `manual`）；`services/valut-service.ts`（加解密、CRUD、refs、权限判定、启动 namespace 自检注册器）；`custommcpservers` 模型与 `services/custom-mcp-service.ts`（bearer 联动、删除级联、穿透链接数据）；`services/custom-mcp-forwarder.ts`（服务端直连真实 endpoint 的转发与凭据注入）；`mcp-endpoint.ts` 扩展 custom MCP 作用域签发；`mcp-relay-consumer` 路由扩展（serverName 命中 custom 作用域 → custom-mcp-forwarder）；GraphQL schemas/resolvers（valut、custom-mcp）；会话创建支持 `customMcpServerIds` 并入会话密钥签发。
+- contracts：新增 `contracts/valut.graphql`、`contracts/custom-mcp.graphql`；`contracts/agent-session.graphql` 增补 `customMcpServerIds`；`contracts/mcp-forward-redis.md`/relay 通道增补 custom 路由口径注释。
 - agent-web：设置页 Valut 区块（namespace 聚合表格、新增/编辑对话框、refs 展开、权限收敛）与自定义 MCP 区块（列表、新增/编辑对话框、Bearer 二选一、穿透链接）；移除 `McpProxyKeySection` 与 `api/mcp-proxy.ts` 及导航项；`McpRegistrySection` 空态文案清理；新建会话对话框 MCP 选择合并展示自定义 MCP。
 - tests/api 与 tests/e2e 覆盖。
 
 **不做**：
 
 - 「MCP 代理」后端链路（controller-api `routes/mcp-proxy*.ts` 等）下线——仅前端入口移除（PRD 约束）；
-- Valut 跨工作区共享/继承、Valut 值向云电脑环境变量等通用终端注入通道（本期唯一直接消费者=自定义 MCP bearer 下发，其余「终端服务」消费场景后续期次）；
+- 自定义 MCP 真实 endpoint/凭据的**直连下发**（v1.0 方案，v1.1 已否决——改为平台代理转发）；
+- 脱离会话生命周期的长期密钥/独立端点（评审口径：本期只有下发给云容器对话的场景，key 随会话管理）；
+- Valut 跨工作区共享/继承、Valut 值向云电脑环境变量等通用终端注入通道（本期唯一直接消费者=自定义 MCP bearer 转发注入，其余「终端服务」消费场景后续期次）；
 - 自定义 MCP 的非 HTTP 协议（stdio/SSE）与 OAuth 等其他验证方式；
 - 既有个人级 `mcpservers` 的工作区化（维持二期口径不动）；
+- agent-controller / ACP 协议变更（Agent 侧拿到的代理地址形态与既有链路一致）；
 - admin 侧（admin-api/admin-web）Valut 管理面（本期不做后台透出）。
 
 ## 2. 技术架构
@@ -72,15 +80,19 @@ graph TD
         MSV[custom-mcp-service<br/>bearer 联动/删除级联]
         WA[workspaceAccess<br/>role/readOnly 判定]
         CRY[crypto<br/>AES-256-GCM<br/>CREDENTIAL_ENCRYPTION_KEY]
-        SS[session.create<br/>解密 bearer 下发 mcpServers]
+        MEP[mcp-endpoint<br/>会话密钥签发/revoke<br/>+custom 作用域]
+        RC[mcp-relay-consumer<br/>MCP 入口路由]
+        CF[custom-mcp-forwarder<br/>实时加载配置+解密注入<br/>直连真实 endpoint]
         VN[(valutnamespaces)]
         VE[(valutentries<br/>valueEncrypted)]
         VF[(valutrefs)]
         CM[(custommcpservers)]
+        SE[(mcp_session_endpoints<br/>+customMcpServers)]
     end
-    subgraph controller-api / Agent
-        ACP[ACP session/new<br/>mcpServers http]
+    subgraph 容器/Agent
+        LB[loopback 127.0.0.1<br/>/mcp/sessionId/name<br/>Bearer=会话 key]
     end
+    EXT[真实自定义 MCP 服务<br/>HTTP endpoint]
     VS --> VR --> VSV
     MS --> MR --> MSV --> VSV
     VR --> WA
@@ -90,8 +102,13 @@ graph TD
     VSV --> VE
     VSV --> VF
     MSV --> CM
-    NS --> SS --> MSV
-    SS -->|明文仅在服务端| ACP
+    NS --> MEP --> SE
+    LB -->|mcp:request relay| RC
+    RC -->|会话 key 在线校验| MEP
+    RC -->|命中 custom 作用域| CF
+    CF -->|按 id 实时加载<br/>不存在即 410| CM
+    CF -->|解密 bearer| VSV
+    CF -->|customHeaders+Authorization| EXT
 ```
 
 ### 2.2 技术栈
@@ -113,7 +130,10 @@ graph TD
 | agent-api `models/valut-ref.ts`（新增） | 引用关联（`valutrefs`） | `{valutEntryId, feature, refId, refLabel}` + 冗余 `tenantId/workspaceId`；唯一索引 `{feature,refId}`（一条数据在同一功能点下至多引用一条 entry）；索引 `{valutEntryId}` |
 | agent-api `services/valut-service.ts`（新增） | Valut 唯一读写口 | `createManualEntry/updateValue/deleteEntry/listGrouped/listManualOptions`；`ensureNamespace(feature)` 启动注册器；`createManagedEntry(feature, refId, refLabel, key, value, flags)` 供功能点调用（强制带 ref）；`resolveValue(entryId)` 服务端内解密；手动条目删除前 refs 计数拒绝 |
 | agent-api `models/custom-mcp-server.ts` + `services/custom-mcp-service.ts`（新增） | 自定义 MCP CRUD 与 Valut 联动 | bearer 新建 → `createManagedEntry('mcp-bearer-tokens', mcpId, ...)`；bearer 引用 → 仅建 ref（校验 namespace=manual）；删除 → namespace 判定级联删 entry 或仅删 ref；编辑 → 自建 token 更新值 / manual 返回 `bearerEntryLink` |
-| agent-api `services/session.ts`（变更） | 会话下发自定义 MCP | `CreateSessionInput.customMcpServerIds`；解析 + 校验工作区可见 + 解密 bearer + 合并 customHeaders → ACP `mcpServers` http 项 |
+| agent-api `services/mcp-endpoint.ts`（变更） | 会话密钥签发扩展 custom 作用域 | `createEndpoint(sessionId, userId, mcpServerIds, workflow?, customMcpServers?)`：`mcp_session_endpoints` 增 `customMcpServers:[{id,name}]` 快照；返回 `serverNames` 合并 custom 名；生命周期/revoke 机制不变（会话在线可用、终态失效） |
+| agent-api `services/custom-mcp-forwarder.ts`（新增） | 服务端直连真实 endpoint 的转发器 | 入参 `{sessionId, name}` → 端点作用域快照命中 name → 按 id 实时加载 `custommcpservers`（**不存在/无权 → 410 失效**）→ bearer 时 `resolveValue` 解密 → 合并 customHeaders（同名多值展开）+ `Authorization: Bearer` → 直连真实 endpoint 转发 JSON-RPC → 回传响应；全程服务端内 |
+| agent-api `services/mcp-relay-consumer.ts`（变更） | MCP 入口路由扩展 | token 状态校验（既有 getStatus=会话在线才可用）后按 serverName 路由：先 custom 作用域（→ custom-mcp-forwarder），未命中走既有 mcpservers 转发路径 |
+| agent-api `services/session.ts`（变更） | 会话创建并入 custom 作用域 | `CreateSessionInput.customMcpServerIds`：校验存在且当前工作区可见 → 并入 `createEndpoint` 的 custom 快照；显式 `[]`=不注入；工作流节点会话同口径（reissue 保留快照） |
 | agent-api `migrations/023-valut-foundations`（新增） | 播种与索引 | 播种 `manual` namespace；建三集合索引；幂等可重跑（编号以主分支占用顺延） |
 | agent-web | Valut/自定义 MCP 区块与代理入口移除 | 设置页新增两 section（标题 + 「工作区」badge），删除 `McpProxyKeySection`/`api/mcp-proxy.ts` 及导航项；新建会话 MCP 选择合并 |
 
@@ -271,14 +291,16 @@ extend type Mutation {
 
 #### 契约 3: `contracts/agent-session.graphql`（变更）
 
-- `CreateSessionInput` 新增 `customMcpServerIds: [ID!]`（可选，缺省=null 不注入；语义与 `mcpServerIds` 正交、可叠加）。
-- 服务端解析：校验条目存在且当前工作区可见（共享规则同 §2.3 权限矩阵）→ 组装 ACP `mcpServers` http 项 `{name, url: endpoint, headers}`，其中 `headers` = customHeaders 展开 +（bearer 时）`Authorization: Bearer <resolveValue(bearerEntryId)>`；解密仅发生于服务端，不落会话库明文。
+- `CreateSessionInput` 新增 `customMcpServerIds: [ID!]`（可选，缺省=null 不注入；显式 `[]`=不注入；语义与 `mcpServerIds` 正交、可叠加）。
+- 服务端解析（v1.1 代理转发口径）：校验条目存在且当前工作区可见（规则同 §2.3 权限矩阵）→ 并入既有 `mcp-endpoint` 会话密钥签发（`mcp_session_endpoints.customMcpServers=[{id,name}]` 快照，`serverNames` 合并 custom 名）。**对 Agent 暴露的只有既有代理地址形态**（容器内 loopback `/mcp/<sessionId>/<name>` + 会话 Bearer key）——真实 endpoint、customHeaders 与 bearer token 不出服务端；会话终态 key revoke（既有 subscriber 兜底），代理入口随之失效。
+- `contracts/mcp-forward-redis.md` 增补注释：agent-api MCP 入口路由按 serverName 先匹配会话端点的 custom 作用域快照（命中 → `custom-mcp-forwarder` 服务端直连真实 endpoint），未命中走既有 `mcpservers` 转发；`mcp:relay:request` 报文结构不变。
 
 ### 3.2 内部接口
 
 - `valut-service.ensureNamespace(feature, displayName?)`：功能点启动注册器（进程启动时逐个调用，幂等 upsert `service-{feature}`）；本期注册 `service-mcp-bearer-tokens`（展示名「MCP Bearer Tokens」）。
 - `valut-service.createManagedEntry({feature, refId, refLabel, key, value, editable, deletable, workspaceId, tenantId, createdBy})`：托管写入唯一入口；内部同事务写 `valutentries`+`valutrefs`；缺 ref 参数直接抛错（编码期防漏）。
-- `valut-service.resolveValue(entryId)`：返回明文；**仅服务端内部调用**（本期调用方：会话下发组装）；不暴露 GraphQL/REST。
+- `valut-service.resolveValue(entryId)`：返回明文；**仅服务端内部调用**（本期调用方：custom-mcp-forwarder 转发注入）；不暴露 GraphQL/REST。
+- `custom-mcp-forwarder.forward({sessionId, name, body})`：转发唯一入口；返回 `{status, body}`；失败语义：`401`（会话 key 失效/离线）、`403`（name 不在该会话作用域）、`410`（自定义 MCP 已删除）、`502`（真实 endpoint 不可达/超时）。
 - `valut-service.removeRef(feature, refId)` / `deleteEntryCascade(entryId)`：删除联动原语。
 
 ## 4. 数据模型
@@ -341,6 +363,10 @@ extend type Mutation {
 | `createdBy` | ObjectId(ref: User) | |
 | `createdAt/updatedAt` | Date | timestamps |
 
+#### 集合: `mcp_session_endpoints`（既有，本期扩展）
+
+新增字段 `customMcpServers: [{ id: String, name: String }]`（缺省 `[]`）：会话签发时该会话被授权的自定义 MCP 快照。name 用于 loopback 地址路由（`/mcp/<sessionId>/<name>`），id 用于转发路径实时存在性/配置加载。既有 `sessionId` 唯一索引、tokenHash、状态与 revoke 机制不变；`reissueEndpoint` 重签保留该快照。该集合在 controller-api 侧有只读镜像（共写集合口径同一期）。
+
 ### 4.2 缓存设计
 
 - 无新增缓存。Valut 列表/选项按请求直查（设置页低频）；`resolveValue` 不缓存明文（安全口径，宁多一次解密）。
@@ -383,18 +409,26 @@ flowchart TD
     L -->|manual| N[仅删除 valutrefs 引用 + MCP 记录]
 ```
 
-会话下发（明文不出服务端）：
+会话签发与代理转发（v1.1：明文不出服务端，对会话只暴露代理地址+会话密钥）：
 
 ```mermaid
 sequenceDiagram
     participant W as agent-web
     participant A as agent-api
-    participant C as controller-api/Agent
+    participant G as 容器内 Agent
+    participant X as 真实自定义 MCP
     W->>A: createSession(customMcpServerIds:[...])
-    A->>A: 校验可见性（actorFilter/workspace-scope）
-    A->>A: resolveValue(bearerEntryId) 解密（仅内存）
-    A->>C: acp:start mcpServers += {name,url,headers[+Authorization]}
-    Note over A: 明文不入库、不进日志（REDACT_PATHS）
+    A->>A: 校验存在且当前工作区可见
+    A->>A: mcp-endpoint 签发会话 key（JWT）<br/>customMcpServers=[{id,name}] 快照落 mcp_session_endpoints
+    A-->>G: acp:start（mcpEndpoint=代理地址+会话 key）<br/>不含真实 endpoint/凭据
+    G->>A: MCP 调用（loopback → relay → MCP 入口，Bearer=key）
+    A->>A: getStatus=active（会话在线）且 name 在 custom 作用域
+    A->>A: 按 id 实时加载 custommcpservers（不存在→410 全端点失效）
+    A->>A: bearer 时 resolveValue 解密（仅内存）
+    A->>X: 转发 JSON-RPC（customHeaders 展开 + Authorization）
+    X-->>A: 响应
+    A-->>G: 响应
+    Note over A: 会话终态 → key revoke（既有 subscriber）→ 401
 ```
 
 启动 namespace 自检：
@@ -414,8 +448,8 @@ flowchart TD
 #### 实现点 1: 明文边界与加密复用
 
 - **描述**：value 仅在 `valut-service` 内解密；GraphQL 类型不含 value；日志脱敏。
-- **技术细节**：复用 `services/crypto.ts`（AES-256-GCM、`CREDENTIAL_ENCRYPTION_KEY`，未配置即抛错——与 PRD「不静默降级」一致）；契约入参字段名 `value`/`newToken` 加入 `REDACT_PATHS` 脱敏名单；`resolveValue` 返回值不进入任何结构化日志字段；会话下发组装在 `session.create` 内联完成，明文不落 `sessions`/消息库。
-- **风险点**：脱敏名单遗漏导致 token 入访问日志——以「契约字段名登记 + 单测断言日志脱敏」兜底。
+- **技术细节**：复用 `services/crypto.ts`（AES-256-GCM、`CREDENTIAL_ENCRYPTION_KEY`，未配置即抛错——与 PRD「不静默降级」一致）；契约入参字段名 `value`/`newToken` 加入 `REDACT_PATHS` 脱敏名单；`resolveValue` 返回值不进入任何结构化日志字段；明文唯一消费点=custom-mcp-forwarder 转发注入（仅内存组装请求头，不落库、不写日志、不进转发响应）。
+- **风险点**：脱敏名单遗漏导致 token 入访问日志——以「契约字段名登记 + 单测断言日志脱敏」兜底；转发器不得把真实 endpoint 的响应头/错误体中的凭据回声写日志（统一 sanitize）。
 
 #### 实现点 2: 工作区权限落地
 
@@ -439,6 +473,16 @@ flowchart TD
 - **描述**：删除 `McpProxyKeySection`（设置页 section 与 NAV 项）与 `api/mcp-proxy.ts`；`McpRegistrySection` 空态文案「使用 MCP 代理密钥注册」改为中性文案。
 - **技术细节**：同步删除 `tests/e2e/src/settings-mcp-proxy.spec.ts` 与组件测试中对代理区块的引用；controller-api 代理路由保留（PRD 约束：仅前端移除）。
 
+#### 实现点 6: 会话密钥生命周期与自定义 MCP 转发（v1.1 评审口径）
+
+- **描述**：自定义 MCP 经平台代理转发：会话 key 随会话签发/失效；转发器在服务端直连真实 endpoint；删除 MCP 即全端点失效。
+- **技术细节**：
+  - **签发**：`session.create` 校验 `customMcpServerIds`（存在 + 当前工作区可见）后并入 `mcpEndpointService.createEndpoint`——`mcp_session_endpoints.customMcpServers=[{id,name}]` 快照随 tokenHash 落库，`serverNames` 返回合并 custom 名（Agent 侧 loopback 地址形态与既有完全一致，`acp:start` 协议零变更）；`reissueEndpoint` 沿用快照重签。key 生命周期=既有机制：TTL + `session:status` 终态 revoke subscriber——会话离线/关闭即不可用。
+  - **路由**：`mcp-relay-consumer` 在 token 校验（getStatus=active，即会话在线）通过后，按 serverName 先查会话端点 custom 快照（命中 → custom-mcp-forwarder），未命中走既有 `mcpservers` 转发。
+  - **转发**：custom-mcp-forwarder 按快照 id **每次请求实时** `CustomMcpServer.findById`（挂 workspace-scope 的服务端内部查询用显式条件绕过 ALS）：不存在 → `410`（**删除即全端点失效**，无需逐会话回收 key）；存在则组装请求——customHeaders 同名多值展开 +（`authType=bearer` 时）`Authorization: Bearer <resolveValue(bearerEntryId)>`，POST 真实 endpoint，回传状态码与响应体；超时 30s → `502`。
+  - **失效优先级**：key 失效（401）> 作用域外（403）> MCP 已删除（410）> 对端故障（502），语义清晰可诊断。
+- **风险点**：快照 name 与 MCP 改名不一致——改名不影响路由（快照 name + id 加载，配置实时生效）；真实 endpoint 慢响应占用 relay 并发——以 30s 超时 + 既有 relay 请求超时（60s）双层兜底；自建 bearer 条目被级联删除后转发即时失败（id 加载不到 entry → 410 同口径）。
+
 ## 6. 技术决策
 
 ### 6.1 决策列表
@@ -450,9 +494,11 @@ flowchart TD
 | D3 Valut 可见集 | 共享型（本工作区∪全局） | 独占型（仅当前工作区） | B | 需求未提跨工作区复用 valut；「全局工作区=全员可见」已由 global 工作区语义承担（切到全局上下文即可见），避免普通工作区直接看到全局 secret 列表扩大暴露面 |
 | D4 namespace 存储 | 条目内联字符串，无注册表 | 独立 `valutnamespaces` + 启动注册器 | B | 需求要求「启动时检查、没有则创建」「全局跨租户唯一」——注册表+唯一索引是最直接承载；界面展示名也有处安放 |
 | D5 自定义 MCP 是否并入 mcpservers | `mcpservers` 加 workspaceId 扩展 | 独立 `custommcpservers` 集合 | B | 二期明确 `mcpservers` 维持个人级不工作区化；新集合避免搅动存量代理/平台内置链路与唯一索引 |
-| D6 会话下发方式 | 走 mcp_session_endpoints 代理签发 | 服务端直接组装 ACP http mcpServers | B | 自定义 HTTP MCP 无需经代理转发；endpoint 链路与「MCP 代理」同属下线方向，不复用 |
+| D6 自定义 MCP 下发方式（v1.1 返工） | 服务端组装真实 endpoint+凭据直发 ACP mcpServers（v1.0 方案） | 平台代理转发：复用既有 mcp-endpoint 会话密钥，服务端直连真实 endpoint | B | **评审意见**：「改为做 MCP 代理，由服务器和 MCP 服务通讯，暴露 CustomMCP 代理地址做转发，对外提供代理地址和访问密钥；key 随会话生命周期管理；删除自定义 MCP 后所有端点同时失效」——真实凭据不出服务端、泄露面最小；既有 relay/loopback 链路零改动 |
 | D7 编辑时 key 可改 | 允许改 key | key 不可改、仅重写 value | B | key 是识别与唯一性锚点；改 key=删旧建新，语义更清晰 |
 | D8 manual 条目删除 | 允许级联断 ref | 有 refs 时拒绝删除 | B | 防误删导致 MCP 运行期失凭据；界面先展示 refs 再引导解除 |
+| D9 删除即全端点失效实现（v1.1 新增） | 删除时遍历回收所有引用会话的 key | 转发路径按 id 实时存在性校验（不存在→410） | B | 一次删除即生效、无遗漏窗口；避免大规模会话 key 回收写放大；key 本身仍随会话生命周期独立失效 |
+| D10 会话作用域快照形态（v1.1 新增） | 仅存 customMcpServerIds | 存 `[{id,name}]` 快照 | B | name 供 loopback 地址路由（与既有 serverNames 口径一致），id 供实时配置加载；改名不影响存量会话路由，编辑配置实时生效 |
 
 ### 6.2 依赖与约束
 
@@ -460,8 +506,9 @@ flowchart TD
 |------|------|------|
 | 依赖 | 多租户二期（workspaceAccess/workspace-scope） | 权限判定与拦截复用，零新机制 |
 | 依赖 | `services/crypto.ts`（CREDENTIAL_ENCRYPTION_KEY） | 部署环境必须已配置该 env（供应商凭据已在用，满足） |
-| 依赖 | ACP `session/new` 的 `mcpServers`（http 形态） | Agent 需支持 http MCP；不支持时该会话忽略自定义 MCP（沿用既有能力检测口径） |
-| 约束 | 明文不出服务端 | 契约无 value 出参；日志脱敏；resolveValue 仅内部 |
+| 依赖 | 既有 mcp-endpoint 会话密钥机制与 relay 链路（agent-controller loopback → controller-api mcp-relay → agent-api mcp-relay-consumer） | 自定义 MCP 代理地址/密钥完全复用，Agent 侧与 ACP 协议零变更（Agent 需支持 http MCP 的既有口径不变） |
+| 约束 | 明文不出服务端 | 契约无 value 出参；日志脱敏；resolveValue 仅转发器内部调用 |
+| 约束 | 访问密钥随会话生命周期 | 会话在线可用、终态 revoke；本期无脱离会话的长期密钥 |
 | 约束 | namespace 全局跨租户唯一 | 注册表唯一索引；功能点命名冲突在编码期评审拦截 |
 | 约束 | 「MCP 代理」仅前端移除 | controller-api 代理路由与模型本期不动 |
 | 约束 | 单环境变量密钥 | 不支持 per-tenant 密钥（需求明确一个 key） |
@@ -472,18 +519,25 @@ flowchart TD
 contracts/
 ├── valut.graphql                          # 新增
 ├── custom-mcp.graphql                     # 新增
-└── agent-session.graphql                  # CreateSessionInput +customMcpServerIds
+├── agent-session.graphql                  # CreateSessionInput +customMcpServerIds
+└── mcp-forward-redis.md                   # 增补 custom 路由口径注释
 servers/agent-api/src/
 ├── models/valut-namespace.ts              # 新增（全局唯一 name）
 ├── models/valut-entry.ts                  # 新增（applyWorkspaceScope）
 ├── models/valut-ref.ts                    # 新增
 ├── models/custom-mcp-server.ts            # 新增（applyWorkspaceScope）
+├── models/mcp-session-endpoint.ts         # +customMcpServers 快照
 ├── services/valut-service.ts(+test)       # 加解密/CRUD/refs/namespace 注册器
 ├── services/custom-mcp-service.ts(+test)  # bearer 联动/删除级联
-├── services/session.ts                    # customMcpServerIds 下发组装
+├── services/custom-mcp-forwarder.ts(+test) # 服务端直连真实 endpoint（存在性实时校验/凭据注入/410 失效）
+├── services/mcp-endpoint.ts(+test)        # createEndpoint/reissue 扩展 custom 作用域
+├── services/mcp-relay-consumer.ts(+test)  # serverName 路由扩展（custom 快照优先）
+├── services/session.ts                    # customMcpServerIds 并入会话密钥签发
 ├── graphql/schemas/valut.ts, custom-mcp.ts      # 新增（登记 index）
 ├── graphql/resolvers/valut.ts, custom-mcp.ts    # 新增（登记 resolvers/index.ts）
 └── migrations/023-valut-foundations.ts(+test)   # 播种 manual + 索引（编号随主分支顺延）
+servers/controller-api/src/
+└── models/mcp-session-endpoint.ts         # 只读镜像 +customMcpServers（共写集合口径）
 apps/agent-web/src/
 ├── components/settings/ValutSection.tsx(+test)        # 新增
 ├── components/settings/CustomMcpSection.tsx(+test)    # 新增
@@ -505,16 +559,16 @@ tests/e2e/src/settings-mcp-proxy.spec.ts                          # 删除
 - 工作区权限矩阵（对照 T-WS 模式新增 T-VAL/T-CMCP）：全局工作区 developer 读通写拒（`global workspace is read-only`）、admin 写通；普通工作区成员读写通、非成员 `Not found`；跨租户不可达。
 - 契约安全：GraphQL 响应体任意路径不含 value 明文（含错误信息）；`valutManualOptions` 仅 manual 且仅当前工作区。
 - custom-mcp-service 单测：bearer 新建写 entry+ref（editable/deletable 正确）；bearer 引用非 manual 拒绝；删除自建级联删 entry+ref；删除引用仅删 ref；并发删除只级联一次；更新自建 token 改值不回显。
-- 会话下发：`customMcpServerIds` 组装 headers（customHeaders 多值展开 + Authorization 注入）；不可见 id 拒绝；不落库明文（断言 sessions 文档与 acp:start 载荷之外的存储面无 token）。
-- E2E：设置页新增/编辑/删除 Valut 条目（值全程不可见）；新增 Bearer 自定义 MCP（两条路径）；删除联动；「MCP 代理」区块不存在。
+- 会话密钥与转发（T-CF 系列）：`customMcpServerIds` 不可见 id 拒绝；端点快照落库且 `serverNames` 合并 custom 名；`reissueEndpoint` 保留快照；会话终态 revoke 后转发 401；name 不在作用域 403；MCP 删除后转发 410（全端点同时失效）；bearer 解密注入 Authorization 且 customHeaders 同名多值展开；真实 endpoint 不可达/超时 502；转发报文与日志无凭据明文（含 sessions 文档、relay 载荷、访问日志断言）。
+- E2E：设置页新增/编辑/删除 Valut 条目（值全程不可见）；新增 Bearer 自定义 MCP（两条路径）；删除联动（删除后会话内该 MCP 调用失败）；「MCP 代理」区块不存在。
 
 ### 8.2 测试类型
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | Vitest | valut-service、custom-mcp-service、迁移、权限插件两档、下发组装 |
-| API 测试 | tests/api（Vitest + 编排环境） | valut/custom-mcp 契约用例与权限矩阵、会话创建携带 customMcpServerIds |
-| E2E 测试 | tests/e2e（Playwright） | 设置页两区块全流程、代理入口移除、穿透链接跳转 |
+| 单元测试 | Vitest | valut-service、custom-mcp-service、custom-mcp-forwarder、mcp-endpoint 扩展、mcp-relay-consumer 路由、迁移、权限插件两档 |
+| API 测试 | tests/api（Vitest + 编排环境） | valut/custom-mcp 契约用例与权限矩阵、会话创建携带 customMcpServerIds、转发鉴权/失效矩阵（mock 真实 endpoint） |
+| E2E 测试 | tests/e2e（Playwright） | 设置页两区块全流程、代理入口移除、穿透链接跳转、删除后调用失效 |
 
 ## 9. 部署方案
 
@@ -533,7 +587,7 @@ tests/e2e/src/settings-mcp-proxy.spec.ts                          # 删除
 ## 10. 验收标准
 
 - [ ] 技术方案评审通过
-- [ ] Contract（valut / custom-mcp / agent-session 增补）评审通过
+- [ ] Contract（valut / custom-mcp / agent-session 增补 / mcp-forward-redis 注释）评审通过
 - [ ] Valut 三集合与迁移 023 落地：manual 播种、namespace 全局唯一、`service-mcp-bearer-tokens` 启动自检创建
 - [ ] 值加密存储、任何接口/页面/日志无明文；编辑=重写不回显
 - [ ] 工作区权限矩阵通过（全局=全员读/admin 写；普通=成员读写；跨工作区 Not found）
@@ -541,7 +595,7 @@ tests/e2e/src/settings-mcp-proxy.spec.ts                          # 删除
 - [ ] 对外选择已存在 secret 仅限 manual
 - [ ] 自定义 MCP CRUD 与 bearer 两条路径、删除级联、编辑穿透链接全部按 PRD 通过
 - [ ] 前端「MCP 代理」入口与请求移除，其余 MCP 区块无回归
-- [ ] 会话创建可携带自定义 MCP，bearer token 服务端解密注入 Authorization
+- [ ] 自定义 MCP 经平台代理转发：会话仅获得代理地址+会话密钥，真实 endpoint/凭据不出服务端；会话 key 在线可用、终态失效；删除自定义 MCP 后所有会话入口同时失效（410）
 - [ ] API 测试通过、E2E 测试通过
 
 ## 11. 相关文档
