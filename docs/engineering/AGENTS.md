@@ -225,6 +225,7 @@ flowchart LR
 - [[proposals/20261102-feat-cloud-storage.md]] — 云电脑支持申请存储（工作区级 cloudstorages 与迁移 020、cloud-controller PVC CRUD + Job 卷挂载 /home/worker 主目录/fsGroup/initContainer 恢复、entrypoint bootstrap_home 幂等自举与工作负载幂等标准（迁移 018）、destroy 后独立 archiver Job 压缩 .tar.gz2 原子替换写入每工作区 100Gi 归档 PVC 并释放源 PVC、状态机 IDLE/ATTACHED/ARCHIVING/ARCHIVED/DESTROYED/CREATE_FAILED、3 档 per_unit 小时计费 + 已归档半价 + storagebillingcursors + BillingCategory.storage、T-CS/T-CC/T-BOOT/T-WL/T-BILL/T-WEB/E2E 用例矩阵）
 - [[proposals/20261103-feat-workflow-iteration.md]] — 工作流迭代（契约新增 renameWorkflowInstance、agent-api 实例改名与 agent-workflow-tools 新增 renameCurrentWorkflow 工具；agent-web 详情页改名入口、节点卡片动态行收敛为「正在思考」静态指示、WorkflowNodeCard 补 React Flow Handle 修复依赖连线不可见、详情抽屉 PR 区块前置、token 文案改「{} tokens」、tint 改不透明 bg-card、图表视图按执行中节点前后各 2 卡片窗口 fitView 自动居中）
 - [[proposals/20261103-feat-workflow-node-interrupt-retry.md]] — 工作流节点中断处理迭代（中断自动重试 1→10 次 + 指数退避 0/1/2/4/8/16/30m 封顶、重试管线 close→resume→等待 idling→addMessage 带 5 分钟空闲超时、重试计划持久化 retryCount/nextRetryAt/retryPhase + 30s 周期扫描器抗进程重启、新状态 RETRY_FAILED 与事件 retryExhausted、restart/resumeFailed 开放来源、通用会话状态回调、迁移 021 fallbackSent→retryCount、check-run action_required 映射）
+- [[proposals/20261104-feat-cloud-storage-archive-optimization.md]] — 云存储归档优化（stopCloudHost 新增 archiveStorage 选项：不勾选时 cloud-controller 落 storageArchiveSkipped 跳过归档、存储 ATTACHED→IDLE 继续全价；云存储新增「归档/复原到归档/fork」：cloud-controller 存储级 archive/restore 端点 + cloudstorageoperations 台账（迁移 003）、agent-api 状态机 +RESTORING 与 restores 回调 + 迁移 022、前端停止对话框归档勾选与三操作入口）
 
 ### 实现计划（`plan/`）
 
