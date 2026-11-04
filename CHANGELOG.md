@@ -4,6 +4,9 @@
 
 ### 修复
 
+- 修复云电脑运行后无法再安装工作负载（Issue #446）：harness secret 改为随容器创建持久化到
+  `cloudcontainersecrets`、cloud-controller 启动时加载、终态删除；运行期安装仅对 harness 负载强制要求
+  harness env，standard 负载（如 MongoDB）在 secret 缺失时仍可正常安装
 - 修复新建会话/工作流拉起会话时设置的「模式与模型」偶现失效：agent-controller 应用初始 mode/model 后
   经 ACP 协议回读确认（config-option 响应快照比对），失败重试一次；`session/new` 未携带 configOptions 时
   挂起等待 `config_option_update` 补应用（上限 `INITIAL_CONFIG_PENDING_TIMEOUT_MS`，默认 10s），不再静默回退默认值
