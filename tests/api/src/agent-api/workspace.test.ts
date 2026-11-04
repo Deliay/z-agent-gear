@@ -1639,28 +1639,30 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
     const after = await gqlCtx(MY_WORKSPACES, undefined, admin.token, teamGlobalId);
     expect(after.data.myWorkspaces.some((workspace: { id: string }) => workspace.id === workspaceId)).toBe(false);
 
-    // 非空删除保护：先写入本工作区 commit 设置（user_commit_settings 计入 11 集合）
+    // 非空删除保护：先在本工作区写入资源（供应商；Commit 设置已成员级，不再计入工作区资源）
+    const suffix = Date.now().toString(36);
     const nonEmpty = await gqlCtx(
       CREATE_TENANT_WORKSPACE,
-      { name: `non-empty-${Date.now().toString(36)}` },
+      { name: `non-empty-${suffix}` },
       admin.token,
       teamGlobalId,
     );
     const nonEmptyId = nonEmpty.data.createTenantWorkspace.id;
     const saved = await gqlCtx(
-      UPDATE_COMMIT_SETTINGS,
+      CREATE_PROVIDER,
       {
         input: {
-          committerMode: 'HUMAN_ONLY',
-          committerType: 'CUSTOM',
-          customName: 'Non Empty',
-          customEmail: 'non-empty@example.com',
+          name: `non-empty-provider-${suffix}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mockServer.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-ws-api-test',
         },
       },
       admin.token,
       nonEmptyId,
     );
-    expect(saved.errors).toBeUndefined();
+    expect(saved.errors, JSON.stringify(saved.errors)).toBeUndefined();
     const blocked = await gqlCtx(DELETE_TENANT_WORKSPACE, { id: nonEmptyId }, admin.token, teamGlobalId);
     expect(blocked.errors?.[0]?.message).toBe('workspace is not empty');
   });

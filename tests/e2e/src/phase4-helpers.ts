@@ -215,10 +215,8 @@ export function injectSessionUpdate(
   sessionId: string,
   update: Record<string, unknown>,
 ): void {
-  controller.socket.emit('acp:message', {
-    sessionId,
-    message: { type: 'text', content: JSON.stringify(update) },
-  })
+  // 契约：acp:message 的 message 字段即 ACP SessionUpdate 对象
+  controller.socket.emit('acp:message', { sessionId, message: update })
 }
 
 export interface Phase4Env {
@@ -387,5 +385,5 @@ export async function callWorkflowTool(
 
 export const SIDEBAR = 'nav[aria-label="Sidebar"]'
 export const sectionToggle = (key: 'hosts' | 'workflows' | 'sessions' | 'gateways') =>
-  `[data-testid="sidebar-section-${key}"] button[aria-expanded]`
+  `[data-testid="sidebar-section-${key}"] > div > button[aria-expanded]`
 export const nodeCard = (nodeId: string) => `[data-testid="workflow-node-card-${nodeId}"]`

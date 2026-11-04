@@ -94,12 +94,30 @@ function mocks(options: { receiptError?: boolean } = {}) {
               items: [
                 {
                   __typename: 'InvoiceItem',
-                  productId: 'model.m1.output',
-                  quantity: 2,
-                  unitPrice: 1,
-                  amount: 2,
+                  productId: 'model.m1.token.input',
+                  quantity: 200000,
+                  unitPrice: 100,
+                  amount: 20,
                   meteringRef: null,
-                  segment: 'output',
+                  segment: 'input:aborted',
+                },
+                {
+                  __typename: 'InvoiceItem',
+                  productId: 'model.m1.token.cached_input',
+                  quantity: 800000,
+                  unitPrice: 25,
+                  amount: 20,
+                  meteringRef: null,
+                  segment: 'cached_input:aborted',
+                },
+                {
+                  __typename: 'InvoiceItem',
+                  productId: 'model.m1.token.output',
+                  quantity: 100000,
+                  unitPrice: 100,
+                  amount: 10,
+                  meteringRef: null,
+                  segment: 'output:aborted',
                 },
               ],
               receiptId: null,
@@ -263,6 +281,22 @@ describe('前台我的费用', () => {
     fireEvent.click(screen.getByRole('button', { name: '查看' }));
     expect(await screen.findByText('收据号 R-0002')).toBeDefined();
     expect(screen.queryByText('该账单暂无收据')).toBeNull();
+  });
+
+  it('T-FE2: 中断调用收据明细三段分别展示且均带「中断」标注', async () => {
+    renderPage();
+    await screen.findByText('容器周期结算');
+    fireEvent.click(screen.getAllByRole('button', { name: '下一页' })[0]);
+    await screen.findByText('模型调用 m1');
+    fireEvent.click(screen.getByRole('button', { name: '查看' }));
+
+    // 20% 未缓存段 / 80% 缓存段 / 输出全价段，三行均带「中断」且段名可区分
+    expect(await screen.findByText(/token\.input（输入（中断））/)).toBeDefined();
+    expect(screen.getByText(/token\.cached_input（缓存输入（中断））/)).toBeDefined();
+    expect(screen.getByText(/token\.output（输出（中断））/)).toBeDefined();
+    // 两条输入段的数量可区分
+    expect(screen.getByText(/200000 tokens/)).toBeDefined();
+    expect(screen.getByText(/800000 tokens/)).toBeDefined();
   });
 
   it('R10-5: 充值账单（recharge）同样可查看收据', async () => {

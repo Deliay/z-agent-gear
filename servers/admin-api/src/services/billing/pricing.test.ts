@@ -157,6 +157,35 @@ describe('PricingService（用量 × 价目 → 费用，单价快照）', () =>
     expect(priced.items).toEqual([]);
   });
 
+  it('T-AB8: 拆分输入（cached = 80%）的三段计价数量/金额正确，为 0 的段不产生明细', async () => {
+    const findOne = ProductPrice.findOne as unknown as ReturnType<typeof vi.fn>;
+    const lean = vi.fn().mockResolvedValue(mockPrice({}));
+    findOne.mockReturnValue({ sort: () => ({ lean }) } as never);
+    const service = new PricingService();
+
+    // 拆分后：input=1_000_000，cachedInputTokens=800_000 → 未缓存段 200_000
+    const priced = await service.priceModel(
+      'gpt-5',
+      { inputTokens: 1_000_000, cachedInputTokens: 800_000, outputTokens: 1_000_000 },
+      new Date(),
+    );
+    const bySegment = new Map(priced.items.map((item) => [item.segment, item]));
+    expect(bySegment.get('input')?.quantity).toBe(200_000);
+    expect(bySegment.get('cached_input')?.quantity).toBe(800_000);
+    expect(bySegment.get('output')?.quantity).toBe(1_000_000);
+    // 200k×100 + 800k×50 + 1M×400 = 460000000 / 1e6 → 460 分
+    expect(priced.amountCents).toBe(460);
+    expect(priced.items.reduce((acc, item) => acc + item.amount, 0)).toBe(460);
+
+    // 输入仅 1 token（拆分后 cached=1, nonCached=0）：未缓存段不产生明细
+    const single = await service.priceModel(
+      'gpt-5',
+      { inputTokens: 1, cachedInputTokens: 1, outputTokens: 1 },
+      new Date(),
+    );
+    expect(single.items.map((item) => item.segment)).toEqual(['cached_input', 'output']);
+  });
+
   it('T-PRICE-C1: 初始化云电脑创建价目且不覆盖既有调价档', async () => {
     const updateOne = ProductPrice.updateOne as unknown as ReturnType<typeof vi.fn>;
     updateOne.mockResolvedValue({ acknowledged: true });

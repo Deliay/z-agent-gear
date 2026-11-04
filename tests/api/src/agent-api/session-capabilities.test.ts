@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 // FeatureId 唯一事实源：直接引用 agent-controller 的能力清单，禁止测试手抄复制
 import { FEATURE_IDS } from '../../../../packages/agent-controller/src/acp/capabilities.js';
 import { createFrontUser } from '../support/front-users.js';
+import { personalGlobalWorkspaceId } from '../support/workspace-fixtures.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const SSE_BASE_URL = (process.env.API_URL || 'http://localhost:10001').replace(/\/graphql\/?$/, '');
@@ -121,6 +122,7 @@ async function sleep(ms: number) {
 }
 
 let authToken = '';
+let authUserId = '';
 let mongoConnection: typeof mongoose | null = null;
 
 async function createFreshController(): Promise<{ controllerId: string; client: ClientSocket }> {
@@ -198,6 +200,7 @@ describe('ACP 会话能力快照 API', () => {
   beforeAll(async () => {
     const frontUser = await createFrontUser();
     authToken = frontUser.token;
+    authUserId = frontUser.userId;
     expect(authToken).toBeTruthy();
   });
 
@@ -376,6 +379,9 @@ describe('ACP 会话能力快照 API', () => {
         {
           providerId, name: userName, scope: 'user', isEnabled: true,
           isCustom: true, sortOrder: 0, createdAt: new Date(), updatedAt: new Date(),
+          // 多租户二期：scope=user 行归属租户工作区（缺省个人全局工作区），否则作用域过滤不可见
+          tenantId: new mongoose.Types.ObjectId(authUserId),
+          workspaceId: await personalGlobalWorkspaceId(mongoConnection.connection.db!, authUserId),
         },
       ]);
 
