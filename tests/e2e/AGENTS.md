@@ -311,7 +311,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-UI4G4 连线 | 2 条边渲染且可见、strokeWidth ≥ 2、marker-end 箭头存在（自定义节点补 Handle 后转绿） |
 | E2E-UI4G5 人类节点就地操作 | 图表卡片输入 → 「完成」→ 节点推进；「打回」填理由 → 上游节点返工 |
 | E2E-UI4G6 人类节点详情抽屉 | 点击节点头部 → 侧边抽屉展示详情；Esc 关闭后回到原视图 |
-| E2E-UI4G7 进行中静态指示 | 注入 `agent_thought_chunk`/`tool_call`/`agent_message_chunk` → 动态行恒为「正在思考」且不泄露注入文本 |
+| E2E-UI4G7 进行中动态提示 | 注入 `agent_thought_chunk`/`tool_call`/`agent_message_chunk` → 动态行分别为「思考中...」/「执行中: <工具标题>」/「Concluding...」，且不泄露思考/输出正文 |
 | E2E-UI4G8 完成态 token | 注入 `usage_update` 后经 MCP 完成节点 → 「已完成 · 4321 tokens」且不含「消耗」 |
 | E2E-UI4G9 资源上图 | 黑板/PR/追加提示词小卡片与所属节点关联；未归属条目进实例资源行；垃圾桶不渲染；图表视图右栏资源树隐藏；点击开抽屉 |
 | E2E-UI4G10 徽标行 | 有 PR/检查项/返工记录的节点徽标可见且 PR 可点；无对应信息不渲染 |

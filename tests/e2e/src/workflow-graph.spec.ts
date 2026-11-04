@@ -209,19 +209,19 @@ test.describe('工作流图表 UI 四期', () => {
     env.controllers.forEach((controller) => controller.disconnect())
   })
 
-  test('E2E-UI4G7 进行中 AI 节点动态行恒为「正在思考」', async ({ page }) => {
+  test('E2E-UI4G7 进行中 AI 节点动态行按活动类型展示提示', async ({ page }) => {
     const { env, instance } = await setup(page, 'g7')
     await openGraph(page, instance.id)
     const { sessionId, controller } = await advanceToAiRunning(page, env.token, instance, env.controllers[0])
     const exec = instance.nodes.find((node) => node.nodeKey === 'exec')!
     const liveRow = page.locator(`[data-testid="node-live-activity-${exec.id}"]`)
-    await expect(liveRow).toContainText('正在思考', { timeout: 15000 })
+    await expect(liveRow).toContainText('思考中...', { timeout: 15000 })
 
     injectSessionUpdate(controller, sessionId, {
       sessionUpdate: 'agent_thought_chunk',
       content: { type: 'text', text: `正在分析需求${'…'.repeat(3)}结尾片段` },
     })
-    await expect(liveRow).toContainText('正在思考', { timeout: 10000 })
+    await expect(liveRow).toContainText('思考中...', { timeout: 10000 })
     await expect(liveRow).not.toContainText('结尾片段')
 
     injectSessionUpdate(controller, sessionId, {
@@ -235,14 +235,13 @@ test.describe('工作流图表 UI 四期', () => {
       toolCallId: 'tc-1',
       title: '执行 npm test',
     })
-    await expect(liveRow).toContainText('正在思考', { timeout: 10000 })
-    await expect(liveRow).not.toContainText('执行 npm test')
+    await expect(liveRow).toContainText('执行中: 执行 npm test', { timeout: 10000 })
 
     injectSessionUpdate(controller, sessionId, {
       sessionUpdate: 'agent_message_chunk',
       content: { type: 'text', text: '正在总结实现结果' },
     })
-    await expect(liveRow).toContainText('正在思考', { timeout: 10000 })
+    await expect(liveRow).toContainText('Concluding...', { timeout: 10000 })
     await expect(liveRow).not.toContainText('正在总结实现结果')
 
     env.controllers.forEach((item) => item.disconnect())

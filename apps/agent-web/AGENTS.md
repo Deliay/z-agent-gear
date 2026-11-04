@@ -178,7 +178,7 @@ pnpm run preview  # Preview production build
 > 纯前端展示层 + 一处新 mutation 调用；计划见 `docs/engineering/plan/20261103-feat-workflow-iteration.md`。
 
 - **详情页改名入口**：`pages/WorkflowInstancePage.tsx` 标题 `h1` 后为「重命名」图标按钮（`aria-label="重命名实例"`），打开 `Dialog` 并预填当前名称；输入框 `aria-label="实例名称"`，前端校验 trim 后 1~64（提示「名称不能为空」/「名称最多 64 个字符」，非法时禁用「保存」），服务端文案（`invalid workflow name` 等）原样展示且对话框保持打开；成功 `toast.success('实例名称已更新')` 并关闭。mutation `RENAME_WORKFLOW_INSTANCE`（`graphql/workflow.ts`）返回 `{id,name}` 由 Apollo 按 id 归一化，标题/侧边栏随 `GET_WORKFLOW_INSTANCE`（5s）/`HOME_OVERVIEW`（15s）轮询兜底刷新。
-- **卡片动态行静态化**：`graph/WorkflowNodeCard.tsx` 的进行中动态行**恒为 spinner + 「正在思考」**，不再渲染思考/工具/文本正文（`activityText` 已删除）；`useNodeSessionActivity` 连接保留（`tokenUsage` 仍用于完成态，且能在完成前捕获最后一条 `usage_update`），卡片忽略 `activity.text`。
+- **卡片动态行**：`graph/WorkflowNodeCard.tsx` 的进行中动态行按 `useNodeSessionActivity` 的 `activity.kind` 展示——`thinking`（含尚无活动的默认态）→ spinner + 「思考中...」、`tool_call` → 「执行中: {工具标题}」、`text` → 「Concluding...」；不渲染思考/输出正文。工具调用的 `activity.text` 只保留标题（`useNodeSessionActivity` 复用 `toolCallTitle`，禁止另写一套标题逻辑）。
 - **token 文案口径**：完成态为 `已完成 · ${tokenUsage} tokens`（**不含「消耗」**），容器 `title="该数值为会话当前上下文长度"`；无用量仅「已完成」。
 - **Handle（勿删）**：卡片顶部 `Handle type="target" position={Position.Top}`、底部 `type="source" position={Position.Bottom}`，视觉透明（`!size-1 !bg-transparent !border-0`）+ `isConnectable={false}` + `pointer-events-none`。**缺 Handle 时 React Flow 无法解析连接点，依赖连线不渲染**（E2E-UI4G4 守卫）；`pointer-events-none` 保证卡片点击/人类节点操作不被拦截。组件测试需用 `ReactFlowProvider` 包裹。
 - **卡片不透明**：`WorkflowNodeTreeConstants.NODE_STATUS_VISUAL[*].tint` 七态统一 `bg-card`（无透明度后缀），状态语义只由 `spine`/`badge` 承载；`NODE_STATUS_COLOR_VAR` 不变。仅图表卡片消费 tint，列表视图零影响。
