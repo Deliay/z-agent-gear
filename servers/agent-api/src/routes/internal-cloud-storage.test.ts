@@ -12,6 +12,7 @@ vi.mock('../services/cloud-storage-service.js', () => ({
   cloudStorageService: {
     handleArchiveCallback: vi.fn(),
     handleUsageCallback: vi.fn(),
+    handleRestoreCallback: vi.fn(),
   },
 }));
 
@@ -28,6 +29,7 @@ describe('internal cloud storage routes', () => {
     vi.clearAllMocks();
     vi.mocked(cloudStorageService.handleArchiveCallback).mockResolvedValue({} as never);
     vi.mocked(cloudStorageService.handleUsageCallback).mockResolvedValue({} as never);
+    vi.mocked(cloudStorageService.handleRestoreCallback).mockResolvedValue({} as never);
     const app = express();
     app.use(express.json());
     app.use('/internal/cloud-storages', internalCloudStorageRouter);
@@ -145,6 +147,67 @@ describe('internal cloud storage routes', () => {
     vi.mocked(cloudStorageService.handleUsageCallback).mockResolvedValue(null as never);
     expect(
       (await post(`/internal/cloud-storages/${STORAGE_ID}/usage`, { usageBytes: 1 })).status,
+    ).toBe(404);
+  });
+
+  it('accepts restore callback and forwards payload (按 operationId 幂等由 service 保证)', async () => {
+    const operationId = '507f1f77bcf86cd7994390f1';
+    const response = await post(`/internal/cloud-storages/${STORAGE_ID}/restores`, {
+      operationId,
+      storageId: STORAGE_ID,
+      status: 'SUCCEEDED',
+      usageBytes: 5368709120,
+      startedAt: '2026-11-02T15:00:00.000Z',
+      finishedAt: '2026-11-02T15:10:00.000Z',
+      failureReason: null,
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+    expect(cloudStorageService.handleRestoreCallback).toHaveBeenCalledWith(STORAGE_ID, {
+      operationId,
+      status: 'SUCCEEDED',
+      usageBytes: 5368709120,
+      startedAt: '2026-11-02T15:00:00.000Z',
+      finishedAt: '2026-11-02T15:10:00.000Z',
+      failureReason: null,
+    });
+  });
+
+  it('rejects invalid restore body / unknown storage', async () => {
+    expect(
+      (
+        await post(`/internal/cloud-storages/${STORAGE_ID}/restores`, {
+          operationId: '',
+          status: 'RUNNING',
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await post(`/internal/cloud-storages/${STORAGE_ID}/restores`, {
+          operationId: 'op-1',
+          status: 'DONE',
+        })
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await post(`/internal/cloud-storages/${STORAGE_ID}/restores`, {
+          operationId: 'op-1',
+          status: 'RUNNING',
+          usageBytes: -1,
+        })
+      ).status,
+    ).toBe(400);
+
+    vi.mocked(cloudStorageService.handleRestoreCallback).mockResolvedValue(null as never);
+    expect(
+      (
+        await post(`/internal/cloud-storages/${STORAGE_ID}/restores`, {
+          operationId: 'op-1',
+          status: 'RUNNING',
+        })
+      ).status,
     ).toBe(404);
   });
 });

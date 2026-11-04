@@ -7,6 +7,7 @@ export const cloudStorageTypeDefs = `#graphql
     ATTACHED
     ARCHIVING
     ARCHIVED
+    RESTORING
     DESTROYING
     DESTROYED
     CREATE_FAILED
@@ -37,6 +38,21 @@ export const cloudStorageTypeDefs = `#graphql
     name: String!
   }
 
+  enum CloudStorageRestoreStatus {
+    PENDING
+    RUNNING
+    SUCCEEDED
+    FAILED
+  }
+
+  type CloudStorageRestore {
+    id: ID!
+    status: CloudStorageRestoreStatus!
+    startedAt: String
+    finishedAt: String
+    failureReason: String
+  }
+
   type CloudStorageArchiveSpace {
     capacityGi: Int!
     usedGi: Float
@@ -58,6 +74,8 @@ export const cloudStorageTypeDefs = `#graphql
     attachedCloudHostName: String
     attachedAt: String
     currentArchive: CloudStorageArchive
+    currentRestore: CloudStorageRestore
+    forkedFromStorageId: ID
     archiveSpace: CloudStorageArchiveSpace!
     failureReason: String
     destroyedAt: String
@@ -102,6 +120,11 @@ export const cloudStorageTypeDefs = `#graphql
     sizeGi: Int!
   }
 
+  input ForkCloudStorageInput {
+    # trim 后 1~64；同一工作区唯一（与 create 同规则）
+    name: String!
+  }
+
   extend type Query {
     cloudStorages(onlyAttachable: Boolean = false, includeDestroyed: Boolean = false): [CloudStorage!]!
     cloudStorage(id: ID!): CloudStorage
@@ -115,5 +138,8 @@ export const cloudStorageTypeDefs = `#graphql
     destroyCloudStorage(id: ID!): CloudStorage!
     retryCloudStorageArchive(id: ID!): CloudStorage!
     refreshCloudStorageUsage(id: ID!): CloudStorage!
+    archiveCloudStorage(id: ID!): CloudStorage!
+    restoreCloudStorageToArchive(id: ID!): CloudStorage!
+    forkCloudStorage(id: ID!, input: ForkCloudStorageInput!): CloudStorage!
   }
 `;

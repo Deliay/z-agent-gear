@@ -678,7 +678,10 @@ export class ContainerService {
    * 对终态记录仍会核实 Job 是否存在并清理残留（幂等体现在响应上，`deletedJob` 反映真实动作）。
    * 全程持有该容器的串行锁，避免与 `start()` 交错产生孤儿 Job。
    */
-  async destroy(containerId: string, options?: { reason?: string }): Promise<DestroyResult> {
+  async destroy(
+    containerId: string,
+    options?: { reason?: string; storageArchive?: boolean },
+  ): Promise<DestroyResult> {
     const container = await this.repo.findById(containerId);
     if (!container) {
       throw new ContainerNotFoundError(containerId);
@@ -710,6 +713,9 @@ export class ContainerService {
 
   private async prepareStorageArchive(container: CloudContainerEntity): Promise<void> {
     if (!this.storageService || !container.storageId || container.connectedAt === null) return;
+    // 显式不归档（destroy body storageArchive:false）：跳过标记在 destroying CAS 同一次写入，
+    // 终态回调/巡检收口一律尊重（D2）；显式 startArchive（手动重试）不走此入口，不受限。
+    if (container.storageArchiveSkipped === true) return;
     try {
       await this.storageService.maybeStartArchive(container.id);
     } catch (err) {
@@ -722,7 +728,7 @@ export class ContainerService {
 
   private async destroyLocked(
     containerId: string,
-    options?: { reason?: string },
+    options?: { reason?: string; storageArchive?: boolean },
   ): Promise<DestroyResult> {
     const container = await this.repo.findById(containerId);
     if (!container) {
@@ -776,11 +782,19 @@ export class ContainerService {
       return { success: true, id: containerId, status: container.status, deletedJob };
     }
 
-    const destroying = await this.repo.update(
-      containerId,
-      { status: 'destroying', currentWorkloadName: null },
-      { fromStatuses: [...ACTIVE_STATUSES] },
-    );
+    // D2：跳过标记必须与 `destroying` CAS 同一次写入（无「已 destroying 但未打标记」窗口）。
+    // 仅「显式 false + 挂载存储」时写入；true/缺省/未挂载不写（保持旧报文行为）。
+    const destroyingPatch: {
+      status: 'destroying';
+      currentWorkloadName: null;
+      storageArchiveSkipped?: true;
+    } = { status: 'destroying', currentWorkloadName: null };
+    if (options?.storageArchive === false && container.storageId) {
+      destroyingPatch.storageArchiveSkipped = true;
+    }
+    const destroying = await this.repo.update(containerId, destroyingPatch, {
+      fromStatuses: [...ACTIVE_STATUSES],
+    });
     if (!destroying) {
       // 并发操作已将其置为终态，按终态路径幂等清理。
       return this.destroyLocked(containerId, options);

@@ -288,6 +288,50 @@ describe('ContainerService 云存储挂载（T-CC-J1/J2/RS1/RS2）', () => {
     expect(archiveCalls.at(-1)!.payload.status).toBe('SUCCEEDED');
   });
 
+  it('T-SKIP4a: destroy(storageArchive:false) 与 destroying CAS 同一次写入跳过标记，不触发归档', async () => {
+    const { repo, client, service, storageService, archiveCalls } = setup();
+    const created = await service.start(
+      'harness',
+      'ck-1',
+      [],
+      [],
+      harnessOptions({ storage: storageInput() }),
+    );
+    await service.markOnline(created.id);
+    autoCompleteArchive(client);
+
+    await service.destroy(created.id, { storageArchive: false });
+    await storageService.drainArchiveTasks();
+
+    const stored = await repo.findById(created.id);
+    expect(stored?.status).toBe('exited');
+    expect(stored?.storageArchiveSkipped).toBe(true);
+    expect(stored?.storageArchiveStatus).toBeNull();
+    expect(
+      client.createdManifests.filter((m) => m.metadata.labels.app === 'zag-archive'),
+    ).toHaveLength(0);
+    expect(archiveCalls).toHaveLength(0);
+  });
+
+  it('T-SKIP4c: 未挂载存储 / storageArchive:true 不写跳过标记', async () => {
+    const { repo, service } = setup();
+    const created = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    await service.markOnline(created.id);
+    await service.destroy(created.id, { storageArchive: false });
+    expect((await repo.findById(created.id))?.storageArchiveSkipped).toBeNull();
+
+    const second = await service.start(
+      'harness',
+      'ck-2',
+      [],
+      [],
+      harnessOptions({ storage: storageInput() }),
+    );
+    await service.markOnline(second.id);
+    await service.destroy(second.id, { storageArchive: true });
+    expect((await repo.findById(second.id))?.storageArchiveSkipped).toBeNull();
+  });
+
   it('PVC 创建失败 → 容器 failed（不进入 connecting）', async () => {
     const { repo, client, service } = setup();
     client.failCreatePvcTimes = 1;

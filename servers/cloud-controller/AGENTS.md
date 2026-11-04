@@ -200,3 +200,15 @@ pnpm run test:coverage
 - **巡检**：`status-sync` 每轮调用 `reconcileArchives`：`pending/running` 超 `ARCHIVE_TIMEOUT_MS` → `failed` + 回调；重启后补跑（源 PVC 未删，原子替换保证旧归档不丢）；`succeeded/failed` 未送达回调重投（进程内记录，重启后每容器一次，agent-api 幂等）。
 - **模型**：`cloudcontainers` 新增 `storageId/storagePvcName/storageSizeGi/storageWorkspaceId/storageStorageClass/storageRestorePath/storageArchive*`（历史行 null 容忍）；读取层（agent-api 只读镜像）同步透出。
 - **部署**：`deploy/k8s/cloud-controller.yaml` RBAC 增加 `persistentvolumeclaims` get/list/watch/create/delete 与 `pods`/`pods/log` get/list；env 见上表。archiver 镜像 `deploy/images/archiver/`（ubuntu + tar + pbzip2 + bzip2 回退，`MODE=archive|restore|usage|cleanup`）。Aspire dev 仍 `K8S_ENABLED=false`（InMemory）但补齐存储 env。
+
+## 云存储归档优化（存储级归档/复原 + 停止不归档）
+
+> 需求 #434；契约 `contracts/cloud-controller-websocket.md` A.2.3/A.2.10/A.2.11~A.2.13。
+
+- **停止不归档（跳过标记）**：`DELETE /internal/containers/:id` body 接受 `storageArchive:false`（非布尔 400 `INVALID_BODY`）。`ContainerService.destroy(id, {reason?,storageArchive?})` 只在 `storageArchive===false && container.storageId` 时，把 `storageArchiveSkipped:true` 与 `destroying` CAS **同一次写入**（无中间窗口）；`prepareStorageArchive`/`maybeStartArchive`/巡检收口统一尊重该标记；显式 `POST /containers/:id/archive`（手动重试）不受限。未挂载/true/缺省不写标记。terminal 报文仅在 `fresh.storageArchiveSkipped===true` 时携带 `archiveSkipped:true`。
+- **存储级操作台账**：`models/cloud-storage-operation.ts`（集合 `cloudstorageoperations`，仅本服务写）`_id=operationId`（24hex）；`repositories/storage-operation-repository.ts` 提供 `create/findById/findInflight/findActive/markRunning/markSucceeded/markFailed/markCallbackDelivered/findStale/findUndelivered`；同存储仅一个 `pending/running` 由部分唯一索引 `uniq_storage_op_inflight` 保证（撞键 409 `OPERATION_RUNNING`），迁移 `003-cloud-storage-operations` 幂等建索引。`StorageService` deps 新增 `operationRepo`。
+- **存储级归档**：`POST /internal/storages/:id/archive`（`operationId/archiveId/fileName/workspaceId/tenantId`）→ 无活跃容器校验（409 `STORAGE_IN_USE`）→ 台账 pending → 锁外 spawn → `archiveMutex`+`awaitCleanup` 串行 → 复用 archiver `MODE=archive` Job（源 PVC RO + 归档卷 RW，Pod 标签 `zag.cloud/storage-op-id`）→ 成功删源 PVC（最多 3 次）→ 既有 A.2.10 归档回调（追加 `operationId`）；失败保留旧归档与源卷。
+- **存储级复原**：`POST /internal/storages/:id/restore`（`operationId/workspaceId/tenantId/archivePath/sizeGi(1..30)/storageClass`）→ `recreateStoragePvc`（存在则删→轮询消失→ensure；fork 新存储直接 ensure）→ restore Job（archiver `MODE=restore`，归档卷 RO + 目标卷 RW，`RESTORE_FILE=archivePath`，校验 `ZAG_RESTORE_DONE`）→ `POST /internal/cloud-storages/:id/restores` 回调；失败不删归档。
+- **操作查询**：`GET /internal/storages/:id/operations/:operationId`（`operationId/type/status/usageBytes/startedAt/finishedAt/failureReason`）。
+- **巡检**：`StatusSyncService` 每轮在 `reconcileArchives` 后调用 `reconcileStorageOperations`：超 `ARCHIVE_TIMEOUT_MS` → failed + 回调；本进程无执行任务（重启）→ 重跑；终态未送达回调 → 重投一次（agent-api 幂等）。
+- **零回归**：`storageArchive` 缺省时 destroy 报文/落库/terminal 与改动前逐字段一致；未挂载存储不写 `storageArchiveSkipped`、不携带 `archiveSkipped`。

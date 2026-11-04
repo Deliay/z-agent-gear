@@ -117,6 +117,8 @@ vi.mock('./cloud-storage-service.js', () => ({
     releaseStorage: vi.fn(),
     markAttached: vi.fn(),
     markArchiving: vi.fn(),
+    detachToIdle: vi.fn(),
+    getSummary: vi.fn(),
     reconcileFromTerminal: vi.fn().mockResolvedValue(false),
     recordContainer: vi.fn(),
   },
@@ -143,6 +145,7 @@ import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
 import { cloudStorageService } from './cloud-storage-service.js';
 
 const HOST_ID = '507f1f77bcf86cd799439011';
+const STORAGE_ID = '507f1f77bcf86cd7994390a9';
 const CONTROLLER_ID = '507f1f77bcf86cd799439012';
 const WORKSPACE_ID = '507f1f77bcf86cd799439013';
 
@@ -884,7 +887,30 @@ describe('CloudHostService', () => {
         sessions: [
           { id: 'sess-1', title: 'working', status: 'idling', acpServerType: 'opencode' },
         ],
+        storage: null,
       });
+    });
+
+    it('T-SKIP1: stopImpact 返回挂载存储摘要（供停止对话框展示归档勾选）', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'RUNNING', storageId: STORAGE_ID })) as never,
+      );
+      vi.mocked(Session.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      } as never);
+      vi.mocked(cloudStorageService.getSummary).mockResolvedValue({
+        id: STORAGE_ID,
+        name: 'my-data',
+        sizeGi: 10,
+        status: 'ATTACHED',
+        usageBytes: 1024,
+        hourlyCredits: 5,
+      } as never);
+
+      const impact = await service.stopImpact(HOST_ID, 'user-1');
+
+      expect(cloudStorageService.getSummary).toHaveBeenCalledWith(STORAGE_ID);
+      expect(impact.storage).toMatchObject({ id: STORAGE_ID, name: 'my-data', status: 'ATTACHED' });
     });
   });
 
@@ -939,6 +965,53 @@ describe('CloudHostService', () => {
 
       expect(cloudControllerClient.destroyContainer).toHaveBeenCalledWith('container-late');
       expect(result.status).toBe('STOPPED');
+    });
+
+    it('T-SKIP1a: 挂载存储 + archiveStorage:false → destroy body 带 storageArchive:false', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'RUNNING', storageId: STORAGE_ID })) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+      vi.mocked(CloudHost.findOneAndUpdate)
+        .mockReturnValueOnce(
+          chain(hostDoc({ status: 'STOPPING', storageId: STORAGE_ID })) as never,
+        )
+        .mockReturnValueOnce(
+          chain(hostDoc({ status: 'STOPPED', storageId: STORAGE_ID, containerId: null })) as never,
+        );
+      vi.mocked(sessionService.endByController).mockResolvedValue(0 as never);
+      vi.mocked(cloudControllerClient.destroyContainer).mockResolvedValue(undefined as never);
+
+      await service.stop(HOST_ID, 'user-1', false, false);
+
+      expect(cloudControllerClient.destroyContainer).toHaveBeenCalledWith('container-1', {
+        storageArchive: false,
+      });
+    });
+
+    it('T-SKIP1b: 缺省/true 或未挂载 → 不携带 storageArchive（报文旧形状）', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain(hostDoc({ status: 'RUNNING', storageId: STORAGE_ID })) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+      vi.mocked(CloudHost.findOneAndUpdate)
+        .mockReturnValueOnce(
+          chain(hostDoc({ status: 'STOPPING', storageId: STORAGE_ID })) as never,
+        )
+        .mockReturnValueOnce(
+          chain(hostDoc({ status: 'STOPPED', storageId: STORAGE_ID, containerId: null })) as never,
+        );
+      vi.mocked(sessionService.endByController).mockResolvedValue(0 as never);
+      vi.mocked(cloudControllerClient.destroyContainer).mockResolvedValue(undefined as never);
+
+      await service.stop(HOST_ID, 'user-1', false, true);
+      expect(cloudControllerClient.destroyContainer).toHaveBeenLastCalledWith('container-1');
+
+      vi.mocked(CloudHost.findOneAndUpdate)
+        .mockReturnValueOnce(chain(hostDoc({ status: 'STOPPING', containerId: 'c-2' })) as never)
+        .mockReturnValueOnce(chain(hostDoc({ status: 'STOPPED', containerId: null })) as never);
+      await service.stop(HOST_ID, 'user-1', false, false);
+      expect(cloudControllerClient.destroyContainer).toHaveBeenLastCalledWith('c-2');
     });
 
     it('A-9 reverts to the previous status when new active sessions appear before stop', async () => {
@@ -1439,6 +1512,94 @@ describe('CloudHostService', () => {
 
       expect(cloudStorageService.markArchiving).toHaveBeenCalledWith(STORAGE_ID, HOST_ID, null);
       expect(cloudStorageService.releaseStorage).not.toHaveBeenCalled();
+    });
+
+    it('T-SKIP2a: terminal archiveSkipped=true → detachToIdle（不归档）', async () => {
+      const host = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: new Date('2026-10-20T01:00:00.000Z'),
+        status: 'RUNNING',
+      });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(host) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(
+          hostDoc({
+            storageId: STORAGE_ID,
+            readyAt: new Date('2026-10-20T01:00:00.000Z'),
+            status: 'STOPPED',
+          }),
+        ) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: null, archiveSkipped: true },
+      });
+
+      expect(cloudStorageService.detachToIdle).toHaveBeenCalledWith(STORAGE_ID, HOST_ID);
+      expect(cloudStorageService.markArchiving).not.toHaveBeenCalled();
+      expect(cloudStorageService.reconcileFromTerminal).not.toHaveBeenCalled();
+      expect(cloudStorageService.releaseStorage).not.toHaveBeenCalled();
+    });
+
+    it('T-SKIP2b: 未就绪即终态（readyAt=null）即使 archiveSkipped=true 仍 releaseStorage', async () => {
+      const host = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: null,
+        status: 'STARTING',
+      });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(host) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(
+          hostDoc({
+            storageId: STORAGE_ID,
+            readyAt: null,
+            status: 'STOPPED',
+          }),
+        ) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: null, archiveSkipped: true },
+      });
+
+      expect(cloudStorageService.releaseStorage).toHaveBeenCalledWith(STORAGE_ID, HOST_ID);
+      expect(cloudStorageService.detachToIdle).not.toHaveBeenCalled();
+    });
+
+    it('T-SKIP2c: terminal 重投两次，第二次走终态幂等分支（不重复 CAS/副作用）', async () => {
+      const running = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: new Date('2026-10-20T01:00:00.000Z'),
+        status: 'RUNNING',
+      });
+      const stopped = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: new Date('2026-10-20T01:00:00.000Z'),
+        status: 'STOPPED',
+      });
+      vi.mocked(CloudHost.findOne)
+        .mockReturnValueOnce(chain(running) as never)
+        .mockReturnValueOnce(chain(stopped) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(chain(stopped) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: null, archiveSkipped: true },
+      });
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: null, archiveSkipped: true },
+      });
+
+      // 第二次不再执行 STOPPED CAS（仅早退分支的幂等副作用补偿）。
+      expect(CloudHost.findOneAndUpdate).toHaveBeenCalledTimes(1);
+      // 存储侧依赖 detachToIdle 自身 CAS 幂等（T-SKIP2c 服务单测）。
+      expect(cloudStorageService.detachToIdle).toHaveBeenCalledTimes(2);
     });
 
     it('T-CS-AR1b: 已 ready 终止但 archiveStatus=null（未触发归档）→ 释放存储，不永久卡已挂载', async () => {

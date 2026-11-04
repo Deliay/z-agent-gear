@@ -117,6 +117,7 @@ export const cloudHostTypeDefs = `#graphql
     activeSessionCount: Int!
     sessionsWillBeLost: Boolean!
     sessions: [CloudHostSessionSummary!]!
+    storage: CloudStorageSummary
   }
 
   type CloudHostCapabilities {
@@ -199,9 +200,13 @@ export const cloudHostTypeDefs = `#graphql
 
   extend type Mutation {
     createCloudHost(input: CreateCloudHostInput!): CloudHost!
-    stopCloudHost(id: ID!, force: Boolean): CloudHost!
+    stopCloudHost(id: ID!, force: Boolean, archiveStorage: Boolean): CloudHost!
     deleteCloudHost(id: ID!): Boolean!
     installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!
+    # Git 项目设置幂等口径：目标目录已是同一仓库（remote 归一后精确匹配）时直接复用该目录，
+    # 不拉取、不改动目录内容；目标目录为空目录时自动移除后继续克隆；
+    # 被其他项目占用（其他仓库 / 非空普通目录 / 同名文件）时失败并提示
+    # 「目标目录已存在其他项目，请修改前缀地址」，被占用内容不被改动。
     setupCloudHostGithubProject(input: SetupCloudHostGithubProjectInput!): CloudHostSetupOperation!
     retryCloudHostSetupOperation(id: ID!): CloudHostSetupOperation!
     createCloudHostIssuesLinkage(input: CloudHostIssuesLinkageInput!): CloudHostIssuesLinkage!

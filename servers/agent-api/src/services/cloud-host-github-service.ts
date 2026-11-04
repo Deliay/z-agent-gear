@@ -36,20 +36,47 @@ interface GithubSetupServiceDeps {
   stepTimeoutMs?: number;
 }
 
-/** 幂等 Git 设置脚本：认证由容器的 github-credential-manager 在批次前完成。 */
+/**
+ * 幂等 Git 设置脚本：认证由容器的 github-credential-manager 在批次前完成。
+ * 同仓库复用零改动（不拉取）/ 空目录清理后克隆 / 被其他项目占用时统一提示且不改动内容。
+ */
 export const GITHUB_SETUP_SCRIPT = `set -euo pipefail
 TARGET="\${WORKLOAD_PARAM_TARGETPATH:?missing targetPath}"
 REPO="\${WORKLOAD_PARAM_REPOFULLNAME:?missing repoFullName}"
 command -v gh >/dev/null || { echo "gh 不可用，请先安装 Github 工作负载"; exit 1; }
+
+normalize_remote() {
+  local url="$1"
+  url="\${url%/}"
+  url="\${url%.git}"
+  url="\${url%/}"
+  url="\${url#https://}"
+  url="\${url#http://}"
+  url="\${url#ssh://}"
+  url="\${url#git://}"
+  url="\${url#*@}"
+  printf '%s' "$url"
+}
+
 if [ -d "$TARGET/.git" ]; then
   ORIGIN="$(git -C "$TARGET" remote get-url origin 2>/dev/null || true)"
-  case "$ORIGIN" in
-    *"github.com/$REPO"|*"github.com:$REPO") git -C "$TARGET" pull --ff-only ;;
-    *) echo "目标目录已存在其他 Git 仓库，请修改 clone 路径"; exit 2 ;;
-  esac
+  REMOTE="$(normalize_remote "$ORIGIN")"
+  if [ "$REMOTE" = "github.com/$REPO" ] || [ "$REMOTE" = "github.com:$REPO" ]; then
+    echo "目标目录已是 $REPO 的 Git 仓库，直接复用该目录"
+  else
+    echo "目标目录已存在其他项目，请修改前缀地址"
+    exit 2
+  fi
 else
-  if [ -d "$TARGET" ] && [ -n "$(ls -A "$TARGET" 2>/dev/null)" ]; then
-    echo "目标目录非空且不是 Git 仓库，请修改 clone 路径"; exit 3
+  if [ -d "$TARGET" ]; then
+    if [ -n "$(ls -A "$TARGET" 2>/dev/null)" ]; then
+      echo "目标目录已存在其他项目，请修改前缀地址"
+      exit 3
+    fi
+    rmdir "$TARGET"
+  elif [ -e "$TARGET" ]; then
+    echo "目标目录已存在其他项目，请修改前缀地址"
+    exit 4
   fi
   gh repo clone "$REPO" "$TARGET"
 fi
