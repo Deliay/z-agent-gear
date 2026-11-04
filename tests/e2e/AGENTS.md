@@ -278,12 +278,13 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-CREN1 代码块工具栏 | 注入围栏代码块 → 语言标签 + 复制成功 toast + 自动换行切换 |
 | E2E-CREN2 Mermaid | 每条注入携带独立 `messageId` → 合法 mermaid 渲染 SVG；语法错误回退代码块且同页其余内容正常 |
 | E2E-CREN3 差异渲染 | 注入 diff 工具内容 → 双行号列数值正确、插入行对齐不串位 |
-| E2E-CREN4 终端 ANSI | 注入带颜色码输出 → 颜色 span 出现且文本可读 |
+| E2E-CREN4 终端渲染 | 注入颜色码 + 进度条 `\r` + 光标上移/行擦除 + 私有模式/DCS → 颜色 span 出现、最终画面只保留收敛结果（`progress 100%` 可见 / `progress 10%` 不可见）、无控制序列泄漏、容器背景 `rgb(5, 5, 5)` |
 | E2E-CREN5 工具生命周期一致 | 创建（execute + title + rawInput）→ 稀疏完成更新后标题仍为命令名；负向断言「不出现 `Tool Call: Command` / 通用 `Tool Call`」可红，且可展开查看原始输入 |
 | E2E-CREN6 滚动导航 | 长列表上翻后注入新消息 → `scrollTop` 保持原位 + 「回到底部」出现；点击后滚动到底并恢复自动跟随（再注入一条仍贴底） |
 | E2E-CREN7 窄视口溢出 | 375px 下超长代码/差异 → `scrollWidth - clientWidth ≤ 1` |
 | E2E-CREN8 导出 | 点击导出对话 → download 事件触发、文件名 `session-*.md` 且内容包含会话文本 |
 | E2E-CREN9 长会话导出拉全历史 | 注入 30 条后重载（首帧仅 25 条）→ 导出文件包含全部 30 条，验证分页补历史 |
+| E2E-CREN10 终端主题解耦 | 切换 `html.dark` 前后终端背景恒为 `rgb(5, 5, 5)`，彩色文本仍可读 |
 
 ### Sidebar Phase 4 E2E (`sidebar-phase4.spec.ts`)
 

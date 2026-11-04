@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import type { ToolCallContent } from '@agentclientprotocol/sdk';
 import ContentBlockRenderer from '../ContentBlockRenderer';
 
@@ -114,5 +114,18 @@ describe('ContentBlockRenderer', () => {
 
     expect(container.querySelector('[data-testid="diff-view"]')).toBeTruthy();
     expect(screen.getByText(/term-1/)).toBeDefined();
+  });
+
+  it('should render terminal output asynchronously when present', async () => {
+    renderContent([
+      {
+        type: 'terminal',
+        terminalId: 'term-2',
+        output: '\u001b[32mready\u001b[0m',
+      } as unknown as ToolCallContent,
+    ]);
+
+    const terminal = screen.getByTestId('terminal-output');
+    await waitFor(() => expect(terminal.textContent).toContain('ready'));
   });
 });
