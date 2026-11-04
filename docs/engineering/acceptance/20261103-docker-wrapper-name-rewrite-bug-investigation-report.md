@@ -1,25 +1,33 @@
 ---
-description: 测试环境 docker harbor 代理包装脚本误改写 --name 等带值选项的值，导致 Aspire 容器资源（Mongo/Redis/RabbitMQ/OTel）全部 FailedToStart、tests/api 集成测试链路不可用的问题调查报告——CLI 级最小复现 3/3 必现、bash -x argv 级证据、Aspire 运行日志 A/B 对照定位到 /usr/local/bin/docker 参数遍历缺陷
+description: Docker 预制工作负载脚本生成的 harbor 代理 shim 误改写 --name 等带值选项的值，导致 Aspire 容器资源（Mongo/Redis/RabbitMQ/OTel）全部 FailedToStart、tests/api 集成测试链路不可用的问题调查与修复报告——CLI 级最小复现 3/3 必现、bash -x argv 级证据、Aspire 运行日志 A/B 对照定位到 shim 参数遍历缺陷，已在仓库以 migration 020 修复
 type: Permanent
 ---
 
-# docker 包装脚本误改写 --name 的值 · 问题调查报告（2026-11-03）
+# docker 包装脚本误改写 --name 的值 · 问题调查与修复报告（2026-11-03）
 
-> **状态**: ✅ **已复现、已定位（REPRODUCED & ROOT-CAUSED，2026-11-03）**——CLI 级最小复现 **3/3 必现**（`docker run -d --name <名字> redis:8.6` → `invalid container name`），`bash -x` 抓到包装脚本实际 exec 的改写后 argv；Aspire 运行日志 A/B 对照（同机同镜像：裸 PATH → 4 个容器资源全部 `FailedToStart`；PATH 前置修复版 shim → 4 个容器全部创建成功并持续运行）把根因钉死在 `/usr/local/bin/docker` 的参数遍历逻辑。修复脚本位于**测试环境镜像（非本仓库代码）**，落点归属与固化方案见第八节「待确认问题」。
+> **状态**: ✅ **已复现、已定位、已修复（REPRODUCED, ROOT-CAUSED & FIXED）**——CLI 级最小复现 **3/3 必现**（`docker run -d --name <名字> redis:8.6` → `invalid container name`），`bash -x` 抓到 shim 实际 exec 的改写后 argv；Aspire 运行日志 A/B 对照（同机同镜像：裸 PATH → 4 个容器资源全部 `FailedToStart`；PATH 前置修复版 shim → 4 个容器全部创建成功并持续运行）把根因钉死在 `/usr/local/bin/docker` 的参数遍历逻辑。
+>
+> **落点更正（2026-11-04）**：该 `/usr/local/bin/docker` **不是测试环境镜像自带、也不是外部运维脚本**，而是本仓库「Docker」预制工作负载初始化脚本在容器内生成的 harbor 代理 shim。脚本源头为 `servers/admin-api/src/migrations/003-docker-apt-source.ts`（v3）→ `012-worker-user-scripts.ts`（v4），由 `admin-api` 迁移写入 `cloudworkloads` 后在云主机初始化时执行。因此修复落点就在本仓库：新增 **migration 020** 将预置脚本刷新为 v5，修正 shim 的带值选项解析（见 §六/§九）。
 
 ## 关联文档
 
 - 来源 Issue：[Deliay/z-agent-gear#409](https://github.com/Deliay/z-agent-gear/issues/409)（`start-BUG 修复工作流`，2026-11-02 创建）
 - 历史同根因记录：`docs/engineering/acceptance/20261023-integration-release-acceptance-report.md` §1127（首次定位 + 当场修复，备份 `docker.bak-20261024`）、`docs/engineering/acceptance/20261028-integration-release-acceptance-report.md` §8.4/§9.3（复现 + 绕过）
 - 受影响测试链路：`tests/api/AGENTS.md`（依赖 `aspire start` 拉起 MongoDB/Redis 后执行集成套件）
-- 总分支：`bugfix/docker-wrapper-name-rewrite`（从 `origin/main` @ `869c4d19` 切出）
+- 总分支：`bugfix/docker-wrapper-name-rewrite`（从 `origin/main` @ `869c4d19` 切出，修复提交前已合并最新 `origin/main`）
 - 目标分支：`main`（人类问题描述未指定，按工作流默认）
 - 调查报告路径：`docs/engineering/acceptance/20261103-docker-wrapper-name-rewrite-bug-investigation-report.md`
-- 调研日期：2026-11-03
+- 调研日期：2026-11-03；落点更正与修复：2026-11-04
 
 ## 一、问题概述
 
 **人类输入**（上游节点「输入问题描述」，源自 Issue #409）：测试环境的 `docker` 命令（`/usr/local/bin/docker`）不是原生 Docker CLI，而是一个 **harbor 代理包装脚本**（bash，最终 `exec /usr/bin/docker`），用途是把镜像引用重写为内网代理地址（`redis:8.6` → `core.harbor.internal.fffdan.com/docker-hub-proxy/redis:8.6`）。
+
+**来源更正**：该 shim 由本仓库「Docker」预制工作负载脚本生成——`admin-api` migration 003 写入 v3、012 写入带 sudo 的 v4，云主机初始化时以 `tee /usr/local/bin/docker` 落盘（root 拥有只是 `sudo` 执行的表象）。仓库内的事实来源：
+
+- `servers/admin-api/src/migrations/003-docker-apt-source.ts` → `DOCKER_SCRIPT_V3`（shim heredoc 首次出现）
+- `servers/admin-api/src/migrations/012-worker-user-scripts.ts` → `DOCKER_SCRIPT_V4`（叠加 sudo/worker 用户）
+- 修复：`servers/admin-api/src/migrations/020-docker-shim-value-options.ts` → `DOCKER_SCRIPT_V5`
 
 该脚本对 `pull|run|create` 的参数遍历只区分「以 `-` 开头的 flag」与「非 flag 参数」，**不识别需要接值的选项**，于是把 `--name` 的**值**当成镜像名改写：
 
@@ -46,7 +54,7 @@ done
 
 | 项 | 值 |
 |---|---|
-| 问题脚本 | `/usr/local/bin/docker`（bash，1079 字节，mtime **2026-11-01 22:24**，root 拥有；非本仓库代码） |
+| 问题脚本 | `/usr/local/bin/docker`（bash，1079 字节，mtime **2026-11-01 22:24**，root 拥有）。**由本仓库 Docker 预制工作负载脚本生成**（`DOCKER_SCRIPT_V3`/`V4` 的 shim heredoc → `sudo tee /usr/local/bin/docker`），非镜像内置文件 |
 | 真实 Docker CLI | `/usr/bin/docker`，Docker 29.9.2（build a82e528），daemon 正常 |
 | harbor 代理 | `core.harbor.internal.fffdan.com`（`docker-hub-proxy` / `ghcr` 仓库） |
 | Aspire CLI | 13.6.1+3751e615（`/usr/local/bin/aspire` → `~/.aspire/bin/aspire`） |
@@ -157,13 +165,13 @@ C4/C5 证明缺陷**不止于 `--name`**：所有「带值选项出现在镜像�
 
 **证据链**：
 
-1. **源码**：`/usr/local/bin/docker` 遍历逻辑（§一引用片段）——只判 `[ "${a#-}" = "$a" ]`，`--name test-redis` 中 `test-redis` 满足条件 → 被 `normalize_image` 改写。
+1. **源码**：本仓库 `DOCKER_SCRIPT_V3`/`V4` 的 shim heredoc（§一引用片段）——只判 `[ "${a#-}" = "$a" ]`，`--name test-redis` 中 `test-redis` 满足条件 → 被 `normalize_image` 改写；容器内 `/usr/local/bin/docker` 即由该 heredoc 原样落盘。
 2. **argv 轨迹**：`bash -x` 显示最终 `exec /usr/bin/docker create --name core.harbor.../repro-trace-1 redis:8.6`（§3.2）——改写发生在包装层，daemon 只是拒绝了非法名。
 3. **最小复现**：`run/create --name <名字>` 3/3 必现 `invalid container name`（§3.1）；`--platform`/`-e` 同源错位（§3.3 C4/C5）。
 4. **A/B 日志**：同机同镜像，裸 PATH 全 `FailedToStart` vs PATH 前置修复 shim 全部容器正常运行（§3.4）。
-5. **历史同根因**：`20261023` 报告首次定位并当场修复（备份 `docker.bak-20261024`），`20261028` 报告复现并绕过——**本次为同一缺陷在镜像重建（脚本 mtime 2026-11-01 22:24）后回归**。
+5. **历史同根因**：`20261023` 报告首次定位并当场修复（备份 `docker.bak-20261024`），`20261028` 报告复现并绕过——**本次为同一缺陷在 Docker 工作负载重新初始化后回归**。
 
-**为何是回归**：2026-10-24 曾修复过该 shim，但修复只落在当时环境；测试环境镜像于 2026-11-01 重新构建/覆盖，`/usr/local/bin/docker` 恢复为带缺陷版本 → 2026-11-02 的多次 Aspire 启动再次全红。**根因本质是「环境脚本缺陷 + 修复未固化进仓库/镜像」。**
+**为何是回归**：2026-10-24 曾修复过该 shim，但只改了当时容器内的 `/usr/local/bin/docker`，**仓库里的 shim 源头（migration 003/012）未同步修复**；测试环境镜像于 2026-11-01 重建、Docker 工作负载再次执行初始化脚本，缺陷版本被重新落盘 → 2026-11-02 的多次 Aspire 启动再次全红。**根因本质是「仓库内 shim 生成逻辑缺陷 + 历史修复只落在运行环境、未固化进仓库」。**
 
 **调用链**：`aspire start` → AppHost → DCP `run-controllers`/`ContainerReconciler` → `docker create --name <资源名> <镜像>`（PATH 解析到 `/usr/local/bin/docker` 包装脚本）→ 值被改写 → daemon `invalid container name` → 资源 `Starting -> FailedToStart` → 依赖容器的服务（agent-api 等）`Waiting` → `tests/api` 集成套件无法执行。
 
@@ -175,57 +183,77 @@ C4/C5 证明缺陷**不止于 `--name`**：所有「带值选项出现在镜像�
 | 不受影响 | ① `docker pull <镜像>`（无带值选项）；② `--xxx=value` 等号形态（整段以 `-` 开头透传）；③ `exec/ps/logs/rm` 等其它子命令（走 `*)` 分支原样透传）；④ 原生 `/usr/bin/docker` 直调 |
 | 编排层 | Aspire/DCP 全部容器资源（mongodb/redis/rabbitmq/otel-collector）创建失败；项目进程资源不受影响 |
 | 测试链路 | `tests/api` 集成套件（含 T-ST11/T-ST12/T-ST15 等 WebSocket 用例）**环境性不可用**；`tests/e2e` 依赖 `aspire start` 的实跑同样受阻 |
-| 其它入口 | CI（GitHub Actions 原生 docker）不受影响；仅测试/开发环境镜像受影响 |
+| 其它入口 | CI（GitHub Actions 原生 docker）不受影响；**选择「Docker」工作负载的云主机/开发机**会生成带缺陷 shim（源头在本仓库工作负载脚本，非 worker 镜像本身） |
 | 数据修复需求 | **无**——失败发生在容器创建前，未产生任何持久化脏数据；C5 类 env 污染也仅存在于失败命令的瞬时参数中 |
-| 严重度 | 高（阻断集成测试主链路）+ **回归性质**（历史上已修过一次，未固化导致复发） |
+| 严重度 | 高（阻断集成测试主链路）+ **回归性质**（历史上已修过一次，但只改运行环境、未修仓库源头） |
 
-## 六、修复方案与风险
+## 六、修复方案与落地
 
-> 脚本位于测试环境镜像（root 拥有，非本仓库代码），**本仓库无法直接提交该文件的修改**；方案分「环境侧根治」与「仓库侧防护」两层，具体落点待人类确认（§八）。
+> **落点更正**：shim 的源头在本仓库「Docker」预制工作负载脚本（migration 003/012），因此不需要环境镜像维护方同步，也不需要复制一份环境侧脚本。修复直接进入迁移体系。
 
-### 方案 A（环境侧根治，推荐主路径）
+### 6.1 已实施：migration 020（v5）
 
-改造 `/usr/local/bin/docker` 参数遍历：
+新增 `servers/admin-api/src/migrations/020-docker-shim-value-options.ts`：
 
-1. 维护**带值选项跳过表**（`--name/-n`、`-e/--env`、`-p/--publish`、`-v/--volume`、`--network`、`-w/--workdir`、`--entrypoint`、`-l/--label`、`--platform`、`--restart`、`--health-cmd` 等）：命中选项则连同其**下一个参数**一起原样透传，不进入归一化候选；
-2. `--xxx=value`（含 `=`）形态整段透传（现状已正确，保持）；
-3. 仅对**跳过表消费之后剩下的第一个位置参数**做 `normalize_image`；
-4. 未知 flag：默认按「可能带值」保守处理（即下一个参数不归一化），宁可漏改不可错改——错改是 daemon 硬失败，漏改仅回退 docker.io 拉取。
+- 以 `DOCKER_SCRIPT_V4` 为基线，定点替换 shim 的参数遍历块，生成 `DOCKER_SCRIPT_V5`（历史版本常量保持字节不变，供迁移匹配）；
+- 迁移按 `presetKey='docker'`（回退精确 `name='Docker'`）定位，库内脚本字节等于 V1/V2/V3/V4 才刷新为 V5；已是 V5 则 no-op；管理员定制脚本 `warn` 跳过；管理员删除的预置项不重建；
+- 已注册到 `servers/admin-api/src/index.ts` 的启动迁移列表，随 admin-api 启动自动执行。
 
-**风险**：跳过表不全 → 某些选项仍错位（用 §七 用例集回归兜底）；「未知 flag 保守跳过」可能让镜像归一化漏掉（可接受，`normalize_image` 对已含域名的引用本就透传）。**落地方式待定**：直接改环境脚本（易再次被镜像重建覆盖，需镜像维护方同步）或把修复版脚本纳入本仓库（如 `deploy/` 或 `scripts/`）由镜像构建采纳——见 §八 #1。
+**生效路径**：admin-api 启动 → `admin_migrations` 执行 020 → `cloudworkloads.initScript` 更新为 v5 → 云主机下次执行「Docker」工作负载初始化时 `tee /usr/local/bin/docker` 落盘 v5。**已经落盘的坏 shim 需要重跑该工作负载（或重建/恢复云主机）才会被覆盖**；本修复不依赖对运行中容器做热替换。
 
-### 方案 B（仓库侧防护，无论 A 是否落地都建议做）
+### 6.2 v5 参数解析规则
 
-1. **包装脚本行为回归测试**：仿 `deploy/images/worker/entrypoint.test.sh` 的 bash 测试风格，新增针对 harbor shim 的用例（`--name`/`-e`/`--platform`/等号形态/无选项 pull 五类断言），脚本缺失时自动 skip（CI 原生 docker 环境不受影响）；
-2. **fail-fast 预检**：`tests/api/AGENTS.md` 增加环境预检步骤（或 `scripts/` 增加 preflight 脚本）：检测 `docker` 是否为 shim、并用 `docker create --name __preflight__ <小镜像>` 探测，失败时给出**指向本报告的明确报错**，避免下次再以「集成测试跑不起来」的表象浪费排查轮次；
-3. **文档沉淀**：在 `tests/api/AGENTS.md` 记录「容器 FailedToStart → 先查 docker shim」的排障路径。
+- `--opt=value`（含 `=`）整段透传；
+- 长选项命中 `VALUE_LONG_OPTS`（`--name/-e/--env/-p/--publish/-v/--volume/--platform/--network/-w/--workdir/--entrypoint/--label/--restart/--health-*` 等）时，连同下一个参数一起透传；
+- 短选项按字符簇解析：`-e FOO=bar` 跳过下一参数；`-eFOO=bar`、`-p8080:80`、`-v/a:/b` 整段透传；`-it`/`-d` 等布尔簇不受影响；
+- `pull` 单独处理：`-a/--all-tags`、`-q/--quiet` 是布尔，仅 `--platform` 跳过其值；
+- 未知长选项按**无值布尔**处理——宁可漏归一化（回退 docker.io 拉取），也不吞掉镜像/命令参数；
+- `--` 之后全部视为位置参数；
+- 只对跳过选项后的**第一个位置参数**调用 `normalize_image`，其后的命令/参数不再改写。
 
-**风险**：预检命令本身需一个可拉取的小镜像（`redis:8.6` 已在本环境缓存）；bash 测试需避免在无 shim 环境误报（用「检测 shim 存在才执行」守卫）。
+### 6.3 回归测试（已落地）
 
-### 不做的事
+`servers/admin-api/src/migrations/020-docker-shim-value-options.test.ts`（15 个用例）覆盖：
 
-- 不改 DCP/Aspire（上游行为正确，是被调用方被污染）；
-- 不做数据修复（无脏数据，§五）；
-- 不在本仓库复制整份环境脚本逻辑做「影子实现」（方案 A-落地方式若选入仓库，须以镜像构建单一事实来源为准，避免两份脚本漂移）。
+- 迁移口径：V1/V2/V3/V4 → V5 刷新、V5 幂等、管理员定制跳过、已删除不重建；
+- shim argv 级行为：`create/run --name` 值不被改写、`-e/-p/-v/--platform` 值透传、等号形态与短选项粘连、`pull -a/-q/--platform`、未知长选项、其它子命令透传；
+- 脚本可被 `bash -n` 解析，安装/启动/校验锚点保持不变。
+
+### 6.4 风险与边界
+
+- **跳过表不全**：未来 Docker 新增「带值长选项」若未及时补表，其值可能仍被误当镜像；但未知长选项按布尔处理，不会进一步吞掉镜像后的命令参数，且回归用例可快速扩展；
+- **存量运行中容器**：旧 shim 仍驻留，直到重跑 Docker 工作负载/重建容器；这是迁移式修复的固有生效延迟，不是新缺陷；
+- **不改 DCP/Aspire**：上游行为正确，问题在被调用的 shim；
+- **不做数据修复**：失败发生在容器创建前，无持久化脏数据。
 
 ## 七、回归测试计划
 
-| # | 层级 | 用例 | 通过标准 |
-|---|---|---|---|
-| T1 | bash 单测 | `create --name <名字> <镜像>` 经 shim | argv 中 `--name` 值**未被改写**，镜像被归一化 |
-| T2 | bash 单测 | `-e FOO=bar`、`--platform linux/amd64`、`-v /a:/b` 在镜像前 | 各值原样透传，仅镜像被归一化 |
-| T3 | bash 单测 | `--name=<名字>` 等号形态 + `pull <镜像>` | 与现状一致（透传/归一化正确） |
-| T4 | CLI 实测 | `docker run -d --name regression-$$ redis:8.6` | 创建成功，随后 `docker rm -f` 清理 |
-| T5 | Aspire 集成 | `aspire start` → `aspire describe mongodb redis` | 均为 `Running`，**无** `FailedToStart` |
-| T6 | 集成套件 | `tests/api`：`aspire start && aspire wait agent-api` → `pnpm test` | 套件可执行（含 T-ST11/T-ST12/T-ST15） |
-| T7 | 回归防再犯 | 镜像重建后重跑 T1~T4 | 防止 shim 缺陷再次随镜像回归（对应 §四「为何是回归」） |
+| # | 层级 | 用例 | 通过标准 | 状态 |
+|---|---|---|---|---|
+| T1 | bash 单测 | `create --name <名字> <镜像>` 经 shim | argv 中 `--name` 值**未被改写**，镜像被归一化 | ✅ migration 020 单测 |
+| T2 | bash 单测 | `-e FOO=bar`、`--platform linux/amd64`、`-v /a:/b` 在镜像前 | 各值原样透传，仅镜像被归一化 | ✅ migration 020 单测 |
+| T3 | bash 单测 | `--name=<名字>` 等号形态 + `pull <镜像>` | 透传/归一化正确 | ✅ migration 020 单测 |
+| T4 | CLI 实测 | `docker run -d --name regression-$$ redis:8.6` | 创建成功，随后 `docker rm -f` 清理 | ⏸ 本轮执行环境无 docker/daemon，随部署环境验收补跑 |
+| T5 | Aspire 集成 | `aspire start` → `aspire describe mongodb redis` | 均为 `Running`，**无** `FailedToStart` | ⏸ 同上 |
+| T6 | 集成套件 | `tests/api`：`aspire start && aspire wait agent-api` → `pnpm test` | 套件可执行（含 T-ST11/T-ST12/T-ST15） | ⏸ 同上 |
+| T7 | 回归防再犯 | 工作负载重新初始化后重跑 T1~T4 | shim 缺陷不再随初始化回归 | ✅ 源头修复 + 迁移单测；T4 随 T5/T6 补跑 |
 
-> 本轮（调查节点）交付 T1~T4 的用例设计与预期；**T4/T5/T6 实跑随修复节点执行**（本节点按人类指示跳过复现，Aspire 全链路复现未完成，见 §3.4 附注）。
+> T1~T3 已由 `020-docker-shim-value-options.test.ts` 以 argv 级断言实跑通过；T4~T6 需要真实 Docker daemon / Aspire 环境，本轮执行环境不具备，未虚报结果。
 
-## 八、待确认问题
+## 八、已确认事项（原「待确认问题」）
 
-1. **修复落点归属**：`/usr/local/bin/docker` 由测试环境镜像提供（root 拥有、非本仓库代码）。由**环境镜像维护方直接修**，还是**本仓库提交修复版 shim**（如 `scripts/` 或 `deploy/` 下）供镜像构建采纳？（影响方案 A 的落地方式与 §六风险条目；若入仓库，须明确镜像构建的取用路径避免双脚本漂移。）
-2. **既有 workaround 是否固化**：`/home/worker/.local/bin/docker`（2026-11-02 创建的修复版）目前仅靠 `export PATH=$HOME/.local/bin:$PATH` 生效，**镜像重建即丢失**——是否随本次修复一并固化？
-3. **历史备份处置**：`20261023` 报告提到的 `docker.bak-20261024` 在当前镜像中已不存在（镜像于 2026-11-01 重建），是否需要镜像维护方在新镜像中保留「原生 docker」回退路径？
-4. **复现范围**：Aspire 全链路 e2e 复现本轮按人类指示跳过（CLI 级 3/3 复现 + A/B 日志证据已闭合）；修复后是否必须补跑 §七 T5/T6 才算验收通过（建议：是）。
-5. **目标分支**：Issue 未指定目标分支，总 PR 按工作流默认指向 `main`；如人类另有指定需改。
+1. **修复落点归属**：已确认 shim 由本仓库 Docker 预制工作负载脚本生成，直接在本仓库修（migration 020），无需环境镜像维护方另行同步。
+2. **既有 workaround**：`/home/worker/.local/bin/docker` 只是临时 PATH 绕过，不再作为交付物；migration 020 落地后由工作负载重新初始化覆盖正式 shim。
+3. **历史备份处置**：`docker.bak-20261024` 不再是必要路径；原生 CLI 始终是 `/usr/bin/docker`，shim 仅做参数转发。
+4. **复现与验收范围**：Aspire 全链路本轮未实跑（环境限制），部署到具备 Docker daemon 的环境后需补跑 T4~T6 完成端到端验收。
+5. **目标分支**：PR 目标为 `main`；分支已合并最新 `origin/main`，沿用 `bugfix/docker-wrapper-name-rewrite`。
+
+## 九、修复记录
+
+| 项 | 内容 |
+|---|---|
+| 修复文件 | `servers/admin-api/src/migrations/020-docker-shim-value-options.ts`、`020-docker-shim-value-options.test.ts` |
+| 注册点 | `servers/admin-api/src/index.ts` 启动迁移列表 |
+| 文档同步 | `deploy/images/worker/BUILD.md`「已知限制」改为「跳过带值选项后归一化首个位置参数」 |
+| 历史常量 | V1~V4 保持字节不变，V5 由 V4 定点替换生成，避免破坏迁移的字节匹配口径 |
+| 验证 | `vitest run src/migrations/020-docker-shim-value-options.test.ts`：15 passed（含 V1~V4 刷新、V5 幂等、admin 定制跳过、shim argv 行为、`bash -n`） |
