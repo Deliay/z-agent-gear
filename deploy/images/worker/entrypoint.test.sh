@@ -2,6 +2,7 @@
 set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENTRYPOINT="$SCRIPT_DIR/entrypoint.sh"
+DOCKERFILE="$SCRIPT_DIR/Dockerfile"
 ORIGINAL_PATH="$PATH"
 PASS=0
 FAIL=0
@@ -119,11 +120,15 @@ nvm() {
 STUB
   cat > "$STUB_DIR/nvm-install.fixture" <<'STUB'
 #!/usr/bin/env bash
-# 假 nvm install.sh：METHOD=script 非交互、PROFILE=/dev/null 不写 profile（与 Dockerfile 口径一致）
+# 假 nvm install.sh：METHOD=git 走自定义 git 仓库、PROFILE=/dev/null 不写 profile（与 entrypoint 口径一致）
 set -eu
-[ "${METHOD:-}" = "script" ]
+[ "${METHOD:-}" = "git" ]
 [ "${PROFILE:-}" = "/dev/null" ]
 [ -n "${NVM_DIR:-}" ]
+[ -n "${NVM_SOURCE:-}" ]
+[ -n "${NVM_INSTALL_VERSION:-}" ]
+printf 'METHOD=%s\nNVM_SOURCE=%s\nNVM_INSTALL_VERSION=%s\n' \
+  "$METHOD" "$NVM_SOURCE" "$NVM_INSTALL_VERSION" > "$STUB_DIR/nvm_install_env"
 mkdir -p "$NVM_DIR"
 cp "$STUB_DIR/nvm.sh.fixture" "$NVM_DIR/nvm.sh"
 STUB
@@ -161,13 +166,17 @@ setup_env() {
   echo "2.13.0" > "$STUB_DIR/version"
   # profile.d 落到临时目录（测试非 root，不写 /etc）；默认假定 pnpm 已装（T-EP13 显式移除）
   mkdir -p "$TEST_DIR/etc/profile.d"
+  export NVM_PROFILE_PATH="$TEST_DIR/etc/profile.d/nvm.sh"
+  export ZAG_NVM_PROFILE_FILE="$NVM_PROFILE_PATH"
   export PNPM_PROFILE_PATH="$TEST_DIR/etc/profile.d/pnpm.sh"
   export ZAG_PNPM_PROFILE_FILE="$PNPM_PROFILE_PATH"
   # 默认模拟「镜像烘焙完成的主目录」：nvm.sh 可 source、current/bin/node 可执行（T-EP15 no-op；
   # T-EP16/T-EP17 显式移除产物触发自举）。
   export ZAG_WORKER_NVM_DIR="$TEST_DIR/nvm"
   write_fake_nvm "$ZAG_WORKER_NVM_DIR"
-  export NVM_INSTALL_URL="https://nexus.internal.invalid/repository/github-raw-proxy/nvm-sh/nvm/v0.40.8/install.sh"
+  export NVM_INSTALL_URL="https://git.internal.fffdan.com/nvm-sh/nvm/raw/branch/master/install.sh"
+  export NVM_SOURCE="https://git.internal.fffdan.com/nvm-sh/nvm.git"
+  export NVM_INSTALL_VERSION="master"
   export NODE_VERSION=24
   export NPM_REGISTRY="https://nexus.internal.fffdan.com/repository/npm-proxy/"
   export STUB_DIR TMPDIR="$RUN_TMP"
@@ -186,7 +195,9 @@ teardown_env() {
   rm -rf "$TEST_DIR"
   unset STUB_DIR TMPDIR ZAG_SERVER_ENDPOINT STUB_AGENT_EXITS STUB_NPM_MODE STUB_NPM_FAIL_PNPM STUB_RUN_FOREVER
   unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS ZAG_PNPM_PROFILE_FILE PNPM_PROFILE_PATH
-  unset ZAG_STORAGE_HOME STUB_CURL_MODE ZAG_WORKER_NVM_DIR NVM_INSTALL_URL NODE_VERSION NPM_REGISTRY
+  unset ZAG_NVM_PROFILE_FILE NVM_PROFILE_PATH NVM_NODEJS_ORG_MIRROR
+  unset ZAG_STORAGE_HOME STUB_CURL_MODE ZAG_WORKER_NVM_DIR NODE_VERSION NPM_REGISTRY
+  unset NVM_INSTALL_URL NVM_SOURCE NVM_INSTALL_VERSION
   export PATH="$ORIGINAL_PATH"
 }
 
@@ -475,6 +486,10 @@ rm -rf "$ZAG_WORKER_NVM_DIR"
 rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP16 自举后入口正常退出"
 assert_eq 1 "$(count_lines "$STUB_DIR/curl_invocations")" "T-EP16 恰好下载一次 nvm 安装脚本"
+assert_contains "$STUB_DIR/curl_invocations" "https://git.internal.fffdan.com/nvm-sh/nvm/raw/branch/master/install.sh" "T-EP16 使用自定义 nvm 安装脚本"
+assert_contains "$STUB_DIR/nvm_install_env" "METHOD=git" "T-EP16 以 git 方式安装 nvm"
+assert_contains "$STUB_DIR/nvm_install_env" "NVM_SOURCE=https://git.internal.fffdan.com/nvm-sh/nvm.git" "T-EP16 使用自定义 nvm git 仓库"
+assert_contains "$STUB_DIR/nvm_install_env" "NVM_INSTALL_VERSION=master" "T-EP16 安装自定义仓库的 master 引用"
 assert_eq 1 "$(grep -c '^nvm install --default 24$' "$STUB_DIR/nvm_invocations" 2>/dev/null || true)" "T-EP16 nvm install --default \$NODE_VERSION 一次"
 assert_eq 1 "$(grep -c '^nvm alias default 24$' "$STUB_DIR/nvm_invocations" 2>/dev/null || true)" "T-EP16 nvm alias default 一次"
 assert_eq 1 "$(grep -c '^config set registry https://nexus.internal.fffdan.com/repository/npm-proxy/$' "$STUB_DIR/npm_config" 2>/dev/null || true)" "T-EP16 以 worker 身份设置 npm registry"
@@ -485,6 +500,8 @@ else
 fi
 assert_contains "$TEST_DIR/stdout.log" "bootstrap_home: nvm not available" "T-EP16 日志含 nvm 自举锚点"
 assert_contains "$TEST_DIR/stdout.log" "bootstrap_home: node installed" "T-EP16 日志含 node 自举锚点"
+assert_contains "$NVM_PROFILE_PATH" '# >>> nvm >>>' "T-EP16 写入 nvm profile 标记块"
+assert_contains "$NVM_PROFILE_PATH" 'export NVM_DIR="$HOME/.nvm"' "T-EP16 profile 导出 NVM_DIR"
 # 重跑幂等：不再下载/安装
 rm -f "$STUB_DIR/agent_starts"
 rc=$(run_entrypoint)
@@ -538,6 +555,31 @@ rc=$(run_entrypoint)
 assert_eq 0 "$rc" "T-EP18 未设置 ZAG_STORAGE_HOME 时自举失败不退出"
 assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP18 未设置时仍拉起 agent-gear"
 assert_contains "$TEST_DIR/stdout.log" "WARN: bootstrap_home failed" "T-EP18 未设置时仅告警"
+teardown_env
+
+echo "== T-EP19: 主目录工具链全部在 entrypoint 安装（构建期不再以 worker 安装） =="
+for needle in 'USER worker' 'nvm' 'NVM_' 'NODE_VERSION' 'NODEJS_DIST_MIRROR' 'PNPM_HOME' 'npm install -g' 'pnpm add -g'; do
+  if grep -qiF -- "$needle" "$DOCKERFILE"; then
+    fail "T-EP19 Dockerfile 仍包含主目录工具链配置: $needle"
+  else
+    pass "T-EP19 Dockerfile 已移除主目录工具链配置: $needle"
+  fi
+done
+assert_contains "$ENTRYPOINT" 'METHOD=git' "T-EP19 entrypoint 以 git 方式安装 nvm"
+assert_contains "$ENTRYPOINT" 'NVM_SOURCE="$nvm_source"' "T-EP19 entrypoint 透传自定义 nvm git 仓库"
+assert_contains "$ENTRYPOINT" 'run_as_worker env -u NODE_VERSION PROFILE=/dev/null METHOD=git' "T-EP19 nvm 安装由 worker 用户执行"
+
+echo "== T-EP20: 未挂载云存储的新容器同样完成自举并上线 =="
+setup_env
+rm -rf "$ZAG_WORKER_NVM_DIR"
+unset ZAG_STORAGE_HOME
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP20 非存储容器入口正常退出"
+assert_eq 1 "$(count_lines "$STUB_DIR/curl_invocations")" "T-EP20 非存储容器安装 nvm"
+assert_eq 1 "$(grep -c '^nvm install --default 24$' "$STUB_DIR/nvm_invocations" 2>/dev/null || true)" "T-EP20 非存储容器安装 Node"
+assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP20 非存储容器正常拉起 agent-gear"
+assert_contains "$TEST_DIR/stdout.log" "bootstrap_home: node installed" "T-EP20 非存储容器自举成功"
+assert_contains "$TEST_DIR/stdout.log" "updating agent-gear via pnpm" "T-EP20 非存储容器继续安装 agent-gear"
 teardown_env
 
 echo
