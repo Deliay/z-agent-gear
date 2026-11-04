@@ -1543,6 +1543,65 @@ describe('CloudHostService', () => {
       expect(cloudStorageService.releaseStorage).not.toHaveBeenCalled();
     });
 
+    it('T-SKIP2b: 未就绪即终态（readyAt=null）即使 archiveSkipped=true 仍 releaseStorage', async () => {
+      const host = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: null,
+        status: 'STARTING',
+      });
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(host) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(
+        chain(
+          hostDoc({
+            storageId: STORAGE_ID,
+            readyAt: null,
+            status: 'STOPPED',
+          }),
+        ) as never,
+      );
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: null, archiveSkipped: true },
+      });
+
+      expect(cloudStorageService.releaseStorage).toHaveBeenCalledWith(STORAGE_ID, HOST_ID);
+      expect(cloudStorageService.detachToIdle).not.toHaveBeenCalled();
+    });
+
+    it('T-SKIP2c: terminal 重投两次，第二次走终态幂等分支（不重复 CAS/副作用）', async () => {
+      const running = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: new Date('2026-10-20T01:00:00.000Z'),
+        status: 'RUNNING',
+      });
+      const stopped = hostDoc({
+        storageId: STORAGE_ID,
+        readyAt: new Date('2026-10-20T01:00:00.000Z'),
+        status: 'STOPPED',
+      });
+      vi.mocked(CloudHost.findOne)
+        .mockReturnValueOnce(chain(running) as never)
+        .mockReturnValueOnce(chain(stopped) as never);
+      vi.mocked(CloudHost.findOneAndUpdate).mockReturnValue(chain(stopped) as never);
+      vi.mocked(Session.countDocuments).mockResolvedValue(0 as never);
+
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: null, archiveSkipped: true },
+      });
+      await service.handleTerminal(HOST_ID, {
+        status: 'stopped',
+        storage: { id: STORAGE_ID, archiveStatus: null, archiveSkipped: true },
+      });
+
+      // 第二次不再执行 STOPPED CAS（仅早退分支的幂等副作用补偿）。
+      expect(CloudHost.findOneAndUpdate).toHaveBeenCalledTimes(1);
+      // 存储侧依赖 detachToIdle 自身 CAS 幂等（T-SKIP2c 服务单测）。
+      expect(cloudStorageService.detachToIdle).toHaveBeenCalledTimes(2);
+    });
+
     it('T-CS-AR1b: 已 ready 终止但 archiveStatus=null（未触发归档）→ 释放存储，不永久卡已挂载', async () => {
       const host = hostDoc({
         storageId: STORAGE_ID,

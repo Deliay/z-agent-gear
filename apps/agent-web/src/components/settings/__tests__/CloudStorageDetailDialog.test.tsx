@@ -2,6 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import CloudStorageDetailDialog from '../CloudStorageDetailDialog'
 import { CLOUD_STORAGE } from '@/graphql/queries'
+import {
+  ARCHIVE_CLOUD_STORAGE,
+  FORK_CLOUD_STORAGE,
+  RESTORE_CLOUD_STORAGE_TO_ARCHIVE,
+} from '@/graphql/mutations'
 import type { CloudStorageData } from '@/graphql/types'
 
 const mockUseQuery = vi.fn()
@@ -9,6 +14,9 @@ const mockUseMutation = vi.fn()
 const mockRefreshUsage = vi.fn()
 const mockRetryArchive = vi.fn()
 const mockDestroyStorage = vi.fn()
+const mockArchiveStorage = vi.fn()
+const mockRestoreStorage = vi.fn()
+const mockForkStorage = vi.fn()
 const mockRefetch = vi.fn()
 
 vi.mock('@apollo/client/react', () => ({
@@ -21,6 +29,11 @@ vi.mock('sonner', () => ({
     success: vi.fn(),
     error: vi.fn(),
   },
+}))
+
+vi.mock('../ForkCloudStorageDialog', () => ({
+  default: ({ open, source }: { open: boolean; source: { id: string } | null }) =>
+    open ? <div data-testid="fork-dialog" data-source-id={source?.id ?? ''} /> : null,
 }))
 
 function makeStorage(overrides: Partial<CloudStorageData> = {}): CloudStorageData {
@@ -77,6 +90,10 @@ describe('CloudStorageDetailDialog', () => {
     vi.clearAllMocks()
     mockRefetch.mockResolvedValue(undefined)
     mockUseMutation.mockImplementation((doc: unknown) => {
+      if (doc === ARCHIVE_CLOUD_STORAGE) return [mockArchiveStorage, { loading: false }]
+      if (doc === RESTORE_CLOUD_STORAGE_TO_ARCHIVE)
+        return [mockRestoreStorage, { loading: false }]
+      if (doc === FORK_CLOUD_STORAGE) return [mockForkStorage, { loading: false }]
       const text = JSON.stringify(doc)
       if (text.includes('refreshCloudStorageUsage')) return [mockRefreshUsage, { loading: false }]
       if (text.includes('retryCloudStorageArchive')) return [mockRetryArchive, { loading: false }]
@@ -85,6 +102,11 @@ describe('CloudStorageDetailDialog', () => {
     mockRefreshUsage.mockResolvedValue({ data: { refreshCloudStorageUsage: makeStorage() } })
     mockRetryArchive.mockResolvedValue({ data: { retryCloudStorageArchive: makeStorage() } })
     mockDestroyStorage.mockResolvedValue({ data: { destroyCloudStorage: makeStorage() } })
+    mockArchiveStorage.mockResolvedValue({ data: { archiveCloudStorage: makeStorage() } })
+    mockRestoreStorage.mockResolvedValue({
+      data: { restoreCloudStorageToArchive: makeStorage() },
+    })
+    mockForkStorage.mockResolvedValue({ data: { forkCloudStorage: makeStorage() } })
   })
 
   it('T-WEB7 展示基本信息/实际占用/当前归档，ATTACHED 可刷新用量', async () => {
@@ -168,5 +190,106 @@ describe('CloudStorageDetailDialog', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '销毁云存储' }))
     expect(screen.getByText(/数据尚未成功归档，销毁后将无法恢复。销毁云存储/)).toBeInTheDocument()
+  })
+
+  it('T-WEB2 IDLE+SUCCEEDED 展示归档/复原/fork 与确认文案；手动归档来源', async () => {
+    mockDetail(
+      makeStorage({
+        status: 'IDLE',
+        attachedCloudHostId: null,
+        attachedCloudHostName: null,
+        currentArchive: {
+          id: 'ar-1',
+          fileName: 'manual-20261102-100000.tar.gz2',
+          status: 'SUCCEEDED',
+          cloudHostId: null,
+          cloudHostName: null,
+          usageBytes: 1024,
+        },
+      }),
+    )
+    render(<CloudStorageDetailDialog open storageId="st-1" onClose={vi.fn()} />)
+
+    expect(screen.getByText('手动归档')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '归档' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '复原到归档' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'fork' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '归档' }))
+    expect(screen.getByText(/归档后将释放数据卷并转为半价计费/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '确认归档' }))
+    await waitFor(() => {
+      expect(mockArchiveStorage).toHaveBeenCalledWith({ variables: { id: 'st-1' } })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: '复原到归档' }))
+    expect(screen.getByText(/当前内容将被丢弃并回滚到归档版本，不可恢复/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '确认复原' }))
+    await waitFor(() => {
+      expect(mockRestoreStorage).toHaveBeenCalledWith({ variables: { id: 'st-1' } })
+    })
+  })
+
+  it('T-WEB2 RESTORING 进行中无操作/无销毁；FAILED 展示重试与警示', () => {
+    mockDetail(
+      makeStorage({
+        status: 'RESTORING',
+        attachedCloudHostId: null,
+        currentRestore: { id: 'op-1', status: 'RUNNING', startedAt: '2026-11-02T10:00:00.000Z' },
+      }),
+    )
+    const { unmount } = render(
+      <CloudStorageDetailDialog open storageId="st-1" onClose={vi.fn()} />,
+    )
+    expect(screen.getByText('复原中')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '归档' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '复原到归档' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'fork' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '销毁云存储' })).not.toBeInTheDocument()
+    unmount()
+
+    mockDetail(
+      makeStorage({
+        status: 'RESTORING',
+        attachedCloudHostId: null,
+        currentRestore: {
+          id: 'op-2',
+          status: 'FAILED',
+          failureReason: 'tar failed',
+        },
+      }),
+    )
+    render(<CloudStorageDetailDialog open storageId="st-1" onClose={vi.fn()} />)
+    expect(screen.getByText('tar failed')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '重试复原' })).toBeInTheDocument()
+    expect(screen.getByText(/复原失败，当前数据可能不完整/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '销毁云存储' })).toBeInTheDocument()
+  })
+
+  it('T-WEB4 复原错误文案映射（has no archive / is restoring / not allowed）', async () => {
+    mockDetail(
+      makeStorage({
+        status: 'IDLE',
+        attachedCloudHostId: null,
+        currentArchive: {
+          id: 'ar-1',
+          fileName: 'a.tar.gz2',
+          status: 'SUCCEEDED',
+        },
+      }),
+    )
+    render(<CloudStorageDetailDialog open storageId="st-1" onClose={vi.fn()} />)
+
+    for (const [serverMessage, expected] of [
+      ['storage has no archive', '当前没有可用的归档'],
+      ['storage is restoring', '复原仍在进行中，请稍后重试'],
+      ['not allowed to restore storage', '没有复原该云存储的权限'],
+    ] as const) {
+      mockRestoreStorage.mockRejectedValueOnce(new Error(serverMessage))
+      fireEvent.click(screen.getByRole('button', { name: '复原到归档' }))
+      fireEvent.click(screen.getByRole('button', { name: '确认复原' }))
+      expect(await screen.findByText(expected)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    }
   })
 })

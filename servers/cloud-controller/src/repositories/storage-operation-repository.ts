@@ -13,6 +13,14 @@ export class OperationRunningError extends Error {
   }
 }
 
+/** operationId 非法（路由层 hex24 前置校验不可达，防御分支语义为 400 INVALID_BODY）。 */
+export class InvalidOperationIdError extends Error {
+  constructor(public readonly operationId: string) {
+    super(`invalid operation id: ${operationId}`);
+    this.name = 'InvalidOperationIdError';
+  }
+}
+
 export interface StorageOperationEntity {
   /** operationId（24 位 hex）。 */
   id: string;
@@ -137,7 +145,7 @@ export class MongoStorageOperationRepository implements StorageOperationReposito
     input: CreateStorageOperationInput,
   ): Promise<{ created: boolean; operation: StorageOperationEntity }> {
     if (!mongoose.isValidObjectId(input.operationId)) {
-      throw new OperationRunningError(input.storageId);
+      throw new InvalidOperationIdError(input.operationId);
     }
     const existing = await this.findById(input.operationId, input.storageId);
     if (existing) return { created: false, operation: existing };
@@ -283,6 +291,9 @@ export class InMemoryStorageOperationRepository implements StorageOperationRepos
   async create(
     input: CreateStorageOperationInput,
   ): Promise<{ created: boolean; operation: StorageOperationEntity }> {
+    if (!/^[a-f0-9]{24}$/i.test(input.operationId)) {
+      throw new InvalidOperationIdError(input.operationId);
+    }
     const existing = this.store.get(input.operationId);
     if (existing) return { created: false, operation: { ...existing } };
     const inflight = await this.findInflight(input.storageId);

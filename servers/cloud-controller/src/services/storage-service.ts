@@ -11,6 +11,7 @@
  */
 import type { CloudContainerEntity, ContainerRepository } from '../repositories/container-repository.js';
 import {
+  InvalidOperationIdError,
   OperationRunningError,
   type StorageOperationEntity,
   type StorageOperationRepository,
@@ -31,7 +32,7 @@ import {
 } from './k8s-storage-manager.js';
 
 export { buildArchiveFileName, sanitizeArchiveName, StoragePvcConflictError };
-export { OperationRunningError };
+export { InvalidOperationIdError, OperationRunningError };
 
 /** 容器不存在（归档触发/用量刷新）。 */
 export class StorageContainerNotFoundError extends Error {
@@ -349,7 +350,7 @@ export class StorageService {
     }
     const inflightOperation = await this.findInflightOperation(storageId);
     if (inflightOperation) {
-      throw new StorageArchiveRunningError(inflightOperation.archiveId);
+      throw new OperationRunningError(storageId);
     }
     await this.deps.storageManager.deleteStoragePvc(storageId);
     return { storageId, deleted: true };
@@ -1535,7 +1536,7 @@ export class StorageService {
     }
     const inflightOperation = await this.findInflightOperation(input.storageId);
     if (inflightOperation) {
-      throw new StorageArchiveRunningError(inflightOperation.archiveId);
+      throw new OperationRunningError(input.storageId);
     }
     // 与归档/恢复/用量共用按工作区归档 PVC 的串行锁（清理 Job 以 RW 挂载归档卷）。
     await this.archiveMutex.runExclusive(input.workspaceId, async () => {

@@ -880,6 +880,8 @@ export class CloudStorageService {
     const status = String(doc.status);
     const archive = doc.currentArchive as Doc | null;
     const currentRestore = doc.currentRestore as Doc | null;
+    const isRetry = status === 'RESTORING';
+    const previousRestore = currentRestore;
     const operationId = new mongoose.Types.ObjectId().toString();
     const startedAt = new Date();
 
@@ -937,10 +939,7 @@ export class CloudStorageService {
       },
       { returnDocument: 'after' },
     ).lean()) as Doc | null;
-    if (!moved) {
-      if (status === 'RESTORING') throw new Error('storage is not restorable');
-      throw new Error('storage is not restorable');
-    }
+    if (!moved) throw new Error('storage is not restorable');
 
     try {
       await this.controllerClient.restoreStorageOperation(id, {
@@ -952,15 +951,43 @@ export class CloudStorageService {
         storageClass,
       });
     } catch (err) {
-      await CloudStorage.updateOne(
-        { _id: id, status: 'RESTORING', 'currentRestore.operationId': operationId },
-        { $set: { status: 'IDLE', currentRestore: null } },
-      ).catch(() => undefined);
-      if (err instanceof CloudControllerRequestError) {
-        if (err.code === 'OPERATION_RUNNING' || err.code === 'STORAGE_IN_USE') {
-          throw new Error('storage is restoring');
-        }
-        if (err.code === 'NOT_FOUND') throw new Error('storage has no archive');
+      const inProgress =
+        err instanceof CloudControllerRequestError &&
+        (err.code === 'OPERATION_RUNNING' || err.code === 'STORAGE_IN_USE');
+      if (inProgress) {
+        // 控制面仍有该存储操作在跑（请求可能已受理但响应丢失）：不回滚、保持 RESTORING，
+        // 由 restores 回调/对账收口；避免把半恢复 PVC 暴露为可挂载的 IDLE。
+        throw new Error('storage is restoring');
+      }
+      const failureReason =
+        err instanceof CloudControllerRequestError && err.code === 'NOT_FOUND'
+          ? 'storage has no archive'
+          : 'control plane unavailable';
+      if (isRetry && previousRestore) {
+        // 重试路径：回写旧 FAILED 快照（对齐 D8），继续保持 RESTORING 可再次重试。
+        await CloudStorage.updateOne(
+          { _id: id, status: 'RESTORING', 'currentRestore.operationId': operationId },
+          { $set: { currentRestore: previousRestore } },
+        ).catch(() => undefined);
+      } else {
+        // 初始路径同样保持 RESTORING + FAILED（PRD 风险表：复原失败不可挂载），可重试/警示后销毁。
+        await CloudStorage.updateOne(
+          { _id: id, status: 'RESTORING', 'currentRestore.operationId': operationId },
+          {
+            $set: {
+              currentRestore: {
+                operationId,
+                status: 'FAILED',
+                startedAt,
+                finishedAt: new Date(),
+                failureReason,
+              },
+            },
+          },
+        ).catch(() => undefined);
+      }
+      if (failureReason === 'storage has no archive') {
+        throw new Error('storage has no archive');
       }
       throw new Error('control plane unavailable');
     }
@@ -1022,6 +1049,7 @@ export class CloudStorageService {
     const pvcName = `zag-storage-${String(storageId)}`;
     const storageClass = source.storageClass ? String(source.storageClass) : null;
     const sourceId = new mongoose.Types.ObjectId(String(source._id));
+    const restoreStartedAt = new Date();
     const archiveUsageBytes =
       typeof archive.usageBytes === 'number' ? archive.usageBytes : null;
     try {
@@ -1044,7 +1072,7 @@ export class CloudStorageService {
         currentRestore: {
           operationId,
           status: 'PENDING',
-          startedAt: new Date(),
+          startedAt: restoreStartedAt,
           finishedAt: null,
           failureReason: null,
         },
@@ -1066,14 +1094,23 @@ export class CloudStorageService {
         storageClass,
       });
     } catch (err) {
+      const failureReason = err instanceof Error ? err.message : String(err);
+      const failedAt = new Date();
       await CloudStorage.findOneAndUpdate(
         { _id: storageId, status: 'CREATING' },
         {
           $set: {
             status: 'CREATE_FAILED',
-            failureReason: err instanceof Error ? err.message : String(err),
-            destroyedAt: new Date(),
-            currentRestore: null,
+            failureReason,
+            destroyedAt: failedAt,
+            // 与异步失败口径一致：保留 FAILED 复原记录（便于排障/展示），不置 null。
+            currentRestore: {
+              operationId,
+              status: 'FAILED',
+              startedAt: restoreStartedAt,
+              finishedAt: failedAt,
+              failureReason,
+            },
           },
         },
       ).catch(() => undefined);

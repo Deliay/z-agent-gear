@@ -27,6 +27,7 @@ import {
   ContainerActiveError,
   ContainerNotActiveError,
   NoStorageError,
+  InvalidOperationIdError,
   OperationRunningError,
   StorageArchiveRunningError,
   StorageContainerNotFoundError,
@@ -1042,6 +1043,10 @@ export function createInternalRouter(
     }
     if (err instanceof OperationRunningError) {
       res.status(409).json({ error: 'OPERATION_RUNNING', message: err.message });
+      return;
+    }
+    if (err instanceof InvalidOperationIdError) {
+      res.status(400).json({ error: 'INVALID_BODY', message: err.message });
       return;
     }
     if (err instanceof ContainerActiveError) {

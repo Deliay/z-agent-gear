@@ -3,6 +3,7 @@ import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sStorageManager } from './k8s-storage-manager.js';
 import {
   ContainerActiveError,
+  InvalidOperationIdError,
   OperationRunningError,
   StorageArchiveRunningError,
   StorageService,
@@ -822,5 +823,34 @@ describe('存储级归档/复原（T-AR4 / T-RS4 / T-OP）', () => {
     expect(operation?.status).toBe('failed');
     expect(archiveCalls.at(-1)!.payload.status).toBe('FAILED');
     expect(await storageManager.getStoragePvc(STORAGE_ID)).not.toBeNull();
+  });
+
+  it('P3: 非法 operationId → InvalidOperationIdError；台账 inflight → delete/cleanup 抛 OPERATION_RUNNING', async () => {
+    const { client, storageManager, service, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+
+    await expect(
+      service.startStorageArchive(STORAGE_ID, {
+        operationId: 'not-hex',
+        archiveId: 'archive-op-4',
+        fileName: FILE_NAME,
+        workspaceId: WORKSPACE_ID,
+      }),
+    ).rejects.toBeInstanceOf(InvalidOperationIdError);
+
+    await operationRepo.create({
+      operationId: OPERATION_ID,
+      storageId: STORAGE_ID,
+      workspaceId: WORKSPACE_ID,
+      type: 'restore',
+    });
+    await expect(service.deleteStorage(STORAGE_ID)).rejects.toBeInstanceOf(OperationRunningError);
+    await expect(
+      service.cleanup({
+        storageId: STORAGE_ID,
+        workspaceId: WORKSPACE_ID,
+        deleteArchive: true,
+      }),
+    ).rejects.toBeInstanceOf(OperationRunningError);
   });
 });
