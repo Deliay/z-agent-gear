@@ -9,6 +9,10 @@ import type {
   ContainerRepository,
   UpdateContainerInput,
 } from '../repositories/container-repository.js';
+import {
+  InMemoryHarnessSecretRepository,
+  type HarnessSecretRepository,
+} from '../repositories/harness-secret-repository.js';
 import type { K8sJobManager } from './k8s-job-manager.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import type { TokenService } from './token-service.js';
@@ -185,6 +189,7 @@ export class ContainerService {
     private readonly hooks: ContainerServiceHooks = {},
     private readonly secretStore: SecretStore = new SecretStore(),
     private readonly storageService?: StorageService,
+    private readonly harnessSecretRepository: HarnessSecretRepository = new InMemoryHarnessSecretRepository(),
   ) {}
 
   /** 在途计费钩子（O-1：停机前必须排空，避免 outbox 写入被 SIGTERM 截断）。 */
@@ -241,6 +246,37 @@ export class ContainerService {
       timer.unref?.();
     });
     await Promise.race([Promise.allSettled(pending).then(() => undefined), timeout]);
+  }
+
+  /**
+   * cloud-controller 启动时把已落库的 harness secret 恢复到进程内 `SecretStore`（Issue #446）。
+   *
+   * - 仅恢复 `purpose=harness` 且仍处于活跃状态的容器；
+   * - 容器已终态/已不存在（崩溃窗口残留）→ 删除记录，保证 secret 与容器生命周期一致；
+   * - 幂等可重复调用；返回本次加载/清理条数（供启动日志，值本身不打印）。
+   */
+  async restoreHarnessSecrets(): Promise<{ loaded: number; purged: number }> {
+    const records = await this.harnessSecretRepository.findAll();
+    if (records.length === 0) return { loaded: 0, purged: 0 };
+    const containers = await this.repo.findAll();
+    const byId = new Map(containers.map((container) => [container.id, container]));
+    let loaded = 0;
+    let purged = 0;
+    for (const record of records) {
+      const container = byId.get(record.containerId);
+      if (
+        container &&
+        container.purpose === 'harness' &&
+        !isTerminalStatus(container.status)
+      ) {
+        this.secretStore.put(record.containerId, record.secrets);
+        loaded += 1;
+      } else {
+        await this.deleteHarnessSecret(record.containerId);
+        purged += 1;
+      }
+    }
+    return { loaded, purged };
   }
 
   /** 注册销毁通知（由 Socket.IO 网关接入，用于向在线容器 emit shutdown）。 */
@@ -357,9 +393,11 @@ export class ContainerService {
       storageRestorePath: options.storage?.restore?.archivePath ?? null,
     });
 
-    // 云电脑 secret 仅内存持有（不落库、不打印）；Job/初始化下发需要它，失败时随终态清理。
+    // 云电脑 secret：内存 `SecretStore` 供本进程读取，同时落库（`cloudcontainersecrets`）
+    // 供 cloud-controller 重启后恢复（Issue #446）；终态统一删除。本模块不打印任何值。
     if (purpose === 'harness' && options.secrets) {
       this.secretStore.put(created.id, options.secrets);
+      await this.persistHarnessSecret(created.id, options.secrets);
     }
 
     try {
@@ -463,6 +501,7 @@ export class ContainerService {
       const current = await this.repo.findById(created.id);
       if (!current || isTerminalStatus(current.status)) {
         this.secretStore.delete(created.id);
+        await this.deleteHarnessSecret(created.id);
       }
       throw err;
     }
@@ -630,7 +669,7 @@ export class ContainerService {
       // （契约 A.2.10）；归档 Job 本身在容器锁外异步执行。
       await this.prepareStorageArchive(updated);
       // 非 destroy 路径的终态（Job 自退/异常退出）同样投递 destroyed，避免尾结与冻结释放被拖延
-      this.finalizeTerminal(updated);
+      await this.finalizeTerminal(updated);
     }
     // CAS 未命中仅回读用于返回值，绝不据此投递事件。
     return updated ?? this.repo.findById(containerId);
@@ -655,7 +694,7 @@ export class ContainerService {
     );
     if (updated) {
       await this.prepareStorageArchive(updated);
-      this.finalizeTerminal(updated);
+      await this.finalizeTerminal(updated);
     }
     return updated ?? this.repo.findById(containerId);
   }
@@ -737,8 +776,9 @@ export class ContainerService {
 
     // 终态记录：不跳过清理，核实并删除残留 Job（幂等语义 = Job 不存在时不再重复删除）。
     if (isTerminalStatus(container.status)) {
-      // 云电脑 secret 随终态清理（幂等）。
+      // 云电脑 secret 随终态清理（内存 + 落库，幂等）。
       this.secretStore.delete(containerId);
+      await this.deleteHarnessSecret(containerId);
       const deletion = await this.deleteJobIfExistsDetailed(container.name);
       // 卡死的 destroying（销毁被 SIGTERM 打断）：Job 删除失败则保留待巡检重试；
       // 否则迁移 exited，兑现契约 `destroying → exited`（问题 50）。
@@ -766,7 +806,7 @@ export class ContainerService {
         const current = exited ?? (await this.repo.findById(containerId));
         if (exited && current) {
           await this.prepareStorageArchive(current);
-          this.finalizeTerminal(current);
+          await this.finalizeTerminal(current);
         }
         return {
           success: true,
@@ -852,19 +892,47 @@ export class ContainerService {
 
     // Job 删除失败时不归档（容器可能仍在读写源卷；由终态巡检 reclaim 成功后补触发）。
     if (deletedJob) await this.prepareStorageArchive(exited);
-    this.finalizeTerminal(exited);
+    await this.finalizeTerminal(exited);
 
     return { success: true, id: containerId, status: 'exited', deletedJob };
   }
 
+  /** 落库 harness secret（失败仅告警：内存副本仍可支撑本进程初始化，终态/启动对账兜底）。 */
+  private async persistHarnessSecret(
+    containerId: string,
+    secrets: HarnessSecrets,
+  ): Promise<void> {
+    try {
+      await this.harnessSecretRepository.upsert(containerId, secrets);
+    } catch (err) {
+      this.logger.error(
+        { component: 'harness', containerId, err },
+        'failed to persist harness secret (restart recovery degraded)',
+      );
+    }
+  }
+
+  /** 删除落库的 harness secret（失败仅告警；启动加载对账会清理残留）。 */
+  private async deleteHarnessSecret(containerId: string): Promise<void> {
+    try {
+      await this.harnessSecretRepository.delete(containerId);
+    } catch (err) {
+      this.logger.warn(
+        { component: 'harness', containerId, err },
+        'failed to delete persisted harness secret',
+      );
+    }
+  }
+
   /**
-   * 终态统一收口：先清理内存 secret，再按需投递销毁钩子。
+   * 终态统一收口：先清理内存与持久化 secret，再按需投递销毁钩子。
    *
    * 销毁事件投递条件（裁决 4）：`billingAccountId` 与 `billingStartedAt` 均非空（计费），
    * 或 `purpose=harness`（云电脑 terminal 回调不依赖计费，裁决 A19/A24）。
    */
-  private finalizeTerminal(container: CloudContainerEntity): void {
+  private async finalizeTerminal(container: CloudContainerEntity): Promise<void> {
     this.secretStore.delete(container.id);
+    await this.deleteHarnessSecret(container.id);
     const billed = container.billingAccountId !== null && container.billingStartedAt !== null;
     if (!billed && container.purpose !== 'harness') return;
     this.emitHook('onDestroyed', container);
@@ -916,7 +984,7 @@ export class ContainerService {
         );
         if (exited) {
           await this.prepareStorageArchive(exited);
-          this.finalizeTerminal(exited);
+          await this.finalizeTerminal(exited);
         }
       } else if (deletion === 'deleted') {
         await this.repo.update(containerId, { tokenHash: null });

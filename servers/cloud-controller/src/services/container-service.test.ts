@@ -12,13 +12,18 @@ import { K8sJobManager } from './k8s-job-manager.js';
 import { TokenService } from './token-service.js';
 import { SecretStore, type HarnessSecrets } from './secret-store.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
+import { InMemoryHarnessSecretRepository } from '../repositories/harness-secret-repository.js';
 import { createTestLogger, type TestLogger } from '../observability/testing.js';
 import { RecordingExporter } from '../observability/recording-exporter.js';
 import { shutdownTelemetry, startTelemetry } from '../observability/telemetry.js';
 
 function setup(
   overrides: Partial<ContainerServiceConfig> = {},
-  extras: { hooks?: ContainerServiceHooks; secretStore?: SecretStore } = {},
+  extras: {
+    hooks?: ContainerServiceHooks;
+    secretStore?: SecretStore;
+    harnessSecretRepository?: InMemoryHarnessSecretRepository;
+  } = {},
 ) {
   const repo = new InMemoryContainerRepository();
   const client = new InMemoryK8sClient();
@@ -30,6 +35,8 @@ function setup(
     publicWsEndpoint: 'cloud.example.com:4003',
   });
   const secretStore = extras.secretStore ?? new SecretStore();
+  const harnessSecretRepository =
+    extras.harnessSecretRepository ?? new InMemoryHarnessSecretRepository();
   const testLog: TestLogger = createTestLogger();
   const service = new ContainerService(
     repo,
@@ -45,8 +52,19 @@ function setup(
     testLog.logger,
     extras.hooks ?? {},
     secretStore,
+    undefined,
+    harnessSecretRepository,
   );
-  return { repo, client, tokenService, jobManager, service, secretStore, testLog };
+  return {
+    repo,
+    client,
+    tokenService,
+    jobManager,
+    service,
+    secretStore,
+    harnessSecretRepository,
+    testLog,
+  };
 }
 
 function harnessSecrets(overrides: Partial<HarnessSecrets> = {}): HarnessSecrets {
@@ -647,8 +665,8 @@ describe('ContainerService workload state machine', () => {
     expect(stored?.currentWorkloadName).toBeNull();
   });
 
-  it('T-CC2/T-CC7: harness 启动落库新字段、Job env 与 TTL、secret 仅存内存', async () => {
-    const { repo, client, service, secretStore } = setup();
+  it('T-CC2/T-CC7: harness 启动落库新字段、Job env 与 TTL、secret 不进入容器实体', async () => {
+    const { repo, client, service, secretStore, harnessSecretRepository } = setup();
     const expiresAt = new Date(Date.now() + 3600_000);
     const secrets = harnessSecrets();
 
@@ -692,7 +710,8 @@ describe('ContainerService workload state machine', () => {
     expect(manifest.spec).not.toHaveProperty('activeDeadlineSeconds');
 
     expect(secretStore.get(created.id)).toEqual(secrets);
-    // secret 不落库：实体无 secrets 字段
+    // Issue #446：secret 同时落库到独立集合（供重启恢复），但不进入 cloudcontainers 实体。
+    expect(harnessSecretRepository.get(created.id)).toEqual(secrets);
     expect(JSON.stringify(stored)).not.toContain(secrets.modelApiKey);
     expect(JSON.stringify(stored)).not.toContain(secrets.hostKey);
   });
@@ -742,9 +761,9 @@ describe('ContainerService workload state machine', () => {
     expect(ready).toHaveLength(1);
   });
 
-  it('T-CC14/T-CC20: harness 终态触发 onDestroyed 并清理 secret（无计费也触发）', async () => {
+  it('T-CC14/T-CC20: harness 终态触发 onDestroyed 并清理 secret（内存 + 落库，无计费也触发）', async () => {
     const destroyed: string[] = [];
-    const { service, secretStore } = setup(
+    const { service, secretStore, harnessSecretRepository } = setup(
       {},
       {
         hooks: {
@@ -762,6 +781,7 @@ describe('ContainerService workload state machine', () => {
 
     expect(destroyed).toEqual([`harness:exited:${harness.id}`]);
     expect(secretStore.get(harness.id)).toBeNull();
+    expect(harnessSecretRepository.get(harness.id)).toBeNull();
 
     // Job 异常退出（markExited / markFailed）同样清理 secret 并触发 destroyed
     const exited = await service.start('harness', 'ck-1', [], [], harnessOptions());
@@ -769,12 +789,59 @@ describe('ContainerService workload state machine', () => {
     await service.markExited(exited.id, '容器正常退出');
     expect(destroyed).toContain(`harness:exited:${exited.id}`);
     expect(secretStore.get(exited.id)).toBeNull();
+    expect(harnessSecretRepository.get(exited.id)).toBeNull();
 
     const failed = await service.start('harness', 'ck-1', [], [], harnessOptions());
     await service.markOnline(failed.id);
     await service.markFailed(failed.id, '容器异常退出');
     expect(destroyed).toContain(`harness:failed:${failed.id}`);
     expect(secretStore.get(failed.id)).toBeNull();
+    expect(harnessSecretRepository.get(failed.id)).toBeNull();
+  });
+
+  it('T-CC-SECRESTORE: 启动时恢复活跃 harness secret，并清理终态/不存在容器的残留记录（Issue #446）', async () => {
+    const harnessSecretRepository = new InMemoryHarnessSecretRepository();
+    const first = setup({}, { harnessSecretRepository });
+    const secrets = harnessSecrets();
+
+    const active = await first.service.start(
+      'harness',
+      'ck-1',
+      [],
+      [],
+      harnessOptions({ secrets }),
+    );
+    const terminal = await first.service.start('harness', 'ck-1', [], [], harnessOptions());
+    await first.service.markOnline(terminal.id);
+    await first.service.markFailed(terminal.id, '容器异常退出');
+    // 模拟崩溃窗口：终态删除失败/删除后残留
+    await harnessSecretRepository.upsert(terminal.id, secrets);
+    await harnessSecretRepository.upsert('missing-container', harnessSecrets({ modelApiKey: 'old' }));
+
+    // 模拟 cloud-controller 重启：新进程内存为空，复用 Mongo 仓储与容器记录。
+    const restartedStore = new SecretStore();
+    const restarted = new ContainerService(
+      first.repo,
+      first.tokenService,
+      first.jobManager,
+      {
+        namespace: 'zag-workers',
+        image: 'zero-tools/zag-worker:latest',
+        connectTimeoutMs: 300000,
+        shutdownGraceMs: 0,
+      },
+      first.testLog.logger,
+      {},
+      restartedStore,
+      undefined,
+      harnessSecretRepository,
+    );
+
+    await expect(restarted.restoreHarnessSecrets()).resolves.toEqual({ loaded: 1, purged: 2 });
+    expect(restartedStore.get(active.id)).toEqual(secrets);
+    expect(restartedStore.get(terminal.id)).toBeNull();
+    expect(harnessSecretRepository.get(terminal.id)).toBeNull();
+    expect(harnessSecretRepository.get('missing-container')).toBeNull();
   });
 
   it('R2-4: mustFailure is preserved into the terminal onDestroyed callback', async () => {

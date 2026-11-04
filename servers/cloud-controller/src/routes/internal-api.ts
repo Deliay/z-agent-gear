@@ -550,6 +550,17 @@ export async function parseHarnessRequest(
   };
 }
 
+/** 工作负载是否为 harness 类别（`workloadKind=harness` 或带 `harnessType`）。 */
+function isHarnessWorkload(workload: {
+  workloadKind?: string | null;
+  harnessType?: string | null;
+}): boolean {
+  return (
+    String(workload.workloadKind ?? '').toLowerCase() === 'harness' ||
+    Boolean(workload.harnessType)
+  );
+}
+
 /**
  * runtime 安装 harness 负载的逐类型版本门禁（契约 A.2.5 第 3 条）。
  *
@@ -564,10 +575,7 @@ function checkRuntimeHarnessVersionGate(
   getWorkerVersion?: (containerId: string) => string | undefined,
 ): string | null {
   if (!workload) return null;
-  const isHarness =
-    String(workload.workloadKind ?? '').toLowerCase() === 'harness' ||
-    Boolean(workload.harnessType);
-  if (!isHarness) return null;
+  if (!isHarnessWorkload(workload)) return null;
 
   const harnessType = workload.harnessType ?? '';
   const required = harnessType
@@ -887,6 +895,7 @@ export function createInternalRouter(
             workloadName: workload.name,
             script,
             params: entry.params ?? {},
+            requiresHarnessEnv: isHarnessWorkload(workload),
           };
         })
         .filter(

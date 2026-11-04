@@ -95,6 +95,11 @@ export interface RuntimeEntry {
   workloadName: string;
   script: string;
   params: Record<string, unknown>;
+  /**
+   * 该条是否为 harness 负载（需要 `ZAG_MODEL_*` 等 harness env）。
+   * 仅 harness 负载在 secret/env 不可信时判失败；标准负载不依赖该 env（Issue #446）。
+   */
+  requiresHarnessEnv?: boolean;
 }
 
 export interface RuntimeBatchInput {
@@ -467,7 +472,12 @@ export class WorkloadDispatcher {
       }
 
       // purpose=harness：与 init 批次同源解析 env（`ZAG_HARNESS_TYPES` / `ZAG_MODEL_*` /
-      // `ZAG_DEFAULT_WORKSPACE` 等），`harness prepare` 依赖；解析失败在落库任何批次前判失败。
+      // `ZAG_DEFAULT_WORKSPACE` 等）。仅当本批次包含 harness 负载时才强制要求 env（Issue #446）：
+      // 标准负载（如 MongoDB）不依赖模型配置，secret 丢失（cloud-controller 重启）不应阻断安装；
+      // env 可得时仍照常注入，保持既有自定义脚本行为。
+      const requiresHarnessEnv = input.entries.some(
+        (entry) => entry.requiresHarnessEnv === true,
+      );
       const runEnv = this.resolveRunEnv(container);
       if (!runEnv.ok) {
         this.deps.logger.warn(
@@ -476,10 +486,13 @@ export class WorkloadDispatcher {
             event: 'harness-env-unavailable',
             containerId,
             phase: 'runtime',
+            requiresHarnessEnv,
           },
-          'harness env unavailable (runtime batch aborted)',
+          requiresHarnessEnv
+            ? 'harness env unavailable (runtime batch aborted)'
+            : 'harness env unavailable (standard workload continues without env)',
         );
-        throw new HarnessEnvironmentUnavailableError();
+        if (requiresHarnessEnv) throw new HarnessEnvironmentUnavailableError();
       }
 
       const now = new Date(this.now());
@@ -510,7 +523,7 @@ export class WorkloadDispatcher {
         containerId,
         'init',
         logs,
-        runEnv.env,
+        runEnv.ok ? runEnv.env : undefined,
         input.githubAuth === true,
       );
 

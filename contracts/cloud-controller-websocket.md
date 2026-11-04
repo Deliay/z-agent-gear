@@ -443,7 +443,7 @@ Content-Type: application/json
 - `workspaceId` **可选**（多租户二期新增）：前台用户当前租户工作区 id，落库到 `cloudcontainers.workspaceId`；缺失时按同库 `workspaces` 集合以 `{tenantId, type:'global'}` 解析全局工作区回退，解析不到置 `null` 并记录 warn；显式下发但非法（空串/非字符串）返回 `400 INVALID_HARNESS`。
 - `harnessTypes` 非空时仅接受 `opencode` / `kimi_code` / `deepseek_harness`（可多选）；落库的 `agentGearMinVersion` 下限恒为 `2.12.0`（以 2.12.0 为底取 max），并按 `harnessTypes` 细分类型常量上调（见 §3.4）。
 - `expiresAt` 仅落库留存（容器 TTL 留档，不再关联模型 Key 有效期；模型 Key 改为随容器回收）；Job **不再设置 `activeDeadlineSeconds`**，工作容器最长运行时间无限制，不会因到期被 K8s 强制销毁。
-- `secrets` 仅内存持有（`secret-store`），不落库、不返回、不打印；容器进入终态后清理。
+- `secrets` 同时持有于进程内 `SecretStore` 与持久化集合 `cloudcontainersecrets`（仅供 cloud-controller 在重启/滚动发布后恢复，Issue #446）；**不返回、不打印**，容器进入终态（exited/failed/destroying）后删除。cloud-controller 启动时把活跃容器的记录加载回内存，并清理已终态/不存在容器的残留记录。
 - `secrets.modelContextLengths` 为**可选**字段：`模型 ID → 最长上下文（token，正整数）` 的 JSON object 字符串（无有效条目时为 `{}`）；缺省/空串表示无上下文信息（滚动升级期间旧调用方不下发），不纳入「secrets 各字段非空」必填校验；携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传给 worker。
 - Job env：`ZAG_SERVER_ENDPOINT` + `ZAG_CONTROLLER_KEY`（`/worker` 一次性 token）维持不变；harness 追加 `ZAG_HOST_ENDPOINT`、`ZAG_HOST_KEY`（标准连接）、`ZAG_HOST_NAME`、`ZAG_HARNESS_TYPES`、`ZAG_DEFAULT_WORKSPACE`、`ZAG_USER_TYPE`、`ZAG_USER_ID`、`ZAG_AGENT_API_ENDPOINT`（agent-api 内部地址，来自 `AGENT_API_URL`）、`ZAG_CONTROLLER_ID`（云主机 controllerId）。模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发，不进入 Job env。
 - `workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
@@ -516,8 +516,10 @@ Content-Type: application/json
   与在线 worker 上报版本（`register` 的 `version`）比较；不满足返回 `400 INVALID_WORKLOAD`（可读原因）。
   在线版本不可得（未注册/注册信息缺失）时放行并 `warn` 留痕。
 - runtime 批次与 init 批次**同口径注入云电脑初始化 env**（§2.9：`ZAG_HARNESS_TYPES` / `ZAG_MODEL_*` /
-  `ZAG_DEFAULT_WORKSPACE` 等，`purpose=harness` 时）；env 无法构建（secret 缺失/模型配置不完整）时该次安装判失败
-  并返回可读原因，不下发 `undefined` 或半套配置（沿用 T-CC13 口径）。
+  `ZAG_DEFAULT_WORKSPACE` 等，`purpose=harness` 时）。**仅当本次批次包含 harness 负载时**才强制要求 env：
+  env 无法构建（secret 缺失/模型配置不完整）时该次安装判失败并返回可读原因，不下发 `undefined` 或半套配置
+  （沿用 T-CC13 口径）；**standard 负载不依赖该 env**（如 MongoDB），secret 缺失时仍正常安装、批次不带 `env`
+  （Issue #446）。env 可构建时 standard 批次仍照常携带，保持既有自定义脚本行为。
 - 已安装仍允许重复执行（脚本幂等）；成功结果的 `installedWorkloads` 按 `workloadId` 去重（保留首次记录）。
 
 **响应 200：** `{ "batchId": "...", "items": [{ "logId": "...", "workloadId": "...", "workloadName": "..." }] }`
