@@ -94,24 +94,29 @@ describe('WorkflowNodeCard', () => {
     expect(screen.getByText('gpt-4o')).toBeInTheDocument()
   })
 
-  it('T-WFI-NC1 运行中动态行恒为「正在思考」，不泄露注入文本', () => {
+  it('T-WFI-NC1 运行中动态行按活动类型展示提示，不泄露注入正文', () => {
     mockActivity.value = { activity: { kind: 'thinking', text: '…思考结尾' }, tokenUsage: null }
     const { rerender } = renderCard({ status: 'RUNNING' })
     const row = screen.getByTestId('node-live-activity-n1')
-    expect(row).toHaveTextContent('正在思考')
+    expect(row).toHaveTextContent('思考中...')
     expect(row).not.toHaveTextContent('思考结尾')
 
-    mockActivity.value = { activity: { kind: 'tool_call', text: 'Tool Call: 执行测试' }, tokenUsage: null }
+    mockActivity.value = { activity: { kind: 'tool_call', text: '执行测试' }, tokenUsage: null }
     rerender(card({ id: 'n1', data: data({ status: 'RUNNING' }) } as unknown as NodeProps<WorkflowNodeCardNode>))
     const toolRow = screen.getByTestId('node-live-activity-n1')
-    expect(toolRow).toHaveTextContent('正在思考')
-    expect(toolRow).not.toHaveTextContent('执行测试')
+    expect(toolRow).toHaveTextContent('执行中: 执行测试')
 
     mockActivity.value = { activity: { kind: 'text', text: '…总结' }, tokenUsage: null }
     rerender(card({ id: 'n1', data: data({ status: 'REWORK' }) } as unknown as NodeProps<WorkflowNodeCardNode>))
     const textRow = screen.getByTestId('node-live-activity-n1')
-    expect(textRow).toHaveTextContent('正在思考')
+    expect(textRow).toHaveTextContent('Concluding...')
     expect(textRow).not.toHaveTextContent('总结')
+  })
+
+  it('T-WFI-NC1b 尚无活动时动态行默认显示「思考中...」', () => {
+    mockActivity.value = { activity: null, tokenUsage: null }
+    renderCard({ status: 'RUNNING' })
+    expect(screen.getByTestId('node-live-activity-n1')).toHaveTextContent('思考中...')
   })
 
   it('T-WFI-NC2 完成态 token 行：「已完成 · N tokens」且不含「消耗」并带说明 title', () => {
