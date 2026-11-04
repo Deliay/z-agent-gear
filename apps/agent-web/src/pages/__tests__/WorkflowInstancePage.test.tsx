@@ -43,8 +43,45 @@ vi.mock('@/components/workflow/WorkflowGraphView', () => ({
 }));
 
 vi.mock('@/components/workflow/NodeDetailDrawer', () => ({
-  default: ({ open, target }: { open: boolean; target: unknown }) =>
-    open ? <div data-testid="node-detail-drawer">{JSON.stringify(target)}</div> : null,
+  default: ({
+    open,
+    target,
+    onRestartNode,
+  }: {
+    open: boolean
+    target: unknown
+    onRestartNode?: (node: { id: string; name: string; type: string; status: string }) => void
+  }) =>
+    open ? (
+      <div data-testid="node-detail-drawer">
+        {JSON.stringify(target)}
+        <button
+          type="button"
+          onClick={() =>
+            onRestartNode?.({ id: 'n2', name: '代码实现', type: 'AI', status: 'RETRY_FAILED' })
+          }
+        >
+          抽屉重启
+        </button>
+      </div>
+    ) : null,
+}));
+
+vi.mock('@/components/workflow/EditInstanceNodeDialog', () => ({
+  default: ({
+    open,
+    restartMode,
+    node,
+  }: {
+    open: boolean
+    restartMode?: boolean
+    node?: { name: string }
+  }) =>
+    open ? (
+      <div data-testid="edit-node-dialog" data-restart={String(restartMode ?? false)}>
+        {node?.name}
+      </div>
+    ) : null,
 }));
 
 vi.mock('@/components/MobileBackButton', () => ({
@@ -91,6 +128,8 @@ function makeInstance(): WorkflowInstanceData {
         startedAt: null,
         reworkedAt: null,
         reworkCount: 0,
+        retryCount: 0,
+        nextRetryAt: null,
         rejectInfo: null,
         failInfo: null,
       },
@@ -441,5 +480,63 @@ describe('WorkflowInstancePage 关联 Pull Request 与追加提示词', () => {
     expect(screen.getByText('暂无关联')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /追加提示词（0）/ }));
     expect(screen.getByText('暂无')).toBeInTheDocument();
+  });
+});
+
+
+describe('WorkflowInstancePage 重试用尽（T-FE4）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeRetryFailedInstance(): WorkflowInstanceData {
+    const instance = makeInstance();
+    instance.currentNodeNames = [];
+    instance.nodes = [
+      {
+        ...(instance.nodes[0] as WorkflowNodeData),
+        id: 'n2',
+        type: 'AI',
+        name: '代码实现',
+        status: 'RETRY_FAILED',
+        retryCount: 10,
+        nextRetryAt: null,
+        failInfo: {
+          reason: '中断自动重试 10 次仍未推进，需要人工介入',
+          source: 'RETRY_EXHAUSTED',
+          at: '2026-08-08T00:00:00Z',
+        },
+      } as WorkflowNodeData,
+    ];
+    return instance;
+  }
+
+  it('T-FE4a: RETRY_FAILED 进入阻断 banner（文案区别于 FAILED）且 toast 每节点仅一次', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeRetryFailedInstance() }, loading: false });
+    const view = render(<WorkflowInstancePage />);
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('中断自动重试用尽');
+    expect(alert.textContent).toContain('代码实现');
+    expect(alert.textContent).not.toContain('个节点失败');
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toContain('中断自动重试用尽');
+
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeRetryFailedInstance() }, loading: false });
+    view.rerender(<WorkflowInstancePage />);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-FE4b: 抽屉「重启节点」打开 EditInstanceNodeDialog(restartMode)', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeRetryFailedInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '代码实现 详情' }));
+    expect(screen.getByTestId('node-detail-drawer')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '抽屉重启' }));
+    const dialog = screen.getByTestId('edit-node-dialog');
+    expect(dialog).toHaveAttribute('data-restart', 'true');
+    expect(dialog.textContent).toContain('代码实现');
   });
 });

@@ -3,6 +3,11 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 /** 延迟脱离执行默认等待锁释放的上限（超时后结构化报错，避免永久挂起） */
 const DEFAULT_DETACH_TIMEOUT_MS = 30_000;
 
+/** 是否为 KeyedMutex 的「同上下文重复取同一 key」错误（延迟重排判据） */
+export function isReentrantLockError(err: unknown): boolean {
+  return (err as Error)?.message?.includes('KeyedMutex re-entrant lock detected') === true;
+}
+
 /**
  * 按 key 串行化异步操作（同一 key 的并发调用排队执行）。
  *

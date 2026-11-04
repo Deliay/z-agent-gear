@@ -82,7 +82,7 @@ pnpm run start   # Start production server
 - 会话只读：停止时 `sessionService.endByController`；`resume`/`sendSessionMessage`/`cancelGeneration` 对云电脑非 RUNNING/软删返回 `session is ended`；`createSession` 对 cloud Controller 校验 `CloudHost.status===RUNNING` 且 `acpServerType` 必须在 `harnessTypes` 映射内，落库前后各复查一次（缩小与 stop/terminal 的竞态窗口）。`Session.controllerType`/`Session.cloudHost`（含软删除留档）由 `resolvers/session.ts` 的 `Session` 类型 resolver 提供，**必须在 `graphql/resolvers/index.ts` 登记 `Session` 键**（否则运行时恒 null）；前端只读判定不依赖 controllers 列表命中。
 - 创建⇄停止并发：`startHarness` 成功后以 `{_id,status:'STARTING'}` CAS 回写 `containerId`；CAS 未命中（并发 stop 已推进）立即销毁容器并撤销模型 Key；stop 以 CAS 后的最新快照决定销毁，终态 CAS 后再扫一次会话。每用户数量无限制：`uniq_active_cloud_host_per_user` 由迁移 `011-drop-cloud-host-active-unique-index` 下线（schema 声明已移除，迁移 005 只读不回改）。
 - `KeyedMutex` 非可重入：同异步上下文嵌套同 key 会立即抛错（`AsyncLocalStorage` 检测），避免永久挂起。
-- 删除：仅 `STOPPED/FAILED`，软删除 `cloudhosts.deletedAt`、撤销 ControllerKey、`Controller.status=offline`；Controller/会话/消息保留，列表与首页过滤。`Controller.cloudHost` 对软删除返回 null，前端对 `type=cloud && cloudHost=null` 同样按只读渲染。
+- 删除：仅 `STOPPED/FAILED`，软删除 `cloudhosts.deletedAt`、撤销 ControllerKey、`Controller.status=offline`；Controller/会话/消息保留，列表与首页过滤。`Controller.cloudHost` 对软删除返回 null，前端对 `type=cloud && cloudHost=null` 同样按只读渲染。`Controller.cloudHost` 与 `myCloudHosts` 同为**工作区成员口径**（`actorFilter`，团队工作区成员可见他人创建的云电脑；无工作区上下文的引擎/内部链路仍按 `userId` 归属校验）。
 - 开关：`HARNESS_ENABLED=false` 时 capabilities 隐藏/禁用、create 返回 `harness feature is disabled`；存量仍可 list/stop/delete。
 
 ## 云主机工作负载与 Github 项目设置（本期）
@@ -164,6 +164,22 @@ pnpm run start   # Start production server
 - **排障**：`LOG_LEVEL=debug` 看高频细节（`session:message` 逐条为 debug）；`OTEL_SDK_DISABLED=true` 关追踪导出；JSON 单行日志可直接 `grep`（`grep '"requestId":"<id>"'` 串一次请求、`grep '"trace_id":"<trace-id>"'` 跨服务串链路、`grep '"level":"error"'`）。
 - **审计例外**：`bootstrapAdminPassword` 为契约 §6.2 唯一明文例外（admin-api 首次 seed）；本服务其余 `password`/`token`/`secret` 类键一律经 `REDACT_PATHS` 脱敏，`sanitizeOperationError` 语义保持不变。
 
+## 工作流节点中断自动重试
+
+- **触发源**：`orchestrator.handleSessionEnded`（`session:status ended` 且节点仍 `RUNNING`）与 `handleSessionIdled`（turn 结束空闲且节点 `RUNNING/REWORK`）都只做一件事——`scheduleInterruptionRetry({ trigger })`（`services/workflow/interrupt-retry.ts`）。`ended` 有两个来源：① agent-api `closeSession`（人工关闭，close 回调）；② controller-api 直接写库并 publish（Agent 进程异常退出/控制器失败/断连超时）。**两者都必须经 `sessionService.onSessionStatus` 通用通道接入排期**（`orchestrator.register` 注册；只分流 `ended`），否则 PRD 功能点 1 的「会话被意外结束」不会触发重试。`removed` 仍是立即 `FAILED`（`SESSION_START_FAILED`，会话已删除无法 resume）。
+- **去重**：close 回调、stop ack 重复事件、重试管线自身 `close(suppressFallback)` 引发的 ended 可能多次投递；排期 CAS（`retryPhase` 预期值 + `retryCount` 快照）与 `handleSessionEnded` 前置过滤（实例未删 / 节点 `RUNNING` / `sessionId` 匹配）保证只计一次。
+- **预算与退避**：最多 10 次，`delay(N) = N===1 ? 0 : min(2^(N-2), 30) * 60_000` 分钟（0/1/2/4/8/16/30/30/30/30，总窗口约 2 小时）。10 次用尽 → 引擎 `retryExhausted` → `RETRY_FAILED` + `failInfo.source='RETRY_EXHAUSTED'` + immediate 人工介入待办。
+- **节点字段**（替代旧 `fallbackSent`）：`retryCount`（本 episode 已排期次数）、`nextRetryAt`、`retryPhase`（`SCHEDULED`/`RECONNECTING`）、`retryDeadlineAt`、`retryTrigger`（`ENDED`/`IDLED`）。`complete/completeRework/reject/rework/resume/resumeFailed/restart` 复位全部 5 字段；`fail`/`retryExhausted` 只清调度字段、保留 `retryCount`。**重试成功发送提示词不复位 `retryCount`**（D1 防「提示词无效→再中断→计数归零」死循环）。
+- **排期 CAS**：`{nodeId, sessionId, status∈RUNNING/REWORK, retryPhase=expectedPhase, retryCount=快照}` 字段级 `updateOne`；`expectedPhase` 为 `null`（首次）或 `'RECONNECTING'`（本次重试失败重排）。人工 restart/rework/删除后 CAS 自然不命中，绝不误发。
+- **管线**：占位（`SCHEDULED→RECONNECTING`，`retryDeadlineAt=now+5m`）→ 会话非 ended/disconnected 才 `close(suppressFallback:true, reason:'workflow_interruption_retry')` → **先布防等待器再 resume** → `resume(带内 mode/model)` → 等 `idling` → 发送前双校验（未删除 / 状态 / sessionId / phase）→ `addMessage(FALLBACK_PROMPT | IDLE_NUDGE_PROMPT)` → 清调度字段。
+- **空闲等待器**（`services/session-idle-waiter.ts`）：事件优先 + `ended.error` 快判 + 15s DB 心跳兜底，5 分钟截止；close 引起的不带 error 的 `ended` 在未见 `connecting` 前忽略（F11）；**心跳同口径**：DB 仍为 `ended/disconnected` 时，只有已见 `connecting/running` 或临近 deadline（≤30s）才判失败，避免 close→resume 间隙慢控制器误耗一次预算。
+- **会话已丢失**：`sessionId` 缺失时按「本次失败」消耗一次重试预算后重排（不再直接 retryExhausted）。
+- **调度器**（`services/workflow/interrupt-retry-scheduler.ts`）：30s 扫描 A（到期 `SCHEDULED` 执行）与扫描 B（`RECONNECTING` 且 `retryDeadlineAt` 过期 → 重排，兜底进程重启丢等待器）；`scanning` 互斥 + 每节点 `KeyedMutex` + `timer.unref()`。
+- **单实例部署约束**：调度器与 `KeyedMutex` 同为进程内锁，多副本会重复执行同一节点的重试；必须单实例运行。
+- **会话通用状态通道**：`sessionService.onSessionStatus/notifySessionStatus`（多监听者，注册返回注销函数）在 `session-lifecycle-subscriber` 的 `handled` 过滤**之前**透传全量 `session:status`；按高频豁免口径只记结构化日志、不逐条开 span。
+- **人工入口**：`restartNode` 与 MCP `resumeFailedNode` 均接受 `RETRY_FAILED`；前端列表/抽屉提供重启入口，阻断 banner 与 toast 分档文案。
+- **已知取舍（D9）**：人工在会话页点「关闭」仍计为一次中断并纳入自动重试（回调只带 sessionId，平台无法区分来源）；复用旧口径，仅次数放大。如需区分须另立提案。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
@@ -200,6 +216,7 @@ pnpm run start   # Start production server
 - **租户隔离（双条件）**：带 `userId` 的 19 个集合均**复制新增**同值 `tenantId`（`userId` 字段与筛选全部保留）；`services/tenant-scope.ts` 的 Mongoose 插件在查询编译前为 `{userId}` 过滤注入 `tenantId`（显式 tenantId 不覆盖；递归处理 `$or`/`$and`/`$nor` 内的 userId 分支）、写入（save/insertMany/`$set.userId`）自动补齐 `tenantId`。**例外**：`userId` 为操作符对象（如 `$in`/`$nin`）时不复制（值语义不同；一期运行时无此类过滤点，二期放开 userId 维度前需显式处理）。T-ISO 矩阵（`models/tenant-isolation.test.ts`）对 19 集合逐一走真实 Mongoose 查询中间件（驱动层 `countDocuments` spy），并与 `TENANT_ID_COLLECTIONS` 的集合名互校；Mongoose v9 的查询/文档中间件必须写成**同步钩子（无 next 参数）**，否则运行期抛 `next is not a function`。新增带 userId 的模型必须声明 `tenantId` 并 `applyTenantScope(schema)`（**例外**：`user_commit_settings` 为成员级集合，`userId` 为全局成员主键、`tenantId` 仅留档，显式豁免插件，见「Commit 设置与提交身份」段）；唯一索引保留 userId 维度：`{tenantId,userId,name}` / `{tenantId,userId,githubUserId}` / `{tenantId,userId}`。
 - **迁移**：`012-account-user-tenant` 逐 user 幂等拆分三件套（只复制不删除原登录字段）；`013-tenant-id-backfill` 19 集合复制清洗 + 索引（只新增不删除）。**集合名以模型 `model.collection.name` 为单一来源**（如 `issue_workflow_triggers`），由 T-ISO 互校 + `013-...real.test.ts` 真库兜底；历史环境若误建空集合 `issueworkflowtriggers`，确认无数据后可手工 drop。启动后 `services/tenant-self-check.ts` 以带索引 count + `limit(100)` 抽样异步自检，仅告警不阻塞。
 - **计费**：`billing-client` ownerType 使用 `tenant`（ownerId=tenantId；`front_user` 仅兼容期旧调用方）；`startHarness` 下发 `tenantId`（=userId）。
+- **待办通知租户归属**：订阅/引擎链路（permission / elicitation / harness login / workflow intervention）创建 `TodoItem` 时，必须经 `TodoService.resolveSessionTenantId` 显式继承会话所在租户工作区的 `tenantId`；缺省会由 tenant-scope 写成 `userId`（个人租户），导致团队工作区看不到待办、切到个人工作区反而可见。
 - **开户**：`POST /internal/users`（Bearer `INTERNAL_API_TOKEN`）创建账户+用户+个人租户+零余额租户计费账户；按 username 幂等（200 既有视图 / 201 新建 / 400 规则 / 409 重名 / 503 计费不可达并回滚）。
 
 ## 工作流实例改名（工作流迭代）
@@ -208,3 +225,9 @@ pnpm run start   # Start production server
 - **服务**：`services/workflow/instance.ts` 的 `normalizeWorkflowName(raw)`（trim 后 1~64，非法抛 `invalid workflow name`）与 `workflowInstanceService.rename(userId, id, rawName)` 为**唯一名称规则来源**；归属口径与归档/删除一致（`actorFilter`），查询**不过滤 `deletedAt`** 以便区分「不存在/无权限」（`Workflow instance not found`）与「已删除」（`Workflow instance is deleted`）；更新带 `deletedAt:null` 并兜底 `matchedCount===0` 按已删除处理。名称规则仅作用于改名入口，实例化历史行为不变。
 - **入口**：GraphQL `renameWorkflowInstance`（`graphql/resolvers/workflow.ts`，`wrap()` 原样透传文案）；平台 MCP `agent-workflow-tools.renameCurrentWorkflow`（`services/workflow/tool-handlers.ts`，工具总数 **14**）复用同一 service，错误映射 `invalid workflow name → INVALID_PARAMS`、`not found → NOT_FOUND`、其余（含已删除）→ `INVALID_STATE`。
 - **已归档实例允许改名**（仅禁止已删除）；团队工作区非创建人场景与既有 13 个工具同口径，不在本期扩大范围。
+
+## 多租户二期（工作区资源查询口径）
+
+- **请求链路**：已归属工作区的资源（`sessions` / `controllers` / `controllerkeys` / `cloudhosts` / `cloudstorages` / `configuredworkflows` / `workflowinstances` / `workflowtemplates` / `githubaccounts` / `providers` / `models`）一律用 `actorFilter(userId)` 组合查询，**禁止显式写 `userId`**：工作区上下文存在时返回 `{}`，由 `applyWorkspaceScope` 注入可见集；无上下文（引擎/内部/迁移）才回退 `{userId}` 归属校验。典型回归：`Controller.cloudHost`、`sessionService.create` 的云电脑状态校验、云电脑创建时选择共享 GitHub 绑定、Issue 联动实例化时读取已配置工作流、会话级权限超时设置。
+- **异步链路**：Issue/PR 回调、SSE 等无请求头链路先 `runWithWorkspace(...)` 建立上下文，再执行同样口径的查询。
+- **保留 `{userId}` 的例外**（按一期口径仍跟随成员本人）：个人 MCP 配置、待办通知、网关、未绑定 `ControllerKey` 的创建清理（避免误删他人 key）、本地控制器项目工作区（`ControllerWorkspace`）及按项目工作区归组的 Worktree 会话查询、`CloudHostSetupOperation` 等内部操作单、`CloudHostIssuesLinkage` 等个人联动配置。

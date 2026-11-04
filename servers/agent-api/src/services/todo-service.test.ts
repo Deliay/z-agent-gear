@@ -25,10 +25,18 @@ vi.mock('../models/user.js', () => ({
   },
 }));
 
+vi.mock('../models/workspace.js', () => ({
+  Workspace: {
+    findById: vi.fn(),
+  },
+}));
+
 import { TodoService } from './todo-service.js';
+import { runWithWorkspace } from './workspace-context.js';
 import { TodoItem } from '../models/todo-item.js';
 import { Session } from '../models/session.js';
 import { User } from '../models/user.js';
+import { Workspace } from '../models/workspace.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -62,6 +70,12 @@ describe('TodoService', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(Session.findById).mockReturnValue({
+      select: () => ({ lean: vi.fn().mockResolvedValue(null) }),
+    } as never);
+    vi.mocked(Workspace.findById).mockReturnValue({
+      select: () => ({ lean: vi.fn().mockResolvedValue(null) }),
+    } as never);
     service = new TodoService();
   });
 
@@ -349,6 +363,33 @@ describe('TodoService', () => {
       expect(expiresAtMs).toBeGreaterThanOrEqual(before + 5 * 60 * 1000);
       expect(expiresAtMs).toBeLessThanOrEqual(Date.now() + 5 * 60 * 1000 + 100);
     });
+
+    it('T-TODO-TEAM: 待办继承会话所在团队工作区的租户（不落个人租户）', async () => {
+      vi.mocked(TodoItem.create).mockResolvedValue(mockTodoDoc() as never);
+      vi.mocked(Session.findById).mockReturnValue({
+        select: () => ({ lean: vi.fn().mockResolvedValue({ workspaceId: 'ws-team' }) }),
+      } as never);
+      vi.mocked(Workspace.findById).mockReturnValue({
+        select: () => ({ lean: vi.fn().mockResolvedValue({ tenantId: 'tenant-team' }) }),
+      } as never);
+
+      await service.createElicitationTodo({
+        requestId: 'elic_team',
+        controllerId: 'ctrl-1',
+        sessionId: '507f1f77bcf86cd799439031',
+        userId: 'user-1',
+        mode: 'form',
+        message: '团队会话提问',
+      });
+
+      expect(TodoItem.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          userId: 'user-1',
+          tenantId: 'tenant-team',
+          type: 'elicitation_request',
+        }),
+      );
+    });
   });
 
   describe('createWorkflowInterventionTodo', () => {
@@ -571,6 +612,27 @@ describe('TodoService', () => {
         { $set: { permissionTimeoutAction: 'reject' } },
       );
       expect(result).toBe(true);
+    });
+
+    it('T-TODO-TEAM: 工作区上下文内可更新他人会话的超时设置', async () => {
+      vi.mocked(Session.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
+
+      await runWithWorkspace(
+        {
+          id: 'ws-team',
+          tenantId: 'tenant-team',
+          type: 'normal',
+          role: 'developer',
+          readOnly: false,
+          globalWorkspaceId: 'ws-global',
+        },
+        () => service.updatePermissionTimeout('user-1', 'sess-1', 'reject'),
+      );
+
+      expect(Session.updateOne).toHaveBeenCalledWith(
+        { _id: 'sess-1' },
+        { $set: { permissionTimeoutAction: 'reject' } },
+      );
     });
 
     it('should return false when sessionId is null', async () => {

@@ -442,7 +442,11 @@ describe('WorkflowEngine.transition', () => {
     instance.nodes[1].sessionId = 'sess-2';
     instance.nodes[1].failInfo = { reason: 'r', source: 'LLM_REPORTED', at: new Date() };
     instance.nodes[1].rejectInfo = { reason: 'r', fromNodeId: null, at: new Date() };
-    instance.nodes[1].fallbackSent = true;
+    instance.nodes[1].retryCount = 3;
+    instance.nodes[1].nextRetryAt = new Date();
+    instance.nodes[1].retryPhase = 'SCHEDULED';
+    instance.nodes[1].retryDeadlineAt = new Date();
+    instance.nodes[1].retryTrigger = 'ENDED';
     loadInstance(instance);
 
     await workflowEngine.transition('inst-1', 'n2', 'restart', {});
@@ -451,7 +455,12 @@ describe('WorkflowEngine.transition', () => {
     expect(node.status).toBe('RUNNING');
     expect(node.failInfo).toBeNull();
     expect(node.rejectInfo).toBeNull();
-    expect(node.fallbackSent).toBe(false);
+    // 重试字段全部复位（替换旧 fallbackSent=false 用例）
+    expect(node.retryCount).toBe(0);
+    expect(node.nextRetryAt).toBeNull();
+    expect(node.retryPhase).toBeNull();
+    expect(node.retryDeadlineAt).toBeNull();
+    expect(node.retryTrigger).toBeNull();
     expect(hooks.onNodeRestart).toHaveBeenCalledWith(instance, node, {});
     expect(instance.currentNodeNames).toEqual(['技术方案']);
   });
@@ -684,5 +693,162 @@ describe('WorkflowEngine.onNodesTransitioned', () => {
     const order = transitionedHooks.onNodesTransitioned.mock.invocationCallOrder[0];
     const finishOrder = transitionedHooks.onWorkflowFinished.mock.invocationCallOrder[0];
     expect(order).toBeLessThan(finishOrder);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 中断自动重试：retryExhausted 状态机与重试字段复位（T-ENG1~7）
+// ---------------------------------------------------------------------------
+
+describe('WorkflowEngine retry transitions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workflowEngine.registerHooks(hooks);
+  });
+
+  function retryNode(overrides: Partial<WorkflowNodeDoc> = {}) {
+    return makeNode({
+      nodeId: 'n1',
+      nodeKey: 'n1',
+      type: 'AI',
+      name: '执行',
+      status: 'RUNNING',
+      sessionId: 'sess-1',
+      retryCount: 10,
+      nextRetryAt: new Date(),
+      retryPhase: 'RECONNECTING',
+      retryDeadlineAt: new Date(),
+      retryTrigger: 'ENDED',
+      ...overrides,
+    });
+  }
+
+  it('T-ENG1: retryExhausted：RUNNING→RETRY_FAILED，来源 RETRY_EXHAUSTED，保留 retryCount、清调度字段', async () => {
+    const instance = makeInstance([retryNode()]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'retryExhausted', { reason: '重试用尽' });
+
+    const node = instance.nodes[0];
+    expect(node.status).toBe('RETRY_FAILED');
+    expect(node.failInfo).toMatchObject({ reason: '重试用尽', source: 'RETRY_EXHAUSTED' });
+    expect(node.retryCount).toBe(10);
+    expect(node.nextRetryAt).toBeNull();
+    expect(node.retryPhase).toBeNull();
+    expect(node.retryDeadlineAt).toBeNull();
+    expect(node.retryTrigger).toBeNull();
+    expect(instance.lastNodeStatus).toBe('RETRY_FAILED');
+  });
+
+  it('T-ENG2: retryExhausted：REWORK→RETRY_FAILED', async () => {
+    const instance = makeInstance([retryNode({ status: 'REWORK' })]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'retryExhausted', { reason: 'r' });
+
+    expect(instance.nodes[0].status).toBe('RETRY_FAILED');
+  });
+
+  it('T-ENG3: retryExhausted 从 DONE/FAILED/RETRY_FAILED 拒绝', async () => {
+    for (const from of ['DONE', 'FAILED', 'RETRY_FAILED'] as const) {
+      const instance = makeInstance([retryNode({ status: from })]);
+      loadInstance(instance);
+      await expect(workflowEngine.transition('inst-1', 'n1', 'retryExhausted', { reason: 'r' })).rejects.toThrow(
+        /不允许执行/,
+      );
+    }
+  });
+
+  it('T-ENG4: resumeFailed：RETRY_FAILED→RUNNING，failInfo 清空，5 个重试字段全部复位', async () => {
+    const instance = makeInstance([retryNode({ status: 'RETRY_FAILED', failInfo: { reason: 'r', source: 'RETRY_EXHAUSTED', at: new Date() } })]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'resumeFailed');
+
+    const node = instance.nodes[0];
+    expect(node.status).toBe('RUNNING');
+    expect(node.failInfo).toBeNull();
+    expect(node.retryCount).toBe(0);
+    expect(node.nextRetryAt).toBeNull();
+    expect(node.retryPhase).toBeNull();
+    expect(node.retryDeadlineAt).toBeNull();
+    expect(node.retryTrigger).toBeNull();
+  });
+
+  it('T-ENG5: restart：RETRY_FAILED→RUNNING，重试字段复位', async () => {
+    const instance = makeInstance([
+      retryNode({ status: 'RETRY_FAILED', failInfo: { reason: 'r', source: 'RETRY_EXHAUSTED', at: new Date() } }),
+    ]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'restart', {});
+
+    const node = instance.nodes[0];
+    expect(node.status).toBe('RUNNING');
+    expect(node.retryCount).toBe(0);
+    expect(node.retryPhase).toBeNull();
+    expect(hooks.onNodeRestart).toHaveBeenCalled();
+  });
+
+  it('T-ENG6: complete/completeRework/reject/rework/resume 各自复位重试字段（表驱动）', async () => {
+    type Case = { event: Parameters<typeof workflowEngine.transition>[2]; from: string; prepare?: (i: ReturnType<typeof makeInstance>) => void };
+    const cases: Case[] = [
+      {
+        event: 'complete',
+        from: 'RUNNING',
+        prepare: (instance) => {
+          instance.nodes.push(makeNode({ nodeId: 'n2', nodeKey: 'n2', name: '下游', status: 'INITIALIZING', dependsOn: ['n1'] }));
+        },
+      },
+      { event: 'completeRework', from: 'REWORK' },
+      {
+        event: 'reject',
+        from: 'RUNNING',
+        prepare: (instance) => {
+          instance.nodes[0].dependsOn = ['n2'];
+          instance.nodes.push(makeNode({ nodeId: 'n2', nodeKey: 'n2', name: '上游', status: 'DONE' }));
+        },
+      },
+      {
+        event: 'rework',
+        from: 'DONE',
+        prepare: () => undefined,
+      },
+      {
+        event: 'resume',
+        from: 'REJECT',
+        prepare: () => undefined,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const instance = makeInstance([retryNode({ status: testCase.from, retryCount: 4 })]);
+      testCase.prepare?.(instance);
+      loadInstance(instance);
+
+      await workflowEngine.transition('inst-1', 'n1', testCase.event, { reason: 'r' });
+
+      const node = instance.nodes[0];
+      expect(node.retryCount, `${testCase.event} 复位 retryCount`).toBe(0);
+      expect(node.nextRetryAt, `${testCase.event} 清 nextRetryAt`).toBeNull();
+      expect(node.retryPhase, `${testCase.event} 清 retryPhase`).toBeNull();
+      expect(node.retryDeadlineAt, `${testCase.event} 清 retryDeadlineAt`).toBeNull();
+      expect(node.retryTrigger, `${testCase.event} 清 retryTrigger`).toBeNull();
+    }
+  });
+
+  it('T-ENG7: fail 保留 retryCount、只清调度字段', async () => {
+    const instance = makeInstance([retryNode({ retryCount: 3 })]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'fail', { reason: 'r', source: 'LLM_REPORTED' });
+
+    const node = instance.nodes[0];
+    expect(node.status).toBe('FAILED');
+    expect(node.retryCount).toBe(3);
+    expect(node.nextRetryAt).toBeNull();
+    expect(node.retryPhase).toBeNull();
+    expect(node.retryDeadlineAt).toBeNull();
+    expect(node.retryTrigger).toBeNull();
   });
 });

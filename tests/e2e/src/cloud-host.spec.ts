@@ -14,6 +14,14 @@ function gqlRequest(page: import('@playwright/test').Page, query: string, variab
 
 const sidebar = () => 'nav[aria-label="Sidebar"]';
 
+/** UI 四期「主机」分区默认折叠，展开后才能看到云电脑/控制器条目。 */
+async function expandHosts(page: import('@playwright/test').Page): Promise<void> {
+  const header = page.locator(sidebar()).getByRole('button', { name: /^主机/ });
+  if ((await header.getAttribute('aria-expanded')) !== 'true') {
+    await header.click();
+  }
+}
+
 // 创建期不再预置默认工作区：需要读取 hasDefaultWorkspace/defaultSessionId 判定就绪后的行为
 const HOST_FLAGS = `
   query {
@@ -51,6 +59,7 @@ test.describe('Cloud Host E2E', () => {
     const { username } = await registerFundedUser(page);
     await loginViaUI(page, username);
     await expect(page.locator(sidebar())).toBeVisible();
+    await expandHosts(page);
 
     await page.getByRole('button', { name: '新建云电脑' }).click();
     const dialog = page.getByRole('dialog');
@@ -68,6 +77,7 @@ test.describe('Cloud Host E2E', () => {
     const { token, username } = await registerFundedUser(page);
     await loginViaUI(page, username);
     await expect(page.locator(sidebar())).toBeVisible();
+    await expandHosts(page);
 
     const hostName = `e2e-cloud-${Date.now().toString(36)}`;
 
@@ -200,6 +210,7 @@ test.describe('Cloud Host E2E', () => {
     const { token, username } = await registerFundedUser(page);
     await loginViaUI(page, username);
     await expect(page.locator(sidebar())).toBeVisible();
+    await expandHosts(page);
 
     const hostName = `e2e-nows-${Date.now().toString(36)}`;
     let hostId = '';
@@ -349,10 +360,15 @@ async function waitForHost(
 async function seedGithub(page: import('@playwright/test').Page, userId: string): Promise<void> {
   const db = (await phase10Db())!;
   const accountId = new mongoose.Types.ObjectId();
+  // 多租户二期：共享型账号按工作区可见（缺省会因作用域过滤不可见）
+  const globalWorkspace = await db
+    .collection('workspaces')
+    .findOne({ tenantId: new mongoose.Types.ObjectId(userId), type: 'global' });
   await db.collection('githubaccounts').insertOne({
     _id: accountId,
     userId,
     tenantId: userId, // 多租户一期：githubaccounts.tenantId 对齐 userId 的 String 类型
+    workspaceId: globalWorkspace ? String(globalWorkspace._id) : null,
     // GraphQL Int 为 32 位；Date.now() 会溢出导致 githubAccounts 查询整体报错
     githubUserId: 20261024,
     githubLogin: 'phase10-owner',
@@ -508,6 +524,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
     const { token, username } = await registerFundedUser(page);
     const userId = await getMe(page, token);
     await loginViaUI(page, username);
+    await expandHosts(page);
     const name = `e2e-p10-legacy-${Date.now().toString(36)}`;
 
     try {
@@ -582,6 +599,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
       'phase10-owner/repo',
     );
     await loginViaUI(page, username);
+    await expandHosts(page);
     const name = `e2e-p10-project-${Date.now().toString(36)}`;
 
     try {
@@ -643,6 +661,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
     test.setTimeout(120_000);
     const { token, username } = await registerFundedUser(page);
     await loginViaUI(page, username);
+    await expandHosts(page);
     const name = `e2e-harness-opt-${Date.now().toString(36)}`;
 
     try {
@@ -704,6 +723,7 @@ test.describe('Cloud Host Github project provisioning E2E (Phase 10)', () => {
     const userId = await getMe(page, token);
     await seedGithub(page, userId);
     await loginViaUI(page, username);
+    await expandHosts(page);
     const name = `e2e-p10-fail-${Date.now().toString(36)}`;
 
     try {

@@ -5,6 +5,7 @@ vi.mock('../models/session.js', () => ({
   Session: {
     find: vi.fn(),
     findOne: vi.fn(),
+    findById: vi.fn(),
     findOneAndUpdate: vi.fn(),
     findByIdAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
@@ -94,6 +95,7 @@ import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 import { commitSettingsService } from './commit-settings-service.js';
+import { runWithWorkspace } from './workspace-context.js';
 
 const mockRedis = {
   set: vi.fn(),
@@ -2086,6 +2088,39 @@ describe('SessionService', () => {
       ).rejects.toThrow('cloud host is not running');
     });
 
+    it('T-SS-TEAM: 工作区上下文内按工作区查询云电脑（成员可在他人的云电脑上建会话）', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud', name: 'cloud' }),
+      } as never);
+      vi.mocked(CloudHost.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'STARTING' }),
+      } as never);
+
+      await expect(
+        runWithWorkspace(
+          {
+            id: 'ws-team',
+            tenantId: 'tenant-team',
+            type: 'normal',
+            role: 'developer',
+            readOnly: false,
+            globalWorkspaceId: 'ws-global',
+          },
+          () =>
+            sessionService.create('user-1', {
+              controllerId: 'ctrl-1',
+              acpServerType: 'opencode',
+              workspaceId: 'ws-1',
+            }),
+        ),
+      ).rejects.toThrow('cloud host is not running');
+
+      expect(CloudHost.findOne).toHaveBeenCalledWith({
+        controllerId: 'ctrl-1',
+        deletedAt: null,
+      });
+    });
+
     it('rejects createSession for an ACP type outside the cloud host harnessTypes', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud', name: 'cloud' }),
@@ -2397,5 +2432,58 @@ describe('SessionService.create default MCP injection', () => {
       userId: 'user-1',
       enabled: true,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 会话状态通用通道（T-SES1）：onSessionStatus / notifySessionStatus / getSessionStatusRaw
+// ---------------------------------------------------------------------------
+
+describe('SessionService.onSessionStatus', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('T-SES1: 注册与分发；未注册时静默；注销后不再触发', async () => {
+    const listener = vi.fn();
+    const event = { sessionId: 'sess-1', status: 'idling' };
+
+    // 未注册时静默
+    await expect(sessionService.notifySessionStatus(event)).resolves.toBeUndefined();
+
+    const unsubscribe = sessionService.onSessionStatus(listener);
+    await sessionService.notifySessionStatus({ ...event, promptCompleted: true, error: 'BOOM' });
+    expect(listener).toHaveBeenCalledWith({ sessionId: 'sess-1', status: 'idling', promptCompleted: true, error: 'BOOM' });
+
+    unsubscribe();
+    await sessionService.notifySessionStatus(event);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-SES1b: 监听器抛错只告警，不影响其他监听器', async () => {
+    const bad = vi.fn().mockRejectedValue(new Error('boom'));
+    const good = vi.fn();
+    const offBad = sessionService.onSessionStatus(bad);
+    const offGood = sessionService.onSessionStatus(good);
+    try {
+      await expect(sessionService.notifySessionStatus({ sessionId: 'sess-1', status: 'idling' })).resolves.toBeUndefined();
+      expect(good).toHaveBeenCalled();
+    } finally {
+      offBad();
+      offGood();
+    }
+  });
+
+  it('T-SES1c: getSessionStatusRaw 直读会话状态，缺失返回 null', async () => {
+    vi.mocked(Session.findById).mockReturnValue({
+      select: vi.fn(() => ({ lean: vi.fn(async () => ({ status: 'idling' })) })),
+    } as never);
+    await expect(sessionService.getSessionStatusRaw('sess-1')).resolves.toBe('idling');
+    expect(Session.findById).toHaveBeenCalledWith('sess-1');
+
+    vi.mocked(Session.findById).mockReturnValue({
+      select: vi.fn(() => ({ lean: vi.fn(async () => null) })),
+    } as never);
+    await expect(sessionService.getSessionStatusRaw('sess-x')).resolves.toBeNull();
   });
 });

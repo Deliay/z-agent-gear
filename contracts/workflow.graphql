@@ -28,6 +28,9 @@ enum WorkflowNodeStatus {
   REWORK
   # 失败：阻断流程，需人工介入（MCP resumeFailedNode 恢复 RUNNING）
   FAILED
+  # 中断自动重试 10 次用尽：阻断流程，需人工介入
+  # （restartNode 拉起全新会话，或 MCP resumeFailedNode 在会话内给出指示后恢复 RUNNING）
+  RETRY_FAILED
 }
 
 # ---------- 工作流模板 ----------
@@ -128,7 +131,8 @@ type WorkflowNodeRejectInfo {
 
 type WorkflowNodeFailInfo {
   reason: String!
-  # 失败来源：SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）/ SESSION_START_FAILED（节点会话启动失败或被移除）
+  # 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED /
+  # RETRY_EXHAUSTED（中断自动重试 10 次用尽）
   source: String!
   at: String!
 }
@@ -158,6 +162,11 @@ type WorkflowNode {
   startedAt: String
   reworkedAt: String
   reworkCount: Int!
+  # 当前中断 episode 已排期的自动重试次数（0~10）；成功重发提示词也不复位（防死循环），
+  # 仅在推进/人工操作（complete/rework/reject/resume/restart 等）时复位
+  retryCount: Int!
+  # 下次自动重试计划时间（ISO 字符串）；null = 无排期（已发送/未排期）
+  nextRetryAt: String
   rejectInfo: WorkflowNodeRejectInfo
   failInfo: WorkflowNodeFailInfo
 }
@@ -353,7 +362,8 @@ type Mutation {
   completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
   # 人类打回（RUNNING/REWORK→REJECT，触发上游 REWORK）
   rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
-  # 重启节点（RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话）
+  # 重启节点（RUNNING/REWORK/FAILED/RETRY_FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话；
+  # RETRY_FAILED 来源用于自动重试用尽后的人工恢复）
   restartNode(instanceId: ID!, nodeId: ID!, agentConfig: AgentNodeConfigInput): WorkflowNode!
   # 删除实例（软删除：停止流程运转、删除全部节点会话、标记 deletedAt，实例数据保留；已删实例拒绝一切流转）
   deleteWorkflowInstance(id: ID!): Boolean!

@@ -53,16 +53,21 @@ function data(overrides: Partial<WorkflowGraphNodeData> = {}): WorkflowGraphNode
   }
 }
 
-function renderCard(overrides: Partial<WorkflowGraphNodeData> = {}) {
-  return renderCardElement(data(overrides))
+// 卡片含 React Flow Handle（连线锚点），需要 provider 上下文
+function card(props: unknown) {
+  return (
+    <ReactFlowProvider>
+      <WorkflowNodeCard {...(props as NodeProps<WorkflowNodeCardNode>)} />
+    </ReactFlowProvider>
+  )
 }
 
-/** Handle 需要 React Flow 上下文（真实使用场景始终位于 <ReactFlow> 内） */
-function renderCardElement(cardData: WorkflowGraphNodeData) {
-  return render(
-    <WorkflowNodeCard {...({ id: 'n1', data: cardData } as unknown as NodeProps<WorkflowNodeCardNode>)} />,
-    { wrapper: ReactFlowProvider },
-  )
+function renderCard(overrides: Partial<WorkflowGraphNodeData> = {}) {
+  const props = {
+    id: 'n1',
+    data: data(overrides),
+  } as unknown as NodeProps<WorkflowNodeCardNode>
+  return render(card(props))
 }
 
 beforeEach(() => {
@@ -78,7 +83,7 @@ describe('WorkflowNodeCard', () => {
     expect(screen.getByTestId('node-status-spine').className).toContain('bg-info')
 
     const props = { id: 'n1', data: data({ status: 'FAILED' }) } as unknown as NodeProps<WorkflowNodeCardNode>
-    rerender(<WorkflowNodeCard {...props} />)
+    rerender(card(props))
     expect(screen.getByTestId('node-status-badge-n1')).toHaveTextContent('失败')
     expect(screen.getByTestId('node-status-spine').className).toContain('bg-destructive')
   })
@@ -97,13 +102,13 @@ describe('WorkflowNodeCard', () => {
     expect(row).not.toHaveTextContent('思考结尾')
 
     mockActivity.value = { activity: { kind: 'tool_call', text: 'Tool Call: 执行测试' }, tokenUsage: null }
-    rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'RUNNING' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
+    rerender(card({ id: 'n1', data: data({ status: 'RUNNING' }) } as unknown as NodeProps<WorkflowNodeCardNode>))
     const toolRow = screen.getByTestId('node-live-activity-n1')
     expect(toolRow).toHaveTextContent('正在思考')
     expect(toolRow).not.toHaveTextContent('执行测试')
 
     mockActivity.value = { activity: { kind: 'text', text: '…总结' }, tokenUsage: null }
-    rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'REWORK' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
+    rerender(card({ id: 'n1', data: data({ status: 'REWORK' }) } as unknown as NodeProps<WorkflowNodeCardNode>))
     const textRow = screen.getByTestId('node-live-activity-n1')
     expect(textRow).toHaveTextContent('正在思考')
     expect(textRow).not.toHaveTextContent('总结')
@@ -119,7 +124,7 @@ describe('WorkflowNodeCard', () => {
     expect(screen.queryByTestId('node-live-activity-n1')).not.toBeInTheDocument()
 
     mockActivity.value = { activity: null, tokenUsage: null }
-    rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'DONE' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
+    rerender(card({ id: 'n1', data: data({ status: 'DONE' }) } as unknown as NodeProps<WorkflowNodeCardNode>))
     expect(screen.getByTestId('node-result-n1')).toHaveTextContent(/^已完成$/)
   })
 
@@ -149,7 +154,9 @@ describe('WorkflowNodeCard', () => {
       lastSyncAt: '',
       lastSyncError: null,
     }
-    const { container } = renderCardElement(data({ status: 'DONE', prLinks: [link], hasCheckRun: true }))
+    const { container } = render(
+      card({ id: 'n1', data: data({ status: 'DONE', prLinks: [link], hasCheckRun: true }) } as unknown as NodeProps<WorkflowNodeCardNode>),
+    )
     expect(container.querySelector('a[href="https://github.com/acme/repo/pull/1"]')).toBeTruthy()
     expect(screen.getByText('检查项')).toBeInTheDocument()
   })

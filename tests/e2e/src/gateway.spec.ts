@@ -77,54 +77,60 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
   await page.locator('nav[aria-label="Sidebar"]').waitFor({ timeout: 10000 });
 }
 
-async function expandController(page: import('@playwright/test').Page) {
+/**
+ * UI 四期起网关聚合为顶栏「网关」分区（按在线主机聚合），不再挂在控制器节点下。
+ * 分区默认折叠，先展开。
+ */
+async function openGateways(page: import('@playwright/test').Page) {
   const sidebar = page.locator('nav[aria-label="Sidebar"]');
-  // 控制器节点默认展开；点击会折叠，因此这里只等待其子分区出现。
-  await expect(sidebar.getByText('统一网关')).toBeVisible({ timeout: 10000 });
+  const header = sidebar.getByRole('button', { name: /^网关/ });
+  if ((await header.getAttribute('aria-expanded')) !== 'true') await header.click();
   return sidebar;
 }
 
-async function expandGateway(page: import('@playwright/test').Page) {
+/** 「新增网关」先弹出在线主机选择菜单（ControllerPicker），选定后打开对话框。 */
+async function openNewGatewayDialog(page: import('@playwright/test').Page) {
   const sidebar = page.locator('nav[aria-label="Sidebar"]');
-  // TreeSection 默认展开；再次点击会折叠。
-  await expect(sidebar.getByText('统一网关')).toBeVisible({ timeout: 10000 });
-  return sidebar;
+  await sidebar.getByRole('button', { name: '新增网关' }).click();
+  const menu = sidebar.getByRole('menu');
+  if (await menu.isVisible().catch(() => false)) {
+    await menu.getByRole('menuitem').first().click();
+  }
+  await expect(page.getByText('新建网关暴露')).toBeVisible({ timeout: 5000 });
 }
 
 test.describe('Gateway E2E', () => {
 
   test('should show gateway section for online controller', async ({ page }) => {
-    const { token, username, controllerId, disconnect } = await setupGatewayTest(page);
+    const { username, disconnect } = await setupGatewayTest(page);
 
     await loginViaUI(page, username);
-    const sidebar = await expandController(page);
-
-    await expect(sidebar.getByText('统一网关')).toBeVisible({ timeout: 10000 });
+    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    // 在线主机存在时聚合分区可见，且提供「新增网关」入口
+    await expect(sidebar.getByRole('button', { name: /^网关/ })).toBeVisible({ timeout: 10000 });
+    await expect(sidebar.getByRole('button', { name: '新增网关' })).toBeVisible();
     disconnect();
   });
 
   test('should show empty state when expanding gateways', async ({ page }) => {
-    const { token, username, controllerId, disconnect } = await setupGatewayTest(page);
+    const { username, disconnect } = await setupGatewayTest(page);
 
     await loginViaUI(page, username);
-    await expandController(page);
-    const sidebar = await expandGateway(page);
+    const sidebar = await openGateways(page);
 
-    await expect(sidebar.getByText('无网关暴露')).toBeVisible({ timeout: 10000 });
+    // 空态收敛：不渲染占位文案，列表为空
+    await expect(sidebar.getByText('无网关暴露')).toHaveCount(0);
+    await expect(page.locator('[data-testid="sidebar-gateway-list"] > li')).toHaveCount(0);
     disconnect();
   });
 
   test('should open gateway dialog', async ({ page }) => {
-    const { token, username, controllerId, disconnect } = await setupGatewayTest(page);
+    const { username, disconnect } = await setupGatewayTest(page);
 
     await loginViaUI(page, username);
-    await expandController(page);
-    await expandGateway(page);
+    await openGateways(page);
+    await openNewGatewayDialog(page);
 
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
-    await sidebar.getByRole('button', { name: '新增网关' }).click();
-
-    await expect(page.getByText('新建网关暴露')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('input[type="text"]')).toBeVisible();
     await expect(page.locator('input[type="number"]')).toBeVisible();
     await expect(page.getByText('取消')).toBeVisible();
@@ -136,14 +142,11 @@ test.describe('Gateway E2E', () => {
   });
 
   test('should create a gateway', async ({ page }) => {
-    const { token, username, controllerId, disconnect } = await setupGatewayTest(page);
+    const { username, disconnect } = await setupGatewayTest(page);
 
     await loginViaUI(page, username);
-    await expandController(page);
-    await expandGateway(page);
-
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
-    await sidebar.getByRole('button', { name: '新增网关' }).click();
+    const sidebar = await openGateways(page);
+    await openNewGatewayDialog(page);
 
     await page.locator('input[type="text"]').fill('my-api');
     await page.locator('input[type="number"]').fill('3000');
@@ -158,22 +161,19 @@ test.describe('Gateway E2E', () => {
   });
 
   test('should show error for duplicate name', async ({ page }) => {
-    const { token, username, controllerId, disconnect } = await setupGatewayTest(page);
+    const { username, disconnect } = await setupGatewayTest(page);
 
     await loginViaUI(page, username);
-    await expandController(page);
-    await expandGateway(page);
+    const sidebar = await openGateways(page);
 
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
-
-    await sidebar.getByRole('button', { name: '新增网关' }).click();
+    await openNewGatewayDialog(page);
     await page.locator('input[type="text"]').fill('dup-svc');
     await page.locator('input[type="number"]').fill('3001');
     await page.getByRole('button', { name: '创建', exact: true }).click();
     await expect(page.getByText('新建网关暴露')).not.toBeVisible({ timeout: 5000 });
     await expect(sidebar.getByText('dup-svc')).toBeAttached({ timeout: 15000 });
 
-    await sidebar.getByRole('button', { name: '新增网关' }).click();
+    await openNewGatewayDialog(page);
     await page.locator('input[type="text"]').fill('dup-svc');
     await page.locator('input[type="number"]').fill('3002');
     await page.getByRole('button', { name: '创建', exact: true }).click();
@@ -185,15 +185,12 @@ test.describe('Gateway E2E', () => {
   });
 
   test('should delete a gateway', async ({ page }) => {
-    const { token, username, controllerId, disconnect } = await setupGatewayTest(page);
+    const { username, disconnect } = await setupGatewayTest(page);
 
     await loginViaUI(page, username);
-    await expandController(page);
-    await expandGateway(page);
+    const sidebar = await openGateways(page);
 
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
-
-    await sidebar.getByRole('button', { name: '新增网关' }).click();
+    await openNewGatewayDialog(page);
     await page.locator('input[type="text"]').fill('del-svc');
     await page.locator('input[type="number"]').fill('4000');
     await page.getByRole('button', { name: '创建', exact: true }).click();
@@ -201,22 +198,18 @@ test.describe('Gateway E2E', () => {
 
     await sidebar.getByTitle('删除网关暴露').click();
     await expect(sidebar.getByText('del-svc')).not.toBeAttached({ timeout: 15000 });
-    await expect(sidebar.getByText('无网关暴露')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('[data-testid="sidebar-gateway-list"] > li')).toHaveCount(0);
 
     disconnect();
   });
 
   test('should close dialog on cancel', async ({ page }) => {
-    const { token, username, controllerId, disconnect } = await setupGatewayTest(page);
+    const { username, disconnect } = await setupGatewayTest(page);
 
     await loginViaUI(page, username);
-    await expandController(page);
-    await expandGateway(page);
+    await openGateways(page);
+    await openNewGatewayDialog(page);
 
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
-    await sidebar.getByRole('button', { name: '新增网关' }).click();
-
-    await expect(page.getByText('新建网关暴露')).toBeVisible({ timeout: 5000 });
     await page.getByText('取消').click();
     await expect(page.getByText('新建网关暴露')).not.toBeVisible();
 
@@ -224,22 +217,18 @@ test.describe('Gateway E2E', () => {
   });
 
   test('should not show gateway section for offline controller', async ({ page }) => {
-    const { token, username, controllerId, disconnect } = await setupGatewayTest(page);
+    const { username, disconnect } = await setupGatewayTest(page);
 
     disconnect();
 
     await loginViaUI(page, username);
-
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
 
-    // Wait for controller to become offline in the UI (via 15s polling)
-    await expect(async () => {
-      await sidebar.getByRole('button', { name: /e2e-gw-host/ }).click();
-      const statusDot = sidebar.locator('span.h-2.w-2.rounded-full.bg-muted-foreground');
-      await expect(statusDot.first()).toBeVisible({ timeout: 1000 });
-    }).toPass({ timeout: 15000, intervals: [1000] });
-
-    await expect(sidebar.getByText('统一网关')).not.toBeVisible({ timeout: 5000 });
+    // 聚合分区仅在在线主机存在时提供「新增网关」入口
+    await expect(sidebar.getByRole('button', { name: '新增网关' })).toHaveCount(0, {
+      timeout: 15000,
+    });
+    await expect(page.locator('[data-testid="sidebar-gateway-list"] > li')).toHaveCount(0);
   });
 
 });

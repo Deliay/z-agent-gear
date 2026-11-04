@@ -28,6 +28,8 @@ function node(overrides: Partial<WorkflowNodeData> & { id: string }): WorkflowNo
     startedAt: null,
     reworkedAt: null,
     reworkCount: 0,
+    retryCount: 0,
+    nextRetryAt: null,
     rejectInfo: null,
     failInfo: null,
     ...overrides,

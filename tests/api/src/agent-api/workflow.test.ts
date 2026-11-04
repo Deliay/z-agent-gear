@@ -178,7 +178,7 @@ const WORKFLOW_INSTANCE_QUERY = `
   query WorkflowInstance($id: ID!) {
     workflowInstance(id: $id) {
       id name currentNodeNames lastNodeName lastNodeStatus archived workflowWorktreePath workflowWorktreeBranch
-      nodes { id nodeKey type name status stage sortOrder sessionId startedAt reworkedAt reworkCount agentConfig { acpServerType modeId modelId initNewWorktree } rejectInfo { reason fromNodeId at } failInfo { reason source at } }
+      nodes { id nodeKey type name status stage sortOrder sessionId startedAt reworkedAt reworkCount retryCount nextRetryAt agentConfig { acpServerType modeId modelId initNewWorktree } rejectInfo { reason fromNodeId at } failInfo { reason source at } }
       blackboard { key value updatedAt }
       blackboardTrash { key value updatedAt }
     }
@@ -229,6 +229,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+async function waitFor<T>(fn: () => Promise<T | undefined>, timeoutMs: number, label: string): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await fn();
+    if (value !== undefined) return value;
+    await sleep(300);
+  }
+  throw new Error(`Timeout waiting for ${label}`);
+}
+
+async function getSessionMessagesText(token: string, sessionId: string): Promise<string[]> {
+  const res = await gqlRequest(
+    `query SessionMessages($sessionId: ID!) { sessionMessages(sessionId: $sessionId, limit: 100) { id content } }`,
+    { sessionId },
+    token,
+  );
+  const body = await res.json();
+  expect(body.errors).toBeUndefined();
+  return (body.data.sessionMessages as { content: unknown }[]).map((m) =>
+    typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+  );
+}
+
 async function newUserToken(tag: string): Promise<string> {
   const { token } = await createFrontUser();
   return token;
@@ -256,6 +279,11 @@ async function registerFakeController(
   const rawKey = keyBody.data.createControllerKey.rawKey;
 
   const client = createClient();
+  // 真实控制器每 30s 心跳续期 `session:<keyId>`（TTL 90s）；单 fake 跑满 describe 必须保活
+  const heartbeat = setInterval(() => {
+    if (client.connected) client.emit('heartbeat');
+  }, 30_000);
+  client.on('disconnect', () => clearInterval(heartbeat));
   client.on('acp:check', (data: { requestId: string }) => {
     client.emit('acp:check:result', { requestId: data.requestId, servers });
   });
@@ -1358,63 +1386,109 @@ describe('Workflow Node Failure (A22-A23)', () => {
     expect(done.data.status).toBe('DONE');
   }, 40_000);
 
-  it('A23: 兜底提醒后会话再次停止 → 节点升级 FAILED（SESSION_STUCK）', async () => {
+  it('A23: 会话停止 → 自动重试管线立即执行（resume + 兜底提示词）；再次停止 → 排队 1 分钟后重试', async () => {
     const { instanceId, sessionId } = await advanceToExecRunning('a23');
 
-    // 第一次停止：兜底 resume + 提醒提示词，节点保持 RUNNING
+    // 第一次停止：中断自动重试第 1 次（立即执行）→ close → resume → 等 idle → 兜底提示词
     await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
-    const resumeEvent = await waitForEvent<{ requestId: string; sessionId: string }>(fake.client, 'acp:resume', 15000);
+    const resumeEvent = await waitForResume<{ requestId: string; sessionId: string }>(fake.client, sessionId, 15000);
     fake.client.emit('acp:resume:result', { requestId: resumeEvent.requestId, sessionId, success: true });
-    await sleep(800);
-    const inst1 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    const inst1 = await waitFor(
+      async () => {
+        const i = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+        const n = i.nodes.find((node: Record<string, any>) => node.nodeKey === 'exec')!;
+        return n.retryCount === 1 && n.nextRetryAt === null ? i : undefined;
+      },
+      15000,
+      'a23 first retry executed',
+    );
     expect(inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').status).toBe('RUNNING');
 
-    // 第二次停止：不再 resume，节点升级 FAILED（SESSION_STUCK）
-    await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
-    await sleep(1500);
-    const inst2 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
-    const execNode = inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
-    expect(execNode.status).toBe('FAILED');
-    expect(execNode.failInfo.source).toBe('SESSION_STUCK');
-    expect(inst2.currentNodeNames).toEqual([]);
-  }, 40_000);
+    let resumeEvents = 0;
+    const countResume = (data: { sessionId?: string }) => {
+      if (data.sessionId === sessionId) resumeEvents += 1;
+    };
+    fake.client.on('acp:resume', countResume);
 
-  it('A34: 节点会话 turn 结束（审批超时自动停止）但节点未推进 → 兜底提醒；再次停滞 → FAILED + 人工介入待办', async () => {
+    // 第二次停止：排到 1 分钟后（retryCount=2，不立即 resume）
+    await gqlRequest(CLOSE_SESSION, { id: sessionId }, token);
+    const inst2 = await waitFor(
+      async () => {
+        const i = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+        const n = i.nodes.find((node: Record<string, any>) => node.nodeKey === 'exec')!;
+        return n.retryCount === 2 ? i : undefined;
+      },
+      15000,
+      'a23 second retry scheduled',
+    );
+    const execNode = inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('RUNNING');
+    expect(execNode.nextRetryAt).toBeTruthy();
+    const delayMs = new Date(execNode.nextRetryAt).getTime() - Date.now();
+    expect(delayMs).toBeGreaterThan(30_000);
+    expect(delayMs).toBeLessThanOrEqual(61_000);
+    await sleep(1500);
+    fake.client.off('acp:resume', countResume);
+    expect(resumeEvents).toBe(0);
+  }, 60_000);
+
+  it('A34: 节点会话 turn 结束（审批超时自动停止）但节点未推进 → 自动重试（停滞提醒）；再次停滞 → 排期', async () => {
     const { instanceId, sessionId } = await advanceToExecRunning('a34');
 
-    // 模拟审批超时自动停止：prompt:start（running）→ prompt:complete（idling），全程未调用完成工具
+    // 模拟审批超时自动停止：prompt:start（running）→ prompt:complete（idling）
     fake.client.emit('acp:prompt:start', { sessionId });
     await sleep(500);
-    const nudgeEvent = waitForEvent<{ message?: { content?: string } }>(fake.client, 'acp:message', 15000);
+    const resumeEvent = waitForResume<{ requestId: string; sessionId: string }>(fake.client, sessionId, 15000);
     fake.client.emit('acp:prompt:complete', { sessionId, stopReason: 'cancelled' });
+    const resumeData = await resumeEvent;
+    fake.client.emit('acp:resume:result', { requestId: resumeData.requestId, sessionId, success: true });
 
-    // 首次停滞：兜底提醒提示词直接补发（会话仍存活，无需 resume），节点保持 RUNNING
-    const nudge = await nudgeEvent;
-    expect(String(nudge.message?.content ?? '')).toContain('工作流');
-    await sleep(500);
-    const inst1 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+    // 重试管线重发停滞提醒（IDLE_NUDGE_PROMPT），节点保持 RUNNING 且计数保留
+    const nudge = await waitFor(
+      async () => {
+        const msgs = await getSessionMessagesText(token, sessionId);
+        return msgs.find((m) => m.includes('本轮执行已停止'));
+      },
+      15000,
+      'idle nudge prompt',
+    );
+    expect(nudge).toContain('completeCurrentNode');
+    const inst1 = await waitFor(
+      async () => {
+        const i = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+        const n = i.nodes.find((node: Record<string, any>) => node.nodeKey === 'exec')!;
+        return n.retryCount === 1 && n.nextRetryAt === null ? i : undefined;
+      },
+      15000,
+      'a34 first retry executed',
+    );
     expect(inst1.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec').status).toBe('RUNNING');
 
-    // 再次停滞：节点升级 FAILED（SESSION_STUCK）+ 人工介入强提醒待办
+    // 再次停滞：排到下一档退避（retryCount=2），不再立即 resume
+    let resumeEvents = 0;
+    const countResume = (data: { sessionId?: string }) => {
+      if (data.sessionId === sessionId) resumeEvents += 1;
+    };
+    fake.client.on('acp:resume', countResume);
     fake.client.emit('acp:prompt:start', { sessionId });
     await sleep(500);
     fake.client.emit('acp:prompt:complete', { sessionId, stopReason: 'cancelled' });
-    await sleep(1500);
-    const inst2 = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
-    const execNode = inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
-    expect(execNode.status).toBe('FAILED');
-    expect(execNode.failInfo.source).toBe('SESSION_STUCK');
-
-    const todosRes = await gqlRequest(
-      `query { getTodoList { id type priority title } }`,
-      undefined,
-      token,
+    const inst2 = await waitFor(
+      async () => {
+        const i = (await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json()).data.workflowInstance;
+        const n = i.nodes.find((node: Record<string, any>) => node.nodeKey === 'exec')!;
+        return n.retryCount === 2 ? i : undefined;
+      },
+      15000,
+      'a34 second retry scheduled',
     );
-    const todos = (await todosRes.json()).data.getTodoList as Array<{ type: string; priority: string; title: string }>;
-    const intervention = todos.find((t) => t.type === 'workflow_intervention');
-    expect(intervention, '应创建人工介入强提醒待办').toBeDefined();
-    expect(intervention!.priority).toBe('immediate');
-  }, 40_000);
+    const execNode = inst2.nodes.find((n: Record<string, any>) => n.nodeKey === 'exec');
+    expect(execNode.status).toBe('RUNNING');
+    expect(execNode.nextRetryAt).toBeTruthy();
+    await sleep(1000);
+    fake.client.off('acp:resume', countResume);
+    expect(resumeEvents).toBe(0);
+  }, 60_000);
 });
 
 
