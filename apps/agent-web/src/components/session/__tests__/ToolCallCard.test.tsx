@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ToolCallCard from '../ToolCallCard';
 import { mergeToolCallMessages } from '../tool-call-state';
 
@@ -109,7 +109,7 @@ describe('ToolCallCard kinds', () => {
     expect(screen.getByText(/term-1/)).toBeDefined();
   });
 
-  it('should render terminal output when content carries it', () => {
+  it('should render terminal output when content carries it', async () => {
     renderToolCall({
       sessionUpdate: 'tool_call',
       toolCallId: 'tc-1',
@@ -119,11 +119,11 @@ describe('ToolCallCard kinds', () => {
       content: [{ type: 'terminal', terminalId: 'term-2', output: '\u001b[31mfailed\u001b[0m' }],
     });
 
-    expect(screen.getByTestId('terminal-output')).toBeDefined();
-    expect(screen.getByTestId('terminal-output').textContent).toContain('failed');
+    const terminal = screen.getByTestId('terminal-output');
+    await waitFor(() => expect(terminal.textContent).toContain('failed'));
   });
 
-  it('should render output for a failed execute call instead of hiding it (R-4)', () => {
+  it('should render output for a failed execute call instead of hiding it (R-4)', async () => {
     renderToolCall({
       sessionUpdate: 'tool_call',
       toolCallId: 'tc-failed',
@@ -134,7 +134,8 @@ describe('ToolCallCard kinds', () => {
       rawOutput: { output: 'stderr: boom' },
     });
 
-    expect(screen.getByTestId('terminal-output').textContent).toContain('stderr: boom');
+    const terminal = screen.getByTestId('terminal-output');
+    await waitFor(() => expect(terminal.textContent).toContain('stderr: boom'));
     expect(screen.getByText(/npm test/)).toBeDefined();
   });
 
