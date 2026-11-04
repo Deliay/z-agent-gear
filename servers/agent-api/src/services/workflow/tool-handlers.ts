@@ -136,7 +136,7 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'resumeFailedNode',
     description:
-      '操作当前节点「恢复运行」（FAILED→RUNNING）。仅在人类已在对话中给出明确处理指示后调用',
+      '操作当前节点「恢复运行」（FAILED/RETRY_FAILED→RUNNING）。仅在人类已在对话中给出明确处理指示后调用',
     inputSchema: { type: 'object', properties: {} },
   },
   {

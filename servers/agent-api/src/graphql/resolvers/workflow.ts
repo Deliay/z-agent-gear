@@ -107,6 +107,8 @@ function mapInstanceNode(node: Doc) {
     startedAt: toIso(node.startedAt),
     reworkedAt: toIso(node.reworkedAt),
     reworkCount: node.reworkCount ?? 0,
+    retryCount: node.retryCount ?? 0,
+    nextRetryAt: toIso(node.nextRetryAt),
     // 归一化：缺 reason 的空对象视为 null
     rejectInfo: rejectInfo?.reason
       ? { reason: rejectInfo.reason, fromNodeId: rejectInfo.fromNodeId ?? null, at: toIso(rejectInfo.at) }
