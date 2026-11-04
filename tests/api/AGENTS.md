@@ -215,6 +215,7 @@ pnpm test
 | T-WS-ISO5 configuredWorkflows | developer 可见 admin 配置的工作流（列表 + `configuredWorkflow(id)`），`resourceWorkspaceId`=普通工作区；outsider/团队全局上下文不可见；admin 切换可见 |
 | T-WS-ISO6 workflowInstances | developer 可见 admin 实例化的实例，`resourceWorkspaceId`=租户工作区、`workspaceId`=项目工作区（语义互不影响）；outsider/团队全局上下文不可见；admin 切换可见 |
 | T-WS-ISO7 workflowTemplates | 自定义模板仅本工作区可见且 `resourceWorkspaceId`=普通工作区；outsider/团队全局上下文不可见；内置模板在个人全局 / 团队全局 / 团队普通三种上下文均可见且 `resourceWorkspaceId=null` |
+| T-WS-ISO8 成员/管理员辅助与操作路径（需 `MONGODB_URI`） | browseFolder/getHomeDirectory/listHistorySessions/cloudHostIssuesLinkages/retryCloudHostSetupOperation/setupCloudHostGithubProject（本工作区 + 全局共享绑定）；developer 在 admin 创建的 RUNNING 云电脑上创建会话（回归 `sessionService.create` 的云电脑按工作区成员口径查询） |
 
 
 ### Admin Team 租户 API (`admin-api/tenant-team.test.ts` T-TT-API)
