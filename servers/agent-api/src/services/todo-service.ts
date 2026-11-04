@@ -1,6 +1,7 @@
 import { TodoItem } from '../models/todo-item.js';
 import { Session } from '../models/session.js';
 import { User } from '../models/user.js';
+import { actorFilter } from './workspace-context.js';
 
 interface PermissionOption {
   optionId: string;
@@ -349,7 +350,7 @@ export class TodoService {
   async updatePermissionTimeout(userId: string, sessionId: string | null, timeoutAction: string): Promise<boolean> {
     if (sessionId) {
       const result = await Session.updateOne(
-        { _id: sessionId, userId },
+        { _id: sessionId, ...actorFilter(userId) },
         { $set: { permissionTimeoutAction: timeoutAction } },
       );
       return result.modifiedCount > 0;

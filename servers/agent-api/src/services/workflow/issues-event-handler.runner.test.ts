@@ -560,6 +560,27 @@ describe('IssuesTriggerRunner 团队租户工作区上下文', () => {
     expect(seen?.tenantId).toBe('team-1');
     expect(seen?.role).toBe('admin');
   });
+
+  it('T-ISS-CTX2: 已配置工作流按工作区查询，不按 trigger.userId 过滤', async () => {
+    const ctx = {
+      id: WORKSPACE_ID,
+      tenantId: 'team-1',
+      type: 'normal',
+      role: 'developer',
+      readOnly: false,
+      globalWorkspaceId: '507f1f77bcf86cd799439027',
+    } as const;
+    h.triggerFindById.mockReturnValue(
+      lean(triggerDoc({ status: 'PENDING_INSTANTIATE', workspaceId: WORKSPACE_ID })),
+    );
+    h.controllerFindById.mockReturnValue({ select: () => lean({ workspaceId: WORKSPACE_ID }) });
+    h.systemWorkspaceContext.mockResolvedValue(ctx);
+    h.instantiate.mockResolvedValue({ _id: INSTANCE_ID, nodes: [] });
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.workflowFindOne).toHaveBeenCalledWith({ _id: '507f1f77bcf86cd799439026' });
+  });
 });
 
 describe('IssuesTriggerRunner 触发人身份优先级（T-GH-S3/S4）', () => {

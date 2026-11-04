@@ -176,7 +176,7 @@ export class SessionService {
     if (controller.type === 'cloud') {
       const host = await CloudHost.findOne({
         controllerId: input.controllerId,
-        userId,
+        ...actorFilter(userId),
         deletedAt: null,
       }).lean();
       if (!host || !cloudHostRunning(host as { status?: string })) {
@@ -328,7 +328,7 @@ export class SessionService {
     if (controller.type === 'cloud') {
       const stillRunning = await CloudHost.findOne({
         controllerId: input.controllerId,
-        userId,
+        ...actorFilter(userId),
         deletedAt: null,
         ...(input.allowStartingCloudHost === true
           ? { status: { $in: ['STARTING', 'RUNNING'] } }
@@ -358,7 +358,7 @@ export class SessionService {
     if (controller.type === 'cloud') {
       const afterInsert = await CloudHost.findOne({
         controllerId: input.controllerId,
-        userId,
+        ...actorFilter(userId),
         deletedAt: null,
         ...(input.allowStartingCloudHost === true
           ? { status: { $in: ['STARTING', 'RUNNING'] } }

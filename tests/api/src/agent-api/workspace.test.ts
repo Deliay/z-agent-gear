@@ -2611,6 +2611,30 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       );
       expect(devWorkspace.errors, JSON.stringify(devWorkspace.errors)).toBeUndefined();
       const devWorkspaceId = devWorkspace.data.createWorkspace.id as string;
+
+      // createSession：developer 在 admin 创建的 RUNNING 云电脑上建会话（云电脑按工作区成员口径查询）
+      const devCloudWorkspace = await gql(
+        CREATE_WORKSPACE,
+        { input: { controllerId: cloudControllerId, path: `/tmp/iso-dev-cloud-${Date.now()}` } },
+        developer.token,
+        normalId,
+      );
+      expect(devCloudWorkspace.errors, JSON.stringify(devCloudWorkspace.errors)).toBeUndefined();
+      const devCloudSession = await gql(
+        CREATE_SESSION,
+        {
+          input: {
+            controllerId: cloudControllerId,
+            acpServerType: 'opencode',
+            workspaceId: devCloudWorkspace.data.createWorkspace.id,
+          },
+        },
+        developer.token,
+        normalId,
+      );
+      expect(devCloudSession.errors, JSON.stringify(devCloudSession.errors)).toBeUndefined();
+      expect(devCloudSession.data.createSession.session.id).toBeTruthy();
+
       const devHistory = await gql(
         LIST_HISTORY_SESSIONS,
         { controllerId, workspaceId: devWorkspaceId },
