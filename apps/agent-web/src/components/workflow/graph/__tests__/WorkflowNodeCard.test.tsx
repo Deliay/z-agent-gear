@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
-import type { NodeProps } from '@xyflow/react'
+import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
 import WorkflowNodeCard, { type WorkflowNodeCardNode } from '../WorkflowNodeCard'
 import type { WorkflowGraphNodeData } from '../graph-layout'
 
@@ -54,11 +54,15 @@ function data(overrides: Partial<WorkflowGraphNodeData> = {}): WorkflowGraphNode
 }
 
 function renderCard(overrides: Partial<WorkflowGraphNodeData> = {}) {
-  const props = {
-    id: 'n1',
-    data: data(overrides),
-  } as unknown as NodeProps<WorkflowNodeCardNode>
-  return render(<WorkflowNodeCard {...props} />)
+  return renderCardElement(data(overrides))
+}
+
+/** Handle 需要 React Flow 上下文（真实使用场景始终位于 <ReactFlow> 内） */
+function renderCardElement(cardData: WorkflowGraphNodeData) {
+  return render(
+    <WorkflowNodeCard {...({ id: 'n1', data: cardData } as unknown as NodeProps<WorkflowNodeCardNode>)} />,
+    { wrapper: ReactFlowProvider },
+  )
 }
 
 beforeEach(() => {
@@ -85,33 +89,48 @@ describe('WorkflowNodeCard', () => {
     expect(screen.getByText('gpt-4o')).toBeInTheDocument()
   })
 
-  it('T-UI4-NC3 进行中动态行：思考中/工具调用/总结中/等待消息', () => {
+  it('T-WFI-NC1 运行中动态行恒为「正在思考」，不泄露注入文本', () => {
     mockActivity.value = { activity: { kind: 'thinking', text: '…思考结尾' }, tokenUsage: null }
     const { rerender } = renderCard({ status: 'RUNNING' })
-    expect(screen.getByTestId('node-live-activity-n1')).toHaveTextContent('思考中 …思考结尾')
+    const row = screen.getByTestId('node-live-activity-n1')
+    expect(row).toHaveTextContent('正在思考')
+    expect(row).not.toHaveTextContent('思考结尾')
 
     mockActivity.value = { activity: { kind: 'tool_call', text: 'Tool Call: 执行测试' }, tokenUsage: null }
     rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'RUNNING' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
-    expect(screen.getByTestId('node-live-activity-n1')).toHaveTextContent('Tool Call: 执行测试')
+    const toolRow = screen.getByTestId('node-live-activity-n1')
+    expect(toolRow).toHaveTextContent('正在思考')
+    expect(toolRow).not.toHaveTextContent('执行测试')
 
     mockActivity.value = { activity: { kind: 'text', text: '…总结' }, tokenUsage: null }
     rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'REWORK' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
-    expect(screen.getByTestId('node-live-activity-n1')).toHaveTextContent('总结中 …总结')
-
-    mockActivity.value = { activity: null, tokenUsage: null }
-    rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'RUNNING' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
-    expect(screen.getByTestId('node-live-activity-n1')).toHaveTextContent('等待消息')
+    const textRow = screen.getByTestId('node-live-activity-n1')
+    expect(textRow).toHaveTextContent('正在思考')
+    expect(textRow).not.toHaveTextContent('总结')
   })
 
-  it('T-UI4-NC4 完成态 token 行：有用量展示 token，无用量仅「已完成」', () => {
+  it('T-WFI-NC2 完成态 token 行：「已完成 · N tokens」且不含「消耗」并带说明 title', () => {
     mockActivity.value = { activity: null, tokenUsage: 3210 }
     const { rerender } = renderCard({ status: 'DONE' })
-    expect(screen.getByTestId('node-result-n1')).toHaveTextContent('已完成 · 消耗 3210 tokens')
+    const result = screen.getByTestId('node-result-n1')
+    expect(result).toHaveTextContent('已完成 · 3210 tokens')
+    expect(result).not.toHaveTextContent('消耗')
+    expect(result).toHaveAttribute('title', '该数值为会话当前上下文长度')
     expect(screen.queryByTestId('node-live-activity-n1')).not.toBeInTheDocument()
 
     mockActivity.value = { activity: null, tokenUsage: null }
     rerender(<WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'DONE' }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />)
     expect(screen.getByTestId('node-result-n1')).toHaveTextContent(/^已完成$/)
+  })
+
+  it('T-WFI-NC3 渲染 target(上)/source(下) Handle 且不拦截点击', () => {
+    const { container } = renderCard()
+    const target = container.querySelector('.react-flow__handle-top')
+    const source = container.querySelector('.react-flow__handle-bottom')
+    expect(target).toBeTruthy()
+    expect(source).toBeTruthy()
+    expect(target!.className).toContain('pointer-events-none')
+    expect(source!.className).toContain('pointer-events-none')
   })
 
   it('T-UI4-NC5 PR / 检查项 / 返工徽标按有无信息显隐', () => {
@@ -130,9 +149,7 @@ describe('WorkflowNodeCard', () => {
       lastSyncAt: '',
       lastSyncError: null,
     }
-    const { container } = render(
-      <WorkflowNodeCard {...({ id: 'n1', data: data({ status: 'DONE', prLinks: [link], hasCheckRun: true }) } as unknown as NodeProps<WorkflowNodeCardNode>)} />,
-    )
+    const { container } = renderCardElement(data({ status: 'DONE', prLinks: [link], hasCheckRun: true }))
     expect(container.querySelector('a[href="https://github.com/acme/repo/pull/1"]')).toBeTruthy()
     expect(screen.getByText('检查项')).toBeInTheDocument()
   })

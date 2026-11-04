@@ -310,6 +310,8 @@ export const workflowTypeDefs = `#graphql
     restartNode(instanceId: ID!, nodeId: ID!, agentConfig: AgentNodeConfigInput): WorkflowNode!
     deleteWorkflowInstance(id: ID!): Boolean!
     archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
+    # 修改工作流实例名称（trim 后 1~64 字符；已删除实例拒绝）
+    renameWorkflowInstance(id: ID!, name: String!): WorkflowInstance!
     # 写入/覆盖工作流追加提示词（同 key 覆盖）；系统键拒绝人工写入
     setWorkflowAdditionalPrompt(instanceId: ID!, key: String!, value: String!): WorkflowInstance!
     # 删除工作流追加提示词（不存在时幂等成功）；系统键拒绝人工删除

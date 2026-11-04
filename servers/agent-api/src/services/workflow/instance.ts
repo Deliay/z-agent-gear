@@ -27,6 +27,23 @@ const logger = rootLogger.child({ component: 'workflow-instance' });
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
+/** 实例改名长度上限（与云电脑/工作区命名口径一致） */
+export const WORKFLOW_NAME_MAX_LENGTH = 64;
+/** 实例改名非法名称统一文案（GraphQL/MCP 两个入口共用） */
+export const WORKFLOW_NAME_INVALID = 'invalid workflow name';
+
+/**
+ * 归一工作流实例名称：trim 后必须 1~64 字符，否则抛 `invalid workflow name`。
+ * 仅作用于改名入口，不改变实例化历史行为（见实现计划 D2）。
+ */
+export function normalizeWorkflowName(raw: string): string {
+  const name = typeof raw === 'string' ? raw.trim() : '';
+  if (!name || name.length > WORKFLOW_NAME_MAX_LENGTH) {
+    throw new Error(WORKFLOW_NAME_INVALID);
+  }
+  return name;
+}
+
 export interface InstantiateNodeInput {
   nodeKey: string;
   type?: 'HUMAN' | 'AI' | 'FLAG';
@@ -650,6 +667,37 @@ class WorkflowInstanceService {
     }
 
     return workflowEngine.transition(instanceId, nodeId, 'restart', { agentConfig });
+  }
+
+  /**
+   * 修改实例名称（GraphQL 与 MCP 共用）：
+   * - trim 后 1~64 字符，非法抛 `invalid workflow name`
+   * - 归属校验与归档/删除同口径（有工作区上下文按工作区，无上下文按创建者）
+   * - 已软删除实例拒绝，文案明确区分「不存在」与「已删除」
+   * - 已归档实例允许改名（PRD 仅禁止已删除实例，见实现计划 D3）
+   */
+  async rename(userId: string, id: string, rawName: string) {
+    const name = normalizeWorkflowName(rawName);
+    // 不过滤 deletedAt：需要区分「不存在/无权限」与「已删除」两种拒绝文案
+    const instance = await WorkflowInstance.findOne({ _id: id, ...actorFilter(userId) }).lean();
+    if (!instance) {
+      throw new Error('Workflow instance not found');
+    }
+    if (instance.deletedAt) {
+      throw new Error('Workflow instance is deleted');
+    }
+    const result = await WorkflowInstance.updateOne(
+      { _id: id, deletedAt: null },
+      { $set: { name } },
+    );
+    if (result.matchedCount === 0) {
+      throw new Error('Workflow instance is deleted');
+    }
+    const updated = await WorkflowInstance.findById(id).lean();
+    if (!updated) {
+      throw new Error('Workflow instance not found');
+    }
+    return updated;
   }
 
   /** 归档/取消归档实例：仅分组展示差异，不影响流程运转与节点会话 */

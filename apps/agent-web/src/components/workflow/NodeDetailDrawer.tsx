@@ -90,20 +90,6 @@ function NodeDetail({ instance, node, onOpenSession }: {
         </div>
       )}
 
-      {nodeArtifacts.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="text-xs font-medium text-muted-foreground">产物（{nodeArtifacts.length}）</div>
-          {nodeArtifacts.map((artifact) => (
-            <div key={artifact.title} className="min-w-0 rounded-md border bg-muted/30 p-2">
-              <div className="mb-0.5 text-xs wrap-anywhere font-medium text-foreground">{artifact.title}</div>
-              <div className="min-w-0 text-xs text-muted-foreground">
-                <MarkdownContent content={artifact.value} />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
       {nodeLinks.length > 0 && (
         <div className="space-y-1.5">
           <div className="text-xs font-medium text-muted-foreground">关联 Pull Request</div>
@@ -148,6 +134,20 @@ function NodeDetail({ instance, node, onOpenSession }: {
               {link.lastSyncError && (
                 <div className="mt-0.5 break-all text-xs text-destructive">{link.lastSyncError}</div>
               )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {nodeArtifacts.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-xs font-medium text-muted-foreground">产物（{nodeArtifacts.length}）</div>
+          {nodeArtifacts.map((artifact) => (
+            <div key={artifact.title} className="min-w-0 rounded-md border bg-muted/30 p-2">
+              <div className="mb-0.5 text-xs wrap-anywhere font-medium text-foreground">{artifact.title}</div>
+              <div className="min-w-0 text-xs text-muted-foreground">
+                <MarkdownContent content={artifact.value} />
+              </div>
             </div>
           ))}
         </div>

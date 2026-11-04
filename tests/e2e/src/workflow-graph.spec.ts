@@ -5,20 +5,23 @@ import {
   completeHumanNode,
   getPhase4Instance,
   injectSessionUpdate,
+  instantiatePhase4Workflow,
   nodeCard,
   seedInstance,
   seedPullRequestLink,
   setupPhase4Env,
   waitFor,
+  type InstantiateNodeInput,
   type Phase4Controller,
   type Phase4Instance,
 } from './phase4-helpers'
 
 /**
- * UI 优化四期 · 工作流图表（E2E-UI4G1~G10）
+ * UI 优化四期 · 工作流图表（E2E-UI4G1~G10）+ 工作流迭代（E2E-WFI1~WFI3）
  *
- * 覆盖：竖向布局与画布占满、主题跟随、状态整体配色、加粗箭头连线、
- * 人类节点就地操作、节点详情抽屉、进行中动态行、完成态 token、资源上图、徽标行。
+ * 覆盖：竖向布局与画布占满、主题跟随与卡片不透明、状态整体配色、加粗箭头连线、
+ * 人类节点就地操作、节点详情抽屉、进行中静态指示、完成态 token、资源上图、徽标行，
+ * 以及自动定位执行中节点与抽屉 PR 区块前置。
  */
 test.describe('工作流图表 UI 四期', () => {
   test.skip(!process.env.MONGODB_URI, 'requires MONGODB_URI for workflow fixtures')
@@ -88,7 +91,7 @@ test.describe('工作流图表 UI 四期', () => {
     env.controllers.forEach((controller) => controller.disconnect())
   })
 
-  test('E2E-UI4G2 卡片主题跟随（深色主题非纯白）', async ({ page }) => {
+  test('E2E-UI4G2 卡片主题跟随且背景不透明', async ({ page }) => {
     const { env, instance } = await setup(page, 'g2')
     await page.evaluate(() => localStorage.setItem('theme', 'dark'))
     await page.reload()
@@ -97,6 +100,9 @@ test.describe('工作流图表 UI 四期', () => {
     const card = page.locator('[data-testid^="workflow-node-card-"]').first()
     const darkColor = await card.evaluate((element) => getComputedStyle(element).backgroundColor)
     expect(darkColor).not.toBe('rgb(255, 255, 255)')
+    // 卡片底色不透明（禁止 rgba(..., alpha<1) 与 transparent）
+    expect(darkColor).toMatch(/^rgb\(/)
+    expect(darkColor).not.toMatch(/rgba\(.*,\s*0?\.\d+\)/)
 
     await page.evaluate(() => localStorage.setItem('theme', 'light'))
     await page.reload()
@@ -106,6 +112,7 @@ test.describe('工作流图表 UI 四期', () => {
       .first()
       .evaluate((element) => getComputedStyle(element).backgroundColor)
     expect(lightColor).not.toBe(darkColor)
+    expect(lightColor).toMatch(/^rgb\(/)
 
     env.controllers.forEach((controller) => controller.disconnect())
   })
@@ -135,14 +142,17 @@ test.describe('工作流图表 UI 四期', () => {
     env.controllers.forEach((controller) => controller.disconnect())
   })
 
-  test('E2E-UI4G4 连线加粗且带箭头', async ({ page }) => {
+  test('E2E-UI4G4 连线可见、加粗且带箭头', async ({ page }) => {
     const { env, instance } = await setup(page, 'g4')
     await openGraph(page, instance.id)
 
+    await expect(page.locator('.react-flow__edge')).toHaveCount(2)
     const edges = page.locator('.react-flow__edge-path')
     await expect(edges).toHaveCount(2)
     for (let index = 0; index < 2; index += 1) {
       const edge = edges.nth(index)
+      // 自定义节点缺 Handle 时边不渲染，这里同时守卫「可见」
+      await expect(edge).toBeVisible()
       const strokeWidth = await edge.evaluate((el) => Number(getComputedStyle(el).strokeWidth.replace('px', '')))
       expect(strokeWidth).toBeGreaterThanOrEqual(2)
       await expect(edge).toHaveAttribute('marker-end', /url\(#/)
@@ -199,19 +209,20 @@ test.describe('工作流图表 UI 四期', () => {
     env.controllers.forEach((controller) => controller.disconnect())
   })
 
-  test('E2E-UI4G7 进行中 AI 节点动态行（思考/工具调用/总结）', async ({ page }) => {
+  test('E2E-UI4G7 进行中 AI 节点动态行恒为「正在思考」', async ({ page }) => {
     const { env, instance } = await setup(page, 'g7')
     await openGraph(page, instance.id)
     const { sessionId, controller } = await advanceToAiRunning(page, env.token, instance, env.controllers[0])
     const exec = instance.nodes.find((node) => node.nodeKey === 'exec')!
     const liveRow = page.locator(`[data-testid="node-live-activity-${exec.id}"]`)
-    await expect(liveRow).toContainText('等待消息', { timeout: 15000 })
+    await expect(liveRow).toContainText('正在思考', { timeout: 15000 })
 
     injectSessionUpdate(controller, sessionId, {
       sessionUpdate: 'agent_thought_chunk',
       content: { type: 'text', text: `正在分析需求${'…'.repeat(3)}结尾片段` },
     })
-    await expect(liveRow).toContainText('思考中', { timeout: 10000 })
+    await expect(liveRow).toContainText('正在思考', { timeout: 10000 })
+    await expect(liveRow).not.toContainText('结尾片段')
 
     injectSessionUpdate(controller, sessionId, {
       sessionUpdate: 'tool_call',
@@ -224,18 +235,20 @@ test.describe('工作流图表 UI 四期', () => {
       toolCallId: 'tc-1',
       title: '执行 npm test',
     })
-    await expect(liveRow).toContainText('Tool Call: 执行 npm test', { timeout: 10000 })
+    await expect(liveRow).toContainText('正在思考', { timeout: 10000 })
+    await expect(liveRow).not.toContainText('执行 npm test')
 
     injectSessionUpdate(controller, sessionId, {
       sessionUpdate: 'agent_message_chunk',
       content: { type: 'text', text: '正在总结实现结果' },
     })
-    await expect(liveRow).toContainText('总结中', { timeout: 10000 })
+    await expect(liveRow).toContainText('正在思考', { timeout: 10000 })
+    await expect(liveRow).not.toContainText('正在总结实现结果')
 
     env.controllers.forEach((item) => item.disconnect())
   })
 
-  test('E2E-UI4G8 完成态 token：注入 usage 后完成节点显示消耗', async ({ page }) => {
+  test('E2E-UI4G8 完成态 token：注入 usage 后完成节点显示「已完成 · N tokens」', async ({ page }) => {
     const { env, instance } = await setup(page, 'g8')
     await openGraph(page, instance.id)
     const { sessionId, controller, start } = await advanceToAiRunning(page, env.token, instance, env.controllers[0])
@@ -253,10 +266,9 @@ test.describe('工作流图表 UI 四期', () => {
     })
     expect(result.isError).toBe(false)
 
-    await expect(page.locator(`[data-testid="node-result-${exec.id}"]`)).toContainText(
-      '已完成 · 消耗 4321 tokens',
-      { timeout: 20000 },
-    )
+    const resultRow = page.locator(`[data-testid="node-result-${exec.id}"]`)
+    await expect(resultRow).toContainText('已完成 · 4321 tokens', { timeout: 20000 })
+    await expect(resultRow).not.toContainText('消耗')
 
     env.controllers.forEach((item) => item.disconnect())
   })
@@ -331,6 +343,154 @@ test.describe('工作流图表 UI 四期', () => {
     const execCard = page.locator(nodeCard(exec.id))
     await expect(execCard.getByRole('link', { name: 'PR' })).toHaveCount(0)
     await expect(execCard.getByRole('link', { name: '检查项' })).toHaveCount(0)
+
+    env.controllers.forEach((controller) => controller.disconnect())
+  })
+})
+
+/**
+ * 工作流迭代 · 图表视图自动定位与抽屉排序（E2E-WFI1~WFI3）
+ */
+test.describe('工作流迭代 · 图表自动定位与抽屉排序', () => {
+  test.skip(!process.env.MONGODB_URI, 'requires MONGODB_URI for workflow fixtures')
+
+  async function openGraph(page: Page, instanceId: string) {
+    await page.goto(`/workflows/${instanceId}`)
+    await page.getByRole('button', { name: '图表' }).click()
+    await expect(page.locator('.react-flow')).toBeVisible({ timeout: 15000 })
+  }
+
+  /** 线性 7 节点图（人类节点，dependsOn 形成单链） */
+  function sevenNodeChain(): InstantiateNodeInput[] {
+    return Array.from({ length: 7 }, (_, index) => ({
+      nodeKey: `n${index + 1}`,
+      type: 'HUMAN',
+      name: `节点${index + 1}`,
+      stage: '阶段',
+      dependsOn: index === 0 ? [] : [`n${index}`],
+      requiresWorktree: false,
+    }))
+  }
+
+  async function setupSeven(page: Page, tag: string) {
+    const env = await setupPhase4Env(page, tag, { withInstances: false })
+    const controller = env.controllers[0]
+    const workspace = env.workspaces[0]
+    const instance = await instantiatePhase4Workflow(
+      page,
+      env.token,
+      controller.controllerId,
+      workspace.id,
+      `p4-${tag}-七节点-${Date.now().toString(36)}`,
+      sevenNodeChain(),
+    )
+    await loginViaUI(page, env.username)
+    return { env, instance }
+  }
+
+  /** 卡片中心与画布中心的相对偏移（比例） */
+  async function centerOffset(page: Page, nodeId: string): Promise<{ dx: number; dy: number }> {
+    const canvas = await page.locator('.react-flow').boundingBox()
+    const card = await page.locator(nodeCard(nodeId)).boundingBox()
+    expect(canvas).toBeTruthy()
+    expect(card).toBeTruthy()
+    return {
+      dx: Math.abs(card!.x + card!.width / 2 - (canvas!.x + canvas!.width / 2)) / canvas!.width,
+      dy: Math.abs(card!.y + card!.height / 2 - (canvas!.y + canvas!.height / 2)) / canvas!.height,
+    }
+  }
+
+  test('E2E-WFI1 有执行中节点时居中，视野容纳前后各 2 卡片', async ({ page }) => {
+    const { env, instance } = await setupSeven(page, 'wfi1')
+    const [n1, n2, n3, n4, n5, n6, n7] = instance.nodes
+    await seedInstance(instance.id, { 'nodes.3.status': 'RUNNING' })
+    await openGraph(page, instance.id)
+
+    // 执行中节点（n4）位于画布中心 ±15%
+    await expect
+      .poll(async () => {
+        const offset = await centerOffset(page, n4.id)
+        return offset.dx < 0.15 && offset.dy < 0.15
+      }, { timeout: 15000, message: '执行中节点居中' })
+      .toBe(true)
+
+    const canvas = (await page.locator('.react-flow').boundingBox())!
+    const withinCanvas = async (nodeId: string) => {
+      const box = await page.locator(nodeCard(nodeId)).boundingBox()
+      if (!box) return false
+      // 与画布可见区域有非空交集
+      return (
+        box.y + box.height > canvas.y &&
+        box.y < canvas.y + canvas.height &&
+        box.x + box.width > canvas.x &&
+        box.x < canvas.x + canvas.width
+      )
+    }
+
+    // 前后各 2 个卡片可见
+    expect(await withinCanvas(n2.id)).toBe(true)
+    expect(await withinCanvas(n3.id)).toBe(true)
+    expect(await withinCanvas(n5.id)).toBe(true)
+    expect(await withinCanvas(n6.id)).toBe(true)
+    // 首尾节点被裁出视口
+    expect(await withinCanvas(n1.id)).toBe(false)
+    expect(await withinCanvas(n7.id)).toBe(false)
+
+    env.controllers.forEach((controller) => controller.disconnect())
+  })
+
+  test('E2E-WFI2 执行中节点切换后视图自动重新定位', async ({ page }) => {
+    const { env, instance } = await setupSeven(page, 'wfi2')
+    const [, , n3, n4] = instance.nodes
+    await seedInstance(instance.id, { 'nodes.3.status': 'RUNNING' })
+    await openGraph(page, instance.id)
+
+    await expect
+      .poll(async () => (await centerOffset(page, n4.id)).dy < 0.15, { timeout: 15000 })
+      .toBe(true)
+
+    // 切换执行中节点：n4 → n3（5s 轮询后视图跟随）
+    await seedInstance(instance.id, {
+      'nodes.3.status': 'DONE',
+      'nodes.2.status': 'RUNNING',
+    })
+    await expect
+      .poll(async () => (await centerOffset(page, n3.id)).dy < 0.15, { timeout: 20000 })
+      .toBe(true)
+
+    env.controllers.forEach((controller) => controller.disconnect())
+  })
+
+  test('E2E-WFI3 节点详情抽屉中关联 PR 区块位于产物之前', async ({ page }) => {
+    const { env, instance } = await setupSeven(page, 'wfi3')
+    const [n1] = instance.nodes
+    await seedInstance(instance.id, {
+      [`blackboard.${n1.id}-节点1-产物-说明`]: '节点产物内容',
+    })
+    await seedPullRequestLink(instance.id, {
+      nodeId: n1.id,
+      nodeKey: 'n1',
+      pullRequestId: 'acme/repo#77',
+      prUrl: 'https://github.com/acme/repo/pull/77',
+    })
+
+    await openGraph(page, instance.id)
+    await page.locator(nodeCard(n1.id)).getByRole('button', { name: '节点1 详情' }).click()
+
+    const drawer = page.getByTestId('node-detail-drawer')
+    await expect(drawer).toBeVisible()
+    await expect(drawer).toContainText('关联 Pull Request')
+    await expect(drawer).toContainText('产物')
+
+    const prBeforeArtifact = await drawer.evaluate((element) => {
+      const titles = Array.from(element.querySelectorAll('div'))
+        .filter((el) => el.className.includes('font-medium'))
+        .map((el) => el.textContent ?? '')
+      const prIndex = titles.findIndex((text) => text.includes('关联 Pull Request'))
+      const artifactIndex = titles.findIndex((text) => /^产物（\d+）$/.test(text.trim()))
+      return prIndex >= 0 && artifactIndex >= 0 && prIndex < artifactIndex
+    })
+    expect(prBeforeArtifact).toBe(true)
 
     env.controllers.forEach((controller) => controller.disconnect())
   })

@@ -163,7 +163,7 @@ async rename(userId: string, id: string, rawName: string) {
 |------|------|
 | `apps/agent-web/src/components/workflow/graph/WorkflowNodeCard.tsx` | ① 删除 `activityText` 函数；② 动态行改为 `<Loader2 className="size-3 shrink-0 animate-spin" /> + <span>正在思考</span>`，保留 `data-testid={node-live-activity-${nodeId}}`，不再渲染 `activity.text`；③ 完成态文案改 `已完成 · ${tokenUsage} tokens`，容器加 `title="该数值为会话当前上下文长度"`；④ 从 `@xyflow/react` 引入 `Handle, Position`，在根 `div` 内渲染 `<Handle type="target" position={Position.Top} isConnectable={false} className="...pointer-events-none/透明" />` 与 `<Handle type="source" position={Position.Bottom} ... />` |
 | `apps/agent-web/src/components/workflow/WorkflowNodeTreeConstants.ts` | `NODE_STATUS_VISUAL[*].tint` 七个状态统一改为 `'bg-card'`（不透明语义色），`spine`/`badge`/`NODE_STATUS_COLOR_VAR` 不变 |
-| `apps/agent-web/src/components/workflow/graph/__tests__/WorkflowNodeCard.test.tsx` | T-UI4-NC3 改写为「动态行恒为『正在思考』」：注入 thinking/tool_call/text 三种 activity 时文案不变且**不包含**注入文本；T-UI4-NC4 断言「已完成 · 3210 tokens」且不含「消耗」、`title` 存在；新增 T-WFI-NC9 断言渲染出 `.react-flow__handle-top`（target）与 `.react-flow__handle-bottom`（source） |
+| `apps/agent-web/src/components/workflow/graph/__tests__/WorkflowNodeCard.test.tsx` | T-WFI-NC1（原 T-UI4-NC3 改写）「动态行恒为『正在思考』」：注入 thinking/tool_call/text 三种 activity 时文案不变且**不包含**注入文本；T-WFI-NC2（原 T-UI4-NC4 改写）断言「已完成 · 3210 tokens」且不含「消耗」、`title` 存在；新增 T-WFI-NC3 断言渲染出 `.react-flow__handle-top`（target）与 `.react-flow__handle-bottom`（source）且带 `pointer-events-none` |
 | `apps/agent-web/src/components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts` | 断言每个状态 `tint === 'bg-card'`，且不含 `/[0-9]+\/`（无透明度后缀） |
 
 Handle 实现要点：
@@ -251,10 +251,10 @@ useEffect(() => {
 
 | 文件 | 变更 |
 |------|------|
-| `tests/e2e/src/workflow-graph.spec.ts` | ① **G2** 补「背景不透明」断言：卡片 `backgroundColor` 为 `rgb(...)`（禁止 `rgba(..., <1)`）；② **G4** 保留 strokeWidth/marker-end，补 `toBeVisible()` 与 `.react-flow__edge` 数量 2；③ **G7** 改写为「动态行恒为『正在思考』」：注入 thinking/tool_call/text 后文案不变，负向断言不含注入文本（替代原「思考中/Tool Call/总结中」）；④ **G8** 文案改「已完成 · 4321 tokens」并负向断言不含「消耗」；⑤ 新增 **G11 自动定位窗口**（7 节点实例，中间节点 RUNNING）：执行中卡片中心落在画布中心 ±15% 内、前 2/后 2 可见、首尾节点被裁出视口；⑥ 新增 **G12 执行中切换重新定位**（直写状态从 n3 RUNNING 切到 n4 RUNNING，视图中心跟随）；⑦ 新增 **G13 抽屉 PR 前置**（同时 seed PR 与产物，断言「关联 Pull Request」区块在「产物」之前） |
-| `tests/api/src/agent-api/workflow.test.ts` | 新增 describe `Workflow Instance Rename (A35)`：A35a GraphQL 改名成功（trim 落库、`workflowInstance`/`workflowInstances` 均返回新名）；A35b 空白与 65 字符返回 `invalid workflow name` 且名称不变；A35c 他人实例 `Workflow instance not found`；A35d 软删实例 `Workflow instance is deleted`；A35e 节点会话 MCP `renameCurrentWorkflow` 成功改名（`callWorkflowTool`） |
-| `tests/api/AGENTS.md` | 工作流表格补 A35 行（GraphQL + MCP 双入口、非法名称、已删除拒绝） |
-| `tests/e2e/AGENTS.md` | Workflow Graph 表格更新 G2/G4/G7/G8 口径，新增 G11/G12/G13 |
+| `tests/e2e/src/workflow-graph.spec.ts` | ① **G2** 补「背景不透明」断言：卡片 `backgroundColor` 为 `rgb(...)`（禁止 `rgba(..., <1)`）；② **G4** 保留 strokeWidth/marker-end，补 `toBeVisible()` 与 `.react-flow__edge` 数量 2；③ **G7** 改写为「动态行恒为『正在思考』」：注入 thinking/tool_call/text 后文案不变，负向断言不含注入文本（替代原「思考中/Tool Call/总结中」）；④ **G8** 文案改「已完成 · 4321 tokens」并负向断言不含「消耗」；⑤ 新增 **E2E-WFI1 自动定位窗口**（7 节点实例，中间节点 RUNNING）：执行中卡片中心落在画布中心 ±15% 内、前 2/后 2 可见、首尾节点被裁出视口；⑥ 新增 **E2E-WFI2 执行中切换重新定位**（直写状态：初始 nodes.3 [n4] RUNNING，切换为 nodes.2 [n3] RUNNING 且 n4 DONE，视图中心跟随 n3）；⑦ 新增 **E2E-WFI3 抽屉 PR 前置**（同时 seed PR 与产物，断言「关联 Pull Request」区块在「产物」之前） |
+| `tests/api/src/agent-api/workflow.test.ts` | 新增 describe `Workflow Instance Rename (A51-A55)`（A35-A50 已被「工作流优化特性」套件占用，故编号顺延）：A51 GraphQL 改名成功（trim 落库、`workflowInstance`/`workflowInstances` 均返回新名）；A52 空白与 65 字符返回 `invalid workflow name` 且名称不变；A53 他人实例 `Workflow instance not found`；A54 软删实例 `Workflow instance is deleted`；A55 节点会话 MCP `renameCurrentWorkflow` 成功改名（`callWorkflowTool`） |
+| `tests/api/AGENTS.md` | 工作流表格补 A51-A55 行（GraphQL + MCP 双入口、非法名称、已删除拒绝） |
+| `tests/e2e/AGENTS.md` | Workflow Graph 表格更新 G2/G4/G7/G8 口径，新增 E2E-WFI1/WFI2/WFI3 |
 | `servers/agent-api/AGENTS.md` | 工作流段补「实例改名」：`renameWorkflowInstance` + `agent-workflow-tools.renameCurrentWorkflow`，共用 `normalizeWorkflowName` 与软删除门禁 |
 | `apps/agent-web/AGENTS.md` | 新增「工作流迭代」小节：详情页改名入口、卡片动态行静态化与 token 文案口径、Handle 连接点（勿删）、tint `bg-card`、图表自动定位窗口与防抖动约束（effect 依赖仅执行中集合） |
 | `docs/engineering/AGENTS.md` | 「实现计划」索引登记本文件 |
@@ -290,11 +290,11 @@ useEffect(() => {
 
 | 编号 | 文件 | 断言 |
 |------|------|------|
-| A35a | `tests/api/src/agent-api/workflow.test.ts` | GraphQL `renameWorkflowInstance` 成功，`workflowInstance`/`workflowInstances` 返回新名 |
-| A35b | 同上 | 空白 / 65 字符 → `invalid workflow name`，名称不变 |
-| A35c | 同上 | 他人实例 → `Workflow instance not found` |
-| A35d | 同上 | 软删实例 → `Workflow instance is deleted` |
-| A35e | 同上 | 节点会话 MCP `renameCurrentWorkflow` 成功改名 |
+| A51 | `tests/api/src/agent-api/workflow.test.ts` | GraphQL `renameWorkflowInstance` 成功，`workflowInstance`/`workflowInstances` 返回新名 |
+| A52 | 同上 | 空白 / 65 字符 → `invalid workflow name`，名称不变 |
+| A53 | 同上 | 他人实例 → `Workflow instance not found` |
+| A54 | 同上 | 软删实例 → `Workflow instance is deleted` |
+| A55 | 同上 | 节点会话 MCP `renameCurrentWorkflow` 成功改名 |
 
 ### 4.3 E2E
 
@@ -413,7 +413,7 @@ cd tests/e2e && BASE_URL=<agent-web> API_URL=<agent-api>/graphql \
 ### 8.5 Phase 8（测试与文档）
 
 - [ ] agent-api / agent-web 单测与组件测试全绿，lint 通过
-- [ ] `tests/api` 工作流套件（含 A35）通过
+- [ ] `tests/api` 工作流套件（含 A51-A55）通过
 - [ ] `tests/e2e` 工作流图表套件（含新增 WFI 用例）通过，`workflow.spec.ts` / `sidebar-phase4.spec.ts` 零回归
 - [ ] 契约、`servers/agent-api/AGENTS.md`、`apps/agent-web/AGENTS.md`、`tests/api/AGENTS.md`、`tests/e2e/AGENTS.md`、`docs/engineering/AGENTS.md` 已同步
 

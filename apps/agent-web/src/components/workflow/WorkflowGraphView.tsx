@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@apollo/client/react'
 import {
   ReactFlow,
@@ -9,6 +9,7 @@ import {
   useEdgesState,
   type Edge,
   type Node,
+  type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { NODE_STATUS_COLOR_VAR } from './WorkflowNodeTreeConstants'
@@ -17,7 +18,12 @@ import type { GetAcpServerOptionsQuery } from '@/graphql/types'
 import type { WorkflowInstanceData } from '@/graphql/workflow'
 import WorkflowNodeCard from './graph/WorkflowNodeCard'
 import { ResourceChips } from './graph/ResourceChip'
-import { buildGraphViewModel, type GraphResource, type WorkflowGraphNode } from './graph/graph-layout'
+import {
+  buildGraphViewModel,
+  pickFocusWindow,
+  type GraphResource,
+  type WorkflowGraphNode,
+} from './graph/graph-layout'
 import type { NodeDetailTarget } from './NodeDetailDrawer'
 
 interface WorkflowGraphViewProps {
@@ -86,6 +92,44 @@ export default function WorkflowGraphView({
     setEdges(viewModel.edges)
   }, [initialNodes, viewModel.edges, setNodes, setEdges])
 
+  // ---- 自动定位执行中节点（PRD 功能点 7）----
+  const flowRef = useRef<ReactFlowInstance<WorkflowGraphNode, Edge> | null>(null)
+  const [rfReady, setRfReady] = useState(false)
+  // 节点列表用 ref 读取：5s 轮询每轮重建节点对象，若进入依赖会导致反复 fitView（抖动）
+  const nodesRef = useRef(initialNodes)
+  useEffect(() => {
+    nodesRef.current = initialNodes
+  }, [initialNodes])
+  const firstFocusRef = useRef(true)
+  const activeIds = initialNodes
+    .filter((node) => node.data.status === 'RUNNING' || node.data.status === 'REWORK')
+    .map((node) => node.id)
+  // 仅「执行中节点集合」变化才重新定位（防抖动：手动平移/缩放期间不被打断）
+  const activeKey = activeIds.join(',')
+
+  useEffect(() => {
+    if (!rfReady || !flowRef.current) return
+    if (activeIds.length === 0) return
+    const windowIds = pickFocusWindow(nodesRef.current, activeIds)
+    if (windowIds.length === 0) return
+    const raf = requestAnimationFrame(() => {
+      flowRef.current?.fitView({
+        nodes: windowIds.map((id) => ({ id })),
+        padding: 0.2,
+        // 首屏直接定位避免动画闪烁，执行中切换保留 300ms 平滑过渡
+        duration: firstFocusRef.current ? 0 : 300,
+      })
+      firstFocusRef.current = false
+    })
+    return () => cancelAnimationFrame(raf)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 依赖仅执行中集合，节点对象变化不触发（D9）
+  }, [rfReady, activeKey])
+
+  const handleInit = useCallback((instance: ReactFlowInstance<WorkflowGraphNode, Edge>) => {
+    flowRef.current = instance
+    setRfReady(true)
+  }, [])
+
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
       onOpenDetail?.({ type: 'node', nodeId: node.id })
@@ -117,6 +161,7 @@ export default function WorkflowGraphView({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
+        onInit={handleInit}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         minZoom={0.2}

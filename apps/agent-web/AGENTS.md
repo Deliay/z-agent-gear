@@ -172,3 +172,16 @@ pnpm run preview  # Preview production build
 - **共享资源来源与只读收敛**：`lib/workspace-source.ts` + `hooks/useResourceSource.ts` 判定本工作区/全局工作区/其他工作区；供应商/模型/GitHub 绑定展示 `ResourceSourceBadge`。普通上下文的全局工作区资源隐藏编辑/删除；全局工作区 + developer（`Workspace.readOnly`）整体只读（隐藏添加/编辑/解绑入口；成员级 Git 提交人设置不受影响）。旧数据未携带 `workspaceId` 时保持升级前行为（无徽标、可编辑）。
 - **Git 区块**：提交人设置为成员级（键 `userId`），无 `source`/`readOnly` 口径，只读工作区不影响保存。
 - **测试入口**：`stores/__tests__/workspace.test.tsx`、`components/__tests__/WorkspaceSwitcher.test.tsx`、`pages/__tests__/WorkspacePage.test.tsx`、`pages/__tests__/TenantMembersPage.test.tsx`、`lib/__tests__/workspace-source.test.ts`、`components/settings/__tests__/ProviderSection.readonly.test.tsx`。
+
+## 工作流迭代（实例改名 / 卡片展示 / 图表自动定位）
+
+> 纯前端展示层 + 一处新 mutation 调用；计划见 `docs/engineering/plan/20261103-feat-workflow-iteration.md`。
+
+- **详情页改名入口**：`pages/WorkflowInstancePage.tsx` 标题 `h1` 后为「重命名」图标按钮（`aria-label="重命名实例"`），打开 `Dialog` 并预填当前名称；输入框 `aria-label="实例名称"`，前端校验 trim 后 1~64（提示「名称不能为空」/「名称最多 64 个字符」，非法时禁用「保存」），服务端文案（`invalid workflow name` 等）原样展示且对话框保持打开；成功 `toast.success('实例名称已更新')` 并关闭。mutation `RENAME_WORKFLOW_INSTANCE`（`graphql/workflow.ts`）返回 `{id,name}` 由 Apollo 按 id 归一化，标题/侧边栏随 `GET_WORKFLOW_INSTANCE`（5s）/`HOME_OVERVIEW`（15s）轮询兜底刷新。
+- **卡片动态行静态化**：`graph/WorkflowNodeCard.tsx` 的进行中动态行**恒为 spinner + 「正在思考」**，不再渲染思考/工具/文本正文（`activityText` 已删除）；`useNodeSessionActivity` 连接保留（`tokenUsage` 仍用于完成态，且能在完成前捕获最后一条 `usage_update`），卡片忽略 `activity.text`。
+- **token 文案口径**：完成态为 `已完成 · ${tokenUsage} tokens`（**不含「消耗」**），容器 `title="该数值为会话当前上下文长度"`；无用量仅「已完成」。
+- **Handle（勿删）**：卡片顶部 `Handle type="target" position={Position.Top}`、底部 `type="source" position={Position.Bottom}`，视觉透明（`!size-1 !bg-transparent !border-0`）+ `isConnectable={false}` + `pointer-events-none`。**缺 Handle 时 React Flow 无法解析连接点，依赖连线不渲染**（E2E-UI4G4 守卫）；`pointer-events-none` 保证卡片点击/人类节点操作不被拦截。组件测试需用 `ReactFlowProvider` 包裹。
+- **卡片不透明**：`WorkflowNodeTreeConstants.NODE_STATUS_VISUAL[*].tint` 七态统一 `bg-card`（无透明度后缀），状态语义只由 `spine`/`badge` 承载；`NODE_STATUS_COLOR_VAR` 不变。仅图表卡片消费 tint，列表视图零影响。
+- **详情抽屉排序**：`NodeDetailDrawer` 中「关联 Pull Request」区块在「产物」之前（其余结构不变）。
+- **图表自动定位**：`graph/graph-layout.ts` 的纯函数 `pickFocusWindow(nodes, activeIds, before=2, after=2)` 按 `position.y` 升序（同 y 按 x）定位**第一个**执行中节点，返回「前 2 + 自身 + 后 2」id 窗口（越界收敛，无执行中返回 `[]`）。`WorkflowGraphView` 用 `onInit` 保存 React Flow 实例并置 `rfReady`，effect **仅依赖 `[rfReady, activeKey]`**（执行中 id 集合拼接；节点列表经 ref 读取），首次 `duration:0`、切换 `duration:300`；无执行中节点不主动 `fitView`（保留整图首屏）。**禁止把 `nodes`/`instance` 加入该 effect 依赖**：5s 轮询每轮重建节点对象，会导致反复 fitView 抖动。
+- **测试入口**：`pages/__tests__/WorkflowInstancePage.test.tsx`（T-RNWEB1~4）、`components/workflow/graph/__tests__/WorkflowNodeCard.test.tsx`（T-WFI-NC1~3）、`components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-WFI-TC1）、`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-WFI-SH1）、`components/workflow/graph/__tests__/graph-layout.test.ts`（T-WFI1~5）、`components/workflow/__tests__/WorkflowGraphView.test.tsx`（T-WFI-V1~4，mock React Flow 断言窗口 fitView 与防抖动）、`tests/e2e/src/workflow-graph.spec.ts`（E2E-WFI1~3）。
