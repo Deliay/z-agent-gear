@@ -144,7 +144,7 @@ export class MongoStorageOperationRepository implements StorageOperationReposito
   async create(
     input: CreateStorageOperationInput,
   ): Promise<{ created: boolean; operation: StorageOperationEntity }> {
-    if (!mongoose.isValidObjectId(input.operationId)) {
+    if (!/^[a-f0-9]{24}$/.test(input.operationId)) {
       throw new InvalidOperationIdError(input.operationId);
     }
     const existing = await this.findById(input.operationId, input.storageId);
@@ -291,7 +291,7 @@ export class InMemoryStorageOperationRepository implements StorageOperationRepos
   async create(
     input: CreateStorageOperationInput,
   ): Promise<{ created: boolean; operation: StorageOperationEntity }> {
-    if (!/^[a-f0-9]{24}$/i.test(input.operationId)) {
+    if (!/^[a-f0-9]{24}$/.test(input.operationId)) {
       throw new InvalidOperationIdError(input.operationId);
     }
     const existing = this.store.get(input.operationId);

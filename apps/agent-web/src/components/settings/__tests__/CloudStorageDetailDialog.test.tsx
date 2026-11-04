@@ -281,6 +281,7 @@ describe('CloudStorageDetailDialog', () => {
     render(<CloudStorageDetailDialog open storageId="st-1" onClose={vi.fn()} />)
 
     for (const [serverMessage, expected] of [
+      ['storage is not restorable', '当前状态不可复原到归档'],
       ['storage has no archive', '当前没有可用的归档'],
       ['storage is restoring', '复原仍在进行中，请稍后重试'],
       ['not allowed to restore storage', '没有复原该云存储的权限'],

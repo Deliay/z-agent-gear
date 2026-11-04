@@ -689,6 +689,15 @@ describe('StorageService 巡检', () => {
     await service.drainArchiveTasks();
     expect(result.retried).toBe(0);
     expect((await repo.findById(container.id))?.storageArchiveStatus).toBeNull();
+
+    // 显式 startArchive（手动重试）不受跳过标记限制。
+    autoComplete(client, { app: 'zag-archive', log: 'ZAG_ARCHIVE_RESULT={"usageBytes":9}' });
+    await service.startArchive(container.id, {
+      archiveId: 'manual-archive',
+      fileName: FILE_NAME,
+    });
+    await service.drainArchiveTasks();
+    expect((await repo.findById(container.id))?.storageArchiveStatus).toBe('succeeded');
   });
 });
 
@@ -852,5 +861,78 @@ describe('存储级归档/复原（T-AR4 / T-RS4 / T-OP）', () => {
         deleteArchive: true,
       }),
     ).rejects.toBeInstanceOf(OperationRunningError);
+  });
+
+  it('T-OP1a: pending/running 超 ARCHIVE_TIMEOUT_MS → failed + FAILED 回调', async () => {
+    const { client, storageManager, service, archiveCalls, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    await operationRepo.create({
+      operationId: OPERATION_ID,
+      storageId: STORAGE_ID,
+      workspaceId: WORKSPACE_ID,
+      type: 'archive',
+      archiveId: 'archive-timeout',
+      fileName: FILE_NAME,
+      startedAt: new Date(Date.now() - 60_000),
+    });
+
+    const result = await service.reconcileStorageOperations(Date.now());
+
+    expect(result.failed).toBe(1);
+    expect((await operationRepo.findById(OPERATION_ID))?.status).toBe('failed');
+    expect((await operationRepo.findById(OPERATION_ID))?.failureReason).toBe('操作超时');
+    expect(archiveCalls.at(-1)!.payload.status).toBe('FAILED');
+    expect((await operationRepo.findById(OPERATION_ID))?.callbackDeliveredAt).not.toBeNull();
+  });
+
+  it('T-OP1b: 本进程无执行任务（findActive 命中且未超时）→ 重跑并收口', async () => {
+    const { client, storageManager, service, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    autoComplete(client, {
+      app: 'zag-archive',
+      log: 'ZAG_ARCHIVE_RESULT={"usageBytes":7}',
+    });
+    await operationRepo.create({
+      operationId: OPERATION_ID,
+      storageId: STORAGE_ID,
+      workspaceId: WORKSPACE_ID,
+      type: 'archive',
+      archiveId: 'archive-resume',
+      fileName: FILE_NAME,
+      startedAt: new Date(),
+    });
+
+    const result = await service.reconcileStorageOperations(Date.now());
+    expect(result.retried).toBe(1);
+    await service.drainArchiveTasks();
+
+    const operation = await operationRepo.findById(OPERATION_ID);
+    expect(operation?.status).toBe('succeeded');
+    expect(operation?.usageBytes).toBe(7);
+  });
+
+  it('T-OP1c: 终态未送达回调 → 重投一次并写 callbackDeliveredAt，不再重投', async () => {
+    const { client, storageManager, service, archiveCalls, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    await operationRepo.create({
+      operationId: OPERATION_ID,
+      storageId: STORAGE_ID,
+      workspaceId: WORKSPACE_ID,
+      type: 'archive',
+      archiveId: 'archive-repost',
+      fileName: FILE_NAME,
+      startedAt: new Date(),
+    });
+    await operationRepo.markRunning(OPERATION_ID);
+    await operationRepo.markSucceeded(OPERATION_ID, { usageBytes: 11 });
+
+    const first = await service.reconcileStorageOperations(Date.now());
+    expect(first.recalled).toBe(1);
+    expect(archiveCalls).toHaveLength(1);
+    expect((await operationRepo.findById(OPERATION_ID))?.callbackDeliveredAt).not.toBeNull();
+
+    const second = await service.reconcileStorageOperations(Date.now());
+    expect(second.recalled).toBe(0);
+    expect(archiveCalls).toHaveLength(1);
   });
 });

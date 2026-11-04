@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { cloudStorageErrorMessage } from '@/lib/cloud-storage'
 
 interface ForkCloudStorageDialogProps {
   open: boolean
@@ -27,25 +28,6 @@ interface ForkCloudStorageDialogProps {
 }
 
 const NAME_MAX = 64
-
-const SERVER_ERROR_MESSAGES: Record<string, string> = {
-  'storage name is required': '请输入名称',
-  'storage name is too long': '名称最多 64 个字符',
-  'storage name already exists': '当前工作区已存在同名云存储',
-  'storage is not forkable': '源存储没有可用归档，暂不可 fork',
-  'storage is restoring': '有正在进行的复原操作，请稍后重试',
-  'insufficient balance': '账户余额不足，请联系管理员充值后重试',
-  'global workspace is read-only': '全局工作区为只读，无法创建云存储',
-  'storage feature is disabled': '云存储功能未启用',
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    const message = error.message.trim()
-    return SERVER_ERROR_MESSAGES[message] ?? message
-  }
-  return 'fork 失败，请稍后重试'
-}
 
 /**
  * fork 云存储：名称自定 + 容量与源一致（只读）+ 全价报价；创建成功即开始计费。
@@ -103,7 +85,7 @@ export default function ForkCloudStorageDialog({
       onForked(created)
       onClose()
     } catch (err) {
-      setError(getErrorMessage(err))
+      setError(cloudStorageErrorMessage(err, 'fork 失败，请稍后重试'))
     } finally {
       setSubmitting(false)
     }

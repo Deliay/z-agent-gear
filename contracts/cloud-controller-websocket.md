@@ -582,6 +582,7 @@ DELETE /internal/storages/:storageId
 ```
 
 - 仍有活跃容器引用（`cloudcontainers.storageId` + 活跃状态）→ `409 STORAGE_IN_USE`；PVC 不存在按成功处理。
+- 台账仍有 `pending/running` 存储级操作 → `409 OPERATION_RUNNING`。
 
 **响应 200：** `{ "storageId": "...", "deleted": true }`
 
@@ -590,7 +591,7 @@ POST /internal/storages/:storageId/cleanup
 { "workspaceId": "<id>", "deleteArchive": true }
 ```
 
-- 删除源 PVC（若存在）并在 `deleteArchive=true` 时删除归档目录 `/archive/<workspaceId>/<storageId>/`；归档进行中 → `409 ARCHIVE_RUNNING`。
+- 删除源 PVC（若存在）并在 `deleteArchive=true` 时删除归档目录 `/archive/<workspaceId>/<storageId>/`；归档进行中 → `409 ARCHIVE_RUNNING`；台账有进行中存储级操作 → `409 OPERATION_RUNNING`。
 - 与归档/恢复/用量共用按工作区归档 PVC 的串行锁。
 
 **响应 200：** `{ "accepted": true }`
@@ -682,7 +683,7 @@ Content-Type: application/json
 - 同一存储仍有活跃容器（`storageId` + 非终态）→ 409 `STORAGE_IN_USE`。
 
 **响应 200：** `{ "accepted": true, "operationId": "<opId>" }`
-**错误：** `404 STORAGE_NOT_FOUND`、`409 STORAGE_IN_USE`、`409 OPERATION_RUNNING`、`400 INVALID_BODY`。
+**错误：** `404 STORAGE_NOT_FOUND`（源 PVC 不存在）、`409 STORAGE_IN_USE`、`409 OPERATION_RUNNING`、`400 INVALID_BODY`。
 
 ### A.2.12 存储级复原（复原到归档 / fork 共用）
 
@@ -698,10 +699,10 @@ Content-Type: application/json
 - `operationId` 必填 24 位 hex；`workspaceId` 必填；`archivePath` 校验复用 `ARCHIVE_PATH_PATTERN`（拒绝 `..`）；`sizeGi` 1~30 整数；`storageClass` 可选，校验同 `STORAGE_CLASS_PATTERN`。
 - 执行：删除目标 PVC（存在时等待真正消失）→ 按 `sizeGi`/`storageClass` ensure 重建 → restore Job（archiver `MODE=restore`，归档卷 RO + 目标卷 RW，`RESTORE_FILE=archivePath`），校验 Pod 日志 `ZAG_RESTORE_DONE` 标记行。fork 时 `:storageId` 为**新**存储（PVC 尚不存在时跳过删除直接重建）。
 - 失败不删除归档；目标 PVC 可能为半恢复态，重试时整体删除重建。
-- 幂等/互斥同 A.2.11。
+- 幂等/互斥同 A.2.11。目标存储 PVC 允许不存在（fork 新存储/复原先删后建）；存储级记录存在性由 agent-api 权威校验，端点不做 404 预检。
 
 **响应 200：** `{ "accepted": true, "operationId": "<opId>" }`
-**错误：** `404 STORAGE_NOT_FOUND`、`409 STORAGE_IN_USE`、`409 OPERATION_RUNNING`、`400 INVALID_BODY`。
+**错误：** `409 STORAGE_IN_USE`、`409 OPERATION_RUNNING`、`400 INVALID_BODY`。
 
 ### A.2.13 操作查询与 restores 回调
 

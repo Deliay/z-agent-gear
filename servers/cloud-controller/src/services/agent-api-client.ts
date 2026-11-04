@@ -32,6 +32,29 @@ export interface TerminalStorageState {
   archiveSkipped?: boolean;
 }
 
+/**
+ * terminal 报文的 storage 组装（契约 A.2.10 / 零回归）：
+ * - 未挂载存储 → null（不携带该字段）；
+ * - 显式跳过归档（`storageArchiveSkipped === true`）→ 携带 `archiveSkipped:true`；
+ * - 其它情况（缺省/历史 null/false）不携带 `archiveSkipped`，保持旧报文逐字段等价。
+ */
+export function buildTerminalStorageState(
+  storageId: string | null | undefined,
+  snapshot: {
+    archiveStatus?: 'pending' | 'running' | 'succeeded' | 'failed' | null;
+    archiveId?: string | null;
+    archiveSkipped?: boolean | null;
+  },
+): TerminalStorageState | null {
+  if (!storageId) return null;
+  return {
+    id: storageId,
+    archiveStatus: snapshot.archiveStatus ?? null,
+    archiveId: snapshot.archiveId ?? null,
+    ...(snapshot.archiveSkipped === true ? { archiveSkipped: true } : {}),
+  };
+}
+
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_STORAGE_RETRY_DELAYS_MS = [0, 250, 1000, 3000] as const;
 

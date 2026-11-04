@@ -451,8 +451,7 @@ describe('internal storage API', () => {
     }
   });
 
-  it('T-AR4: 非法 operationId / 非布尔 storageArchive → 400 INVALID_BODY', async () => {
-    const ctx = await setup();
+  it('T-AR4: 非法 operationId / 非布尔 storageArchive → 400 INVALID_BODY', async () => {    const ctx = await setup();
     try {
       const badOperation = await post(
         `${ctx.baseUrl}/internal/storages/${STORAGE_ID}/archive`,
@@ -484,6 +483,29 @@ describe('internal storage API', () => {
       );
       expect(badDestroy.status).toBe(400);
       expect((await badDestroy.json()).error).toBe('INVALID_BODY');
+    } finally {
+      await close(ctx.httpServer);
+    }
+  });
+
+  it('B1: GET /internal/containers 透出 storageArchiveSkipped（契约 A.3）', async () => {
+    const ctx = await setup();
+    try {
+      await ctx.repo.create({
+        name: 'zag-worker-skip',
+        namespace: 'zag-cloud',
+        purpose: 'harness',
+        image: 'worker:test',
+        status: 'exited',
+        storageId: STORAGE_ID,
+        storageArchiveSkipped: true,
+      });
+      const response = await fetch(`${ctx.baseUrl}/internal/containers`, {
+        headers: authHeaders(),
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as Array<Record<string, unknown>>;
+      expect(body[0]).toMatchObject({ storageArchiveSkipped: true });
     } finally {
       await close(ctx.httpServer);
     }

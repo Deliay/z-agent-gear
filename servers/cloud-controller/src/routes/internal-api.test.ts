@@ -296,6 +296,7 @@ describe('internal management API', () => {
         'storageArchiveFileName',
         'storageArchiveFinishedAt',
         'storageArchiveId',
+        'storageArchiveSkipped',
         'storageArchiveStartedAt',
         'storageArchiveStatus',
         'storageArchiveUsageBytes',

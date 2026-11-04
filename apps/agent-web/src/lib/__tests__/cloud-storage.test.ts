@@ -5,6 +5,7 @@ import {
   canDestroyCloudStorage,
   canForkStorage,
   canRestoreStorage,
+  cloudStorageErrorMessage,
   cloudStorageStatusLabel,
   hasFailedRestore,
 } from '../cloud-storage'
@@ -96,5 +97,21 @@ describe('cloud storage status helpers (T-WEB2/T-WEB4)', () => {
     expect(canDestroyCloudStorage(failed)).toBe(true)
     expect(canDestroyCloudStorage(storage({ status: 'RESTORING', currentRestore: { id: 'op-1', status: 'RUNNING' } }))).toBe(false)
     expect(RESTORE_DESTRUCTIVE_WARNING).toContain('不可恢复')
+  })
+
+  it('T-WEB4 六条契约错误文案单一来源映射', () => {
+    const expected: Record<string, string> = {
+      'storage is not archivable': '仅待挂载状态可归档',
+      'storage is not restorable': '当前状态不可复原到归档',
+      'storage has no archive': '当前没有可用的归档',
+      'storage is not forkable': '源存储没有可用归档，暂不可 fork',
+      'storage is restoring': '复原仍在进行中，请稍后重试',
+      'not allowed to restore storage': '没有复原该云存储的权限',
+    }
+    for (const [server, message] of Object.entries(expected)) {
+      expect(cloudStorageErrorMessage(new Error(server))).toBe(message)
+    }
+    expect(cloudStorageErrorMessage(new Error('unknown'), 'fallback')).toBe('unknown')
+    expect(cloudStorageErrorMessage(null, 'fallback')).toBe('fallback')
   })
 })

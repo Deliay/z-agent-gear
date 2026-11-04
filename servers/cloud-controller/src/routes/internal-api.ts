@@ -32,6 +32,7 @@ import {
   StorageArchiveRunningError,
   StorageContainerNotFoundError,
   StorageInUseError,
+  StorageNotFoundError,
   type StartStorageInput,
   type StorageService,
 } from '../services/storage-service.js';
@@ -109,6 +110,7 @@ export interface CloudContainerJson {
   storageArchiveStartedAt: string | null;
   storageArchiveFinishedAt: string | null;
   storageArchiveFailure: string | null;
+  storageArchiveSkipped: boolean | null;
 }
 
 /** 严格对齐契约附录 A.3 的 JSON 结构。 */
@@ -165,6 +167,12 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
       ? entity.storageArchiveFinishedAt.toISOString()
       : null,
     storageArchiveFailure: entity.storageArchiveFailure ?? null,
+    storageArchiveSkipped:
+      entity.storageArchiveSkipped === true
+        ? true
+        : entity.storageArchiveSkipped === false
+          ? false
+          : null,
   };
 }
 
@@ -1023,6 +1031,10 @@ export function createInternalRouter(
   function respondStorageError(res: Response, err: unknown): void {
     if (err instanceof StorageContainerNotFoundError) {
       res.status(404).json({ error: 'NOT_FOUND', message: err.message });
+      return;
+    }
+    if (err instanceof StorageNotFoundError) {
+      res.status(404).json({ error: 'STORAGE_NOT_FOUND', message: err.message });
       return;
     }
     if (err instanceof StoragePvcConflictError) {

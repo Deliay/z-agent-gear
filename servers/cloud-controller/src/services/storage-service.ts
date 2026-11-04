@@ -42,6 +42,14 @@ export class StorageContainerNotFoundError extends Error {
   }
 }
 
+/** 存储级操作目标存储不存在（契约 404 STORAGE_NOT_FOUND；如源 PVC 已缺失的归档请求）。 */
+export class StorageNotFoundError extends Error {
+  constructor(public readonly storageId: string) {
+    super(`storage not found: ${storageId}`);
+    this.name = 'StorageNotFoundError';
+  }
+}
+
 /** 删除 PVC 时仍有活跃容器引用（契约 A.2.7 409 STORAGE_IN_USE）。 */
 export class StorageInUseError extends Error {
   constructor(public readonly storageId: string) {
@@ -250,6 +258,15 @@ function isArchivableStatus(status: string): boolean {
 
 function isStorageActiveStatus(status: string): boolean {
   return !isArchivableStatus(status);
+}
+
+/**
+ * 回调目标已不存在（agent-api 返回 HTTP 404）：属于永久失败，视为已送达并停止重投，
+ * 避免巡检每 tick 无限重试；其余错误（网络/5xx）仍走退避与巡检重投。
+ */
+function isPermanentCallbackFailure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /HTTP 404\b/.test(message);
 }
 
 /** 恢复前等待同名 PVC 真正消失（删除为异步，避免命中 Terminating 卷）。 */
@@ -843,6 +860,12 @@ export class StorageService {
     input: StorageArchiveRequestInput,
   ): Promise<{ accepted: boolean; operationId: string }> {
     const repo = this.requireOperationRepo();
+    // 同 operationId 重投优先幂等返回（即使源 PVC 已因成功归档被删除）。
+    const existing = await repo.findById(input.operationId, storageId);
+    if (existing) return { accepted: true, operationId: existing.id };
+    if (!(await this.deps.storageManager.getStoragePvc(storageId))) {
+      throw new StorageNotFoundError(storageId);
+    }
     if (await this.hasActiveContainer(storageId)) {
       throw new StorageInUseError(storageId);
     }
@@ -920,11 +943,12 @@ export class StorageService {
 
   private async runStorageOperation(operationId: string): Promise<void> {
     if (this.runningOperations.has(operationId)) return;
-    const repo = this.requireOperationRepo();
-    const operation = await repo.findById(operationId);
-    if (!operation || (operation.status !== 'pending' && operation.status !== 'running')) return;
+    // 在首个 await 前占位，关闭巡检与入口双重 spawn 的窗口。
     this.runningOperations.add(operationId);
     try {
+      const repo = this.requireOperationRepo();
+      const operation = await repo.findById(operationId);
+      if (!operation || (operation.status !== 'pending' && operation.status !== 'running')) return;
       await this.awaitCleanup(operation.workspaceId);
       await this.archiveMutex.runExclusive(operation.workspaceId, () =>
         operation.type === 'archive'
@@ -1006,7 +1030,10 @@ export class StorageService {
       }
       const finishedAt = this.now();
       const succeeded = await repo.markSucceeded(operationId, { usageBytes, finishedAt });
-      if (!succeeded) return;
+      if (!succeeded) {
+        if (jobName) await this.deleteJobBestEffort(jobName);
+        return;
+      }
       const sourcePvcReleased = await this.deleteSourcePvcWithRetry(
         this.deps.storageManager.storagePvcName(running.storageId),
       );
@@ -1104,13 +1131,16 @@ export class StorageService {
       const log = await this.deps.k8sClient.readPodLogs(
         this.storageOperationPodSelector(operationId, 'restore'),
       );
-      if (!/ZAG_RESTORE_DONE/.test(log)) {
+      if (!/^ZAG_RESTORE_DONE\s*$/m.test(log)) {
         await this.finishStorageOperationFailure(operationId, '复原完成标记行缺失', jobName);
         return;
       }
       const finishedAt = this.now();
       const succeeded = await repo.markSucceeded(operationId, { finishedAt });
-      if (!succeeded) return;
+      if (!succeeded) {
+        if (jobName) await this.deleteJobBestEffort(jobName);
+        return;
+      }
       const delivered = await this.callbackRestore({
         operationId,
         storageId: running.storageId,
@@ -1284,6 +1314,19 @@ export class StorageService {
       await client.notifyStorageRestore(payload.storageId, payload);
       return true;
     } catch (err) {
+      if (isPermanentCallbackFailure(err)) {
+        this.deps.logger.warn(
+          {
+            component: 'cloud-storage',
+            event: 'restore_callback_dropped',
+            storageId: payload.storageId,
+            operationId: payload.operationId,
+            err,
+          },
+          'restore callback target no longer exists; stop retrying',
+        );
+        return true;
+      }
       this.deps.logger.error(
         {
           component: 'cloud-storage',
@@ -1868,6 +1911,19 @@ export class StorageService {
       await client.notifyStorageArchive(payload.storageId, payload);
       return true;
     } catch (err) {
+      if (isPermanentCallbackFailure(err)) {
+        this.deps.logger.warn(
+          {
+            component: 'cloud-storage',
+            event: 'archive_callback_dropped',
+            containerId: payload.containerId,
+            archiveId: payload.archiveId,
+            err,
+          },
+          'archive callback target no longer exists; stop retrying',
+        );
+        return true;
+      }
       this.deps.logger.error(
         {
           component: 'cloud-storage',

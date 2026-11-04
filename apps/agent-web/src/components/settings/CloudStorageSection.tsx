@@ -22,6 +22,7 @@ import {
   canDestroyCloudStorage,
   canForkStorage,
   canRestoreStorage,
+  cloudStorageErrorMessage,
   cloudStorageStatusBadgeVariant,
   cloudStorageStatusLabel,
   formatStorageBytes,
@@ -37,27 +38,6 @@ import NewCloudStorageDialog from './NewCloudStorageDialog'
 import CloudStorageDetailDialog from './CloudStorageDetailDialog'
 import ForkCloudStorageDialog from './ForkCloudStorageDialog'
 
-const SERVER_ERROR_MESSAGES: Record<string, string> = {
-  'storage is not destroyable': '当前状态不可销毁云存储',
-  'storage is archiving': '归档仍在进行中，暂不可操作',
-  'storage is attached': '云存储仍被云电脑挂载，无法操作',
-  'storage is not archivable': '仅待挂载状态可归档',
-  'storage is not restorable': '当前状态不可复原到归档',
-  'storage has no archive': '当前没有可用的归档',
-  'storage is restoring': '复原仍在进行中，请稍后重试',
-  'storage is not forkable': '源存储没有可用归档，暂不可 fork',
-  'not allowed to destroy storage': '没有销毁该云存储的权限',
-  'not allowed to restore storage': '没有复原该云存储的权限',
-  'insufficient balance': '账户余额不足，请联系管理员充值后重试',
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    const message = error.message.trim()
-    return SERVER_ERROR_MESSAGES[message] ?? message
-  }
-  return '操作失败，请稍后重试'
-}
 
 function StorageRow({ storage, onDetail, onDestroy, onArchive, onRestore, onFork }: {
   storage: CloudStorageData
@@ -243,7 +223,7 @@ export default function CloudStorageSection() {
       toast.success('云存储已销毁')
       await refetchAll()
     } catch (err) {
-      setDestroyError(getErrorMessage(err))
+      setDestroyError(cloudStorageErrorMessage(err))
     } finally {
       setDestroying(false)
     }
@@ -263,7 +243,7 @@ export default function CloudStorageSection() {
       toast.success('已发起归档，完成后将按半价计费')
       await refetchAll()
     } catch (err) {
-      setActionError(getErrorMessage(err))
+      setActionError(cloudStorageErrorMessage(err))
     } finally {
       setActionBusy(false)
     }
@@ -280,7 +260,7 @@ export default function CloudStorageSection() {
       toast.success('已发起复原，完成后回到待挂载')
       await refetchAll()
     } catch (err) {
-      setActionError(getErrorMessage(err))
+      setActionError(cloudStorageErrorMessage(err))
     } finally {
       setActionBusy(false)
     }
@@ -305,7 +285,7 @@ export default function CloudStorageSection() {
       ) : mainQuery.error && !mainQuery.data ? (
         <div className="space-y-2">
           <p role="alert" className="break-words text-sm text-destructive">
-            云存储加载失败：{getErrorMessage(mainQuery.error)}
+            云存储加载失败：{cloudStorageErrorMessage(mainQuery.error)}
           </p>
           <Button type="button" size="sm" variant="outline" onClick={() => { void mainQuery.refetch() }}>
             重试

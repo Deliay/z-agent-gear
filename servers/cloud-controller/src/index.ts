@@ -24,7 +24,11 @@ import { HeartbeatTracker } from './services/heartbeat-tracker.js';
 import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
 import { WorkloadDispatcher } from './services/workload-dispatcher.js';
 import { SecretStore } from './services/secret-store.js';
-import { AgentApiClient, type TerminalStorageState } from './services/agent-api-client.js';
+import {
+  AgentApiClient,
+  buildTerminalStorageState,
+  type TerminalStorageState,
+} from './services/agent-api-client.js';
 import { AdminBillingClient } from './services/admin-billing-client.js';
 import { wireSocketDiagnostics } from './services/socket-diagnostics.js';
 import {
@@ -264,15 +268,14 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
           let terminalStorage: TerminalStorageState | null = null;
           if (container.storageId) {
             const fresh = (await containerService.getById(container.id)) ?? container;
-            terminalStorage = {
-              id: container.storageId,
+            terminalStorage = buildTerminalStorageState(container.storageId, {
               // 透传真实归档状态：null = 未触发归档（agent-api 据此 releaseStorage 回滚），
               // 不得强改写为 pending（契约 A.2.10）。
               archiveStatus: fresh.storageArchiveStatus ?? null,
               archiveId: fresh.storageArchiveId ?? null,
               // 仅在本次销毁显式跳过归档时携带（契约 A.2.10 扩展）；未挂载/未跳过保持旧报文。
-              ...(fresh.storageArchiveSkipped === true ? { archiveSkipped: true } : {}),
-            };
+              archiveSkipped: fresh.storageArchiveSkipped ?? null,
+            });
           }
           try {
             await retryHarnessCallback(

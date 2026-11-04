@@ -138,4 +138,22 @@ describe('ForkCloudStorageDialog (T-WEB3)', () => {
     )
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  it('T-WEB4 storage is not forkable 映射', async () => {
+    mockForkStorage.mockRejectedValueOnce(new Error('storage is not forkable'))
+    render(
+      <ForkCloudStorageDialog
+        open
+        source={makeStorage()}
+        onClose={vi.fn()}
+        onForked={vi.fn()}
+      />,
+    )
+
+    fireEvent.change(screen.getByLabelText('fork 云存储名称'), { target: { value: '副本' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认 fork' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '源存储没有可用归档，暂不可 fork',
+    )
+  })
 })
