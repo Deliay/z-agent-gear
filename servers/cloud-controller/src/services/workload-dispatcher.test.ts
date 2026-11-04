@@ -1475,6 +1475,7 @@ describe('WorkloadDispatcher - harness env', () => {
             workloadName: 'OpenCode（Harness）',
             script: 'echo install',
             params: {},
+            requiresHarnessEnv: true,
           },
         ],
         source: 'user',
@@ -1511,7 +1512,7 @@ describe('WorkloadDispatcher - harness env', () => {
       expect('env' in idlePayload).toBe(false);
     });
 
-    it('T-CC-R2: harness env 解析失败 → 可读错误、不下发批次与日志、不打印 secret', async () => {
+    it('T-CC-R2: harness 负载且 env 解析失败 → 可读错误、不下发批次与日志、不打印 secret', async () => {
       const { dispatcher, repo, workloadLogRepository, runs, log } = setup();
       const container = await repo.create({
         name: 'zag-worker-runtime-nosecret',
@@ -1524,7 +1525,15 @@ describe('WorkloadDispatcher - harness env', () => {
 
       await expect(
         dispatcher.startRuntimeBatch(container.id, {
-          entries: [{ workloadId: 'w1', workloadName: 'x', script: 'true', params: {} }],
+          entries: [
+            {
+              workloadId: 'w1',
+              workloadName: 'OpenCode（Harness）',
+              script: 'true',
+              params: {},
+              requiresHarnessEnv: true,
+            },
+          ],
           source: 'user',
         }),
       ).rejects.toThrow('云电脑运行环境缺失');
@@ -1538,6 +1547,49 @@ describe('WorkloadDispatcher - harness env', () => {
         ),
       ).toBe(true);
       expect(JSON.stringify(log.records)).not.toContain('zag_sk_');
+    });
+
+    it('T-CC-R2b: 标准负载不依赖 harness env（secret 缺失仍可安装，Issue #446）', async () => {
+      const { dispatcher, repo, runs, log } = setup();
+      const container = await repo.create({
+        name: 'zag-worker-runtime-standard-nosecret',
+        namespace: 'zag-workers',
+        purpose: 'harness',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'online',
+        harnessTypes: ['opencode'],
+      });
+
+      const result = await dispatcher.startRuntimeBatch(container.id, {
+        entries: [
+          {
+            workloadId: 'w-mongo',
+            workloadName: 'MongoDB',
+            script: 'echo mongodb',
+            params: {},
+            requiresHarnessEnv: false,
+          },
+        ],
+        source: 'user',
+      });
+      expect(result.items).toHaveLength(1);
+
+      const payload = runs('init').at(-1)!.payload;
+      expect('env' in payload).toBe(false);
+      await dispatcher.handleResult(container.id, {
+        logId: result.items[0].logId,
+        status: 'success',
+      });
+      expect((await repo.findById(container.id))?.status).toBe('online');
+      expect(
+        log.records.some(
+          (r) =>
+            r.level === 'warn' &&
+            r.event === 'harness-env-unavailable' &&
+            r.phase === 'runtime' &&
+            r.requiresHarnessEnv === false,
+        ),
+      ).toBe(true);
     });
 
     it('T-CC-R3: 安装成功追加 harnessTypes（$addToSet 去重）；失败/standard 不追加', async () => {
@@ -1562,7 +1614,15 @@ describe('WorkloadDispatcher - harness env', () => {
       secretStore.put(container.id, secrets);
 
       const ok = await dispatcher.startRuntimeBatch(container.id, {
-        entries: [{ workloadId: 'w-kimi', workloadName: 'Kimi Code（Harness）', script: 'x', params: {} }],
+        entries: [
+          {
+            workloadId: 'w-kimi',
+            workloadName: 'Kimi Code（Harness）',
+            script: 'x',
+            params: {},
+            requiresHarnessEnv: true,
+          },
+        ],
         source: 'user',
       });
       await dispatcher.handleResult(container.id, { logId: ok.items[0].logId, status: 'success' });
@@ -1570,7 +1630,15 @@ describe('WorkloadDispatcher - harness env', () => {
 
       // 重复成功不重复追加（$addToSet 去重）
       const again = await dispatcher.startRuntimeBatch(container.id, {
-        entries: [{ workloadId: 'w-kimi', workloadName: 'Kimi Code（Harness）', script: 'x', params: {} }],
+        entries: [
+          {
+            workloadId: 'w-kimi',
+            workloadName: 'Kimi Code（Harness）',
+            script: 'x',
+            params: {},
+            requiresHarnessEnv: true,
+          },
+        ],
         source: 'user',
       });
       await dispatcher.handleResult(container.id, { logId: again.items[0].logId, status: 'success' });
@@ -1586,7 +1654,15 @@ describe('WorkloadDispatcher - harness env', () => {
 
       // 失败结果不追加
       const failed = await dispatcher.startRuntimeBatch(container.id, {
-        entries: [{ workloadId: 'w-kimi', workloadName: 'Kimi Code（Harness）', script: 'x', params: {} }],
+        entries: [
+          {
+            workloadId: 'w-kimi',
+            workloadName: 'Kimi Code（Harness）',
+            script: 'x',
+            params: {},
+            requiresHarnessEnv: true,
+          },
+        ],
         source: 'mcp',
       });
       await dispatcher.handleResult(container.id, {
