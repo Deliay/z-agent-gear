@@ -117,6 +117,7 @@ export const cloudHostTypeDefs = `#graphql
     activeSessionCount: Int!
     sessionsWillBeLost: Boolean!
     sessions: [CloudHostSessionSummary!]!
+    storage: CloudStorageSummary
   }
 
   type CloudHostCapabilities {
@@ -199,7 +200,7 @@ export const cloudHostTypeDefs = `#graphql
 
   extend type Mutation {
     createCloudHost(input: CreateCloudHostInput!): CloudHost!
-    stopCloudHost(id: ID!, force: Boolean): CloudHost!
+    stopCloudHost(id: ID!, force: Boolean, archiveStorage: Boolean): CloudHost!
     deleteCloudHost(id: ID!): Boolean!
     installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!
     setupCloudHostGithubProject(input: SetupCloudHostGithubProjectInput!): CloudHostSetupOperation!

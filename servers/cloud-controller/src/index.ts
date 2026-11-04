@@ -17,6 +17,7 @@ import { createK8sClient } from './services/k8s-client.js';
 import { K8sJobManager } from './services/k8s-job-manager.js';
 import { K8sStorageManager } from './services/k8s-storage-manager.js';
 import { StorageService } from './services/storage-service.js';
+import { MongoStorageOperationRepository } from './repositories/storage-operation-repository.js';
 import { ContainerService } from './services/container-service.js';
 import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
@@ -36,6 +37,7 @@ import { createInternalRouter } from './routes/internal-api.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001CloudcontainersTenantId from './migrations/001-cloudcontainers-tenant-id-backfill.js';
 import * as migration002CloudcontainersWorkspaceId from './migrations/002-cloudcontainers-workspace-id.js';
+import * as migration003CloudStorageOperations from './migrations/003-cloud-storage-operations.js';
 
 export interface CloudControllerApp {
   app: express.Express;
@@ -172,6 +174,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     repo,
     k8sClient,
     storageManager,
+    operationRepo: new MongoStorageOperationRepository(),
     agentApiClient,
     logger: logger.child({ component: 'cloud-storage' }),
     config: {
@@ -267,6 +270,8 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
               // 不得强改写为 pending（契约 A.2.10）。
               archiveStatus: fresh.storageArchiveStatus ?? null,
               archiveId: fresh.storageArchiveId ?? null,
+              // 仅在本次销毁显式跳过归档时携带（契约 A.2.10 扩展）；未挂载/未跳过保持旧报文。
+              ...(fresh.storageArchiveSkipped === true ? { archiveSkipped: true } : {}),
             };
           }
           try {
@@ -384,6 +389,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
       await runMigrations([
         migration001CloudcontainersTenantId,
         migration002CloudcontainersWorkspaceId,
+        migration003CloudStorageOperations,
       ]);
     } catch (err) {
       logger.warn({ err }, 'runMigrations failed (non-fatal)');

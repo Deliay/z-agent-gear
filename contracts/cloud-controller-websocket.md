@@ -466,13 +466,15 @@ Content-Type: application/json
 DELETE /internal/containers/:id?reason=<url-encoded reason>
 ```
 
+`reason`（可选，费用中心强拆）：可直接作为 query 参数，或在 JSON body 中提供 `{ "reason": "...", "storageArchive": false }`（body 优先）。缺省为「强制销毁」；强拆 reason 固定为「余额不足超过 10 分钟，强制销毁」，写入容器 `exitReason` 可审计。
+
+`storageArchive`（可选，布尔）：仅 `purpose=harness` 且挂载云存储时有意义。缺省/`true` = 现状（终态自动归档）；`false` = 本次销毁**跳过归档**：cloud-controller 在 `destroying` CAS 的**同一次写入**落 `cloudcontainers.storageArchiveSkipped=true`，`maybeStartArchive` 与巡检收口尊重该标记（幂等，不触发归档 Job）；未挂载存储的容器忽略该字段。显式 `POST /internal/containers/:id/archive`（手动重试）不受该标记限制。非布尔值返回 `400 INVALID_BODY`。
+
 **响应 200：**
 
 ```json
 { "success": true, "deletedJob": true }
 ```
-
-`reason`（可选，费用中心强拆）：可直接作为 query 参数，或在 JSON body 中提供 `{ "reason": "..." }`（body 优先）。缺省为「强制销毁」；强拆 reason 固定为「余额不足超过 10 分钟，强制销毁」，写入容器 `exitReason` 可审计。
 
 `deletedJob` 反映**本次调用是否真实执行了 Job 删除**（`false` 表示 Job 已不存在、未重复删除）。调用方据此观察残留 Job 清理是否发生。
 
@@ -645,7 +647,9 @@ Content-Type: application/json
   "usageBytes": 5368709120,
   "startedAt": "...", "finishedAt": "...", "failureReason": null,
   // SUCCEEDED 时必填：源 PVC 是否已释放（删除失败/false 由 agent-api 记入 currentArchive 留痕）
-  "sourcePvcReleased": true
+  "sourcePvcReleased": true,
+  // 可选：存储级归档操作单号（cloudstorageoperations._id）；容器级归档缺省
+  "operationId": "<opId>"
 }
 ```
 
@@ -656,9 +660,72 @@ POST /internal/cloud-storages/:storageId/usage
 
 - 均 Bearer `INTERNAL_API_TOKEN`；按 `archiveId` 幂等，终态单调（SUCCEEDED 后迟到的 RUNNING 忽略）；回调失败按 `0/250ms/1s/3s` 退避重试，最终失败只记 error（agent-api 以 `GET /internal/containers/:id/archive` 兜底对账）。
 - terminal 回调（websocket `container:terminal` → agent-api `/internal/cloud-hosts/:id/terminal`）报文新增
-  `storage: { "id": "<storageId>", "archiveStatus": "pending|running|succeeded|failed|null", "archiveId": "<本次归档 id>" }`；agent-api 据此把存储
+  `storage: { "id": "<storageId>", "archiveStatus": "pending|running|succeeded|failed|null", "archiveId": "<本次归档 id>", "archiveSkipped": true }`；agent-api 据此把存储
   `ATTACHED → ARCHIVING`（避免「云电脑已 STOPPED、存储仍显示已挂载」）；`archiveStatus=null` 表示未触发归档，
   agent-api 走 `releaseStorage` 回滚；`archiveId` 用于开启新归档周期（旧周期迟到回调忽略）。未挂载存储时不携带该字段。
+  `archiveSkipped=true` **仅在本次销毁显式跳过归档（destroy `storageArchive:false`）时携带**，agent-api 据此走
+  `ATTACHED → IDLE`（不归档、不回滚到 ARCHIVED）；未触发归档且未跳过（如从未 ready）不携带该字段，行为与现状一致。
+
+### A.2.11 存储级归档（手动归档）
+
+```
+POST /internal/storages/:storageId/archive
+Content-Type: application/json
+
+{ "operationId": "<opId>", "archiveId": "<id>", "fileName": "<name>-<ts>.tar.gz2",
+  "workspaceId": "<ws>", "tenantId": "<tenant>" }
+```
+
+- `operationId` 必填且为 24 位 hex（作为台账 `cloudstorageoperations._id`，非法 400 `INVALID_BODY`）；`archiveId`/`fileName` 校验同 A.2.8；`workspaceId` 必填，`tenantId` 可选。
+- 归档 Job 与容器级归档同一脚本（`MODE=archive`：清 `.tmp` → 压缩 → `du` → 删旧 `.tar.gz2` → `mv` → 标记行），Job 卷为源 PVC RO + 归档 PVC RW；成功后删除源 PVC（最多 3 次）并以既有 A.2.10 回调上报（报文追加 `operationId`）；失败保留旧归档与源卷。
+- 幂等：同 `operationId` 重投直接返回已受理（返回既有状态）；同存储已有 `pending/running` 操作 → 409 `OPERATION_RUNNING`。
+- 同一存储仍有活跃容器（`storageId` + 非终态）→ 409 `STORAGE_IN_USE`。
+
+**响应 200：** `{ "accepted": true, "operationId": "<opId>" }`
+**错误：** `404 STORAGE_NOT_FOUND`、`409 STORAGE_IN_USE`、`409 OPERATION_RUNNING`、`400 INVALID_BODY`。
+
+### A.2.12 存储级复原（复原到归档 / fork 共用）
+
+```
+POST /internal/storages/:storageId/restore
+Content-Type: application/json
+
+{ "operationId": "<opId>", "workspaceId": "<ws>", "tenantId": "<tenant>",
+  "archivePath": "/archive/<ws>/<srcStorageId>/<fileName>",
+  "sizeGi": 20, "storageClass": "ceph-rbd" }
+```
+
+- `operationId` 必填 24 位 hex；`workspaceId` 必填；`archivePath` 校验复用 `ARCHIVE_PATH_PATTERN`（拒绝 `..`）；`sizeGi` 1~30 整数；`storageClass` 可选，校验同 `STORAGE_CLASS_PATTERN`。
+- 执行：删除目标 PVC（存在时等待真正消失）→ 按 `sizeGi`/`storageClass` ensure 重建 → restore Job（archiver `MODE=restore`，归档卷 RO + 目标卷 RW，`RESTORE_FILE=archivePath`），校验 Pod 日志 `ZAG_RESTORE_DONE` 标记行。fork 时 `:storageId` 为**新**存储（PVC 尚不存在时跳过删除直接重建）。
+- 失败不删除归档；目标 PVC 可能为半恢复态，重试时整体删除重建。
+- 幂等/互斥同 A.2.11。
+
+**响应 200：** `{ "accepted": true, "operationId": "<opId>" }`
+**错误：** `404 STORAGE_NOT_FOUND`、`409 STORAGE_IN_USE`、`409 OPERATION_RUNNING`、`400 INVALID_BODY`。
+
+### A.2.13 操作查询与 restores 回调
+
+```
+GET /internal/storages/:storageId/operations/:operationId
+```
+
+**响应 200：**
+
+```jsonc
+{ "operationId": "...", "type": "archive|restore", "status": "pending|running|succeeded|failed",
+  "usageBytes": 123, "startedAt": "...", "finishedAt": "...", "failureReason": null }
+```
+
+```
+POST /internal/cloud-storages/:storageId/restores        # cloud-controller → agent-api
+Content-Type: application/json
+
+{ "operationId": "<opId>", "storageId": "<id>", "status": "RUNNING|SUCCEEDED|FAILED",
+  "usageBytes": 5368709120, "startedAt": "...", "finishedAt": "...", "failureReason": null }
+```
+
+- 操作查询与回调均 Bearer `INTERNAL_API_TOKEN`；restores 回调按 `operationId` 幂等、终态单调；回调失败按 `0/250ms/1s/3s` 退避重试，agent-api 以操作查询端点兜底对账（与归档回调同模式）。
+- 台账巡检并入既有 15s `status-sync`：`pending/running` 超 `ARCHIVE_TIMEOUT_MS` → `failed` + 回调；本进程无执行任务（重启）→ 重跑；终态且 `callbackDeliveredAt=null` → 重投一次（幂等）。
 
 ### A.3 CloudContainer JSON 结构
 
@@ -700,6 +767,7 @@ POST /internal/cloud-storages/:storageId/usage
 | `storageArchiveStartedAt` | `string \| null` | 归档开始时间 |
 | `storageArchiveFinishedAt` | `string \| null` | 归档结束时间 |
 | `storageArchiveFailure` | `string \| null` | 归档失败原因 |
+| `storageArchiveSkipped` | `boolean \| null` | 本次销毁显式跳过归档（destroy `storageArchive:false`）；终态转移前写入，历史行 null |
 
 > `secrets` 永不出现在列表/详情响应中。
 

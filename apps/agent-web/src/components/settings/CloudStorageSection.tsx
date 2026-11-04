@@ -2,19 +2,31 @@ import { useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { CLOUD_STORAGES } from '@/graphql/queries'
-import { DESTROY_CLOUD_STORAGE } from '@/graphql/mutations'
+import {
+  ARCHIVE_CLOUD_STORAGE,
+  DESTROY_CLOUD_STORAGE,
+  RESTORE_CLOUD_STORAGE_TO_ARCHIVE,
+} from '@/graphql/mutations'
 import type {
+  ArchiveCloudStorageMutation,
   CloudStorageData,
   DestroyCloudStorageMutation,
   GetCloudStoragesQuery,
+  RestoreCloudStorageToArchiveMutation,
 } from '@/graphql/types'
 import {
   ARCHIVE_FAILED_DESTROY_WARNING,
+  RESTORE_DESTRUCTIVE_WARNING,
+  RESTORE_FAILED_DESTROY_WARNING,
+  canArchiveStorage,
   canDestroyCloudStorage,
+  canForkStorage,
+  canRestoreStorage,
   cloudStorageStatusBadgeVariant,
   cloudStorageStatusLabel,
   formatStorageBytes,
   hasFailedArchive,
+  hasFailedRestore,
   isDestroyedStorageStatus,
 } from '@/lib/cloud-storage'
 import { formatDateTime } from '@/lib/format'
@@ -23,12 +35,19 @@ import { Badge } from '@/components/ui/badge'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import NewCloudStorageDialog from './NewCloudStorageDialog'
 import CloudStorageDetailDialog from './CloudStorageDetailDialog'
+import ForkCloudStorageDialog from './ForkCloudStorageDialog'
 
 const SERVER_ERROR_MESSAGES: Record<string, string> = {
   'storage is not destroyable': '当前状态不可销毁云存储',
-  'storage is archiving': '归档仍在进行中，暂不可销毁',
-  'storage is attached': '云存储仍被云电脑挂载，无法销毁',
+  'storage is archiving': '归档仍在进行中，暂不可操作',
+  'storage is attached': '云存储仍被云电脑挂载，无法操作',
+  'storage is not archivable': '仅待挂载状态可归档',
+  'storage is not restorable': '当前状态不可复原到归档',
+  'storage has no archive': '当前没有可用的归档',
+  'storage is restoring': '复原仍在进行中，请稍后重试',
+  'storage is not forkable': '源存储没有可用归档，暂不可 fork',
   'not allowed to destroy storage': '没有销毁该云存储的权限',
+  'not allowed to restore storage': '没有复原该云存储的权限',
   'insufficient balance': '账户余额不足，请联系管理员充值后重试',
 }
 
@@ -40,12 +59,17 @@ function getErrorMessage(error: unknown): string {
   return '操作失败，请稍后重试'
 }
 
-function StorageRow({ storage, onDetail, onDestroy }: {
+function StorageRow({ storage, onDetail, onDestroy, onArchive, onRestore, onFork }: {
   storage: CloudStorageData
   onDetail: () => void
   onDestroy: () => void
+  onArchive: () => void
+  onRestore: () => void
+  onFork: () => void
 }) {
   const destroyable = canDestroyCloudStorage(storage)
+  const archivable = canArchiveStorage(storage)
+  const restorable = canRestoreStorage(storage)
   return (
     <li
       className="min-w-0 rounded-lg border border-border p-3"
@@ -66,6 +90,39 @@ function StorageRow({ storage, onDetail, onDestroy }: {
           >
             详情
           </Button>
+          {archivable && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              aria-label={`归档 ${storage.name}`}
+              onClick={onArchive}
+            >
+              归档
+            </Button>
+          )}
+          {restorable && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              aria-label={`复原到归档 ${storage.name}`}
+              onClick={onRestore}
+            >
+              {hasFailedRestore(storage) ? '重试复原' : '复原到归档'}
+            </Button>
+          )}
+          {canForkStorage(storage) && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              aria-label={`fork ${storage.name}`}
+              onClick={onFork}
+            >
+              fork
+            </Button>
+          )}
           {destroyable && (
             <Button
               type="button"
@@ -143,6 +200,11 @@ export default function CloudStorageSection() {
   const [destroyTarget, setDestroyTarget] = useState<CloudStorageData | null>(null)
   const [destroying, setDestroying] = useState(false)
   const [destroyError, setDestroyError] = useState<string | null>(null)
+  const [archiveTarget, setArchiveTarget] = useState<CloudStorageData | null>(null)
+  const [restoreTarget, setRestoreTarget] = useState<CloudStorageData | null>(null)
+  const [forkTarget, setForkTarget] = useState<CloudStorageData | null>(null)
+  const [actionBusy, setActionBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const mainQuery = useQuery<GetCloudStoragesQuery>(CLOUD_STORAGES, {
     variables: { onlyAttachable: false, includeDestroyed: false },
@@ -154,6 +216,10 @@ export default function CloudStorageSection() {
     fetchPolicy: 'cache-and-network',
   })
   const [destroyStorage] = useMutation<DestroyCloudStorageMutation>(DESTROY_CLOUD_STORAGE)
+  const [archiveStorage] = useMutation<ArchiveCloudStorageMutation>(ARCHIVE_CLOUD_STORAGE)
+  const [restoreStorage] = useMutation<RestoreCloudStorageToArchiveMutation>(
+    RESTORE_CLOUD_STORAGE_TO_ARCHIVE,
+  )
 
   const storages = mainQuery.data?.cloudStorages ?? []
   const destroyedStorages = (destroyedQuery.data?.cloudStorages ?? []).filter((storage) =>
@@ -184,6 +250,41 @@ export default function CloudStorageSection() {
   }
 
   const archiveFailedDestroy = hasFailedArchive(destroyTarget)
+  const restoreFailedDestroy = hasFailedRestore(destroyTarget)
+
+  const handleArchive = async () => {
+    const target = archiveTarget
+    if (!target || actionBusy) return
+    setActionBusy(true)
+    setActionError(null)
+    try {
+      await archiveStorage({ variables: { id: target.id } })
+      setArchiveTarget(null)
+      toast.success('已发起归档，完成后将按半价计费')
+      await refetchAll()
+    } catch (err) {
+      setActionError(getErrorMessage(err))
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const handleRestore = async () => {
+    const target = restoreTarget
+    if (!target || actionBusy) return
+    setActionBusy(true)
+    setActionError(null)
+    try {
+      await restoreStorage({ variables: { id: target.id } })
+      setRestoreTarget(null)
+      toast.success('已发起复原，完成后回到待挂载')
+      await refetchAll()
+    } catch (err) {
+      setActionError(getErrorMessage(err))
+    } finally {
+      setActionBusy(false)
+    }
+  }
 
   return (
     <section className="min-w-0 space-y-4 border-t pt-6" data-testid="cloud-storage-section">
@@ -231,6 +332,18 @@ export default function CloudStorageSection() {
                 setDestroyError(null)
                 setDestroyTarget(storage)
               }}
+              onArchive={() => {
+                setActionError(null)
+                setArchiveTarget(storage)
+              }}
+              onRestore={() => {
+                setActionError(null)
+                setRestoreTarget(storage)
+              }}
+              onFork={() => {
+                setActionError(null)
+                setForkTarget(storage)
+              }}
             />
           ))}
         </ul>
@@ -272,6 +385,11 @@ export default function CloudStorageSection() {
           {destroyError}
         </p>
       )}
+      {actionError && (
+        <p role="alert" className="break-words text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
 
       <NewCloudStorageDialog
         open={createOpen}
@@ -294,13 +412,42 @@ export default function CloudStorageSection() {
         onOpenChange={(open) => !open && setDestroyTarget(null)}
         title="销毁云存储"
         description={
-          archiveFailedDestroy
-            ? `${ARCHIVE_FAILED_DESTROY_WARNING}。销毁云存储会删除全部数据与当前归档，且不可恢复，确认销毁？`
-            : '销毁云存储会删除全部数据与当前归档，且不可恢复，确认销毁？'
+          restoreFailedDestroy
+            ? `${RESTORE_FAILED_DESTROY_WARNING}。销毁云存储会删除全部数据与当前归档，且不可恢复，确认销毁？`
+            : archiveFailedDestroy
+              ? `${ARCHIVE_FAILED_DESTROY_WARNING}。销毁云存储会删除全部数据与当前归档，且不可恢复，确认销毁？`
+              : '销毁云存储会删除全部数据与当前归档，且不可恢复，确认销毁？'
         }
         confirmLabel="确认销毁"
         loading={destroying}
         onConfirm={handleDestroy}
+      />
+
+      <ConfirmDialog
+        open={archiveTarget !== null}
+        onOpenChange={(open) => !open && setArchiveTarget(null)}
+        title="归档云存储"
+        description="归档后将释放数据卷并转为半价计费；归档期间存储不可挂载。确认归档？"
+        confirmLabel="确认归档"
+        loading={actionBusy}
+        onConfirm={handleArchive}
+      />
+
+      <ConfirmDialog
+        open={restoreTarget !== null}
+        onOpenChange={(open) => !open && setRestoreTarget(null)}
+        title="复原到归档"
+        description={`${RESTORE_DESTRUCTIVE_WARNING}。确认从归档重建当前云存储？`}
+        confirmLabel="确认复原"
+        loading={actionBusy}
+        onConfirm={handleRestore}
+      />
+
+      <ForkCloudStorageDialog
+        open={forkTarget !== null}
+        source={forkTarget}
+        onClose={() => setForkTarget(null)}
+        onForked={() => { void refetchAll() }}
       />
     </section>
   )

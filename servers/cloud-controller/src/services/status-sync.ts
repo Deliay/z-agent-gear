@@ -41,7 +41,10 @@ export interface StatusSyncOptions {
    * 云存储归档巡检（并入 15s 巡检）：`pending/running` 超时收口、重启补跑、
    * 已完成未回调重投（提案实现点 9）。
    */
-  storageService?: { reconcileArchives(now?: number): Promise<unknown> };
+  storageService?: {
+    reconcileArchives(now?: number): Promise<unknown>;
+    reconcileStorageOperations(now?: number): Promise<unknown>;
+  };
   logger: ObservationLogger;
 }
 
@@ -122,6 +125,11 @@ export class StatusSyncService {
             () => storageService.reconcileArchives(),
             'storage-archive-scan-failed',
             'storage archive scan failed',
+          );
+          await this.runScanStep(
+            () => storageService.reconcileStorageOperations(),
+            'storage-operation-scan-failed',
+            'storage operation scan failed',
           );
         }
         span.setAttribute('checked', stats.checked);

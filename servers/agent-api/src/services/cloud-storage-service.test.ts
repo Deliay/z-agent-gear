@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import mongoose from 'mongoose';
 import { runWithWorkspace, type WorkspaceContext } from './workspace-context.js';
 
 const h = vi.hoisted(() => ({
@@ -8,6 +9,9 @@ const h = vi.hoisted(() => ({
     deleteStorage: vi.fn(),
     cleanupStorage: vi.fn(),
     triggerArchive: vi.fn(),
+    archiveStorageOperation: vi.fn(),
+    restoreStorageOperation: vi.fn(),
+    getStorageOperation: vi.fn(),
     refreshUsage: vi.fn(),
     getArchive: vi.fn(),
   },
@@ -69,6 +73,7 @@ import { CloudStorage } from '../models/cloud-storage.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { CloudContainer } from '../models/cloud-container.js';
 import { User } from '../models/user.js';
+import { CloudControllerRequestError } from './cloud-controller-client.js';
 import {
   CloudStorageService,
   buildArchiveFileName,
@@ -668,7 +673,7 @@ describe('archive callbacks / retry / usage (T-CS-AR1..AR5)', () => {
       failureReason: 'compress failed',
     });
 
-    // 重试：前置为失败归档 + 有历史容器
+    // 重试：前置为失败归档 + 有历史容器（容器级以 currentArchive.containerId 判别）
     const retryDoc = storageDoc({
       status: 'ARCHIVING',
       lastContainerId: 'container-1',
@@ -676,6 +681,7 @@ describe('archive callbacks / retry / usage (T-CS-AR1..AR5)', () => {
       currentArchive: {
         archiveId: 'a1',
         status: 'FAILED',
+        containerId: 'container-1',
         cloudHostName: 'my cloud',
       },
     });
@@ -818,7 +824,7 @@ describe('archive callbacks / retry / usage (T-CS-AR1..AR5)', () => {
         storageDoc({
           status: 'ARCHIVING',
           lastContainerId: null,
-          currentArchive: { archiveId: 'a1', status: 'FAILED' },
+          currentArchive: null,
         }),
       ) as never,
     );
@@ -906,5 +912,274 @@ describe('archive naming and fallback quote', () => {
     const credits = (sizeGi: number) => fallbackStorageQuote(sizeGi).full.hourlyCredits;
     expect([1, 10, 11, 20, 25, 26, 30].map(credits)).toEqual([5, 5, 6, 15, 20, 23, 35]);
     expect(fallbackStorageQuote(20).archived.hourlyCredits).toBe(7.5);
+  });
+});
+
+describe('归档优化：手动归档 / 复原 / fork / 停止不归档（T-AR1 / T-RS1 / T-FORK）', () => {
+  const successArchive = {
+    archiveId: 'a-ok',
+    status: 'SUCCEEDED',
+    fileName: 'my-data-20261102-100000.tar.gz2',
+    path: `/archive/${WS}/${STORAGE_ID}/my-data-20261102-100000.tar.gz2`,
+    usageBytes: 4096,
+    cloudHostId: null,
+    cloudHostName: null,
+  };
+
+  it('T-AR1: 手动归档仅 IDLE；CAS → ARCHIVING 并写占位 currentArchive', async () => {
+    vi.mocked(CloudStorage.findOne).mockReturnValue(chain(storageDoc()) as never);
+    vi.mocked(CloudStorage.findOneAndUpdate).mockReturnValue(
+      chain(storageDoc({ status: 'ARCHIVING' })) as never,
+    );
+    vi.mocked(CloudStorage.findById).mockReturnValue(
+      chain(storageDoc({ status: 'ARCHIVING' })) as never,
+    );
+    h.controller.archiveStorageOperation.mockResolvedValue({ accepted: true, operationId: 'x' });
+
+    await withWorkspace(adminContext, () => service.archive(STORAGE_ID, USER));
+
+    const call = h.controller.archiveStorageOperation.mock.calls[0] as [
+      string,
+      { operationId: string; archiveId: string; fileName: string; workspaceId: string },
+    ];
+    expect(call[0]).toBe(STORAGE_ID);
+    expect(call[1].operationId).toMatch(/^[a-f0-9]{24}$/);
+    expect(call[1].fileName).toMatch(/^my-data-\d{8}-\d{6}\.tar\.gz2$/);
+    const update = vi.mocked(CloudStorage.findOneAndUpdate).mock.calls[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(update.$set.status).toBe('ARCHIVING');
+    expect(update.$set.currentArchive).toMatchObject({
+      containerId: null,
+      status: 'PENDING',
+      operationId: call[1].operationId,
+    });
+
+    // 非 IDLE 拒绝
+    vi.mocked(CloudStorage.findOne).mockReturnValue(
+      chain(storageDoc({ status: 'ATTACHED' })) as never,
+    );
+    await withWorkspace(adminContext, async () => {
+      await expect(service.archive(STORAGE_ID, USER)).rejects.toThrow('storage is not archivable');
+    });
+  });
+
+  it('T-AR3a: 归档触发同步失败 → 回滚 IDLE 并恢复旧 currentArchive', async () => {
+    const previous = { archiveId: 'old', status: 'SUCCEEDED', path: '/archive/old' };
+    vi.mocked(CloudStorage.findOne).mockReturnValue(
+      chain(storageDoc({ status: 'IDLE', currentArchive: previous })) as never,
+    );
+    vi.mocked(CloudStorage.findOneAndUpdate).mockReturnValue(
+      chain(storageDoc({ status: 'ARCHIVING' })) as never,
+    );
+    h.controller.archiveStorageOperation.mockRejectedValue(
+      new CloudControllerRequestError(409, 'OPERATION_RUNNING'),
+    );
+
+    await withWorkspace(adminContext, async () => {
+      await expect(service.archive(STORAGE_ID, USER)).rejects.toThrow('storage is archiving');
+    });
+    const rollback = vi.mocked(CloudStorage.updateOne).mock.calls.at(-1)!;
+    expect(rollback[1]).toEqual({ $set: { status: 'IDLE', currentArchive: previous } });
+  });
+
+  it('T-AR3b: retryArchive 无容器来源 → 走存储级端点（新 operationId）', async () => {
+    vi.mocked(CloudStorage.findOne).mockReturnValue(
+      chain(
+        storageDoc({
+          status: 'ARCHIVING',
+          lastContainerId: 'stale-container',
+          currentArchive: { archiveId: 'a1', status: 'FAILED', containerId: null },
+        }),
+      ) as never,
+    );
+    vi.mocked(CloudStorage.findOneAndUpdate).mockReturnValue(
+      chain(storageDoc({ status: 'ARCHIVING' })) as never,
+    );
+    h.controller.archiveStorageOperation.mockResolvedValue({ accepted: true, operationId: 'x' });
+
+    await withWorkspace(adminContext, () => service.retryArchive(STORAGE_ID, USER));
+
+    expect(h.controller.triggerArchive).not.toHaveBeenCalled();
+    expect(h.controller.archiveStorageOperation).toHaveBeenCalledWith(
+      STORAGE_ID,
+      expect.objectContaining({ operationId: expect.stringMatching(/^[a-f0-9]{24}$/) }),
+    );
+  });
+
+  it('T-RS1: 复原门槛（IDLE + SUCCEEDED + 创建人/管理员）与无归档文案', async () => {
+    vi.mocked(CloudStorage.findOne).mockReturnValue(
+      chain(storageDoc({ status: 'IDLE', currentArchive: successArchive })) as never,
+    );
+    vi.mocked(CloudStorage.findOneAndUpdate).mockReturnValue(
+      chain(storageDoc({ status: 'RESTORING' })) as never,
+    );
+    vi.mocked(CloudStorage.findById).mockReturnValue(
+      chain(storageDoc({ status: 'RESTORING' })) as never,
+    );
+    h.controller.restoreStorageOperation.mockResolvedValue({ accepted: true, operationId: 'x' });
+
+    await withWorkspace(adminContext, () => service.restoreToArchive(STORAGE_ID, OTHER_USER));
+    expect(h.controller.restoreStorageOperation).toHaveBeenCalledWith(
+      STORAGE_ID,
+      expect.objectContaining({
+        archivePath: successArchive.path,
+        sizeGi: 20,
+      }),
+    );
+
+    // 非创建人 + 非管理员 → 拒绝
+    await withWorkspace(devContext, async () => {
+      await expect(service.restoreToArchive(STORAGE_ID, OTHER_USER)).rejects.toThrow(
+        'not allowed to restore storage',
+      );
+    });
+
+    // 无归档 → storage has no archive
+    vi.mocked(CloudStorage.findOne).mockReturnValue(
+      chain(storageDoc({ status: 'IDLE', currentArchive: null })) as never,
+    );
+    await withWorkspace(devContext, async () => {
+      await expect(service.restoreToArchive(STORAGE_ID, USER)).rejects.toThrow(
+        'storage has no archive',
+      );
+    });
+  });
+
+  it('T-RS2/T-RS3: 复原回调 SUCCEEDED → IDLE；FAILED 保持 RESTORING + 可重试', async () => {
+    const operationId = new mongoose.Types.ObjectId().toString();
+    vi.mocked(CloudStorage.findById).mockReturnValue(
+      chain(
+        storageDoc({
+          status: 'RESTORING',
+          currentArchive: successArchive,
+          currentRestore: { operationId, status: 'RUNNING' },
+        }),
+      ) as never,
+    );
+    vi.mocked(CloudStorage.findOneAndUpdate).mockReturnValueOnce(
+      chain(
+        storageDoc({
+          status: 'IDLE',
+          usageBytes: 4096,
+          currentRestore: null,
+        }),
+      ) as never,
+    );
+    await service.handleRestoreCallback(STORAGE_ID, { operationId, status: 'SUCCEEDED' });
+    const successUpdate = vi.mocked(CloudStorage.findOneAndUpdate).mock.calls[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(successUpdate.$set.status).toBe('IDLE');
+    expect(successUpdate.$set.currentRestore).toBeNull();
+    expect(successUpdate.$set.usageBytes).toBe(4096);
+
+    vi.mocked(CloudStorage.findById).mockReturnValue(
+      chain(
+        storageDoc({
+          status: 'RESTORING',
+          currentArchive: successArchive,
+          currentRestore: { operationId, status: 'RUNNING' },
+        }),
+      ) as never,
+    );
+    vi.mocked(CloudStorage.findOneAndUpdate).mockReturnValueOnce(
+      chain(
+        storageDoc({
+          status: 'RESTORING',
+          currentRestore: { operationId, status: 'FAILED', failureReason: 'tar failed' },
+        }),
+      ) as never,
+    );
+    await service.handleRestoreCallback(STORAGE_ID, {
+      operationId,
+      status: 'FAILED',
+      failureReason: 'tar failed',
+    });
+    const failedUpdate = vi.mocked(CloudStorage.findOneAndUpdate).mock.calls.at(-1)![1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(failedUpdate.$set.status).toBeUndefined();
+    expect(failedUpdate.$set.currentRestore).toMatchObject({ status: 'FAILED' });
+  });
+
+  it('T-FORK2: fork 创建新存储（sizeGi/来源/容量只读）并复用 restore 端点', async () => {
+    const source = storageDoc({
+      status: 'IDLE',
+      currentArchive: successArchive,
+    });
+    vi.mocked(CloudStorage.findOne)
+      .mockReturnValueOnce(chain(source) as never)
+      .mockReturnValueOnce(chain(null) as never);
+    vi.mocked(CloudStorage.create).mockResolvedValue({} as never);
+    h.controller.restoreStorageOperation.mockResolvedValue({ accepted: true, operationId: 'x' });
+
+    const newId = '507f1f77bcf86cd7994390f1';
+    vi.mocked(CloudStorage.findById).mockReturnValue(
+      chain(storageDoc({ _id: newId, status: 'CREATING', sizeGi: 20 })) as never,
+    );
+    await withWorkspace(adminContext, () =>
+      service.fork(STORAGE_ID, { name: 'my-data-copy' }, USER),
+    );
+
+    const created = vi.mocked(CloudStorage.create).mock.calls[0][0] as Record<string, unknown>;
+    expect(created).toMatchObject({
+      name: 'my-data-copy',
+      sizeGi: 20,
+      status: 'CREATING',
+    });
+    expect(String(created.forkedFromStorageId)).toBe(STORAGE_ID);
+    expect(h.controller.restoreStorageOperation).toHaveBeenCalledWith(
+      String(created._id),
+      expect.objectContaining({ archivePath: successArchive.path, sizeGi: 20 }),
+    );
+  });
+
+  it('T-FORK3: fork 源不可用 → storage is not forkable；同步失败 → CREATE_FAILED + 删 PVC', async () => {
+    vi.mocked(CloudStorage.findOne).mockReturnValue(
+      chain(storageDoc({ status: 'ATTACHED', currentArchive: successArchive })) as never,
+    );
+    await withWorkspace(adminContext, async () => {
+      await expect(
+        service.fork(STORAGE_ID, { name: 'copy' }, USER),
+      ).rejects.toThrow('storage is not forkable');
+    });
+
+    const source = storageDoc({ status: 'IDLE', currentArchive: successArchive });
+    vi.mocked(CloudStorage.findOne)
+      .mockReturnValueOnce(chain(source) as never)
+      .mockReturnValueOnce(chain(null) as never);
+    vi.mocked(CloudStorage.create).mockResolvedValue({} as never);
+    vi.mocked(CloudStorage.findOneAndUpdate).mockResolvedValue({} as never);
+    h.controller.restoreStorageOperation.mockRejectedValue(
+      new CloudControllerRequestError(503, 'unavailable'),
+    );
+    h.controller.deleteStorage.mockResolvedValue({ deleted: true } as never);
+
+    await withWorkspace(adminContext, async () => {
+      await expect(service.fork(STORAGE_ID, { name: 'copy' }, USER)).rejects.toThrow(
+        'control plane unavailable',
+      );
+    });
+    const failed = vi.mocked(CloudStorage.findOneAndUpdate).mock.calls.at(-1)!;
+    expect((failed[1] as { $set: Record<string, unknown> }).$set).toMatchObject({
+      status: 'CREATE_FAILED',
+    });
+    expect(h.controller.deleteStorage).toHaveBeenCalled();
+  });
+
+  it('T-SKIP2a: detachToIdle CAS ATTACHED→IDLE（FULL、清 attached*）', async () => {
+    vi.mocked(CloudStorage.findOneAndUpdate).mockReturnValue(
+      chain(storageDoc({ status: 'IDLE', billingRate: 'FULL' })) as never,
+    );
+    await service.detachToIdle(STORAGE_ID, HOST_ID);
+    const [filter, update] = vi.mocked(CloudStorage.findOneAndUpdate).mock.calls[0];
+    expect(filter).toMatchObject({ _id: STORAGE_ID, status: 'ATTACHED', attachedCloudHostId: HOST_ID });
+    expect((update as { $set: Record<string, unknown> }).$set).toMatchObject({
+      status: 'IDLE',
+      billingRate: 'FULL',
+      attachedCloudHostId: null,
+      attachFromStatus: null,
+    });
   });
 });

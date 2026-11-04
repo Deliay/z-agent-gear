@@ -9,6 +9,7 @@ import { K8sStorageManager } from '../services/k8s-storage-manager.js';
 import { StorageService } from '../services/storage-service.js';
 import { TokenService } from '../services/token-service.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
+import { InMemoryStorageOperationRepository } from '../repositories/storage-operation-repository.js';
 import { internalAuth } from '../middleware/internal-auth.js';
 import { createTestLogger } from '../observability/testing.js';
 import { createInternalRouter, parseHarnessRequest, parseStorageRequest } from './internal-api.js';
@@ -79,10 +80,12 @@ async function setup() {
     archiveAccessMode: 'ReadWriteOnce',
   });
   const testLog = createTestLogger();
+  const operationRepo = new InMemoryStorageOperationRepository();
   const storageService = new StorageService({
     repo,
     k8sClient: client,
     storageManager,
+    operationRepo,
     logger: testLog.logger,
     config: {
       namespace: 'zag-cloud',
@@ -116,8 +119,7 @@ async function setup() {
   const httpServer: HttpServer = createServer(app);
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   const baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
-  return { repo, client, storageManager, storageService, containerService, httpServer, baseUrl };
-}
+  return { repo, client, storageManager, storageService, containerService, httpServer, baseUrl };}
 
 async function close(server: HttpServer): Promise<void> {
   await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -394,6 +396,94 @@ describe('internal storage API', () => {
         error: 'ARCHIVE_RUNNING',
         archiveId: 'archive-busy',
       });
+    } finally {
+      await close(ctx.httpServer);
+    }
+  });
+
+  it('T-AR4: POST /storages/:id/archive 受理并可按 operationId 查询', async () => {
+    const ctx = await setup();
+    try {
+      await ctx.storageManager.ensureStoragePvc({
+        storageId: STORAGE_ID,
+        tenantId: TENANT_ID,
+        workspaceId: WORKSPACE_ID,
+        sizeGi: 10,
+      });
+      await ctx.storageManager.ensureArchivePvc(WORKSPACE_ID, TENANT_ID);
+      ctx.client.onJobCreated = (manifest) => {
+        if (manifest.metadata.labels.app !== 'zag-archive') return;
+        ctx.client.setPodLog(
+          manifest.metadata.name,
+          'ZAG_ARCHIVE_RESULT={"usageBytes":321}',
+        );
+        ctx.client.setPhase(manifest.metadata.name, 'succeeded');
+      };
+      const operationId = 'd'.repeat(24);
+
+      const response = await post(
+        `${ctx.baseUrl}/internal/storages/${STORAGE_ID}/archive`,
+        {
+          operationId,
+          archiveId: 'archive-api-1',
+          fileName: FILE_NAME,
+          workspaceId: WORKSPACE_ID,
+          tenantId: TENANT_ID,
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ accepted: true, operationId });
+
+      await ctx.storageService.drainArchiveTasks();
+      const detail = await fetch(
+        `${ctx.baseUrl}/internal/storages/${STORAGE_ID}/operations/${operationId}`,
+        { headers: authHeaders() },
+      );
+      expect(detail.status).toBe(200);
+      expect(await detail.json()).toMatchObject({
+        operationId,
+        type: 'archive',
+        status: 'succeeded',
+        usageBytes: 321,
+      });
+    } finally {
+      await close(ctx.httpServer);
+    }
+  });
+
+  it('T-AR4: 非法 operationId / 非布尔 storageArchive → 400 INVALID_BODY', async () => {
+    const ctx = await setup();
+    try {
+      const badOperation = await post(
+        `${ctx.baseUrl}/internal/storages/${STORAGE_ID}/archive`,
+        {
+          operationId: 'not-hex',
+          archiveId: 'archive-api-1',
+          fileName: FILE_NAME,
+          workspaceId: WORKSPACE_ID,
+        },
+      );
+      expect(badOperation.status).toBe(400);
+      expect((await badOperation.json()).error).toBe('INVALID_BODY');
+
+      const container = await ctx.repo.create({
+        name: 'zag-worker-destroy',
+        namespace: 'zag-cloud',
+        purpose: 'harness',
+        image: 'worker:test',
+        status: 'online',
+        storageId: STORAGE_ID,
+      });
+      const badDestroy = await fetch(
+        `${ctx.baseUrl}/internal/containers/${container.id}`,
+        {
+          method: 'DELETE',
+          headers: authHeaders(),
+          body: JSON.stringify({ storageArchive: 'no' }),
+        },
+      );
+      expect(badDestroy.status).toBe(400);
+      expect((await badDestroy.json()).error).toBe('INVALID_BODY');
     } finally {
       await close(ctx.httpServer);
     }

@@ -10,6 +10,11 @@
  * - 归档/恢复/用量/清理按工作区归档 PVC `KeyedMutex` 串行。
  */
 import type { CloudContainerEntity, ContainerRepository } from '../repositories/container-repository.js';
+import {
+  OperationRunningError,
+  type StorageOperationEntity,
+  type StorageOperationRepository,
+} from '../repositories/storage-operation-repository.js';
 import { type ObservationLogger } from '../observability/logger.js';
 import type { AgentApiClient } from './agent-api-client.js';
 import type { K8sClient, K8sContainer, K8sJobManifest, K8sVolume } from './k8s-client.js';
@@ -26,6 +31,7 @@ import {
 } from './k8s-storage-manager.js';
 
 export { buildArchiveFileName, sanitizeArchiveName, StoragePvcConflictError };
+export { OperationRunningError };
 
 /** 容器不存在（归档触发/用量刷新）。 */
 export class StorageContainerNotFoundError extends Error {
@@ -82,12 +88,14 @@ export const SOURCE_PVC_DELETE_ATTEMPTS = 3;
 export const ARCHIVE_RESULT_PREFIX = 'ZAG_ARCHIVE_RESULT=';
 export const ARCHIVE_LABEL_ROLE = 'zag.cloud/role';
 export const ARCHIVE_ID_LABEL = 'zag.cloud/archive-id';
+/** 存储级操作台账单号标签（归档/复原 Job 的 Pod 选择器）。 */
+export const STORAGE_OP_ID_LABEL = 'zag.cloud/storage-op-id';
 
 export interface ArchiveCallbackPayload {
   archiveId: string;
   storageId: string;
   cloudHostId: string | null;
-  containerId: string;
+  containerId: string | null;
   cloudHostName: string | null;
   fileName: string;
   path: string;
@@ -98,6 +106,18 @@ export interface ArchiveCallbackPayload {
   failureReason: string | null;
   /** 归档成功后源 PVC 是否已释放（删除失败时为 false，裁决 13）。 */
   sourcePvcReleased?: boolean;
+  /** 存储级归档操作单号（容器级归档缺省）。 */
+  operationId?: string | null;
+}
+
+export interface RestoreCallbackPayload {
+  operationId: string;
+  storageId: string;
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+  usageBytes: number | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  failureReason: string | null;
 }
 
 export interface UsageCallbackPayload {
@@ -105,10 +125,10 @@ export interface UsageCallbackPayload {
   measuredAt: string;
 }
 
-/** `notifyStorageArchive` / `notifyStorageUsage` 的最小契约（便于单测注入桩）。 */
+/** `notifyStorageArchive` / `notifyStorageUsage` / `notifyStorageRestore` 的最小契约（便于单测注入桩）。 */
 export type StorageCallbackClient = Pick<
   AgentApiClient,
-  'notifyStorageArchive' | 'notifyStorageUsage'
+  'notifyStorageArchive' | 'notifyStorageUsage' | 'notifyStorageRestore'
 >;
 
 export interface StorageServiceConfig {
@@ -125,6 +145,8 @@ export interface StorageServiceDeps {
   repo: ContainerRepository;
   k8sClient: K8sClient;
   storageManager: K8sStorageManager;
+  /** 存储级归档/复原操作台账（可选：未配置时新端点 503）。 */
+  operationRepo?: StorageOperationRepository;
   agentApiClient?: StorageCallbackClient;
   logger: ObservationLogger;
   config: StorageServiceConfig;
@@ -152,6 +174,25 @@ export interface CleanupStorageInput {
   storageId: string;
   workspaceId: string;
   deleteArchive: boolean;
+}
+
+/** 存储级归档请求（契约 A.2.11）。 */
+export interface StorageArchiveRequestInput {
+  operationId: string;
+  archiveId: string;
+  fileName: string;
+  workspaceId: string;
+  tenantId?: string | null;
+}
+
+/** 存储级复原请求（契约 A.2.12；复原到归档与 fork 共用）。 */
+export interface StorageRestoreRequestInput {
+  operationId: string;
+  workspaceId: string;
+  tenantId?: string | null;
+  archivePath: string;
+  sizeGi: number;
+  storageClass?: string | null;
 }
 
 export interface RefreshUsageResult {
@@ -221,6 +262,8 @@ export class StorageService {
   private readonly runningArchiveContainers = new Set<string>();
   /** 已成功投递回调的容器（重启后清空 → 巡检重投一次，幂等）。 */
   private readonly callbackDelivered = new Set<string>();
+  /** 本进程内正在执行的存储级操作（按 operationId）；重启后为空 → 由巡检重跑。 */
+  private readonly runningOperations = new Set<string>();
   /** 进行中的清理 Job（按工作区）：完成前同工作区归档/用量排队。 */
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
   private readonly sleep: (ms: number) => Promise<void>;
@@ -304,6 +347,10 @@ export class StorageService {
     if (inflight) {
       throw new StorageArchiveRunningError(inflight.storageArchiveId);
     }
+    const inflightOperation = await this.findInflightOperation(storageId);
+    if (inflightOperation) {
+      throw new StorageArchiveRunningError(inflightOperation.archiveId);
+    }
     await this.deps.storageManager.deleteStoragePvc(storageId);
     return { storageId, deleted: true };
   }
@@ -318,24 +365,51 @@ export class StorageService {
     tenantId?: string | null,
   ): Promise<StartStoragePrepareResult> {
     if (input.restore) {
-      const existing = await this.deps.storageManager.getStoragePvc(input.id);
-      if (existing) {
-        await this.deps.storageManager.deletePvcByName(existing.name);
-        // 删除为异步：轮询至 PVC 真正消失，避免紧接的 ensure 命中 Terminating 同名卷。
-        const deadline = Date.now() + PVC_DELETE_WAIT_TIMEOUT_MS;
-        for (;;) {
-          const remaining = await this.deps.storageManager.getStoragePvc(input.id);
-          if (!remaining) break;
-          if (Date.now() >= deadline) {
-            throw new Error(`storage PVC ${existing.name} is still terminating`);
-          }
-          await this.sleep(PVC_DELETE_POLL_INTERVAL_MS);
-        }
-      }
+      return this.recreateStoragePvc({
+        storageId: input.id,
+        tenantId: tenantId ?? null,
+        workspaceId: input.workspaceId,
+        sizeGi: input.sizeGi,
+        storageClass: input.storageClass ?? null,
+      });
     }
     return this.deps.storageManager.ensureStoragePvc({
       storageId: input.id,
       tenantId: tenantId ?? null,
+      workspaceId: input.workspaceId,
+      sizeGi: input.sizeGi,
+      storageClass: input.storageClass ?? null,
+    });
+  }
+
+  /**
+   * 复原/fork 目标 PVC 准备（裁决 13 / D12）：先删同名残留（存在时）并轮询至真正消失，
+   * 再按 `sizeGi`/`storageClass` ensure 重建。fork 时 PVC 尚不存在，等价于直接 ensure。
+   */
+  async recreateStoragePvc(input: {
+    storageId: string;
+    tenantId?: string | null;
+    workspaceId: string;
+    sizeGi: number;
+    storageClass?: string | null;
+  }): Promise<StartStoragePrepareResult> {
+    const existing = await this.deps.storageManager.getStoragePvc(input.storageId);
+    if (existing) {
+      await this.deps.storageManager.deletePvcByName(existing.name);
+      // 删除为异步：轮询至 PVC 真正消失，避免紧接的 ensure 命中 Terminating 同名卷。
+      const deadline = Date.now() + PVC_DELETE_WAIT_TIMEOUT_MS;
+      for (;;) {
+        const remaining = await this.deps.storageManager.getStoragePvc(input.storageId);
+        if (!remaining) break;
+        if (Date.now() >= deadline) {
+          throw new Error(`storage PVC ${existing.name} is still terminating`);
+        }
+        await this.sleep(PVC_DELETE_POLL_INTERVAL_MS);
+      }
+    }
+    return this.deps.storageManager.ensureStoragePvc({
+      storageId: input.storageId,
+      tenantId: input.tenantId ?? null,
       workspaceId: input.workspaceId,
       sizeGi: input.sizeGi,
       storageClass: input.storageClass ?? null,
@@ -405,6 +479,8 @@ export class StorageService {
     if (!container || !container.storageId || !container.storagePvcName) {
       return { started: false };
     }
+    // 显式跳过归档（destroy storageArchive:false）：巡检/终态兜底一律不再补归档（D2）。
+    if (container.storageArchiveSkipped === true) return { started: false };
     // 从未就绪（创建/恢复失败）不归档：源卷可能为空或仅部分恢复，归档会覆盖可用旧归档。
     if (container.connectedAt === null) return { started: false };
     if (
@@ -661,7 +737,8 @@ export class StorageService {
 
   private buildArchiveJobManifest(input: {
     jobName: string;
-    containerId: string;
+    containerId?: string | null;
+    operationId?: string | null;
     archiveId: string;
     storagePvcName: string;
     archivePvcName: string;
@@ -676,13 +753,18 @@ export class StorageService {
       },
       { name: 'archive', persistentVolumeClaim: { claimName: input.archivePvcName } },
     ];
-    const labels = {
+    const labels: Record<string, string> = {
       [STORAGE_APP_LABEL]: ARCHIVE_APP_VALUE,
       [STORAGE_ID_LABEL]: toLabelValue(input.storageId),
-      'zag.cloud/container-id': input.containerId,
       [ARCHIVE_ID_LABEL]: toLabelValue(input.archiveId),
       [ARCHIVE_LABEL_ROLE]: 'archive',
     };
+    if (input.containerId) {
+      labels['zag.cloud/container-id'] = input.containerId;
+    }
+    if (input.operationId) {
+      labels[STORAGE_OP_ID_LABEL] = toLabelValue(input.operationId);
+    }
     const container: K8sContainer = {
       name: 'archiver',
       image: this.deps.config.archiverImage,
@@ -741,6 +823,551 @@ export class StorageService {
 
   private cleanupPodSelector(): string {
     return `${ARCHIVE_LABEL_ROLE}=cleanup`;
+  }
+
+  // ---------------------------------------------------------------- 存储级操作（归档/复原）
+
+  private requireOperationRepo(): StorageOperationRepository {
+    const repo = this.deps.operationRepo;
+    if (!repo) throw new Error('storage operation ledger not configured');
+    return repo;
+  }
+
+  /**
+   * 触发存储级归档（契约 A.2.11，手动归档）：无活跃容器 + 台账幂等 + per-workspace 串行。
+   * 返回既有 operationId（同 id 重投）或新建的 operationId。
+   */
+  async startStorageArchive(
+    storageId: string,
+    input: StorageArchiveRequestInput,
+  ): Promise<{ accepted: boolean; operationId: string }> {
+    const repo = this.requireOperationRepo();
+    if (await this.hasActiveContainer(storageId)) {
+      throw new StorageInUseError(storageId);
+    }
+    const { created, operation } = await repo.create({
+      operationId: input.operationId,
+      storageId,
+      workspaceId: input.workspaceId,
+      tenantId: input.tenantId ?? null,
+      type: 'archive',
+      archiveId: input.archiveId,
+      fileName: input.fileName,
+      startedAt: this.now(),
+    });
+    if (created) {
+      this.spawn('storage-archive', () => this.runStorageOperation(operation.id));
+    }
+    return { accepted: true, operationId: operation.id };
+  }
+
+  /**
+   * 触发存储级复原（契约 A.2.12；复原到归档与 fork 共用）。
+   * fork 时 `storageId` 为新存储（PVC 尚不存在时跳过删除直接重建）。
+   */
+  async startStorageRestore(
+    storageId: string,
+    input: StorageRestoreRequestInput,
+  ): Promise<{ accepted: boolean; operationId: string }> {
+    const repo = this.requireOperationRepo();
+    if (await this.hasActiveContainer(storageId)) {
+      throw new StorageInUseError(storageId);
+    }
+    const { created, operation } = await repo.create({
+      operationId: input.operationId,
+      storageId,
+      workspaceId: input.workspaceId,
+      tenantId: input.tenantId ?? null,
+      type: 'restore',
+      archivePath: input.archivePath,
+      sizeGi: input.sizeGi,
+      storageClass: input.storageClass ?? null,
+      startedAt: this.now(),
+    });
+    if (created) {
+      this.spawn('storage-restore', () => this.runStorageOperation(operation.id));
+    }
+    return { accepted: true, operationId: operation.id };
+  }
+
+  /** 操作查询（契约 A.2.13）。 */
+  async getOperation(
+    storageId: string,
+    operationId: string,
+  ): Promise<{
+    operationId: string;
+    type: string;
+    status: string;
+    usageBytes: number | null;
+    startedAt: string | null;
+    finishedAt: string | null;
+    failureReason: string | null;
+  } | null> {
+    const repo = this.requireOperationRepo();
+    const operation = await repo.findById(operationId, storageId);
+    if (!operation) return null;
+    return {
+      operationId: operation.id,
+      type: operation.type,
+      status: operation.status,
+      usageBytes: operation.usageBytes,
+      startedAt: operation.startedAt.toISOString(),
+      finishedAt: operation.finishedAt?.toISOString() ?? null,
+      failureReason: operation.failureReason,
+    };
+  }
+
+  private async runStorageOperation(operationId: string): Promise<void> {
+    if (this.runningOperations.has(operationId)) return;
+    const repo = this.requireOperationRepo();
+    const operation = await repo.findById(operationId);
+    if (!operation || (operation.status !== 'pending' && operation.status !== 'running')) return;
+    this.runningOperations.add(operationId);
+    try {
+      await this.awaitCleanup(operation.workspaceId);
+      await this.archiveMutex.runExclusive(operation.workspaceId, () =>
+        operation.type === 'archive'
+          ? this.executeStorageArchive(operationId)
+          : this.executeStorageRestore(operationId),
+      );
+    } finally {
+      this.runningOperations.delete(operationId);
+    }
+  }
+
+  private async executeStorageArchive(operationId: string): Promise<void> {
+    const repo = this.requireOperationRepo();
+    const operation = await repo.findById(operationId);
+    if (!operation || operation.status === 'succeeded' || operation.status === 'failed') return;
+    const running =
+      operation.status === 'pending' ? await repo.markRunning(operationId) : operation;
+    if (!running) return;
+    const archiveId = running.archiveId;
+    const fileName = running.fileName;
+    if (!archiveId || !fileName) {
+      await this.finishStorageOperationFailure(operationId, '归档参数缺失', null);
+      return;
+    }
+    const path = this.archivePath(running.workspaceId, running.storageId, fileName);
+    let jobName: string | null = null;
+    await this.callbackArchive({
+      archiveId,
+      storageId: running.storageId,
+      cloudHostId: null,
+      containerId: null,
+      cloudHostName: null,
+      fileName,
+      path,
+      status: 'RUNNING',
+      usageBytes: null,
+      startedAt: running.startedAt.toISOString(),
+      finishedAt: null,
+      failureReason: null,
+      operationId,
+    });
+    try {
+      await this.deps.storageManager.ensureArchivePvc(running.workspaceId, running.tenantId);
+      jobName = `zag-archive-${running.storageId.slice(0, 8)}-${randomSuffix(4)}`;
+      await this.deps.k8sClient.createJob(
+        this.buildArchiveJobManifest({
+          jobName,
+          operationId,
+          archiveId,
+          storagePvcName: this.deps.storageManager.storagePvcName(running.storageId),
+          archivePvcName: this.archivePvcName(running.workspaceId),
+          workspaceId: running.workspaceId,
+          storageId: running.storageId,
+          fileName,
+        }),
+      );
+      const outcome = await this.waitForJob(jobName);
+      if (outcome.phase !== 'succeeded') {
+        await this.finishStorageOperationFailure(
+          operationId,
+          outcome.message ?? '归档失败',
+          jobName,
+        );
+        return;
+      }
+      const log = await this.deps.k8sClient.readPodLogs(
+        this.storageOperationPodSelector(operationId, 'archive'),
+      );
+      const usageBytes = parseUsageBytes(log);
+      if (usageBytes === null) {
+        await this.finishStorageOperationFailure(operationId, '用量标记行缺失', jobName);
+        return;
+      }
+      // 超时巡检可能已把状态收口为 failed：不再删除源 PVC（保守保留，交由运维清理）。
+      const current = await repo.findById(operationId);
+      if (current?.status !== 'running') {
+        if (jobName) await this.deleteJobBestEffort(jobName);
+        return;
+      }
+      const finishedAt = this.now();
+      const succeeded = await repo.markSucceeded(operationId, { usageBytes, finishedAt });
+      if (!succeeded) return;
+      const sourcePvcReleased = await this.deleteSourcePvcWithRetry(
+        this.deps.storageManager.storagePvcName(running.storageId),
+      );
+      const delivered = await this.callbackArchive({
+        archiveId,
+        storageId: running.storageId,
+        cloudHostId: null,
+        containerId: null,
+        cloudHostName: null,
+        fileName,
+        path,
+        status: 'SUCCEEDED',
+        usageBytes,
+        startedAt: running.startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        failureReason: null,
+        sourcePvcReleased,
+        operationId,
+      });
+      if (delivered) await repo.markCallbackDelivered(operationId);
+      this.deps.logger.info(
+        {
+          component: 'cloud-storage',
+          event: 'storage_archive_succeeded',
+          storageId: running.storageId,
+          operationId,
+          archiveId,
+          usageBytes,
+          sourcePvcReleased,
+        },
+        'storage-level archive succeeded',
+      );
+      if (jobName) await this.deleteJobBestEffort(jobName);
+    } catch (err) {
+      await this.finishStorageOperationFailure(
+        operationId,
+        err instanceof Error ? err.message : String(err),
+        jobName,
+      );
+    }
+  }
+
+  private async executeStorageRestore(operationId: string): Promise<void> {
+    const repo = this.requireOperationRepo();
+    const operation = await repo.findById(operationId);
+    if (!operation || operation.status === 'succeeded' || operation.status === 'failed') return;
+    const running =
+      operation.status === 'pending' ? await repo.markRunning(operationId) : operation;
+    if (!running) return;
+    if (!running.archivePath || !running.sizeGi) {
+      await this.finishStorageOperationFailure(operationId, '复原参数缺失', null);
+      return;
+    }
+    let jobName: string | null = null;
+    await this.callbackRestore({
+      operationId,
+      storageId: running.storageId,
+      status: 'RUNNING',
+      usageBytes: null,
+      startedAt: running.startedAt.toISOString(),
+      finishedAt: null,
+      failureReason: null,
+    });
+    try {
+      await this.recreateStoragePvc({
+        storageId: running.storageId,
+        tenantId: running.tenantId,
+        workspaceId: running.workspaceId,
+        sizeGi: running.sizeGi,
+        storageClass: running.storageClass,
+      });
+      const archivePvc = await this.deps.storageManager.getArchivePvc(running.workspaceId);
+      if (!archivePvc) throw new Error('archive PVC not found');
+      jobName = `zag-restore-${running.storageId.slice(0, 8)}-${randomSuffix(4)}`;
+      await this.deps.k8sClient.createJob(
+        this.buildRestoreJobManifest({
+          jobName,
+          operationId,
+          storageId: running.storageId,
+          archivePvcName: archivePvc.name,
+          targetPvcName: this.deps.storageManager.storagePvcName(running.storageId),
+          archivePath: running.archivePath,
+          workspaceId: running.workspaceId,
+        }),
+      );
+      const outcome = await this.waitForJob(jobName, '复原超时');
+      if (outcome.phase !== 'succeeded') {
+        await this.finishStorageOperationFailure(
+          operationId,
+          outcome.message ?? '复原失败',
+          jobName,
+        );
+        return;
+      }
+      const log = await this.deps.k8sClient.readPodLogs(
+        this.storageOperationPodSelector(operationId, 'restore'),
+      );
+      if (!/ZAG_RESTORE_DONE/.test(log)) {
+        await this.finishStorageOperationFailure(operationId, '复原完成标记行缺失', jobName);
+        return;
+      }
+      const finishedAt = this.now();
+      const succeeded = await repo.markSucceeded(operationId, { finishedAt });
+      if (!succeeded) return;
+      const delivered = await this.callbackRestore({
+        operationId,
+        storageId: running.storageId,
+        status: 'SUCCEEDED',
+        usageBytes: null,
+        startedAt: running.startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        failureReason: null,
+      });
+      if (delivered) await repo.markCallbackDelivered(operationId);
+      this.deps.logger.info(
+        {
+          component: 'cloud-storage',
+          event: 'storage_restore_succeeded',
+          storageId: running.storageId,
+          operationId,
+        },
+        'storage-level restore succeeded',
+      );
+      if (jobName) await this.deleteJobBestEffort(jobName);
+    } catch (err) {
+      await this.finishStorageOperationFailure(
+        operationId,
+        err instanceof Error ? err.message : String(err),
+        jobName,
+      );
+    }
+  }
+
+  private async finishStorageOperationFailure(
+    operationId: string,
+    failureReason: string,
+    jobName: string | null,
+  ): Promise<void> {
+    const repo = this.requireOperationRepo();
+    const finishedAt = this.now();
+    const failed = await repo.markFailed(operationId, { failureReason, finishedAt });
+    if (failed) {
+      const delivered =
+        failed.type === 'archive'
+          ? await this.callbackArchive({
+              archiveId: failed.archiveId ?? '',
+              storageId: failed.storageId,
+              cloudHostId: null,
+              containerId: null,
+              cloudHostName: null,
+              fileName: failed.fileName ?? '',
+              path:
+                failed.fileName != null
+                  ? this.archivePath(failed.workspaceId, failed.storageId, failed.fileName)
+                  : '',
+              status: 'FAILED',
+              usageBytes: null,
+              startedAt: failed.startedAt.toISOString(),
+              finishedAt: finishedAt.toISOString(),
+              failureReason,
+              operationId,
+            })
+          : await this.callbackRestore({
+              operationId,
+              storageId: failed.storageId,
+              status: 'FAILED',
+              usageBytes: null,
+              startedAt: failed.startedAt.toISOString(),
+              finishedAt: finishedAt.toISOString(),
+              failureReason,
+            });
+      if (delivered) await repo.markCallbackDelivered(operationId);
+      this.deps.logger.error(
+        {
+          component: 'cloud-storage',
+          event: 'storage_operation_failed',
+          storageId: failed.storageId,
+          operationId,
+          type: failed.type,
+          failureReason,
+        },
+        'storage-level operation failed',
+      );
+    }
+    if (jobName) await this.deleteJobBestEffort(jobName);
+  }
+
+  /**
+   * 存储级操作巡检（并入 status-sync 15s）：
+   * - `pending/running` 超 `ARCHIVE_TIMEOUT_MS` → failed + 回调；
+   * - 本进程无执行任务（重启）→ 重跑（归档源卷未删安全；复原整体删重建）；
+   * - 终态未送达回调 → 重投一次（agent-api 幂等）。
+   */
+  async reconcileStorageOperations(
+    now: number = Date.now(),
+  ): Promise<{ retried: number; failed: number; recalled: number }> {
+    const repo = this.deps.operationRepo;
+    if (!repo) return { retried: 0, failed: 0, recalled: 0 };
+    let retried = 0;
+    let failed = 0;
+    let recalled = 0;
+
+    for (const operation of await repo.findStale(now, this.deps.config.archiveTimeoutMs)) {
+      const updated = await repo.markFailed(operation.id, {
+        failureReason: '操作超时',
+        finishedAt: this.now(),
+      });
+      if (updated) {
+        const delivered = await this.repostStorageCallback(updated);
+        if (delivered) await repo.markCallbackDelivered(updated.id);
+        failed += 1;
+      }
+    }
+
+    for (const operation of await repo.findActive()) {
+      if (this.runningOperations.has(operation.id)) continue;
+      this.spawn('storage-operation', () => this.runStorageOperation(operation.id));
+      retried += 1;
+    }
+
+    for (const operation of await repo.findUndelivered()) {
+      const delivered = await this.repostStorageCallback(operation);
+      if (delivered) {
+        await repo.markCallbackDelivered(operation.id);
+        recalled += 1;
+      }
+    }
+
+    return { retried, failed, recalled };
+  }
+
+  private async repostStorageCallback(operation: StorageOperationEntity): Promise<boolean> {
+    if (operation.type === 'archive') {
+      return this.callbackArchive({
+        archiveId: operation.archiveId ?? '',
+        storageId: operation.storageId,
+        cloudHostId: null,
+        containerId: null,
+        cloudHostName: null,
+        fileName: operation.fileName ?? '',
+        path: operation.fileName
+          ? this.archivePath(operation.workspaceId, operation.storageId, operation.fileName)
+          : '',
+        status: operation.status === 'succeeded' ? 'SUCCEEDED' : 'FAILED',
+        usageBytes: operation.usageBytes,
+        startedAt: operation.startedAt.toISOString(),
+        finishedAt: operation.finishedAt?.toISOString() ?? null,
+        failureReason: operation.failureReason,
+        sourcePvcReleased:
+          operation.status === 'succeeded'
+            ? await this.isSourcePvcReleased(operation.storageId)
+            : undefined,
+        operationId: operation.id,
+      });
+    }
+    return this.callbackRestore({
+      operationId: operation.id,
+      storageId: operation.storageId,
+      status: operation.status === 'succeeded' ? 'SUCCEEDED' : 'FAILED',
+      usageBytes: operation.usageBytes,
+      startedAt: operation.startedAt.toISOString(),
+      finishedAt: operation.finishedAt?.toISOString() ?? null,
+      failureReason: operation.failureReason,
+    });
+  }
+
+  private storageOperationPodSelector(operationId: string, role: 'archive' | 'restore'): string {
+    return `${STORAGE_OP_ID_LABEL}=${toLabelValue(operationId)},${ARCHIVE_LABEL_ROLE}=${role}`;
+  }
+
+  private async callbackRestore(payload: RestoreCallbackPayload): Promise<boolean> {
+    const client = this.deps.agentApiClient;
+    if (!client) return false;
+    try {
+      await client.notifyStorageRestore(payload.storageId, payload);
+      return true;
+    } catch (err) {
+      this.deps.logger.error(
+        {
+          component: 'cloud-storage',
+          event: 'restore_callback_failed',
+          storageId: payload.storageId,
+          operationId: payload.operationId,
+          err,
+        },
+        'restore callback failed',
+      );
+      return false;
+    }
+  }
+
+  private async findInflightOperation(
+    storageId: string,
+  ): Promise<StorageOperationEntity | null> {
+    if (!this.deps.operationRepo) return null;
+    return this.deps.operationRepo.findInflight(storageId);
+  }
+
+  private buildRestoreJobManifest(input: {
+    jobName: string;
+    operationId: string;
+    storageId: string;
+    archivePvcName: string;
+    targetPvcName: string;
+    archivePath: string;
+    workspaceId: string;
+  }): K8sJobManifest {
+    const labels = {
+      [STORAGE_APP_LABEL]: 'zag-restore',
+      [STORAGE_ID_LABEL]: toLabelValue(input.storageId),
+      'zag.cloud/workspace-id': toLabelValue(input.workspaceId),
+      [STORAGE_OP_ID_LABEL]: toLabelValue(input.operationId),
+      [ARCHIVE_LABEL_ROLE]: 'restore',
+    };
+    const volumes: K8sVolume[] = [
+      {
+        name: 'archive',
+        persistentVolumeClaim: { claimName: input.archivePvcName, readOnly: true },
+      },
+      { name: 'target', persistentVolumeClaim: { claimName: input.targetPvcName } },
+    ];
+    return {
+      apiVersion: 'batch/v1',
+      kind: 'Job',
+      metadata: {
+        name: input.jobName,
+        namespace: this.deps.config.namespace,
+        labels,
+      },
+      spec: {
+        backoffLimit: 0,
+        ttlSecondsAfterFinished: 600,
+        template: {
+          metadata: { labels },
+          spec: {
+            restartPolicy: 'Never',
+            automountServiceAccountToken: false,
+            containers: [
+              {
+                name: 'archiver',
+                image: this.deps.config.archiverImage,
+                command: ['/usr/local/bin/archiver-entrypoint.sh'],
+                env: [
+                  { name: 'MODE', value: 'restore' },
+                  { name: 'RESTORE_FILE', value: input.archivePath },
+                  { name: 'TARGET_DIR', value: '/target' },
+                  { name: 'ARCHIVE_ROOT', value: this.archiveRoot },
+                  { name: 'WORKSPACE_ID', value: input.workspaceId },
+                  { name: 'STORAGE_ID', value: input.storageId },
+                ],
+                resources: { limits: { cpu: '2', memory: '2Gi' } },
+                volumeMounts: [
+                  { name: 'archive', mountPath: this.archiveRoot, readOnly: true },
+                  { name: 'target', mountPath: '/target' },
+                ],
+              },
+            ],
+            volumes,
+          },
+        },
+      },
+    };
   }
 
   // ---------------------------------------------------------------- 恢复
@@ -905,6 +1532,10 @@ export class StorageService {
     const inflight = await this.findInflightArchive(input.storageId);
     if (inflight) {
       throw new StorageArchiveRunningError(inflight.storageArchiveId);
+    }
+    const inflightOperation = await this.findInflightOperation(input.storageId);
+    if (inflightOperation) {
+      throw new StorageArchiveRunningError(inflightOperation.archiveId);
     }
     // 与归档/恢复/用量共用按工作区归档 PVC 的串行锁（清理 Job 以 RW 挂载归档卷）。
     await this.archiveMutex.runExclusive(input.workspaceId, async () => {
@@ -1177,6 +1808,7 @@ export class StorageService {
 
   private async waitForJob(
     jobName: string,
+    timeoutMessage = '归档超时',
   ): Promise<{ phase: 'succeeded' | 'failed'; message?: string }> {
     const deadline = Date.now() + this.deps.config.archiveTimeoutMs;
     // 首次检查不等 sleep，命中即时成功（测试/短任务零等待）。
@@ -1190,7 +1822,7 @@ export class StorageService {
         return { phase: 'failed', message: job.message ?? 'Job 失败' };
       }
       if (Date.now() >= deadline) {
-        return { phase: 'failed', message: '归档超时' };
+        return { phase: 'failed', message: timeoutMessage };
       }
       await this.sleep(this.pollIntervalMs);
     }

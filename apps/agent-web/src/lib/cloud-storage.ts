@@ -12,6 +12,7 @@ export const CLOUD_STORAGE_STATUS_LABELS: Record<CloudStorageStatus, string> = {
   ATTACHED: '已挂载',
   ARCHIVING: '归档中',
   ARCHIVED: '已归档',
+  RESTORING: '复原中',
   DESTROYING: '销毁中',
   DESTROYED: '已销毁',
   CREATE_FAILED: '创建失败',
@@ -45,6 +46,7 @@ export function cloudStorageStatusBadgeVariant(
     case 'CREATING':
     case 'ATTACHING':
     case 'ARCHIVING':
+    case 'RESTORING':
       return 'secondary'
     case 'CREATE_FAILED':
       return 'destructive'
@@ -83,6 +85,49 @@ export function isArchiveRunning(
   return storage.currentArchive?.status !== 'FAILED'
 }
 
+/** 最近一次复原失败（RESTORING 且 currentRestore.status=FAILED） */
+export function hasFailedRestore(
+  storage?: Pick<CloudStorageData, 'status' | 'currentRestore'> | null,
+): boolean {
+  return storage?.status === 'RESTORING' && storage.currentRestore?.status === 'FAILED'
+}
+
+export function isRestoreRunning(
+  storage?: Pick<CloudStorageData, 'status' | 'currentRestore'> | null,
+): boolean {
+  if (storage?.status !== 'RESTORING') return false
+  return storage.currentRestore?.status !== 'FAILED'
+}
+
+/** 手动归档入口：仅 IDLE（工作区可写；服务端权威） */
+export function canArchiveStorage(
+  storage?: Pick<CloudStorageData, 'status'> | null,
+): boolean {
+  return storage?.status === 'IDLE'
+}
+
+/** 复原到归档入口：IDLE + SUCCEEDED 归档；RESTORING + FAILED 仅作为「重试」 */
+export function canRestoreStorage(
+  storage?: Pick<CloudStorageData, 'status' | 'currentArchive' | 'currentRestore'> | null,
+): boolean {
+  if (!storage) return false
+  if (storage.status === 'IDLE') return storage.currentArchive?.status === 'SUCCEEDED'
+  return hasFailedRestore(storage)
+}
+
+/** fork 入口：源有 SUCCEEDED 归档且 IDLE/ARCHIVED */
+export function canForkStorage(
+  storage?: Pick<CloudStorageData, 'status' | 'currentArchive'> | null,
+): boolean {
+  if (!storage) return false
+  if (storage.status !== 'IDLE' && storage.status !== 'ARCHIVED') return false
+  return storage.currentArchive?.status === 'SUCCEEDED'
+}
+
+/** 复原的破坏性二次确认文案 */
+export const RESTORE_DESTRUCTIVE_WARNING =
+  '当前内容将被丢弃并回滚到归档版本，不可恢复'
+
 /**
  * 销毁入口口径（服务端为权威）：
  * - IDLE / ARCHIVED 可销毁；
@@ -90,15 +135,18 @@ export function isArchiveRunning(
  * - ATTACHED / ARCHIVING（进行中）不展示入口。
  */
 export function canDestroyCloudStorage(
-  storage?: Pick<CloudStorageData, 'status' | 'currentArchive'> | null,
+  storage?: Pick<CloudStorageData, 'status' | 'currentArchive' | 'currentRestore'> | null,
 ): boolean {
   if (!storage) return false
   if (storage.status === 'IDLE' || storage.status === 'ARCHIVED') return true
-  return hasFailedArchive(storage)
+  return hasFailedArchive(storage) || hasFailedRestore(storage)
 }
 
 /** 归档失败时销毁的额外警示文案（T-WEB6） */
 export const ARCHIVE_FAILED_DESTROY_WARNING = '数据尚未成功归档，销毁后将无法恢复'
+
+/** 复原失败时销毁的额外警示文案 */
+export const RESTORE_FAILED_DESTROY_WARNING = '复原失败，当前数据可能不完整，销毁后将无法恢复'
 
 /** 字节数展示（二进制单位，保留一位小数） */
 export function formatStorageBytes(bytes: number | null | undefined): string {

@@ -28,6 +28,8 @@ export interface TerminalStorageState {
   archiveStatus: 'pending' | 'running' | 'succeeded' | 'failed' | null;
   /** 本次归档 id（契约 A.2.10 扩展；新周期占位/旧回调判定）。 */
   archiveId?: string | null;
+  /** 本次销毁显式跳过归档（destroy storageArchive:false）；仅 true 时携带。 */
+  archiveSkipped?: boolean;
 }
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -86,6 +88,15 @@ export class AgentApiClient {
       `/internal/cloud-storages/${encodeURIComponent(storageId)}/usage`,
       body,
       'storage usage',
+    );
+  }
+
+  /** 复原回调（`POST /internal/cloud-storages/:id/restores`，4 次退避重试）。 */
+  async notifyStorageRestore(storageId: string, body: object): Promise<void> {
+    await this.postWithRetry(
+      `/internal/cloud-storages/${encodeURIComponent(storageId)}/restores`,
+      body,
+      'storage restore',
     );
   }
 
