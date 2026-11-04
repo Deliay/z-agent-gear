@@ -94,6 +94,7 @@ import { McpServer } from '../models/mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 import { commitSettingsService } from './commit-settings-service.js';
+import { runWithWorkspace } from './workspace-context.js';
 
 const mockRedis = {
   set: vi.fn(),
@@ -2084,6 +2085,39 @@ describe('SessionService', () => {
           workspaceId: 'ws-1',
         }),
       ).rejects.toThrow('cloud host is not running');
+    });
+
+    it('T-SS-TEAM: 工作区上下文内按工作区查询云电脑（成员可在他人的云电脑上建会话）', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud', name: 'cloud' }),
+      } as never);
+      vi.mocked(CloudHost.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ status: 'STARTING' }),
+      } as never);
+
+      await expect(
+        runWithWorkspace(
+          {
+            id: 'ws-team',
+            tenantId: 'tenant-team',
+            type: 'normal',
+            role: 'developer',
+            readOnly: false,
+            globalWorkspaceId: 'ws-global',
+          },
+          () =>
+            sessionService.create('user-1', {
+              controllerId: 'ctrl-1',
+              acpServerType: 'opencode',
+              workspaceId: 'ws-1',
+            }),
+        ),
+      ).rejects.toThrow('cloud host is not running');
+
+      expect(CloudHost.findOne).toHaveBeenCalledWith({
+        controllerId: 'ctrl-1',
+        deletedAt: null,
+      });
     });
 
     it('rejects createSession for an ACP type outside the cloud host harnessTypes', async () => {

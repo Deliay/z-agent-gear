@@ -262,7 +262,7 @@ export class CloudHostService {
     if (githubAccountId) {
       const account = await GitHubAccount.findOne({
         _id: githubAccountId,
-        userId,
+        ...actorFilter(userId),
       }).lean();
       if (!account) throw new Error('Github 账号不存在或不属于当前用户');
     }

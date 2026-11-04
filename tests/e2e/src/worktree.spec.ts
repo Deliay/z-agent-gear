@@ -25,7 +25,12 @@ async function waitFor(fn: () => boolean | Promise<boolean>, timeoutMs = 15000, 
  */
 async function expandSidebarToWorktrees(page: Page, hostname = 'e2e-host'): Promise<void> {
   const sidebar = page.locator('nav[aria-label="Sidebar"]');
-  await expect(sidebar.getByRole('button', { name: new RegExp(hostname) })).toBeVisible({
+  // UI 四期「主机」分区默认折叠，先展开再找控制器（按钮与齿轮名都含 hostname，取 first）
+  const hostSection = sidebar.getByRole('button', { name: /^主机/ });
+  if ((await hostSection.getAttribute('aria-expanded')) !== 'true') {
+    await hostSection.click();
+  }
+  await expect(sidebar.getByRole('button', { name: new RegExp(hostname) }).first()).toBeVisible({
     timeout: 10000,
   });
   await waitFor(async () => {

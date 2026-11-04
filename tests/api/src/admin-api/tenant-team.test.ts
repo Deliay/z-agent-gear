@@ -161,9 +161,19 @@ describe('Admin Team Tenant API（T-TT-API）', () => {
     expect(team.balance === 0 || team.balance === null).toBe(true);
     teamId = team.id;
 
-    const duplicate = await adminGql(CREATE_TEAM_TENANT, { name: teamName }, token);
-    expect(duplicate.errors?.[0]?.message).toBe('tenant name already exists');
-    expect(duplicate.errors?.[0]?.extensions?.code).toBe('CONFLICT');
+    // 同 team 重名：按 name 幂等返回既有租户（200），不产生第二条
+    const duplicate = await adminGql<{ adminCreateTeamTenant: { id: string } }>(
+      CREATE_TEAM_TENANT,
+      { name: teamName },
+      token,
+    );
+    expect(duplicate.errors, JSON.stringify(duplicate.errors)).toBeUndefined();
+    expect(duplicate.data!.adminCreateTeamTenant.id).toBe(teamId);
+
+    // 与既有 personal 租户同名（personal 租户名 = 登录名）→ 409 CONFLICT
+    const conflict = await adminGql(CREATE_TEAM_TENANT, { name: ownerUsername }, token);
+    expect(conflict.errors?.[0]?.message).toBe('tenant name already exists');
+    expect(conflict.errors?.[0]?.extensions?.code).toBe('CONFLICT');
 
     // 重名不产生第二条同名租户
     const list = await adminGql<{ adminTenants: Array<{ id: string; name: string }> }>(

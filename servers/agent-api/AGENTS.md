@@ -82,7 +82,7 @@ pnpm run start   # Start production server
 - 会话只读：停止时 `sessionService.endByController`；`resume`/`sendSessionMessage`/`cancelGeneration` 对云电脑非 RUNNING/软删返回 `session is ended`；`createSession` 对 cloud Controller 校验 `CloudHost.status===RUNNING` 且 `acpServerType` 必须在 `harnessTypes` 映射内，落库前后各复查一次（缩小与 stop/terminal 的竞态窗口）。`Session.controllerType`/`Session.cloudHost`（含软删除留档）由 `resolvers/session.ts` 的 `Session` 类型 resolver 提供，**必须在 `graphql/resolvers/index.ts` 登记 `Session` 键**（否则运行时恒 null）；前端只读判定不依赖 controllers 列表命中。
 - 创建⇄停止并发：`startHarness` 成功后以 `{_id,status:'STARTING'}` CAS 回写 `containerId`；CAS 未命中（并发 stop 已推进）立即销毁容器并撤销模型 Key；stop 以 CAS 后的最新快照决定销毁，终态 CAS 后再扫一次会话。每用户数量无限制：`uniq_active_cloud_host_per_user` 由迁移 `011-drop-cloud-host-active-unique-index` 下线（schema 声明已移除，迁移 005 只读不回改）。
 - `KeyedMutex` 非可重入：同异步上下文嵌套同 key 会立即抛错（`AsyncLocalStorage` 检测），避免永久挂起。
-- 删除：仅 `STOPPED/FAILED`，软删除 `cloudhosts.deletedAt`、撤销 ControllerKey、`Controller.status=offline`；Controller/会话/消息保留，列表与首页过滤。`Controller.cloudHost` 对软删除返回 null，前端对 `type=cloud && cloudHost=null` 同样按只读渲染。
+- 删除：仅 `STOPPED/FAILED`，软删除 `cloudhosts.deletedAt`、撤销 ControllerKey、`Controller.status=offline`；Controller/会话/消息保留，列表与首页过滤。`Controller.cloudHost` 对软删除返回 null，前端对 `type=cloud && cloudHost=null` 同样按只读渲染。`Controller.cloudHost` 与 `myCloudHosts` 同为**工作区成员口径**（`actorFilter`，团队工作区成员可见他人创建的云电脑；无工作区上下文的引擎/内部链路仍按 `userId` 归属校验）。
 - 开关：`HARNESS_ENABLED=false` 时 capabilities 隐藏/禁用、create 返回 `harness feature is disabled`；存量仍可 list/stop/delete。
 
 ## 云主机工作负载与 Github 项目设置（本期）
@@ -201,3 +201,9 @@ pnpm run start   # Start production server
 - **迁移**：`012-account-user-tenant` 逐 user 幂等拆分三件套（只复制不删除原登录字段）；`013-tenant-id-backfill` 19 集合复制清洗 + 索引（只新增不删除）。**集合名以模型 `model.collection.name` 为单一来源**（如 `issue_workflow_triggers`），由 T-ISO 互校 + `013-...real.test.ts` 真库兜底；历史环境若误建空集合 `issueworkflowtriggers`，确认无数据后可手工 drop。启动后 `services/tenant-self-check.ts` 以带索引 count + `limit(100)` 抽样异步自检，仅告警不阻塞。
 - **计费**：`billing-client` ownerType 使用 `tenant`（ownerId=tenantId；`front_user` 仅兼容期旧调用方）；`startHarness` 下发 `tenantId`（=userId）。
 - **开户**：`POST /internal/users`（Bearer `INTERNAL_API_TOKEN`）创建账户+用户+个人租户+零余额租户计费账户；按 username 幂等（200 既有视图 / 201 新建 / 400 规则 / 409 重名 / 503 计费不可达并回滚）。
+
+## 多租户二期（工作区资源查询口径）
+
+- **请求链路**：已归属工作区的资源（`sessions` / `controllers` / `controllerkeys` / `cloudhosts` / `cloudstorages` / `configuredworkflows` / `workflowinstances` / `workflowtemplates` / `githubaccounts` / `providers` / `models`）一律用 `actorFilter(userId)` 组合查询，**禁止显式写 `userId`**：工作区上下文存在时返回 `{}`，由 `applyWorkspaceScope` 注入可见集；无上下文（引擎/内部/迁移）才回退 `{userId}` 归属校验。典型回归：`Controller.cloudHost`、`sessionService.create` 的云电脑状态校验、云电脑创建时选择共享 GitHub 绑定、Issue 联动实例化时读取已配置工作流、会话级权限超时设置。
+- **异步链路**：Issue/PR 回调、SSE 等无请求头链路先 `runWithWorkspace(...)` 建立上下文，再执行同样口径的查询。
+- **保留 `{userId}` 的例外**（按一期口径仍跟随成员本人）：个人 MCP 配置、待办通知、网关、未绑定 `ControllerKey` 的创建清理（避免误删他人 key）、本地控制器项目工作区（`ControllerWorkspace`）及按项目工作区归组的 Worktree 会话查询、`CloudHostSetupOperation` 等内部操作单、`CloudHostIssuesLinkage` 等个人联动配置。

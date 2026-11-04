@@ -20,6 +20,13 @@ async function runReadonlyScenario(page: Page, options: { deletedAt: Date | null
   expect(userDoc?._id).toBeTruthy();
   const userId = userDoc!._id;
 
+  // 多租户二期：资源按租户工作区归属（缺省个人全局工作区），缺省会因作用域过滤不可见
+  const globalWorkspace = await db
+    .collection('workspaces')
+    .findOne({ tenantId: userId, type: 'global' });
+  expect(globalWorkspace?._id, '个人全局工作区必须存在').toBeTruthy();
+  const globalWorkspaceId = globalWorkspace!._id as mongoose.Types.ObjectId;
+
   const now = new Date();
   const controllerId = new mongoose.Types.ObjectId();
   const hostId = new mongoose.Types.ObjectId();
@@ -36,6 +43,7 @@ async function runReadonlyScenario(page: Page, options: { deletedAt: Date | null
       hostname: `readonly-${controllerId.toString()}`,
       type: 'cloud',
       status: 'offline',
+      workspaceId: globalWorkspaceId,
       keyId: new mongoose.Types.ObjectId(),
       version: '2.5.0',
       createdAt: now,
@@ -62,6 +70,7 @@ async function runReadonlyScenario(page: Page, options: { deletedAt: Date | null
       controllerId,
       keyId: new mongoose.Types.ObjectId(),
       workspaceId,
+      resourceWorkspaceId: globalWorkspaceId,
       containerId: null,
       defaultSessionId: null,
       startedAt: now,
@@ -75,6 +84,7 @@ async function runReadonlyScenario(page: Page, options: { deletedAt: Date | null
     const session = await db.collection('sessions').insertOne({
       userId,
       tenantId: userId,
+      workspaceId: globalWorkspaceId,
       controllerId,
       controllerName: `readonly-${controllerId.toString()}`,
       acpServerType: 'opencode',

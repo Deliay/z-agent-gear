@@ -53,20 +53,30 @@ function uniqueIndexesWithKeys(indexes: IndexInfo[], keys: Record<string, unknow
 }
 
 describe.skipIf(!HAS_MONGO)('多租户上线回归：索引与 workspaceId 类型不变量', () => {
-  it('T-IDX-API1: user_commit_settings 只保留固定名 workspace 唯一索引', async () => {
+  it('T-IDX-API1: user_commit_settings 唯一键回到 userId 维度（成员级）', async () => {
     const indexes = await listIndexes('user_commit_settings');
     expect(
-      uniqueIndexesWithKeys(indexes, { workspaceId: 1 }).some(
-        (index) => index.name === 'uniq_workspace_commit_setting',
+      uniqueIndexesWithKeys(indexes, { userId: 1 }).some(
+        (index) => index.name === 'uniq_user_commit_setting',
       ),
-      `期望 uniq_workspace_commit_setting，实际：${JSON.stringify(indexes)}`,
+      `期望 uniq_user_commit_setting，实际：${JSON.stringify(indexes)}`,
     ).toBe(true);
 
-    // 迁移 015 已下线 userId 维度；默认名 / 旧固定名都必须消失
+    // 迁移 019 已下线 workspaceId 维度：任何 workspace 维度的唯一索引都必须消失
+    expect(
+      uniqueIndexesWithKeys(indexes, { workspaceId: 1 }),
+      `残留 workspaceId 唯一索引：${JSON.stringify(indexes)}`,
+    ).toHaveLength(0);
+    expect(
+      uniqueIndexesWithKeys(indexes, { tenantId: 1, workspaceId: 1 }),
+      `残留 {tenantId,workspaceId} 唯一索引：${JSON.stringify(indexes)}`,
+    ).toHaveLength(0);
+
+    // 默认名 / 旧固定名都必须消失（为兼容存量库，残留的非唯一历史索引不在此断言范围）
     for (const legacyName of [
       'userId_1',
       'workspaceId_1',
-      'uniq_user_commit_setting',
+      'uniq_workspace_commit_setting',
       'tenantId_1_userId_1',
     ]) {
       expect(indexes.some((index) => index.name === legacyName), `残留旧索引 ${legacyName}`).toBe(

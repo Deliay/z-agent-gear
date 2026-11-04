@@ -287,9 +287,13 @@ test.describe('Settings Workspace E2E', () => {
     await loginViaUI(page, username);
 
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
-    await expect(sidebar.getByRole('button', { name: /e2e-ws-host/ })).toBeVisible({ timeout: 5000 });
+    // UI 四期「主机」分区默认折叠，先展开；控制器节点本身仍默认展开（勿再点击会折叠）
+    await sidebar.getByRole('button', { name: /^主机/ }).click();
+    await expect(sidebar.getByRole('button', { name: /e2e-ws-host/ }).first()).toBeVisible({
+      timeout: 5000,
+    });
 
-    // 控制器默认展开，勿再点击（点击会折叠）；直接断言工作区树下可见。
+    // 直接断言工作区树下可见。
     await expect(sidebar.getByText('myproject（默认）', { exact: true })).toBeVisible();
 
     disconnect();

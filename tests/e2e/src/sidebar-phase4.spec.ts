@@ -77,7 +77,7 @@ test.describe('侧边栏 UI 四期', () => {
     for (const placeholder of ['无会话', '无工作流实例', '无网关暴露', '无工作区']) {
       await expect(page.locator(SIDEBAR)).not.toContainText(placeholder)
     }
-    await expect(page.locator('[data-testid="sidebar-session-list"]')).toBeVisible()
+    // 空态收敛：无会话时列表容器保持空（可为隐藏），不渲染占位文本
     await expect(page.locator('[data-testid="sidebar-session-list"] > li')).toHaveCount(0)
 
     env.controllers.forEach((controller) => controller.disconnect())

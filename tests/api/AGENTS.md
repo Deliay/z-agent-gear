@@ -210,11 +210,12 @@ pnpm test
 |------|------|
 | T-WS-ISO1 sessions | developer 在普通工作区可见/可读 admin 创建会话（`sessions` + `session(id)`）；outsider 列表不含且 `session(id)` 为 null；admin 在团队全局上下文不可见、切到普通工作区可见 |
 | T-WS-ISO2 controllers/controllerkeys | developer 可见 admin 注册控制器并**改名**（成员可操作他人资源）；outsider 列表不含且 `controller(id)` 为 null；admin 切换后可见；未绑定 key 同口径（developer 可重命名，非成员不可见） |
-| T-WS-ISO3 cloudhosts（需 `MONGODB_URI`） | 直插 `cloudhosts`（`resourceWorkspaceId`=普通工作区）→ developer `myCloudHosts`/`cloudHost(id)` 可见；outsider 不可见；admin 切换可见；契约 `CloudHost.workspaceId`=租户工作区 id |
+| T-WS-ISO3 cloudhosts（需 `MONGODB_URI`） | 直插 `cloudhosts`（`resourceWorkspaceId`=普通工作区）→ developer `myCloudHosts`/`cloudHost(id)` 可见；`controllers[].cloudHost`（`Controller.cloudHost` 嵌套字段）同样按成员口径可见（回归 team 自定义工作区下 B 看不到 A 的云电脑）；outsider 不可见；admin 切换可见；契约 `CloudHost.workspaceId`=租户工作区 id |
 | T-WS-ISO4 githubaccounts（需 `MONGODB_URI`） | 直插 `githubaccounts`（`workspaceId`=普通工作区）→ developer 可见（共享读=本工作区∪全局）；outsider 不可见；普通工作区行不进入团队全局上下文 |
 | T-WS-ISO5 configuredWorkflows | developer 可见 admin 配置的工作流（列表 + `configuredWorkflow(id)`），`resourceWorkspaceId`=普通工作区；outsider/团队全局上下文不可见；admin 切换可见 |
 | T-WS-ISO6 workflowInstances | developer 可见 admin 实例化的实例，`resourceWorkspaceId`=租户工作区、`workspaceId`=项目工作区（语义互不影响）；outsider/团队全局上下文不可见；admin 切换可见 |
 | T-WS-ISO7 workflowTemplates | 自定义模板仅本工作区可见且 `resourceWorkspaceId`=普通工作区；outsider/团队全局上下文不可见；内置模板在个人全局 / 团队全局 / 团队普通三种上下文均可见且 `resourceWorkspaceId=null` |
+| T-WS-ISO8 成员/管理员辅助与操作路径（需 `MONGODB_URI`） | browseFolder/getHomeDirectory/listHistorySessions/cloudHostIssuesLinkages/retryCloudHostSetupOperation/setupCloudHostGithubProject（本工作区 + 全局共享绑定）；developer 在 admin 创建的 RUNNING 云电脑上创建会话（回归 `sessionService.create` 的云电脑按工作区成员口径查询） |
 
 
 ### Admin Team 租户 API (`admin-api/tenant-team.test.ts` T-TT-API)

@@ -181,8 +181,8 @@ test.describe('首页展示优化 E2E', () => {
     const item = sidebar.getByText('集中展示实例');
     await expect(item).toBeVisible({ timeout: 15000 });
 
-    // 条目标注所属工作区与所属控制器（工作区名以 "home-e3-ws" 结尾，状态分隔符 "·" 区分于工作区默认条目）
-    await expect(sidebar.getByText(/home-e3-ws · home-e3-host · /)).toBeVisible();
+    // 聚合条目标注所属工作区（UI 四期：条目名 + 状态 + 工作区名，不再拼接控制器名）
+    await expect(sidebar.getByText(/home-e3-ws/)).toBeVisible();
 
     // 点击直达详情
     await item.click();
@@ -199,12 +199,13 @@ test.describe('首页展示优化 E2E', () => {
     await loginViaUI(page, username);
     const sidebar = page.locator(sidebarSel);
 
-    // 控制器分组默认展开，其下工作区列表可见
-    await expect(sidebar.getByRole('button', { name: /home-e4-host/ })).toBeVisible({ timeout: 15000 });
-    await expect(sidebar.getByText(/home-e4-ws（默认）/)).toBeVisible();
-    // 其下工作流列表可见
+    // 「主机」分区默认折叠，展开后可定位控制器节点
+    await sidebar.getByRole('button', { name: /^主机/ }).click();
+    await expect(sidebar.getByRole('button', { name: /home-e4-host/ }).first()).toBeVisible({
+      timeout: 15000,
+    });
+    // UI 四期：工作流与会话为跨环境聚合列表，无需展开工作区即可见
     await expect(sidebar.getByText('控制器实例')).toBeVisible();
-    // 其下会话列表可见（会话可能同时出现在「会话」与工作区根目录回退分组中）
     await expect(sidebar.locator('a[href^="/sessions/"]').first()).toBeVisible();
     disconnect();
   });
@@ -216,9 +217,11 @@ test.describe('首页展示优化 E2E', () => {
     await loginViaUI(page, username);
     const sidebar = page.locator(sidebarSel);
 
-    // 无工作流实例 → 空态；其余信息流正常渲染
-    await expect(sidebar.getByText('无工作流实例')).toBeVisible({ timeout: 15000 });
-    await expect(sidebar.getByText('无会话')).toBeVisible();
+    // 空态收敛：不渲染占位文案，聚合列表为空
+    await expect(sidebar.getByText('无工作流实例')).toHaveCount(0);
+    await expect(sidebar.getByText('无会话')).toHaveCount(0);
+    await expect(page.locator('[data-testid="sidebar-workflow-list"] > li')).toHaveCount(0);
+    await expect(page.locator('[data-testid="sidebar-session-list"] > li')).toHaveCount(0);
     disconnect();
   });
 });

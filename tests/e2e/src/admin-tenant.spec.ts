@@ -52,7 +52,21 @@ test.describe('Admin Tenant E2E', () => {
     );
     if (mutationNames) {
       expect(mutationNames).toContain('adminCreateFrontUser');
-      expect(mutationNames.filter((name) => /Tenant/i.test(name))).toEqual([]);
+      // 多租户二期允许 team 租户管理（创建/加成员/移成员），租户本体仍只读
+      const allowedTenantMutations = new Set([
+        'adminCreateTeamTenant',
+        'adminAddTenantMember',
+        'adminRemoveTenantMember',
+      ]);
+      for (const name of mutationNames.filter((item) => /Tenant/i.test(item))) {
+        expect(
+          allowedTenantMutations.has(name),
+          `unexpected tenant mutation: ${name}`,
+        ).toBe(true);
+      }
+      expect(
+        mutationNames.some((name) => /^(admin)?(update|delete|disable|enable)Tenant$/i.test(name)),
+      ).toBe(false);
     }
 
     await adminLoginViaUI(page);

@@ -103,6 +103,8 @@ test.describe('Settings Controller Config Page E2E', () => {
 
     await loginViaUI(page, username);
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    // UI 四期侧边栏「主机」分区默认折叠，先展开再定位控制器条目
+    await sidebar.getByRole('button', { name: /^主机/ }).click();
 
     const gearIcon = sidebar.locator('[role="button"][title="控制器配置"]');
     await expect(gearIcon).toBeVisible({ timeout: 5000 });
@@ -258,6 +260,8 @@ test.describe('Settings Controller Config Page E2E', () => {
 
     await loginViaUI(page, username);
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    // 「主机」分区默认折叠，先展开（齿轮点击本身不得触发展开控制器节点）
+    await sidebar.getByRole('button', { name: /^主机/ }).click();
 
     const controllerBtn = sidebar.getByText(/e2e-cfg-host/).first();
     await expect(controllerBtn).toBeVisible({ timeout: 5000 });

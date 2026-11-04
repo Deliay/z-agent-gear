@@ -821,15 +821,17 @@ describe('cloud-controller Job manifest resources', () => {
     });
   };
 
-  it('T-IC-EPH1: 仅声明 limits ephemeral-storage: 10Gi（不设 requests）', () => {
+  it('T-IC-EPH1: 仅 limits 声明 ephemeral-storage: 10Gi（requests 不含该键）', () => {
     const resources = build().spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toBeUndefined();
+    // cpu/memory 的 requests 由既有 JOB_RESOURCES 声明；ephemeral-storage 仅注入 limits
+    expect(resources.requests).toEqual({ cpu: '0.1', memory: '256Mi' });
+    expect(resources.requests?.['ephemeral-storage']).toBeUndefined();
     expect(resources.limits['ephemeral-storage']).toBe('10Gi');
   });
 
   it('T-IC-EPH2: JOB_EPHEMERAL_STORAGE 覆盖值仅作用于 limits', () => {
     const resources = build('5Gi').spec.template.spec.containers[0]!.resources;
-    expect(resources.requests).toBeUndefined();
+    expect(resources.requests?.['ephemeral-storage']).toBeUndefined();
     expect(resources.limits['ephemeral-storage']).toBe('5Gi');
   });
 });

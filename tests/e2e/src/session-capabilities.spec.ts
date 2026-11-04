@@ -112,11 +112,12 @@ async function setupSession(
   socket: Socket;
   sessionId: string;
   token: string;
+  userId: string;
   username: string;
   controllerId: string;
   disconnect: () => void;
 }> {
-  const { token, username } = await registerUser(page);
+  const { token, userId, username } = await registerUser(page);
   const rawKey = await createControllerKey(page, token);
   const { controllerId, socket, disconnect } = await registerController(rawKey);
   const workspaceId = await createWorkspace(page, controllerId, token);
@@ -150,7 +151,7 @@ async function setupSession(
   resolveSessionId(sessionId);
 
   await loginViaUI(page, username);
-  return { socket, sessionId, token, username, controllerId, disconnect };
+  return { socket, sessionId, token, userId, username, controllerId, disconnect };
 }
 
 async function openSessionPage(page: import('@playwright/test').Page, sessionId: string) {
@@ -256,13 +257,11 @@ test.describe('ACP 能力透明化 E2E', () => {
     const userName = `e2e-custom-${suffix}`;
     const providerId = new mongoose.Types.ObjectId();
     const collection = mongoose.connection.collection('models');
-    await collection.insertMany([
-      { providerId, name: globalName, scope: 'global', isEnabled: true, isCustom: false, sortOrder: 0, createdAt: new Date(), updatedAt: new Date() },
-      { providerId, name: userName, scope: 'user', isEnabled: true, isCustom: true, sortOrder: 0, createdAt: new Date(), updatedAt: new Date() },
-    ]);
 
+    let sessionId = '';
+    let disconnect: () => void = () => undefined;
     try {
-      const { sessionId, disconnect } = await setupSession(page, {
+      const setup = await setupSession(page, {
         capabilities: makeCapabilities(),
         availableModels: [
           { id: globalName, name: globalName },
@@ -272,6 +271,24 @@ test.describe('ACP 能力透明化 E2E', () => {
         ],
         currentModelId: globalName,
       });
+      sessionId = setup.sessionId;
+      disconnect = setup.disconnect;
+
+      // 多租户二期：scope=user 行归属租户工作区（缺省个人全局工作区），否则作用域过滤不可见
+      const globalWorkspace = await mongoose.connection
+        .collection('workspaces')
+        .findOne({ tenantId: new mongoose.Types.ObjectId(setup.userId), type: 'global' });
+      expect(globalWorkspace, '个人全局工作区必须存在').toBeTruthy();
+      await collection.insertMany([
+        { providerId, name: globalName, scope: 'global', isEnabled: true, isCustom: false, sortOrder: 0, createdAt: new Date(), updatedAt: new Date() },
+        {
+          providerId, name: userName, scope: 'user', isEnabled: true, isCustom: true, sortOrder: 0,
+          tenantId: new mongoose.Types.ObjectId(setup.userId),
+          workspaceId: globalWorkspace!._id,
+          createdAt: new Date(), updatedAt: new Date(),
+        },
+      ]);
+
       await openSessionPage(page, sessionId);
 
       await page.getByRole('button', { name: new RegExp(globalName) }).click();

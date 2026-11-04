@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import mongoose from 'mongoose';
 import { createFrontUser } from '../support/front-users.js';
+import { personalGlobalWorkspaceId } from '../support/workspace-fixtures.js';
 
 // 会话只读：云电脑终态后 resume 被拒绝；非 RUNNING 云电脑不允许 createSession。
 // 普通 ended 会话仍可 resume（回归）。
@@ -54,10 +55,12 @@ async function seedCloudController(
   const controllerId = new mongoose.Types.ObjectId();
   const hostId = new mongoose.Types.ObjectId();
   const workspaceId = new mongoose.Types.ObjectId();
+  const globalWorkspaceId = await personalGlobalWorkspaceId(db, userId);
   await db.collection('controllers').insertOne({
     _id: controllerId,
     userId: new mongoose.Types.ObjectId(userId),
     tenantId: new mongoose.Types.ObjectId(userId),
+    workspaceId: globalWorkspaceId,
     name: `ro-${controllerId.toString()}`,
     hostname: `ro-${controllerId.toString()}`,
     type: 'cloud',
@@ -88,6 +91,7 @@ async function seedCloudController(
     controllerId,
     keyId: new mongoose.Types.ObjectId(),
     workspaceId,
+    resourceWorkspaceId: globalWorkspaceId,
     containerId: null,
     defaultSessionId: null,
     startedAt: now,
@@ -124,6 +128,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
         tenantId: new mongoose.Types.ObjectId(userId),
+        workspaceId: await personalGlobalWorkspaceId(db, userId),
         controllerId,
         controllerName: 'cloud',
         acpServerType: 'opencode',
@@ -158,6 +163,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
         _id: controllerId,
         userId: new mongoose.Types.ObjectId(userId),
         tenantId: new mongoose.Types.ObjectId(userId),
+        workspaceId: await personalGlobalWorkspaceId(db, userId),
         name: 'local',
         hostname: 'local',
         type: 'local',
@@ -170,6 +176,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
         tenantId: new mongoose.Types.ObjectId(userId),
+        workspaceId: await personalGlobalWorkspaceId(db, userId),
         controllerId,
         controllerName: 'local',
         acpServerType: 'opencode',
@@ -203,6 +210,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
         tenantId: new mongoose.Types.ObjectId(userId),
+        workspaceId: await personalGlobalWorkspaceId(db, userId),
         controllerId,
         controllerName: 'cloud',
         acpServerType: 'opencode',
@@ -263,6 +271,7 @@ describe.skipIf(!HAS_MONGO)('Cloud Host session readonly', () => {
       const inserted = await db.collection('sessions').insertOne({
         userId: new mongoose.Types.ObjectId(userId),
         tenantId: new mongoose.Types.ObjectId(userId),
+        workspaceId: await personalGlobalWorkspaceId(db, userId),
         controllerId,
         controllerName: 'cloud',
         acpServerType: 'opencode',
