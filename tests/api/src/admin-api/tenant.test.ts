@@ -87,10 +87,19 @@ describe('Admin Tenant API', () => {
     expect(queries).toContain('adminTenant');
     expect(mutations).toContain('adminCreateFrontUser');
 
-    // 后台不做多租户设计：契约层即不存在改/删/停用入口；租户相关写操作仅开户
+    // 后台租户域写操作白名单：开户 + team 租户管理（创建/加成员/移成员）；
+    // 租户本体仍只读（无 update/delete/disable）
+    const ALLOWED_TENANT_MUTATIONS = new Set([
+      'adminCreateFrontUser',
+      'adminCreateTeamTenant',
+      'adminAddTenantMember',
+      'adminRemoveTenantMember',
+    ]);
     const tenantMutations = mutations.filter((name) => /tenant|frontuser/i.test(name));
     expect(tenantMutations.length).toBeGreaterThan(0);
-    expect(tenantMutations.every((name) => /^adminCreateFrontUser$/i.test(name))).toBe(true);
+    for (const name of tenantMutations) {
+      expect(ALLOWED_TENANT_MUTATIONS.has(name), `unexpected tenant mutation: ${name}`).toBe(true);
+    }
     expect(mutations.some((n) => /^(admin)?(update|delete|remove|disable|enable)(Tenant|FrontUser)$/i.test(n))).toBe(false);
   });
 

@@ -37,11 +37,19 @@ import {
   HARNESS_OPENCODE_SCRIPT_V3,
   PLAYWRIGHT_SCRIPT_V2,
 } from './017-workload-pnpm-scripts.js';
+// 018 把上述四条脚本升级到 pnpm 12（V4/V4/V5/V3）：本迁移的「最新标准版本」随之取 018 的输出，
+// 保证 018 → 019 顺序执行或单独执行时都收敛到同一份最终脚本，不会把 pnpm 12 版本回退成 pnpm 9。
+import {
+  HARNESS_DEEPSEEK_SCRIPT_V5,
+  HARNESS_KIMI_CODE_SCRIPT_V4,
+  HARNESS_OPENCODE_SCRIPT_V4,
+  PLAYWRIGHT_SCRIPT_V3,
+} from './018-pnpm-12-upgrade.js';
 
-const log = logger.child({ component: 'migration/018-workload-idempotent-anchors' });
+const log = logger.child({ component: 'migration/019-workload-idempotent-anchors' });
 
 /**
- * 018-workload-idempotent-anchors：全部预制工作负载脚本的「锚点判定 + 结尾硬校验 + 可重复执行」标准核查。
+ * 019-workload-idempotent-anchors：全部预制工作负载脚本的「锚点判定 + 结尾硬校验 + 可重复执行」标准核查。
  *
  * 背景（提案 §实现点 5）：云存储挂载 `/home/worker` 后，恢复归档的新容器会在完整旧环境上重跑全部
  * init 脚本，脚本必须幂等。迁移按 017 形态实现：逐条按 `presetKey`（回退精确 `name`）定位，
@@ -52,10 +60,12 @@ const log = logger.child({ component: 'migration/018-workload-idempotent-anchors
  *   已满足标准（安装锚点 + 结尾硬校验 + 覆盖式/幂等写入），迁移对其历史版本做统一收敛，最新版本为空操作；
  * - Node.js 仅有「收敛式安装」而缺少开头锚点分支，故新增 `NODEJS_SCRIPT_V2`（产物可用时校验后
  *   直接 `exit 0`），旧版本按字节匹配刷新。
+ * - 四条 Harness/Playwright 脚本的标准版本取 `018-pnpm-12-upgrade` 的输出（pnpm 12 引导块），
+ *   因此本迁移既可在 018 之后执行（此时为 no-op），也可单独执行时直接收敛到 pnpm 12 版本。
  *
  * 迁移随启动自动执行、失败不阻断（沿用 `admin_migrations` runner 语义）。
  */
-export const name = '018-workload-idempotent-anchors';
+export const name = '019-workload-idempotent-anchors';
 
 /** Node.js 版本校验块（V1 中的锚点插入位置）。 */
 const NODEJS_VERSION_BLOCK = `VERSION="\${WORKLOAD_PARAM_VERSION:-22}"
@@ -162,14 +172,19 @@ export const WORKLOAD_IDEMPOTENCY_TARGETS: WorkloadIdempotencyTarget[] = [
       HARNESS_OPENCODE_INIT_SCRIPT,
       HARNESS_OPENCODE_INIT_SCRIPT_V1,
       HARNESS_OPENCODE_SCRIPT_V2,
+      HARNESS_OPENCODE_SCRIPT_V3,
     ],
-    newScript: HARNESS_OPENCODE_SCRIPT_V3,
+    newScript: HARNESS_OPENCODE_SCRIPT_V4,
   },
   {
     presetKey: 'harness-kimi-code',
     name: 'Kimi Code（Harness）',
-    oldScripts: [HARNESS_KIMI_CODE_INIT_SCRIPT, HARNESS_KIMI_CODE_SCRIPT_V2],
-    newScript: HARNESS_KIMI_CODE_SCRIPT_V3,
+    oldScripts: [
+      HARNESS_KIMI_CODE_INIT_SCRIPT,
+      HARNESS_KIMI_CODE_SCRIPT_V2,
+      HARNESS_KIMI_CODE_SCRIPT_V3,
+    ],
+    newScript: HARNESS_KIMI_CODE_SCRIPT_V4,
   },
   {
     presetKey: 'harness-deepseek-harness',
@@ -179,14 +194,15 @@ export const WORKLOAD_IDEMPOTENCY_TARGETS: WorkloadIdempotencyTarget[] = [
       HARNESS_DEEPSEEK_INIT_SCRIPT,
       HARNESS_DEEPSEEK_SCRIPT_V2,
       HARNESS_DEEPSEEK_SCRIPT_V3,
+      HARNESS_DEEPSEEK_SCRIPT_V4,
     ],
-    newScript: HARNESS_DEEPSEEK_SCRIPT_V4,
+    newScript: HARNESS_DEEPSEEK_SCRIPT_V5,
   },
   {
     presetKey: 'playwright',
     name: 'Playwright',
-    oldScripts: [PLAYWRIGHT_SCRIPT_V1],
-    newScript: PLAYWRIGHT_SCRIPT_V2,
+    oldScripts: [PLAYWRIGHT_SCRIPT_V1, PLAYWRIGHT_SCRIPT_V2],
+    newScript: PLAYWRIGHT_SCRIPT_V3,
   },
   {
     presetKey: 'mongodb',

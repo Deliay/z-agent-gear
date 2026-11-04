@@ -242,6 +242,29 @@ export function layoutGraphNodes(inputs: LayoutInput[]): Map<string, { x: number
   return positions
 }
 
+/**
+ * 自动定位窗口：按布局纵序（y 升序，同 y 按 x）排序后，定位第一个执行中节点，
+ * 返回「前 before 个 + 自身 + 后 after 个」的 id 列表（索引越界自动收敛）。
+ * 无执行中节点（或均不在布局中）返回空数组，调用方保持整图 fitView。
+ */
+export function pickFocusWindow(
+  nodes: Array<{ id: string; position: { x: number; y: number } }>,
+  activeIds: string[],
+  before = 2,
+  after = 2,
+): string[] {
+  if (activeIds.length === 0) return []
+  const active = new Set(activeIds)
+  const ordered = [...nodes].sort(
+    (a, b) => a.position.y - b.position.y || a.position.x - b.position.x,
+  )
+  const index = ordered.findIndex((node) => active.has(node.id))
+  if (index < 0) return []
+  const start = Math.max(0, index - before)
+  const end = Math.min(ordered.length - 1, index + after)
+  return ordered.slice(start, end + 1).map((node) => node.id)
+}
+
 function buildEdges(instance: WorkflowInstanceData): Edge[] {
   const known = new Set(instance.nodes.map((node) => node.id))
   const edges: Edge[] = []

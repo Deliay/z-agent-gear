@@ -109,7 +109,10 @@ test.describe('Session Mobile Layout', () => {
       // 移动端会话列表由 Sidebar 承担（不再渲染旧的 h2「会话」标题）。
       await expect(page.locator(sidebar()).getByRole('button', { name: /^会话/ })).toBeVisible();
 
-      // Controller should be visible in the tree
+      // Controller should be visible in the tree（「主机」分区默认折叠，先展开）
+      const hostSection = page.locator(sidebar()).getByRole('button', { name: /^主机/ });
+      await expect(hostSection).toBeVisible();
+      await hostSection.click();
       await expect(page.getByText('e2e-mobile-host')).toBeVisible();
     } finally {
       disconnect();

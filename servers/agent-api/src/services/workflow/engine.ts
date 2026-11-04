@@ -18,7 +18,16 @@ export interface WorkflowNodeDoc {
   startedAt?: Date;
   reworkedAt?: Date;
   reworkCount: number;
-  fallbackSent?: boolean;
+  /** 当前中断 episode 已排期的自动重试次数（0~10） */
+  retryCount?: number;
+  /** 下一次重试计划时间；null = 已发送/未排期 */
+  nextRetryAt?: Date | null;
+  /** SCHEDULED（已排期待执行）/ RECONNECTING（已占位，close→resume→等待空闲中） */
+  retryPhase?: string | null;
+  /** RECONNECTING 的空闲等待截止 */
+  retryDeadlineAt?: Date | null;
+  /** ENDED / IDLED：决定重发哪条提示词 */
+  retryTrigger?: string | null;
   rejectInfo?: { reason: string; fromNodeId?: string | null; at: Date } | null;
   failInfo?: { reason: string; source: string; at: Date } | null;
   agentConfig?: {
@@ -71,7 +80,9 @@ export type WorkflowEvent =
   | 'resume'
   | 'fail'
   | 'resumeFailed'
-  | 'restart';
+  | 'restart'
+  /** 中断自动重试 10 次用尽：RUNNING/REWORK → RETRY_FAILED，阻断流程等待人工介入 */
+  | 'retryExhausted';
 
 export interface TransitionPayload {
   /** reject：打回原因 */
@@ -134,9 +145,11 @@ const TRANSITIONS: Record<WorkflowEvent, { from: string[]; to: string }> = {
   completeRework: { from: ['REWORK'], to: 'DONE' },
   resume: { from: ['REJECT'], to: 'RUNNING' },
   fail: { from: ['RUNNING'], to: 'FAILED' },
-  resumeFailed: { from: ['FAILED'], to: 'RUNNING' },
+  resumeFailed: { from: ['FAILED', 'RETRY_FAILED'], to: 'RUNNING' },
   // 重启节点：会话失败/卡住时人工触发，关闭旧会话并拉起全新会话重试
-  restart: { from: ['RUNNING', 'REWORK', 'FAILED'], to: 'RUNNING' },
+  restart: { from: ['RUNNING', 'REWORK', 'FAILED', 'RETRY_FAILED'], to: 'RUNNING' },
+  // 中断自动重试次数用尽：人工介入前阻断流程
+  retryExhausted: { from: ['RUNNING', 'REWORK'], to: 'RETRY_FAILED' },
 };
 
 const EVENT_LABEL: Record<WorkflowEvent, string> = {
@@ -149,6 +162,7 @@ const EVENT_LABEL: Record<WorkflowEvent, string> = {
   fail: '标记失败',
   resumeFailed: '恢复运行',
   restart: '重启节点',
+  retryExhausted: '重试失败',
 };
 
 /** 领域层实例锁：事件回调、GraphQL、MCP 与兜底流转共用同一把锁 */
@@ -271,6 +285,7 @@ class WorkflowEngine {
         break;
       }
       case 'complete': {
+        this.resetRetryState(node);
         this.writeArtifacts(instance, node, payload.artifacts);
         node.status = 'DONE';
         this.markLastNode(instance, node);
@@ -298,6 +313,7 @@ class WorkflowEngine {
         }
         node.status = 'REJECT';
         node.rejectInfo = { reason: payload.reason ?? '', fromNodeId: payload.fromNodeId ?? null, at: new Date() };
+        this.resetRetryState(node);
         this.markLastNode(instance, node);
         await addRejectRecord(instance, node.nodeId, payload.reason ?? '', payload.fromNodeId);
         // 触发直接上游 REWORK（可通过 targetNodeIds 限定范围）
@@ -319,12 +335,14 @@ class WorkflowEngine {
       case 'rework': {
         node.status = 'REWORK';
         this.markLastNode(instance, node);
+        this.resetRetryState(node);
         node.reworkCount = (node.reworkCount ?? 0) + 1;
         node.reworkedAt = new Date();
         await this.hooks.onNodeRework?.(instance, node, payload);
         break;
       }
       case 'completeRework': {
+        this.resetRetryState(node);
         // 重置产物：旧产物 key 挪入垃圾桶
         for (const key of getArtifactKeys(instance, node.nodeId, node.name)) {
           await removeKey(instance, key);
@@ -346,6 +364,7 @@ class WorkflowEngine {
       case 'resume': {
         node.status = 'RUNNING';
         this.markLastNode(instance, node);
+        this.resetRetryState(node);
         await this.hooks.onNodeResume?.(instance, node);
         break;
       }
@@ -354,9 +373,23 @@ class WorkflowEngine {
         // （SESSION_STUCK 来源会话已 ended；LLM_REPORTED 来源会话保留供人类对话介入）
         node.status = 'FAILED';
         this.markLastNode(instance, node);
+        // 保留 retryCount（展示与排查），只清调度字段
+        this.clearRetrySchedule(node);
         node.failInfo = {
           reason: payload.reason ?? '',
           source: payload.source ?? 'LLM_REPORTED',
+          at: new Date(),
+        };
+        break;
+      }
+      case 'retryExhausted': {
+        // 中断自动重试次数用尽：与 fail 同为阻断语义，但来源固定并保留 retryCount
+        node.status = 'RETRY_FAILED';
+        this.markLastNode(instance, node);
+        this.clearRetrySchedule(node);
+        node.failInfo = {
+          reason: payload.reason ?? '',
+          source: 'RETRY_EXHAUSTED',
           at: new Date(),
         };
         break;
@@ -365,15 +398,16 @@ class WorkflowEngine {
         // 人工在节点会话中给出指示后由 LLM 调用恢复；会话仍在，无需 hook
         node.status = 'RUNNING';
         this.markLastNode(instance, node);
+        this.resetRetryState(node);
         node.failInfo = null;
         break;
       }
       case 'restart': {
-        // 会话失败/卡住时人工重启：清失败/打回标记与兜底提醒，关闭旧会话拉起全新会话
+        // 会话失败/卡住时人工重启：清失败/打回标记与重试状态，关闭旧会话拉起全新会话
         node.status = 'RUNNING';
         node.failInfo = null;
         node.rejectInfo = null;
-        node.fallbackSent = false;
+        this.resetRetryState(node);
         // 如果提供了新 agentConfig，更新节点快照
         if (payload.agentConfig) {
           node.agentConfig = payload.agentConfig;
@@ -389,6 +423,23 @@ class WorkflowEngine {
   private markLastNode(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): void {
     instance.lastNodeName = node.name;
     instance.lastNodeStatus = node.status;
+  }
+
+  /**
+   * 复位本 episode 的全部重试字段（推进/人工操作时调用）。
+   * 只有推进或人工干预才结束「中断 episode」，重试成功发送提示词不复位（D1 防死循环）。
+   */
+  private resetRetryState(node: WorkflowNodeDoc): void {
+    node.retryCount = 0;
+    this.clearRetrySchedule(node);
+  }
+
+  /** 只清调度字段，保留 retryCount（fail / retryExhausted 保留展示与排查） */
+  private clearRetrySchedule(node: WorkflowNodeDoc): void {
+    node.nextRetryAt = null;
+    node.retryPhase = null;
+    node.retryDeadlineAt = null;
+    node.retryTrigger = null;
   }
 
   /** READY 节点的激活评估：上游全部 DONE 后按类型推进 */

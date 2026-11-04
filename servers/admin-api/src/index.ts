@@ -58,8 +58,10 @@ import * as migration015PresetPlaywright from './migrations/015-preset-playwrigh
 import * as migration016PresetMongo from './migrations/016-preset-mongodb.js';
 // 017：工作负载全局安装 npm → pnpm（open code/kimi/dsh/playwright 脚本字节匹配刷新）
 import * as migration017WorkloadPnpmScripts from './migrations/017-workload-pnpm-scripts.js';
-// 018：全部预制工作负载脚本「锚点 + 结尾硬校验 + 可重入」核查与字节匹配刷新（Node.js 新增锚点）
-import * as migration018WorkloadIdempotentAnchors from './migrations/018-workload-idempotent-anchors.js';
+// 018：pnpm 9.15.9 → 12.16.1（全局 bin 目录变更，四条工作负载脚本刷新）
+import * as migration018Pnpm12Upgrade from './migrations/018-pnpm-12-upgrade.js';
+// 019：全部预制工作负载脚本「锚点 + 结尾硬校验 + 可重入」核查与字节匹配刷新（Node.js 新增锚点）
+import * as migration019WorkloadIdempotentAnchors from './migrations/019-workload-idempotent-anchors.js';
 import { CloudHost } from './models/cloud-host.js';
 import { StorageBillingCursor } from './models/storage-billing-cursor.js';
 import { storageTickService } from './services/billing/storage-tick.js';
@@ -154,7 +156,8 @@ async function start() {
   // 015-preset-playwright——写入 Playwright 预制工作负载（工具 + Chromium，参数化内网下载地址）
   // 016-preset-mongodb——写入 MongoDB 预制工作负载（内网 Nexus apt 原生安装 mongodb-org 8.0；015 已被 Playwright 占用，顺延）
   // 017-workload-pnpm-scripts——预置工作负载全局安装 npm → pnpm（含缺失自举回退）
-  // 018-workload-idempotent-anchors——预制工作负载「锚点 + 结尾硬校验 + 可重入」核查与刷新
+  // 018-pnpm-12-upgrade——四条 Harness/Playwright 脚本 pnpm 9.15.9 → 12.16.1
+  // 019-workload-idempotent-anchors——预制工作负载「锚点 + 结尾硬校验 + 可重入」核查与刷新（标准版本已含 018 的 pnpm 12）
   try {
     await runMigrations([
       migration001,
@@ -176,7 +179,8 @@ async function start() {
       migration015PresetPlaywright,
       migration016PresetMongo,
       migration017WorkloadPnpmScripts,
-      migration018WorkloadIdempotentAnchors,
+      migration018Pnpm12Upgrade,
+      migration019WorkloadIdempotentAnchors,
     ]);
   } catch (err) {
     logger.error({ err }, 'runMigrations failed (non-fatal)');

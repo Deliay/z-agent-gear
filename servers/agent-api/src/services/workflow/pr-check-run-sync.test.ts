@@ -178,6 +178,7 @@ describe('mapNodeStatusToCheckRun', () => {
     ['DONE', 'completed', 'success', '已完成'],
     ['REJECT', 'completed', 'action_required', '被打回，待处理'],
     ['FAILED', 'completed', 'failure', '执行失败'],
+    ['RETRY_FAILED', 'completed', 'action_required', '重试失败，待人工处理'],
   ])('%s → %s/%s（%s）', (nodeStatus, status, conclusion, label) => {
     expect(mapNodeStatusToCheckRun(nodeStatus)).toEqual({ status, conclusion, label });
   });

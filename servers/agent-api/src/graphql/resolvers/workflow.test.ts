@@ -31,6 +31,7 @@ vi.mock('../../services/workflow/instance.js', () => ({
     rejectNode: vi.fn(),
     setAdditionalPrompt: vi.fn(),
     removeAdditionalPrompt: vi.fn(),
+    rename: vi.fn(),
   },
 }));
 
@@ -366,6 +367,36 @@ describe('workflow resolvers', () => {
 
       await workflowResolvers.Mutation.rejectNode({}, { instanceId: 'inst-1', nodeId: 'n1', reason: '不行' }, ctx);
       expect(workflowInstanceService.rejectNode).toHaveBeenCalledWith('user-1', 'inst-1', 'n1', '不行');
+    });
+
+    it('renameWorkflowInstance 委托服务并映射实例', async () => {
+      vi.mocked(workflowInstanceService.rename).mockResolvedValue({
+        ...instanceDoc,
+        name: '新名称',
+      } as never);
+
+      const result = await workflowResolvers.Mutation.renameWorkflowInstance(
+        {},
+        { id: 'inst-1', name: '新名称' },
+        ctx,
+      );
+
+      expect(workflowInstanceService.rename).toHaveBeenCalledWith('user-1', 'inst-1', '新名称');
+      expect(result).toMatchObject({ id: 'inst-1', name: '新名称' });
+    });
+
+    it('renameWorkflowInstance 未登录拒绝', async () => {
+      await expect(
+        workflowResolvers.Mutation.renameWorkflowInstance({}, { id: 'inst-1', name: '名称' }, emptyCtx),
+      ).rejects.toThrow('Not authenticated');
+    });
+
+    it('renameWorkflowInstance 服务层非法名称以原样文案抛出', async () => {
+      vi.mocked(workflowInstanceService.rename).mockRejectedValue(new Error('invalid workflow name'));
+
+      await expect(
+        workflowResolvers.Mutation.renameWorkflowInstance({}, { id: 'inst-1', name: '   ' }, ctx),
+      ).rejects.toThrow('invalid workflow name');
     });
 
     it('服务层非法图错误以可读 message 抛出', async () => {

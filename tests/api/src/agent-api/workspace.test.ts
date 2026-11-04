@@ -1639,28 +1639,30 @@ describe('多租户二期：工作区上下文与权限（T-WS-API）', () => {
     const after = await gqlCtx(MY_WORKSPACES, undefined, admin.token, teamGlobalId);
     expect(after.data.myWorkspaces.some((workspace: { id: string }) => workspace.id === workspaceId)).toBe(false);
 
-    // 非空删除保护：先写入本工作区 commit 设置（user_commit_settings 计入 11 集合）
+    // 非空删除保护：先在本工作区写入资源（供应商；Commit 设置已成员级，不再计入工作区资源）
+    const suffix = Date.now().toString(36);
     const nonEmpty = await gqlCtx(
       CREATE_TENANT_WORKSPACE,
-      { name: `non-empty-${Date.now().toString(36)}` },
+      { name: `non-empty-${suffix}` },
       admin.token,
       teamGlobalId,
     );
     const nonEmptyId = nonEmpty.data.createTenantWorkspace.id;
     const saved = await gqlCtx(
-      UPDATE_COMMIT_SETTINGS,
+      CREATE_PROVIDER,
       {
         input: {
-          committerMode: 'HUMAN_ONLY',
-          committerType: 'CUSTOM',
-          customName: 'Non Empty',
-          customEmail: 'non-empty@example.com',
+          name: `non-empty-provider-${suffix}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mockServer.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-ws-api-test',
         },
       },
       admin.token,
       nonEmptyId,
     );
-    expect(saved.errors).toBeUndefined();
+    expect(saved.errors, JSON.stringify(saved.errors)).toBeUndefined();
     const blocked = await gqlCtx(DELETE_TENANT_WORKSPACE, { id: nonEmptyId }, admin.token, teamGlobalId);
     expect(blocked.errors?.[0]?.message).toBe('workspace is not empty');
   });
@@ -1942,7 +1944,7 @@ const ISO_SESSIONS = `
 `;
 const ISO_SESSION = `query IsoSession($id: ID!) { session(id: $id) { id status controllerId } }`;
 const ISO_CONTROLLERS = `
-  query IsoControllers { controllers { id name type status } }
+  query IsoControllers { controllers { id name type status cloudHost { id } } }
 `;
 const ISO_CONTROLLER = `query IsoController($id: ID!) { controller(id: $id) { id name } }`;
 const ISO_CONTROLLER_KEYS = `
@@ -1952,6 +1954,9 @@ const ISO_CLOUD_HOSTS = `
   query IsoCloudHosts { myCloudHosts { id name status workspaceId controllerId } }
 `;
 const ISO_CLOUD_HOST = `query IsoCloudHost($id: ID!) { cloudHost(id: $id) { id name workspaceId } }`;
+const ISO_TODO_LIST = `
+  query IsoTodoList { getTodoList { id type title elicitationData { requestId sessionId message } } }
+`;
 const ISO_GITHUB_ACCOUNTS = `
   query IsoGithubAccounts { githubAccounts { id githubLogin workspaceId } }
 `;
@@ -2038,6 +2043,7 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
   let cloudHostId = '';
   let githubAccountId = '';
   let cloudControllerId = '';
+  let cloudControllerHostId = '';
   let globalGithubAccountId = '';
   let adminFailedOperationId = '';
   let developerFailedOperationId = '';
@@ -2410,6 +2416,7 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
         cloudHostId = hostObjectId.toString();
         githubAccountId = accountObjectId.toString();
         cloudControllerId = cloudControllerObjectId.toString();
+        cloudControllerHostId = cloudHostObjectId.toString();
         globalGithubAccountId = globalAccountObjectId.toString();
         adminFailedOperationId = adminOperationObjectId.toString();
         developerFailedOperationId = developerOperationObjectId.toString();
@@ -2517,6 +2524,15 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       expect(memberDetail.errors, JSON.stringify(memberDetail.errors)).toBeUndefined();
       expect(memberDetail.data.cloudHost).toMatchObject({ id: cloudHostId, workspaceId: normalId });
 
+      // Controller.cloudHost（首页/控制器列表嵌套字段）同样按工作区成员口径：
+      // 回归「team 租户自定义工作区下，成员 B 看不到成员 A 创建的云电脑」。
+      const memberControllers = await gql(ISO_CONTROLLERS, undefined, developer.token, normalId);
+      expect(memberControllers.errors, JSON.stringify(memberControllers.errors)).toBeUndefined();
+      const memberCloudController = memberControllers.data.controllers.find(
+        (row: { id: string }) => row.id === cloudControllerId,
+      );
+      expect(memberCloudController?.cloudHost).toMatchObject({ id: cloudControllerHostId });
+
       const adminDetail = await gql(ISO_CLOUD_HOST, { id: cloudHostId }, admin.token, normalId);
       expect(adminDetail.errors, JSON.stringify(adminDetail.errors)).toBeUndefined();
       expect(adminDetail.data.cloudHost).toMatchObject({ id: cloudHostId, workspaceId: normalId });
@@ -2600,6 +2616,30 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       );
       expect(devWorkspace.errors, JSON.stringify(devWorkspace.errors)).toBeUndefined();
       const devWorkspaceId = devWorkspace.data.createWorkspace.id as string;
+
+      // createSession：developer 在 admin 创建的 RUNNING 云电脑上建会话（云电脑按工作区成员口径查询）
+      const devCloudWorkspace = await gql(
+        CREATE_WORKSPACE,
+        { input: { controllerId: cloudControllerId, path: `/tmp/iso-dev-cloud-${Date.now()}` } },
+        developer.token,
+        normalId,
+      );
+      expect(devCloudWorkspace.errors, JSON.stringify(devCloudWorkspace.errors)).toBeUndefined();
+      const devCloudSession = await gql(
+        CREATE_SESSION,
+        {
+          input: {
+            controllerId: cloudControllerId,
+            acpServerType: 'opencode',
+            workspaceId: devCloudWorkspace.data.createWorkspace.id,
+          },
+        },
+        developer.token,
+        normalId,
+      );
+      expect(devCloudSession.errors, JSON.stringify(devCloudSession.errors)).toBeUndefined();
+      expect(devCloudSession.data.createSession.session.id).toBeTruthy();
+
       const devHistory = await gql(
         LIST_HISTORY_SESSIONS,
         { controllerId, workspaceId: devWorkspaceId },
@@ -2619,6 +2659,41 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       );
       expect(adminHistory.errors, JSON.stringify(adminHistory.errors)).toBeUndefined();
       expect(adminHistory.data.listHistorySessions.length).toBeGreaterThanOrEqual(1);
+
+      // 问询待办：团队会话的 elicitation 待办必须归属团队租户，当前工作区可见、个人工作区不可见。
+      const elicitationRequestId = `iso-elic-${Date.now()}`;
+      controllerSocket.emit('acp:elicitation', {
+        requestId: elicitationRequestId,
+        sessionId,
+        mode: 'form',
+        message: '团队会话提问',
+        toolCallId: 'iso-question-1',
+        requestedSchema: {
+          type: 'object',
+          title: '团队会话确认',
+          properties: { ok: { type: 'boolean', title: '确认' } },
+        },
+      });
+      let teamTodo: { elicitationData?: { requestId?: string } } | undefined;
+      for (let i = 0; i < 20; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const todos = await gql(ISO_TODO_LIST, undefined, admin.token, normalId);
+        expect(todos.errors, JSON.stringify(todos.errors)).toBeUndefined();
+        teamTodo = todos.data.getTodoList.find(
+          (row: { elicitationData?: { requestId?: string } }) =>
+            row.elicitationData?.requestId === elicitationRequestId,
+        );
+        if (teamTodo) break;
+      }
+      expect(teamTodo, '团队工作区应能看到会话问询待办').toBeTruthy();
+      const personalTodos = await gql(ISO_TODO_LIST, undefined, admin.token);
+      expect(personalTodos.errors, JSON.stringify(personalTodos.errors)).toBeUndefined();
+      expect(
+        personalTodos.data.getTodoList.some(
+          (row: { elicitationData?: { requestId?: string } }) =>
+            row.elicitationData?.requestId === elicitationRequestId,
+        ),
+      ).toBe(false);
 
       // cloudHostIssuesLinkages：developer 对 admin 创建的 cloud 控制器应过门禁
       const devLinkages = await gql(

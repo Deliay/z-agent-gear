@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import NodeDetailDrawer, { type NodeDetailTarget } from '../NodeDetailDrawer'
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow'
 
@@ -45,6 +45,8 @@ function node(overrides: Partial<WorkflowNodeData> = {}): WorkflowNodeData {
     startedAt: '2026-10-30T10:00:00Z',
     reworkedAt: '2026-10-31T10:00:00Z',
     reworkCount: 2,
+    retryCount: 0,
+    nextRetryAt: null,
     rejectInfo: { reason: '缺少测试覆盖', fromNodeId: 'n0', at: '' },
     failInfo: null,
     ...overrides,
@@ -132,6 +134,24 @@ describe('NodeDetailDrawer', () => {
     expect(screen.getByText(/最近同步：2026-10-31T12:00:00Z/)).toBeInTheDocument()
   })
 
+  it('T-WFI-SH1 关联 PR 区块位于产物之前（同时存在两者时）', () => {
+    renderDrawer({ type: 'node', nodeId: 'n1' })
+
+    const prTitle = screen.getByText('关联 Pull Request')
+    const artifactTitle = screen.getByText(/^产物（\d+）$/)
+    // Node.DOCUMENT_POSITION_FOLLOWING：产物标题在 PR 标题之后
+    expect(prTitle.compareDocumentPosition(artifactTitle)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+  })
+
+  it('T-WFI-SH1b 仅产物或仅 PR 时展示正常', () => {
+    const artifactsOnly = instance({ pullRequestLinks: [] })
+    renderDrawer({ type: 'node', nodeId: 'n1' }, artifactsOnly)
+    expect(screen.getByText(/^产物（\d+）$/)).toBeInTheDocument()
+    expect(screen.queryByText('关联 Pull Request')).not.toBeInTheDocument()
+  })
+
   it('T-UI4-SH6 失败节点展示失败原因', () => {
     renderDrawer(
       { type: 'node', nodeId: 'n1' },
@@ -207,5 +227,52 @@ describe('NodeDetailDrawer', () => {
   it('节点不存在时展示兜底文案', () => {
     renderDrawer({ type: 'node', nodeId: 'missing' })
     expect(screen.getByText('节点不存在或已被删除')).toBeInTheDocument()
+  })
+})
+
+describe('NodeDetailDrawer 中断自动重试（T-FE2/T-FE3）', () => {
+  function renderRetry(nodeOverrides: Partial<WorkflowNodeData>, onRestartNode = vi.fn()) {
+    const inst = instance({
+      nodes: [
+        node({
+          type: 'AI',
+          status: 'RETRY_FAILED',
+          failInfo: { reason: '中断自动重试 10 次仍未推进，需要人工介入', source: 'RETRY_EXHAUSTED', at: '' },
+          ...nodeOverrides,
+        }),
+      ],
+    })
+    render(
+      <NodeDetailDrawer
+        open
+        onOpenChange={() => {}}
+        instance={inst}
+        target={{ type: 'node', nodeId: 'n1' }}
+        onRestartNode={onRestartNode}
+      />,
+    )
+    return { onRestartNode }
+  }
+
+  it('T-FE2: RETRY_FAILED 展示独立徽标、重试失败原因、重启按钮与重试进度', () => {
+    const { onRestartNode } = renderRetry({
+      retryCount: 10,
+      nextRetryAt: new Date(Date.now() + 60_000).toISOString(),
+    })
+
+    expect(screen.getByTestId('drawer-node-status')).toHaveTextContent('重试失败')
+    expect(screen.getByText(/重试失败原因：中断自动重试 10 次仍未推进/)).toBeInTheDocument()
+    expect(screen.getByText('自动重试')).toBeInTheDocument()
+    expect(screen.getByText(/自动重试 10\/10 · 下次/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '重启节点' }))
+    expect(onRestartNode).toHaveBeenCalledTimes(1)
+    expect(onRestartNode.mock.calls[0][0]).toMatchObject({ id: 'n1', status: 'RETRY_FAILED' })
+  })
+
+  it('T-FE3: retryCount>0 且 nextRetryAt=null 时不展示重试进度', () => {
+    renderRetry({ retryCount: 3, nextRetryAt: null })
+    expect(screen.queryByText('自动重试')).not.toBeInTheDocument()
+    expect(screen.queryByText(/正在恢复会话/)).not.toBeInTheDocument()
   })
 })

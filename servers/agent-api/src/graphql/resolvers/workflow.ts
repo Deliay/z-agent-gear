@@ -107,6 +107,8 @@ function mapInstanceNode(node: Doc) {
     startedAt: toIso(node.startedAt),
     reworkedAt: toIso(node.reworkedAt),
     reworkCount: node.reworkCount ?? 0,
+    retryCount: node.retryCount ?? 0,
+    nextRetryAt: toIso(node.nextRetryAt),
     // 归一化：缺 reason 的空对象视为 null
     rejectInfo: rejectInfo?.reason
       ? { reason: rejectInfo.reason, fromNodeId: rejectInfo.fromNodeId ?? null, at: toIso(rejectInfo.at) }
@@ -342,6 +344,16 @@ export const workflowResolvers = {
     archiveWorkflowInstance: async (_parent: unknown, args: { id: string; archived: boolean }, context: AuthContext) => {
       const userId = requireUser(context);
       return wrap(() => workflowInstanceService.setArchived(userId, args.id, args.archived));
+    },
+    renameWorkflowInstance: async (
+      _parent: unknown,
+      args: { id: string; name: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      return wrap(async () =>
+        mapInstance((await workflowInstanceService.rename(userId, args.id, args.name)) as unknown as Doc),
+      );
     },
     setWorkflowAdditionalPrompt: async (
       _parent: unknown,

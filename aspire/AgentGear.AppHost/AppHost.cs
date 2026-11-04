@@ -18,6 +18,20 @@ string SecretOrDefault(string name, int bytes = 32)
         .Replace("=", string.Empty);
 }
 
+// 需要「固定长度 hex」语义的密钥（如 AES-256 的 32 字节 = 64 位 hex）。
+// 不能用 SecretOrDefault：base64 去符号后的随机串长度不恒定，agent-api 按 hex 解析会得到
+// ERR_CRYPTO_INVALID_KEYLEN（GitHub 帐号绑定必然 500）。
+string HexSecretOrDefault(string name, int bytes = 32)
+{
+    var configured = builder.Configuration[$"Parameters:{name}"];
+    if (!string.IsNullOrWhiteSpace(configured))
+    {
+        return configured;
+    }
+    return Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(bytes))
+        .ToLowerInvariant();
+}
+
 var compose = builder.AddDockerComposeEnvironment("z-agent-gear")
     .WithProperties(env =>
     {
@@ -67,18 +81,6 @@ var redis = builder.AddRedis("redis")
         service.Image = "registry.cn-hangzhou.aliyuncs.com/zero-tools/redis:8.6";
     });
 
-// OTel 采集端（dev 与 compose 共用）：OTLP 4317(gRPC)/4318(HTTP) → debug exporter（dev 直读
-// collector stdout）。配置挂载 aspire/otel-collector/config.yaml（otlphttp 生产导出段为注释态）。
-builder.AddContainer("otel-collector", "otel/opentelemetry-collector-contrib", "latest")
-    .WithBindMount("../otel-collector/config.yaml", "/etc/otelcol-contrib/config.yaml", isReadOnly: true)
-    .WithEndpoint(targetPort: 4317, port: 4317, name: "otlp-grpc", scheme: "http")
-    .WithEndpoint(targetPort: 4318, port: 4318, name: "otlp-http", scheme: "http")
-    .PublishAsDockerComposeService((resource, service) =>
-    {
-        service.Name = "otel-collector";
-        service.Restart = "unless-stopped";
-    });
-
 // 计费事件骨干（费用中心）：topic exchange + 重试/DLQ；本地 dev 与 compose 均复用同一 RabbitMQ。
 // 仅当显式 RABBITMQ_DISABLED=true 时跳过（无镜像的受限环境跑其余服务；MQ 客户端会自行重试并降级）。
 var rabbitmqDisabled = string.Equals(
@@ -109,7 +111,7 @@ var adminInitialPassword = builder.AddParameter("admin-initial-password", secret
 var githubAppId = builder.AddParameter("github-app-id", value: "4253594");
 var githubAppUrl = builder.AddParameter("github-app-url", value: "https://github.com/apps/z-agent-bot-test");
 var githubSetupUrl = builder.AddParameter("github-setup-url", value: "http://localhost:10001/api/github/setup");
-var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: SecretOrDefault("github-token-encryption-key"));
+var githubTokenEncryptionKey = builder.AddParameter("github-token-encryption-key", secret: true, value: HexSecretOrDefault("github-token-encryption-key"));
 // GitHub API base：本地/API 测试可指向进程内 mock（`GITHUB_API_BASE=http://127.0.0.1:<port>`）
 var githubApiBase = builder.AddParameter(
     "github-api-base",
@@ -121,20 +123,12 @@ var githubAppPrivateKeyPath = Path.Combine(AppContext.BaseDirectory, "github-app
 var githubAppPrivateKeyValue = File.Exists(githubAppPrivateKeyPath) ? File.ReadAllText(githubAppPrivateKeyPath) : "";
 var githubAppPrivateKey = builder.AddParameter("github-app-private-key", secret: true, value: githubAppPrivateKeyValue);
 
-// 可观测性（contracts/observability.md）：otel-endpoint 空 = SDK 完全关闭、零外发；
-// 本地 dev 默认指向 otel-collector 的 4318（publish 默认空，由部署方显式配置）。
-var otelEndpoint = builder.AddParameter(
-    "otel-endpoint",
-    value: builder.ExecutionContext.IsPublishMode ? "" : "http://localhost:4318");
-var otelSampleArg = builder.AddParameter("otel-sample-arg", value: "1.0");
 var logLevel = builder.AddParameter("log-level", value: "info");
 
 var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controller-api", "src/index.ts")
     .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("LOG_LEVEL", logLevel)
-    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
-    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithHttpEndpoint(env: "PORT")
     .WithReference(mongodb)
     .WithReference(redis)
@@ -149,8 +143,6 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("LOG_LEVEL", logLevel)
-    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
-    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("CORS_ORIGIN", corsOrigin)
     .WithEnvironment("JWT_SECRET", jwtSecret)
     .WithEnvironment("MCP_ENDPOINT_JWT_SECRET", mcpJwtSecret)
@@ -172,7 +164,7 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     });
 
 var internalApiToken = builder.AddParameter("internal-api-token", secret: true, value: SecretOrDefault("internal-api-token"));
-var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zag/worker:latest");
+var workerImage = builder.AddParameter("worker-image", value: "core.harbor.internal.fffdan.com/zero-tools/worker:latest");
 var publicWsEndpoint = builder.AddParameter("public-ws-endpoint", value: "localhost:10004");
 // 前台云电脑开关：publish 默认关闭（灰度时置 true）；dev 固定 true 便于联调。
 var harnessEnabled = builder.AddParameter("harness-enabled", value: "false");
@@ -185,8 +177,6 @@ var cloudController = builder.AddNodeApp("cloud-controller", "../../servers/clou
     .WithPnpm()
     .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
     .WithEnvironment("LOG_LEVEL", logLevel)
-    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
-    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("K8S_NAMESPACE", "zag-cloud")
     .WithEnvironment("WORKER_IMAGE", workerImage)
     .WithEnvironment("PUBLIC_WS_ENDPOINT", publicWsEndpoint)
@@ -221,8 +211,6 @@ var agentController = builder.AddNodeApp("agent-controller", "../../packages/age
     .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
     .WithEnvironment("LOG_LEVEL", logLevel)
-    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
-    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("ZAG_SERVER_ENDPOINT", controllerApi.GetEndpoint("http"))
     .WithExplicitStart()
     .WaitFor(controllerApi)
@@ -232,8 +220,6 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
     .WithPnpm()
     .WithEnvironment("ADMIN_JWT_SECRET", adminJwtSecret)
     .WithEnvironment("LOG_LEVEL", logLevel)
-    .WithEnvironment("OTEL_EXPORTER_OTLP_ENDPOINT", otelEndpoint)
-    .WithEnvironment("OTEL_TRACES_SAMPLER_ARG", otelSampleArg)
     .WithEnvironment("CREDENTIAL_ENCRYPTION_KEY", credentialEncryptionKey)
     .WithEnvironment("ADMIN_INITIAL_PASSWORD", adminInitialPassword)
     .WithEnvironment("CORS_ORIGIN", corsOrigin)

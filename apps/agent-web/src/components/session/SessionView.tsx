@@ -61,7 +61,7 @@ const RESUME_TIMEOUT_MS = 30000;
 const WORKFLOW_CONTINUE_PROMPT =
   '你身处一个自动化工作流系统，当前会话绑定到一个工作流节点。系统检测到会话此前断连，现已恢复。' +
   '你必须使用提供的工作流 MCP 工具对当前节点执行操作：先用 getNodeInfo 确认当前节点状态；' +
-  '若节点为 FAILED，先调用 resumeFailedNode 将节点恢复为运行状态；然后继续你之前的工作，' +
+  '若节点为 FAILED 或 RETRY_FAILED，先调用 resumeFailedNode 将节点恢复为运行状态；然后继续你之前的工作，' +
   '完成时调用 completeCurrentNode（产物通过黑板工具写入），需要上游返工时调用 rejectCurrentNode 并给出明确原因，' +
   '确实无法继续时调用 failCurrentNode 说明原因。不要只输出文本而不调用工具。';
 

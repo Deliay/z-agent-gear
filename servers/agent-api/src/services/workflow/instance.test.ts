@@ -18,6 +18,7 @@ vi.mock('../../models/workflow-instance.js', () => ({
     create: vi.fn(),
     findOne: vi.fn(),
     find: vi.fn(),
+    findById: vi.fn(),
     updateOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
   },
@@ -78,7 +79,7 @@ const testLog = createTestLogger();
 const childSpy = vi
   .spyOn(rootLogger, 'child')
   .mockImplementation((bindings) => testLog.logger.child(bindings));
-const { workflowInstanceService } = await import('./instance.js');
+const { workflowInstanceService, normalizeWorkflowName } = await import('./instance.js');
 childSpy.mockRestore();
 
 import { workflowEngine } from './engine.js';
@@ -1127,6 +1128,98 @@ describe('WorkflowInstanceService.setArchived', () => {
 
     await expect(workflowInstanceService.setArchived('user-1', 'inst-x', true)).rejects.toThrow(/不存在/);
     expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('normalizeWorkflowName', () => {
+  it('T-RN5 首尾空白被 trim，64 字符边界通过', () => {
+    expect(normalizeWorkflowName('  工作流实例  ')).toBe('工作流实例');
+    const boundary = 'a'.repeat(64);
+    expect(normalizeWorkflowName(boundary)).toBe(boundary);
+  });
+
+  it('T-RN2 空串 / 纯空白 / 65 字符抛 invalid workflow name', () => {
+    expect(() => normalizeWorkflowName('')).toThrow('invalid workflow name');
+    expect(() => normalizeWorkflowName('   ')).toThrow('invalid workflow name');
+    expect(() => normalizeWorkflowName('a'.repeat(65))).toThrow('invalid workflow name');
+  });
+});
+
+describe('WorkflowInstanceService.rename', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('T-RN1 成功：名称 trim 后落库并返回新名称', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ _id: oid('inst-1'), userId: oid('user-1'), name: '旧名称' }),
+    );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({ matchedCount: 1 } as never);
+    vi.mocked(WorkflowInstance.findById).mockReturnValue(
+      leanQuery({ _id: oid('inst-1'), name: '新名称' }),
+    );
+
+    const result = await workflowInstanceService.rename('user-1', 'inst-1', '  新名称  ');
+
+    expect(WorkflowInstance.findOne).toHaveBeenCalledWith({ _id: 'inst-1', userId: 'user-1' });
+    expect(WorkflowInstance.updateOne).toHaveBeenCalledWith(
+      { _id: 'inst-1', deletedAt: null },
+      { $set: { name: '新名称' } },
+    );
+    expect(result).toMatchObject({ name: '新名称' });
+  });
+
+  it('T-RN2 空 / 纯空白 / 65 字符拒绝且不写库', async () => {
+    for (const raw of ['', '   ', 'a'.repeat(65)]) {
+      await expect(workflowInstanceService.rename('user-1', 'inst-1', raw)).rejects.toThrow(
+        'invalid workflow name',
+      );
+    }
+    expect(WorkflowInstance.findOne).not.toHaveBeenCalled();
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('T-RN3 他人实例 / 不存在拒绝', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(null));
+
+    await expect(workflowInstanceService.rename('user-1', 'inst-x', '新名称')).rejects.toThrow(
+      'Workflow instance not found',
+    );
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('T-RN4 已软删除实例拒绝且文案明确', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ _id: oid('inst-1'), userId: oid('user-1'), deletedAt: new Date() }),
+    );
+
+    await expect(workflowInstanceService.rename('user-1', 'inst-1', '新名称')).rejects.toThrow(
+      'Workflow instance is deleted',
+    );
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('T-RN6 更新瞬间已删除（matchedCount=0）按已删除处理', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ _id: oid('inst-1'), userId: oid('user-1') }),
+    );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({ matchedCount: 0 } as never);
+
+    await expect(workflowInstanceService.rename('user-1', 'inst-1', '新名称')).rejects.toThrow(
+      'Workflow instance is deleted',
+    );
+  });
+
+  it('返回文档缺失时抛 not found（同一请求窗口兜底）', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery({ _id: oid('inst-1'), userId: oid('user-1') }),
+    );
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({ matchedCount: 1 } as never);
+    vi.mocked(WorkflowInstance.findById).mockReturnValue(leanQuery(null));
+
+    await expect(workflowInstanceService.rename('user-1', 'inst-1', '新名称')).rejects.toThrow(
+      'Workflow instance not found',
+    );
   });
 });
 

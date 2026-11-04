@@ -300,6 +300,7 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
             {cloudHost && (
               <button
                 type="button"
+                data-testid="config-tab-workloads"
                 onClick={() => setActiveSection('workloads')}
                 className={`w-full rounded-md px-3 py-2 text-sm text-left ${activeSection === 'workloads' ? 'bg-accent' : 'hover:bg-accent'}`}
               >

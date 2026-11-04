@@ -6,11 +6,17 @@ import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow'
 
 const mockUseQuery = vi.fn();
 const mockDelete = vi.fn().mockResolvedValue({});
+const mockRename = vi.fn().mockResolvedValue({});
 const mockNavigate = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
-  useMutation: () => [mockDelete],
+  // 按 mutation 文档名区分：改名用独立 mock，其余沿用 mockDelete（删除/归档）
+  useMutation: (doc: { definitions?: Array<{ name?: { value?: string } }> }) => {
+    const name = doc?.definitions?.[0]?.name?.value;
+    if (name === 'RenameWorkflowInstance') return [mockRename];
+    return [mockDelete];
+  },
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -37,8 +43,45 @@ vi.mock('@/components/workflow/WorkflowGraphView', () => ({
 }));
 
 vi.mock('@/components/workflow/NodeDetailDrawer', () => ({
-  default: ({ open, target }: { open: boolean; target: unknown }) =>
-    open ? <div data-testid="node-detail-drawer">{JSON.stringify(target)}</div> : null,
+  default: ({
+    open,
+    target,
+    onRestartNode,
+  }: {
+    open: boolean
+    target: unknown
+    onRestartNode?: (node: { id: string; name: string; type: string; status: string }) => void
+  }) =>
+    open ? (
+      <div data-testid="node-detail-drawer">
+        {JSON.stringify(target)}
+        <button
+          type="button"
+          onClick={() =>
+            onRestartNode?.({ id: 'n2', name: '代码实现', type: 'AI', status: 'RETRY_FAILED' })
+          }
+        >
+          抽屉重启
+        </button>
+      </div>
+    ) : null,
+}));
+
+vi.mock('@/components/workflow/EditInstanceNodeDialog', () => ({
+  default: ({
+    open,
+    restartMode,
+    node,
+  }: {
+    open: boolean
+    restartMode?: boolean
+    node?: { name: string }
+  }) =>
+    open ? (
+      <div data-testid="edit-node-dialog" data-restart={String(restartMode ?? false)}>
+        {node?.name}
+      </div>
+    ) : null,
 }));
 
 vi.mock('@/components/MobileBackButton', () => ({
@@ -85,6 +128,8 @@ function makeInstance(): WorkflowInstanceData {
         startedAt: null,
         reworkedAt: null,
         reworkCount: 0,
+        retryCount: 0,
+        nextRetryAt: null,
         rejectInfo: null,
         failInfo: null,
       },
@@ -272,6 +317,77 @@ describe('WorkflowInstancePage 实例状态与归档', () => {
   });
 });
 
+describe('WorkflowInstancePage 实例改名（T-RNWEB）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRename.mockResolvedValue({});
+  });
+
+  it('T-RNWEB1 点击重命名入口弹出对话框并预填当前名称', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.textContent).toContain('重命名实例');
+    expect(screen.getByLabelText('实例名称')).toHaveValue('测试实例');
+  });
+
+  it('T-RNWEB2 空白名称禁用提交并提示', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+    fireEvent.change(screen.getByLabelText('实例名称'), { target: { value: '   ' } });
+
+    expect(screen.getByText('名称不能为空')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+  });
+
+  it('T-RNWEB2b 超长名称禁用提交并提示', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+    fireEvent.change(screen.getByLabelText('实例名称'), { target: { value: 'a'.repeat(65) } });
+
+    expect(screen.getByText('名称最多 64 个字符')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+  });
+
+  it('T-RNWEB3 提交 trim 后名称、成功 toast、对话框关闭', async () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+    fireEvent.change(screen.getByLabelText('实例名称'), { target: { value: '  新名称  ' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() =>
+      expect(mockRename).toHaveBeenCalledWith({
+        variables: { id: 'inst-1', name: '新名称' },
+      }),
+    );
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('实例名称已更新'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('T-RNWEB4 服务端错误文案展示且对话框保持打开', async () => {
+    mockRename.mockRejectedValue(new Error('invalid workflow name'));
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '重命名实例' }));
+    fireEvent.change(screen.getByLabelText('实例名称'), { target: { value: '新名称' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(screen.getByText('invalid workflow name')).toBeInTheDocument());
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
 describe('WorkflowInstancePage 关联 Pull Request 与追加提示词', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -364,5 +480,63 @@ describe('WorkflowInstancePage 关联 Pull Request 与追加提示词', () => {
     expect(screen.getByText('暂无关联')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /追加提示词（0）/ }));
     expect(screen.getByText('暂无')).toBeInTheDocument();
+  });
+});
+
+
+describe('WorkflowInstancePage 重试用尽（T-FE4）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeRetryFailedInstance(): WorkflowInstanceData {
+    const instance = makeInstance();
+    instance.currentNodeNames = [];
+    instance.nodes = [
+      {
+        ...(instance.nodes[0] as WorkflowNodeData),
+        id: 'n2',
+        type: 'AI',
+        name: '代码实现',
+        status: 'RETRY_FAILED',
+        retryCount: 10,
+        nextRetryAt: null,
+        failInfo: {
+          reason: '中断自动重试 10 次仍未推进，需要人工介入',
+          source: 'RETRY_EXHAUSTED',
+          at: '2026-08-08T00:00:00Z',
+        },
+      } as WorkflowNodeData,
+    ];
+    return instance;
+  }
+
+  it('T-FE4a: RETRY_FAILED 进入阻断 banner（文案区别于 FAILED）且 toast 每节点仅一次', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeRetryFailedInstance() }, loading: false });
+    const view = render(<WorkflowInstancePage />);
+
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('中断自动重试用尽');
+    expect(alert.textContent).toContain('代码实现');
+    expect(alert.textContent).not.toContain('个节点失败');
+    expect(toast.error).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(toast.error).mock.calls[0][0]).toContain('中断自动重试用尽');
+
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeRetryFailedInstance() }, loading: false });
+    view.rerender(<WorkflowInstancePage />);
+    expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-FE4b: 抽屉「重启节点」打开 EditInstanceNodeDialog(restartMode)', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeRetryFailedInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: '代码实现 详情' }));
+    expect(screen.getByTestId('node-detail-drawer')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '抽屉重启' }));
+    const dialog = screen.getByTestId('edit-node-dialog');
+    expect(dialog).toHaveAttribute('data-restart', 'true');
+    expect(dialog.textContent).toContain('代码实现');
   });
 });

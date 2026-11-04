@@ -149,7 +149,7 @@ test.describe('Session Rendering', () => {
     session.disconnect();
   });
 
-  test('E2E-CREN4 终端 ANSI 颜色渲染', async ({ page }) => {
+  test('E2E-CREN4 终端渲染：颜色、动态输出收敛与深黑主题', async ({ page }) => {
     const session = await setupSession(page, '/tmp/e2e-cren4');
 
     inject(session.socket, session.sessionId, {
@@ -159,7 +159,14 @@ test.describe('Session Rendering', () => {
       status: 'completed',
       title: 'Run build',
       rawInput: { command: 'npm run build' },
-      rawOutput: { output: '\u001b[31merror:\u001b[0m failed\n\u001b[32mok\u001b[0m done\u001b[?25l\u001b[?2004h\u001b[200~pasted\u001b[201~\u001b[2@\u001b[10`\u001b[>4;2m\u001b[15~\u001bPtmux;xx\u001b\\' },
+      rawOutput: {
+        output: '\u001b[31merror:\u001b[0m failed\n'
+          + '\u001b[32mok\u001b[0m done\n'
+          + 'progress 10%\rprogress 55%\rprogress 100%\n'
+          + 'header\nprogress 10%\nfooter\u001b[1A\r\u001b[2Kprogress 100%'
+          + '\u001b[?25l\u001b[?2004h\u001b[200~pasted\u001b[201~'
+          + '\u001b[2@\u001b[10`\u001b[>4;2m\u001b[15~\u001bPtmux;xx\u001b\\',
+      },
     });
 
     const terminal = page.getByTestId('terminal-output');
@@ -167,12 +174,49 @@ test.describe('Session Rendering', () => {
     await expect(terminal.locator('span[style*="color"]')).not.toHaveCount(0);
     await expect(terminal).toContainText('error:');
     await expect(terminal).toContainText('pasted');
+    // 动态输出收敛为最终画面：进度条只保留最后结果
+    await expect(terminal).toContainText('progress 100%');
+    await expect(terminal).not.toContainText('progress 10%');
     // 私有模式/CSI 标记/DCS 不得残留为可见乱码
     await expect(terminal).not.toContainText('?25');
     await expect(terminal).not.toContainText('?2004');
     await expect(terminal).not.toContainText('~');
     await expect(terminal).not.toContainText('>4;2m');
     await expect(terminal).not.toContainText('tmux');
+    // 深黑主题背景
+    expect(await terminal.evaluate((el) => getComputedStyle(el).backgroundColor))
+      .toBe('rgb(5, 5, 5)');
+
+    session.disconnect();
+  });
+
+  test('E2E-CREN10 终端深黑主题与界面深浅模式解耦', async ({ page }) => {
+    const session = await setupSession(page, '/tmp/e2e-cren10');
+
+    inject(session.socket, session.sessionId, {
+      sessionUpdate: 'tool_call',
+      toolCallId: `tc_theme_${Date.now()}`,
+      kind: 'execute',
+      status: 'completed',
+      title: 'Run theme check',
+      rawInput: { command: 'echo theme' },
+      rawOutput: { output: '\u001b[33mwarning\u001b[0m theme-check' },
+    });
+
+    const terminal = page.getByTestId('terminal-output');
+    await expect(terminal).toBeVisible({ timeout: 10000 });
+    await expect(terminal).toContainText('theme-check');
+
+    const background = () => terminal.evaluate((el) => getComputedStyle(el).backgroundColor);
+    expect(await background()).toBe('rgb(5, 5, 5)');
+
+    await page.evaluate(() => document.documentElement.classList.add('dark'));
+    expect(await background()).toBe('rgb(5, 5, 5)');
+
+    await page.evaluate(() => document.documentElement.classList.remove('dark'));
+    expect(await background()).toBe('rgb(5, 5, 5)');
+    // 彩色文本在深黑底上仍可读
+    await expect(terminal.locator('span[style*="color"]')).not.toHaveCount(0);
 
     session.disconnect();
   });

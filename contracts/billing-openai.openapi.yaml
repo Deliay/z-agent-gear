@@ -13,7 +13,10 @@ info:
       `account` Key 仍只返回定价完整的全局模型。
     - 计费：调用前统一预扣费检查（余额不足且无授信返回 402，不产生账单）；
       调用完成后按输入 / 缓存输入 / 输出三段 token 出账并生成收据；
-      中断调用按已产生用量出账（标注中断），用量缺失按兜底规则估算（标注估算）。
+      中断调用按已产生用量出账（标注中断），**输入 token 按 20% 未缓存 + 80% 缓存计价、输出 token 全价**；
+      用量缺失按兜底规则估算（标注估算，估算输入同样按 20/80 拆分计价）。
+      usage 形状（`prompt_tokens` / `completion_tokens` / `prompt_tokens_details.cached_tokens`）不变，
+      事件与调用记录中的 token 三段始终为**实际用量**（拆分仅用于计价）。
       系统模型（`scope=global`）走既有计费链路；`cloud_host` Key 调用用户自定义模型（`scope=user`）
       由网关代转发，**不计费**（无计量/outbox，仅写 `billable=false,cost=0` 的调用审计）。
     - 事件：调用完成后网关只写本地 outbox 即返回，异步经 RabbitMQ 进入计量管线。

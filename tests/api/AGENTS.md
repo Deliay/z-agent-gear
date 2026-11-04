@@ -210,11 +210,12 @@ pnpm test
 |------|------|
 | T-WS-ISO1 sessions | developer 在普通工作区可见/可读 admin 创建会话（`sessions` + `session(id)`）；outsider 列表不含且 `session(id)` 为 null；admin 在团队全局上下文不可见、切到普通工作区可见 |
 | T-WS-ISO2 controllers/controllerkeys | developer 可见 admin 注册控制器并**改名**（成员可操作他人资源）；outsider 列表不含且 `controller(id)` 为 null；admin 切换后可见；未绑定 key 同口径（developer 可重命名，非成员不可见） |
-| T-WS-ISO3 cloudhosts（需 `MONGODB_URI`） | 直插 `cloudhosts`（`resourceWorkspaceId`=普通工作区）→ developer `myCloudHosts`/`cloudHost(id)` 可见；outsider 不可见；admin 切换可见；契约 `CloudHost.workspaceId`=租户工作区 id |
+| T-WS-ISO3 cloudhosts（需 `MONGODB_URI`） | 直插 `cloudhosts`（`resourceWorkspaceId`=普通工作区）→ developer `myCloudHosts`/`cloudHost(id)` 可见；`controllers[].cloudHost`（`Controller.cloudHost` 嵌套字段）同样按成员口径可见（回归 team 自定义工作区下 B 看不到 A 的云电脑）；outsider 不可见；admin 切换可见；契约 `CloudHost.workspaceId`=租户工作区 id |
 | T-WS-ISO4 githubaccounts（需 `MONGODB_URI`） | 直插 `githubaccounts`（`workspaceId`=普通工作区）→ developer 可见（共享读=本工作区∪全局）；outsider 不可见；普通工作区行不进入团队全局上下文 |
 | T-WS-ISO5 configuredWorkflows | developer 可见 admin 配置的工作流（列表 + `configuredWorkflow(id)`），`resourceWorkspaceId`=普通工作区；outsider/团队全局上下文不可见；admin 切换可见 |
 | T-WS-ISO6 workflowInstances | developer 可见 admin 实例化的实例，`resourceWorkspaceId`=租户工作区、`workspaceId`=项目工作区（语义互不影响）；outsider/团队全局上下文不可见；admin 切换可见 |
 | T-WS-ISO7 workflowTemplates | 自定义模板仅本工作区可见且 `resourceWorkspaceId`=普通工作区；outsider/团队全局上下文不可见；内置模板在个人全局 / 团队全局 / 团队普通三种上下文均可见且 `resourceWorkspaceId=null` |
+| T-WS-ISO8 成员/管理员辅助与操作路径（需 `MONGODB_URI`） | browseFolder/getHomeDirectory/listHistorySessions/cloudHostIssuesLinkages/retryCloudHostSetupOperation/setupCloudHostGithubProject（本工作区 + 全局共享绑定）；developer 在 admin 创建的 RUNNING 云电脑上创建会话（回归 `sessionService.create` 的云电脑按工作区成员口径查询） |
 
 
 ### Admin Team 租户 API (`admin-api/tenant-team.test.ts` T-TT-API)
@@ -467,6 +468,13 @@ pnpm test
 | A16 非 RUNNING 状态提示 | REJECT 状态调用 completeCurrentNode 返回 INVALID_STATE 可读提示 |
 | A17 removeBlackboardKey | 移除后黑板无、blackboardTrash 有 |
 | A18 权限隔离 | 他人 workflowInstance 查询为 null、列表为空、mutation 报「不存在或无权限」 |
+| A51 实例改名（GraphQL） | `renameWorkflowInstance` 成功（trim 落库），`workflowInstance` 与 `workflowInstances` 均返回新名称 |
+| A52 非法名称 | 空白 / 65 字符 → `invalid workflow name`，实例名称不变 |
+| A53 他人实例改名 | 非创建者 → `Workflow instance not found`，名称不变 |
+| A54 已删除实例改名 | 软删除实例 → `Workflow instance is deleted` |
+| A55 MCP 改名 | 节点会话 `callWorkflowTool('renameCurrentWorkflow')` 成功，GraphQL 查询到新名称（与 GraphQL 共用同一服务） |
+
+> 实例改名用例编号从 **A51** 起（A35-A50 已被「工作流优化特性」套件占用）；实现计划中写作 A35a~e，以本节编号为准。
 
 ### 工作流 GitHub PR 联动回调 (`agent-api/workflow-pr-callback.test.ts` T-PR*)
 
@@ -494,6 +502,26 @@ pnpm test
 | T-PR18 标识归一 | URL / `owner/repo#n` / `owner/repo/pull/n` 归一为同一关联 |
 
 > MCP 工具调用：MCP 传递重构一期后 agent-api 公网 `POST /mcp/*` 入口已下线，平台 MCP 统一经控制器 relay。fake controller 在主 WebSocket 上发 `mcp:request`（`{requestId, sessionId, serverName, token, body}`，body 为 JSON-RPC `tools/call`），按 requestId 匹配 `mcp:response`（带超时与监听器清理，参考 workflow.test.ts 的 `callWorkflowTool`）；token 从 fake controller 收到的 `acp:start.mcpEndpoint.token` 获取。
+
+### 工作流节点中断自动重试 (`agent-api/workflow-interrupt-retry.test.ts` T-WFIR*)
+
+> 需要 agent-api + controller-api 就绪且直连 `MONGODB_URI`（缺失时整套跳过）。退避窗口约 2 小时不可真实等待：T-WFIR4/6/7/8 通过直连 Mongo 预置 `retryCount` / `retryPhase` / `nextRetryAt` / `retryDeadlineAt` / `deletedAt` 等价覆盖扫描与用尽语义（实现计划 D11）。
+
+| 测试 | 描述 |
+|------|------|
+| T-WFIR1 契约透出 | `workflowInstance` 节点 `retryCount=0` / `nextRetryAt=null` |
+| T-WFIR2 控制器上报 ended | publish `session:status {status:'ended'}`（DB 仍 idling）→ 管线 `acp:stop`（来自管线，未调用 closeSession）+ `acp:resume` → 会话消息含 FALLBACK（「系统检测到会话已结束」）；节点 RUNNING、`retryCount=1`、`nextRetryAt=null` |
+| T-WFIR2b Agent 异常退出 | 控制器先落库 ended 再 publish ended（`acp-session-manager` 真实路径）→ 跳过 close、直接 resume 并重发兜底提示词；`retryCount=1` |
+| T-WFIR2c 双投递去重 | `closeSession`（close 回调）与控制器 ended 事件双投递 → 排期 CAS 只允许一个赢家，`retryCount=1` |
+| T-WFIR3 退避排期 | 再次 ended → `retryCount=2`、`nextRetryAt` 为未来约 1 分钟；未到点不产生新的 acp:resume（按 sessionId 计数） |
+| T-WFIR4 用尽 | 预置 `retryCount=10` → ended → `RETRY_FAILED` + `failInfo.source=RETRY_EXHAUSTED` + `workflow_intervention`（immediate）；不再 resume |
+| T-WFIR5 restart | `restartNode` 于 RETRY_FAILED → RUNNING、`retryCount=0`、拉起新会话 |
+| T-WFIR6 扫描 A | 预置 `SCHEDULED` + `nextRetryAt=now-1s` → 30s 内执行管线（resume + 清调度字段） |
+| T-WFIR7 扫描 B | 预置 `RECONNECTING` + `retryDeadlineAt=now-1s` → 重排（`retryCount+1`、`nextRetryAt` 未来）；**不补发 FALLBACK/IDLE_NUDGE、不 resume** |
+| T-WFIR8 软删除跳过 | `deletedAt` 非空的实例即使排期到期也不执行、无 acp:resume |
+| T-WFIR9 MCP 恢复 | `resumeFailedNode` 于 RETRY_FAILED → RUNNING、`retryCount=0`、`failInfo=null` |
+
+> 回归改写：`workflow.test.ts` 的 A23（二次停止即 FAILED）与 A34（二次停滞即 FAILED + 待办）已按新语义改写为「首次立即重试管线 / 二次排期 1 分钟后」；超限用例由 T-WFIR4 覆盖。
 
 ### GitHub 原生 Webhook 入口 (`agent-api/github-webhook.test.ts` T-GHWH*)
 
