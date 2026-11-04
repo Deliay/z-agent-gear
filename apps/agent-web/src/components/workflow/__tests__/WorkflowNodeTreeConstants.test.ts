@@ -4,6 +4,7 @@ import {
   NODE_STATUS_COLOR_VAR,
   NODE_STATUS_LABELS,
   NODE_STATUS_VISUAL,
+  retryProgressText,
 } from '../WorkflowNodeTreeConstants'
 import type { WorkflowNodeStatus } from '@/graphql/workflow'
 
@@ -15,6 +16,7 @@ const STATUSES: WorkflowNodeStatus[] = [
   'REJECT',
   'REWORK',
   'FAILED',
+  'RETRY_FAILED',
 ]
 
 describe('NODE_STATUS_VISUAL', () => {
@@ -48,6 +50,13 @@ describe('NODE_STATUS_VISUAL', () => {
     }
   })
 
+  it('T-WFI-TC1 七态 tint 统一不透明 bg-card（无透明度后缀）', () => {
+    for (const status of STATUSES) {
+      expect(NODE_STATUS_VISUAL[status].tint).toBe('bg-card')
+      expect(NODE_STATUS_VISUAL[status].tint).not.toMatch(/\/\d+/)
+    }
+  })
+
   it('六态主色互异（INITIALIZING/READY 为中性色域）', () => {
     const primary = [
       NODE_STATUS_VISUAL.RUNNING.spine,
@@ -56,5 +65,32 @@ describe('NODE_STATUS_VISUAL', () => {
       NODE_STATUS_VISUAL.FAILED.spine,
     ]
     expect(new Set(primary).size).toBe(primary.length)
+  })
+})
+
+describe('RETRY_FAILED 与自动重试进度（T-FE1）', () => {
+  it('T-FE1a: 标签「重试失败」，三张映射全覆盖且徽标派生不缺失', () => {
+    expect(NODE_STATUS_LABELS.RETRY_FAILED).toBe('重试失败')
+    for (const mapping of [NODE_STATUS_VISUAL, NODE_STATUS_COLOR_VAR, NODE_STATUS_BADGE, NODE_STATUS_LABELS]) {
+      expect(mapping.RETRY_FAILED).toBeTruthy()
+    }
+    expect(NODE_STATUS_VISUAL.RETRY_FAILED.badge).toContain('destructive')
+    expect(NODE_STATUS_COLOR_VAR.RETRY_FAILED).toBe('var(--color-destructive)')
+  })
+
+  it('T-FE1b: retryProgressText 三态：无排期不展示 / 未来 HH:mm / 已过期恢复中', () => {
+    expect(retryProgressText({ retryCount: 2, nextRetryAt: null })).toBeNull()
+
+    const now = new Date('2026-11-03T10:00:00')
+    expect(
+      retryProgressText({ retryCount: 2, nextRetryAt: new Date('2026-11-03T10:01:00').toISOString() }, now),
+    ).toBe('自动重试 2/10 · 下次 10:01')
+    expect(
+      retryProgressText({ retryCount: 3, nextRetryAt: new Date('2026-11-03T09:59:00').toISOString() }, now),
+    ).toBe('自动重试 3/10 · 正在恢复会话')
+  })
+
+  it('T-FE1c: 非法时间串不展示', () => {
+    expect(retryProgressText({ retryCount: 1, nextRetryAt: 'not-a-date' })).toBeNull()
   })
 })

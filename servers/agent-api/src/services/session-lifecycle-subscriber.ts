@@ -28,13 +28,26 @@ export class SessionLifecycleSubscriber {
     });
 
     this.subscriber.on('message', async (_channel: string, message: string) => {
-      let parsed: { sessionId?: string; status?: string; promptCompleted?: boolean; _meta?: unknown };
+      let parsed: { sessionId?: string; status?: string; promptCompleted?: boolean; error?: string; _meta?: unknown };
       try {
         parsed = JSON.parse(message);
       } catch {
         return;
       }
       if (!parsed.sessionId || !parsed.status) return;
+
+      // 通用通道先于 handled 过滤：中断自动重试的空闲等待器需要裸 idling / ended / connecting 等全量事件。
+      // 高频豁免：只记结构化日志，不逐条开 span。
+      try {
+        await sessionService.notifySessionStatus({
+          sessionId: parsed.sessionId,
+          status: parsed.status,
+          promptCompleted: parsed.promptCompleted,
+          error: parsed.error,
+        });
+      } catch (err) {
+        logger.error({ err, sessionId: parsed.sessionId, status: parsed.status }, 'failed to dispatch session status event');
+      }
 
       const handled = parsed.status === 'removed' || (parsed.status === 'idling' && parsed.promptCompleted === true);
       if (!handled) return;

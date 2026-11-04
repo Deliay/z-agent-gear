@@ -181,6 +181,9 @@ export function mapNodeStatusToCheckRun(status: string): CheckRunProjection {
       return { status: 'completed', conclusion: 'action_required', label: '被打回，待处理' };
     case 'FAILED':
       return { status: 'completed', conclusion: 'failure', label: '执行失败' };
+    case 'RETRY_FAILED':
+      // 自动重试用尽：语义为「需人工动作」，与 REJECT 同族
+      return { status: 'completed', conclusion: 'action_required', label: '重试失败，待人工处理' };
     default:
       return { status: 'queued', label: '排队中' };
   }

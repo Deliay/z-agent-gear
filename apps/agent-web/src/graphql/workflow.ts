@@ -16,6 +16,8 @@ export type WorkflowNodeStatus =
   | 'REJECT'
   | 'REWORK'
   | 'FAILED'
+  /** 中断自动重试 10 次用尽（阻断流程，可重启节点或会话内指示后恢复） */
+  | 'RETRY_FAILED'
 
 export interface WorkflowTemplateNodeData {
   nodeKey: string
@@ -79,7 +81,10 @@ export interface WorkflowNodeRejectInfoData {
 
 export interface WorkflowNodeFailInfoData {
   reason: string
-  /** SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode） */
+  /**
+   * SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）/
+   * SESSION_START_FAILED（节点会话启动失败或被移除）/ RETRY_EXHAUSTED（中断自动重试 10 次用尽）
+   */
   source: string
   at: string
 }
@@ -105,6 +110,10 @@ export interface WorkflowNodeData {
   startedAt: string | null
   reworkedAt: string | null
   reworkCount: number
+  /** 当前中断 episode 已排期的自动重试次数（0~10） */
+  retryCount: number
+  /** 下次自动重试计划时间（ISO）；null = 无排期 */
+  nextRetryAt: string | null
   rejectInfo: WorkflowNodeRejectInfoData | null
   failInfo: WorkflowNodeFailInfoData | null
 }
@@ -383,6 +392,8 @@ export const GET_WORKFLOW_INSTANCE = gql`
         startedAt
         reworkedAt
         reworkCount
+        retryCount
+        nextRetryAt
         rejectInfo {
           reason
           fromNodeId
@@ -491,6 +502,15 @@ export const DELETE_WORKFLOW_INSTANCE = gql`
 export const ARCHIVE_WORKFLOW_INSTANCE = gql`
   mutation ArchiveWorkflowInstance($id: ID!, $archived: Boolean!) {
     archiveWorkflowInstance(id: $id, archived: $archived)
+  }
+`
+
+export const RENAME_WORKFLOW_INSTANCE = gql`
+  mutation RenameWorkflowInstance($id: ID!, $name: String!) {
+    renameWorkflowInstance(id: $id, name: $name) {
+      id
+      name
+    }
   }
 `
 

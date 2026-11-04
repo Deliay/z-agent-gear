@@ -1,4 +1,4 @@
-import { ExternalLink, MessageSquare, RotateCcw } from 'lucide-react'
+import { ExternalLink, MessageSquare, RefreshCw, RotateCcw } from 'lucide-react'
 import {
   Sheet,
   SheetContent,
@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import MarkdownContent from '@/components/session/MarkdownContent'
 import { artifactsOf } from '@/lib/artifact-owners'
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow'
-import { NODE_STATUS_BADGE, NODE_STATUS_LABELS, NODE_TYPE_LABELS } from './WorkflowNodeTreeConstants'
+import { NODE_STATUS_BADGE, NODE_STATUS_LABELS, NODE_TYPE_LABELS, retryProgressText } from './WorkflowNodeTreeConstants'
 import HumanNodeActions from './HumanNodeActions'
 import type { GraphResource } from './graph/graph-layout'
 
@@ -24,6 +24,8 @@ interface NodeDetailDrawerProps {
   instance: WorkflowInstanceData
   target: NodeDetailTarget | null
   onOpenSession?: (sessionId: string) => void
+  /** 重启节点（与列表视图同源：交给页面级 EditInstanceNodeDialog restartMode） */
+  onRestartNode?: (node: WorkflowNodeData) => void
 }
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -35,16 +37,24 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-function NodeDetail({ instance, node, onOpenSession }: {
+function NodeDetail({ instance, node, onOpenSession, onRestartNode }: {
   instance: WorkflowInstanceData
   node: WorkflowNodeData
   onOpenSession?: (sessionId: string) => void
+  onRestartNode?: (node: WorkflowNodeData) => void
 }) {
   const nodeArtifacts = artifactsOf(node, instance.blackboard)
   const nodeLinks = instance.pullRequestLinks.filter((link) => link.nodeId === node.id)
   const actionable =
     node.type === 'HUMAN' &&
     (node.status === 'READY' || node.status === 'RUNNING' || node.status === 'REWORK')
+  const canRestart =
+    node.type === 'AI' &&
+    (node.status === 'RUNNING' ||
+      node.status === 'REWORK' ||
+      node.status === 'FAILED' ||
+      node.status === 'RETRY_FAILED')
+  const retryProgress = retryProgressText(node)
 
   return (
     <div className="min-w-0 space-y-3">
@@ -70,6 +80,12 @@ function NodeDetail({ instance, node, onOpenSession }: {
             打开会话
           </Button>
         )}
+        {canRestart && onRestartNode && (
+          <Button size="xs" variant="outline" onClick={() => onRestartNode(node)}>
+            <RefreshCw className="size-3" />
+            重启节点
+          </Button>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -77,6 +93,7 @@ function NodeDetail({ instance, node, onOpenSession }: {
         <Field label="说明" value={node.description || '—'} />
         {node.startedAt && <Field label="开始时间" value={node.startedAt} />}
         {node.reworkedAt && <Field label="最近返工" value={node.reworkedAt} />}
+        {retryProgress && <Field label="自动重试" value={retryProgress} />}
       </div>
 
       {node.rejectInfo && node.status === 'REJECT' && (
@@ -84,23 +101,9 @@ function NodeDetail({ instance, node, onOpenSession }: {
           打回理由：{node.rejectInfo.reason}
         </div>
       )}
-      {node.failInfo && node.status === 'FAILED' && (
+      {node.failInfo && (node.status === 'FAILED' || node.status === 'RETRY_FAILED') && (
         <div className="rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
-          失败原因：{node.failInfo.reason}
-        </div>
-      )}
-
-      {nodeArtifacts.length > 0 && (
-        <div className="space-y-1.5">
-          <div className="text-xs font-medium text-muted-foreground">产物（{nodeArtifacts.length}）</div>
-          {nodeArtifacts.map((artifact) => (
-            <div key={artifact.title} className="min-w-0 rounded-md border bg-muted/30 p-2">
-              <div className="mb-0.5 text-xs wrap-anywhere font-medium text-foreground">{artifact.title}</div>
-              <div className="min-w-0 text-xs text-muted-foreground">
-                <MarkdownContent content={artifact.value} />
-              </div>
-            </div>
-          ))}
+          {node.status === 'RETRY_FAILED' ? '重试失败原因' : '失败原因'}：{node.failInfo.reason}
         </div>
       )}
 
@@ -148,6 +151,20 @@ function NodeDetail({ instance, node, onOpenSession }: {
               {link.lastSyncError && (
                 <div className="mt-0.5 break-all text-xs text-destructive">{link.lastSyncError}</div>
               )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {nodeArtifacts.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-xs font-medium text-muted-foreground">产物（{nodeArtifacts.length}）</div>
+          {nodeArtifacts.map((artifact) => (
+            <div key={artifact.title} className="min-w-0 rounded-md border bg-muted/30 p-2">
+              <div className="mb-0.5 text-xs wrap-anywhere font-medium text-foreground">{artifact.title}</div>
+              <div className="min-w-0 text-xs text-muted-foreground">
+                <MarkdownContent content={artifact.value} />
+              </div>
             </div>
           ))}
         </div>
@@ -220,6 +237,7 @@ export default function NodeDetailDrawer({
   instance,
   target,
   onOpenSession,
+  onRestartNode,
 }: NodeDetailDrawerProps) {
   const node = target?.type === 'node' ? instance.nodes.find((item) => item.id === target.nodeId) ?? null : null
 
@@ -251,7 +269,12 @@ export default function NodeDetailDrawer({
         </SheetHeader>
         <div className="min-h-0 min-w-0 flex-1">
           {target?.type === 'node' && node && (
-            <NodeDetail instance={instance} node={node} onOpenSession={onOpenSession} />
+            <NodeDetail
+              instance={instance}
+              node={node}
+              onOpenSession={onOpenSession}
+              onRestartNode={onRestartNode}
+            />
           )}
           {target?.type === 'node' && !node && (
             <p className="text-xs text-muted-foreground">节点不存在或已被删除</p>

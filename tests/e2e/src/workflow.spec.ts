@@ -248,6 +248,10 @@ interface InstanceNode {
   stage: string;
   sessionId: string | null;
   reworkCount: number;
+  /** 当前中断 episode 已排期的自动重试次数（中断自动重试迭代） */
+  retryCount: number;
+  /** 下次自动重试计划时间（ISO）；null = 无排期 */
+  nextRetryAt: string | null;
 }
 
 interface InstantiateNodeInput {
@@ -316,7 +320,7 @@ async function getInstance(page: Page, token: string, instanceId: string) {
     query WorkflowInstance($id: ID!) {
       workflowInstance(id: $id) {
         id name currentNodeNames
-        nodes { id nodeKey name type status stage sessionId reworkCount prompts artifactTitles requiresWorktree linkUpstreamPullRequest rejectInfo { reason } failInfo { reason source } }
+        nodes { id nodeKey name type status stage sessionId reworkCount retryCount nextRetryAt prompts artifactTitles requiresWorktree linkUpstreamPullRequest rejectInfo { reason } failInfo { reason source } }
         blackboard { key value }
         blackboardTrash { key value }
         additionalPrompts { key value }
@@ -930,9 +934,9 @@ test.describe('Workflow E2E', () => {
   });
 
   // -------------------------------------------------------------------------
-  // E2E-4 会话兜底
+  // E2E-4 会话中断自动重试
   // -------------------------------------------------------------------------
-  test('E2E-4: session ended without node transition gets resumed with fallback prompt (once per node)', async ({ page }) => {
+  test('E2E-4A: session ended without node transition gets auto-retried (stop → resume → fallback prompt)', async ({ page }) => {
     test.setTimeout(60000);
     const env = await setupWorkflowEnv(page, 'e4');
     const { instanceId, execStart } = await advanceToExecRunning(page, env, `wf-e4-实例-${Date.now().toString(36)}`);
@@ -942,11 +946,11 @@ test.describe('Workflow E2E', () => {
     await closeSession(page, env.token, execSessionId);
     await waitFor(() => env.controller.stops.includes(execSessionId) || undefined, 15000, 'exec acp:stop');
 
-    // 兜底：会话被 resume（acp:resume）且收到兜底提示词（仅 1 次）
+    // 自动重试第 1 次（立即执行）：会话被 resume（acp:resume）且收到兜底提示词
     await waitFor(
       () => env.controller.resumes.find((r) => r.sessionId === execSessionId),
       15000,
-      'fallback acp:resume',
+      'retry acp:resume',
     );
     const fallbackMsg = await waitFor(
       async () => {
@@ -958,56 +962,99 @@ test.describe('Workflow E2E', () => {
     );
     expect(fallbackMsg).toContain('completeCurrentNode');
 
-    // 节点仍 RUNNING（未转移），会话恢复可用
-    const inst = await getInstance(page, env.token, instanceId);
-    expect(inst.nodes.find((n) => n.nodeKey === 'exec')!.status).toBe('RUNNING');
-    await waitFor(
-      async () => (await getSessionStatus(page, env.token, execSessionId)) === 'idling',
-      15000,
-      'exec session idling after fallback resume',
-    );
-
-    // 再次结束会话：每节点仅兜底 1 次，不再 resume；节点升级为 FAILED（阻断流程）
-    await closeSession(page, env.token, execSessionId);
-    await waitFor(() => env.controller.stops.filter((s) => s === execSessionId).length >= 2 || undefined, 15000, 'second acp:stop');
-    await page.waitForTimeout(3000);
-    expect(env.controller.resumes.filter((r) => r.sessionId === execSessionId)).toHaveLength(1);
-    const msgsAfter = await getSessionMessagesText(page, env.token, execSessionId);
-    expect(msgsAfter.filter((m) => m.includes('你身处一个自动化工作流系统'))).toHaveLength(1);
-
-    // 节点 FAILED（SESSION_STUCK），流程阻断
-    const failedNode = await waitFor(
+    // 节点仍 RUNNING（未转移），retryCount=1 且无排期；会话恢复可用
+    const inst = await waitFor(
       async () => {
         const i = await getInstance(page, env.token, instanceId);
         const n = i.nodes.find((n) => n.nodeKey === 'exec')!;
+        return n.retryCount === 1 && n.nextRetryAt === null ? i : undefined;
+      },
+      15000,
+      'retryCount=1 & no schedule',
+    );
+    expect(inst!.nodes.find((n) => n.nodeKey === 'exec')!.status).toBe('RUNNING');
+    await waitFor(
+      async () => (await getSessionStatus(page, env.token, execSessionId)) === 'idling',
+      15000,
+      'exec session idling after retry resume',
+    );
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-4B: second interruption is scheduled with backoff and progress is visible in UI', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e4b');
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, `wf-e4b-实例-${Date.now().toString(36)}`);
+    const execSessionId = execStart.sessionId;
+
+    // 第一次中断 → 立即重试完成（retryCount=1）
+    await closeSession(page, env.token, execSessionId);
+    await waitFor(() => env.controller.stops.includes(execSessionId) || undefined, 15000, 'exec acp:stop');
+    await waitFor(
+      async () => {
+        const i = await getInstance(page, env.token, instanceId);
+        const n = i.nodes.find((x) => x.nodeKey === 'exec')!;
+        return n.retryCount === 1 && n.nextRetryAt === null ? true : undefined;
+      },
+      20000,
+      'first retry executed',
+    );
+
+    // 第二次中断 → 排到 1 分钟后（retryCount=2）；不等待真实退避触发（D11）
+    const resumesBefore = env.controller.resumes.length;
+    await closeSession(page, env.token, execSessionId);
+    const node = await waitFor(
+      async () => {
+        const i = await getInstance(page, env.token, instanceId);
+        const n = i.nodes.find((x) => x.nodeKey === 'exec')!;
+        return n.retryCount === 2 ? n : undefined;
+      },
+      15000,
+      'retryCount=2',
+    );
+    expect(node!.nextRetryAt).toBeTruthy();
+    expect(node!.status).toBe('RUNNING');
+    expect(env.controller.resumes.length).toBe(resumesBefore);
+
+    // UI：节点卡展示自动重试进度（自动重试 2/10 · 下次 HH:mm）
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+    await expect(nodeCard(page, 'AI执行').getByText(/自动重试 2\/10/)).toBeVisible({ timeout: 15000 });
+
+    env.controller.disconnect();
+  });
+
+  test('E2E-4C: FAILED node recovers via in-session instruction + resumeFailedNode', async ({ page }) => {
+    test.setTimeout(60000);
+    const env = await setupWorkflowEnv(page, 'e4c');
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, `wf-e4c-实例-${Date.now().toString(36)}`);
+    const execSessionId = execStart.sessionId;
+
+    // 用 failCurrentNode 制造 FAILED（保持旧「人工恢复」链路回归；RETRY_FAILED 端到端由 T-WFIR4 覆盖）
+    const failed = await callWorkflowTool(env.controller, execSessionId, execStart.mcpEndpoint!.token, 'failCurrentNode', {
+      reason: '缺少必要环境',
+    });
+    expect(failed.isError).toBe(false);
+    const failedNode = await waitFor(
+      async () => {
+        const i = await getInstance(page, env.token, instanceId);
+        const n = i.nodes.find((x) => x.nodeKey === 'exec')!;
         return n.status === 'FAILED' ? n : undefined;
       },
       15000,
-      'exec node FAILED after second stop',
+      'exec node FAILED',
     );
-    expect(failedNode?.failInfo?.source).toBe('SESSION_STUCK');
+    expect(failedNode!.failInfo?.source).toBe('LLM_REPORTED');
 
-    // UI 强提醒：节点「失败」badge + 顶部阻断 banner
+    // UI 强提醒：失败 badge + 阻断 banner
     await loginViaUI(page, env.username);
     await page.goto(`/workflows/${instanceId}`);
     await expect(nodeCard(page, 'AI执行').getByText('失败', { exact: true })).toBeVisible({ timeout: 10000 });
     await expect(page.getByRole('alert')).toContainText('需要人工介入');
-    await expect(page.getByRole('alert')).toContainText('AI执行');
 
-    // 人类打开会话点「继续」恢复会话（会话关闭后旧 MCP token 已失效，需重新签发），
-    // 再在对话中给出指示，AI 调 resumeFailedNode 将节点恢复为 RUNNING
-    const resumeRes = await gqlRequest(page, `
-      mutation ResumeSession($id: ID!) { resumeSession(id: $id) { success error } }
-    `, { id: execSessionId }, env.token);
-    expect((await resumeRes.json()).data.resumeSession.success).toBe(true);
-    await waitFor(
-      () => env.controller.resumes.filter((r) => r.sessionId === execSessionId).length >= 2 || undefined,
-      15000,
-      'manual acp:resume',
-    );
-    const manualResume = env.controller.resumes.filter((r) => r.sessionId === execSessionId).at(-1)!;
-    const mcpToken = manualResume.mcpEndpoint?.token ?? execStart.mcpEndpoint!.token;
-    const resumeResult = await callWorkflowTool(env.controller, execSessionId, mcpToken, 'resumeFailedNode', {});
+    // 人类在会话中给出指示后，AI 调 resumeFailedNode 恢复 RUNNING
+    const resumeResult = await callWorkflowTool(env.controller, execSessionId, execStart.mcpEndpoint!.token, 'resumeFailedNode', {});
     expect(resumeResult.isError).toBe(false);
     expect(resumeResult.data).toMatchObject({ status: 'RUNNING' });
     const instResumed = await getInstance(page, env.token, instanceId);

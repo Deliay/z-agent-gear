@@ -300,20 +300,23 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 ### Workflow Graph Phase 4 E2E (`workflow-graph.spec.ts`)
 
-> 工作流图表套件：BLANK 来源实例化三节点图（人类 → 人类 → AI），状态/黑板/追加提示词/PR 关联用 MONGODB_URI 直写构造；动态行与 token 用 fake controller `acp:message` 注入 `SessionUpdate`，完成节点经 `completeCurrentNode` MCP relay。缺少 MONGODB_URI 时整体跳过。
+> 工作流图表套件：BLANK 来源实例化三节点图（人类 → 人类 → AI），状态/黑板/追加提示词/PR 关联用 MONGODB_URI 直写构造；动态行与 token 用 fake controller `acp:message` 注入 `SessionUpdate`，完成节点经 `completeCurrentNode` MCP relay。缺少 MONGODB_URI 时整体跳过。工作流迭代新增 E2E-WFI1~3（7 节点线性图 + 直写状态，验证自动定位与抽屉排序）。
 
 | 测试 | 描述 |
 |------|------|
 | E2E-UI4G1 竖向布局与画布占满 | 默认图表视图节点自上而下（y 坐标单调）；画布高度 ≥ 480px 且占视图区主要高度 |
-| E2E-UI4G2 卡片主题跟随 | 深色主题下节点卡片计算样式背景非纯白；切回浅色即时跟随 |
+| E2E-UI4G2 卡片主题跟随与不透明 | 深色主题下卡片背景非纯白；切回浅色即时跟随；两主题背景均为 `rgb(...)`（禁止 `rgba(..., alpha<1)`） |
 | E2E-UI4G3 状态整体配色 | REJECT 与 FAILED 脊色互异；REWORK 徽标带 `animate-pulse`，REJECT 静态 |
-| E2E-UI4G4 连线 | 边 strokeWidth ≥ 2 且 marker-end 箭头存在 |
+| E2E-UI4G4 连线 | 2 条边渲染且可见、strokeWidth ≥ 2、marker-end 箭头存在（自定义节点补 Handle 后转绿） |
 | E2E-UI4G5 人类节点就地操作 | 图表卡片输入 → 「完成」→ 节点推进；「打回」填理由 → 上游节点返工 |
 | E2E-UI4G6 人类节点详情抽屉 | 点击节点头部 → 侧边抽屉展示详情；Esc 关闭后回到原视图 |
-| E2E-UI4G7 进行中动态行 | 注入 `agent_thought_chunk`/`tool_call`/`agent_message_chunk` → 动态行分别显示「思考中」/工具调用标题/「总结中」；无消息显示「等待消息」 |
-| E2E-UI4G8 完成态 token | 注入 `usage_update` 后经 MCP 完成节点 → 「已完成 · 消耗 N tokens」 |
+| E2E-UI4G7 进行中静态指示 | 注入 `agent_thought_chunk`/`tool_call`/`agent_message_chunk` → 动态行恒为「正在思考」且不泄露注入文本 |
+| E2E-UI4G8 完成态 token | 注入 `usage_update` 后经 MCP 完成节点 → 「已完成 · 4321 tokens」且不含「消耗」 |
 | E2E-UI4G9 资源上图 | 黑板/PR/追加提示词小卡片与所属节点关联；未归属条目进实例资源行；垃圾桶不渲染；图表视图右栏资源树隐藏；点击开抽屉 |
 | E2E-UI4G10 徽标行 | 有 PR/检查项/返工记录的节点徽标可见且 PR 可点；无对应信息不渲染 |
+| E2E-WFI1 自动定位窗口 | 7 节点线性图中间节点 RUNNING：执行中卡片中心落在画布中心 ±15%，前后各 2 卡片可见，首尾节点被裁出画布 |
+| E2E-WFI2 执行中切换重新定位 | 直写状态把 RUNNING 从 n4 切到 n3，5s 轮询后视图中心跟随 n3 |
+| E2E-WFI3 抽屉 PR 前置 | 同时 seed PR 与黑板产物，抽屉内「关联 Pull Request」区块位于「产物」之前 |
 
 ### Port Forward E2E (`port-forward.spec.ts`)
 
@@ -337,7 +340,9 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-1 实例化 → 人类节点输入 → AI 节点拉起 | 侧边栏实例化对话框创建实例 → 实例页完成人类节点 → AI 节点状态推进为执行中；API 校验会话打标（workflowInstanceId/workflowNodeId）；侧边栏会话列表不可见工作流会话但实例入口可见 |
 | E2E-2 AI 节点完成接力 | fake controller 用 acp:start 的 mcpEndpoint.token 调 completeCurrentNode → 下游会话收到 acp:start（首条消息提示词含上游产物）、上游会话收到 acp:stop 且状态 ended |
 | E2E-3 打回 → 返工 → 复工 | rejectNode 打回 → UI 显示已打回/打回理由/返工中；原会话收到 acp:resume 且消息含打回原因；completeCurrentRework（resume 新 token）→ 下游 REJECT→RUNNING 并收到复工消息，旧产物入垃圾桶 |
-| E2E-4 会话兜底 | closeSession 且节点未转移 → 会话被 resume 且收到兜底提示词；再次结束不再 resume（每节点仅 1 次） |
+| E2E-4A 中断自动重试（首次立即） | closeSession 且节点未转移 → 平台自动 acp:stop（ack）→ acp:resume → 会话回到 idling 后收到兜底提示词；节点仍 RUNNING、retryCount=1、nextRetryAt=null |
+| E2E-4B 退避排期与进度可见 | 再次 closeSession → retryCount=2 且 nextRetryAt 非空（不等待 1 分钟真实触发，D11）；UI 节点卡展示「自动重试 2/10 · 下次 HH:mm」 |
+| E2E-4C 人工恢复链路回归 | failCurrentNode 制造 FAILED（UI 失败 badge + 阻断 banner）→ 会话内指示后 resumeFailedNode → RUNNING、failInfo 清空；RETRY_FAILED 端到端由 tests/api T-WFIR4 覆盖 |
 | E2E-5 实例视图 UI | 节点树按阶段分组、状态/类型 badge、黑板面板产物可见、点击「会话」打开侧面板（SessionView 渲染节点提示词） |
 | E2E-6 设置页管理 UI | 工作流 section 可见；TemplateEditorDialog 创建模板；内置模板只读（查看对话框无保存按钮）；从内置模板「配置工作流」并显示「本配置复制自模板」文案；已配置工作流卡片显示「复制自模板 v1」 |
 | P2-E2E-14 设置页已配置工作流图编辑 | 编辑已配置工作流完整节点图并保存；来源模板不变 |
