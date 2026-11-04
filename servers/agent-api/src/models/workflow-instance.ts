@@ -3,7 +3,17 @@ import { applyTenantScope } from '../services/tenant-scope.js';
 import { applyWorkspaceScope } from '../services/workspace-scope.js';
 import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY } from './workflow-template.js';
 
-export const WORKFLOW_NODE_STATUSES = ['INITIALIZING', 'READY', 'RUNNING', 'DONE', 'REJECT', 'REWORK', 'FAILED'] as const;
+export const WORKFLOW_NODE_STATUSES = [
+  'INITIALIZING',
+  'READY',
+  'RUNNING',
+  'DONE',
+  'REJECT',
+  'REWORK',
+  'FAILED',
+  // 中断自动重试 10 次用尽：阻断流程，需人工介入
+  'RETRY_FAILED',
+] as const;
 export type WorkflowNodeStatus = (typeof WORKFLOW_NODE_STATUSES)[number];
 
 const agentNodeConfigSchema = new mongoose.Schema(
@@ -29,7 +39,7 @@ const rejectInfoSchema = new mongoose.Schema(
 const failInfoSchema = new mongoose.Schema(
   {
     reason: { type: String, required: true },
-    // 失败来源：SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）
+    // 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED / RETRY_EXHAUSTED（中断自动重试用尽）
     source: { type: String, required: true },
     at: { type: Date, required: true },
   },
@@ -52,8 +62,18 @@ const instanceNodeSchema = new mongoose.Schema(
     startedAt: { type: Date },
     reworkedAt: { type: Date },
     reworkCount: { type: Number, default: 0 },
-    // 会话兜底提示词是否已发送（每节点仅 1 次，防死循环）
-    fallbackSent: { type: Boolean, default: false },
+    // ---- 中断自动重试（10 次预算 + 指数退避；替代旧 fallbackSent 一次性兜底） ----
+    // 当前中断 episode 已排期的重试次数（0~10）；成功重发提示词也**不**复位（防死循环），
+    // 仅在推进/人工操作（complete/completeRework/reject/rework/resume/resumeFailed/restart）复位
+    retryCount: { type: Number, default: 0 },
+    // 下一次重试计划时间；null = 已发送/未排期
+    nextRetryAt: { type: Date, default: null },
+    // SCHEDULED（已排期待执行）/ RECONNECTING（已占位，close→resume→等待空闲中）
+    retryPhase: { type: String, enum: ['SCHEDULED', 'RECONNECTING'], default: null },
+    // RECONNECTING 的空闲等待截止（占位时间 + 5 分钟）
+    retryDeadlineAt: { type: Date, default: null },
+    // ENDED / IDLED：决定重发哪条提示词
+    retryTrigger: { type: String, enum: ['ENDED', 'IDLED'], default: null },
     rejectInfo: { type: rejectInfoSchema, default: undefined },
     failInfo: { type: failInfoSchema, default: undefined },
     // ---- 实例快照字段（实例化时从最终节点图复制；旧实例缺失时由 orchestrator 回退读配置） ----
@@ -129,6 +149,11 @@ workflowInstanceSchema.index({ configuredWorkflowId: 1 });
 workflowInstanceSchema.index({ userId: 1, archivedAt: 1, createdAt: -1 });
 // 按控制器过滤（controllerId 当前未单独建索引）
 workflowInstanceSchema.index({ userId: 1, controllerId: 1, archivedAt: 1, createdAt: -1 });
+// 中断自动重试调度扫描（30s 周期）：只索引存在排期的节点（部分索引，生产 autoIndex=false 由迁移 021 兜底）
+workflowInstanceSchema.index(
+  { 'nodes.nextRetryAt': 1 },
+  { partialFilterExpression: { 'nodes.nextRetryAt': { $exists: true } } },
+);
 
 applyTenantScope(workflowInstanceSchema);
 applyWorkspaceScope(workflowInstanceSchema, { workspaceField: 'resourceWorkspaceId' });

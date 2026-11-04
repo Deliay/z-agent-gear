@@ -29,6 +29,15 @@ export interface ControllerDefaultMcpSnapshot {
   serverIds?: Array<string | { toString(): string } | null | undefined> | null;
 }
 
+/** 会话状态通用事件（`session:status` 通道原样透传；`onSessionStatus` 消费） */
+export interface SessionStatusEvent {
+  sessionId: string;
+  status: string;
+  promptCompleted?: boolean;
+  /** 会话意外结束的错误码（CONTROLLER_OFFLINE / ACP_RESUME_FAILED 等） */
+  error?: string;
+}
+
 /**
  * 解析新建会话的初始 MCP 集合（纯函数，便于单测）：
  * - explicitIds !== undefined（含 []）：以调用方为准，原样返回；
@@ -65,6 +74,11 @@ export class SessionService {
   private sessionRemovedCallback?: (sessionId: string) => void | Promise<void>;
   /** 会话 turn 结束进入空闲（promptCompleted）时的回调（由工作流 Orchestrator 注册用于停滞检测） */
   private sessionIdledCallback?: (sessionId: string) => void | Promise<void>;
+  /**
+   * 会话状态通用通道（`session:status` 全量透传，不经过 `handled` 过滤）。
+   * 多监听者集合：中断自动重试的空闲等待器按会话订阅，注册即返回注销函数。
+   */
+  private sessionStatusListeners = new Set<(event: SessionStatusEvent) => void | Promise<void>>();
 
   onSessionEnded(callback: (sessionId: string) => void | Promise<void>): void {
     this.sessionEndedCallback = callback;
@@ -76,6 +90,31 @@ export class SessionService {
 
   onSessionIdled(callback: (sessionId: string) => void | Promise<void>): void {
     this.sessionIdledCallback = callback;
+  }
+
+  /** 订阅会话状态通用通道；返回注销函数（无监听者时静默） */
+  onSessionStatus(callback: (event: SessionStatusEvent) => void | Promise<void>): () => void {
+    this.sessionStatusListeners.add(callback);
+    return () => {
+      this.sessionStatusListeners.delete(callback);
+    };
+  }
+
+  /** 透传 `session:status`（错误只告警，不影响调用方） */
+  async notifySessionStatus(event: SessionStatusEvent): Promise<void> {
+    for (const listener of [...this.sessionStatusListeners]) {
+      try {
+        await listener(event);
+      } catch (err) {
+        logger.warn({ event: 'session-status-listener-failed', sessionId: event.sessionId, status: event.status, err }, 'session status listener failed');
+      }
+    }
+  }
+
+  /** 直读会话状态（内部只读，不经 user 作用域）：会话文档缺失返回 null */
+  async getSessionStatusRaw(sessionId: string): Promise<string | null> {
+    const session = await Session.findById(sessionId).select('status').lean();
+    return (session as { status?: string } | null)?.status ?? null;
   }
 
   /** controller-api 清理失败会话（publish removed）后由 SSE 订阅层触发 */

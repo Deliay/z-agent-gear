@@ -42,6 +42,8 @@ function makeNode(overrides: Partial<WorkflowNodeData> = {}): WorkflowNodeData {
     startedAt: null,
     reworkedAt: null,
     reworkCount: 0,
+    retryCount: 0,
+    nextRetryAt: null,
     rejectInfo: null,
     failInfo: null,
     ...overrides,

@@ -25,6 +25,8 @@ export const workflowTypeDefs = `#graphql
     REJECT
     REWORK
     FAILED
+    # 中断自动重试 10 次用尽：阻断流程，需人工介入
+    RETRY_FAILED
   }
 
   # ---------- 工作流模板 ----------
@@ -134,6 +136,10 @@ export const workflowTypeDefs = `#graphql
     startedAt: String
     reworkedAt: String
     reworkCount: Int!
+    # 当前中断 episode 已排期的自动重试次数（0~10）
+    retryCount: Int!
+    # 下次自动重试计划时间（ISO 字符串）；null = 无排期
+    nextRetryAt: String
     rejectInfo: WorkflowNodeRejectInfo
     failInfo: WorkflowNodeFailInfo
   }
@@ -306,7 +312,8 @@ export const workflowTypeDefs = `#graphql
     updateWorkflowNode(instanceId: ID!, nodeId: ID!, input: WorkflowNodeUpdateInput!): WorkflowNode!
     completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!
     rejectNode(instanceId: ID!, nodeId: ID!, reason: String!): WorkflowNode!
-    # 重启节点（RUNNING/REWORK/FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话）
+    # 重启节点（RUNNING/REWORK/FAILED/RETRY_FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话；
+    # RETRY_FAILED 来源用于自动重试用尽后的人工恢复）
     restartNode(instanceId: ID!, nodeId: ID!, agentConfig: AgentNodeConfigInput): WorkflowNode!
     deleteWorkflowInstance(id: ID!): Boolean!
     archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!

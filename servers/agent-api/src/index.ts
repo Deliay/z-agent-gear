@@ -43,6 +43,7 @@ import * as migration017NormalizeStringWorkspaceId from './migrations/017-normal
 import * as migration018DropLegacyUniqueIndexes from './migrations/018-drop-legacy-tenantless-unique-indexes.js';
 import * as migration019CommitSettingsPerMember from './migrations/019-commit-settings-per-member.js';
 import * as migration020CloudStorageIndexes from './migrations/020-cloud-storage-indexes.js';
+import * as migration021WorkflowInterruptRetry from './migrations/021-workflow-interrupt-retry.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -57,6 +58,7 @@ import { sessionLifecycleSubscriber } from './services/session-lifecycle-subscri
 import { workflowOrchestrator } from './services/workflow/orchestrator.js';
 import { prHandlerRegistry } from './services/workflow/pr-handler-registry.js';
 import { issuesTriggerRunner } from './services/workflow/issues-event-handler.js';
+import { interruptRetryScheduler } from './services/workflow/interrupt-retry-scheduler.js';
 import { registerPrCheckRunSyncHooks } from './services/workflow/pr-check-run-sync.js';
 import { prCheckRunSubscriber } from './services/workflow/pr-check-run-subscriber.js';
 import { seedBuiltinWorkflowTemplate } from './services/workflow/seed.js';
@@ -197,6 +199,7 @@ async function start() {
       migration018DropLegacyUniqueIndexes,
       migration019CommitSettingsPerMember,
       migration020CloudStorageIndexes,
+      migration021WorkflowInterruptRetry,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');
@@ -204,6 +207,9 @@ async function start() {
 
   // Issues 联动触发状态机：启动扫描 + 1s 定时（Redis 不可用也照常运行）
   issuesTriggerRunner.start();
+
+  // 工作流节点中断自动重试：30s 扫描到期排期与超时 RECONNECTING（单实例部署约束）
+  interruptRetryScheduler.start();
 
   try {
     getRedisClient();
