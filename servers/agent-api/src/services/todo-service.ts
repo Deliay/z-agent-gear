@@ -1,6 +1,8 @@
+import mongoose from 'mongoose';
 import { TodoItem } from '../models/todo-item.js';
 import { Session } from '../models/session.js';
 import { User } from '../models/user.js';
+import { Workspace } from '../models/workspace.js';
 
 interface PermissionOption {
   optionId: string;
@@ -64,9 +66,29 @@ export interface ElicitationResolvedTarget {
 }
 
 export class TodoService {
+  /**
+   * 待办通知的租户归属：跟随会话所在租户工作区的租户。
+   *
+   * 订阅/引擎链路没有 ALS 上下文，缺省时 tenant-scope 会把 `tenantId` 写成
+   * `userId`（个人租户），导致团队工作区查询不到待办、切到个人工作区反而可见。
+   */
+  private async resolveSessionTenantId(sessionId?: string | null): Promise<string | null> {
+    if (!sessionId || !mongoose.isValidObjectId(sessionId)) return null;
+    const session = (await Session.findById(sessionId).select('workspaceId').lean()) as
+      | { workspaceId?: unknown }
+      | null;
+    if (!session?.workspaceId) return null;
+    const workspace = (await Workspace.findById(session.workspaceId).select('tenantId').lean()) as
+      | { tenantId?: unknown }
+      | null;
+    return workspace?.tenantId ? String(workspace.tenantId) : null;
+  }
+
   async createPermissionTodo(data: PermissionRequestData): Promise<InstanceType<typeof TodoItem>> {
+    const tenantId = await this.resolveSessionTenantId(data.sessionId);
     const todo = await TodoItem.create({
       userId: data.userId,
+      ...(tenantId ? { tenantId } : {}),
       type: 'permission_request',
       priority: 'immediate',
       title: `Agent请求权限：${data.toolCall.title || data.toolCall.toolCallId}`,
@@ -121,8 +143,10 @@ export class TodoService {
     sessionId: string;
     reason: string;
   }): Promise<InstanceType<typeof TodoItem>> {
+    const tenantId = await this.resolveSessionTenantId(data.sessionId);
     const todo = await TodoItem.create({
       userId: data.userId,
+      ...(tenantId ? { tenantId } : {}),
       type: 'workflow_intervention',
       priority: 'immediate',
       title: `工作流节点「${data.nodeName}」需要人工介入`,
@@ -133,8 +157,10 @@ export class TodoService {
   }
 
   async createElicitationTodo(data: ElicitationRequestData): Promise<InstanceType<typeof TodoItem>> {
+    const tenantId = await this.resolveSessionTenantId(data.sessionId);
     const todo = await TodoItem.create({
       userId: data.userId,
+      ...(tenantId ? { tenantId } : {}),
       type: 'elicitation_request',
       priority: 'immediate',
       title: `Agent请求输入：${data.mode === 'url' ? '打开链接授权' : (data.requestedSchema?.title || '填写信息')}`,
@@ -168,12 +194,14 @@ export class TodoService {
       ? (data.expiresInSeconds as number)
       : HARNESS_LOGIN_DEFAULT_EXPIRES_SECONDS;
     const expiresAt = new Date(Date.now() + expiresInSeconds * 1000);
+    const tenantId = await this.resolveSessionTenantId(data.sessionId);
 
     const result = await TodoItem.findOneAndUpdate(
       { userId: data.userId, 'harnessLoginData.requestId': data.requestId },
       {
         $setOnInsert: {
           userId: data.userId,
+          ...(tenantId ? { tenantId } : {}),
           type: 'harness_login_request',
           priority: 'immediate',
           title: 'Kimi Code 需要登录',
