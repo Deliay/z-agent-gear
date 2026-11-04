@@ -21,7 +21,7 @@ export const NODE_STATUS_LABELS: Record<WorkflowNodeStatus, string> = {
  * 节点状态语义配色单一来源（PRD 功能点 11）。
  *
  * - `spine`：卡片左侧色脊（4px）
- * - `tint` ：卡片淡底
+ * - `tint` ：卡片底色（统一不透明 `bg-card`，避免半透明导致卡片与画布底色混叠）
  * - `badge`：状态徽标
  *
  * 语义表：RUNNING→info、DONE→success、REJECT→warning（静态琥珀）、
@@ -34,43 +34,43 @@ export const NODE_STATUS_VISUAL: Record<
 > = {
   INITIALIZING: {
     spine: 'bg-muted-foreground/40',
-    tint: 'bg-muted/30',
+    tint: 'bg-card',
     badge: 'bg-muted text-muted-foreground',
   },
   READY: {
     spine: 'bg-border',
-    tint: 'bg-muted/20',
+    tint: 'bg-card',
     badge: 'bg-muted text-muted-foreground',
   },
   RUNNING: {
     spine: 'bg-info',
-    tint: 'bg-info/10',
+    tint: 'bg-card',
     badge: 'bg-info/15 text-info',
   },
   DONE: {
     spine: 'bg-success',
-    tint: 'bg-success/10',
+    tint: 'bg-card',
     badge: 'bg-success/15 text-success',
   },
   REJECT: {
     spine: 'bg-warning',
-    tint: 'bg-warning/10',
+    tint: 'bg-card',
     badge: 'bg-warning/15 text-warning',
   },
   REWORK: {
     spine: 'bg-warning animate-pulse',
-    tint: 'bg-warning/10',
+    tint: 'bg-card',
     badge: 'bg-warning/15 text-warning animate-pulse',
   },
   FAILED: {
     spine: 'bg-destructive',
-    tint: 'bg-destructive/10',
+    tint: 'bg-card',
     badge: 'bg-destructive/15 text-destructive',
   },
   // 自动重试用尽：与 FAILED 同族破坏色，文案区分「重试失败」
   RETRY_FAILED: {
     spine: 'bg-destructive',
-    tint: 'bg-destructive/10',
+    tint: 'bg-card',
     badge: 'bg-destructive/15 text-destructive',
   },
 }

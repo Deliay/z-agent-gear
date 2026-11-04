@@ -505,6 +505,15 @@ export const ARCHIVE_WORKFLOW_INSTANCE = gql`
   }
 `
 
+export const RENAME_WORKFLOW_INSTANCE = gql`
+  mutation RenameWorkflowInstance($id: ID!, $name: String!) {
+    renameWorkflowInstance(id: $id, name: $name) {
+      id
+      name
+    }
+  }
+`
+
 export const INSTANTIATE_WORKFLOW = gql`
   mutation InstantiateWorkflow($input: InstantiateWorkflowInput!) {
     instantiateWorkflow(input: $input) {

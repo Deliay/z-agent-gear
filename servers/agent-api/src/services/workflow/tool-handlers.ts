@@ -1,6 +1,7 @@
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { logger as rootLogger } from '../../observability/logger.js';
 import { workflowEngine, type TransitionPayload, type WorkflowInstanceDoc, type WorkflowNodeDoc } from './engine.js';
+import { workflowInstanceService } from './instance.js';
 import { getArtifactKeys, getValue, listKeys, removeKey } from './blackboard.js';
 import { prHandlerRegistry, normalizePullRequestId, PullRequestIdError } from './pr-handler-registry.js';
 import { syncNodeStatus } from './pr-check-run-sync.js';
@@ -160,6 +161,16 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
         },
       },
       required: ['pullRequestId'],
+    },
+  },
+  {
+    name: 'renameCurrentWorkflow',
+    description:
+      '修改当前工作流实例的名称。当你完成了一个阶段的标志性产物、或人类在对话中要求更新工作流名称时调用；新名称会同步展示在工作流列表与详情页。',
+    inputSchema: {
+      type: 'object',
+      properties: { name: { type: 'string', description: '新名称（trim 后 1~64 字符）' } },
+      required: ['name'],
     },
   },
 ];
@@ -364,6 +375,34 @@ export async function callWorkflowTool(
 
     case 'resumeFailedNode': {
       return transition(toolScope, 'resumeFailed', {});
+    }
+
+    case 'renameCurrentWorkflow': {
+      const rawName = requireString(
+        args,
+        'name',
+        '新名称需为 trim 后 1~64 字符的字符串。',
+      );
+      if (instance.deletedAt) {
+        throw new WorkflowToolError('INVALID_STATE', '工作流实例已删除，无法改名');
+      }
+      try {
+        const updated = await workflowInstanceService.rename(
+          toolScope.userId,
+          toolScope.instanceId,
+          rawName,
+        );
+        return { workflowInstanceId: toolScope.instanceId, name: updated?.name ?? rawName.trim() };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message === 'invalid workflow name') {
+          throw new WorkflowToolError('INVALID_PARAMS', '名称非法：trim 后需为 1~64 字符。');
+        }
+        if (message === 'Workflow instance not found') {
+          throw new WorkflowToolError('NOT_FOUND', `工作流实例不存在或无权限：${toolScope.instanceId}`);
+        }
+        throw new WorkflowToolError('INVALID_STATE', message || '工作流实例改名失败');
+      }
     }
 
     case 'linkPullRequest': {

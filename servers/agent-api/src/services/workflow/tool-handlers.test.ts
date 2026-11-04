@@ -24,6 +24,12 @@ vi.mock('./pr-check-run-sync.js', () => ({
   syncNodeStatus: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('./instance.js', () => ({
+  workflowInstanceService: {
+    rename: vi.fn(),
+  },
+}));
+
 import {
   callWorkflowTool,
   getWorkflowToolDefinitions,
@@ -34,6 +40,7 @@ import { workflowEngine } from './engine.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { syncNodeStatus } from './pr-check-run-sync.js';
+import { workflowInstanceService } from './instance.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -104,7 +111,7 @@ describe('workflow tool-handlers', () => {
   });
 
   describe('工具定义', () => {
-    it('提供全部 13 个工具且带 inputSchema', () => {
+    it('提供全部 14 个工具且带 inputSchema', () => {
       const defs = getWorkflowToolDefinitions();
       expect(defs.map((d) => d.name).sort()).toEqual(
         [
@@ -121,6 +128,7 @@ describe('workflow tool-handlers', () => {
           'failCurrentNode',
           'resumeFailedNode',
           'linkPullRequest',
+          'renameCurrentWorkflow',
         ].sort(),
       );
       for (const def of defs) {
@@ -446,5 +454,58 @@ describe('linkPullRequest 工具', () => {
     loadInstance();
     const info = (await callWorkflowTool(SCOPE, 'getNodeInfo', {})) as Record<string, unknown>;
     expect(info.workflowInstanceId).toBe('inst-1');
+  });
+});
+
+describe('workflow tool-handlers renameCurrentWorkflow', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('T-RNM1 工具定义存在且 name 为必填字符串参数', () => {
+    const def = getWorkflowToolDefinitions().find((item) => item.name === 'renameCurrentWorkflow');
+    expect(def).toBeTruthy();
+    expect(def!.description).toContain('修改当前工作流实例的名称');
+    expect(def!.inputSchema).toMatchObject({
+      type: 'object',
+      required: ['name'],
+      properties: { name: { type: 'string' } },
+    });
+  });
+
+  it('T-RNM2 成功：复用实例改名服务并返回新名称', async () => {
+    loadInstance();
+    vi.mocked(workflowInstanceService.rename).mockResolvedValue({ name: '新名称' } as never);
+
+    await expect(
+      callWorkflowTool(SCOPE, 'renameCurrentWorkflow', { name: '  新名称  ' }),
+    ).resolves.toEqual({ workflowInstanceId: 'inst-1', name: '新名称' });
+    expect(workflowInstanceService.rename).toHaveBeenCalledWith('user-1', 'inst-1', '  新名称  ');
+  });
+
+  it('T-RNM3 空名称 → INVALID_PARAMS 且不调用服务', async () => {
+    loadInstance();
+    await expect(callWorkflowTool(SCOPE, 'renameCurrentWorkflow', { name: '   ' })).rejects.toSatisfy(
+      expectToolError('INVALID_PARAMS'),
+    );
+    expect(workflowInstanceService.rename).not.toHaveBeenCalled();
+  });
+
+  it('T-RNM4 非法名称/已删除/未找到按文案映射错误码', async () => {
+    loadInstance();
+    vi.mocked(workflowInstanceService.rename).mockRejectedValueOnce(new Error('invalid workflow name'));
+    await expect(
+      callWorkflowTool(SCOPE, 'renameCurrentWorkflow', { name: 'a'.repeat(65) }),
+    ).rejects.toSatisfy(expectToolError('INVALID_PARAMS'));
+
+    vi.mocked(workflowInstanceService.rename).mockRejectedValueOnce(new Error('Workflow instance is deleted'));
+    await expect(
+      callWorkflowTool(SCOPE, 'renameCurrentWorkflow', { name: '新名称' }),
+    ).rejects.toSatisfy(expectToolError('INVALID_STATE'));
+
+    vi.mocked(workflowInstanceService.rename).mockRejectedValueOnce(new Error('Workflow instance not found'));
+    await expect(
+      callWorkflowTool(SCOPE, 'renameCurrentWorkflow', { name: '新名称' }),
+    ).rejects.toSatisfy(expectToolError('NOT_FOUND'));
   });
 });

@@ -134,6 +134,24 @@ describe('NodeDetailDrawer', () => {
     expect(screen.getByText(/最近同步：2026-10-31T12:00:00Z/)).toBeInTheDocument()
   })
 
+  it('T-WFI-SH1 关联 PR 区块位于产物之前（同时存在两者时）', () => {
+    renderDrawer({ type: 'node', nodeId: 'n1' })
+
+    const prTitle = screen.getByText('关联 Pull Request')
+    const artifactTitle = screen.getByText(/^产物（\d+）$/)
+    // Node.DOCUMENT_POSITION_FOLLOWING：产物标题在 PR 标题之后
+    expect(prTitle.compareDocumentPosition(artifactTitle)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+  })
+
+  it('T-WFI-SH1b 仅产物或仅 PR 时展示正常', () => {
+    const artifactsOnly = instance({ pullRequestLinks: [] })
+    renderDrawer({ type: 'node', nodeId: 'n1' }, artifactsOnly)
+    expect(screen.getByText(/^产物（\d+）$/)).toBeInTheDocument()
+    expect(screen.queryByText('关联 Pull Request')).not.toBeInTheDocument()
+  })
+
   it('T-UI4-SH6 失败节点展示失败原因', () => {
     renderDrawer(
       { type: 'node', nodeId: 'n1' },

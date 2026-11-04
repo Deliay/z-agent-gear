@@ -6,6 +6,7 @@ import {
   GET_WORKFLOW_INSTANCE,
   DELETE_WORKFLOW_INSTANCE,
   ARCHIVE_WORKFLOW_INSTANCE,
+  RENAME_WORKFLOW_INSTANCE,
   type GetWorkflowInstanceQuery,
   type WorkflowNodeData,
 } from '@/graphql/workflow'
@@ -22,6 +23,7 @@ import NodeDetailDrawer, { type NodeDetailTarget } from '@/components/workflow/N
 import MobileBackButton from '@/components/MobileBackButton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -30,7 +32,18 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { Archive, ArchiveRestore, Trash2, List, GitBranch } from 'lucide-react'
+import { Archive, ArchiveRestore, Trash2, List, GitBranch, Pencil } from 'lucide-react'
+
+/** 实例名称长度上限（与服务端 WORKFLOW_NAME_MAX_LENGTH 同口径） */
+const WORKFLOW_NAME_MAX_LENGTH = 64
+
+/** 前端名称校验（仅提示，服务端为权威）：返回错误文案或 null */
+function validateName(raw: string): string | null {
+  const name = raw.trim()
+  if (!name) return '名称不能为空'
+  if (name.length > WORKFLOW_NAME_MAX_LENGTH) return `名称最多 ${WORKFLOW_NAME_MAX_LENGTH} 个字符`
+  return null
+}
 
 export default function WorkflowInstancePage() {
   const { id } = useParams<{ id: string }>()
@@ -44,6 +57,12 @@ export default function WorkflowInstancePage() {
   const [deleting, setDeleting] = useState(false)
   const [deleteWorkflowInstance] = useMutation(DELETE_WORKFLOW_INSTANCE)
   const [archiveWorkflowInstance] = useMutation(ARCHIVE_WORKFLOW_INSTANCE)
+  const [renameWorkflowInstance] = useMutation(RENAME_WORKFLOW_INSTANCE)
+  // 改名对话框：名称草稿 + 服务端错误文案（前端校验只提示不替代服务端）
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState(false)
   // 视图切换：List/Graph，localStorage 持久化
   const [viewMode, setViewMode] = useState<'list' | 'graph'>(() => {
     const saved = localStorage.getItem('workflow-view-mode')
@@ -144,6 +163,35 @@ export default function WorkflowInstancePage() {
     }
   }
 
+  /** 打开改名对话框：预填当前名称并清空上次错误 */
+  const handleOpenRename = () => {
+    setRenameDraft(instance.name)
+    setRenameError(null)
+    setRenameOpen(true)
+  }
+
+  const handleRename = async () => {
+    const error = validateName(renameDraft)
+    if (error) {
+      setRenameError(error)
+      return
+    }
+    setRenaming(true)
+    setRenameError(null)
+    try {
+      await renameWorkflowInstance({
+        variables: { id: instance.id, name: renameDraft.trim() },
+      })
+      toast.success('实例名称已更新')
+      setRenameOpen(false)
+    } catch (err) {
+      // 服务端文案原样展示（invalid workflow name / Workflow instance is deleted 等）
+      setRenameError(err instanceof Error ? err.message : '重命名失败，请重试')
+    } finally {
+      setRenaming(false)
+    }
+  }
+
   return (
     <div
       className={
@@ -155,6 +203,15 @@ export default function WorkflowInstancePage() {
       <div className="flex flex-wrap items-center gap-2">
         <MobileBackButton to="/sessions" />
         <h1 className="text-xl font-bold">{instance.name}</h1>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="重命名实例"
+          title="重命名实例"
+          onClick={handleOpenRename}
+        >
+          <Pencil className="size-3.5" />
+        </Button>
         {instance.currentNodeNames.length > 0 ? (
           instance.currentNodeNames.map((name) => (
             <Badge key={name} variant="default">
@@ -303,6 +360,51 @@ export default function WorkflowInstancePage() {
         sessionId={sideSessionId}
         onClose={() => setSideSessionId(null)}
       />
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>重命名实例</DialogTitle>
+            <DialogDescription>
+              新名称将同步展示在工作流列表与详情页；trim 后需为 1~
+              {WORKFLOW_NAME_MAX_LENGTH} 个字符。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-1.5">
+            <label htmlFor="workflow-rename-input" className="text-xs text-muted-foreground">
+              实例名称
+            </label>
+            <Input
+              id="workflow-rename-input"
+              aria-label="实例名称"
+              value={renameDraft}
+              aria-invalid={renameError != null || validateName(renameDraft) != null}
+              onChange={(event) => {
+                setRenameDraft(event.target.value)
+                setRenameError(null)
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && !renaming && !validateName(renameDraft)) {
+                  void handleRename()
+                }
+              }}
+            />
+            {(renameError ?? validateName(renameDraft)) && (
+              <p className="text-xs text-destructive">
+                {renameError ?? validateName(renameDraft)}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameOpen(false)} disabled={renaming}>
+              取消
+            </Button>
+            <Button onClick={handleRename} disabled={renaming || validateName(renameDraft) != null}>
+              {renaming ? '保存中…' : '保存'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>

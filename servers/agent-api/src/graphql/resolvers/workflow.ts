@@ -345,6 +345,16 @@ export const workflowResolvers = {
       const userId = requireUser(context);
       return wrap(() => workflowInstanceService.setArchived(userId, args.id, args.archived));
     },
+    renameWorkflowInstance: async (
+      _parent: unknown,
+      args: { id: string; name: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      return wrap(async () =>
+        mapInstance((await workflowInstanceService.rename(userId, args.id, args.name)) as unknown as Doc),
+      );
+    },
     setWorkflowAdditionalPrompt: async (
       _parent: unknown,
       args: { instanceId: string; key: string; value: string },

@@ -3405,3 +3405,162 @@ describe('Workflow Optimization Features (A35-A44)', () => {
     expect(removedWorktrees.length).toBeGreaterThan(0);
   }, 30_000);
 });
+
+// ---------------------------------------------------------------------------
+// 实例改名（A51-A55）：GraphQL renameWorkflowInstance + 节点会话 MCP renameCurrentWorkflow
+// ---------------------------------------------------------------------------
+
+const RENAME_WORKFLOW_INSTANCE = `
+  mutation RenameWorkflowInstance($id: ID!, $name: String!) {
+    renameWorkflowInstance(id: $id, name: $name) { id name }
+  }
+`;
+
+describe('Workflow Instance Rename (A51-A55)', () => {
+  let token = '';
+  let otherToken = '';
+  let fake: FakeController;
+  let workspaceId = '';
+  let instanceId = '';
+
+  beforeAll(async () => {
+    token = await newUserToken('wfrename');
+    otherToken = await newUserToken('wfrename-other');
+    expect(token).toBeTruthy();
+    expect(otherToken).toBeTruthy();
+
+    fake = await registerFakeController(token, 'rename');
+    const available = await refreshCapabilities(token, fake.controllerId);
+    expect(available).toContain('opencode');
+
+    const templateId = await createSimpleTemplate(token, `wf-rename-${Date.now()}`);
+    const configuredId = await configureFromTemplate(token, templateId, fake.controllerId, `wf-rename-cfg-${Date.now()}`);
+    workspaceId = await createWorkspace(token, fake.controllerId);
+
+    const res = await gqlRequest(
+      INSTANTIATE_WORKFLOW,
+      {
+        input: instantiateInput(
+          fake.controllerId,
+          configuredId,
+          workspaceId,
+          `wf-rename-实例-${Date.now()}`,
+        ),
+      },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    instanceId = body.data.instantiateWorkflow.id;
+  }, 30_000);
+
+  afterAll(() => {
+    fake?.client.disconnect();
+  });
+
+  it('A51: GraphQL 改名成功（trim 落库），实例与列表均返回新名称', async () => {
+    const res = await gqlRequest(
+      RENAME_WORKFLOW_INSTANCE,
+      { id: instanceId, name: '  迭代后的实例名  ' },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.renameWorkflowInstance).toMatchObject({
+      id: instanceId,
+      name: '迭代后的实例名',
+    });
+
+    const instBody = await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json();
+    expect(instBody.data.workflowInstance.name).toBe('迭代后的实例名');
+
+    const listBody = await (
+      await gqlRequest(WORKFLOW_INSTANCES_QUERY, { workspaceId }, token)
+    ).json();
+    const listed = listBody.data.workflowInstances.find((row: Record<string, any>) => row.id === instanceId);
+    expect(listed?.name).toBe('迭代后的实例名');
+  });
+
+  it('A52: 空白 / 超长名称返回 invalid workflow name 且名称不变', async () => {
+    const blank = await (await gqlRequest(RENAME_WORKFLOW_INSTANCE, { id: instanceId, name: '   ' }, token)).json();
+    expect(blank.errors?.[0]?.message).toBe('invalid workflow name');
+
+    const tooLong = await (
+      await gqlRequest(RENAME_WORKFLOW_INSTANCE, { id: instanceId, name: 'a'.repeat(65) }, token)
+    ).json();
+    expect(tooLong.errors?.[0]?.message).toBe('invalid workflow name');
+
+    const instBody = await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json();
+    expect(instBody.data.workflowInstance.name).toBe('迭代后的实例名');
+  });
+
+  it('A53: 他人实例改名被拒绝（Workflow instance not found）', async () => {
+    const res = await gqlRequest(RENAME_WORKFLOW_INSTANCE, { id: instanceId, name: '越权改名' }, otherToken);
+    const body = await res.json();
+    expect(body.errors?.[0]?.message).toBe('Workflow instance not found');
+
+    const instBody = await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json();
+    expect(instBody.data.workflowInstance.name).toBe('迭代后的实例名');
+  });
+
+  it('A54: 软删除实例改名被拒绝（Workflow instance is deleted）', async () => {
+    const tplId = await createSimpleTemplate(token, `wf-rename-del-${Date.now()}`);
+    const cfgId = await configureFromTemplate(token, tplId, fake.controllerId, `wf-rename-del-cfg-${Date.now()}`);
+    const created = await (
+      await gqlRequest(
+        INSTANTIATE_WORKFLOW,
+        { input: instantiateInput(fake.controllerId, cfgId, workspaceId, `wf-rename-del-${Date.now()}`) },
+        token,
+      )
+    ).json();
+    const delId = created.data.instantiateWorkflow.id;
+
+    const delBody = await (await gqlRequest(DELETE_WORKFLOW_INSTANCE_MUT, { id: delId }, token)).json();
+    expect(delBody.errors).toBeUndefined();
+
+    const res = await gqlRequest(RENAME_WORKFLOW_INSTANCE, { id: delId, name: '已删除改名' }, token);
+    const body = await res.json();
+    expect(body.errors?.[0]?.message).toBe('Workflow instance is deleted');
+  }, 20_000);
+
+  it('A55: 节点会话 MCP renameCurrentWorkflow 改名成功（复用同一服务）', async () => {
+    const instBody = await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json();
+    const inputNode = instBody.data.workflowInstance.nodes.find((n: Record<string, any>) => n.nodeKey === 'input');
+    expect(inputNode.status).toBe('READY');
+
+    const startEvent = waitForEvent<{
+      requestId: string;
+      sessionId: string;
+      mcpEndpoint?: { token: string; serverNames: string[] };
+    }>(fake.client, 'acp:start', 10000);
+
+    const completeBody = await (
+      await gqlRequest(COMPLETE_HUMAN_NODE, { instanceId, nodeId: inputNode.id, input: '需求已就绪' }, token)
+    ).json();
+    expect(completeBody.errors).toBeUndefined();
+
+    const startData = await startEvent;
+    expect(startData.mcpEndpoint?.token).toBeTruthy();
+    fake.client.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId: startData.sessionId,
+      success: true,
+      externalSessionId: `ext_rename_${Date.now()}`,
+    });
+    await sleep(500);
+
+    const result = await callWorkflowTool(
+      fake.client,
+      startData.sessionId,
+      startData.mcpEndpoint!.token,
+      'renameCurrentWorkflow',
+      { name: '  MCP 改名后的实例  ' },
+    );
+    const parsed = parseToolResult(result.body);
+    expect(parsed.isError).toBe(false);
+    expect(parsed.data.name).toBe('MCP 改名后的实例');
+
+    const after = await (await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token)).json();
+    expect(after.data.workflowInstance.name).toBe('MCP 改名后的实例');
+  }, 30_000);
+});

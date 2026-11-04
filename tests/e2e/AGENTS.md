@@ -300,20 +300,23 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 ### Workflow Graph Phase 4 E2E (`workflow-graph.spec.ts`)
 
-> 工作流图表套件：BLANK 来源实例化三节点图（人类 → 人类 → AI），状态/黑板/追加提示词/PR 关联用 MONGODB_URI 直写构造；动态行与 token 用 fake controller `acp:message` 注入 `SessionUpdate`，完成节点经 `completeCurrentNode` MCP relay。缺少 MONGODB_URI 时整体跳过。
+> 工作流图表套件：BLANK 来源实例化三节点图（人类 → 人类 → AI），状态/黑板/追加提示词/PR 关联用 MONGODB_URI 直写构造；动态行与 token 用 fake controller `acp:message` 注入 `SessionUpdate`，完成节点经 `completeCurrentNode` MCP relay。缺少 MONGODB_URI 时整体跳过。工作流迭代新增 E2E-WFI1~3（7 节点线性图 + 直写状态，验证自动定位与抽屉排序）。
 
 | 测试 | 描述 |
 |------|------|
 | E2E-UI4G1 竖向布局与画布占满 | 默认图表视图节点自上而下（y 坐标单调）；画布高度 ≥ 480px 且占视图区主要高度 |
-| E2E-UI4G2 卡片主题跟随 | 深色主题下节点卡片计算样式背景非纯白；切回浅色即时跟随 |
+| E2E-UI4G2 卡片主题跟随与不透明 | 深色主题下卡片背景非纯白；切回浅色即时跟随；两主题背景均为 `rgb(...)`（禁止 `rgba(..., alpha<1)`） |
 | E2E-UI4G3 状态整体配色 | REJECT 与 FAILED 脊色互异；REWORK 徽标带 `animate-pulse`，REJECT 静态 |
-| E2E-UI4G4 连线 | 边 strokeWidth ≥ 2 且 marker-end 箭头存在 |
+| E2E-UI4G4 连线 | 2 条边渲染且可见、strokeWidth ≥ 2、marker-end 箭头存在（自定义节点补 Handle 后转绿） |
 | E2E-UI4G5 人类节点就地操作 | 图表卡片输入 → 「完成」→ 节点推进；「打回」填理由 → 上游节点返工 |
 | E2E-UI4G6 人类节点详情抽屉 | 点击节点头部 → 侧边抽屉展示详情；Esc 关闭后回到原视图 |
-| E2E-UI4G7 进行中动态行 | 注入 `agent_thought_chunk`/`tool_call`/`agent_message_chunk` → 动态行分别显示「思考中」/工具调用标题/「总结中」；无消息显示「等待消息」 |
-| E2E-UI4G8 完成态 token | 注入 `usage_update` 后经 MCP 完成节点 → 「已完成 · 消耗 N tokens」 |
+| E2E-UI4G7 进行中静态指示 | 注入 `agent_thought_chunk`/`tool_call`/`agent_message_chunk` → 动态行恒为「正在思考」且不泄露注入文本 |
+| E2E-UI4G8 完成态 token | 注入 `usage_update` 后经 MCP 完成节点 → 「已完成 · 4321 tokens」且不含「消耗」 |
 | E2E-UI4G9 资源上图 | 黑板/PR/追加提示词小卡片与所属节点关联；未归属条目进实例资源行；垃圾桶不渲染；图表视图右栏资源树隐藏；点击开抽屉 |
 | E2E-UI4G10 徽标行 | 有 PR/检查项/返工记录的节点徽标可见且 PR 可点；无对应信息不渲染 |
+| E2E-WFI1 自动定位窗口 | 7 节点线性图中间节点 RUNNING：执行中卡片中心落在画布中心 ±15%，前后各 2 卡片可见，首尾节点被裁出画布 |
+| E2E-WFI2 执行中切换重新定位 | 直写状态把 RUNNING 从 n4 切到 n3，5s 轮询后视图中心跟随 n3 |
+| E2E-WFI3 抽屉 PR 前置 | 同时 seed PR 与黑板产物，抽屉内「关联 Pull Request」区块位于「产物」之前 |
 
 ### Port Forward E2E (`port-forward.spec.ts`)
 

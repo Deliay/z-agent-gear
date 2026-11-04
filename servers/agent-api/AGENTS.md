@@ -219,6 +219,13 @@ pnpm run start   # Start production server
 - **待办通知租户归属**：订阅/引擎链路（permission / elicitation / harness login / workflow intervention）创建 `TodoItem` 时，必须经 `TodoService.resolveSessionTenantId` 显式继承会话所在租户工作区的 `tenantId`；缺省会由 tenant-scope 写成 `userId`（个人租户），导致团队工作区看不到待办、切到个人工作区反而可见。
 - **开户**：`POST /internal/users`（Bearer `INTERNAL_API_TOKEN`）创建账户+用户+个人租户+零余额租户计费账户；按 username 幂等（200 既有视图 / 201 新建 / 400 规则 / 409 重名 / 503 计费不可达并回滚）。
 
+## 工作流实例改名（工作流迭代）
+
+- **契约**：`contracts/workflow.graphql` 的 `type Mutation` 新增 `renameWorkflowInstance(id: ID!, name: String!): WorkflowInstance!`；`graphql/schemas/workflow.ts` 为**手写 schema 串**，契约与 schema 必须双写（漏改即运行时 `Cannot query field`）。
+- **服务**：`services/workflow/instance.ts` 的 `normalizeWorkflowName(raw)`（trim 后 1~64，非法抛 `invalid workflow name`）与 `workflowInstanceService.rename(userId, id, rawName)` 为**唯一名称规则来源**；归属口径与归档/删除一致（`actorFilter`），查询**不过滤 `deletedAt`** 以便区分「不存在/无权限」（`Workflow instance not found`）与「已删除」（`Workflow instance is deleted`）；更新带 `deletedAt:null` 并兜底 `matchedCount===0` 按已删除处理。名称规则仅作用于改名入口，实例化历史行为不变。
+- **入口**：GraphQL `renameWorkflowInstance`（`graphql/resolvers/workflow.ts`，`wrap()` 原样透传文案）；平台 MCP `agent-workflow-tools.renameCurrentWorkflow`（`services/workflow/tool-handlers.ts`，工具总数 **14**）复用同一 service，错误映射 `invalid workflow name → INVALID_PARAMS`、`not found → NOT_FOUND`、其余（含已删除）→ `INVALID_STATE`。
+- **已归档实例允许改名**（仅禁止已删除）；团队工作区非创建人场景与既有 13 个工具同口径，不在本期扩大范围。
+
 ## 多租户二期（工作区资源查询口径）
 
 - **请求链路**：已归属工作区的资源（`sessions` / `controllers` / `controllerkeys` / `cloudhosts` / `cloudstorages` / `configuredworkflows` / `workflowinstances` / `workflowtemplates` / `githubaccounts` / `providers` / `models`）一律用 `actorFilter(userId)` 组合查询，**禁止显式写 `userId`**：工作区上下文存在时返回 `{}`，由 `applyWorkspaceScope` 注入可见集；无上下文（引擎/内部/迁移）才回退 `{userId}` 归属校验。典型回归：`Controller.cloudHost`、`sessionService.create` 的云电脑状态校验、云电脑创建时选择共享 GitHub 绑定、Issue 联动实例化时读取已配置工作流、会话级权限超时设置。

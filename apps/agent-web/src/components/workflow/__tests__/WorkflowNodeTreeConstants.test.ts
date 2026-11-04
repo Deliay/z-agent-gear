@@ -50,6 +50,13 @@ describe('NODE_STATUS_VISUAL', () => {
     }
   })
 
+  it('T-WFI-TC1 七态 tint 统一不透明 bg-card（无透明度后缀）', () => {
+    for (const status of STATUSES) {
+      expect(NODE_STATUS_VISUAL[status].tint).toBe('bg-card')
+      expect(NODE_STATUS_VISUAL[status].tint).not.toMatch(/\/\d+/)
+    }
+  })
+
   it('六态主色互异（INITIALIZING/READY 为中性色域）', () => {
     const primary = [
       NODE_STATUS_VISUAL.RUNNING.spine,
