@@ -3,7 +3,7 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Loader2, RotateCcw } from 'lucide-react'
 import HumanNodeActions from '../HumanNodeActions'
 import { NODE_STATUS_LABELS, NODE_STATUS_VISUAL } from '../WorkflowNodeTreeConstants'
-import { useNodeSessionActivity } from '@/hooks/useNodeSessionActivity'
+import { useNodeSessionActivity, type NodeLiveActivity } from '@/hooks/useNodeSessionActivity'
 import { ResourceChips } from './ResourceChip'
 import type { WorkflowGraphNode } from './graph-layout'
 
@@ -14,20 +14,30 @@ export type WorkflowNodeCardNode = WorkflowGraphNode
  * 状态色左脊 + 名称 + 类型/返工徽标 + 元信息（Harness/模型）+ 进行中静态指示 +
  * 完成态 token 行 + PR/检查项徽标 + 资源小卡片 + 人类节点就地操作。
  *
- * 动态行固定为「正在思考」静态指示，不再渲染思考/工具/文本正文（避免长文本撑高卡片）。
+ * 动态行按活动类型展示：思考「思考中...」、工具调用「执行中: {工具标题}」、
+ * 文本输出「Concluding...」；不渲染正文（避免长文本撑高卡片）。
  * 人类交互与拖拽隔离：交互元素统一 `nodrag` + `stopPropagation`。
  */
+function liveActivityLabel(activity: NodeLiveActivity | null): string {
+  if (activity?.kind === 'tool_call') {
+    return activity.text ? `执行中: ${activity.text}` : '执行中'
+  }
+  if (activity?.kind === 'text') return 'Concluding...'
+  return '思考中...'
+}
+
 export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNode>) {
   const visual = NODE_STATUS_VISUAL[data.status]
   const isAiRunning =
     data.type === 'AI' && (data.status === 'RUNNING' || data.status === 'REWORK')
   // 首屏即为 DONE 的 AI 节点：短连一次拉 history 补 token；运行中完成的节点沿用已捕获用量
   const [doneOnMount] = useState(() => data.type === 'AI' && data.status === 'DONE')
-  const { tokenUsage } = useNodeSessionActivity({
+  const { activity, tokenUsage } = useNodeSessionActivity({
     sessionId: data.sessionId,
     active: isAiRunning,
     snapshot: doneOnMount && data.status === 'DONE',
   })
+  const activityLabel = liveActivityLabel(activity)
 
   return (
     <div
@@ -100,7 +110,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
           className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground"
         >
           <Loader2 className="size-3 shrink-0 animate-spin" />
-          <span className="min-w-0 truncate">正在思考</span>
+          <span className="min-w-0 truncate" title={activityLabel}>{activityLabel}</span>
         </div>
       )}
 
