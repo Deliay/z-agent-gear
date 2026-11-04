@@ -126,6 +126,36 @@ export interface StorageArchiveInfoResponse {
   failureReason?: string | null;
 }
 
+/** 存储级归档请求（契约 A.2.11）。 */
+export interface StorageArchiveOperationInput {
+  operationId: string;
+  archiveId: string;
+  fileName: string;
+  workspaceId: string;
+  tenantId?: string | null;
+}
+
+/** 存储级复原请求（契约 A.2.12；复原到归档与 fork 共用）。 */
+export interface StorageRestoreOperationInput {
+  operationId: string;
+  workspaceId: string;
+  tenantId?: string | null;
+  archivePath: string;
+  sizeGi: number;
+  storageClass?: string | null;
+}
+
+/** 存储级操作查询响应（契约 A.2.13）。 */
+export interface StorageOperationInfoResponse {
+  operationId: string;
+  type: 'archive' | 'restore';
+  status: 'pending' | 'running' | 'succeeded' | 'failed';
+  usageBytes?: number | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  failureReason?: string | null;
+}
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /** cloud-controller 内部管理 API 客户端（原生 fetch + 超时 + Bearer 内部 token）。 */
@@ -215,9 +245,18 @@ export class CloudControllerClient {
     return this.request<CloudContainerSummary[]>(`/internal/containers${suffix}`);
   }
 
-  async destroyContainer(id: string): Promise<void> {
+  async destroyContainer(
+    id: string,
+    options?: { storageArchive?: boolean },
+  ): Promise<void> {
+    // D4：仅显式 false 时下发 `storageArchive:false`；true/缺省保持旧报文形状（无 body）。
+    const body =
+      options?.storageArchive === false
+        ? JSON.stringify({ storageArchive: false })
+        : undefined;
     await this.request<{ success: boolean }>(`/internal/containers/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+      ...(body ? { body } : {}),
     });
   }
 
@@ -367,6 +406,57 @@ export class CloudControllerClient {
   async getArchive(containerId: string): Promise<StorageArchiveInfoResponse> {
     return this.requestWithError<StorageArchiveInfoResponse>(
       `/internal/containers/${encodeURIComponent(containerId)}/archive`,
+    );
+  }
+
+  /** 存储级归档（手动归档；契约 A.2.11）。 */
+  async archiveStorageOperation(
+    storageId: string,
+    input: StorageArchiveOperationInput,
+  ): Promise<{ accepted: boolean; operationId: string }> {
+    return this.requestWithError<{ accepted: boolean; operationId: string }>(
+      `/internal/storages/${encodeURIComponent(storageId)}/archive`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          operationId: input.operationId,
+          archiveId: input.archiveId,
+          fileName: input.fileName,
+          workspaceId: input.workspaceId,
+          ...(input.tenantId ? { tenantId: input.tenantId } : {}),
+        }),
+      },
+    );
+  }
+
+  /** 存储级复原（复原到归档 / fork；契约 A.2.12）。 */
+  async restoreStorageOperation(
+    storageId: string,
+    input: StorageRestoreOperationInput,
+  ): Promise<{ accepted: boolean; operationId: string }> {
+    return this.requestWithError<{ accepted: boolean; operationId: string }>(
+      `/internal/storages/${encodeURIComponent(storageId)}/restore`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          operationId: input.operationId,
+          workspaceId: input.workspaceId,
+          ...(input.tenantId ? { tenantId: input.tenantId } : {}),
+          archivePath: input.archivePath,
+          sizeGi: input.sizeGi,
+          ...(input.storageClass ? { storageClass: input.storageClass } : {}),
+        }),
+      },
+    );
+  }
+
+  /** 存储级操作查询（对账兜底；契约 A.2.13）。 */
+  async getStorageOperation(
+    storageId: string,
+    operationId: string,
+  ): Promise<StorageOperationInfoResponse> {
+    return this.requestWithError<StorageOperationInfoResponse>(
+      `/internal/storages/${encodeURIComponent(storageId)}/operations/${encodeURIComponent(operationId)}`,
     );
   }
 

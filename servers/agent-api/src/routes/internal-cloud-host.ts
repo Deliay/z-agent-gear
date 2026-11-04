@@ -268,6 +268,10 @@ internalCloudHostRouter.post('/:id/terminal', async (req: Request, res: Response
                   : req.body.storage.archiveId === null
                     ? null
                     : undefined,
+              archiveSkipped:
+                typeof req.body.storage.archiveSkipped === 'boolean'
+                  ? req.body.storage.archiveSkipped
+                  : undefined,
             }
           : undefined,
     });

@@ -8,6 +8,7 @@ export const CLOUD_STORAGE_STATUSES = [
   'ATTACHED',
   'ARCHIVING',
   'ARCHIVED',
+  'RESTORING',
   'DESTROYING',
   'DESTROYED',
   'CREATE_FAILED',
@@ -23,6 +24,15 @@ export const CLOUD_STORAGE_ARCHIVE_STATUSES = [
 ] as const;
 
 export type CloudStorageArchiveStatus = (typeof CLOUD_STORAGE_ARCHIVE_STATUSES)[number];
+
+export const CLOUD_STORAGE_RESTORE_STATUSES = [
+  'PENDING',
+  'RUNNING',
+  'SUCCEEDED',
+  'FAILED',
+] as const;
+
+export type CloudStorageRestoreStatus = (typeof CLOUD_STORAGE_RESTORE_STATUSES)[number];
 
 /** 本次挂载来源状态（裁决 3）：创建失败回滚与「正在恢复数据」判定用。 */
 export const CLOUD_STORAGE_ATTACH_FROM_STATUSES = ['IDLE', 'ARCHIVED'] as const;
@@ -47,6 +57,24 @@ const archiveSchema = new mongoose.Schema(
     failureReason: { type: String, default: null },
     // 裁决 13：归档成功但源 PVC 删除失败时 false（留痕；true=已释放，null=未知/非成功态）。
     sourcePvcReleased: { type: Boolean, default: null },
+    // 存储级归档操作单号（手动归档/fork 来源）；容器级归档为 null。
+    operationId: { type: String, default: null },
+  },
+  { _id: false },
+);
+
+/** 当前复原操作（仅 RESTORING 期间非空；进入 IDLE 后清空）。 */
+const restoreSchema = new mongoose.Schema(
+  {
+    operationId: { type: String, required: true },
+    status: {
+      type: String,
+      enum: CLOUD_STORAGE_RESTORE_STATUSES,
+      required: true,
+    },
+    startedAt: { type: Date, default: null },
+    finishedAt: { type: Date, default: null },
+    failureReason: { type: String, default: null },
   },
   { _id: false },
 );
@@ -109,6 +137,13 @@ const cloudStorageSchema = new mongoose.Schema(
     usageUpdatedAt: { type: Date, default: null },
 
     currentArchive: { type: archiveSchema, default: null },
+    currentRestore: { type: restoreSchema, default: null },
+    /** fork 来源存储 id；非 fork 创建为 null。 */
+    forkedFromStorageId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CloudStorage',
+      default: null,
+    },
 
     billingAccountId: { type: String, default: null },
     billingRate: { type: String, enum: ['FULL', 'HALF'], default: 'FULL' },
@@ -149,6 +184,14 @@ cloudStorageSchema.index(
 cloudStorageSchema.index(
   { status: 1, billingStartedAt: 1 },
   { name: 'cloud_storage_status_billing' },
+);
+// fork 来源索引（迁移 022 显式创建，避免关闭 autoIndex 时缺失；稀疏不适用范围）。
+cloudStorageSchema.index(
+  { resourceWorkspaceId: 1, forkedFromStorageId: 1 },
+  {
+    name: 'cloud_storage_fork_source',
+    partialFilterExpression: { forkedFromStorageId: { $type: 'objectId' } },
+  },
 );
 
 applyWorkspaceScope(cloudStorageSchema, { workspaceField: 'resourceWorkspaceId' });

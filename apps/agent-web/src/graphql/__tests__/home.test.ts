@@ -44,7 +44,9 @@ describe('云电脑 GraphQL 文档（T-AW15）', () => {
 
   it('云电脑 mutation 变量与契约一致', () => {
     expect(print(CREATE_CLOUD_HOST)).toContain('createCloudHost(input: $input)');
-    expect(print(STOP_CLOUD_HOST)).toContain('stopCloudHost(id: $id, force: $force)');
+    expect(print(STOP_CLOUD_HOST)).toContain(
+      'stopCloudHost(id: $id, force: $force, archiveStorage: $archiveStorage)',
+    );
     expect(print(DELETE_CLOUD_HOST)).toContain('deleteCloudHost(id: $id)');
   });
 

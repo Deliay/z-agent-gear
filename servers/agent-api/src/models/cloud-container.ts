@@ -38,6 +38,8 @@ const cloudContainerSchema = new mongoose.Schema(
     storageArchiveStartedAt: { type: Date, default: null },
     storageArchiveFinishedAt: { type: Date, default: null },
     storageArchiveFailure: { type: String, default: null },
+    // 本次销毁显式跳过归档（与 cloud-controller 同步演进；只读镜像）。
+    storageArchiveSkipped: { type: Boolean, default: null },
   },
   { collection: 'cloudcontainers', strict: false },
 );

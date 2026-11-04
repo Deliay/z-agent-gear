@@ -82,8 +82,8 @@ flowchart TD
 9. **D9 fork 跳过 `POST /internal/storages`**：restore 端点本身内含「删残留 → 轮询 → ensure 重建」，两步会「刚建即删」。fork 只创建 `cloudstorages` 记录（`CREATING`）后直接调 restore，并在报文携带 `tenantId/workspaceId/sizeGi/storageClass`，保证新 PVC 标签与规格完整（对产品无差异）。
 10. **D10 `operationId` 形态统一 24 位 hex**：agent-api 用 `new mongoose.Types.ObjectId().toString()` 生成；cloud-controller 以同值 `new mongoose.Types.ObjectId(operationId)` 作为台账 `_id`，非法形态 400 `INVALID_BODY`。
 11. **D11 台账唯一进行中约束用部分唯一索引**：`cloudstorageoperations` 建 `{storageId:1}` 唯一索引 + `partialFilterExpression: {status: {$in:['pending','running']}}`，插入撞键即 409 `OPERATION_RUNNING`（无需读后写，天然抗并发）。`cloudcontainers` 侧 `findInflightArchive(storageId)` 同时纳入本台账（`deleteStorage`/`cleanup` 的 409 防线）。
-12. **D12 restore Job 形态**：新增 `buildRestoreJobManifest()`（archiver `MODE=restore`、`RESTORE_FILE`、卷 `archive RO + target RW`、标签 `zag.cloud/storage-op-id` + `archive-role=restore`），Job 名 `zag-restore-<storageId 前 8 位>`；轮询状态 + 读 Pod 日志校验 `ZAG_RESTORE_DONE` 标记行；超时复用 `ARCHIVE_TIMEOUT_MS`（不新增 env）。
-13. **D13 复原触发失败的回滚口径**：`restoreToArchive` 同步调用失败 → `RESTORING → IDLE` + `currentRestore = null` + 抛可读文案（用户可再次点击）；异步失败由 `restores` 回调置 `FAILED` 并**保持 RESTORING**（可重试/警示后销毁）。fork 同步失败 → `CREATING → CREATE_FAILED + destroyedAt` + best-effort 删 PVC。
+12. **D12 restore Job 形态**：新增 `buildRestoreJobManifest()`（archiver `MODE=restore`、`RESTORE_FILE`、卷 `archive RO + target RW`、标签 `zag.cloud/storage-op-id` + `archive-role=restore`），Job 名 `zag-restore-<storageId 前 8 位>-<4 位随机后缀>`（与归档 Job 同口径，避免同存储重试撞名）；轮询状态 + 读 Pod 日志校验 `^ZAG_RESTORE_DONE$` 标记行（对齐 `ZAG_ARCHIVE_RESULT` 的整行标记）；超时复用 `ARCHIVE_TIMEOUT_MS`（不新增 env）。
+13. **D13 复原触发失败的回滚口径（返工修订）**：`restoreToArchive` 同步调用失败**不再回滚 `RESTORING → IDLE`**（避免把可能半恢复的 PVC 暴露为可挂载）：初始路径保持 `RESTORING + currentRestore=FAILED`（可重试/警示后销毁），重试路径回写旧 `currentRestore=FAILED` 快照（对齐 D8）；遇 `OPERATION_RUNNING`/`STORAGE_IN_USE` **不回滚、保持 PENDING**，由 restores 回调/operation 对账收口。异步失败由 `restores` 回调置 `FAILED` 并保持 RESTORING；fork 同步失败 → `CREATING → CREATE_FAILED + destroyedAt + currentRestore=FAILED` + best-effort 删 PVC（异步失败同口径）。
 14. **D14 `RESTORING` 的状态门槛集中一处**：`attachStorage` 只允许 `IDLE/ARCHIVED`（不改）；`archive` 只允许 `IDLE`；`restore` 只允许 `IDLE + SUCCEEDED 归档`，重试只允许 `RESTORING + currentRestore.FAILED`；`fork` 只允许源 `currentArchive=SUCCEEDED && status ∈ {IDLE, ARCHIVED}`；`destroy` 在既有规则上追加「`RESTORING + FAILED` 允许（前端额外警示）」。
 15. **D15 复原/归档来源的展示字段**：手动归档记录 `cloudHostId=null`、`cloudHostName=null`、`fileName = buildArchiveFileName(storage.name)`；前端归档卡片对 `cloudHostName == null` 展示「手动归档」。
 16. **D16 fork 并发读取归档的失败语义**：fork 的 `archivePath` 取自触发时刻 `currentArchive.path` 快照；同工作区归档类操作由 `archiveMutex` 串行，若快照文件已被新归档原子替换，restore Job 读取失败 → fork 失败（`CREATE_FAILED`，可重试），**不静默降级为空环境**。
@@ -140,7 +140,7 @@ flowchart TD
 1. **跳过标记时序（T-SKIP4）**：`destroying` CAS 与标记同一次 `repo.update`，不存在「已 destroying 但未打标记」窗口；`destroyLocked` 的终态幂等分支与 `markExited/markFailed` 路径不写标记（D2）。`maybeStartArchive` 读到的正是最新快照（`repo.update` 返回 after）。
 2. **存储级归档（T-AR2/AR4）**：`startStorageArchive` 先校验 `storageId` 无活跃容器（`findActiveByStorage`）与无进行中操作 → 台账 `create`（`pending`）→ 锁外 `spawn` → 锁内 `runStorageArchive`：`pending → running` CAS → 回调 `RUNNING` → `ensureArchivePvc` → 建归档 Job（源 PVC RO + 归档卷 RW）→ 轮询 → 读日志解析 `ZAG_ARCHIVE_RESULT` → CAS `running → succeeded` → 删源 PVC（3 次重试，`sourcePvcReleased` 留痕）→ 回调 `SUCCEEDED`（含 `operationId`）→ 删 Job。失败/超时/标记行缺失 → `failed` + 回调 `FAILED`，**不删源 PVC、不动旧归档**。
 3. **存储级复原（T-RS4）**：`startStorageRestore`：台账 `create` → spawn → `recreateStoragePvc(storageId, sizeGi, storageClass)`（删残留 → 轮询消失 → ensure）→ 建 restore Job（`archive RO` + `target RW`，`RESTORE_FILE=archivePath`）→ 轮询 + 校验 `ZAG_RESTORE_DONE` → CAS `succeeded` → 回调 restores `SUCCEEDED`；失败 → `failed` + 回调 `FAILED`（目标 PVC 可能是半恢复态，重试整体删除重建，D12）。
-4. **互斥（T-OP1）**：存储级操作与容器级归档/用量/清理共用 `archiveMutex`（key = workspaceId）与 `awaitCleanup`；同存储进行中由部分唯一索引拒绝（409 `OPERATION_RUNNING`）。`deleteStorage`/`cleanup` 的 `findInflightArchive` 同时查台账，避免删除正在被归档/复原的卷。
+4. **互斥（T-OP1）**：存储级操作与容器级归档/用量/清理共用 `archiveMutex`（key = workspaceId）与 `awaitCleanup`；同存储进行中由部分唯一索引拒绝（409 `OPERATION_RUNNING`）。`deleteStorage`/`cleanup` 同时检查容器级归档（`findInflightArchive`）与存储级台账（`findInflightOperation`），避免删除正在被归档/复原的卷。
 5. **巡检（T-OP1/T-OP2）**：`reconcileStorageOperations(now)`：`pending/running` 超 `ARCHIVE_TIMEOUT_MS` → `failed` + 回调；本进程无执行任务（重启）→ 重跑（归档：源卷未删，安全；复原：整体删重建）；终态且 `callbackDeliveredAt=null` → 重投一次。
 
 ### 验收 checklist
@@ -204,7 +204,7 @@ stateDiagram-v2
 
 ### 关键实现要点
 
-1. **`archive` 失败回滚（D8）**：控制面同步失败 → `ARCHIVING → IDLE` 并**回写旧 `currentArchive`**；错误映射 `storage is not archivable`（非 IDLE）、`storage is archiving`（控制面 409）。
+1. **`archive` 失败回滚（D8）**：控制面同步失败 → `ARCHIVING → IDLE` 并**回写旧 `currentArchive`**；错误映射 `storage is not archivable`（非 IDLE）、`storage is archiving`（控制面 409）。`restoreToArchive` 同步失败**保持 RESTORING**（初始置 `currentRestore=FAILED`、重试回写旧 FAILED 快照；`OPERATION_RUNNING`/`STORAGE_IN_USE` 保持 PENDING），与 PRD 风险表「复原失败不可挂载」一致（返工修订 D13）。
 2. **`retryArchive` 分流（D6）**：`currentArchive.containerId == null` → 生成新 `operationId`/`archiveId`/`fileName`，调 `archiveStorageOperation`，成功后占位 `currentArchive`（PENDING，保留 `operationId`）；否则走既有 `triggerArchive(containerId)`。
 3. **`reconcileARCHIVING` / `reconcileRESTORING`（D7）**：存储级来源按 `operationId` 查询补齐；容器级来源保持 `getArchive`。均限 20 条/轮、异常吞掉并 warn。
 4. **terminal 幂等**：`detachToIdle` 只命中 `ATTACHED`，terminal 重投/乱序不重复推进；`archiveSkipped` 与 `archiveStatus` 同时存在时以 `archiveSkipped` 优先（cloud-controller 不会同时产出，防御式）。

@@ -54,6 +54,7 @@ export default function StopCloudHostDialog({
   const [stopping, setStopping] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [autoStopFailed, setAutoStopFailed] = useState(false)
+  const [archiveStorage, setArchiveStorage] = useState(true)
   const autoStopRef = useRef(false)
   const [stopCloudHost] = useMutation<StopCloudHostMutation>(STOP_CLOUD_HOST)
 
@@ -67,6 +68,11 @@ export default function StopCloudHostDialog({
   )
 
   const impact: CloudHostStopImpactData | undefined = data?.cloudHostStopImpact
+  const storage = impact?.storage ?? null
+  const storageId = storage?.id ?? null
+  const storageStatus = storage?.status ?? null
+  // 仅「已挂载」的存储可归档；未挂载完成时不渲染可选值、不下发该字段。
+  const canArchiveStorage = storageStatus === 'ATTACHED'
 
   useEffect(() => {
     if (!open) {
@@ -74,15 +80,26 @@ export default function StopCloudHostDialog({
       setStopping(false)
       setError(null)
       setAutoStopFailed(false)
+      setArchiveStorage(true)
     }
   }, [open])
+
+  // 默认勾选归档；存储尚未挂载完成时关闭勾选且不下发（服务端按原状态回滚）。
+  useEffect(() => {
+    if (storageStatus) setArchiveStorage(storageStatus === 'ATTACHED')
+    else setArchiveStorage(true)
+  }, [storageId, storageStatus])
 
   const handleStop = useCallback(async (force: boolean) => {
     setStopping(true)
     setError(null)
     try {
       const { data: result } = await stopCloudHost({
-        variables: { id: cloudHost.id, force },
+        variables: {
+          id: cloudHost.id,
+          force,
+          ...(storage && canArchiveStorage ? { archiveStorage } : {}),
+        },
       })
       const stopped = result?.stopCloudHost
       if (!stopped) {
@@ -106,12 +123,14 @@ export default function StopCloudHostDialog({
     } finally {
       setStopping(false)
     }
-  }, [cloudHost.id, onStopped, stopCloudHost, refetch])
+  }, [cloudHost.id, onStopped, stopCloudHost, refetch, storage, canArchiveStorage, archiveStorage])
 
-  // 无活动会话：直接停止，不展示告警
+  // 无活动会话且未挂载云存储：直接停止，不展示告警。
+  // 挂载云存储时必须展示确认区（含归档勾选项），不自动跳过（D1）。
   useEffect(() => {
     if (!open || loading || !impact) return
     if (impact.activeSessionCount > 0) return
+    if (impact.storage) return
     if (autoStopRef.current || autoStopFailed) return
     autoStopRef.current = true
     void handleStop(false)
@@ -119,6 +138,7 @@ export default function StopCloudHostDialog({
 
   const hasActiveSessions = (impact?.activeSessionCount ?? 0) > 0
   const sessions = impact?.sessions ?? []
+  const needsConfirm = hasActiveSessions || Boolean(storage) || autoStopFailed
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose() }}>
@@ -169,8 +189,34 @@ export default function StopCloudHostDialog({
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
-            正在停止云电脑...
+            {storage ? '请确认停止选项后继续' : '正在停止云电脑...'}
           </p>
+        )}
+
+        {storage && (
+          <div className="space-y-2 rounded-md border border-border p-3">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                aria-label="归档云存储"
+                checked={canArchiveStorage && archiveStorage}
+                disabled={!canArchiveStorage || stopping}
+                onChange={(event) => setArchiveStorage(event.target.checked)}
+              />
+              <span className="min-w-0 break-words">
+                停止时归档云存储（{storage.name}）
+              </span>
+            </label>
+            <p className="text-xs text-muted-foreground">
+              勾选：归档后按半价计费；不勾选：存储回到待挂载并继续全价计费，数据原样保留
+            </p>
+            {!canArchiveStorage && (
+              <p className="text-xs text-muted-foreground">
+                存储尚未挂载完成，停止后按原状态回滚（不归档）
+              </p>
+            )}
+          </div>
         )}
 
         {error && (
@@ -183,22 +229,12 @@ export default function StopCloudHostDialog({
           <Button type="button" variant="outline" onClick={onClose} disabled={stopping}>
             取消
           </Button>
-          {hasActiveSessions && (
+          {needsConfirm && (
             <Button
               type="button"
               variant="destructive"
               disabled={stopping}
-              onClick={() => { void handleStop(true) }}
-            >
-              {stopping ? '停止中...' : '继续停止'}
-            </Button>
-          )}
-          {!hasActiveSessions && autoStopFailed && (
-            <Button
-              type="button"
-              variant="destructive"
-              disabled={stopping}
-              onClick={() => { void handleStop(true) }}
+              onClick={() => { void handleStop(hasActiveSessions) }}
             >
               {stopping ? '停止中...' : '继续停止'}
             </Button>

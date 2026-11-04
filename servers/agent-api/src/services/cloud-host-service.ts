@@ -92,6 +92,8 @@ export interface CloudHostStopImpact {
     status: string;
     acpServerType: string;
   }>;
+  /** 当前挂载的云存储摘要；未挂载为 null（停止对话框据此展示归档勾选项）。 */
+  storage: Doc | null;
 }
 
 export interface TerminalCallbackInput {
@@ -103,6 +105,8 @@ export interface TerminalCallbackInput {
     archiveStatus?: string | null;
     /** cloud-controller 本次归档 id（新周期占位/旧回调判定用，可缺省）。 */
     archiveId?: string | null;
+    /** 本次销毁显式跳过归档（仅 true 时携带）。 */
+    archiveSkipped?: boolean | null;
   } | null;
 }
 
@@ -620,6 +624,8 @@ export class CloudHostService {
     })
       .sort({ createdAt: -1 })
       .lean();
+    const storageId = host.storageId ? String(host.storageId) : null;
+    const storage = storageId ? await this.storageService.getSummary(storageId) : null;
     return {
       activeSessionCount: sessions.length,
       sessionsWillBeLost: sessions.length > 0,
@@ -629,6 +635,7 @@ export class CloudHostService {
         status: String(session.status ?? ''),
         acpServerType: String(session.acpServerType ?? ''),
       })),
+      storage,
     };
   }
 
@@ -644,7 +651,12 @@ export class CloudHostService {
     ]);
   }
 
-  async stop(id: string, userId: string, force?: boolean): Promise<Doc> {
+  async stop(
+    id: string,
+    userId: string,
+    force?: boolean,
+    archiveStorage?: boolean | null,
+  ): Promise<Doc> {
     return withSpan('cloudhost.destroy', { cloudHostId: id, userId }, () =>
       this.hostMutex.runExclusive(`host:${id}`, async () => {
       const host = await this.findOwnedHost(id, userId);
@@ -685,7 +697,16 @@ export class CloudHostService {
       const containerId = (stopping as Doc).containerId;
       if (containerId) {
         try {
-          await this.controllerClient.destroyContainer(String(containerId));
+          // D4：仅「挂载云存储 + 显式不归档」时下发 `storageArchive:false`；
+          // true/缺省/未挂载保持旧报文形状（逐字段等价，含调用参数形态）。
+          const storageId = (stopping as Doc).storageId;
+          if (storageId && archiveStorage === false) {
+            await this.controllerClient.destroyContainer(String(containerId), {
+              storageArchive: false,
+            });
+          } else {
+            await this.controllerClient.destroyContainer(String(containerId));
+          }
         } catch {
           // 停止失败保持 STOPPING 可重试；会话已 ENDED 不回滚
           throw new Error('control plane unavailable');
@@ -953,6 +974,12 @@ export class CloudHostService {
     try {
       if (!host.readyAt) {
         await this.storageService.releaseStorage(storageId, id);
+        return;
+      }
+      // D3：显式跳过归档（destroy storageArchive:false）→ 恒回 IDLE（保留数据与全价），
+      // 不回滚到 attachFromStatus（避免把未归档的新数据错误表达为「内容=归档」）。
+      if (input.storage?.archiveSkipped === true) {
+        await this.storageService.detachToIdle(storageId, id);
         return;
       }
       const archiveStatus = input.storage?.archiveStatus;

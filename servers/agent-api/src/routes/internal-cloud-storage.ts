@@ -60,6 +60,7 @@ function parseArchiveBody(body: unknown): {
       failureReason: typeof value.failureReason === 'string' ? value.failureReason : null,
       sourcePvcReleased:
         typeof value.sourcePvcReleased === 'boolean' ? value.sourcePvcReleased : null,
+      ...(typeof value.operationId === 'string' ? { operationId: value.operationId } : {}),
     },
   };
 }
@@ -123,6 +124,58 @@ internalCloudStorageRouter.post('/:storageId/usage', async (req: Request, res: R
     logger.error(
       { event: 'usage-callback-failed', storageId, err },
       'cloud storage usage callback failed',
+    );
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  }
+});
+
+/**
+ * 复原回调（契约 A.2.13）：`POST /internal/cloud-storages/:storageId/restores`
+ * 按 operationId 幂等、终态单调；非法 body 400，存储不存在 404。
+ */
+internalCloudStorageRouter.post('/:storageId/restores', async (req: Request, res: Response) => {
+  const storageId = String(req.params.storageId);
+  if (!mongoose.isValidObjectId(storageId)) {
+    res.status(404).json({ error: 'NOT_FOUND' });
+    return;
+  }
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const operationId = typeof body.operationId === 'string' ? body.operationId.trim() : '';
+  const status = body.status;
+  if (
+    !operationId ||
+    (status !== 'RUNNING' && status !== 'SUCCEEDED' && status !== 'FAILED')
+  ) {
+    res.status(400).json({ error: 'INVALID_BODY' });
+    return;
+  }
+  const usageBytes = body.usageBytes;
+  if (
+    usageBytes !== undefined &&
+    usageBytes !== null &&
+    (typeof usageBytes !== 'number' || !Number.isFinite(usageBytes) || usageBytes < 0)
+  ) {
+    res.status(400).json({ error: 'INVALID_BODY' });
+    return;
+  }
+  try {
+    const result = await cloudStorageService.handleRestoreCallback(storageId, {
+      operationId,
+      status,
+      usageBytes: typeof usageBytes === 'number' ? usageBytes : null,
+      startedAt: typeof body.startedAt === 'string' ? body.startedAt : null,
+      finishedAt: typeof body.finishedAt === 'string' ? body.finishedAt : null,
+      failureReason: typeof body.failureReason === 'string' ? body.failureReason : null,
+    });
+    if (!result) {
+      res.status(404).json({ error: 'NOT_FOUND' });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error(
+      { event: 'restore-callback-failed', storageId, err },
+      'cloud storage restore callback failed',
     );
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   }

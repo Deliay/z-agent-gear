@@ -128,11 +128,22 @@ export type CloudStorageStatus =
   | 'ATTACHED'
   | 'ARCHIVING'
   | 'ARCHIVED'
+  | 'RESTORING'
   | 'DESTROYING'
   | 'DESTROYED'
   | 'CREATE_FAILED'
 
 export type CloudStorageArchiveStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+
+export type CloudStorageRestoreStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED'
+
+export interface CloudStorageRestoreData {
+  id: string
+  status: CloudStorageRestoreStatus
+  startedAt?: string | null
+  finishedAt?: string | null
+  failureReason?: string | null
+}
 
 export interface CloudStorageCreatorData {
   id: string
@@ -177,6 +188,8 @@ export interface CloudStorageData {
   attachedCloudHostName: string | null
   attachedAt: string | null
   currentArchive: CloudStorageArchiveData | null
+  currentRestore?: CloudStorageRestoreData | null
+  forkedFromStorageId?: string | null
   archiveSpace: CloudStorageArchiveSpaceData
   failureReason: string | null
   destroyedAt: string | null
@@ -243,6 +256,18 @@ export interface RetryCloudStorageArchiveMutation {
 
 export interface RefreshCloudStorageUsageMutation {
   refreshCloudStorageUsage: CloudStorageData
+}
+
+export interface ArchiveCloudStorageMutation {
+  archiveCloudStorage: CloudStorageData
+}
+
+export interface RestoreCloudStorageToArchiveMutation {
+  restoreCloudStorageToArchive: CloudStorageData
+}
+
+export interface ForkCloudStorageMutation {
+  forkCloudStorage: CloudStorageData
 }
 
 /** 前台云电脑（contracts/cloud-host.graphql）；非云电脑控制器为 null */
@@ -374,6 +399,7 @@ export interface CloudHostStopImpactData {
   activeSessionCount: number
   sessionsWillBeLost: boolean
   sessions: CloudHostSessionSummaryData[]
+  storage?: CloudStorageSummaryData | null
 }
 
 export interface GetCloudHostCapabilitiesQuery {

@@ -164,6 +164,12 @@ const cloudContainerSchema = new mongoose.Schema(
     storageArchiveFinishedAt: { type: Date, default: null },
     /** 归档失败原因。 */
     storageArchiveFailure: { type: String, default: null },
+    /**
+     * 本次销毁显式跳过归档（destroy body `storageArchive:false`）：
+     * 在 `destroying` CAS 的同一次写入落库；`maybeStartArchive` / 巡检收口尊重该标记。
+     * 历史行 null 容忍；显式 `startArchive`（手动重试）不受其限制。
+     */
+    storageArchiveSkipped: { type: Boolean, default: null },
   },
   { timestamps: true, collection: 'cloudcontainers' },
 );
