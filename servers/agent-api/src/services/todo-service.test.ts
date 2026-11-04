@@ -32,6 +32,7 @@ vi.mock('../models/workspace.js', () => ({
 }));
 
 import { TodoService } from './todo-service.js';
+import { runWithWorkspace } from './workspace-context.js';
 import { TodoItem } from '../models/todo-item.js';
 import { Session } from '../models/session.js';
 import { User } from '../models/user.js';
@@ -611,6 +612,27 @@ describe('TodoService', () => {
         { $set: { permissionTimeoutAction: 'reject' } },
       );
       expect(result).toBe(true);
+    });
+
+    it('T-TODO-TEAM: 工作区上下文内可更新他人会话的超时设置', async () => {
+      vi.mocked(Session.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
+
+      await runWithWorkspace(
+        {
+          id: 'ws-team',
+          tenantId: 'tenant-team',
+          type: 'normal',
+          role: 'developer',
+          readOnly: false,
+          globalWorkspaceId: 'ws-global',
+        },
+        () => service.updatePermissionTimeout('user-1', 'sess-1', 'reject'),
+      );
+
+      expect(Session.updateOne).toHaveBeenCalledWith(
+        { _id: 'sess-1' },
+        { $set: { permissionTimeoutAction: 'reject' } },
+      );
     });
 
     it('should return false when sessionId is null', async () => {

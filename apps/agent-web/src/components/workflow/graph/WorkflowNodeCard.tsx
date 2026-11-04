@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { NodeProps } from '@xyflow/react'
+import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { Loader2, RotateCcw } from 'lucide-react'
 import HumanNodeActions from '../HumanNodeActions'
 import { NODE_STATUS_LABELS, NODE_STATUS_VISUAL } from '../WorkflowNodeTreeConstants'
@@ -47,6 +47,20 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
         aria-hidden
         data-testid="node-status-spine"
         className={`absolute inset-y-0 left-0 w-1 rounded-l-lg ${visual.spine}`}
+      />
+
+      {/* React Flow 连线锚点：竖向布局，入边在顶、出边在底（不可交互、视觉隐藏） */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        isConnectable={false}
+        className="!size-1 !border-0 !bg-transparent"
+      />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        isConnectable={false}
+        className="!size-1 !border-0 !bg-transparent"
       />
 
       <button

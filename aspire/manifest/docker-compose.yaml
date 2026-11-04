@@ -26,19 +26,6 @@ services:
       - "6379"
     networks:
       - "aspire"
-  otel-collector:
-    image: "otel/opentelemetry-collector-contrib:latest"
-    expose:
-      - "4317"
-      - "4318"
-    volumes:
-      - type: "bind"
-        target: "/etc/otelcol-contrib/config.yaml"
-        source: "${OTEL_COLLECTOR_BINDMOUNT_0}"
-        read_only: true
-    networks:
-      - "aspire"
-    restart: "unless-stopped"
   rabbitmq:
     image: "registry.cn-hangzhou.aliyuncs.com/zero-tools/rabbitmq:3-management"
     environment:
@@ -69,8 +56,6 @@ services:
       NODE_ENV: "production"
       NODE_OPTIONS: "--import tsx"
       LOG_LEVEL: "${LOG_LEVEL}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_ENDPOINT}"
-      OTEL_TRACES_SAMPLER_ARG: "${OTEL_SAMPLE_ARG}"
       PORT: "8001"
       ConnectionStrings__mongodb: "mongodb://admin:${MONGODB_PASSWORD}@mongodb:27017/?authSource=admin&authMechanism=SCRAM-SHA-256"
       MONGODB_HOST: "mongodb"
@@ -96,8 +81,6 @@ services:
       NODE_ENV: "production"
       NODE_OPTIONS: "--import tsx"
       LOG_LEVEL: "${LOG_LEVEL}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_ENDPOINT}"
-      OTEL_TRACES_SAMPLER_ARG: "${OTEL_SAMPLE_ARG}"
       CORS_ORIGIN: "${CORS_ORIGIN}"
       JWT_SECRET: "${JWT_SECRET}"
       MCP_ENDPOINT_JWT_SECRET: "${MCP_JWT_SECRET}"
@@ -143,8 +126,6 @@ services:
       NODE_ENV: "production"
       INTERNAL_API_TOKEN: "${INTERNAL_API_TOKEN}"
       LOG_LEVEL: "${LOG_LEVEL}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_ENDPOINT}"
-      OTEL_TRACES_SAMPLER_ARG: "${OTEL_SAMPLE_ARG}"
       K8S_NAMESPACE: "zag-cloud"
       WORKER_IMAGE: "${WORKER_IMAGE}"
       PUBLIC_WS_ENDPOINT: "${PUBLIC_WS_ENDPOINT}"
@@ -195,8 +176,6 @@ services:
       NODE_ENV: "production"
       ADMIN_JWT_SECRET: "${ADMIN_JWT_SECRET}"
       LOG_LEVEL: "${LOG_LEVEL}"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "${OTEL_ENDPOINT}"
-      OTEL_TRACES_SAMPLER_ARG: "${OTEL_SAMPLE_ARG}"
       CREDENTIAL_ENCRYPTION_KEY: "${CREDENTIAL_ENCRYPTION_KEY}"
       ADMIN_INITIAL_PASSWORD: "${ADMIN_INITIAL_PASSWORD}"
       CORS_ORIGIN: "${CORS_ORIGIN}"

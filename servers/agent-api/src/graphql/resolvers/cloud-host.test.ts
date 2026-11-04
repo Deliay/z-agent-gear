@@ -32,6 +32,7 @@ import { cloudHostService } from '../../services/cloud-host-service.js';
 import { CloudHost } from '../../models/cloud-host.js';
 import { Session } from '../../models/session.js';
 import { billingClient } from '../../services/billing-client.js';
+import { runWithWorkspace } from '../../services/workspace-context.js';
 import { logger as rootLogger } from '../../observability/logger.js';
 
 const context = { currentUser: null } as never;
@@ -166,6 +167,65 @@ describe('cloudHostResolvers.Query.cloudHost', () => {
     );
     expect(vi.mocked(cloudHostService.create).mock.calls[0][1]).toMatchObject({
       githubAccountId: '507f1f77bcf86cd799439099',
+    });
+  });
+});
+
+describe('cloudHostResolvers.Controller.cloudHost', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('T-CH-TEAM1: 工作区上下文内不按 userId 过滤（成员可见他人创建的云电脑）', async () => {
+    vi.mocked(CloudHost.findOne).mockReturnValue(
+      chain({
+        _id: HOST_ID,
+        userId: 'user-2',
+        controllerId: 'ctrl-1',
+        status: 'RUNNING',
+        deletedAt: null,
+      }) as never,
+    );
+    vi.mocked(Session.countDocuments).mockResolvedValue(3 as never);
+
+    const result = await runWithWorkspace(
+      {
+        id: 'ws-team',
+        tenantId: 'tenant-team',
+        type: 'normal',
+        role: 'developer',
+        readOnly: false,
+        globalWorkspaceId: 'ws-global',
+      },
+      () =>
+        cloudHostResolvers.Controller.cloudHost(
+          { id: 'ctrl-1', type: 'cloud' },
+          {},
+          authContext,
+        ),
+    );
+
+    expect(CloudHost.findOne).toHaveBeenCalledWith({ controllerId: 'ctrl-1', deletedAt: null });
+    expect(Session.countDocuments).toHaveBeenCalledWith({
+      controllerId: 'ctrl-1',
+      status: { $ne: 'ended' },
+    });
+    expect(result).toMatchObject({ id: HOST_ID, userId: 'user-2' });
+  });
+
+  it('T-CH-TEAM2: 无工作区上下文（引擎/内部链路）仍保留 userId 归属校验', async () => {
+    vi.mocked(CloudHost.findOne).mockReturnValue(chain(null) as never);
+
+    await cloudHostResolvers.Controller.cloudHost(
+      { id: 'ctrl-1', type: 'cloud' },
+      {},
+      authContext,
+    );
+
+    expect(CloudHost.findOne).toHaveBeenCalledWith({
+      controllerId: 'ctrl-1',
+      userId: 'user-1',
+      deletedAt: null,
     });
   });
 });

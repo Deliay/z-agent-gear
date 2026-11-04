@@ -381,15 +381,17 @@ export const cloudHostResolvers = {
     cloudHost: async (parent: Doc, _args: unknown, context: AuthContext) => {
       const userId = context.currentUser?.id;
       if (!userId || parent.type !== 'cloud') return null;
+      // 工作区上下文内按工作区可见集查询（团队成员可查看他人创建的云电脑）；
+      // 无上下文（引擎/内部/迁移）仍回退 userId 归属校验。
       const host = await CloudHost.findOne({
         controllerId: String(parent.id),
-        userId,
+        ...actorFilter(userId),
         deletedAt: null,
       }).lean();
       if (!host) return null;
       const activeSessionCount = await Session.countDocuments({
         controllerId: String(parent.id),
-        userId,
+        ...actorFilter(userId),
         status: { $ne: 'ended' },
       });
       return cloudHostService.mapCloudHost(host as Doc, activeSessionCount);

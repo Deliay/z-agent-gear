@@ -150,6 +150,7 @@ flowchart LR
 - [[draft/20261028-multi-tenant-phase2.md]] — 多租户二期（Team 类型租户：后台创建、成员须为已存在账户；租户角色两级：管理员=管理租户全部资源/全部工作区可见/可建工作区/按帐号名搜索添加成员/变更角色，开发=不可建工作区/读写删除所在普通工作区资源/全局工作区只读，last-admin 保护、personal 唯一成员恒管理员；默认「全局工作区」不可删除/改名/无成员列表，仅管理员可创建普通工作区（0..n 成员）；普通工作区可用全局工作区模型/Github 绑定，Commit 设置三段继承；团队消费计入团队租户）
 - [[draft/20261028-mongodb-workload.md]] — 增加工作负载「MongoDB」（原生 apt 经内网源安装 MongoDB 8.0：工作负载目录新增预制标准工作负载、安装成功以 mongod --version 硬校验且不拉起实例、幂等可重复、失败可恢复）
 - [[draft/20261028-playwright-workload.md]] — 增加工作负载「Playwright」（新增「Playwright」预制工作负载：安装测试工具与内置浏览器 Chromium/Firefox/WebKit、浏览器下载走内网 playwright-proxy 且下载地址可按次调整、三入口安装与幂等可用保障）
+- [[draft/20261029-interrupted-call-token-billing.md]] — 调用中断的 token 计费优化（中断调用输入 token 按 20% 未缓存 + 80% 已缓存计价、输出保持全价，明细保留中断标注并体现输入两段拆分）
 - [[draft/20261030-ui-optimization-phase4.md]] — UI 优化四期（侧边栏与工作流视图：侧边栏 VSCode 风格可折叠分区「主机/工作流/会话/网关」与跨环境聚合、拖拽调宽、主机层级缩进与空态收敛、人类节点侧边抽屉；工作流卡片两行化、图表竖向布局画布占满、节点卡片信息增强与主题跟随、黑板/PR/追加提示词资源上图、节点状态整体配色与加粗箭头连线）
 - [[draft/20261029-pnpm-workload-and-harness-optional.md]] — 云电脑组件安装切换 pnpm 与工作负载 Harness 可选化（云电脑内组件与工作负载（含 harness）安装统一由 npm 改为 pnpm、环境预装 pnpm；已运行云电脑设置-工作负载显示 harness 为可选工作负载、可后期按需安装；创建时 harness 改为可选可补装）
 - [[draft/20261030-unified-logging-and-otel.md]] — 规范化日志与全链路可观测性（全运行时统一结构化日志并取消自由文本打印、跨服务与云电脑 Job 的全链路追踪、请求标识与脱敏、级别/采样/外发开关可控）

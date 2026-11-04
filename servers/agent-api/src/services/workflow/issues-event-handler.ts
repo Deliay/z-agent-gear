@@ -20,7 +20,7 @@ import {
 import { controllerWorkspaceService } from '../controller-workspace.js';
 import { githubService } from '../github.js';
 import { KeyedMutex } from '../keyed-mutex.js';
-import { runWithWorkspace, type WorkspaceContext } from '../workspace-context.js';
+import { actorFilter, runWithWorkspace, type WorkspaceContext } from '../workspace-context.js';
 import { workspaceService } from '../workspace-service.js';
 import { normalizeWorkspacePrefix, resolveClonePath } from '../workspace-path.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
@@ -412,7 +412,10 @@ export class IssuesTriggerRunner {
         return;
       }
       const configuredWorkflowId = String(trigger.configuredWorkflowId);
-      const workflow = await ConfiguredWorkflow.findOne({ _id: configuredWorkflowId, userId }).lean();
+      const workflow = await ConfiguredWorkflow.findOne({
+        _id: configuredWorkflowId,
+        ...actorFilter(userId),
+      }).lean();
       if (!workflow) {
         await this.fail(trigger._id, 'workflow not found');
         return;

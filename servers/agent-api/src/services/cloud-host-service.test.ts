@@ -370,6 +370,34 @@ describe('CloudHostService', () => {
       );
     });
 
+    it('T-CH-GH2: 工作区上下文内可选用本工作区共享的 Github 账号（不按 userId 过滤）', async () => {
+      setupCreateSuccess();
+      vi.mocked(GitHubAccount.findOne).mockReturnValue(
+        chain({ _id: '507f1f77bcf86cd799439099' }) as never,
+      );
+
+      await runWithWorkspace(
+        {
+          id: 'ws-team',
+          tenantId: 'tenant-team',
+          type: 'normal',
+          role: 'developer',
+          readOnly: false,
+          globalWorkspaceId: 'ws-global',
+        },
+        () =>
+          service.create('user-1', {
+            name: 'shared-gh',
+            harnessTypes: ['OPENCODE'],
+            githubAccountId: '507f1f77bcf86cd799439099',
+          }),
+      );
+
+      expect(GitHubAccount.findOne).toHaveBeenCalledWith({
+        _id: '507f1f77bcf86cd799439099',
+      });
+    });
+
     it('T-CH-C7: allows consecutive creates without one-active-host limit', async () => {
       setupCreateSuccess();
       vi.mocked(cloudWorkloadReader.findHarnessPreset).mockResolvedValue({} as never);

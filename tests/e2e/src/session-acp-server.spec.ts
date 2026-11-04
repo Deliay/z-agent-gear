@@ -527,7 +527,7 @@ test.describe('Session ACP Server Type', () => {
     // Open the imported session from the sidebar sessions list（控制器默认展开，勿点击折叠）
     await page.goto('/sessions');
     const sidebar = page.locator('nav[aria-label="Sidebar"]');
-    const historyLink = sidebar.getByRole('link', { name: 'History - Delete Me', exact: true });
+    const historyLink = sidebar.getByRole('link', { name: /History - Delete Me/ }).first();
     await expect(historyLink).toBeVisible({ timeout: 10000 });
     await historyLink.click();
 

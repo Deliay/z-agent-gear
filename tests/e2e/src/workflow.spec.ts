@@ -8,6 +8,18 @@ const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4
 
 const sidebar = () => 'nav[aria-label="Sidebar"]';
 
+/**
+ * 打开侧边栏「实例化工作流」入口。
+ * UI 四期起该「+」先弹出控制器选择菜单（ControllerPicker），选定后才打开实例化对话框。
+ */
+async function openInstantiateDialog(page: Page): Promise<void> {
+  const nav = page.locator(sidebar());
+  await nav.getByRole('button', { name: '实例化工作流' }).click();
+  const menu = nav.getByRole('menu');
+  await expect(menu).toBeVisible({ timeout: 5000 });
+  await menu.getByRole('menuitem').first().click();
+}
+
 // ---------------------------------------------------------------------------
 // Fake controller（带工作流事件捕获 + 自动应答）
 // ---------------------------------------------------------------------------
@@ -721,7 +733,7 @@ test.describe('Workflow E2E', () => {
 
     // 侧边栏展开 controller → workspace → 工作流分组 → 实例化入口
     // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
-    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    await openInstantiateDialog(page);
 
     // 实例化对话框：选择已配置工作流并命名实例
     const dialog = page.getByRole('dialog');
@@ -1620,7 +1632,7 @@ test.describe('Workflow E2E', () => {
     await loginViaUI(page, username);
     const nav = page.locator(sidebar());
     // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
-    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    await openInstantiateDialog(page);
 
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText('实例化工作流')).toBeVisible();
@@ -1672,7 +1684,7 @@ test.describe('Workflow E2E', () => {
     await loginViaUI(page, username);
     const nav = page.locator(sidebar());
     // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
-    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    await openInstantiateDialog(page);
 
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText('实例化工作流')).toBeVisible();
@@ -2051,7 +2063,7 @@ test.describe('Workflow E2E', () => {
 
     // 侧边栏展开 controller → workspace → 工作流分组 → 实例化入口
     // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
-    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    await openInstantiateDialog(page);
 
     // 打开实例化对话框
     const dialog = page.getByRole('dialog');
@@ -2095,7 +2107,7 @@ test.describe('Workflow E2E', () => {
     await page.waitForTimeout(500);
 
     // 重新通过侧边栏打开对话框（控制器默认展开，对话框自动选择首个工作区）
-    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    await openInstantiateDialog(page);
     await expect(dialog).toBeVisible({ timeout: 10000 });
 
     // 选择配置工作流
@@ -2123,7 +2135,7 @@ test.describe('Workflow E2E', () => {
 
     // 侧边栏展开 controller → workspace → 工作流分组 → 实例化入口
     // 控制器默认展开；实例化对话框会自动选择首个可用工作区。
-    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    await openInstantiateDialog(page);
 
     // 打开实例化对话框
     const dialog = page.getByRole('dialog');
@@ -2433,7 +2445,7 @@ test.describe('Workflow E2E', () => {
 
     await loginViaUI(page, username);
     const nav = page.locator(sidebar());
-    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    await openInstantiateDialog(page);
     let dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('button', { name: firstConfig })).toBeVisible({ timeout: 15000 });
     await dialog.getByRole('button', { name: '取消' }).click();
@@ -2442,7 +2454,7 @@ test.describe('Workflow E2E', () => {
     await configureFromTemplate(page, token, templateId, controller.controllerId, secondConfig);
 
     // 重新打开「+」：打开即 refetch，新工作流无需刷新页面即可见
-    await nav.getByRole('button', { name: '实例化工作流' }).click();
+    await openInstantiateDialog(page);
     dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('button', { name: secondConfig })).toBeVisible({ timeout: 15000 });
     await expect(dialog.getByRole('button', { name: firstConfig })).toBeVisible();

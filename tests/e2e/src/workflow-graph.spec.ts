@@ -145,7 +145,7 @@ test.describe('工作流图表 UI 四期', () => {
       const edge = edges.nth(index)
       const strokeWidth = await edge.evaluate((el) => Number(getComputedStyle(el).strokeWidth.replace('px', '')))
       expect(strokeWidth).toBeGreaterThanOrEqual(2)
-      await expect(edge).toHaveAttribute('marker-end', /url\(#/)
+      await expect(edge).toHaveAttribute('marker-end', /url\(['"]?#/)
     }
 
     env.controllers.forEach((controller) => controller.disconnect())
@@ -287,7 +287,8 @@ test.describe('工作流图表 UI 四期', () => {
     const inputCard = page.locator(nodeCard(input.id))
     await expect(inputCard.getByTestId('resource-chip-blackboard')).toContainText('需求说明')
     await expect(inputCard.getByText('PR')).toBeVisible()
-    await expect(inputCard.getByText('检查项')).toBeVisible()
+    // 徽标区为外链；资源小卡片同文案由 resource-chip-pr 承载，避免 strict 冲突
+    await expect(inputCard.getByRole('link', { name: '检查项' })).toBeVisible()
     await expect(page.locator(nodeCard(review.id)).getByTestId('resource-chip-prompt')).toContainText('review')
     await expect(page.locator('[data-testid="instance-resource-row"]')).toContainText('legacy-无法归属-key')
 
