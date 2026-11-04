@@ -281,10 +281,12 @@ test.describe('ACP Elicitation E2E', () => {
     // 必答项未填时不可提交
     await expect(dialog.getByRole('button', { name: '提交' })).toBeDisabled();
 
-    await dialog.getByText('自动').click();
-    await group.getByText('自动跑测试').click();
-    await group.getByText('生成文档').click();
-    await dialog.getByRole('button', { name: '提交' }).click();
+    // 定位器一律精确匹配：'自动' 与 '自动跑测试' 存在子串包含关系，
+    // 非 exact 的 getByText 会同时命中两者（strict mode violation）
+    await dialog.getByRole('radiogroup', { name: '实施方式' }).getByText('自动', { exact: true }).click();
+    await group.getByText('自动跑测试', { exact: true }).click();
+    await group.getByText('生成文档', { exact: true }).click();
+    await dialog.getByRole('button', { name: '提交', exact: true }).click();
 
     const response = await responsePromise;
     expect(response.requestId).toBe(requestId);

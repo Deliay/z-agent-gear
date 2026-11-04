@@ -8,6 +8,8 @@ export function optionLabel(value: unknown): string {
 /**
  * 判断字段是否为 ACP question 工具的多选形态（`type: 'array'` + `items.anyOf`）。
  * `items.enum` / `items.oneOf` 数组字段属于通用 MCP 语义，不参与逗号拼接。
+ * 注：`anyOf` 与 `enum`/`oneOf` 并存的字段（真实 question 报文不会产生）按保守语义处理——
+ * 渲染走 `oneOf → anyOf → enum` 勾选组，但**不**参与拼接，提交保持数组。
  */
 export function isMultiSelectAnyOf(prop: ElicitationSchemaProperty): boolean {
   return prop.type === 'array' && Boolean(prop.items?.anyOf) && !prop.items?.enum && !prop.items?.oneOf;
