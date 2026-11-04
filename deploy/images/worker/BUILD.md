@@ -1,8 +1,9 @@
 # 默认工作容器镜像构建与自验
 
-> 构建期使用**官方公网源**（Ubuntu archive / raw.githubusercontent.com / nodejs.org / registry.npmjs.org），
-> 因此可在 GitHub Actions 等公网环境构建；所有依赖安装完成后，镜像内的 apt / nvm(Node.js) / npm 源
-> 会切换为**内网 Nexus**，供容器运行时与预制工作负载使用。
+> 构建期只使用**官方公网 Ubuntu archive**，因此可在 GitHub Actions 等公网环境构建。
+> 主目录工具链（nvm / Node.js / pnpm / agent-gear）**不在构建期安装**，由入口 `entrypoint.sh` 在容器
+> 启动时以 **worker 用户**从内网源幂等安装——这样云存储 PVC 挂载到 `/home/worker` 后组件不会丢失。
+> 构建完成后镜像内的 apt 源切换为**内网 Nexus**，供容器运行时与预制工作负载使用。
 
 ## 构建
 
@@ -13,9 +14,6 @@ docker build -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 # 运行期内网源变化时通过 --build-arg 覆盖（不影响构建期使用的官方源）
 docker build \
   --build-arg UBUNTU_MIRROR=https://nexus.internal.fffdan.com/repository/ubuntu-proxy/ \
-  --build-arg NVM_VERSION=v0.40.8 \
-  --build-arg NODEJS_DIST_MIRROR=https://nexus.internal.fffdan.com/repository/node-proxy \
-  --build-arg NODE_VERSION=24 \
   --build-arg NPM_REGISTRY=https://nexus.internal.fffdan.com/repository/npm-proxy/ \
   -t core.harbor.internal.fffdan.com/zero-tools/worker:dev .
 ```
@@ -23,10 +21,20 @@ docker build \
 | 参数 | 生效阶段 | 默认 | 说明 |
 |------|---------|------|------|
 | `UBUNTU_MIRROR` | 运行期 | 内网 `ubuntu-proxy` | 构建完成后写入 `/etc/apt/sources.list.d/ubuntu.sources` |
-| `NODEJS_DIST_MIRROR` | 运行期 | 内网 `node-proxy` | 以 `NVM_NODEJS_ORG_MIRROR` 固化，运行时 nvm 安装 Node.js 使用 |
-| `NPM_REGISTRY` | 运行期 | 内网 `npm-proxy` | 构建完成后写入 worker `~/.npmrc` 并固化为 ENV |
-| `NVM_INSTALL_URL` | 构建期 | 官方 `raw.githubusercontent.com` | 仅在构建期安装 nvm 时使用 |
-| `NODE_VERSION` | 构建期 | `24` | 由 nvm 安装的 Node.js 主版本 |
+| `NPM_REGISTRY` | 运行期 | 内网 `npm-proxy` | 固化为 ENV；entrypoint 安装 pnpm / agent-gear 与运行时工作负载使用 |
+
+> nvm / Node.js 的安装来源不再通过 `--build-arg` 传入：默认值收敛在 `entrypoint.sh`，可在运行时用
+> 同名环境变量覆盖（见下表「运行时主目录工具链参数」）。
+
+### 运行时主目录工具链参数（entrypoint 读取）
+
+| 环境变量 | 默认 | 说明 |
+|---------|------|------|
+| `NVM_INSTALL_URL` | 内网 `git.internal.fffdan.com/nvm-sh/nvm/raw/branch/master/install.sh` | nvm 安装脚本地址 |
+| `NVM_SOURCE` | 内网 `https://git.internal.fffdan.com/nvm-sh/nvm.git` | nvm git 仓库地址（安装脚本 `METHOD=git` 使用） |
+| `NVM_INSTALL_VERSION` | `master` | 安装脚本检出的 git 引用；内网镜像仅同步 master，无 tag |
+| `NODE_VERSION` | `24` | 由 nvm 安装的 Node.js 主版本 |
+| `NVM_NODEJS_ORG_MIRROR` | 内网 `node-proxy` | nvm 安装 Node.js 的发行包源 |
 
 ### .NET（apt）相关构建参数
 
@@ -51,57 +59,81 @@ docker build \
 
 构建完成后将镜像 `WORKER_IMAGE` 配置为 `core.harbor.internal.fffdan.com/zero-tools/worker:dev`（或推送后使用正式 tag）。
 
-> `NVM_INSTALL_URL` 与 `NODE_VERSION` 除构建期 `ARG` 外，还以同名 `ENV` 固化进运行时：挂载云存储
-> 遮蔽 `/home/worker` 后，入口 `bootstrap_home` 用它们重装 nvm/Node（见下文「云存储主目录自举自验」）。
-> 内网地址变化时同样可通过 `--build-arg` 覆盖，无需改 `entrypoint.sh`。
+> 主目录工具链参数由入口 `bootstrap_home` 读取：首次启动（以及挂载云存储遮蔽 `/home/worker` 后）
+> 会用它们重装 nvm/Node（见下文「云存储主目录自举自验」）。内网地址变化时可用运行时环境变量覆盖，
+> 无需改 `entrypoint.sh`；确需固化新默认值时修改 `entrypoint.sh` 顶部默认值。
 
-## 前置条件（构建期公网 / 运行期内网）
+## 前置条件（构建期公网 / 首次启动内网）
 
-镜像内**不存在** apt 的 `nodejs`/`npm`，Node.js 与 npm 全部由 nvm 提供。构建期需要可访问：
-`archive.ubuntu.com` / `security.ubuntu.com` / `raw.githubusercontent.com` / `nodejs.org` / `registry.npmjs.org`。
-构建完成后镜像内的源已切换为内网 Nexus；运行时无需公网。
+镜像内**不存在** apt 的 `nodejs`/`npm`，也**不预装** nvm / Node.js / pnpm / agent-gear。构建期只需可访问
+`archive.ubuntu.com` / `security.ubuntu.com`；构建完成后镜像内的 apt 源已切换为内网 Nexus。
+
+首次启动（以及挂载云存储后）需要内网可访问：
 
 ```bash
 for u in \
-  http://archive.ubuntu.com/ubuntu/dists/noble/Release \
-  https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh \
-  https://nodejs.org/dist/index.tab \
-  https://registry.npmjs.org/pnpm; do
+  https://git.internal.fffdan.com/nvm-sh/nvm/raw/branch/master/install.sh \
+  https://git.internal.fffdan.com/nvm-sh/nvm.git \
+  https://nexus.internal.fffdan.com/repository/node-proxy/index.tab \
+  https://nexus.internal.fffdan.com/repository/npm-proxy/pnpm; do
   printf '%s  %s\n' "$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$u")" "$u"
 done
 ```
 
-> nvm 安装脚本缺失会直接构建失败（Dockerfile 用 `. "$NVM_DIR/nvm.sh"` 断言），不会静默产出残缺镜像。
+> **不挂载云存储的云电脑同样在首次启动时走这套自举**：内网源可达时正常安装并上线，不依赖
+> `ZAG_STORAGE_HOME`。若安装源不可达：挂载云存储（`ZAG_STORAGE_HOME=1`）会快速失败并触发存储回滚；
+> 未挂载存储时入口仅告警并继续保活（等待后续重试，但首次安装失败期间无法上线）。构建阶段不再校验这些地址。
 
 ## 自验（PRD 功能点 1 验收标准：瘦身后通用能力可用）
 
+### 1) 构建产物静态核对（不启动入口）
+
 ```bash
-docker run --rm --entrypoint bash \
-  -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker \
-  -e ZAG_CONTROLLER_KEY=dummy \
-  core.harbor.internal.fffdan.com/zero-tools/worker:dev -c '
-    sudo -u worker env HOME=/home/worker \
-      PATH="/home/worker/.nvm/current/bin:/home/worker/.local/share/pnpm/bin:/home/worker/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-      bash -c "
-        node -v && npm -v && pnpm -v && npm config get registry && \
-        git --version && gh --version && \
-        agent-gear --version && agent-gear harness --help >/dev/null && \
-        { command -v claude-agent-acp || echo \"claude-agent-acp not preinstalled (expected)\"; } && \
-        { command -v codex-acp || echo \"codex-acp not preinstalled (expected)\"; }
-      "
-  '
+IMG=core.harbor.internal.fffdan.com/zero-tools/worker:dev
+docker run --rm --entrypoint bash "$IMG" -c '
+  for c in node npm pnpm agent-gear nvm; do
+    command -v "$c" >/dev/null 2>&1 && { echo "$c unexpectedly preinstalled"; exit 1; } || true
+  done
+  git --version && gh --version
+  echo "no main-home toolchain preinstalled (expected)"
+'
 ```
 
-> root 环境没有 nodejs（按设计由 worker 用户承载），因此自验命令统一经 `sudo -u worker` 并显式构造
-> `PATH`（nvm current/bin + pnpm 全局 bin + PNPM_HOME）。
+### 2) 首次启动由 entrypoint 以 worker 安装（tmpfs 模拟空主目录 / 云存储挂载）
+
+```bash
+docker run -d --name worker-bootstrap \
+  --tmpfs /home/worker:rw,exec,uid=1000,gid=1000 \
+  -e ZAG_STORAGE_HOME=1 \
+  -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker \
+  -e ZAG_CONTROLLER_KEY=dummy \
+  "$IMG"
+docker logs -f worker-bootstrap   # 期望 bootstrap_home / pnpm / agent-gear 安装锚点
+docker exec worker-bootstrap bash -lc '
+  sudo -u worker env HOME=/home/worker \
+    PATH="/home/worker/.nvm/current/bin:/home/worker/.local/share/pnpm/bin:/home/worker/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    bash -c "
+      node -v && npm -v && pnpm -v && npm config get registry && \
+      agent-gear --version && agent-gear harness --help >/dev/null && \
+      { command -v claude-agent-acp || echo \"claude-agent-acp not preinstalled (expected)\"; } && \
+      { command -v codex-acp || echo \"codex-acp not preinstalled (expected)\"; }
+    "
+'
+docker rm -f worker-bootstrap
+```
+
+> root 环境没有 nodejs（按设计由 worker 用户承载），因此运行期自验命令统一经 `sudo -u worker` 并显式
+> 构造 `PATH`（nvm current/bin + pnpm 全局 bin + PNPM_HOME）。
 
 逐项核对：
 
-- [ ] `node`、`git`、`gh` 可用；且 worker 下 `which node` 指向 `/home/worker/.nvm/current/bin/node`（root 环境无 node/npm）
-- [ ] `nvm` 可用（登录 shell 通过 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 24.x）
+- [ ] 构建产物内 `node` / `npm` / `pnpm` / `agent-gear` / `nvm` 均**未预装**；`git`、`gh` 可用
+- [ ] 首次启动日志依次出现 nvm（自定义 git 仓库）→ Node.js → pnpm → agent-gear 安装锚点
+- [ ] worker 下 `which node` 指向 `/home/worker/.nvm/current/bin/node`，root 环境无 node/npm
+- [ ] `nvm` 可用（登录 shell 通过入口写入的 `/etc/profile.d/nvm.sh` 加载），`node -v` 版本符合 `NODE_VERSION`（默认 24.x）
 - [ ] `npm config get registry` 为内网 npm 代理地址，且运行时 `NPM_REGISTRY` 环境变量已固化（`echo "$NPM_REGISTRY"`，供 Node.js 工作负载脚本读取）
 - [ ] `pnpm -v` 为 `12.16.1`，且 `PATH` 含 `/home/worker/.local/share/pnpm/bin`（pnpm 12 全局 bin 目录）
-- [ ] **镜像唯一预装全局包**为 `agent-gear`（固定 `2.16.x`，通过 `npm install -g pnpm` 自举 pnpm 后由 `pnpm add -g` 安装）；**不预装** `@agentclientprotocol/claude-agent-acp`（`command -v claude-agent-acp` 应无输出）与 `@agentclientprotocol/codex-acp`（`command -v codex-acp` 应无输出），二者由用户按需安装（agent-controller 仍保留探测与启动能力）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
+- [ ] 运行期全局包仅 `pnpm` 与 `agent-gear`；**不预装** `@agentclientprotocol/claude-agent-acp`（`command -v claude-agent-acp` 应无输出）与 `@agentclientprotocol/codex-acp`（`command -v codex-acp` 应无输出），二者由用户按需安装（agent-controller 仍保留探测与启动能力）；**不预装** `@opencode/cli`（`command -v opencode` 应无输出）、`@moonshot-ai/kimi-code`（`command -v kimi` 应无输出）与 `@deepseek-ai/dsh`（`command -v dsh` 应无输出），三者分别由 OpenCode / Kimi Code / DeepSeek Harness 工作负载安装
 - [ ] `agent-gear --version` ≥ `2.11.0`（`deepseek_harness` 的平台渠道模型注入与 `harness prepare` 分流自 2.9.0 起，`cordis.patch.yml` 的 insert 受管条目 `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起；`kimi_code` 使用前登录闸门自 2.8.0 起；云电脑双连接与 `harness prepare` 需 ≥ `2.5.0`、参数注入 ≥ `2.3.0`、`items[].required` 短路 ≥ `2.4.0`）
 
 - [ ] `agent-gear harness --help` 可见 `prepare` 子命令
@@ -126,10 +158,13 @@ grep -nE 'iptables|iproute2|fuse-overlayfs|libseccomp2|conntrack' Dockerfile && 
 # 只禁旧版安装脚本环境变量残留；三期引入的 DOTNET_APT_* 为 .NET 工作负载的配置注入（不预装任何包），允许存在
 grep -nE 'DOTNET_INSTALL_URL|ASPIRE_INSTALL_URL' Dockerfile && exit 1 || true
 grep -nE 'install_docker_shim|DOCKER_SHIM_PATH|HARBOR_PROXY|dockerd' entrypoint.sh && exit 1 || true
-echo "静态校验通过：镜像不含 Docker/.NET 预装与 shim 残留"
+# 主目录工具链（nvm/Node/pnpm/agent-gear）不得在构建期安装或固化相关 ARG/ENV
+grep -nE 'USER worker|NVM_|NODE_VERSION|NODEJS_DIST_MIRROR|PNPM_HOME|npm install -g|pnpm add -g' Dockerfile && exit 1 || true
+echo "静态校验通过：镜像不含 Docker/.NET 预装、shim 残留与主目录工具链构建期安装"
 ```
 
 - [ ] 上述 `grep` 均无命中（无 `docker-ce` / `DOCKER_APT_URL` / `install_docker_shim` / `dockerd` 等残留）
+- [ ] Dockerfile 不含 `USER worker` / `NVM_` / `NODE_VERSION` / `PNPM_HOME` / `npm install -g` / `pnpm add -g`
 - [ ] 镜像构建日志中不再出现 `docker-ce-cli` / `docker-buildx-plugin` / `containerd.io` 安装层
 
 ## 工作负载执行自验（PRD 功能点 3/5）
@@ -310,9 +345,9 @@ echo "$PLAYWRIGHT_DOWNLOAD_HOST"                      # 安装时已持久化到
 pnpm 预装与工作负载安装口径（entrypoint `ensure_pnpm` + 迁移 017/018 脚本）：
 
 ```bash
-# 镜像构建期：npm 仅用于自举 pnpm，agent-gear 由 pnpm 安装
+# 首次启动（entrypoint，以 worker 用户）：npm 仅用于自举 pnpm，agent-gear 由 pnpm 安装
 npm install -g pnpm@12.16.1
-pnpm add -g agent-gear@2.16.x
+pnpm add -g agent-gear
 # entrypoint 预装（新容器；固定版本 12.16.1）
 pnpm --version                       # 12.16.1
 echo "$PNPM_HOME"                    # /home/worker/.local/share/pnpm
@@ -419,8 +454,11 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 
 容器默认 `ENTRYPOINT` 为 `entrypoint.sh`，启动流程：
 
-1. 执行 `pnpm add -g agent-gear` 更新到最新版（失败仅告警、回退镜像内预装版本；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
-2. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
+1. `write_nvm_profile` / `write_pnpm_profile` 幂等写入登录 shell 接线；
+2. `bootstrap_home` 以 worker 用户安装 nvm（内网 git 仓库）与 Node.js；`ensure_pnpm` 用 npm 自举
+   `pnpm@12.16.1`；
+3. 执行 `pnpm add -g agent-gear` 安装 / 更新到最新版（失败仅告警；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
+4. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
 
 > 云电脑（harness）容器额外注入标准连接凭据：`ZAG_HOST_ENDPOINT` + `ZAG_HOST_KEY`（controller-api），
 > agent-gear 检测到后进入**双连接**模式（详见 `packages/agent-controller/AGENTS.md`）。`ZAG_CONTROLLER_KEY`
@@ -448,7 +486,7 @@ bash -n entrypoint.sh
 bash entrypoint.test.sh
 ```
 
-自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）、单行 JSON 日志（T-EP12）、pnpm 预装幂等与失败容忍（T-EP13/T-EP14）、云存储主目录自举（T-EP15 完整镜像 no-op / T-EP16 缺 nvm / T-EP17 仅缺 node / T-EP18 下载失败与 fail-fast）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`pnpm`/`curl`/`agent-gear` 与假 `nvm.sh`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），`curl`/`nvm` stub 只在临时目录内落地夹具产物，因此不会启动真实 dockerd、不访问网络、不触碰真实 `/home/worker`。
+自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）、单行 JSON 日志（T-EP12）、pnpm 预装幂等与失败容忍（T-EP13/T-EP14）、主目录自举（T-EP15 完整主目录 no-op / T-EP16 缺 nvm 时用自定义 git 仓库安装 / T-EP17 仅缺 node / T-EP18 下载失败与 fail-fast）、Dockerfile 不再构建期安装主目录工具链（T-EP19）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`pnpm`/`curl`/`agent-gear` 与假 `nvm.sh`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），`curl`/`nvm` stub 只在临时目录内落地夹具产物，因此不会启动真实 dockerd、不访问网络、不触碰真实 `/home/worker`。
 
 > **镜像升级要求**：云电脑双连接 / `harness prepare` 依赖 `agent-gear` ≥ `2.10.0`（harness 容器门禁），含 `deepseek_harness` 的运行需 ≥ `2.11.0`（`header-masq` 配置注入）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.10.0`（DeepSeek Harness 云电脑 ≥ `2.11.0`）的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
@@ -502,11 +540,12 @@ docker rm -f worker-keepalive
 
 ## 云存储主目录自举自验（`bootstrap_home` / `ZAG_STORAGE_HOME`）
 
-挂载云存储时 K8s 把 PVC 挂到 **`/home/worker`**，会遮蔽镜像烘焙的 `.nvm`（Node/npm）与
-`.local/share/pnpm`（pnpm/agent-gear）。入口在 `ensure_pnpm` 之前执行 `bootstrap_home`：按「产物存在且
-可执行」幂等重建（nvm.sh 可 source、`current/bin/node` 可执行），随后由既有 `ensure_pnpm` /
-`update_agent_gear` 补齐 pnpm 与 agent-gear。运行时依赖 `NVM_INSTALL_URL` / `NODE_VERSION` /
-`NPM_REGISTRY`（Dockerfile 已由同名 `ARG` 固化为 `ENV`）；未挂载存储时镜像内容完整，自举为 no-op。
+镜像不再预装主目录工具链，因此**无论是否挂载云存储**，新容器首次启动都会执行自举：
+`bootstrap_home` 按「产物存在且可执行」幂等安装 nvm（内网 git 仓库）与 Node.js，随后由
+`ensure_pnpm` / `update_agent_gear` 补齐 pnpm 与 agent-gear。挂载云存储时 K8s 把 PVC 挂到
+**`/home/worker`**，挂载内容完整（归档恢复）时自举为 no-op；不挂载云存储时 `/home/worker` 来自镜像层
+（同样为空），自举行为一致。运行时依赖 `NVM_INSTALL_URL` / `NVM_SOURCE` / `NVM_INSTALL_VERSION` /
+`NODE_VERSION` / `NVM_NODEJS_ORG_MIRROR` / `NPM_REGISTRY`（默认值在 `entrypoint.sh`，可用运行时环境变量覆盖）。
 
 ### 1) 空 `/home/worker` 起容器 → 自举成功
 
@@ -521,7 +560,7 @@ docker run -d --name worker-empty-home \
   -e ZAG_CONTROLLER_KEY=dummy "$IMG"
 docker logs -f worker-empty-home
 # 期望日志锚点（JSON msg）：
-#   bootstrap_home: nvm not available, installing (NVM_INSTALL_URL=https://nexus.internal.../install.sh)
+#   bootstrap_home: nvm not available, installing (NVM_INSTALL_URL=https://git.internal.fffdan.com/nvm-sh/nvm/raw/branch/master/install.sh, NVM_SOURCE=https://git.internal.fffdan.com/nvm-sh/nvm.git, ref=master)
 #   bootstrap_home: nvm installed
 #   bootstrap_home: node not available, installing Node.js 24
 #   bootstrap_home: node installed (v24.x)
@@ -535,9 +574,10 @@ docker rm -f worker-empty-home
 
 - [ ] 空主目录下 `bootstrap_home` 依次命中 nvm → Node 两个锚点，`current` 软链由 `nvm which default` 重建
 - [ ] `runuser -l worker` 下 `node -v` 符合 `NODE_VERSION`（默认 24.x）、`npm config get registry` 为内网 npm 代理
-- [ ] `pnpm --version` 为 `12.16.1`、`agent-gear --version` 与镜像预装口径一致（pnpm/agent-gear 由既有链路补齐）
+- [ ] `pnpm --version` 为 `12.16.1`、`agent-gear --version` 为运行期安装的最新版（pnpm/agent-gear 由既有链路补齐）
 - [ ] `/home/worker/.nvm`、`/home/worker/.local` 属主为 `worker`（自举以 `run_as_worker` 身份执行，不产生 root 属主文件）
 - [ ] 归档恢复场景（主目录已有完整环境）重跑：无 `bootstrap_home` 日志、无下载、无重复安装（no-op）
+- [ ] **不挂载云存储**（去掉 `--tmpfs` 与 `ZAG_STORAGE_HOME=1`）的新容器同样完成 nvm → Node → pnpm → agent-gear 安装并正常回连（不因缺少云存储而失败）
 
 ### 2) `ZAG_STORAGE_HOME=1` 且下载源不可达 → 入口非零退出（fail-fast）
 

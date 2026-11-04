@@ -44,21 +44,23 @@ jobs:
           provenance: false
           sbom: false
 
-      # 镜像自验：root 环境无 nodejs，统一通过 worker 用户并显式构造 PATH
+      # 镜像自验：主目录工具链由 entrypoint 运行时安装，镜像层不应预装。
+      # 真实自举依赖内网 git / Nexus，公网 CI 只做静态核对；运行期验收见 BUILD.md。
       - name: Verify image
         run: |
           set -e
           IMAGE="${{ secrets.DOCKER_ENDPOINT }}/${{ env.IMAGE_NAMESPACE }}/worker:${{ github.sha }}"
           docker run --rm --entrypoint bash "$IMAGE" -c '
-            sudo -u worker env HOME=/home/worker \
-              PATH="/home/worker/.nvm/current/bin:/home/worker/.local/share/pnpm/bin:/home/worker/.local/share/pnpm:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-              bash -c "
-                node -v &&
-                npm -v &&
-                pnpm -v &&
-                agent-gear --version &&
-                agent-gear harness --help >/dev/null &&
-                ! command -v claude-agent-acp &&
-                ! command -v codex-acp
-              "
+            set -e
+            id worker
+            for c in node npm pnpm agent-gear nvm; do
+              if command -v "$c" >/dev/null 2>&1; then
+                echo "$c unexpectedly preinstalled"; exit 1
+              fi
+            done
+            [ ! -e /etc/profile.d/nvm.sh ]
+            git --version
+            gh --version
+            grep -q "bootstrap_home" /usr/local/bin/entrypoint.sh
+            echo "image static verification passed"
           '
