@@ -304,7 +304,7 @@ describe('CloudHostGithubService', () => {
     await (service as any).run('op1');
     expect(workloadService.fail).toHaveBeenCalledTimes(1);
 
-    // 重试重跑同一 operation：clone 脚本幂等（git pull --ff-only），工作区 upsert 幂等
+    // 重试重跑同一 operation：clone 脚本幂等（同仓库直接复用、空目录清理后克隆），工作区 upsert 幂等
     await (service as any).run('op1');
     // 首轮仅 gitSetup 收尾 1 次（session 未执行）；次轮 gitSetup 收尾 + session 兜底 2 次
     expect(ensureWorkspace).toHaveBeenCalledTimes(3);
@@ -390,8 +390,11 @@ describe('CloudHostGithubService', () => {
   it('T-CHG8: 幂等脚本不含 token 且校验目标目录', () => {
     expect(GITHUB_SETUP_SCRIPT).not.toContain('TOKEN');
     expect(GITHUB_SETUP_SCRIPT).toContain('gh repo clone "$REPO" "$TARGET"');
-    expect(GITHUB_SETUP_SCRIPT).toContain('目标目录非空且不是 Git 仓库');
-    expect(GITHUB_SETUP_SCRIPT).toContain('git -C "$TARGET" pull --ff-only');
+    expect(GITHUB_SETUP_SCRIPT).toContain('目标目录已存在其他项目');
+    expect(GITHUB_SETUP_SCRIPT).toContain('rmdir "$TARGET"');
+    expect(GITHUB_SETUP_SCRIPT).toContain('command -v gh');
+    // 同仓库场景直接复用，不得回退为拉取
+    expect(GITHUB_SETUP_SCRIPT).not.toContain('pull --ff-only');
   });
 
   describe('createOperation 前缀拼接（T-CHG-P1..P6）', () => {
