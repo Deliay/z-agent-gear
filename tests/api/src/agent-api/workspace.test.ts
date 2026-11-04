@@ -1954,6 +1954,9 @@ const ISO_CLOUD_HOSTS = `
   query IsoCloudHosts { myCloudHosts { id name status workspaceId controllerId } }
 `;
 const ISO_CLOUD_HOST = `query IsoCloudHost($id: ID!) { cloudHost(id: $id) { id name workspaceId } }`;
+const ISO_TODO_LIST = `
+  query IsoTodoList { getTodoList { id type title elicitationData { requestId sessionId message } } }
+`;
 const ISO_GITHUB_ACCOUNTS = `
   query IsoGithubAccounts { githubAccounts { id githubLogin workspaceId } }
 `;
@@ -2656,6 +2659,41 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       );
       expect(adminHistory.errors, JSON.stringify(adminHistory.errors)).toBeUndefined();
       expect(adminHistory.data.listHistorySessions.length).toBeGreaterThanOrEqual(1);
+
+      // 问询待办：团队会话的 elicitation 待办必须归属团队租户，当前工作区可见、个人工作区不可见。
+      const elicitationRequestId = `iso-elic-${Date.now()}`;
+      controllerSocket.emit('acp:elicitation', {
+        requestId: elicitationRequestId,
+        sessionId,
+        mode: 'form',
+        message: '团队会话提问',
+        toolCallId: 'iso-question-1',
+        requestedSchema: {
+          type: 'object',
+          title: '团队会话确认',
+          properties: { ok: { type: 'boolean', title: '确认' } },
+        },
+      });
+      let teamTodo: { elicitationData?: { requestId?: string } } | undefined;
+      for (let i = 0; i < 20; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const todos = await gql(ISO_TODO_LIST, undefined, admin.token, normalId);
+        expect(todos.errors, JSON.stringify(todos.errors)).toBeUndefined();
+        teamTodo = todos.data.getTodoList.find(
+          (row: { elicitationData?: { requestId?: string } }) =>
+            row.elicitationData?.requestId === elicitationRequestId,
+        );
+        if (teamTodo) break;
+      }
+      expect(teamTodo, '团队工作区应能看到会话问询待办').toBeTruthy();
+      const personalTodos = await gql(ISO_TODO_LIST, undefined, admin.token);
+      expect(personalTodos.errors, JSON.stringify(personalTodos.errors)).toBeUndefined();
+      expect(
+        personalTodos.data.getTodoList.some(
+          (row: { elicitationData?: { requestId?: string } }) =>
+            row.elicitationData?.requestId === elicitationRequestId,
+        ),
+      ).toBe(false);
 
       // cloudHostIssuesLinkages：developer 对 admin 创建的 cloud 控制器应过门禁
       const devLinkages = await gql(
