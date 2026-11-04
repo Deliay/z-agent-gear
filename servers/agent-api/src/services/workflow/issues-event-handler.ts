@@ -291,6 +291,19 @@ export class IssuesTriggerRunner {
         await this.fail(trigger._id, 'CLOUD_HOST_NOT_RUNNING');
         return;
       }
+      // 云电脑已设置过项目工作区（Git 项目设置成功后 CAS 回写 `CloudHost.workspaceId`）：
+      // 直接复用，不再重复 Git 初始化/设置工作区，避免把已 clone 的仓库再套一层目录。
+      const hostWorkspaceId = host.workspaceId ? String(host.workspaceId) : '';
+      if (hostWorkspaceId && mongoose.isValidObjectId(hostWorkspaceId)) {
+        const ready = await ControllerWorkspace.findOne({
+          _id: hostWorkspaceId,
+          controllerId,
+        }).lean();
+        if (ready) {
+          await this.markWorkspaceReady(trigger._id, String(ready._id));
+          return;
+        }
+      }
       const prefix = await cloudHostService.defaultWorkspace(host);
       const clonePath = resolveClonePath(normalizeWorkspacePrefix(prefix), repoFullName);
       const existing = await ControllerWorkspace.findOne({ userId, controllerId, path: clonePath }).lean();
