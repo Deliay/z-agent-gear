@@ -291,6 +291,101 @@ describe('WorktreeHandler', () => {
     });
   });
 
+  describe('configureCoAuthor', () => {
+    it('T-WTC9: 已有 Worktree 启用共同作者时写 hook、worktree hooksPath 与 bot 身份', async () => {
+      const commands: string[] = [];
+      (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+        const command = args[0] as string;
+        commands.push(command);
+        const cb = getCallback(args);
+        if (cb) {
+          if (command.includes('rev-parse')) cb(null, '/repo/.git\n', '');
+          else cb(null, '', '');
+        }
+        return { on: vi.fn() };
+      });
+
+      const result = await handler.configureCoAuthor('/wt', {
+        name: 'zag-bot[bot]',
+        email: '123456+zag-bot[bot]@users.noreply.github.com',
+      });
+
+      expect(result.success).toBe(true);
+      expect(commands).toContain("git -C '/wt' rev-parse --path-format=absolute --git-common-dir");
+      expect(commands).toContain("git -C '/wt' config extensions.worktreeConfig true");
+      expect(commands).toContain("git -C '/wt' config --worktree core.hooksPath '/repo/.git/zag-hooks'");
+      expect(commands).toContain("git -C '/wt' config --worktree zag.coAuthorName 'zag-bot[bot]'");
+      expect(commands).toContain(
+        "git -C '/wt' config --worktree zag.coAuthorEmail '123456+zag-bot[bot]@users.noreply.github.com'",
+      );
+    });
+
+    it('T-WTC10: 已有 Worktree 关闭共同作者时仅清理受管 hooksPath / zag.*', async () => {
+      const commands: string[] = [];
+      (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+        const command = args[0] as string;
+        commands.push(command);
+        const cb = getCallback(args);
+        if (cb) {
+          if (command.includes('rev-parse')) cb(null, '/repo/.git\n', '');
+          else if (command.includes('--get core.hooksPath')) cb(null, '/repo/.git/zag-hooks\n', '');
+          else cb(null, '', '');
+        }
+        return { on: vi.fn() };
+      });
+
+      const result = await handler.configureCoAuthor('/wt');
+
+      expect(result.success).toBe(true);
+      expect(commands).toContain("git -C '/wt' config --worktree --unset core.hooksPath");
+      expect(commands).toContain("git -C '/wt' config --worktree --unset zag.coAuthorName");
+      expect(commands).toContain("git -C '/wt' config --worktree --unset zag.coAuthorEmail");
+      expect(writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('T-WTC11: 关闭共同作者不触碰用户自建 hooksPath', async () => {
+      const commands: string[] = [];
+      (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+        const command = args[0] as string;
+        commands.push(command);
+        const cb = getCallback(args);
+        if (cb) {
+          if (command.includes('rev-parse')) cb(null, '/repo/.git\n', '');
+          else if (command.includes('--get core.hooksPath')) cb(null, '/home/worker/.husky\n', '');
+          else cb(null, '', '');
+        }
+        return { on: vi.fn() };
+      });
+
+      await handler.configureCoAuthor('/wt');
+
+      expect(commands.some((command) => command.includes('--unset core.hooksPath'))).toBe(false);
+      expect(commands).toContain("git -C '/wt' config --worktree --unset zag.coAuthorName");
+    });
+
+    it('T-WTC12: 非法共同作者按关闭处理，不写 hook', async () => {
+      const commands: string[] = [];
+      (exec as unknown as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+        const command = args[0] as string;
+        commands.push(command);
+        const cb = getCallback(args);
+        if (cb) {
+          if (command.includes('rev-parse')) cb(null, '/repo/.git\n', '');
+          else cb(null, '', '');
+        }
+        return { on: vi.fn() };
+      });
+
+      await handler.configureCoAuthor('/wt', {
+        name: 'bot\ninjected',
+        email: 'bot@example.com',
+      });
+
+      expect(writeFileSync).not.toHaveBeenCalled();
+      expect(commands.some((command) => command.includes('--worktree zag.coAuthorName'))).toBe(false);
+    });
+  });
+
   describe('remove', () => {
     it('should successfully remove a worktree', async () => {
       mockExecSuccess('');

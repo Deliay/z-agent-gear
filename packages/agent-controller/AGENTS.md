@@ -57,7 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.16.0`（major 保持 2；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.17.0`（major 保持 2；已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.11.0 起提升，当前基线 `2.12.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -295,6 +295,10 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 p
   （`# zag-managed`，0755，内容固定不含用户数据）→ `--worktree core.hooksPath` +
   `--worktree zag.coAuthorName/Email`。hook 从 worktree 生效配置读取 trailer，`grep -qF` exact-trailer
   幂等（重复提交 / `--amend` 不叠加），无配置直接放行；任一步失败仅告警，不阻断 worktree 创建。
+- **已有 Worktree 同步（2.17.0）**：`git:worktree:coauthor` 调用
+  `configureCoAuthor(worktreePath, coAuthor?)`——有共同作者时重写受管 hook + `--worktree` 配置；
+  缺省时仅清理本 worktree 的 `core.hooksPath`（exact-match 受管目录）与 `zag.coAuthorName/Email`，
+  共享 hook 文件与其他 worktree 零触碰。用于成员在 Worktree 创建后才勾选/取消「与 bot 共同提交」的场景。
 - **安全**：name/email 用户可控，拼接进 `execAsync` 前必须 `shellQuote`（单引号包裹 + 内嵌 `'` 转义为
   `'\''`）；禁止未转义插值。单条命令失败仅 `this.log.warn`（不打印值），结果仍 `success`。
 - 缺省不写身份（沿用容器级 bot，后者恒为平台 bot）；非法载荷（非字符串/空值）按「未提供」处理。

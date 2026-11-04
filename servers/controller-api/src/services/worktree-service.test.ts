@@ -121,6 +121,35 @@ describe('WorktreeService', () => {
       });
     });
 
+    it('T-CB-C3: should emit existing-worktree co-author sync to controller socket', async () => {
+      const service = new WorktreeService();
+      service.start(mockIO as never);
+
+      const coAuthor = {
+        name: 'zag-bot[bot]',
+        email: '123456+zag-bot[bot]@users.noreply.github.com',
+      };
+      await service.handleCoAuthor('req-2', 'ctrl-1', '/wt', coAuthor);
+
+      expect(mockSocket.emit).toHaveBeenCalledWith('git:worktree:coauthor', {
+        requestId: 'req-2',
+        worktreePath: '/wt',
+        coAuthor,
+        _meta: {},
+      });
+    });
+
+    it('T-CB-C4: should omit coAuthor when clearing existing-worktree co-author', async () => {
+      const service = new WorktreeService();
+      service.start(mockIO as never);
+
+      await service.handleCoAuthor('req-3', 'ctrl-1', '/wt');
+
+      const payload = vi.mocked(mockSocket.emit).mock.calls[0][1] as Record<string, unknown>;
+      expect(payload).toMatchObject({ requestId: 'req-3', worktreePath: '/wt' });
+      expect(payload).not.toHaveProperty('coAuthor');
+    });
+
     it('should omit committer key when committer is undefined', async () => {
       const service = new WorktreeService();
       service.start(mockIO as never);

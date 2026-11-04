@@ -202,3 +202,15 @@ cd apps/agent-web && npx vitest run src/components/settings/__tests__/GitSetting
 | 旧 worker 静默无效果 | PRD 已声明降级；可通过 worker 版本升级获得能力 |
 
 回滚：移除前端勾选项与服务端字段写入即可；已生成 Worktree 的 hook 配置随 Worktree 删除自然消失，不影响主仓。
+
+## 8. 后续修复（#455：已有 Worktree 勾选不生效）
+
+原实现只在 `git:worktree:add` 时写共同作者配置，成员在 Worktree 创建后才勾选/取消时不会生效。
+修复保留创建期行为，额外在**已有 Worktree 上新建会话**时同步一次：
+
+| 层 | 变更 |
+|--|--|
+| agent-api `session.create` | `existingWorktreePath` 分支按当前设置（或工作流快照）下发 `git:worktree:coauthor`；启用时等待 ≤2s ack，关闭时只尽力下发清理；超时/失败只告警 |
+| controller-api | `session:command` 白名单新增 `git:worktree:coauthor` → `worktreeService.handleCoAuthor` → Socket.IO 事件；结果写 Redis `git:worktree:coauthor:{requestId}` |
+| agent-gear 2.17.0 | `WorktreeHandler.configureCoAuthor`：有 `coAuthor` 时写 hook + `--worktree` 配置；缺省时仅清理本 Worktree 的受管 `core.hooksPath` / `zag.*`，共享 hook 与用户 hooks 零触碰 |
+| 测试 | `C3e/C3f`（agent-api 下发/清理）、`T-CB-C3/C4`（controller-api）、`T-WTC9~12`（worker 写入/清理/不触碰用户 hooks） |

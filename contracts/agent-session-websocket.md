@@ -1045,6 +1045,8 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 | Controller → Server | `git:init:result` | 返回初始化结果 |
 | Server → Controller | `git:worktree:add` | 请求创建 Git Worktree |
 | Controller → Server | `git:worktree:add:result` | 返回创建结果 |
+| Server → Controller | `git:worktree:coauthor` | 同步已有 Worktree 的共同作者配置（不改变作者） |
+| Controller → Server | `git:worktree:coauthor:result` | 返回共同作者配置同步结果 |
 | Server → Controller | `git:worktree:remove` | 请求移除 Git Worktree |
 | Controller → Server | `git:worktree:remove:result` | 返回移除结果 |
 | Server → Controller | `git:worktree:list` | 请求列出 Git Worktree |
@@ -1411,7 +1413,39 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 | `commitHash` | `string \| null` | 否 | 提交的 SHA（有实际提交时） |
 | `error` | `string \| null` | 否 | 失败原因 |
 
-### 3.24 服务端处理流程
+### 3.24 `git:worktree:coauthor`（Server → Controller）
+
+同步**已有 Worktree** 的共同作者配置（不改变作者身份）。设置页勾选/取消「与 bot 共同提交」后，
+成员在旧 Worktree 上新建会话时由 agent-api 下发；新建 Worktree 仍由 `git:worktree:add` 的
+`committer.coAuthor*` 一次性完成，无需额外同步。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `worktreePath` | `string` | 是 | Worktree 目录绝对路径 |
+| `coAuthor` | `{ name: string; email: string }` | 否 | 共同作者；缺省 = 关闭共同作者（仅清理本平台写入的受管配置） |
+
+**客户端行为：**
+
+1. 定位 `<git-common-dir>/zag-hooks/`，写入受管 `prepare-commit-msg` hook（内容固定、幂等，失败仅告警）
+2. `git config extensions.worktreeConfig true`；`--worktree core.hooksPath <hookDir>`、`--worktree zag.coAuthorName/Email <bot 身份>`
+3. 关闭共同作者（无 `coAuthor`）时：仅当该 Worktree 的 `core.hooksPath` 恰为受管 hook 目录才 unset，
+   并 unset `zag.coAuthorName/Email`；共享 hook 文件与用户自建 hooks 均不触碰
+4. 回复 `git:worktree:coauthor:result`
+
+> 降级说明：旧 worker（< 2.17.0）忽略该事件 → 已有 Worktree 保持创建时的配置，不报错；共同作者同步失败不阻断建会话。
+
+### 3.25 `git:worktree:coauthor:result`（Controller → Server）
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否已处理（配置失败按 best-effort 记录，不影响会话） |
+| `error` | `string \| null` | 否 | 失败原因 |
+
+### 3.26 服务端处理流程
 
 agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Controller 并处理结果。
 
@@ -1542,6 +1576,34 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
 3. 等待 `git:worktree:add:result`（30s 超时）
 4. 成功时：缓存结果到 Redis `git:worktree:add:{requestId}`（TTL 60s）
 5. 失败时：缓存空结果
+
+#### `git:worktree:coauthor`
+
+同步已有 Worktree 的共同作者配置（不改变作者身份）。
+
+**Payload:**
+
+```json
+{
+  "type": "git:worktree:coauthor",
+  "requestId": "string",
+  "controllerId": "string",
+  "worktreePath": "string",
+  "coAuthor": {
+    "name": "string",
+    "email": "string"
+  }
+}
+```
+
+> `coAuthor` 缺省 = 关闭共同作者（仅清理本平台写入的受管配置）。旧版本控制器忽略该事件 → 已有 Worktree 保持创建时配置。
+
+**服务端行为：**
+
+1. 查找 controller socket
+2. 发送 `git:worktree:coauthor` Socket.IO 事件（含 `requestId`, `worktreePath`, 可选 `coAuthor`）
+3. 启用共同作者时 agent-api 等待结果（2s 超时，best-effort）后再下发 `acp:start`；关闭时只尽力下发清理，不等待
+4. 成功/失败均缓存结果到 Redis `git:worktree:coauthor:{requestId}`（TTL 60s）
 
 #### `git:worktree:remove`
 

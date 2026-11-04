@@ -94,6 +94,10 @@ pnpm run test    # Run tests
   `session-command.ts` 校验后原样透传给 `worktreeService.handleAdd(requestId, controllerId, repoPath, worktreePath, branch, committer?)`，
   `emitToController('git:worktree:add', {..., committer})` 仅在非空时携带；`coAuthor*` 成对出现时由 worker
   追加 `Co-authored-by` trailer。
+- **已有 Worktree 共同作者同步**：`git:worktree:coauthor {requestId, controllerId, worktreePath, coAuthor?}`
+  由 agent-api 在已有 Worktree 新建会话时下发，`session-command.ts` 透传给
+  `worktreeService.handleCoAuthor`；`coAuthor` 缺省 = 关闭（worker 仅清理受管配置），结果写
+  Redis `git:worktree:coauthor:{requestId}`（TTL 60s）。新建 Worktree 仍走 `git:worktree:add`。
 - **白名单不扩张**：committer 只是既有事件的字段扩展，不引入任意 git 命令通道；缺省 = 不下发，
   worker 沿用容器级 bot 身份。
 - 下游 agent-gear ≥2.12.0 在 worktree 初始化后写 worktree 级 `user.name/user.email`（见
