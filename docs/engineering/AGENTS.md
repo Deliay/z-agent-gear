@@ -228,6 +228,7 @@ flowchart LR
 - [[proposals/20261104-feat-cloud-storage-archive-optimization.md]] — 云存储归档优化（stopCloudHost 新增 archiveStorage 选项：不勾选时 cloud-controller 落 storageArchiveSkipped 跳过归档、存储 ATTACHED→IDLE 继续全价；云存储新增「归档/复原到归档/fork」：cloud-controller 存储级 archive/restore 端点 + cloudstorageoperations 台账（迁移 003）、agent-api 状态机 +RESTORING 与 restores 回调 + 迁移 022、前端停止对话框归档勾选与三操作入口）
 - [[proposals/20261104-feat-tool-call-terminal-rendering.md]] — 会话窗口中工具调用展示优化（终端输出渲染：xterm-headless 完整终端仿真解析为最终画面行 + React 静态渲染替代 ansi-to-html 剥离式管线、光标/擦除/覆写语义正确收敛、深黑色主题调色板单一来源、移除 dangerouslySetInnerHTML 注入面、纯前端零契约变更）
 - [[proposals/20261104-fix-github-project-setup-optimization.md]] — Github 项目设置优化（GITHUB_SETUP_SCRIPT 目录已存在分支重写：同仓库 remote 匹配直接复用不再 `git pull --ff-only`、空目录 `rmdir` 后续克隆、异仓库/非空目录/同名文件统一提示「目标目录已存在其他项目」、.git 残骸保守归冲突；T-CHG8 重写 + T-CHG9 真跑 bash 行为矩阵；契约注释增补）
+- [[proposals/20261104-fix-question-tool-multi-select.md]] — question 工具多选题呈现修复（纯前端：ElicitationDialog 识别 `type:array + items.anyOf` 渲染多选勾选组、提交按 Issue #445 以 `.join(',')` 回传 ACP，types.ts 补 anyOf 声明、enum/oneOf 数组提交形态不变，契约 §2.31 补值形态注记；T-QM1~5 组件单测 + E2E 真实 question schema 用例）
 
 ### 实现计划（`plan/`）
 
