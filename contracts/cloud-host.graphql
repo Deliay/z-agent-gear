@@ -157,6 +157,8 @@ type CloudHostStopImpact {
   activeSessionCount: Int!
   sessionsWillBeLost: Boolean!
   sessions: [CloudHostSessionSummary!]!
+  # 当前挂载的云存储摘要；未挂载为 null（停止对话框据此展示归档勾选项）
+  storage: CloudStorageSummary
 }
 
 type CloudHostCapabilities {
@@ -257,7 +259,10 @@ extend type Query {
 extend type Mutation {
   createCloudHost(input: CreateCloudHostInput!): CloudHost!
   # 有活动会话时必须 force=true；已 STOPPED/FAILED 幂等返回当前状态
-  stopCloudHost(id: ID!, force: Boolean): CloudHost!
+  # archiveStorage：仅挂载云存储时有意义；缺省/null = 归档（与现状一致，向后兼容）；
+  # false = 停止后存储直接回到「待挂载」（IDLE），数据保留、继续全价计费。
+  # 非主动销毁（失败/欠费强拆）不经过该入口，始终归档。
+  stopCloudHost(id: ID!, force: Boolean, archiveStorage: Boolean): CloudHost!
   # 仅 STOPPED/FAILED 可删除；软删除并撤销 Key，Controller/会话保留
   deleteCloudHost(id: ID!): Boolean!
   installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!

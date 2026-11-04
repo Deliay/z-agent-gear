@@ -28,6 +28,31 @@ export interface TerminalStorageState {
   archiveStatus: 'pending' | 'running' | 'succeeded' | 'failed' | null;
   /** 本次归档 id（契约 A.2.10 扩展；新周期占位/旧回调判定）。 */
   archiveId?: string | null;
+  /** 本次销毁显式跳过归档（destroy storageArchive:false）；仅 true 时携带。 */
+  archiveSkipped?: boolean;
+}
+
+/**
+ * terminal 报文的 storage 组装（契约 A.2.10 / 零回归）：
+ * - 未挂载存储 → null（不携带该字段）；
+ * - 显式跳过归档（`storageArchiveSkipped === true`）→ 携带 `archiveSkipped:true`；
+ * - 其它情况（缺省/历史 null/false）不携带 `archiveSkipped`，保持旧报文逐字段等价。
+ */
+export function buildTerminalStorageState(
+  storageId: string | null | undefined,
+  snapshot: {
+    archiveStatus?: 'pending' | 'running' | 'succeeded' | 'failed' | null;
+    archiveId?: string | null;
+    archiveSkipped?: boolean | null;
+  },
+): TerminalStorageState | null {
+  if (!storageId) return null;
+  return {
+    id: storageId,
+    archiveStatus: snapshot.archiveStatus ?? null,
+    archiveId: snapshot.archiveId ?? null,
+    ...(snapshot.archiveSkipped === true ? { archiveSkipped: true } : {}),
+  };
 }
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -86,6 +111,15 @@ export class AgentApiClient {
       `/internal/cloud-storages/${encodeURIComponent(storageId)}/usage`,
       body,
       'storage usage',
+    );
+  }
+
+  /** 复原回调（`POST /internal/cloud-storages/:id/restores`，4 次退避重试）。 */
+  async notifyStorageRestore(storageId: string, body: object): Promise<void> {
+    await this.postWithRetry(
+      `/internal/cloud-storages/${encodeURIComponent(storageId)}/restores`,
+      body,
+      'storage restore',
     );
   }
 

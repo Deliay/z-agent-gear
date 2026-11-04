@@ -17,13 +17,18 @@ import { createK8sClient } from './services/k8s-client.js';
 import { K8sJobManager } from './services/k8s-job-manager.js';
 import { K8sStorageManager } from './services/k8s-storage-manager.js';
 import { StorageService } from './services/storage-service.js';
+import { MongoStorageOperationRepository } from './repositories/storage-operation-repository.js';
 import { ContainerService } from './services/container-service.js';
 import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
 import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
 import { WorkloadDispatcher } from './services/workload-dispatcher.js';
 import { SecretStore } from './services/secret-store.js';
-import { AgentApiClient, type TerminalStorageState } from './services/agent-api-client.js';
+import {
+  AgentApiClient,
+  buildTerminalStorageState,
+  type TerminalStorageState,
+} from './services/agent-api-client.js';
 import { AdminBillingClient } from './services/admin-billing-client.js';
 import { wireSocketDiagnostics } from './services/socket-diagnostics.js';
 import {
@@ -36,6 +41,7 @@ import { createInternalRouter } from './routes/internal-api.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001CloudcontainersTenantId from './migrations/001-cloudcontainers-tenant-id-backfill.js';
 import * as migration002CloudcontainersWorkspaceId from './migrations/002-cloudcontainers-workspace-id.js';
+import * as migration003CloudStorageOperations from './migrations/003-cloud-storage-operations.js';
 
 export interface CloudControllerApp {
   app: express.Express;
@@ -172,6 +178,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     repo,
     k8sClient,
     storageManager,
+    operationRepo: new MongoStorageOperationRepository(),
     agentApiClient,
     logger: logger.child({ component: 'cloud-storage' }),
     config: {
@@ -261,13 +268,14 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
           let terminalStorage: TerminalStorageState | null = null;
           if (container.storageId) {
             const fresh = (await containerService.getById(container.id)) ?? container;
-            terminalStorage = {
-              id: container.storageId,
+            terminalStorage = buildTerminalStorageState(container.storageId, {
               // 透传真实归档状态：null = 未触发归档（agent-api 据此 releaseStorage 回滚），
               // 不得强改写为 pending（契约 A.2.10）。
               archiveStatus: fresh.storageArchiveStatus ?? null,
               archiveId: fresh.storageArchiveId ?? null,
-            };
+              // 仅在本次销毁显式跳过归档时携带（契约 A.2.10 扩展）；未挂载/未跳过保持旧报文。
+              archiveSkipped: fresh.storageArchiveSkipped ?? null,
+            });
           }
           try {
             await retryHarnessCallback(
@@ -384,6 +392,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
       await runMigrations([
         migration001CloudcontainersTenantId,
         migration002CloudcontainersWorkspaceId,
+        migration003CloudStorageOperations,
       ]);
     } catch (err) {
       logger.warn({ err }, 'runMigrations failed (non-fatal)');

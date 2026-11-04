@@ -185,3 +185,14 @@ pnpm run preview  # Preview production build
 - **详情抽屉排序**：`NodeDetailDrawer` 中「关联 Pull Request」区块在「产物」之前（其余结构不变）。
 - **图表自动定位**：`graph/graph-layout.ts` 的纯函数 `pickFocusWindow(nodes, activeIds, before=2, after=2)` 按 `position.y` 升序（同 y 按 x）定位**第一个**执行中节点，返回「前 2 + 自身 + 后 2」id 窗口（越界收敛，无执行中返回 `[]`）。`WorkflowGraphView` 用 `onInit` 保存 React Flow 实例并置 `rfReady`，effect **仅依赖 `[rfReady, activeKey]`**（执行中 id 集合拼接；节点列表经 ref 读取），首次 `duration:0`、切换 `duration:300`；无执行中节点不主动 `fitView`（保留整图首屏）。**禁止把 `nodes`/`instance` 加入该 effect 依赖**：5s 轮询每轮重建节点对象，会导致反复 fitView 抖动。
 - **测试入口**：`pages/__tests__/WorkflowInstancePage.test.tsx`（T-RNWEB1~4）、`components/workflow/graph/__tests__/WorkflowNodeCard.test.tsx`（T-WFI-NC1~3）、`components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-WFI-TC1）、`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-WFI-SH1）、`components/workflow/graph/__tests__/graph-layout.test.ts`（T-WFI1~5）、`components/workflow/__tests__/WorkflowGraphView.test.tsx`（T-WFI-V1~4，mock React Flow 断言窗口 fitView 与防抖动）、`tests/e2e/src/workflow-graph.spec.ts`（E2E-WFI1~3）。
+
+## 云存储归档优化（停止归档勾选 / 归档 / 复原到归档 / fork）
+
+> 需求 #434；契约 `contracts/cloud-host.graphql`、`contracts/cloud-storage.graphql`。
+
+- **停止对话框**：`cloudHostStopImpact.storage` 非空时渲染勾选项（`aria-label="归档云存储"`，默认勾选）与说明「勾选：归档后按半价计费；不勾选：存储回到待挂载并继续全价计费，数据原样保留」。**挂载存储时不自动停止**（`activeSessionCount===0 && !impact.storage` 才自动 `handleStop(false)`）；提交 `stopCloudHost(id, force, archiveStorage)`；`storage.status !== 'ATTACHED'` 时勾选禁用并提示「存储尚未挂载完成，停止后按原状态回滚（不归档）」且不下发该字段；未挂载存储不渲染、报文旧形状。
+- **状态文案**：`RESTORING → 复原中`；`canArchiveStorage`（IDLE）、`canRestoreStorage`（IDLE+SUCCEEDED；RESTORING+FAILED 仅「重试」）、`canForkStorage`（IDLE/ARCHIVED+SUCCEEDED）、`hasFailedRestore`、`canDestroyCloudStorage` 含 `RESTORING+FAILED`（警示 `RESTORE_FAILED_DESTROY_WARNING`）。
+- **列表/详情三操作**：`CloudStorageSection` 行操作与 `CloudStorageDetailDialog` 操作区按上述门槛展示「归档 / 复原到归档（失败时重试复原）/ fork」；归档与复原复用 `ConfirmDialog`（复原为 destructive 文案 `RESTORE_DESTRUCTIVE_WARNING`），成功后 `refetchAll`/`refetch`。归档卡片 `cloudHostName == null` 展示「手动归档」；详情展示 `currentRestore` 状态/失败原因。
+- **ForkCloudStorageDialog**：名称输入（trim 1~64，服务端权威重名）、容量只读「与源一致：x Gi」、`cloudStorageBillingQuote(source.sizeGi)` 全价报价、「创建成功即开始计费」；成功 toast 并刷新列表。
+- **文案映射**：`storage is not archivable / has no archive / is not restorable / is restoring / is not forkable / not allowed to restore storage` 等映射中文。
+- **测试入口**：`components/cloud-host/__tests__/StopCloudHostDialog.test.tsx`（T-WEB1）、`lib/__tests__/cloud-storage.test.ts`（T-WEB2/T-WEB4）。

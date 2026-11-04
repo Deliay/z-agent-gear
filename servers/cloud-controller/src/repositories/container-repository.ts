@@ -77,6 +77,8 @@ export interface CloudContainerEntity {
   storageArchiveStartedAt: Date | null;
   storageArchiveFinishedAt: Date | null;
   storageArchiveFailure: string | null;
+  /** 本次销毁显式跳过归档（destroy `storageArchive:false`）；历史行 null。 */
+  storageArchiveSkipped: boolean | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -124,6 +126,7 @@ export interface CreateContainerInput {
   storageArchiveStartedAt?: Date | null;
   storageArchiveFinishedAt?: Date | null;
   storageArchiveFailure?: string | null;
+  storageArchiveSkipped?: boolean | null;
   /** 仅测试用途：显式指定时间戳，便于超时巡检确定性测试。 */
   createdAt?: Date;
   updatedAt?: Date;
@@ -211,6 +214,7 @@ interface RawDoc {
   storageArchiveStartedAt?: Date | null;
   storageArchiveFinishedAt?: Date | null;
   storageArchiveFailure?: string | null;
+  storageArchiveSkipped?: boolean | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -311,6 +315,12 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     storageArchiveStartedAt: doc.storageArchiveStartedAt ?? null,
     storageArchiveFinishedAt: doc.storageArchiveFinishedAt ?? null,
     storageArchiveFailure: doc.storageArchiveFailure ?? null,
+    storageArchiveSkipped:
+      doc.storageArchiveSkipped === true
+        ? true
+        : doc.storageArchiveSkipped === false
+          ? false
+          : null,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -372,6 +382,7 @@ export class MongoContainerRepository implements ContainerRepository {
       storageArchiveStartedAt: input.storageArchiveStartedAt ?? null,
       storageArchiveFinishedAt: input.storageArchiveFinishedAt ?? null,
       storageArchiveFailure: input.storageArchiveFailure ?? null,
+      storageArchiveSkipped: input.storageArchiveSkipped ?? null,
     });
     return toEntity(doc.toObject() as unknown as RawDoc);
   }
@@ -477,6 +488,7 @@ export class InMemoryContainerRepository implements ContainerRepository {
       storageArchiveStartedAt: input.storageArchiveStartedAt ?? null,
       storageArchiveFinishedAt: input.storageArchiveFinishedAt ?? null,
       storageArchiveFailure: input.storageArchiveFailure ?? null,
+      storageArchiveSkipped: input.storageArchiveSkipped ?? null,
       createdAt: input.createdAt ?? now,
       updatedAt: input.updatedAt ?? input.createdAt ?? now,
     };

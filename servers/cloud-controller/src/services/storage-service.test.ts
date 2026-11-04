@@ -3,14 +3,18 @@ import { InMemoryK8sClient } from './k8s-client.js';
 import { K8sStorageManager } from './k8s-storage-manager.js';
 import {
   ContainerActiveError,
+  InvalidOperationIdError,
+  OperationRunningError,
   StorageArchiveRunningError,
   StorageService,
   buildArchiveScript,
   parseUsageBytes,
   type ArchiveCallbackPayload,
+  type RestoreCallbackPayload,
   type UsageCallbackPayload,
 } from './storage-service.js';
 import { InMemoryContainerRepository } from '../repositories/container-repository.js';
+import { InMemoryStorageOperationRepository } from '../repositories/storage-operation-repository.js';
 import { createTestLogger } from '../observability/testing.js';
 
 const STORAGE_ID = 'a'.repeat(24);
@@ -47,11 +51,14 @@ function setup(
   });
   const archiveCalls: Array<{ storageId: string; payload: ArchiveCallbackPayload }> = [];
   const usageCalls: Array<{ storageId: string; payload: UsageCallbackPayload }> = [];
+  const restoreCalls: Array<{ storageId: string; payload: RestoreCallbackPayload }> = [];
   const testLog = createTestLogger();
+  const operationRepo = new InMemoryStorageOperationRepository();
   const service = new StorageService({
     repo,
     k8sClient: client,
     storageManager,
+    operationRepo,
     logger: testLog.logger,
     config: {
       namespace: 'zag-cloud',
@@ -70,9 +77,22 @@ function setup(
       notifyStorageUsage: async (storageId, payload) => {
         usageCalls.push({ storageId, payload: payload as UsageCallbackPayload });
       },
+      notifyStorageRestore: async (storageId, payload) => {
+        restoreCalls.push({ storageId, payload: payload as RestoreCallbackPayload });
+      },
     },
   });
-  return { repo, client, storageManager, service, archiveCalls, usageCalls, testLog };
+  return {
+    repo,
+    client,
+    storageManager,
+    service,
+    archiveCalls,
+    usageCalls,
+    restoreCalls,
+    operationRepo,
+    testLog,
+  };
 }
 
 async function seedStorage(
@@ -654,5 +674,265 @@ describe('StorageService 巡检', () => {
     expect(result.retried).toBeGreaterThanOrEqual(1);
     await service.drainArchiveTasks();
     expect((await repo.findById(container.id))?.storageArchiveStatus).toBe('succeeded');
+  });
+
+  it('T-SKIP4b: 跳过标记的终态容器不会被巡检补归档', async () => {
+    const { repo, client, storageManager, service } = setup();
+    await seedStorage(client, storageManager);
+    autoComplete(client, { app: 'zag-archive', log: 'ZAG_ARCHIVE_RESULT={"usageBytes":5}' });
+    const container = await createTerminalContainer(repo, {
+      storageArchiveStatus: null,
+      storageArchiveSkipped: true,
+    });
+
+    const result = await service.reconcileArchives(Date.now());
+    await service.drainArchiveTasks();
+    expect(result.retried).toBe(0);
+    expect((await repo.findById(container.id))?.storageArchiveStatus).toBeNull();
+
+    // 显式 startArchive（手动重试）不受跳过标记限制。
+    autoComplete(client, { app: 'zag-archive', log: 'ZAG_ARCHIVE_RESULT={"usageBytes":9}' });
+    await service.startArchive(container.id, {
+      archiveId: 'manual-archive',
+      fileName: FILE_NAME,
+    });
+    await service.drainArchiveTasks();
+    expect((await repo.findById(container.id))?.storageArchiveStatus).toBe('succeeded');
+  });
+});
+
+describe('存储级归档/复原（T-AR4 / T-RS4 / T-OP）', () => {
+  const OPERATION_ID = 'd'.repeat(24);
+
+  it('T-AR4: 存储级归档成功 → 台账 succeeded、回调 SUCCEEDED、删源 PVC', async () => {
+    const { client, storageManager, service, archiveCalls, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    client.onJobCreated = (manifest) => {
+      if (manifest.metadata.labels.app !== 'zag-archive') return;
+      client.setPodLog(manifest.metadata.name, 'ZAG_ARCHIVE_RESULT={"usageBytes":123}');
+      client.setPhase(manifest.metadata.name, 'succeeded');
+    };
+
+    const accepted = await service.startStorageArchive(STORAGE_ID, {
+      operationId: OPERATION_ID,
+      archiveId: 'archive-op-1',
+      fileName: FILE_NAME,
+      workspaceId: WORKSPACE_ID,
+      tenantId: TENANT_ID,
+    });
+    expect(accepted).toEqual({ accepted: true, operationId: OPERATION_ID });
+    await service.drainArchiveTasks();
+
+    const operation = await operationRepo.findById(OPERATION_ID);
+    expect(operation?.status).toBe('succeeded');
+    expect(operation?.usageBytes).toBe(123);
+    expect(archiveCalls.map((call) => call.payload.status)).toEqual([
+      'RUNNING',
+      'SUCCEEDED',
+    ]);
+    expect(archiveCalls[1]!.payload.operationId).toBe(OPERATION_ID);
+    expect(await storageManager.getStoragePvc(STORAGE_ID)).toBeNull();
+  });
+
+  it('T-AR4: 同存储进行中 → 409 OPERATION_RUNNING；同 operationId 重投幂等', async () => {
+    const { client, storageManager, service, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    // 保持 pending（不自动完成），模拟进行中。
+    await operationRepo.create({
+      operationId: OPERATION_ID,
+      storageId: STORAGE_ID,
+      workspaceId: WORKSPACE_ID,
+      type: 'archive',
+    });
+
+    await expect(
+      service.startStorageArchive(STORAGE_ID, {
+        operationId: 'e'.repeat(24),
+        archiveId: 'archive-op-2',
+        fileName: FILE_NAME,
+        workspaceId: WORKSPACE_ID,
+      }),
+    ).rejects.toBeInstanceOf(OperationRunningError);
+
+    await expect(
+      service.startStorageArchive(STORAGE_ID, {
+        operationId: OPERATION_ID,
+        archiveId: 'archive-op-1',
+        fileName: FILE_NAME,
+        workspaceId: WORKSPACE_ID,
+      }),
+    ).resolves.toEqual({ accepted: true, operationId: OPERATION_ID });
+  });
+
+  it('T-RS4: 存储级复原 → 删/重建目标 PVC、restore Job（archive RO/target RW）、回调 SUCCEEDED', async () => {
+    const { client, storageManager, service, restoreCalls, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    await storageManager.ensureArchivePvc(WORKSPACE_ID, TENANT_ID);
+    client.onJobCreated = (manifest) => {
+      if (manifest.metadata.labels.app !== 'zag-restore') return;
+      client.setPodLog(manifest.metadata.name, 'ZAG_RESTORE_DONE');
+      client.setPhase(manifest.metadata.name, 'succeeded');
+    };
+
+    const accepted = await service.startStorageRestore(STORAGE_ID, {
+      operationId: OPERATION_ID,
+      workspaceId: WORKSPACE_ID,
+      tenantId: TENANT_ID,
+      archivePath: `/archive/${WORKSPACE_ID}/${STORAGE_ID}/${FILE_NAME}`,
+      sizeGi: 10,
+      storageClass: 'ceph-rbd',
+    });
+    expect(accepted).toEqual({ accepted: true, operationId: OPERATION_ID });
+    await service.drainArchiveTasks();
+
+    const operation = await operationRepo.findById(OPERATION_ID);
+    expect(operation?.status).toBe('succeeded');
+    expect(restoreCalls.map((call) => call.payload.status)).toEqual([
+      'RUNNING',
+      'SUCCEEDED',
+    ]);
+    // 目标 PVC 已按 sizeGi/storageClass 重建。
+    expect(await storageManager.getStoragePvc(STORAGE_ID)).not.toBeNull();
+
+    const job = client.createdManifests.find((m) => m.metadata.labels.app === 'zag-restore');
+    expect(job?.spec.template.spec.containers[0]!.env).toEqual(
+      expect.arrayContaining([
+        { name: 'MODE', value: 'restore' },
+        {
+          name: 'RESTORE_FILE',
+          value: `/archive/${WORKSPACE_ID}/${STORAGE_ID}/${FILE_NAME}`,
+        },
+      ]),
+    );
+    expect(job?.spec.template.spec.containers[0]!.volumeMounts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'archive', readOnly: true }),
+        expect.objectContaining({ name: 'target' }),
+      ]),
+    );
+  });
+
+  it('T-OP1: 存储级操作失败 → 台账 failed + FAILED 回调；归档失败不删源 PVC', async () => {
+    const { client, storageManager, service, archiveCalls, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    client.onJobCreated = (manifest) => {
+      if (manifest.metadata.labels.app !== 'zag-archive') return;
+      client.setPhase(manifest.metadata.name, 'failed', 'archiver failed');
+    };
+
+    await service.startStorageArchive(STORAGE_ID, {
+      operationId: OPERATION_ID,
+      archiveId: 'archive-op-3',
+      fileName: FILE_NAME,
+      workspaceId: WORKSPACE_ID,
+    });
+    await service.drainArchiveTasks();
+
+    const operation = await operationRepo.findById(OPERATION_ID);
+    expect(operation?.status).toBe('failed');
+    expect(archiveCalls.at(-1)!.payload.status).toBe('FAILED');
+    expect(await storageManager.getStoragePvc(STORAGE_ID)).not.toBeNull();
+  });
+
+  it('P3: 非法 operationId → InvalidOperationIdError；台账 inflight → delete/cleanup 抛 OPERATION_RUNNING', async () => {
+    const { client, storageManager, service, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+
+    await expect(
+      service.startStorageArchive(STORAGE_ID, {
+        operationId: 'not-hex',
+        archiveId: 'archive-op-4',
+        fileName: FILE_NAME,
+        workspaceId: WORKSPACE_ID,
+      }),
+    ).rejects.toBeInstanceOf(InvalidOperationIdError);
+
+    await operationRepo.create({
+      operationId: OPERATION_ID,
+      storageId: STORAGE_ID,
+      workspaceId: WORKSPACE_ID,
+      type: 'restore',
+    });
+    await expect(service.deleteStorage(STORAGE_ID)).rejects.toBeInstanceOf(OperationRunningError);
+    await expect(
+      service.cleanup({
+        storageId: STORAGE_ID,
+        workspaceId: WORKSPACE_ID,
+        deleteArchive: true,
+      }),
+    ).rejects.toBeInstanceOf(OperationRunningError);
+  });
+
+  it('T-OP1a: pending/running 超 ARCHIVE_TIMEOUT_MS → failed + FAILED 回调', async () => {
+    const { client, storageManager, service, archiveCalls, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    await operationRepo.create({
+      operationId: OPERATION_ID,
+      storageId: STORAGE_ID,
+      workspaceId: WORKSPACE_ID,
+      type: 'archive',
+      archiveId: 'archive-timeout',
+      fileName: FILE_NAME,
+      startedAt: new Date(Date.now() - 60_000),
+    });
+
+    const result = await service.reconcileStorageOperations(Date.now());
+
+    expect(result.failed).toBe(1);
+    expect((await operationRepo.findById(OPERATION_ID))?.status).toBe('failed');
+    expect((await operationRepo.findById(OPERATION_ID))?.failureReason).toBe('操作超时');
+    expect(archiveCalls.at(-1)!.payload.status).toBe('FAILED');
+    expect((await operationRepo.findById(OPERATION_ID))?.callbackDeliveredAt).not.toBeNull();
+  });
+
+  it('T-OP1b: 本进程无执行任务（findActive 命中且未超时）→ 重跑并收口', async () => {
+    const { client, storageManager, service, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    autoComplete(client, {
+      app: 'zag-archive',
+      log: 'ZAG_ARCHIVE_RESULT={"usageBytes":7}',
+    });
+    await operationRepo.create({
+      operationId: OPERATION_ID,
+      storageId: STORAGE_ID,
+      workspaceId: WORKSPACE_ID,
+      type: 'archive',
+      archiveId: 'archive-resume',
+      fileName: FILE_NAME,
+      startedAt: new Date(),
+    });
+
+    const result = await service.reconcileStorageOperations(Date.now());
+    expect(result.retried).toBe(1);
+    await service.drainArchiveTasks();
+
+    const operation = await operationRepo.findById(OPERATION_ID);
+    expect(operation?.status).toBe('succeeded');
+    expect(operation?.usageBytes).toBe(7);
+  });
+
+  it('T-OP1c: 终态未送达回调 → 重投一次并写 callbackDeliveredAt，不再重投', async () => {
+    const { client, storageManager, service, archiveCalls, operationRepo } = setup();
+    await seedStorage(client, storageManager);
+    await operationRepo.create({
+      operationId: OPERATION_ID,
+      storageId: STORAGE_ID,
+      workspaceId: WORKSPACE_ID,
+      type: 'archive',
+      archiveId: 'archive-repost',
+      fileName: FILE_NAME,
+      startedAt: new Date(),
+    });
+    await operationRepo.markRunning(OPERATION_ID);
+    await operationRepo.markSucceeded(OPERATION_ID, { usageBytes: 11 });
+
+    const first = await service.reconcileStorageOperations(Date.now());
+    expect(first.recalled).toBe(1);
+    expect(archiveCalls).toHaveLength(1);
+    expect((await operationRepo.findById(OPERATION_ID))?.callbackDeliveredAt).not.toBeNull();
+
+    const second = await service.reconcileStorageOperations(Date.now());
+    expect(second.recalled).toBe(0);
+    expect(archiveCalls).toHaveLength(1);
   });
 });

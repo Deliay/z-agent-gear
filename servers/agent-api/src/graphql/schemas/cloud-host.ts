@@ -117,6 +117,7 @@ export const cloudHostTypeDefs = `#graphql
     activeSessionCount: Int!
     sessionsWillBeLost: Boolean!
     sessions: [CloudHostSessionSummary!]!
+    storage: CloudStorageSummary
   }
 
   type CloudHostCapabilities {
@@ -199,7 +200,7 @@ export const cloudHostTypeDefs = `#graphql
 
   extend type Mutation {
     createCloudHost(input: CreateCloudHostInput!): CloudHost!
-    stopCloudHost(id: ID!, force: Boolean): CloudHost!
+    stopCloudHost(id: ID!, force: Boolean, archiveStorage: Boolean): CloudHost!
     deleteCloudHost(id: ID!): Boolean!
     installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!
     # Git 项目设置幂等口径：目标目录已是同一仓库（remote 归一后精确匹配）时直接复用该目录，
