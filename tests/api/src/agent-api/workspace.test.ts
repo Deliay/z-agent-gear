@@ -1942,7 +1942,7 @@ const ISO_SESSIONS = `
 `;
 const ISO_SESSION = `query IsoSession($id: ID!) { session(id: $id) { id status controllerId } }`;
 const ISO_CONTROLLERS = `
-  query IsoControllers { controllers { id name type status } }
+  query IsoControllers { controllers { id name type status cloudHost { id } } }
 `;
 const ISO_CONTROLLER = `query IsoController($id: ID!) { controller(id: $id) { id name } }`;
 const ISO_CONTROLLER_KEYS = `
@@ -2038,6 +2038,7 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
   let cloudHostId = '';
   let githubAccountId = '';
   let cloudControllerId = '';
+  let cloudControllerHostId = '';
   let globalGithubAccountId = '';
   let adminFailedOperationId = '';
   let developerFailedOperationId = '';
@@ -2410,6 +2411,7 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
         cloudHostId = hostObjectId.toString();
         githubAccountId = accountObjectId.toString();
         cloudControllerId = cloudControllerObjectId.toString();
+        cloudControllerHostId = cloudHostObjectId.toString();
         globalGithubAccountId = globalAccountObjectId.toString();
         adminFailedOperationId = adminOperationObjectId.toString();
         developerFailedOperationId = developerOperationObjectId.toString();
@@ -2516,6 +2518,15 @@ describe('多租户二期：8 个资源集合的工作区隔离（T-WS-ISO）', 
       const memberDetail = await gql(ISO_CLOUD_HOST, { id: cloudHostId }, developer.token, normalId);
       expect(memberDetail.errors, JSON.stringify(memberDetail.errors)).toBeUndefined();
       expect(memberDetail.data.cloudHost).toMatchObject({ id: cloudHostId, workspaceId: normalId });
+
+      // Controller.cloudHost（首页/控制器列表嵌套字段）同样按工作区成员口径：
+      // 回归「team 租户自定义工作区下，成员 B 看不到成员 A 创建的云电脑」。
+      const memberControllers = await gql(ISO_CONTROLLERS, undefined, developer.token, normalId);
+      expect(memberControllers.errors, JSON.stringify(memberControllers.errors)).toBeUndefined();
+      const memberCloudController = memberControllers.data.controllers.find(
+        (row: { id: string }) => row.id === cloudControllerId,
+      );
+      expect(memberCloudController?.cloudHost).toMatchObject({ id: cloudControllerHostId });
 
       const adminDetail = await gql(ISO_CLOUD_HOST, { id: cloudHostId }, admin.token, normalId);
       expect(adminDetail.errors, JSON.stringify(adminDetail.errors)).toBeUndefined();
