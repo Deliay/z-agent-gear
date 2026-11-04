@@ -206,6 +206,7 @@ pnpm run start   # Start production server
 
 - 创建：`CreateCloudHostInput` 仅保留 `createDefaultSession`（缺省 `true`）；**创建期不再预置 `/home/worker/workspace`**（`CloudHost.workspaceId` 恒 `null` 落库，`required:false, default:null`），默认工作区只在「Git 项目设置」clone 成功后由 `cloud-host-github-service` 幂等 `ensureWorkspace` 按 finalPath 创建，并 CAS（`{_id, workspaceId:null}`）回写 `workspaceId`——与 `createSession` 开关及会话创建成败无关（多 Harness 不建会话场景同样初始化，Issue #304-1）。`gitSetup` 收尾为主落点，`runSessionStep` 内同逻辑为幂等兜底。`CloudHost.hasDefaultWorkspace`（`Boolean(workspaceId)`）为只读展示字段。
 - ready：`handleReadyLocked` 的 STARTING 与重复 ready 两处建默认会话均要求 `createDefaultSession !== false && host.workspaceId`（两开关同时允许才建）；无工作区只记 info（日志区分 `createDefaultSession=false` / `no default workspace`），不建会话、不写 `defaultSessionId`。
+- Issue 触发复用已设置工作区（#452）：`IssuesTriggerRunner.prepareWorkspace` 先看 `CloudHost.workspaceId`（Git 项目设置成功后 CAS 回写），命中且 `ControllerWorkspace` 仍存在即直接 `PENDING_INSTANTIATE`，**不再 Git 初始化/重复设置工作区**——否则 `defaultWorkspace(host)` 返回的已是 repo 目录，再拼 `resolveClonePath` 会套出 `<repo>/<owner>/<repo>` 并重跑 setup。工作区行缺失时才回退「clonePath 路径判定 → createOperation」旧链路。
 - 模型：`Model.contextLength`（Int，null=未设置）只读镜像 admin-api，经 `mapModel` 透出；上下文下发走两条通道：OpenAI 兼容 `/v1/models` 的 `context_length`（运行时网关），以及创建云电脑时 `secrets.modelContextLengths`（模型 ID → contextLength JSON object，仅启用且正整数；同名保留首个）经 cloud-controller `ZAG_MODEL_CONTEXT_LENGTHS` 写入 opencode 配置 `models.<id>.limit.context`（agent-gear ≥2.7.0，缺失优雅降级）。
 
 ## 多租户一期（三层帐号模型与租户隔离）
