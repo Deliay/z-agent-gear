@@ -337,3 +337,78 @@ describe('McpRelayService 链路回程（A4）', () => {
     expect(rec?.requestId).toBe('mcpreq_bad');
   });
 });
+describe('McpRelayService 按 serverName 超时（裁决 9）', () => {
+  it('T-MRL1 preview-tools 30min 内不 504；其余 server 60s 504 零回归', async () => {
+    vi.useFakeTimers();
+    const { service } = createContext();
+    const socket = createMockSocket();
+    vi.mocked(acpSessionManager.sessionBelongsToController).mockReturnValue(true);
+
+    await service.handleMcpRequest(socket as never, {
+      requestId: 'mcpreq_rl1',
+      sessionId: 'sess-1',
+      serverName: 'agent-session-preview-tools',
+      token: 'token-1',
+      body: { jsonrpc: '2.0', id: 1, method: 'tools/call' },
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(socket.emit).not.toHaveBeenCalledWith('mcp:response', expect.objectContaining({ status: 504 }));
+
+    await vi.advanceTimersByTimeAsync(1_800_000 - 60_000);
+    expect(socket.emit).toHaveBeenCalledWith('mcp:response', {
+      requestId: 'mcpreq_rl1',
+      status: 504,
+      body: {},
+      _meta: {},
+    });
+
+    const socket2 = createMockSocket();
+    await service.handleMcpRequest(socket2 as never, {
+      requestId: 'mcpreq_rl2',
+      sessionId: 'sess-1',
+      serverName: 'server-1',
+      token: 'token-1',
+      body: { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+    });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(socket2.emit).toHaveBeenCalledWith('mcp:response', {
+      requestId: 'mcpreq_rl2',
+      status: 504,
+      body: {},
+      _meta: {},
+    });
+  });
+
+  it('T-MRL2 MCP_REVIEW_TIMEOUT_MS 可调生效', async () => {
+    vi.useFakeTimers();
+    process.env.MCP_REVIEW_TIMEOUT_MS = '5000';
+    try {
+      const { service } = createContext();
+      const socket = createMockSocket();
+      vi.mocked(acpSessionManager.sessionBelongsToController).mockReturnValue(true);
+
+      await service.handleMcpRequest(socket as never, {
+        requestId: 'mcpreq_rl3',
+        sessionId: 'sess-1',
+        serverName: 'agent-session-preview-tools',
+        token: 'token-1',
+        body: { jsonrpc: '2.0', id: 3, method: 'tools/call' },
+      });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(socket.emit).not.toHaveBeenCalledWith('mcp:response', expect.objectContaining({ status: 504 }));
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(socket.emit).toHaveBeenCalledWith('mcp:response', {
+        requestId: 'mcpreq_rl3',
+        status: 504,
+        body: {},
+        _meta: {},
+      });
+    } finally {
+      delete process.env.MCP_REVIEW_TIMEOUT_MS;
+    }
+  });
+});

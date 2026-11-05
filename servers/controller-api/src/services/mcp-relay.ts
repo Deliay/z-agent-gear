@@ -11,6 +11,27 @@ const RELAY_REQUEST_CHANNEL = 'mcp:relay:request';
 const RESPONSE_CHANNEL_PREFIX = 'mcp:relay:response:';
 const REQUEST_TIMEOUT_MS = 60_000;
 
+/** Review 等长等待 MCP 服务超时默认值（30min，契约 §2.12.1；env MCP_REVIEW_TIMEOUT_MS 可调，与 agent-gear 同常量同默认） */
+const MCP_REVIEW_TIMEOUT_DEFAULT_MS = 1_800_000;
+
+/** 平台内建长时工具服务：会话 Review（agent-api agent-session-preview-tools） */
+const PREVIEW_TOOLS_SERVER_NAME = 'agent-session-preview-tools';
+
+function getMcpReviewTimeoutMs(): number {
+  const raw = process.env.MCP_REVIEW_TIMEOUT_MS;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : MCP_REVIEW_TIMEOUT_DEFAULT_MS;
+}
+
+/** 按 serverName 取超时的常量表（裁决 9）：仅 preview-tools 放宽，其余 server 保持 60s */
+const SERVER_TIMEOUT_OVERRIDES: Record<string, () => number> = {
+  [PREVIEW_TOOLS_SERVER_NAME]: getMcpReviewTimeoutMs,
+};
+
+export function resolveServerTimeoutMs(serverName: string): number {
+  return SERVER_TIMEOUT_OVERRIDES[serverName]?.() ?? REQUEST_TIMEOUT_MS;
+}
+
 interface McpRequestPayload {
   requestId: string;
   sessionId: string;
@@ -111,7 +132,7 @@ export class McpRelayService {
     };
 
     subscriber.on('message', onMessage);
-    const timeout = setTimeout(() => settle(504), REQUEST_TIMEOUT_MS);
+    const timeout = setTimeout(() => settle(504), resolveServerTimeoutMs(serverName));
     this.pending.set(requestId, { socket, requestId, subscriber, timeout });
 
     // 先 await 订阅完成再 publish，避免「响应先于订阅」竞态导致响应丢失而 60s 超时
