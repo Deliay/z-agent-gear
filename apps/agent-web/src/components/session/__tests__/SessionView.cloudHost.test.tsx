@@ -51,6 +51,7 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
     cwd: '/root/workspace',
     worktreePath: null,
     worktreeBranch: null,
+    archived: false,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     endedAt: '2026-01-01T01:00:00Z',
@@ -113,7 +114,10 @@ describe('SessionView 云电脑只读回看', () => {
     { status: 'FAILED' as const, failureReason: 'container exited' },
   ])('T-AW10 云电脑终态($status)时隐藏输入/发送/继续，保留历史消息', ({ status, failureReason }) => {
     // 关键：controllers 列表不包含该 controller（真实 GET_CONTROLLERS 可能已过滤/尚未加载）
-    mockQueries(makeSession({ cloudHost: makeCloudHost({ status, failureReason }) }), []);
+    mockQueries(
+      makeSession({ cloudHost: makeCloudHost({ status, failureReason }), readOnlyReason: 'CLOUD_HOST_DESTROYED' }),
+      [],
+    );
 
     render(<SessionView sessionId="session-1" />);
 
@@ -125,7 +129,10 @@ describe('SessionView 云电脑只读回看', () => {
 
   it('T-AW10 软删除云电脑（controller 被列表过滤）仍按只读渲染', () => {
     mockQueries(
-      makeSession({ cloudHost: makeCloudHost({ deletedAt: '2026-01-02T00:00:00Z' }) }),
+      makeSession({
+        cloudHost: makeCloudHost({ deletedAt: '2026-01-02T00:00:00Z' }),
+        readOnlyReason: 'CLOUD_HOST_DESTROYED',
+      }),
       [],
     );
 
@@ -138,7 +145,7 @@ describe('SessionView 云电脑只读回看', () => {
   });
 
   it('T-AW10 云电脑记录缺失（cloudHost=null）时按只读兜底', () => {
-    mockQueries(makeSession({ cloudHost: null }), []);
+    mockQueries(makeSession({ cloudHost: null, readOnlyReason: 'CLOUD_HOST_DESTROYED' }), []);
 
     render(<SessionView sessionId="session-1" />);
 

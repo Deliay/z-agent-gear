@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useMutation } from '@apollo/client/react';
 import { GET_CONTROLLER_WORKSPACES, GET_SESSIONS, GET_WORKSPACES, GET_ACP_CAPABILITIES } from '../../graphql/queries';
-import { CREATE_WORKSPACE, DELETE_WORKSPACE, CLEAR_WORKSPACES, TOGGLE_WORKSPACE, INIT_GIT_REPO, SET_WORKSPACE_DEFAULT_BRANCH, SET_CONTROLLER_WORKTREE_DIR } from '../../graphql/mutations';
-import type { GetControllerWorkspacesQuery, GetAcpCapabilitiesQuery, ControllerWorkspaceData, GitRepoInfoData, CreateWorkspaceMutation } from '../../graphql/types';
+import { CREATE_WORKSPACE, DELETE_WORKSPACE, CLEAR_WORKSPACES, TOGGLE_WORKSPACE, INIT_GIT_REPO, SET_WORKSPACE_DEFAULT_BRANCH, SET_CONTROLLER_WORKTREE_DIR, WORKSPACE_ARCHIVE_IMPACT } from '../../graphql/mutations';
+import type { GetControllerWorkspacesQuery, GetAcpCapabilitiesQuery, ControllerWorkspaceData, GitRepoInfoData, CreateWorkspaceMutation, WorkspaceArchiveImpactQuery } from '../../graphql/types';
 import { getApiBase } from '../../lib/api-base';
 import { Button } from '@/components/ui/button';
 import HistorySessionDialog from './HistorySessionDialog';
@@ -24,11 +24,21 @@ interface WorkspaceSectionProps {
   controllerOnline?: boolean;
 }
 
+/** 会话/工作区列表刷新（纯常量，供各操作的 refetchQueries 复用） */
+const refetchSessions = () => ({ query: GET_SESSIONS });
+const refetchWorkspaces = () => ({ query: GET_WORKSPACES });
+
 export default function WorkspaceSection({ controllerId, controllerOnline = false }: WorkspaceSectionProps) {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [historyWorkspace, setHistoryWorkspace] = useState<{ id: string; name: string } | null>(null);
+  /** 单删前置 impact 进行中标记（防重复点击）；结果分流 N>0 确认 / N=0 或取数失败直接删除 */
+  const impactPendingRef = useRef(false);
+  /** N>0 时的删除确认框（含连带归档会话数量） */
+  const [deleteConfirm, setDeleteConfirm] = useState<{ id: string; count: number } | null>(null);
+  /** 清空确认的连带归档合计（key=workspaceId；null=取数失败降级不展示数量） */
+  const [clearCounts, setClearCounts] = useState<Record<string, number | null>>({});
   const [gitStates, setGitStates] = useState<Record<string, {
     loading: boolean;
     data?: GitRepoInfoData;
@@ -54,6 +64,10 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
   const [initGitRepo] = useMutation(INIT_GIT_REPO);
   const [setWorkspaceDefaultBranch] = useMutation(SET_WORKSPACE_DEFAULT_BRANCH);
   const [setControllerWorktreeDir] = useMutation(SET_CONTROLLER_WORKTREE_DIR);
+
+  // 单删前置 impact 预查询：契约（contracts/agent-session.graphql）将其放在 Mutation，
+  // 必须经 useMutation 执行（useQuery 会因 Cannot query field 直接失败并静默降级为不弹确认）。
+  const [runWorkspaceArchiveImpact] = useMutation<WorkspaceArchiveImpactQuery>(WORKSPACE_ARCHIVE_IMPACT);
 
   const refetchWorktreeDir = async () => {
     try {
@@ -92,8 +106,8 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
 
   const workspaces = data?.controllerWorkspaces ?? [];
 
-  const refetchSessions = () => ({ query: GET_SESSIONS });
-  const refetchWorkspaces = () => ({ query: GET_WORKSPACES });
+  /** 清空连带归档合计：全部工作区取数成功才展示，任一失败降级为不展示数量 */
+  const clearSessionCount = sumClearCounts(workspaces, clearCounts);
 
   const handleAdd = async (path: string) => {
     const { data } = await createWorkspace({
@@ -123,13 +137,46 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
     }
   };
 
-  const handleDelete = async (id: string) => {
-    await deleteWorkspace({
-      variables: { id },
-      refetchQueries: [refetchSessions(), refetchWorkspaces()],
-    });
-    await refetch();
+  const handleDelete = useCallback(
+    async (id: string) => {
+      await deleteWorkspace({
+        variables: { id },
+        refetchQueries: [refetchSessions(), refetchWorkspaces()],
+      });
+      await refetch();
+    },
+    [deleteWorkspace, refetch],
+  );
+
+  /** 点击「删除」：先取连带归档数量（N>0 弹确认框；N=0/取数失败按「不阻断」降级为直接删除） */
+  const handleDeleteClick = async (id: string) => {
+    if (impactPendingRef.current) return;
+    impactPendingRef.current = true;
+    let count: number | null;
+    try {
+      const result = await runWorkspaceArchiveImpact({ variables: { id } });
+      count = result?.data?.workspaceArchiveImpact?.sessionCount ?? null;
+    } catch {
+      count = null;
+    } finally {
+      impactPendingRef.current = false;
+    }
+    if (count != null && count > 0) {
+      setDeleteConfirm({ id, count });
+    } else {
+      void handleDelete(id);
+    }
   };
+
+  /** 清空确认：打开时重置合计并逐工作区取连带归档数量（任一失败则降级不展示数量） */
+  const handleClearClick = () => {
+    setClearCounts({});
+    setConfirmClear(true);
+  };
+
+  const handleClearImpactResult = useCallback((id: string, count: number | null) => {
+    setClearCounts((prev) => (prev[id] === count ? prev : { ...prev, [id]: count }));
+  }, []);
 
   const handleClear = async () => {
     await clearWorkspaces({
@@ -271,7 +318,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
             添加
           </Button>
           {workspaces.length > 0 && (
-            <Button size="sm" variant="outline" onClick={() => setConfirmClear(true)}>
+            <Button size="sm" variant="outline" onClick={handleClearClick}>
               清空
             </Button>
           )}
@@ -328,7 +375,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
                   variant="ghost"
                   size="sm"
                   className="text-destructive shrink-0"
-                  onClick={() => handleDelete(ws.id)}
+                  onClick={() => handleDeleteClick(ws.id)}
                 >
                   删除
                 </Button>
@@ -396,6 +443,11 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
       {confirmClear && (
         <div className="mt-4 rounded-lg border border-destructive/50 p-4">
           <p className="text-sm text-destructive mb-3">确定要清空所有工作区吗？此操作不可撤销。</p>
+          {clearSessionCount != null && clearSessionCount > 0 && (
+            <p className="mb-3 text-sm text-muted-foreground" data-testid="clear-archive-impact">
+              将同时归档其下 {clearSessionCount} 个会话
+            </p>
+          )}
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => setConfirmClear(false)}>
               取消
@@ -403,6 +455,42 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
             <Button variant="destructive" size="sm" onClick={handleClear}>
               确认清空
             </Button>
+          </div>
+        </div>
+      )}
+
+      {/* 清空确认的连带归档数量探针：逐工作区取数，任一失败降级为不展示数量（不阻断确认） */}
+      {confirmClear && workspaces.map((ws) => (
+        <WorkspaceArchiveImpactProbe
+          key={ws.id}
+          workspaceId={ws.id}
+          onResult={handleClearImpactResult}
+        />
+      ))}
+
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
+            <h2 className="mb-4 text-lg font-semibold">删除工作区</h2>
+            <p className="mb-4 text-sm text-muted-foreground">
+              删除工作区将同时归档其下 {deleteConfirm.count} 个会话，是否继续？
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setDeleteConfirm(null)}>
+                取消
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => {
+                  const { id } = deleteConfirm;
+                  setDeleteConfirm(null);
+                  void handleDelete(id);
+                }}
+              >
+                确认删除
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -438,4 +526,47 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
       />
     </>
   );
+}
+
+/** 清空连带归档合计：全部工作区取数成功才给出数量，任一缺失/失败返回 null（降级不展示数量） */
+function sumClearCounts(
+  workspaces: ReadonlyArray<{ id: string }>,
+  counts: Record<string, number | null>,
+): number | null {
+  if (workspaces.length === 0) return null;
+  let total = 0;
+  for (const workspace of workspaces) {
+    const count = counts[workspace.id];
+    if (count == null) return null;
+    total += count;
+  }
+  return total;
+}
+
+/** 单工作区归档影响探针：经 Mutation 取连带归档会话数并回调一次（null = 取数失败，降级不展示数量） */
+function WorkspaceArchiveImpactProbe({
+  workspaceId,
+  onResult,
+}: {
+  workspaceId: string;
+  onResult: (workspaceId: string, count: number | null) => void;
+}) {
+  const [runImpact] = useMutation<WorkspaceArchiveImpactQuery>(WORKSPACE_ARCHIVE_IMPACT);
+  const reportedRef = useRef(false);
+
+  useEffect(() => {
+    if (reportedRef.current) return;
+    reportedRef.current = true;
+    // 探针只回调一次：成功取数回传数量，失败/异常回传 null（降级不展示数量）
+    void (async () => {
+      try {
+        const result = await runImpact({ variables: { id: workspaceId } });
+        onResult(workspaceId, result?.data?.workspaceArchiveImpact?.sessionCount ?? null);
+      } catch {
+        onResult(workspaceId, null);
+      }
+    })();
+  }, [workspaceId, onResult, runImpact]);
+
+  return null;
 }
