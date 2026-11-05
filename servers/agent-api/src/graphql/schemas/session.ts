@@ -237,6 +237,10 @@ export const sessionTypeDefs = `#graphql
     existingWorktreePath: String
     # 缺省 = 按控制器 defaultMcp 解析；显式传数组（含 []）= 以调用方为准；云会话仍并入 agent-cloud-host-tools
     mcpServerIds: [ID!]
+    # 自定义 MCP（工作区级）：缺省 / 显式 [] 均不注入；与 mcpServerIds 正交、可叠加。
+    # 经平台代理转发提供——会话仅获得既有代理地址与会话级密钥，真实 endpoint/凭据不出服务端。
+    # 签发时校验条目存在且当前工作区可见（不可见/不存在 → custom mcp server not found）
+    customMcpServerIds: [ID!]
     # 拉起前选择的模式/模型；缺省使用工具默认值
     modeId: ID
     modelId: ID

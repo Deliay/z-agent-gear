@@ -36,6 +36,18 @@ vi.mock('../models/mcp-server.js', () => ({
   },
 }));
 
+vi.mock('../models/mcp-session-endpoint.js', () => ({
+  McpSessionEndpoint: {
+    findOne: vi.fn(),
+  },
+}));
+
+vi.mock('./custom-mcp-forwarder.js', () => ({
+  customMcpForwarder: {
+    forward: vi.fn(),
+  },
+}));
+
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
@@ -54,13 +66,20 @@ import jwt from 'jsonwebtoken';
 import { mcpEndpointService } from './mcp-endpoint.js';
 import { mcpForwarder, ForwardError } from './mcp-forwarder.js';
 import { McpServer } from '../models/mcp-server.js';
+import { McpSessionEndpoint } from '../models/mcp-session-endpoint.js';
+import { customMcpForwarder } from './custom-mcp-forwarder.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { handlePlatformMcpRequest } from './workflow/tool-handlers.js';
+import { logger as rootLogger } from '../observability/logger.js';
 import { dispatch } from './mcp-dispatch.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getRedisClient).mockReturnValue({ get: vi.fn(), set: vi.fn(), del: vi.fn() } as never);
+  // 缺省无 custom 快照：既有路径零变化
+  vi.mocked(McpSessionEndpoint.findOne).mockReturnValue({
+    lean: vi.fn().mockResolvedValue({ sessionId: 'session-1', customMcpServers: [] }),
+  } as never);
 });
 
 const VALID_PAYLOAD = { sessionId: 'session-1', userId: 'user-1', serverNames: ['github-mcp'] };
@@ -295,6 +314,206 @@ describe('MCP Dispatch', () => {
       serverId: 'server-1',
       sessionId: 'session-1',
       request: notification,
+    });
+  });
+
+  describe('custom MCP 分流（F3/D1/D6/D7）', () => {
+    function mockSnapshot(entries: Array<{ id: string; name: string }> | null) {
+      vi.mocked(McpSessionEndpoint.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(
+          entries === null ? null : { sessionId: 'session-1', customMcpServers: entries },
+        ),
+      } as never);
+    }
+
+    it('快照 name 命中 → custom-mcp-forwarder，优先于同名个人 MCP（不再查 mcpservers）', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        sessionId: 'session-1',
+        userId: 'user-1',
+        serverNames: ['shared-mcp'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockSnapshot([{ id: '64b0000000000000000000c1', name: 'shared-mcp' }]);
+      const forwardResult = {
+        status: 200,
+        body: { jsonrpc: '2.0', id: 1, result: { ok: true } },
+      };
+      vi.mocked(customMcpForwarder.forward).mockResolvedValue(forwardResult as never);
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'shared-mcp',
+        token: 'valid-token',
+        body: VALID_REQUEST,
+      });
+
+      expect(McpSessionEndpoint.findOne).toHaveBeenCalledWith({ sessionId: 'session-1' });
+      expect(customMcpForwarder.forward).toHaveBeenCalledWith({
+        sessionId: 'session-1',
+        snapshotEntry: { id: '64b0000000000000000000c1', name: 'shared-mcp' },
+        body: VALID_REQUEST,
+      });
+      expect(McpServer.findOne).not.toHaveBeenCalled();
+      expect(mcpForwarder.request).not.toHaveBeenCalled();
+      expect(result).toEqual(forwardResult);
+    });
+
+    it('快照未命中 → 既有 mcpservers 路径零变化', async () => {
+      vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockSnapshot([{ id: '64b0000000000000000000c1', name: 'custom-a' }]);
+      vi.mocked(McpServer.findOne).mockResolvedValue(null as never);
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        token: 'valid-token',
+        body: VALID_REQUEST,
+      });
+
+      expect(customMcpForwarder.forward).not.toHaveBeenCalled();
+      expect(McpServer.findOne).toHaveBeenCalledWith({
+        userId: 'user-1',
+        name: 'github-mcp',
+        enabled: true,
+      });
+      expect(result.status).toBe(200);
+      expect(jsonRpcErrorBody(result).error.code).toBe('SERVER_NOT_FOUND');
+    });
+
+    it('T-CF6: 路由用快照 name、加载用快照 id（改名不影响存量会话路由）', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        sessionId: 'session-1',
+        userId: 'user-1',
+        serverNames: ['legacy-name'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      // 快照存的是签发期 name；当前 custommcpservers.name 已改为别的名字
+      mockSnapshot([{ id: '64b0000000000000000000c1', name: 'legacy-name' }]);
+      vi.mocked(customMcpForwarder.forward).mockResolvedValue({ status: 200, body: {} } as never);
+
+      await dispatch({
+        sessionId: 'session-1',
+        serverName: 'legacy-name',
+        token: 'valid-token',
+        body: VALID_REQUEST,
+      });
+
+      expect(customMcpForwarder.forward).toHaveBeenCalledWith(
+        expect.objectContaining({
+          snapshotEntry: { id: '64b0000000000000000000c1', name: 'legacy-name' },
+        }),
+      );
+      expect(McpServer.findOne).not.toHaveBeenCalled();
+    });
+
+    it('T-CF3: 转发状态原样透传（自定义 MCP 已删除 → 410）', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        sessionId: 'session-1',
+        userId: 'user-1',
+        serverNames: ['custom-a'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockSnapshot([{ id: '64b0000000000000000000c1', name: 'custom-a' }]);
+      vi.mocked(customMcpForwarder.forward).mockResolvedValue({
+        status: 410,
+        body: { jsonrpc: '2.0', id: 1, error: { code: 'SERVER_NOT_FOUND', message: 'gone' } },
+      } as never);
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'custom-a',
+        token: 'valid-token',
+        body: VALID_REQUEST,
+      });
+
+      expect(result.status).toBe(410);
+      expect(jsonRpcErrorBody(result).error.code).toBe('SERVER_NOT_FOUND');
+    });
+
+    it('D7: 通知（无 id）立即 202 且 fire-and-forget，转发失败仅 warn', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        sessionId: 'session-1',
+        userId: 'user-1',
+        serverNames: ['custom-a'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockSnapshot([{ id: '64b0000000000000000000c1', name: 'custom-a' }]);
+      // 通知的转发链路永不 resolve——入口不得等待
+      vi.mocked(customMcpForwarder.forward).mockReturnValue(new Promise(() => {}) as never);
+      const warnSpy = vi.spyOn(rootLogger, 'warn');
+      const notification = { jsonrpc: '2.0', method: 'notifications/initialized' };
+
+      const start = Date.now();
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'custom-a',
+        token: 'valid-token',
+        body: notification,
+      });
+
+      expect(Date.now() - start).toBeLessThan(5000);
+      expect(result.status).toBe(202);
+      expect(result.body).toBeUndefined();
+      expect(customMcpForwarder.forward).toHaveBeenCalledWith({
+        sessionId: 'session-1',
+        snapshotEntry: { id: '64b0000000000000000000c1', name: 'custom-a' },
+        body: notification,
+      });
+
+      // 后台失败：仅 warn，不影响 202 响应
+      vi.mocked(customMcpForwarder.forward).mockRejectedValue(new Error('upstream boom'));
+      const second = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'custom-a',
+        token: 'valid-token',
+        body: notification,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(second.status).toBe(202);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'custom-notification-forward-failed' }),
+        expect.any(String),
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('401（会话终态）在读快照之前返回，D6 诊断优先级 401 最高', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        sessionId: 'session-1',
+        userId: 'user-1',
+        serverNames: ['custom-a'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('revoked');
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'custom-a',
+        token: 'valid-token',
+        body: VALID_REQUEST,
+      });
+
+      expect(result.status).toBe(401);
+      expect(McpSessionEndpoint.findOne).not.toHaveBeenCalled();
+      expect(customMcpForwarder.forward).not.toHaveBeenCalled();
+    });
+
+    it('无 custom 快照的存量会话（字段缺失）不进入分流', async () => {
+      vi.mocked(jwt.verify).mockReturnValue(VALID_PAYLOAD as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      vi.mocked(McpSessionEndpoint.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ sessionId: 'session-1' }),
+      } as never);
+      vi.mocked(McpServer.findOne).mockResolvedValue(null as never);
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        token: 'valid-token',
+        body: VALID_REQUEST,
+      });
+
+      expect(customMcpForwarder.forward).not.toHaveBeenCalled();
+      expect(McpServer.findOne).toHaveBeenCalled();
+      expect(result.status).toBe(200);
     });
   });
 

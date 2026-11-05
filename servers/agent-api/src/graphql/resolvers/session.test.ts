@@ -269,6 +269,28 @@ describe('sessionResolvers.Mutation.createSession', () => {
     expect(Object.prototype.hasOwnProperty.call(arg, 'mcpServerIds')).toBe(true);
   });
 
+  it('forwards customMcpServerIds (null normalized to undefined)', async () => {
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-1' } as never);
+
+    await sessionResolvers.Mutation.createSession(
+      {},
+      {
+        input: {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          customMcpServerIds: ['64b0000000000000000000c1'],
+        },
+      },
+      context,
+    );
+
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ customMcpServerIds: ['64b0000000000000000000c1'] }),
+    );
+  });
+
   it('forwards modeId/modelId and normalizes null to undefined', async () => {
     vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-1' } as never);
 
