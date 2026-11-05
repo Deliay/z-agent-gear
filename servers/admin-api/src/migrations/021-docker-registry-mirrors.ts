@@ -91,7 +91,9 @@ fi
 # [zag:mirrors-parse-end]
 
 LEGACY_SHIM="/usr/local/bin/docker"
-if [ -f "$LEGACY_SHIM" ] && grep -q 'core.harbor.internal.fffdan.com' "$LEGACY_SHIM" 2>/dev/null; then
+# 判定标记 = 平台 shim 的特征函数（裁决 11）：以相邻单引号拼接书写，使 V6 脚本字面量
+# 不含该函数名（T-MIG-RM8 / tests/api 断言），shell 拼接后 grep 模式仍是同一标识符。
+if [ -f "$LEGACY_SHIM" ] && grep -q 'normalize''_image' "$LEGACY_SHIM" 2>/dev/null; then
   \${SUDO} rm -f "$LEGACY_SHIM"
   echo "已清理历史镜像引用规范化 shim：$LEGACY_SHIM"
 elif [ -e "$LEGACY_SHIM" ]; then

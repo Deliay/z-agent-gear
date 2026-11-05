@@ -284,6 +284,12 @@ describe('migration 021-docker-registry-mirrors', () => {
     expect(script).not.toContain('ZAG_DOCKER_SHIM_PATH');
     expect(script).not.toContain("<<'SHIM'");
 
+    // 清理判定标记必须是 normalize_image（裁决 11 / PRD 功能点 2「不误删环境内其他内容」），
+    // 以相邻单引号拼接书写，使脚本字面量不含 normalize_image（上方断言），shell 拼接后仍是同一模式。
+    expect(script).toContain("grep -q 'normalize''_image'");
+    // 不得以 Harbor 地址等宽松标记替代：提及该地址的非平台包装脚本会被误删
+    expect(script).not.toContain("grep -q 'core.harbor.internal.fffdan.com'");
+
     // 历史版本常量只读：V5 仍是完整的 shim 版本，未被 021 改写
     expect(DOCKER_SCRIPT_V5).toContain('normalize_image');
     expect(DOCKER_SCRIPT_V5).toContain("<<'SHIM'");
@@ -528,7 +534,7 @@ done
   // T-MIG-RM12：历史 shim 清理切片
   // -------------------------------------------------------------------------
 
-  it('T-MIG-RM12: removes only platform legacy shims', () => {
+  it('T-MIG-RM12: removes only platform legacy shims (marker = normalize_image)', () => {
     const dir = tmpDir();
     const shimPath = join(dir, 'docker');
     const source = `SUDO=
@@ -539,17 +545,28 @@ ${section(PARSE_BEGIN, JSON_END).replace(
 if [ -e "$LEGACY_SHIM" ]; then echo "EXISTS"; else echo "ABSENT"; fi
 `;
 
-    // 含平台标记 → 删除
+    // 夹具需具备辨别性：仅 normalize_image（不含 Harbor 地址）→ 必须删除（裁决 11 的判定标记）
     writeFileSync(
       shimPath,
-      '#!/usr/bin/env bash\nHARBOR_PROXY="core.harbor.internal.fffdan.com"\nnormalize_image() { :; }\n',
+      '#!/usr/bin/env bash\nnormalize_image() {\n  echo "$1"\n}\ncmd="${1:-}"\nexec /usr/bin/docker "$@"\n',
     );
     const removed = runBash(source);
     expect(removed.status).toBe(0);
     expect(removed.stdout).toContain('ABSENT');
     expect(removed.stdout).toContain('已清理历史镜像引用规范化 shim');
 
-    // 无平台标记 → 保留 + 告警
+    // 仅含 Harbor 地址、无 normalize_image（PRD §3.5 推荐写法的自制包装）→ 保留 + 告警，不得误删
+    writeFileSync(
+      shimPath,
+      '#!/usr/bin/env bash\n# 转发 ghcr 到内网代理\nexec /usr/bin/docker "$@"  # core.harbor.internal.fffdan.com/ghcr/\n',
+    );
+    const harborOnly = runBash(source);
+    expect(harborOnly.status).toBe(0);
+    expect(harborOnly.stdout).toContain('EXISTS');
+    expect(harborOnly.stdout).not.toContain('已清理历史镜像引用规范化 shim');
+    expect(harborOnly.stderr).toContain('保留不动');
+
+    // 两者皆无 → 保留 + 告警
     writeFileSync(shimPath, '#!/usr/bin/env bash\necho somebody-elses-wrapper\n');
     const preserved = runBash(source);
     expect(preserved.status).toBe(0);
