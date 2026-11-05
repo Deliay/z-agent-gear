@@ -5,6 +5,7 @@ import { Controller } from '../models/controller.js';
 import { actorFilter } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
+import { sessionService } from './session.js';
 
 const MAX_WORKSPACES = 10;
 
@@ -97,12 +98,27 @@ export class ControllerWorkspaceService {
     return this.mapWorkspace(workspace);
   }
 
+  /**
+   * 删除工作区：删除前先连带归档其下普通会话（「先结束后归档」，D7）。
+   * **归档失败抛错中止删除**（工作区行保留），避免「工作区没了、会话未归档」的中间态。
+   */
   async delete(id: string, userId: string): Promise<boolean> {
+    const workspace = await ControllerWorkspace.findOne({ _id: id, userId }).lean();
+    if (!workspace) return false;
+    await sessionService.archiveByWorkspace(userId, workspace);
     const result = await ControllerWorkspace.findOneAndDelete({ _id: id, userId });
     return !!result;
   }
 
+  /**
+   * 清空控制器下全部工作区：逐个执行连带归档，**任一失败中止**（不删除任何工作区行），
+   * 全部成功后才 `deleteMany`。
+   */
   async clear(controllerId: string, userId: string): Promise<boolean> {
+    const workspaces = await ControllerWorkspace.find({ controllerId, userId }).lean();
+    for (const workspace of workspaces) {
+      await sessionService.archiveByWorkspace(userId, workspace);
+    }
     await ControllerWorkspace.deleteMany({ controllerId, userId });
     return true;
   }
