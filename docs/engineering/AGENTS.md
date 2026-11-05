@@ -231,6 +231,7 @@ flowchart LR
 - [[proposals/20261104-feat-tool-call-terminal-rendering.md]] — 会话窗口中工具调用展示优化（终端输出渲染：xterm-headless 完整终端仿真解析为最终画面行 + React 静态渲染替代 ansi-to-html 剥离式管线、光标/擦除/覆写语义正确收敛、深黑色主题调色板单一来源、移除 dangerouslySetInnerHTML 注入面、纯前端零契约变更）
 - [[proposals/20261104-fix-github-project-setup-optimization.md]] — Github 项目设置优化（GITHUB_SETUP_SCRIPT 目录已存在分支重写：同仓库 remote 匹配直接复用不再 `git pull --ff-only`、空目录 `rmdir` 后续克隆、异仓库/非空目录/同名文件统一提示「目标目录已存在其他项目」、.git 残骸保守归冲突；T-CHG8 重写 + T-CHG9 真跑 bash 行为矩阵；契约注释增补）
 - [[proposals/20261104-fix-question-tool-multi-select.md]] — question 工具多选题呈现修复（纯前端：ElicitationDialog 识别 `type:array + items.anyOf` 渲染多选勾选组、提交按 Issue #445 以 `.join(',')` 回传 ACP，types.ts 补 anyOf 声明、enum/oneOf 数组提交形态不变，契约 §2.31 补值形态注记；T-QM1~5 组件单测 + E2E 真实 question schema 用例）
+- [[proposals/20261105-feat-session-interaction-content-preview.md]] — 新版会话交互与内容预览（agent-web 预览子系统：CodePreview Monaco 本地打包行定位/DiffEditor/批注模式、HtmlPreview iframe 沙箱元素选择、MarkdownPreview sourcepos 原文映射，分屏三模式与宽度门控、实况跟随复用 mergeToolCallMessages（写=常开 Tab diff 聚焦、读=共享预览 Tab）、输入框附件式提示词片段；新增 fs:read-file 读取链路（agent-gear 白名单/controller-api relay/agent-api sessionFileContent）；平台 MCP agent-session-preview-tools review 工具全会话默认装配 + SessionReview 领域（PENDING→通过/驳回/仅评论、30min 等待器、close 自动取消、用户级 SSE）与侧边栏 Review 分区；sendSessionMessage.parts 有序多片段链路（resolver→addMessage 合并文本+metadata→bridge 有序 ContentBlock），MCP 转发按 serverName 放宽至 30 分钟）
 
 ### 实现计划（`plan/`）
 
