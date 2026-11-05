@@ -94,6 +94,39 @@ pnpm run start   # Start production server
 - 删除：仅 `STOPPED/FAILED`，软删除 `cloudhosts.deletedAt`、撤销 ControllerKey、`Controller.status=offline`；Controller/会话/消息保留，列表与首页过滤。`Controller.cloudHost` 对软删除返回 null，前端对 `type=cloud && cloudHost=null` 同样按只读渲染。`Controller.cloudHost` 与 `myCloudHosts` 同为**工作区成员口径**（`actorFilter`，团队工作区成员可见他人创建的云电脑；无工作区上下文的引擎/内部链路仍按 `userId` 归属校验）。
 - 开关：`HARNESS_ENABLED=false` 时 capabilities 隐藏/禁用、create 返回 `harness feature is disabled`；存量仍可 list/stop/delete。
 
+## SessionReview 与会话预览工具（#461）
+
+- **领域**：`models/session-review.ts`（`sessionreviews`，`tenantId` 声明 + `applyTenantScope`，无唯一索引）+
+  迁移 `023-session-reviews`（幂等建 `{userId,status,createdAt:-1}`、`{sessionId,status}`）；
+  查询一律 `actorFilter(userId)`（多租户二期口径）。集合矩阵在 `models/tenant-isolation.test.ts`
+  与 `TENANT_ID_COLLECTIONS`（迁移 013 的集合注册表，回填对新集合为 no-op）双注册（20 集合）。
+- **状态机**：PENDING →（submit PENDING CAS）APPROVED/REJECTED/COMMENTED；→（超时/会话结束 CAS）
+  CANCELLED（`cancelReason: timeout | session_closed`）。CAS 未命中抛 `Review not found or already resolved`。
+- **等待器**（`services/session-review-service.ts`）：进程内 `Map<reviewId, {resolve, timer}>`，
+  `timer.unref()`，30min 到点自行 CAS 取消（`MCP_REVIEW_TIMEOUT_MS` 默认 1_800_000，env 可调）；
+  **单实例前提**（与 `KeyedMutex` / 中断重试调度器同前提）。会话 `ended/removed` 经
+  `sessionService.onSessionStatus` 批量取消（index.ts 注册）。
+- **平台 MCP**：`agent-session-preview-tools`（`services/session-preview-tools.ts`，`transport/source=platform`，
+  唯一工具 `review`）——`sessionService.create` **公共路径恒装配**（普通/云/节点会话全覆盖，与 controller.type
+  无关）并去重；「全部已启用」候选与 `setControllerDefaultMcp` 校验排除口径为
+  `$nin: [agent-cloud-host-tools, agent-session-preview-tools]`（选平台服务报 `MCP_SERVER_NOT_SELECTABLE`）；
+  `mcp-dispatch` platform 直发分支同名路由。review handler：归属校验（actorFilter）→ 文件解析
+  （相对基于 `worktreePath ?? cwd`，越界剔除标 `skipped`、去重、≤50）→ `createForMcp`（SSE
+  `session_review_requested`）→ `waitForResolution` → 终态回包 `{file_reviews, comment, status: Approve|Reject|Comment}`
+  / 取消回包 `{cancelled:true, reason}`（isError=false）。MCP 转发超时按 serverName 放宽 30min（契约 §2.12.1）。
+- **sessionFileContent**（resolver `resolvers/session.ts`）：归属校验（非归属 `Session not found`）+
+  **只读会话允许** + 路径守卫（归一后必须以会话根为前缀否则 `BAD_USER_INPUT`，与 controller 白名单双保险）→
+  发布 `session:command fs:read-file` → 轮询 Redis `fs:read-file:{requestId}` 500ms×30（≈15s）→
+  超时 `Controller offline or file read timeout`；错误文案白名单 `file too large`/`binary file`/`not found`/
+  `permission denied`/`Controller offline or file read timeout`。
+- **addMessage parts**（裁决 6/8）：服务端再过滤 trim 空文本/无 data 图片，全空抛
+  `BAD_USER_INPUT('empty prompt')`；合并文本（非空文本 `\n\n` 连接）写 `content`（标题取自合并文本）、
+  `metadata=JSON.stringify({parts})`（全量含图片）、parts JSON >12MB 拒绝；Redis `session:message`
+  载荷带 `parts`（controller-api 透传 `acp:message`）；无 parts 旧行为逐字不变。
+- `express.json({ limit: '20mb' })`（图片片段 base64 放宽；webhook 路由保持在其前挂载）。
+- 回归：`session-review-service.test.ts`（T-SR1~6）、`session-preview-tools.test.ts`（T-SPT1~7）、
+  `session.test.ts`（T-PARTS1~5、T-SPT6 装配）、`023-session-reviews.test.ts`（T-MIG-SR1~3，真库）。
+
 ## 云主机工作负载与 Github 项目设置（本期）
 
 - 工作负载目录：`services/cloud-workload-catalog.ts`（只读 `cloudworkloads`）：`listAll()` 返回 standard + harness（设置-工作负载与 MCP `workload_list`），`listStandard()` 仅 standard（创建期预装勾选，决策 10）；Github 预制项 `presetKey=github`，参数 `repoFullName`/`targetPath`。

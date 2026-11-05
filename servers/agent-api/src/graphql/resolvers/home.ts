@@ -5,6 +5,7 @@ import { controllerWorkspaceService } from '../../services/controller-workspace.
 import { sessionService } from '../../services/session.js';
 import { workflowInstanceService } from '../../services/workflow/instance.js';
 import { todoService } from '../../services/todo-service.js';
+import { sessionReviewService } from '../../services/session-review-service.js';
 import { gatewayService } from '../../services/gateway.js';
 import { worktreeService } from '../../services/worktree.js';
 import { mapInstance } from './workflow.js';
@@ -58,6 +59,7 @@ export const homeResolvers = {
         archivedDocs,
         todos,
         unreadTodoCount,
+        sessionReviews,
       ] = await Promise.all([
         degrade<Doc[]>(
           async () => (await controllerService.findAllByUser(userId)) as Doc[],
@@ -110,6 +112,12 @@ export const homeResolvers = {
           0,
           'unreadTodoCount',
         ),
+        // Review 列表（PENDING 在前、终态 resolvedAt 倒序、上限 20）；单分支失败降级 []
+        degrade<Doc[]>(
+          async () => (await sessionReviewService.listByUser(userId)) as unknown as Doc[],
+          [],
+          'sessionReviews',
+        ),
       ]);
 
       return {
@@ -122,6 +130,7 @@ export const homeResolvers = {
         archivedWorkflowInstances: archivedDocs.map((doc) => mapInstance(doc)),
         todos,
         unreadTodoCount,
+        sessionReviews,
       };
     },
   },
