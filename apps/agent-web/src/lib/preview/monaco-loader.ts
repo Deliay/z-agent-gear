@@ -13,6 +13,7 @@ export interface MonacoModule {
   MarkerSeverity: typeof import('monaco-editor').MarkerSeverity;
   KeyMod: typeof import('monaco-editor').KeyMod;
   KeyCode: typeof import('monaco-editor').KeyCode;
+  Range: typeof import('monaco-editor').Range;
 }
 
 let monacoPromise: Promise<MonacoModule> | null = null;
