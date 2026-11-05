@@ -23,8 +23,9 @@ import {
 import ProviderSection from '@/components/settings/ProviderSection';
 import ModelSection from '@/components/settings/ModelSection';
 import ControllerListSection from '@/components/settings/ControllerListSection';
-import McpProxyKeySection from '@/components/settings/McpProxyKeySection';
 import McpRegistrySection from '@/components/settings/McpRegistrySection';
+import ValutSection from '@/components/settings/ValutSection';
+import CustomMcpSection from '@/components/settings/CustomMcpSection';
 import GithubBindingSection from '@/components/settings/GithubBindingSection';
 import GitSettingsSection from '@/components/settings/GitSettingsSection';
 import WorkflowSection from '@/components/settings/WorkflowSection';
@@ -40,6 +41,8 @@ import {
   Puzzle,
   Workflow,
   HardDrive,
+  KeyRound,
+  Plug,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -50,6 +53,8 @@ const NAV_ITEMS = [
   { id: 'model-section', label: '可用模型', icon: Cpu },
   { id: 'controller-section', label: '控制器管理', icon: Server },
   { id: 'mcp-section', label: 'MCP 管理', icon: Puzzle },
+  { id: 'valut-section', label: 'Valut', icon: KeyRound },
+  { id: 'custom-mcp-section', label: '自定义 MCP', icon: Plug },
   { id: 'workflow-section', label: '工作流', icon: Workflow },
 ];
 
@@ -60,8 +65,9 @@ const NAV_GROUPS = [
   { label: 'Git', items: [NAV_ITEMS[1], NAV_ITEMS[2]] },
   { label: '模型设置', items: [NAV_ITEMS[3], NAV_ITEMS[4]] },
   { label: '本地控制器', items: [NAV_ITEMS[5]] },
-  { label: 'MCP 代理', items: [NAV_ITEMS[6]] },
-  { label: '工作流', items: [NAV_ITEMS[7]] },
+  // D5：「MCP 代理」入口移除后组名收敛为「MCP」（组内保留「MCP 管理」项）
+  { label: 'MCP', items: [NAV_ITEMS[6], NAV_ITEMS[7], NAV_ITEMS[8]] },
+  { label: '工作流', items: [NAV_ITEMS[9]] },
 ];
 
 export default function SettingsPage() {
@@ -211,12 +217,16 @@ export default function SettingsPage() {
           </section>
 
           <section id="mcp-section" className="mb-8 md:mb-10">
-            <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">MCP 代理</h2>
+            <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">MCP 管理</h2>
             <div className="space-y-4 md:space-y-6">
-              <McpProxyKeySection />
               <McpRegistrySection />
             </div>
           </section>
+
+          {/* D11：Valut 与自定义 MCP 紧随 #mcp-section，供 /settings?section=valut 穿透定位 */}
+          <ValutSection />
+
+          <CustomMcpSection />
 
           <section id="workflow-section" className="mb-8 md:mb-10">
             <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">工作流</h2>

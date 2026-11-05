@@ -86,7 +86,7 @@ describe('WorktreeSidebarGroup', () => {
     expect(screen.queryByRole('button', { name: '删除 Worktree' })).not.toBeInTheDocument();
   });
 
-  it('R-4: 预选 worktree 建会话时透传 modeId/modelId 与路径', () => {
+  it('R-4: 预选 worktree 建会话时透传 modeId/modelId/自定义 MCP 与路径', () => {
     const onCreate = vi.fn();
     render(
       <WorktreeSidebarGroup
@@ -116,6 +116,7 @@ describe('WorktreeSidebarGroup', () => {
       '/repo/.worktrees/feat-a',
       'mode-1',
       'model-1',
+      ['cmcp-1'],
     );
 
     expect(onCreate).toHaveBeenCalledWith(
@@ -128,6 +129,42 @@ describe('WorktreeSidebarGroup', () => {
       '/repo/.worktrees/feat-a',
       'mode-1',
       'model-1',
+      ['cmcp-1'],
+    );
+  });
+
+  it('R-4: 未传第 10 参时按 undefined 透传（不注入自定义 MCP）', () => {
+    const onCreate = vi.fn();
+    render(
+      <WorktreeSidebarGroup
+        workspaceId="ws-1"
+        controllerId="ctrl-1"
+        workspaceName="my-repo"
+        controllers={[]}
+        worktrees={[makeWorktree()]}
+        onCreate={onCreate}
+        fallbackSessions={[makeSession()]}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '添加' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: '新建会话' }));
+    const props = newSessionDialog.props as {
+      onCreate: (...args: unknown[]) => void;
+    };
+    props.onCreate('ctrl-1', 'opencode', 'ws-1');
+
+    expect(onCreate).toHaveBeenCalledWith(
+      'ctrl-1',
+      'opencode',
+      'ws-1',
+      undefined,
+      undefined,
+      undefined,
+      expect.anything(),
+      undefined,
+      undefined,
+      undefined,
     );
   });
 
