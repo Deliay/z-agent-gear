@@ -24,6 +24,7 @@ import WorktreeSidebarGroup from './worktree/WorktreeSidebarGroup';
 import { TodoListPanel } from './TodoListPanel';
 import ThemeToggle from './ThemeToggle';
 import TreeSection from './tree/TreeSection';
+import ReviewSection from './sidebar/ReviewSection';
 import GatewayItem from './GatewayItem';
 import GatewayDialog from './GatewayDialog';
 import WorkflowInstanceCard from './workflow/WorkflowInstanceCard';
@@ -609,6 +610,9 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
             ))}
           </ul>
         </SidebarSection>
+
+        {/* Review 分区（#461）：待 Review 默认展开、已 Review 默认折叠；空分区不渲染 */}
+        <ReviewSection sessionReviews={data?.sessionReviews} />
       </div>
 
       {showNewCloudHost && capabilities && (

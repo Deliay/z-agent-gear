@@ -1168,6 +1168,21 @@ export interface HomeOverviewData {
   archivedWorkflowInstances: WorkflowInstanceSummaryData[]
   todos: TodoItemData[]
   unreadTodoCount: number
+  /** Review 列表（PENDING 在前、终态 resolvedAt 倒序、上限 20） */
+  sessionReviews: SessionReviewSummaryData[]
+}
+
+/** Review 摘要（HOME_OVERVIEW.sessionReviews / GET_SESSION_REVIEW 共用） */
+export interface SessionReviewSummaryData {
+  id: string
+  sessionId: string
+  files: string[]
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'COMMENTED' | 'CANCELLED'
+  fileReviews: unknown
+  comment: string | null
+  cancelReason: string | null
+  createdAt: string
+  resolvedAt: string | null
 }
 
 export interface HomeOverviewQuery {

@@ -19,6 +19,8 @@ interface UseUserEventStreamOptions {
   enabled?: boolean;
   onHarnessLoginRequired?: (data: HarnessLoginRequestDataFields) => void;
   onHarnessLoginResolved?: (data: HarnessLoginResolvedEvent) => void;
+  /** Review 创建/终态（session_review_requested / session_review_updated） */
+  onSessionReview?: (data: { review?: { id: string; status: string } }) => void;
   onReady?: () => void;
   /** 建连/解析异常（非致命，仍会按退避重连） */
   onError?: (error: unknown) => void;
@@ -86,6 +88,12 @@ export function useUserEventStream(options: UseUserEventStreamOptions): void {
           case 'harness_login_resolved':
             optionsRef.current.onHarnessLoginResolved?.(
               message.data as HarnessLoginResolvedEvent,
+            );
+            break;
+          case 'session_review_requested':
+          case 'session_review_updated':
+            optionsRef.current.onSessionReview?.(
+              message.data as { review?: { id: string; status: string } },
             );
             break;
           case 'heartbeat':
