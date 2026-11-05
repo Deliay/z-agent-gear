@@ -26,6 +26,17 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // 裁决 7：monaco 单列独立 chunk（动态 import 隔离，首屏不加载）
+        manualChunks(id: string) {
+          if (id.includes('node_modules') && id.includes('monaco-editor')) return 'monaco';
+          return undefined;
+        },
+      },
+    },
+  },
   test: {
     globals: true,
     environment: 'jsdom',

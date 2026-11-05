@@ -612,7 +612,7 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
         </SidebarSection>
 
         {/* Review 分区（#461）：待 Review 默认展开、已 Review 默认折叠；空分区不渲染 */}
-        <ReviewSection sessionReviews={data?.sessionReviews} />
+        <ReviewSection sessionReviews={data?.sessionReviews ?? []} />
       </div>
 
       {showNewCloudHost && capabilities && (

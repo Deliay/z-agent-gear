@@ -125,7 +125,7 @@ export function ReviewPanel({ reviewId, sessionId, onAnnotation }: ReviewPanelPr
   const badge = STATUS_BADGES[review.status] ?? STATUS_BADGES.PENDING;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-col" data-testid="review-panel">
+    <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="review-panel">
       <div className="flex items-center gap-2 border-b border-border px-2 py-1">
         <span className={`rounded-sm px-2 py-0.5 text-xs ${badge.className}`} data-testid="review-status-badge">
           {badge.label}
@@ -167,11 +167,12 @@ export function ReviewPanel({ reviewId, sessionId, onAnnotation }: ReviewPanelPr
           {activeFile && (fileLoading || !fileData?.sessionFileContent) && (
             <div className="animate-pulse p-4 text-sm text-muted-foreground" data-testid="review-file-skeleton">加载中…</div>
           )}
+          {/* B2：内容恒只读（含 PENDING），批注恒可用 */}
           {activeFile && fileData?.sessionFileContent && (
             <ReviewFileContent
               filePath={activeFile}
               data={fileData.sessionFileContent}
-              readOnly={resolved}
+              readOnly
               onConfirm={handleFileAnnotation(activeFile)}
             />
           )}

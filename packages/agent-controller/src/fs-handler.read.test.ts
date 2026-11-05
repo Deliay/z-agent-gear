@@ -39,7 +39,8 @@ describe('FsHandler.readFile', () => {
     const target = join(outside, 'secret.txt');
     writeFileSync(target, 'secret');
 
-    const escapeResult = await handler.readFile(join(root, '..', 'fs-read-outside-secret', 'secret.txt'));
+    // 弱断言修正：逃逸路径指向白名单外真实存在的文件
+    const escapeResult = await handler.readFile(join(root, '..', outside.split('/').pop()!, 'secret.txt'));
     expect(escapeResult.success).toBe(false);
     expect(escapeResult.error).toBe('not found');
 

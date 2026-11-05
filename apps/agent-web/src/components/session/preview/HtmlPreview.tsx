@@ -26,7 +26,7 @@ interface SelectionEntry {
 
 const INNER_HTML_STORE_LIMIT = 4000;
 
-export function HtmlPreview({ html, readOnly = false, filePath, onConfirm }: HtmlPreviewProps) {
+export function HtmlPreview({ html, filePath, onConfirm }: HtmlPreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [token, setToken] = useState(() => generateToken());
   const [annotate, setAnnotate] = useState(false);
@@ -89,18 +89,16 @@ export function HtmlPreview({ html, readOnly = false, filePath, onConfirm }: Htm
   };
 
   return (
-    <div className="flex min-w-0 flex-col" data-testid="html-preview">
+    <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="html-preview">
       <div className="flex items-center gap-2 border-b border-border px-2 py-1">
-        {!readOnly && (
-          <button
-            type="button"
-            className={`rounded-sm px-2 py-1 text-xs ${annotate ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
-            onClick={() => setAnnotate((value) => !value)}
-            data-testid="html-annotate-toggle"
-          >
-            批注模式
-          </button>
-        )}
+        <button
+          type="button"
+          className={`rounded-sm px-2 py-1 text-xs ${annotate ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
+          onClick={() => setAnnotate((value) => !value)}
+          data-testid="html-annotate-toggle"
+        >
+          批注模式
+        </button>
         {annotate && selection.length > 0 && (
           <button
             type="button"

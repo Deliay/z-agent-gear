@@ -51,6 +51,8 @@ import { useLiveFileTracking } from '../../hooks/useLiveFileTracking';
 import { annotationsToPartText } from '../../lib/preview/annotations-to-part';
 import { mergeText, type PromptPart } from '../../lib/preview/prompt-parts';
 import type { AnnotationBatch } from '../../lib/preview/types';
+import { GET_SESSION_REVIEWS, type SessionReviewData } from '../../graphql/preview';
+import { useUserEventStream } from '../../hooks/useUserEventStream';
 
 interface AcpMessage {
   id: string;
@@ -150,6 +152,33 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     });
     toast.success('批注已回传到输入区');
   }, [id]);
+
+  // A2：Review 标签状态色（session_review_* SSE 即时 + sessionReviews 15s 轮询兜底）
+  const [reviewStatuses, setReviewStatuses] = useState<Record<string, SessionReviewData['status']>>({});
+  type ReviewStatusRow = { id: string; status: SessionReviewData['status'] };
+  const { refetch: refetchReviewStatuses } = useQuery<{ sessionReviews: ReviewStatusRow[] }>(
+    GET_SESSION_REVIEWS as never,
+    {
+      variables: { sessionId: id },
+      pollInterval: 15000,
+      fetchPolicy: 'cache-and-network',
+      onCompleted: (data: { sessionReviews: ReviewStatusRow[] }) => {
+        const map: Record<string, SessionReviewData['status']> = {};
+        for (const review of data?.sessionReviews ?? []) map[review.id] = review.status;
+        setReviewStatuses(map);
+      },
+    } as never,
+  );
+  useUserEventStream({
+    enabled: true,
+    onSessionReview: (event) => {
+      const review = (event as { review?: ReviewStatusRow }).review;
+      if (review?.id) {
+        setReviewStatuses((prev) => ({ ...prev, [review.id]: review.status }));
+        void refetchReviewStatuses?.();
+      }
+    },
+  });
 
   // 深链临时分屏标记（不写偏好）：关闭最后一个 Review 标签后回退 chat
   const [tempSplit, setTempSplit] = useState(false);
@@ -683,7 +712,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
       data-testid="session-split-root"
       data-split-mode={effectiveSplitMode}
     >
-      <div className="flex min-w-0 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-col">
       {protocolMismatch && (
         <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
           ⚠️ Agent 协议版本不兼容：期望 v{protocolMismatch.expectedVersion}，Agent 返回 v{protocolMismatch.agentVersion}。部分功能可能无法正常工作。
@@ -776,8 +805,8 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
       />
       </div>
       {effectiveSplitMode !== 'chat' && (
-        <div className="flex min-h-0 min-w-0 flex-col border-l border-border" data-testid="session-preview-column">
-          <PreviewPane sessionId={id} onAnnotation={handleAnnotation} />
+        <div className="flex h-full min-h-0 min-w-0 flex-col border-l border-border" data-testid="session-preview-column">
+          <PreviewPane sessionId={id} onAnnotation={handleAnnotation} reviewStatuses={reviewStatuses} />
         </div>
       )}
     </div>

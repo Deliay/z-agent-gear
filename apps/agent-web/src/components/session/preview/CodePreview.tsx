@@ -42,6 +42,10 @@ export interface CodePreviewProps {
 // model / viewState 按 filePath 复用（切 tab 保留滚动与光标位置）
 const viewStates = new Map<string, unknown>();
 
+type MouseDownHost = {
+  onMouseDown?: (fn: (e: { target: { position?: { lineNumber: number } }; event: { shiftKey: boolean } }) => void) => void;
+};
+
 export function CodePreview({
   filePath,
   content,
@@ -69,6 +73,25 @@ export function CodePreview({
     let editor: { saveViewState?: () => unknown; restoreViewState?: (state: unknown) => void; dispose: () => void; updateOptions?: (o: unknown) => void; revealLineInCenter?: (line: number) => void; onMouseDown?: (fn: (e: { target: { position?: { lineNumber: number } }; event: { shiftKey: boolean } }) => void) => void; deltaDecorations?: (old: string[], next: Array<Record<string, unknown>>) => string[]; getModel?: () => unknown } | null = null;
     let monacoRef: MonacoModule | null = null;
 
+    // A5：行选（点击/Shift 连选）对普通编辑器与 diff 的 modified 编辑器同源绑定
+    const bindLineSelection = (ed: MouseDownHost): void => {
+      if (!annotate || !ed.onMouseDown) return;
+      ed.onMouseDown((event) => {
+        const line = event.target.position?.lineNumber;
+        if (!line) return;
+        if (event.event.shiftKey && anchorLineRef.current) {
+          setRange({
+            startLine: Math.min(anchorLineRef.current, line),
+            endLine: Math.max(anchorLineRef.current, line),
+          });
+        } else {
+          anchorLineRef.current = line;
+          setRange({ startLine: line, endLine: line });
+          setPopupOpen(true);
+        }
+      });
+    };
+
     void loadMonaco().then((monaco) => {
       if (disposed || !containerRef.current) return;
       monacoRef = monaco;
@@ -90,12 +113,15 @@ export function CodePreview({
         if (changes.length > 0) {
           diffEditor.getModifiedEditor().revealLineInCenter(changes[0].modifiedStartLineNumber);
         }
+        // A5：diff 模式批注——行选绑定到 modified 编辑器（PRD 主场景：行内审查改动）
+        bindLineSelection(diffEditor.getModifiedEditor() as unknown as MouseDownHost);
         editorRef.current = {
           dispose: () => {
             original.dispose();
             modified.dispose();
             diffEditor.dispose();
           },
+          revealLineInCenter: (line: number) => diffEditor.getModifiedEditor().revealLineInCenter(line),
           getLineChanges: () => (diffEditor.getLineChanges?.() ?? []) as Array<{ modifiedStartLineNumber: number }>,
         };
         return;
@@ -113,22 +139,8 @@ export function CodePreview({
       if (savedState && created.restoreViewState) {
         created.restoreViewState(savedState as never);
       }
-      if (annotate && created.onMouseDown) {
-        created.onMouseDown((event) => {
-          const line = event.target.position?.lineNumber;
-          if (!line) return;
-          if (event.event.shiftKey && anchorLineRef.current) {
-            setRange({
-              startLine: Math.min(anchorLineRef.current, line),
-              endLine: Math.max(anchorLineRef.current, line),
-            });
-          } else {
-            anchorLineRef.current = line;
-            setRange({ startLine: line, endLine: line });
-            setPopupOpen(true);
-          }
-        });
-      }
+      // A5：行选绑定（与 diff 的 modified 编辑器同源逻辑）
+      bindLineSelection(created as unknown as MouseDownHost);
       editorRef.current = {
         dispose: () => {
           if (created.saveViewState) viewStates.set(filePath, created.saveViewState());
@@ -196,23 +208,22 @@ export function CodePreview({
   }, [comments, filePath, onConfirm, summary]);
 
   return (
-    <div className="flex min-w-0 flex-col" data-testid="code-preview">
+    <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="code-preview">
       {truncated && (
         <div className="border-b border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-xs" data-testid="code-truncated">
           文件过大，内容已截断展示
         </div>
       )}
       <div className="flex items-center gap-2 border-b border-border px-2 py-1">
-        {!readOnly && (
-          <button
-            type="button"
-            className={`rounded-sm px-2 py-1 text-xs ${annotate ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
-            onClick={() => { setAnnotate((value) => !value); setRange(null); setPopupOpen(false); }}
-            data-testid="code-annotate-toggle"
-          >
-            批注模式
-          </button>
-        )}
+        {/* B2：批注入口与 readOnly 解耦（内容只读、批注恒可用） */}
+        <button
+          type="button"
+          className={`rounded-sm px-2 py-1 text-xs ${annotate ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'}`}
+          onClick={() => { setAnnotate((value) => !value); setRange(null); setPopupOpen(false); }}
+          data-testid="code-annotate-toggle"
+        >
+          批注模式
+        </button>
         {annotate && (
           <button
             type="button"

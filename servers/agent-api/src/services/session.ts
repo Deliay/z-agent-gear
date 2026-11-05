@@ -1056,7 +1056,7 @@ export class SessionService {
       }
       contentValue = kept
         .filter((part) => part.type === 'text')
-        .map((part) => part.text)
+        .map((part) => (part.text ?? '').trim())
         .join('\n\n');
       metadata = JSON.stringify({ parts: kept });
     }

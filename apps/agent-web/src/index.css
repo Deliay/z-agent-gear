@@ -169,3 +169,25 @@
   white-space: nowrap;
   border-width: 0;
 }
+
+/* 会话内容预览高亮（#461）：Monaco 行定位装饰 / HTML 沙箱选择 / Markdown 批注覆盖 */
+.zag-focus-highlight {
+  background-color: rgb(250 204 21 / 0.28);
+}
+.zag-focus-marker {
+  background-color: rgb(250 204 21 / 0.12);
+  outline: 1px solid rgb(250 204 21 / 0.35);
+}
+[data-zag-hover] {
+  outline: 2px solid #3b82f6;
+  outline-offset: -1px;
+}
+[data-zag-selected] {
+  outline: 2px solid #f59e0b;
+  outline-offset: -1px;
+  background-color: rgb(245 158 11 / 0.12);
+}
+.md-annotation-highlight {
+  background-color: rgb(250 204 21 / 0.3);
+  border-radius: 2px;
+}

@@ -249,6 +249,41 @@ describe('Session Review API (T-API-SR1~5)', () => {
     expect(data.file_reviews).toEqual({ 'src/b.ts': [] });
   }, 30000);
 
+  it('T-API-SR6 close 会话 → PENDING 批量 CANCELLED(session_closed)', async () => {
+    // 新建一个 review 后关闭会话
+    const callPromise = callPreviewTool(socket, sessionId, token, 'review', { files: ['src/c.ts'] }, 8000).catch(() => null);
+    let reviewId = '';
+    for (let i = 0; i < 20 && !reviewId; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const res = await gqlRequest(SESSION_REVIEWS, { status: 'PENDING', sessionId }, token);
+      const list = (await res.json()).data.sessionReviews as Array<Record<string, any>>;
+      if (list.length > 0) reviewId = list[0].id;
+    }
+    expect(reviewId).toBeTruthy();
+
+    const closeRes = await gqlRequest(
+      'mutation Close($id: ID!) { closeSession(id: $id) }',
+      { id: sessionId },
+      token,
+    );
+    expect((await closeRes.json()).errors).toBeUndefined();
+
+    // PENDING → CANCELLED(session_closed)
+    let cancelled: Record<string, any> | null = null;
+    for (let i = 0; i < 20 && !cancelled; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const res = await gqlRequest(
+        'query R($id: ID!) { sessionReview(id: $id) { id status cancelReason } }',
+        { id: reviewId },
+        token,
+      );
+      const row = (await res.json()).data.sessionReview;
+      if (row && row.status !== 'PENDING') cancelled = row;
+    }
+    expect(cancelled).toMatchObject({ status: 'CANCELLED', cancelReason: 'session_closed' });
+    await callPromise;
+  }, 40000);
+
   it('T-API-SR5 homeOverview.sessionReviews 聚合（PENDING 在前）', async () => {
     const res = await gqlRequest(HOME_SESSION_REVIEWS, undefined, token);
     const json = await res.json();

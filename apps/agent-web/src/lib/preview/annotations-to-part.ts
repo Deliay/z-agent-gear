@@ -28,7 +28,8 @@ function formatAnchor(comment: ReviewComment): string {
 
 function formatComment(comment: ReviewComment, index: number): string {
   const anchor = comment.anchor;
-  const head = `${index}. ${formatAnchor(comment)}${formatAnchor(comment) ? '：' : ''}${comment.body}`;
+  const label = formatAnchor(comment);
+  const head = `${index}. ${label}${label ? '：' : ''}${comment.body}`;
   if (anchor.kind === 'markdown') {
     const quote = anchor.text
       .split('\n')

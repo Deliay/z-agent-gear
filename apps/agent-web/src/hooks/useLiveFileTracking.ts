@@ -77,11 +77,17 @@ export interface LiveTrackingOptions {
 
 export function useLiveFileTracking({ sessionId, messages, live, store }: LiveTrackingOptions): void {
   const consumedRef = useRef(new Set<string>());
-  const liveSinceRef = useRef<number>(0);
 
+  // A3：开启实况时刻已存在的工具调用视为历史，全部预标记为已消费（进页面不回放历史）——
+  // 仅跟踪开启之后到达/更新的调用；切会话/关闭实况清空
   useEffect(() => {
-    consumedRef.current.clear();
-    liveSinceRef.current = live ? Date.now() : 0;
+    const consumed = consumedRef.current;
+    consumed.clear();
+    if (!live) return;
+    for (const call of groupMessages(messages).map((group) => mergeToolCallMessages(group.messages))) {
+      if (call.toolCallId) consumed.add(`${call.toolCallId}:${fingerprint(call)}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, live]);
 
   useEffect(() => {

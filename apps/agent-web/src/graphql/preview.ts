@@ -69,6 +69,15 @@ export const GET_SESSION_REVIEW = gql`
   }
 `;
 
+export const GET_SESSION_REVIEWS = gql`
+  query GetSessionReviews($sessionId: ID) {
+    sessionReviews(sessionId: $sessionId) {
+      id
+      status
+    }
+  }
+`;
+
 export const SUBMIT_SESSION_REVIEW = gql`
   mutation SubmitSessionReview($id: ID!, $input: SubmitSessionReviewInput!) {
     submitSessionReview(id: $id, input: $input) {

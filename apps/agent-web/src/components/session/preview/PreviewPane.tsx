@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@apollo/client/react';
 import { usePreviewStore } from '../../../stores/preview';
 import { PreviewTabBar } from './PreviewTabBar';
@@ -35,7 +35,7 @@ export function PreviewPane({ sessionId, onAnnotation, reviewStatuses = {}, rend
   const active = store.tabs.find((tab) => tab.id === store.activeTabId) ?? null;
 
   return (
-    <div className="flex min-w-0 flex-col" data-testid="preview-pane">
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col" data-testid="preview-pane">
       <PreviewTabBar
         tabs={store.tabs}
         activeTabId={store.activeTabId}
@@ -59,7 +59,7 @@ export function PreviewPane({ sessionId, onAnnotation, reviewStatuses = {}, rend
           />
         )}
         {active && active.kind === 'review' && (
-          <div className="min-h-0" data-testid="preview-review-tab">
+          <div className="h-full min-h-0" data-testid="preview-review-tab">
             {renderReview ? renderReview(active.reviewId) : <ReviewPanelLazy reviewId={active.reviewId} sessionId={sessionId} onAnnotation={onAnnotation} />}
           </div>
         )}
@@ -123,11 +123,15 @@ type ReviewPanelComponent = React.ComponentType<{
 /** Review 面板动态懒加载（monaco/Mermaid 同型 seam） */
 function ReviewPanelLazy(props: { reviewId: string; sessionId: string; onAnnotation: (batch: AnnotationBatch) => void }) {
   const [Component, setComponent] = useState<ReviewPanelComponent | null>(null);
-  if (!Component) {
+  useEffect(() => {
+    let disposed = false;
     void import('./ReviewPanel').then((module: { ReviewPanel: ReviewPanelComponent }) => {
-      setComponent(() => module.ReviewPanel);
+      if (!disposed) setComponent(() => module.ReviewPanel);
     });
-  }
+    return () => {
+      disposed = true;
+    };
+  }, []);
   if (!Component) {
     return <div className="animate-pulse p-4 text-sm text-muted-foreground" data-testid="review-skeleton">加载中…</div>;
   }
