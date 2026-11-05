@@ -10,7 +10,7 @@ type: Permanent
 **技术提案版本**: v1.0
 **创建日期**: 2026-11-05
 **作者**: z-agent-gear 工作流
-**feat-branch**: `prd/session-interaction-content-preview`（需求总分支；实现分支 `feat/session-interaction-content-preview-impl`，参考 z-git skill 与仓库 `prd/<slug>` + `feat/<slug>-impl` 惯例）
+**feat-branch**: `prd/session-interaction-content-preview`（需求总分支；实现分支 `impl/session-interaction-content-preview`，参考 z-git skill 与仓库 `prd/<slug>` + `impl/<slug>` 惯例）
 
 ## 1. 概述
 
