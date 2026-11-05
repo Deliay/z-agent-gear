@@ -7,7 +7,7 @@ type: Permanent
 
 **功能名称**: 「Docker」工作负载镜像加速改用 Docker 原生镜像仓库镜像（registry mirror）配置
 **关联 PRD**: `docs/product/draft/20261105-docker-registry-mirrors.md`
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1（v1.1：评审意见——`docker_registry_mirrors` 默认值补 `docker-hub-proxy` 后缀，并按实测更新可达性结论）
 **创建日期**: 2026-11-05
 **作者**: ZeroAsh
 **feat-branch**: `prd/docker-registry-mirrors`（需求总分支；实现分支按 `impl/docker-registry-mirrors` 另行切出）
@@ -125,7 +125,7 @@ graph LR
     "label": "镜像仓库镜像地址",
     "type": "text",
     "options": [],
-    "defaultValue": "https://core.harbor.internal.fffdan.com"
+    "defaultValue": "https://core.harbor.internal.fffdan.com/docker-hub-proxy"
   }
   ```
 
@@ -233,7 +233,7 @@ sequenceDiagram
 ### 6.1 决策列表
 
 1. **用 dockerd 原生 `registry-mirrors`（daemon.json），而非保留 shim 或改用 CLI flag**。daemon.json 是 Docker 标准持久配置，`docker info` 可见、排障路径标准；CLI flag（`dockerd --registry-mirror`）与 daemon.json 同名指令冲突会导致 dockerd 拒绝启动，且不利于「配置落盘可查」。shim 方案整体废弃。
-2. **镜像地址用工作负载参数承载**（默认值 = `https://core.harbor.internal.fffdan.com`，已实测 `/v2/` 返回 401 鉴权挑战 = registry API 在线）。沿用 `docker_apt_url` 的决策：参数默认值即「已填写」，天然获得启动时可改、后台可维护、随执行计划落档可查三项能力；脚本内不内置默认地址（单一事实来源是参数默认值），`DOCKER_REGISTRY_MIRRORS` 环境变量保留最高优先级覆盖。
+2. **镜像地址用工作负载参数承载**（默认值 = `https://core.harbor.internal.fffdan.com/docker-hub-proxy`，2026-11-05 实测：`/docker-hub-proxy/v2/` 返回 200、`/docker-hub-proxy/v2/library/ubuntu/manifests/24.04` 返回 200，即该路径为可直接拉通 Docker Hub 官方镜像的代理缓存，mirror 形态可用）。沿用 `docker_apt_url` 的决策：参数默认值即「已填写」，天然获得启动时可改、后台可维护、随执行计划落档可查三项能力；脚本内不内置默认地址（单一事实来源是参数默认值），`DOCKER_REGISTRY_MIRRORS` 环境变量保留最高优先级覆盖。
 3. **registry-mirrors 只覆盖 Docker Hub 是 Docker 原生限制**，本期接受该行为变化：ghcr.io / lscr.io 等非 Docker Hub 仓库不再自动改写，按原生行为直连；需要代理时显式书写 Harbor 代理项目前缀（如 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`），该写法 shim 时代即支持、行为不变。PRD §3.5 已列为周知项。
 4. **地址为空 = 合法配置**（不配置镜像加速），不做快速失败。与 `docker_apt_url` 不同：软件源缺失时安装无法进行，而 mirror 缺失时 dockerd 可正常工作（直连语义），因此不引入新的失败模式；执行记录打印说明，避免「以为有代理实际没有」的静默偏差。
 5. **历史 shim 标记匹配清理**。`/usr/local/bin/docker` 在 PATH 上先于 `/usr/bin/docker`，旧版本装过的 shim 不删会持续拦截；只按 `normalize_image` 标记删除，非本平台内容保留并告警，不误删。
@@ -245,7 +245,7 @@ sequenceDiagram
 
 | 类型 | 内容 | 说明 |
 |------|------|------|
-| 依赖 | 内网 Harbor 代理以 registry mirror 形态可用 | `/v2/` 已实测在线（401 挑战）；「Docker Hub 官方镜像经 mirror 实际拉通」列入 §9.3 发布前置核对 |
+| 依赖 | 内网 Harbor 代理以 registry mirror 形态可用 | 已实测拉通：`/docker-hub-proxy/v2/` 与官方镜像 manifest 均返回 200（见 §6.1 决策 2）；发布后按 §9.3 冒烟复核 |
 | 依赖 | worker 内 agent-gear ≥2.3.0 | 参数注入（现网镜像已满足） |
 | 约束 | 不改契约、不改镜像、不改其他预制工作负载与「必须」语义 | 见 §1.3 |
 | 约束 | TEXT 参数值上限 1024 字符、键名正则等既有校验口径不变 | `docker_registry_mirrors` 满足 `^[a-z][a-z0-9_]{0,31}$` |
@@ -277,7 +277,7 @@ tests/api/src/admin-api/
 | 类型 | 用例 | 覆盖内容 |
 |------|------|---------|
 | 单元测试 | `T-MIG-RM1` | 迁移名暴露为 `020-docker-registry-mirrors` |
-| 单元测试 | `T-MIG-RM2` | v4 脚本 → 刷新为 v5 且追加 `docker_registry_mirrors` 参数（默认值为内网 Harbor 地址） |
+| 单元测试 | `T-MIG-RM2` | v4 脚本 → 刷新为 v5 且追加 `docker_registry_mirrors` 参数（默认值 = `https://core.harbor.internal.fffdan.com/docker-hub-proxy`） |
 | 单元测试 | `T-MIG-RM3` | v1/v2/v3 脚本同样刷新为 v5 + 补参数 |
 | 单元测试 | `T-MIG-RM4` | 已 v5 且参数已存在 → 幂等跳过（不 `save`、不 `create`） |
 | 单元测试 | `T-MIG-RM5` | 已 v5 但参数缺失 → 只补参数，不动脚本 |
@@ -299,7 +299,7 @@ tests/api/src/admin-api/
 
 ### 9.2 配置管理
 
-- 默认镜像地址固化为「Docker」工作负载参数默认值 `https://core.harbor.internal.fffdan.com`（迁移写入，管理员可在后台调整；多地址逗号分隔）；
+- 默认镜像地址固化为「Docker」工作负载参数默认值 `https://core.harbor.internal.fffdan.com/docker-hub-proxy`（迁移写入，管理员可在后台调整；多地址逗号分隔）；
 - `DOCKER_REGISTRY_MIRRORS` 保留为可选的环境级覆盖（优先级最高），无需在 Job/镜像层配置；
 - `ZAG_DOCKER_SHIM_PATH` 随 shim 退役，脚本不再读取（文档残留一并清理）。
 
@@ -313,7 +313,7 @@ flowchart LR
     D --> E[存量定制环境发布说明提示<br/>参照 v5 自行调整]
 ```
 
-- **发布前置核对**：运维确认内网 Harbor 以 mirror 形态可拉通 Docker Hub 官方镜像（`docker pull ubuntu:24.04` 经 mirror 成功）；
+- **发布前置核对**：mirror 形态已实测拉通（见 §6.1 决策 2）；发布后在新容器冒烟复核 `docker pull ubuntu:24.04` 经 mirror 成功；
 - **无需重建 worker 镜像**：脚本与参数均在库内，部署 admin-api 即生效；
 - 运行中的旧容器不受影响，重建后才使用新配置；旧容器重跑初始化时历史 shim 被自动清理；
 - 若 020 日志出现「modified by admin, skipping」，在发布说明中提示对应管理员。
@@ -322,7 +322,7 @@ flowchart LR
 
 - [ ] 技术方案评审通过
 - [ ] `T-MIG-RM1`~`T-MIG-RM9` 全部通过，既有迁移与 runner 测试全绿，覆盖率 ≥80%
-- [ ] 全新环境首次启动：`cloudworkloads` 中「Docker」为脚本 v5 且含 `docker_registry_mirrors` 参数（默认值为内网 Harbor 地址）
+- [ ] 全新环境首次启动：`cloudworkloads` 中「Docker」为脚本 v5 且含 `docker_registry_mirrors` 参数（默认值 = `https://core.harbor.internal.fffdan.com/docker-hub-proxy`）
 - [ ] 存量未定制环境升级后与上条一致；定制脚本不被覆盖且有告警日志
 - [ ] 按默认参数启动容器并挂载「Docker」：初始化成功；`docker info` 可见镜像地址；`docker pull ubuntu:24.04` 与 `docker build`（base image）均经 mirror 完成；`/usr/local/bin/docker` 不存在
 - [ ] 启动时修改镜像地址：`docker info` 反映新地址
