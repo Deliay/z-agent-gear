@@ -64,6 +64,8 @@ import * as migration018Pnpm12Upgrade from './migrations/018-pnpm-12-upgrade.js'
 import * as migration019WorkloadIdempotentAnchors from './migrations/019-workload-idempotent-anchors.js';
 // 020：Docker 镜像代理 shim 识别带值选项，修复 `--name/-e/-p/-v/--platform` 值被误当镜像改写
 import * as migration020DockerShimValueOptions from './migrations/020-docker-shim-value-options.js';
+// 021：Docker 预制脚本 v6——取消镜像引用规范化 shim，改用原生 registry-mirrors（daemon.json）
+import * as migration021DockerRegistryMirrors from './migrations/021-docker-registry-mirrors.js';
 import { CloudHost } from './models/cloud-host.js';
 import { StorageBillingCursor } from './models/storage-billing-cursor.js';
 import { storageTickService } from './services/billing/storage-tick.js';
@@ -161,6 +163,8 @@ async function start() {
   // 018-pnpm-12-upgrade——四条 Harness/Playwright 脚本 pnpm 9.15.9 → 12.16.1
   // 019-workload-idempotent-anchors——预制工作负载「锚点 + 结尾硬校验 + 可重入」核查与刷新（标准版本已含 018 的 pnpm 12）
   // 020-docker-shim-value-options——刷新 Docker 预制脚本为 v5：镜像代理 shim 跳过带值选项（--name/-e/-p/-v 等）
+  // 021-docker-registry-mirrors——刷新 Docker 预制脚本为 v6：删除 shim 装配、清理历史 shim、写
+  //   /etc/docker/daemon.json 的 registry-mirrors（配置变更重启 dockerd 并 docker info 硬校验）+ 补齐参数
   try {
     await runMigrations([
       migration001,
@@ -185,6 +189,7 @@ async function start() {
       migration018Pnpm12Upgrade,
       migration019WorkloadIdempotentAnchors,
       migration020DockerShimValueOptions,
+      migration021DockerRegistryMirrors,
     ]);
   } catch (err) {
     logger.error({ err }, 'runMigrations failed (non-fatal)');
