@@ -456,6 +456,16 @@ Controller 转发 ACP 输出。
 - Controller 断线：全部 pending 立即 503 快速失败，不挂起。
 - Socket.IO 单帧体积上限：controller-api `maxHttpBufferSize` 调为 16MB，超限回 502。
 
+**serverName 路由口径（MCP+Valut 功能迭代，agent-api `mcp-dispatch.dispatch()` 内部分流）：**
+
+- `serverName` 先匹配会话端点 `mcp_session_endpoints.customMcpServers` 快照（`payload.serverNames`
+  作用域校验通过后、既有 `mcpservers` 查询之前；custom 优先于同名个人 MCP）；
+- 命中 → agent-api `custom-mcp-forwarder` 服务端直连真实 endpoint（注入 customHeaders 与
+  bearer 凭据，均不出服务端）；自定义 MCP 已删除 → `410`（全端点同时失效，按 id 每次请求实时校验）；
+- 未命中 → 既有 `mcpservers` 转发路径（platform / registered_proxy），行为零变化；
+- 自定义 MCP 不经 `mcp:forward:*` Redis 频道（该频道仅 registered_proxy），见
+  [mcp-forward-redis.md](./mcp-forward-redis.md)。
+
 ### 2.12.2 `mcp:response`（Server → Controller）
 
 返回 MCP 调用结果。
@@ -465,7 +475,7 @@ Controller 转发 ACP 输出。
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `requestId` | `string` | 是 | 对应的请求 ID |
-| `status` | `number` | 是 | HTTP 状态码（取值 `200`/`401`/`404`/`410`/`502`/`503`/`504`） |
+| `status` | `number` | 是 | HTTP 状态码（取值 `200`/`401`/`404`/`410`/`502`/`503`/`504`；`410` = 自定义 MCP 已删除，全端点同时失效） |
 | `body` | `object` | 是 | JSON-RPC 响应体 |
 
 **客户端行为：**

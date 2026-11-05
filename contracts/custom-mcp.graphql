@@ -1,0 +1,86 @@
+# 自定义 MCP（工作区级）：HTTP 协议；验证方式 none | bearer。
+#
+# bearer 与 Valut 联动两条路径：
+#   - 新建 token（newToken）：写入 Valut `service-mcp-bearer-tokens`
+#     （ref=本 MCP 记录，editable=true / deletable=false，禁止删除、允许编辑）；
+#   - 选择 manual namespace 既有条目（existingEntryId，仅 manual 可选）：仅建 ref。
+# 删除：自建 token 级联删除 Valut 条目 + ref；引用 manual 仅解除 ref。
+# 编辑：自建 token 可就地更新值（旧值不回显）；manual 引用（bearerEntryManaged=false）
+#       经 bearerEntryId 给穿透链接（前端跳转 /settings?section=valut&entry=<id>）。
+#
+# 平台代理转发口径（v1.1 评审结论，安全红线）：
+#   - 自定义 MCP 对会话只暴露既有 loopback 代理地址 `/mcp/<sessionId>/<name>` +
+#     会话级 Bearer key（mcp-endpoint 签发、随会话生灭）；
+#   - 真实 endpoint、customHeaders、bearer token 不出服务端——agent-api
+#     custom-mcp-forwarder 服务端直连真实 endpoint 注入凭据；
+#   - 删除自定义 MCP → 转发路径按 id 每次请求实时存在性校验失败 → 全端点 410 同时失效；
+#   - 改名不影响存量会话路由（快照 name 路由 + id 实时加载配置，编辑即时生效）。
+#
+# 错误口径（白名单，逐字透传）：
+#   `custom mcp server not found` / `invalid mcp name` / `invalid mcp endpoint` /
+#   `invalid custom headers` / `bearer token is required` /
+#   `bearer entry must be manual namespace` / `bearer entry not editable in place` /
+#   `global workspace is read-only` / `Not found` / `Not authenticated`
+
+enum CustomMcpAuthType {
+  none
+  bearer
+}
+
+type CustomMcpHeader {
+  key: String!
+  values: [String!]!     # 同名 header 允许多值
+}
+
+type CustomMcpServer {
+  id: ID!
+  name: String!
+  description: String
+  endpoint: String!      # http(s) URL（仅入出参的地址本身；调用由平台代理转发完成）
+  authType: CustomMcpAuthType!
+  customHeaders: [CustomMcpHeader!]!
+  bearerEntryId: ID      # bearer 时对应的 Valut 条目（自建或引用）
+  bearerEntryManaged: Boolean  # true=自建（service-mcp-bearer-tokens，可就地更新）；false=引用 manual（穿透编辑）
+  workspaceId: ID!
+  createdBy: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input CustomMcpHeaderInput {
+  key: String!           # 禁空白与冒号
+  values: [String!]!     # 单值 ≤4096；总条数 ≤32
+}
+
+input CustomMcpAuthInput {
+  type: CustomMcpAuthType!
+  newToken: String        # type=bearer 且新建：token 明文（仅入参，永不回显）
+  existingEntryId: ID     # type=bearer 且引用：仅 manual 条目
+}
+
+input CreateCustomMcpServerInput {
+  name: String!           # trim 后 1..64（工作区内唯一）
+  description: String     # ≤512
+  endpoint: String!       # 仅 http:// 或 https://，≤1024
+  auth: CustomMcpAuthInput!
+  customHeaders: [CustomMcpHeaderInput!]
+}
+
+input UpdateCustomMcpServerInput {
+  name: String
+  description: String
+  endpoint: String
+  auth: CustomMcpAuthInput      # 省略=不动；bearer+newToken=更新自建值；bearer+existingEntryId=改挂 manual 引用
+  customHeaders: [CustomMcpHeaderInput!]
+}
+
+extend type Query {
+  customMcpServers: [CustomMcpServer!]!   # 当前工作区（独占型可见集）
+  customMcpServer(id: ID!): CustomMcpServer
+}
+
+extend type Mutation {
+  createCustomMcpServer(input: CreateCustomMcpServerInput!): CustomMcpServer!
+  updateCustomMcpServer(id: ID!, input: UpdateCustomMcpServerInput!): CustomMcpServer!
+  deleteCustomMcpServer(id: ID!): Boolean!
+}

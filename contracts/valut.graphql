@@ -1,0 +1,77 @@
+# Valut：工作区级加密 key-value secrets。
+#
+# 安全红线（实现期不得回退）：
+#   - 本契约不存在 value 明文出参（含错误信息字段）；页面/日志/响应一律不见明文。
+#   - 编辑 = 重写新值（旧值不可见、不可回显）；解密仅服务端内部
+#     （valut-service.resolveValue），本期唯一消费点 = custom-mcp-forwarder 内存请求头组装。
+#   - 值加密入库（AES-256-GCM，密钥取环境变量 CREDENTIAL_ENCRYPTION_KEY，未配置即抛错、不静默降级）。
+#
+# namespace：
+#   - manual（展示名「自定义密钥」）由迁移 023 播种，用户手动条目恒落 manual；
+#   - 服务托管为 service-{功能点}，全局跨租户唯一（valutnamespaces.name 唯一索引），
+#     功能点启动自检创建（本期：service-mcp-bearer-tokens）；不提供用户侧 namespace 管理入口。
+#
+# 权限（工作区，复用 workspaceAccess/workspace-scope，零新机制）：
+#   - 全局工作区 = 租户全员可读、仅 admin 可写（developer 写被插件拦截
+#     `global workspace is read-only`）；
+#   - 普通工作区 = 成员可读写；
+#   - 跨工作区/非成员访问一律 `Not found`（不泄露存在性）。
+#
+# 错误口径（白名单，逐字透传）：
+#   `valut entry not found` / `valut key already exists` / `invalid valut key` /
+#   `invalid valut value` / `valut entry is not editable` / `valut entry is not deletable` /
+#   `valut entry has refs` / `global workspace is read-only` / `Not found` / `Not authenticated`
+
+type ValutNamespace {
+  name: String!          # manual | service-{feature}
+  displayName: String!   # manual => 「自定义密钥」
+  managed: Boolean!      # true=服务托管（service-*），用户不可直接新增
+}
+
+type ValutRef {
+  feature: String!       # 功能点，如 mcp-bearer-tokens
+  refId: ID!             # 引入该条目的数据标识，如 customMcpServer id
+  refLabel: String       # 展示用（如 MCP 名称）
+  createdAt: String!
+}
+
+type ValutEntry {
+  id: ID!
+  namespace: String!
+  namespaceDisplayName: String!
+  key: String!
+  editable: Boolean!
+  deletable: Boolean!
+  refs: [ValutRef!]!     # 哪些数据在用这条 secret（可多条）
+  createdBy: String!
+  createdAt: String!
+  updatedAt: String!
+  # 注意：无 value 字段（安全红线，任何字段列表/选择集均不含明文值）
+}
+
+type ValutNamespaceGroup {
+  namespace: ValutNamespace!
+  entries: [ValutEntry!]!
+}
+
+input CreateValutEntryInput {
+  key: String!           # 单行，trim 后 1..128，不含空白与控制字符
+  value: String!         # 多行，1..16384（仅入参，永不回显）
+}
+
+extend type Query {
+  # 当前工作区的条目，按 namespace 聚合（全局工作区 developer 只读由 Workspace.readOnly 表达）
+  valutEntries: [ValutNamespaceGroup!]!
+  # 供功能点「选择已存在 secret」：仅 manual namespace、当前工作区可见集
+  # （服务层强制 workspaceId=当前工作区，防跨工作区 id 猜测）
+  valutManualOptions: [ValutEntry!]!
+}
+
+extend type Mutation {
+  # 手动条目：namespace 恒 manual
+  createValutEntry(input: CreateValutEntryInput!): ValutEntry!
+  # 仅允许重写 value（key 不可改，D7）；editable=false 拒绝
+  updateValutEntry(id: ID!, value: String!): ValutEntry!
+  # deletable=false 拒绝；manual 条目存在 refs 时拒绝（D8）
+  deleteValutEntry(id: ID!): Boolean!
+}
