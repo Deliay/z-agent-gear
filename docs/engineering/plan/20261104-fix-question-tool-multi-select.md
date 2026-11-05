@@ -258,3 +258,11 @@ cd tests/e2e && BASE_URL=<agent-web> API_URL=<agent-api>/graphql \
 | R6 | 新 fixture 污染既有 `formTodo` 单匹配断言 | 裁决 8：独立 fixture、独立 describe |
 
 **回滚**：本需求为单文件行为改动 + 类型声明 + 测试，直接 revert 实现 commit 即可恢复；无数据迁移、无后端、无发布顺序依赖。
+
+## 实施记录（v1.1，2026-11-04）
+
+- **落点调整（计划期裁决 1 之外的偏差）**：`isMultiSelectAnyOf` / `joinMultiSelectValues` / `optionLabel` 未按「同文件导出」实现，而是抽取为 `apps/agent-web/src/lib/elicitation-multi-select.ts`。原因：`ElicitationDialog.tsx` 若导出非组件符号会触发 `eslint react-refresh/only-export-components` 错误（`pnpm run lint` 失败），而计划要求 lint 零新增问题；测试落点仍在 `ElicitationDialog.test.tsx`（T-QM6 从 lib 导入纯函数）。
+- **实际执行结果**：T-QM1/QM1b/QM2/QM2b/QM3/QM4/QM6 在旧实现上为红（无 `role="group"`、无勾选组、`joinMultiSelectValues` 不存在），实现后全绿；`apps/agent-web` `pnpm run test`（123 文件 / 1140 用例）、`pnpm run build`、`pnpm run lint`（0 error，仅存既有 5 warning）通过。
+- **契约注记**：落在 `contracts/agent-session-websocket.md` §2.32（值形态说明）与 §2.31（交叉引用），零字段/类型变更。
+- **返工 v1.2（AI 代码审核 F-1）**：E2E-QM1 的 `dialog.getByText('自动')` 因 Playwright `getByText` 默认子串匹配，同时命中 q0 单选项「自动」与 q1 多选项「自动跑测试」导致 strict mode violation。已改为按角色 + 精确文本定位（`radiogroup` 名「实施方式」内 `getByText('自动', { exact: true })`、组内 `getByText(..., { exact: true })`、提交按钮 `exact: true`）。同时在 `isMultiSelectAnyOf` 注释与 `apps/agent-web/AGENTS.md` 补 N-1 说明（`anyOf` 与 `enum`/`oneOf` 并存时不参与拼接）。
+- **返工自测（E2E 已实跑）**：`aspire start` 后 `tests/e2e` 执行 `pnpm exec playwright test src/elicitation.spec.ts --workers=1` → 5 passed（既有 4 用例 + E2E-QM1，1.5m）；单测 1140 全绿、build 通过、lint 0 error。
