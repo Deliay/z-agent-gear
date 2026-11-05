@@ -89,3 +89,48 @@ describe('McpRelay', () => {
     expect(result.status).toBe(404);
   });
 });
+describe('McpRelay 按 serverName 超时表（裁决 9）', () => {
+  it('T-RLY1 agent-session-preview-tools 超时取 1_800_000，其余 server 保持 60s', async () => {
+    vi.useFakeTimers();
+    const { relay } = createRelay();
+    relay.registerSession('sess-1', {
+      token: 'tok-1',
+      serverNames: ['agent-session-preview-tools', 'github-mcp'],
+    });
+
+    let previewResolved = false;
+    const preview = relay.forward('sess-1', 'agent-session-preview-tools', { method: 'tools/call' });
+    void preview.then(() => { previewResolved = true; });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(previewResolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_800_000 - 60_000);
+    await expect(preview).resolves.toEqual(expect.objectContaining({ status: 504 }));
+
+    const normal = relay.forward('sess-1', 'github-mcp', { method: 'tools/list' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expect(normal).resolves.toEqual(expect.objectContaining({ status: 504 }));
+  });
+
+  it('T-RLY2 MCP_REVIEW_TIMEOUT_MS 环境变量覆盖生效', async () => {
+    vi.useFakeTimers();
+    process.env.MCP_REVIEW_TIMEOUT_MS = '5000';
+    try {
+      const { relay } = createRelay();
+      relay.registerSession('sess-1', { token: 'tok-1', serverNames: ['agent-session-preview-tools'] });
+
+      let resolved = false;
+      const promise = relay.forward('sess-1', 'agent-session-preview-tools', { method: 'tools/call' });
+      void promise.then(() => { resolved = true; });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(resolved).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(promise).resolves.toEqual(expect.objectContaining({ status: 504 }));
+    } finally {
+      delete process.env.MCP_REVIEW_TIMEOUT_MS;
+    }
+  });
+});
