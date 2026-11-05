@@ -78,7 +78,7 @@ pnpm test
 | `CONTROLLER_API_URL` | controller-api **基础地址**（Socket.IO 直连，**不要**带 `/graphql`；带路径会导致注册超时级联） | `http://localhost:35273` |
 | `INTERNAL_API_TOKEN` | agent-api 内部 API Bearer token。**多租户一期起为测试用户开户的唯一引导**：`src/support/front-users.ts` 的 `createFrontUser()` 调 `POST /internal/users`（Bearer 本 token）再 `login` 取 token；缺失时所有需要造用户的套件显式报错（不再静默跳过）。云电脑 ready/terminal、cloud-host-callback、billing 内部 REST 同用 | - |
 | `HARNESS_ENABLED` | 置 `true` 时运行云电脑 harness 套件；缺省/false 时走 feature-disabled 分支（会误跳过 T-CH2 等用例） | `false` |
-| `REDIS_URL` | workflow 套件直连 Redis（断言 channel/缓存）；需与 agent-api `REDIS_URI` 同一实例 | `redis://localhost:6379` |
+| `REDIS_URL` | workflow 套件直连 Redis（断言 channel/缓存）；需与 agent-api `REDIS_URI` 同一实例。Aspire 编排下为 `rediss://`（dev 自签证书）：测试进程需 `NODE_EXTRA_CA_CERTS` 指向 Aspire 签发的 `cert.pem`（`/tmp/aspire-*/<resource>/cert.pem`）或 `NODE_TLS_REJECT_UNAUTHORIZED=0`，否则 ioredis 报 `self-signed certificate` | `redis://localhost:6379` |
 | `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* / T-CR* 用例；缺失时整套跳过） | - |
 | `GITHUB_API_BASE` | Check Runs 出站用例（T-CR*）的 GitHub API 地址。需在启动 Aspire 前指向本地 mock（示例：`GITHUB_API_BASE=http://127.0.0.1:19418 aspire start`，端口即 `MOCK_GITHUB_PORT`）；缺失时整套跳过 | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 / GitHub 原生 webhook（T-GHWH* / T-GHI* 整套依赖）HMAC-SHA256 验签密钥 | - |
@@ -217,6 +217,46 @@ pnpm test
 | T-WS-ISO7 workflowTemplates | 自定义模板仅本工作区可见且 `resourceWorkspaceId`=普通工作区；outsider/团队全局上下文不可见；内置模板在个人全局 / 团队全局 / 团队普通三种上下文均可见且 `resourceWorkspaceId=null` |
 | T-WS-ISO8 成员/管理员辅助与操作路径（需 `MONGODB_URI`） | browseFolder/getHomeDirectory/listHistorySessions/cloudHostIssuesLinkages/retryCloudHostSetupOperation/setupCloudHostGithubProject（本工作区 + 全局共享绑定）；developer 在 admin 创建的 RUNNING 云电脑上创建会话（回归 `sessionService.create` 的云电脑按工作区成员口径查询） |
 
+
+### Valut 契约全链路 (`agent-api/valut.test.ts` API-VAL)
+
+> MCP+Valut Phase 5（计划测试矩阵 API-VAL / T-VAL5~7）；契约 `contracts/valut.graphql`。
+> 需要 agent-api 就绪 + `INTERNAL_API_TOKEN`（开户）；`MONGODB_URI` 可选（T-VAL7 库内无明文断言，
+> 缺省跳过该分支）。夹具为 T-WS 模式（team 租户 + admin/developer/outsider + 普通工作区）。
+
+| 测试 | 描述 |
+|------|------|
+| T-VAL0 鉴权 | Query/Mutation 全入口未认证 → `Not authenticated` |
+| T-VAL1 全链路 | create（namespace=manual、展示名「自定义密钥」、editable/deletable）→ list（manual 组在前、组头 displayName）→ update（仅重写值、key 不可改）→ delete → 再访问 `valut entry not found`；重 key `valut key already exists`、非法 key（空白/空串）`invalid valut key`、非法 value（空 / >16384）`invalid valut value` 逐字 |
+| T-VAL5 权限矩阵 | 全局工作区 developer 读通、create/update/delete 一律 `global workspace is read-only`；admin 写通（create/update）；普通工作区成员读写通（developer 读 admin 创建的条目、admin 切入可读写）；非成员 header → `workspace not found`；跨工作区 id → `Not found`（列表独占：全局↔普通互不可见）；不存在 id → `valut entry not found` |
+| T-VAL6 manual options | `valutManualOptions` 仅 manual 且仅当前工作区（service 条目、跨工作区条目均不出现）；`service-mcp-bearer-tokens` 分组 managed=true / displayName=`MCP Bearer Tokens` / 条目 editable=true、deletable=false，拒删 `valut entry is not deletable` |
+| T-VAL-REFS refs | 引用路径（自定义 MCP `existingEntryId`）→ manual 条目 refs 展开（feature `mcp-bearer-tokens`、refId/refLabel 指向 MCP）；有 refs 拒删 `valut entry has refs`；删除引用 MCP 仅解绑 ref（条目保留）；删除自建 token MCP → entry+ref 级联消失 |
+| T-VAL7 无明文 | 成功路径（create/list/manualOptions/update）与 6 类错误分支（重复 key、不存在 id、非法 value×2、跨工作区 `Not found`、只读拦截、`deletable=false` 拒删）响应任意路径均无 value 明文；出参对象恒无 `value`/`valueEncrypted` 字段；`MONGODB_URI` 提供时直读 `valutentries` 断言 `valueEncrypted{iv,ciphertext,tag}` 密文形态且库内无明文 |
+
+### 自定义 MCP 与转发 (`agent-api/custom-mcp.test.ts` API-CMCP)
+
+> MCP+Valut Phase 5（计划测试矩阵 API-CMCP / T-CMCP* + T-CF*）；契约 `contracts/custom-mcp.graphql`
+> + `contracts/agent-session.graphql`（`customMcpServerIds`）。需要 agent-api + controller-api + Redis
+> 就绪（Aspire）+ `INTERNAL_API_TOKEN`；fake controller 走真实 Socket.IO relay
+> （`mcp:request` → `mcp:response`，controller-api → Redis → agent-api mcp-dispatch）；转发用例
+> mock 真实 HTTP endpoint（进程内 http server，记录收到的请求头/body 并回 JSON-RPC 响应）。
+> `MONGODB_URI` 可选（`mcpsessionendpoints` 快照落库断言，缺省跳过该分支）。夹具同 T-WS 模式。
+
+| 测试 | 描述 |
+|------|------|
+| T-CMCP-C1 none CRUD | 创建/列表/单查；出参白名单恒无 token 字段；`customMcpServer(不存在)`=null；工作区重名 `invalid mcp name`；删除后列表消失 |
+| T-CMCP-C2 校验矩阵 | name 空/超 64、endpoint 非 URL / 非 http(s)、header key 含冒号/重复/空 values/超 32 条、bearer 缺 token、auth type 非法（收敛 `internal error`）逐字；引用非 manual 条目 → `bearer entry must be manual namespace` 且失败不留 MCP（补偿删除） |
+| T-CMCP-C3 bearer 新建 | entry 落 `service-mcp-bearer-tokens`（key=name、editable=true、deletable=false、ref `{feature:'mcp-bearer-tokens', refId=MCP id}`）、`bearerEntryManaged=true`、响应无 token 明文 |
+| T-CMCP-C4 bearer 引用 | 仅 manual 可引用（`bearerEntryManaged=false`）、仅建 ref；多条 MCP 共引同一条目各自独立 ref |
+| T-CMCP-C5 编辑 | name/description/endpoint 直改；manual 引用 bearer+newToken 就地改值 → `bearer entry not editable in place`；自建 token 就地更新（同 bearerEntryId、不回显）；auth 省略 = 不动 |
+| T-CMCP-C6 删除 | 引用删除仅解绑（manual 条目保留、ref 消失）、自建删除级联删 entry+ref；跨工作区 id → `Not found`；不存在 id → `custom mcp server not found` |
+| T-CMCP-P1 权限矩阵 | 与 Valut 同口径：全局 developer 读通、写拒 `global workspace is read-only`；admin 全局写通；普通工作区成员读写通；非成员 header → `workspace not found`；跨工作区 id → `Not found`；列表独占（全局↔普通互不可见） |
+| T-CF1 会话签发 | `customMcpServerIds` 非法 id / 不可见 id（全局 MCP + 普通工作区上下文）→ `custom mcp server not found` 且**不建会话**（sessions 计数不变）；可见 id + 显式 `mcpServerIds: []` → `acp:start.mcpEndpoint.serverNames` 恰为 custom 名（custom-only 可签发）；`mcpsessionendpoints.customMcpServers=[{id,name}]` 快照与 status/tokenHash 落库（需 `MONGODB_URI`） |
+| T-CF4/T-CF5 转发 200 | relay 转发 → mock endpoint 收到 `Authorization: Bearer <解密明文>`、同名多值 header 两个值均在、JSON-RPC body 原样；响应 200 + result；acp:start 载荷、会话查询、MCP/Valut 列表、mcp:response 全链路无凭据明文 |
+| T-CF3 作用域/通知 | name 不在会话作用域 → 200 + `SERVER_NOT_FOUND`（message `Server not assembled in this session` 逐字）；JSON-RPC 通知（无 id）→ 202 |
+| T-CF3 删除 410 | 删除自定义 MCP 后同会话转发 → 410 `Custom MCP server has been deleted`（会话仍 active：scope 校验仍 200） |
+| T-CF4 不可达 502 | endpoint 不可达 → 502 `FORWARD_ERROR`，报文不回显 endpoint / `ECONNREFUSED` 错误正文 |
+| T-CF3 终态 401 | 关闭会话后转发 → 401 `ENDPOINT_REVOKED` / `Invalid token`（诊断优先级 401 先于 410） |
 
 ### Admin Team 租户 API (`admin-api/tenant-team.test.ts` T-TT-API)
 
