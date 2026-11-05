@@ -152,9 +152,30 @@ export const sessionTypeDefs = `#graphql
     permissionTimeoutAction: PermissionTimeoutAction
     workflowInstanceId: ID
     workflowNodeId: String
+    # 归档状态（true=已归档，收纳进侧边栏「已归档」分组；仅分组展示差异，不影响会话数据与进程）
+    archived: Boolean!
+    # 只读原因：null=可写；取值见 SessionReadOnlyReason。
+    # 控制器缺失 / 项目工作区缺失 / 云电脑终态三场景统一（写路径拒绝文案统一 session is ended）
+    readOnlyReason: SessionReadOnlyReason
     createdAt: String!
     updatedAt: String!
     endedAt: String
+  }
+
+  # 会话只读原因（统一只读判定的三场景，由服务端字段 resolver 实时计算，不落库）
+  enum SessionReadOnlyReason {
+    # 项目工作区已删除
+    WORKSPACE_MISSING
+    # 控制器已解绑（不存在）
+    CONTROLLER_MISSING
+    # 云电脑已停止/销毁/删除
+    CLOUD_HOST_DESTROYED
+  }
+
+  # 删除工作区影响预查询（删除确认提示的连带会话数量；与实际连带归档共用同一匹配口径）
+  type WorkspaceArchiveImpact {
+    # 该工作区下将连带归档的普通会话数（不含工作流节点会话与已归档会话）
+    sessionCount: Int!
   }
 
   type AcpMessage {
@@ -244,7 +265,8 @@ export const sessionTypeDefs = `#graphql
 
   extend type Query {
     # controllerId 可选：按控制器过滤
-    sessions(controllerId: ID, includeWorkflowSessions: Boolean): [Session!]!
+    # archived 可选：缺省/false 返回活跃（未归档）会话，true 返回已归档会话；与 includeWorkflowSessions 正交
+    sessions(controllerId: ID, includeWorkflowSessions: Boolean, archived: Boolean): [Session!]!
     session(id: ID!): Session
     sessionMessages(sessionId: ID!, before: ID, limit: Int): [AcpMessage!]!
     acpCapabilities(controllerId: ID!): [AcpCapability!]!
@@ -256,6 +278,11 @@ export const sessionTypeDefs = `#graphql
     createSession(input: CreateSessionInput!): CreateSessionPayload!
     closeSession(id: ID!): Boolean!
     deleteSession(id: ID!): Boolean!
+    # 归档/取消归档会话（仅分组展示差异，不终止进程、不触发 acp 命令）；
+    # 工作流节点会话拒绝 ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED
+    archiveSession(id: ID!, archived: Boolean!): Boolean!
+    # 删除工作区影响预查询：将连带归档的普通会话数（用于删除确认提示，数量与实际归档一致）
+    workspaceArchiveImpact(id: ID!): WorkspaceArchiveImpact!
     sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
     cancelGeneration(sessionId: ID!): Boolean!
     resumeSession(id: ID!): ResumeSessionPayload!
