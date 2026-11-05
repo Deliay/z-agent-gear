@@ -32,10 +32,10 @@ export interface PromptComposerApi {
 const composerStores = new Map<string, PromptComposerApi>();
 
 function createComposerStore(): PromptComposerApi {
-  let parts: ComposerPart[] = [];
+  let snapshot: { parts: ComposerPart[] } = { parts: [] };
   const listeners = new Set<() => void>();
   const emit = (next: ComposerPart[]): void => {
-    parts = next;
+    snapshot = { parts: next };
     for (const listener of listeners) listener();
   };
   return {
@@ -43,12 +43,13 @@ function createComposerStore(): PromptComposerApi {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    getSnapshot: () => ({ parts }),
+    // getSnapshot 必须返回缓存引用（useSyncExternalStore 稳定性要求）
+    getSnapshot: () => snapshot,
     appendPart(part) {
-      emit([...parts, part]);
+      emit([...snapshot.parts, part]);
     },
     removePart(id) {
-      emit(parts.filter((part) => part.id !== id));
+      emit(snapshot.parts.filter((part) => part.id !== id));
     },
     clear() {
       emit([]);

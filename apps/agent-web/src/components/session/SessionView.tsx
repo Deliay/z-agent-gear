@@ -49,6 +49,7 @@ import { getPromptComposer, destroyPromptComposer } from '../../stores/prompt-co
 import { getSplitMode, setSplitMode, type SplitMode } from '../../lib/split-prefs';
 import { useLiveFileTracking } from '../../hooks/useLiveFileTracking';
 import { annotationsToPartText } from '../../lib/preview/annotations-to-part';
+import { mergeText, type PromptPart } from '../../lib/preview/prompt-parts';
 import type { AnnotationBatch } from '../../lib/preview/types';
 
 interface AcpMessage {
@@ -260,16 +261,19 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const [setSessionConfigOption] = useMutation<SetSessionConfigOptionMutation>(SET_SESSION_CONFIG_OPTION);
   const [archiveSession] = useMutation(ARCHIVE_SESSION);
 
-  const handleSendMessage = useCallback(async (content: string) => {
-    if (!id) return;
+  const handleSendMessage = useCallback(async (parts: PromptPart[]) => {
+    if (!id || parts.length === 0) return;
     try {
       lastMessageIsSettingUpdateRef.current = false;
       setSending(true);
+      // 裁决 6：content=合并文本（非空文本 \n\n 连接，兼容旧渲染与标题提取），parts 透传契约参数
+      const content = mergeText(parts);
       await sendMessage({
         variables: {
           sessionId: id,
           content,
           type: 'text',
+          parts: parts.map(({ id: _partId, origin: _origin, ...part }) => part),
         },
       });
     } catch (err) {
@@ -350,7 +354,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           // 断连恢复 ready：自动发送工作流继续提示词，引导 AI 调 MCP 工具推进节点
           if (autoPromptAfterResumeRef.current) {
             autoPromptAfterResumeRef.current = false;
-            handleSendMessage(WORKFLOW_CONTINUE_PROMPT);
+            handleSendMessage([{ id: 'workflow-continue', type: 'text', text: WORKFLOW_CONTINUE_PROMPT }]);
           }
         }
         if (data.data.modes) setModes(data.data.modes);
