@@ -63,6 +63,7 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
     cwd: '/root/workspace',
     worktreePath: null,
     worktreeBranch: null,
+    archived: false,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
     endedAt: null,

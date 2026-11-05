@@ -19,6 +19,14 @@ describe('graphql resolver registry', () => {
     expect(fields.cloudHost.resolve).toEqual(expect.any(Function));
   });
 
+  it('registers Session.readOnlyReason on the executable schema（会话管理优化 spread 登记守卫）', () => {
+    const fields = sessionType.getFields();
+    // readOnlyReason 为字段级 resolver：漏登记 `resolvers/index.ts` 的 Session 键则线上恒 null
+    expect(fields.readOnlyReason.resolve).toEqual(expect.any(Function));
+    // archived 随 mapSession 透出，不设字段 resolver
+    expect(fields.archived.resolve).toBeUndefined();
+  });
+
   it('registers CloudHost.storage / storageRestoring and CloudStorage.hourlyCredits', () => {
     const hostFields = (schema.getType('CloudHost') as GraphQLObjectType).getFields();
     expect(hostFields.storage.resolve).toEqual(expect.any(Function));
