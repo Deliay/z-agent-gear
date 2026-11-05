@@ -317,8 +317,10 @@ docker info                          # 脚本执行后 dockerd 已就绪；未�
 pgrep -a dockerd                     # 仅在选择「Docker」工作负载后才有输出
 docker version                       # CLI 可用
 docker buildx version                # 镜像构建能力可用
-docker pull ubuntu:24.04             # 拉取 Docker Hub 镜像走代理
-docker pull ghcr.io/<owner>/<image>  # 拉取 ghcr 镜像走代理
+docker info --format '{{json .RegistryConfig.Mirrors}}'   # 期望 ["https://core.harbor.internal.fffdan.com/docker-hub-proxy"]
+test ! -e /usr/local/bin/docker      # 历史/默认 shim 环境重跑后已清理（未选择 Docker 时也不存在）
+docker pull ubuntu:24.04             # 经 mirror 拉取 Docker Hub 镜像
+docker pull ghcr.io/<owner>/<image>  # 按原生行为直连；需要代理时显式写 core.harbor.internal.fffdan.com/ghcr/<owner>/<image>
 
 # Node.js（参数 version / package_manager）
 nvm ls && node -v && npm -v && npm config get registry
@@ -378,9 +380,11 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 逐项核对：
 
 - [ ] 未选择「Docker」工作负载时容器内**没有** docker/dockerd（入口不装配 shim、不启动 dockerd，全部由 Docker 脚本负责）；选择后 `docker info` 可用
-- [ ] 选择「Docker」后 `docker version`、`docker buildx version` 均成功；重复执行 Docker 脚本幂等收敛（不重复安装/不重复启动）
-- [ ] 拉取 Docker Hub 镜像走代理：`docker pull ubuntu:24.04` 实际拉取 `core.harbor.internal.fffdan.com/docker-hub-proxy/ubuntu:24.04`
-- [ ] 拉取 ghcr 镜像走代理：`docker pull ghcr.io/<owner>/<image>` 实际拉取 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`
+- [ ] 选择「Docker」后 `docker version`、`docker buildx version` 均成功；重复执行 Docker 脚本幂等收敛（不重复安装/不重复启动、配置无变化不重启 dockerd）
+- [ ] `docker info --format '{{json .RegistryConfig.Mirrors}}'` 可见 mirror 地址；`docker pull ubuntu:24.04` 与 `docker build`（base image）均经 mirror 完成
+- [ ] 非 Docker Hub 仓库不再自动改写：`docker pull ghcr.io/<owner>/<image>` 按原生行为直连；显式 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>` 可拉取
+- [ ] 清空 `docker_registry_mirrors`：初始化成功、`docker info` 无脚本管理的 mirror、执行记录含「未配置镜像加速」
+- [ ] 历史 shim 环境重跑后 `/usr/local/bin/docker` 消失；同路径为非平台内容时保留并告警
 - [ ] **安装来源默认已填且可达**：「Docker」工作负载参数 `docker_apt_url` 默认已填内网代理地址 `https://nexus.internal.fffdan.com/repository/docker-ce-apt`（实测该仓库根即 apt 源根，地址形态为 `https://<nexus-host>/repository/<docker-ce-apt>/`），并核对 `curl -fsS "<地址>/gpg"` 返回 200
 - [ ] 清空 `docker_apt_url` 参数（且未提供 `DOCKER_APT_URL`）且组件尚未安装时：该工作负载**快速失败**并在执行记录中给出含正确地址形态的明确指引（容器仍继续后续初始化并上线）
 - [ ] 安装来源不可达时该工作负载记录失败与日志，容器仍继续后续初始化并上线
@@ -466,7 +470,7 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 > 普通 idle 容器不含 `ZAG_HOST_*`，行为与旧版完全一致。
 
 > 入口**不**装配任何 docker shim、**不**调用 docker、也**不**启动 dockerd —— 容器内 docker 能力
-> （CLI、镜像代理 shim、dockerd）全部由「Docker」工作负载的初始化脚本按需提供（工作负载四期）。
+> （CLI、registry-mirrors 配置、dockerd）全部由「Docker」工作负载的初始化脚本按需提供（工作负载四期）。
 
 受监督运行的行为（版本门禁与自恢复，见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
 
@@ -504,7 +508,7 @@ bash entrypoint.test.sh
 ## 已知限制
 
 - sysbox 为**节点级** runtime（`sysbox-runc`），集群节点需预装 sysbox，否则带 `runtimeClassName: sysbox-runc` 的 Pod 无法调度。集群未启用 sysbox 时可将 `RUNTIME_CLASS_NAME` 置空/改用其他 runtime。
-- 镜像代理 shim 由「Docker」工作负载脚本在安装 CLI 后装配（`/usr/local/bin/docker`），会跳过 `--name/-e/-p/-v/--platform` 等带值选项的值，只对跳过选项后的首个位置参数（镜像引用）做代理改写，覆盖 `docker pull/run/create` 的常规用法；复杂 `docker build` 的 `FROM` 需在 Dockerfile 中直接书写代理地址（或使用 Harbor 代理前缀）。未选择「Docker」工作负载时容器内不存在该 shim。
+- 镜像加速由 dockerd 原生 `registry-mirrors` 提供（「Docker」工作负载脚本写 `/etc/docker/daemon.json`），仅覆盖 Docker Hub；`ghcr.io`/`lscr.io` 等按原生行为直连，需要代理时显式书写 Harbor 代理项目前缀（如 `core.harbor.internal.fffdan.com/ghcr/<owner>/<image>`）；清空工作负载参数 `docker_registry_mirrors` 即回退直连。配置变更且 dockerd 已运行时脚本会重启 dockerd 生效（初始化阶段执行，无用户容器）。
 - 工作容器基础环境不再预装 Docker / .NET，改由对应预制工作负载脚本在初始化阶段按需安装。安装源：Docker 由工作负载参数 `docker_apt_url` 提供（迁移 003 默认填入内网代理地址 `https://nexus.internal.fffdan.com/repository/docker-ce-apt`，可启动时按次调整；`DOCKER_APT_URL` 环境变量可覆盖且优先），脚本本身不内置默认值，清空参数且需安装时快速失败并给出指引；.NET 脚本经 **apt** 安装（内网 Ubuntu 源，必要时经 `DOTNET_APT_SOURCE`/`DOTNET_APT_KEY_URL` 追加 Microsoft feed 代理源，见上文「.NET（apt）相关构建参数」）；Aspire 由工作负载参数 `aspire_cli_url` 提供内网缓存代理安装包直链（迁移 004 默认填入 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`，可启动时按次调整；`ASPIRE_CLI_URL` 环境变量可覆盖且优先），脚本本身不内置默认值，清空且未安装时快速失败并给出指引。任一来源不可达时该工作负载记录失败并保留日志，容器仍继续后续初始化并上线（沿用一期失败策略）。
 
 ## worker 用户与保活自验（agent-gear 2.10.0）
