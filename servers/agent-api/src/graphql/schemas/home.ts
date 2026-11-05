@@ -3,10 +3,12 @@ export const homeTypeDefs = `#graphql
   type HomeOverview {
     # 控制器概览（首页卡片 + 侧边栏顶层分组）
     controllers: [Controller!]!
-    # 最近会话列表（排除工作流节点会话，与既有 sessions 查询口径一致）
+    # 最近会话列表（排除工作流节点会话，与既有 sessions 查询口径一致；服务端按未归档活跃会话过滤）
     sessions: [Session!]!
-    # 会话总数（与 sessions 同口径计数）
+    # 会话总数（与 sessions 同口径计数：未归档活跃会话数）
     sessionTotalCount: Int!
+    # 已归档会话（侧边栏「已归档」折叠分组；与 sessions 的活跃口径互补）
+    archivedSessions: [Session!]!
     # 工作区（侧边栏工作区分组）
     workspaces: [ControllerWorkspace!]!
     # 全部活跃工作流实例（跨工作区）

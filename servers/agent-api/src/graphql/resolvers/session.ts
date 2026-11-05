@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import { sessionService } from '../../services/session.js';
 import { sessionImportService } from '../../services/session-import.js';
+import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { modelService } from '../../services/model.js';
 import { featuresFromSnapshot } from '../../services/agent-capabilities.js';
 import { inferModelSource } from '../../services/model-source.js';
@@ -43,6 +44,20 @@ export const sessionResolvers = {
       return cloudHostService.mapCloudHost(host as Doc, 0);
     },
     agentCapabilities: (session: Record<string, unknown>) => session.agentCapabilities ?? null,
+    /**
+     * 统一只读原因（D5：与写路径同一判定函数的只读版，实时计算不落库）。
+     * 三场景：控制器缺失 / 项目工作区缺失 / 云电脑终态；null=可写。
+     * **必须落在 `sessionResolvers.Session` 内**（`resolvers/index.ts` spread 登记，backend-rules 陷阱）。
+     */
+    readOnlyReason: async (
+      parent: Doc,
+      _args: unknown,
+      context: AuthContext,
+    ) => {
+      const userId = context.currentUser?.id;
+      if (!userId) return null;
+      return sessionService.resolveSessionReadOnlyReason(parent, userId);
+    },
     features: (session: Record<string, unknown>) => featuresFromSnapshot(session.agentCapabilities),
     availableModels: async (
       session: Record<string, unknown>,
@@ -68,7 +83,7 @@ export const sessionResolvers = {
   Query: {
     sessions: async (
       _parent: unknown,
-      args: { controllerId?: string; includeWorkflowSessions?: boolean },
+      args: { controllerId?: string; includeWorkflowSessions?: boolean; archived?: boolean },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -77,6 +92,7 @@ export const sessionResolvers = {
       return sessionService.findAllByUser(context.currentUser.id, {
         controllerId: args.controllerId,
         includeWorkflowSessions: args.includeWorkflowSessions,
+        archived: args.archived,
       });
     },
     session: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
@@ -222,6 +238,47 @@ export const sessionResolvers = {
       } catch (err) {
         throw new GraphQLError((err as Error).message);
       }
+    },
+    // 归档/取消归档（D1：仅分组展示差异；工作流节点会话拒绝 ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED）
+    archiveSession: async (
+      _parent: unknown,
+      args: { id: string; archived: boolean },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await sessionService.setArchived(context.currentUser.id, args.id, args.archived);
+      } catch (err) {
+        if (err instanceof GraphQLError) throw err;
+        throw new GraphQLError((err as Error).message);
+      }
+    },
+    // 删除工作区影响预查询：连带归档的普通会话数（与实际连带归档共用同一匹配函数）
+    workspaceArchiveImpact: async (
+      _parent: unknown,
+      args: { id: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      const userId = context.currentUser.id;
+      const workspace = await controllerWorkspaceService.findById(args.id, userId);
+      if (!workspace) {
+        throw new GraphQLError('Workspace not found');
+      }
+      const matched = await sessionService.matchWorkspaceSessions(
+        {
+          _id: workspace.id,
+          controllerId: workspace.controllerId,
+          path: workspace.path,
+          name: workspace.name,
+        },
+        userId,
+      );
+      return { sessionCount: matched.filter((doc) => !doc.archivedAt).length };
     },
     sendSessionMessage: async (
       _parent: unknown,

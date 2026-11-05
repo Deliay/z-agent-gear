@@ -238,6 +238,20 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | 删除会话 | 点击删除 → 跳转回会话列表 |
 | 未登录重定向 | 直接访问 `/sessions` → 重定向到登录页 |
 
+### 会话归档与只读 E2E (`session-archive.spec.ts` E2E-SARCH* / E2E-SRO1)
+
+> 会话管理优化 Phase 9（计划 §4.3）。fake controller 应答 `acp:check`/`acp:start`/`git:worktree:list` 与
+> `acp:stop` ack（连带归档会先结束活跃会话）；会话与工作区经 GraphQL 造数，E2E-SRO1 用真实
+> `sendSessionMessage` 先落历史消息、再 `deleteWorkspace` 构造只读态。需要 agent-web / agent-api /
+> controller-api 就绪与 `INTERNAL_API_TOKEN`（开户；缺省回落 admin-api `adminCreateFrontUser`），
+> 无需 `MONGODB_URI`。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-SARCH1 | 会话页「归档」→ toast「会话已归档」并返回 `/sessions` → 侧边栏活跃列表该条消失、「已归档（1）」出现 → 展开分组条目可打开（`session-archived-badge` + 「取消归档」入口）→「取消归档」toast 后恢复活跃分组、归档分组消失 |
+| E2E-SARCH2 | 删除工作区前置 `workspaceArchiveImpact` 取数：确认框文案「删除工作区将同时归档其下 2 个会话，是否继续？」→ 确认删除 → 配置页空态 + 侧边栏「已归档（2）」两条可打开 |
+| E2E-SRO1 | 删除工作区后的会话只读回看：`session-readonly-notice`（`data-readonly-reason=WORKSPACE_MISSING`，文案「工作区已不存在，会话记录仅供只读回看。」）出现、输入框（textbox）与「继续」按钮数量为 0、先前写入的历史消息仍可见。云电脑销毁只读回归由 `cloud-host-readonly.spec.ts`（T-AW10 / R2-10，需 `MONGODB_URI`，缺省 skip）覆盖，本套件不重复 |
+
 ### Settings History Session E2E (`settings-history-session.spec.ts`)
 
 | 测试 | 描述 |

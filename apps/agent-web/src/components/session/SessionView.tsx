@@ -17,7 +17,9 @@ import {
   SET_SESSION_MODE,
   SET_SESSION_MODEL,
   SET_SESSION_CONFIG_OPTION,
+  ARCHIVE_SESSION,
 } from '../../graphql/mutations';
+import { HOME_OVERVIEW } from '../../graphql/home';
 import type {
   GetSessionQuery,
   GetSessionMessagesQuery,
@@ -28,6 +30,7 @@ import type {
   AgentModeData,
   AgentModelInfoData,
   SessionConfigOptionData,
+  SessionReadOnlyReason,
 } from '../../graphql/types';
 import { getApiBase } from '../../lib/api-base';
 import { logger } from '../../lib/logger';
@@ -36,7 +39,6 @@ import MessageList from './MessageList';
 import InputBox from './InputBox';
 import ResumeConfirmDialog from './ResumeConfirmDialog';
 import { PendingElicitationBanner } from './PendingElicitationBanner';
-import { isReadOnlyCloudHost } from '../cloud-host/cloud-host-status';
 import { useCommandState } from '../../hooks/useCommandState';
 import { useAgentCapabilities } from '../../hooks/useAgentCapabilities';
 import { threadToMarkdown, downloadThreadMarkdown } from '../../lib/export-thread';
@@ -77,9 +79,16 @@ function getErrorMessage(error?: string): string {
   return error ? (errorMessages[error] || `Failed to resume session: ${error}`) : 'Failed to resume session. Please try again.';
 }
 
+/** 只读提示文案：三场景统一「会话记录仅供只读回看」语义（服务端 readOnlyReason 为唯一判定来源） */
+const READ_ONLY_NOTICES: Record<SessionReadOnlyReason, string> = {
+  WORKSPACE_MISSING: '工作区已不存在，会话记录仅供只读回看。',
+  CONTROLLER_MISSING: '控制器已不存在，会话记录仅供只读回看。',
+  CLOUD_HOST_DESTROYED: '云电脑已销毁，会话记录仅供只读回看。',
+};
+
 interface SessionViewProps {
   sessionId: string;
-  /** 会话删除后的回调（路由页用于跳转回列表页） */
+  /** 会话删除/归档后的返回列表回调（路由页用于跳转回 /sessions） */
   onDeleted?: () => void;
 }
 
@@ -93,6 +102,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const autoPromptAfterResumeRef = useRef(false);
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [modes, setModes] = useState<AgentModeData[]>([]);
   const [sseLoading, setSseLoading] = useState(false);
   const [sseError, setSseError] = useState(false);
@@ -155,6 +165,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const [setSessionMode] = useMutation(SET_SESSION_MODE);
   const [setSessionModel] = useMutation(SET_SESSION_MODEL);
   const [setSessionConfigOption] = useMutation<SetSessionConfigOptionMutation>(SET_SESSION_CONFIG_OPTION);
+  const [archiveSession] = useMutation(ARCHIVE_SESSION);
 
   const handleSendMessage = useCallback(async (content: string) => {
     if (!id) return;
@@ -364,6 +375,36 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
 
   const isWorkflowNodeSession = Boolean(sessionData?.session?.workflowInstanceId);
 
+  /**
+   * 归档/取消归档：
+   * - 归档成功 toast 并返回会话列表（复用 onDeleted 路由回调 = navigate('/sessions')，对齐工作流实例归档）；
+   * - 取消归档就地生效（refetch GET_SESSION 刷新徽标与入口）。
+   * 工作流节点会话不渲染入口（服务端同样拒绝 ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED）。
+   */
+  const handleArchiveToggle = async () => {
+    const session = sessionData?.session;
+    if (!session) return;
+    const nextArchived = !session.archived;
+    setArchiving(true);
+    try {
+      await archiveSession({
+        variables: { id, archived: nextArchived },
+        refetchQueries: [{ query: GET_SESSION }, { query: HOME_OVERVIEW }],
+      });
+      if (nextArchived) {
+        toast.success('会话已归档');
+        onDeleted?.();
+      } else {
+        toast.success('已取消归档');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'Failed to archive session');
+      toast.error(error instanceof Error ? error.message : '操作失败，请重试');
+    } finally {
+      setArchiving(false);
+    }
+  };
+
   /** 「继续」入口：断连会话先弹确认框，已结束会话直接 resume */
   const handleContinueClick = () => {
     if (status === 'disconnected') {
@@ -468,17 +509,10 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     (c) => c.id === sessionData?.session?.controllerId,
   );
   const controllerOnline = sessionController?.status === 'online';
-  // D-1：只读判定不依赖 controller 列表命中（软删除后列表会过滤该 Controller）。
-  // 优先使用 GET_SESSION 返回的 controllerType/cloudHost（cloudHost 含软删除留档）。
-  const isCloudSession =
-    sessionData?.session?.controllerType === 'cloud' || sessionController?.type === 'cloud';
-  const sessionCloudHost = sessionData?.session?.cloudHost;
-  const cloudHost = isCloudSession
-    ? sessionCloudHost ?? sessionController?.cloudHost ?? null
-    : null;
-  // 云电脑 STOPPED/FAILED/deletedAt/缺失：会话只读回看（服务端同样拒绝 resume/command）
-  const readOnlyCloudHost =
-    isCloudSession && (cloudHost == null || isReadOnlyCloudHost(cloudHost));
+  // 只读判定收敛为服务端 readOnlyReason（D5：规则集中后端，前端零规则重复）：
+  // 控制器缺失 / 项目工作区缺失 / 云电脑终态三场景统一由字段 resolver 实时计算。
+  const readOnlyReason = sessionData?.session?.readOnlyReason ?? null;
+  const readOnly = readOnlyReason != null;
 
   if (sessionLoading) {
     return (
@@ -561,6 +595,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           createdAt: sessionData.session.createdAt,
           updatedAt: sessionData.session.updatedAt,
           endedAt: sessionData.session.endedAt,
+          archived: sessionData.session.archived,
         } : null}
         status={status}
         onClose={handleCloseSession}
@@ -572,13 +607,23 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         controllerOnline={controllerOnline}
         capabilities={capabilities}
         capabilitySession={sessionData?.session ?? null}
-        readOnly={readOnlyCloudHost}
+        readOnly={readOnly}
         onExport={handleExportThread}
+        onArchiveToggle={isWorkflowNodeSession ? undefined : handleArchiveToggle}
+        archiving={archiving}
       />
       <PendingElicitationBanner sessionId={id} />
-      {readOnlyCloudHost && (
-        <div className="border-b border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground" data-testid="cloud-host-readonly-notice">
-          云电脑已销毁，会话记录仅供只读回看。
+      {readOnly && readOnlyReason && (
+        <div
+          className="border-b border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground"
+          data-testid="session-readonly-notice"
+          data-readonly-reason={readOnlyReason}
+        >
+          {readOnlyReason === 'CLOUD_HOST_DESTROYED' ? (
+            <span data-testid="cloud-host-readonly-notice">{READ_ONLY_NOTICES[readOnlyReason]}</span>
+          ) : (
+            READ_ONLY_NOTICES[readOnlyReason]
+          )}
         </div>
       )}
       <MessageList
@@ -589,7 +634,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         onLoadMore={handleLoadMore}
         loadingMore={loadingMore}
       />
-      {!readOnlyCloudHost && (
+      {!readOnly && (
         <InputBox
           sessionId={id}
           onSend={handleSendMessage}

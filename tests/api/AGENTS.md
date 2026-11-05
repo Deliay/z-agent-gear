@@ -338,6 +338,33 @@ pnpm test
 | acp:check:result - 多 Server | acp:check:result 响应包含 opencode + github_copilot 两个 server |
 | gc:start - github_copilot | 创建 session 时 acpServerType=github_copilot，验证 serverType 正确传递 |
 
+### 会话归档与工作区连带归档 API (`agent-api/session-archive.test.ts` T-ARCH-API* / T-WSARC-API*)
+
+> 会话管理优化 Phase 9（计划 §4.2）。复用 `createFrontUser` + fake controller（应答 `acp:check`/`acp:start`/
+> `git:worktree:list`/`acp:stop` ack）+ `mongoDb()` DB 断言；**每条用例独立开户**，避免 `homeOverview` /
+> `sessions` 计数被同套件其它用例污染。需要 agent-api + controller-api 就绪、`INTERNAL_API_TOKEN`（开户）
+> 与 `MONGODB_URI`（DB 断言，缺省整套 skip）。
+
+| 测试 | 描述 |
+|------|------|
+| T-ARCH-API1 | `archiveSession` 未认证 → `Not authenticated` |
+| T-ARCH-API2 | 归档/取消归档成功：DB `archivedAt` 置位/置空往返 + 重复归档幂等；`session.archived` 透出，会话在活跃/已归档列表间即时进出 |
+| T-ARCH-API3 | 工作流节点会话 `archiveSession` → `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED` 且不写库；`sessions(archived)` 三档口径（缺省=活跃、`archived:false`=活跃、`archived:true`=仅已归档）且与 `includeWorkflowSessions` 正交（直写归档的节点会话仅在 `includeWorkflowSessions=true` 时出现） |
+| T-ARCH-API4 | `homeOverview.archivedSessions` 与活跃 `sessions` 互补（互不相交且并集为全量），`sessionTotalCount == sessions.length`（未归档计数） |
+| T-WSARC-API1 | `deleteWorkspace` 连带：DB 断言会话 `archivedAt` 非空、原活跃会话 `status=ended`、工作区行被删除；会话从活跃列表消失并进入 `sessions(archived:true)` |
+| T-WSARC-API2 | `workspaceArchiveImpact.sessionCount`=2 = 实际连带归档集合（逐 id 对齐），另一工作区会话不受影响（`archivedAt` 仍为 null） |
+
+### 会话统一只读判定 API (`agent-api/session-readonly.test.ts` T-RO-API*)
+
+> 与既有云电脑只读用例同文件、同 `skipIf(!MONGODB_URI)` 口径（既有 5 条云电脑用例保持不变）。
+> 直插本地控制器 / 项目工作区 / 会话夹具（新数据带 `controllerWorkspaceId` + `cwd`，落个人全局租户工作区）。
+
+| 测试 | 描述 |
+|------|------|
+| T-RO-API1 | 删除控制器后 `resumeSession` → `{success:false, status:'ended', error:'session is ended'}`；`sendSessionMessage` → GraphQL error `session is ended` |
+| T-RO-API2 | `deleteWorkspace` 连带归档后取消归档 → 会话仍只读：`resume`/`sendSessionMessage` 同口径拒绝，`session.readOnlyReason=WORKSPACE_MISSING` |
+| T-RO-API3 | `session.readOnlyReason` 三态透出：`CONTROLLER_MISSING`（控制器行删除）/ `WORKSPACE_MISSING`（工作区行删除）/ `CLOUD_HOST_DESTROYED`（STOPPED 云电脑），运行环境完好会话为 `null` |
+
 ### Session SSE API (`agent-api/session.test.ts`)
 
 | 测试 | 描述 |
@@ -796,7 +823,7 @@ pnpm test
 | `tests/api/src/agent-api/cloud-host-billing-quote.test.ts` | `cloudHostBillingQuote` 转发价目（创建 5 credits / 运行 1 credit/分钟；需 `ADMIN_API_URL`） |
 | `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/多台并行/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.12.0`（基线 2.12.0）；DEEPSEEK_HARNESS 创建同为 2.12.0 |
 | `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等、未 ready 自动退款留痕、已 ready 不退）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
-| `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝（需 `MONGODB_URI`） |
+| `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝；控制器/工作区删除后的统一只读与 `readOnlyReason` 三态（T-RO-API1~3，见「会话统一只读判定 API」小节）（需 `MONGODB_URI`） |
 | `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.12.0`（基线 2.12.0）（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
 
 > `K8S_ENABLED=false` 下无法产生真实 RUNNING 容器；在线、OpenCode ACP、真实默认会话链路由单测 + 真实集群手工验收覆盖，不引入测试后门。

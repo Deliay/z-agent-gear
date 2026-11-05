@@ -139,6 +139,7 @@ export const CREATE_SESSION = gql`
         status
         externalSessionId
         cwd
+        archived
         createdAt
         updatedAt
         endedAt
@@ -192,6 +193,25 @@ export const CLOSE_SESSION = gql`
 export const DELETE_SESSION = gql`
   mutation DeleteSession($id: ID!) {
     deleteSession(id: $id)
+  }
+`
+
+/** 归档/取消归档会话（仅分组展示差异，不终止进程）；工作流节点会话服务端拒绝 */
+export const ARCHIVE_SESSION = gql`
+  mutation ArchiveSession($id: ID!, $archived: Boolean!) {
+    archiveSession(id: $id, archived: $archived)
+  }
+`
+
+/**
+ * 删除工作区影响预查询：将连带归档的普通会话数（删除/清空确认提示，与实际归档同口径）。
+ * 契约位置为 Mutation（`contracts/agent-session.graphql`），必须经 `useMutation` 执行。
+ */
+export const WORKSPACE_ARCHIVE_IMPACT = gql`
+  mutation WorkspaceArchiveImpact($id: ID!) {
+    workspaceArchiveImpact(id: $id) {
+      sessionCount
+    }
   }
 `
 
