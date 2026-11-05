@@ -80,7 +80,6 @@ export function CodePreview({
           renderSideBySide: true,
           theme,
           automaticLayout: true,
-          wordBasedSuggestions: 'currentDocument',
         });
         const original = monaco.editor.createModel(oldText ?? '', language);
         const modified = monaco.editor.createModel(content, language);
@@ -112,7 +111,7 @@ export function CodePreview({
       });
       editor = created as unknown as typeof editor;
       if (savedState && created.restoreViewState) {
-        created.restoreViewState(savedState);
+        created.restoreViewState(savedState as never);
       }
       if (annotate && created.onMouseDown) {
         created.onMouseDown((event) => {

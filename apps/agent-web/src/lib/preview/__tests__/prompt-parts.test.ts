@@ -9,7 +9,6 @@ import {
   deserializeDraft,
   buildSendParts,
   MAX_IMAGE_BYTES,
-  MAX_TOTAL_BYTES,
   DRAFT_PERSIST_LIMIT,
   type PromptPart,
 } from '../prompt-parts.js';

@@ -4,7 +4,7 @@ import { render, fireEvent, screen, cleanup, act } from '@testing-library/react'
 import { HtmlPreview } from '../HtmlPreview';
 import { AnnotationPopup } from '../AnnotationPopup';
 import { AnnotationList } from '../AnnotationList';
-import type { ReviewComment } from '../../../lib/preview/types';
+import type { ReviewComment } from '../../../../lib/preview/types';
 
 afterEach(() => cleanup());
 

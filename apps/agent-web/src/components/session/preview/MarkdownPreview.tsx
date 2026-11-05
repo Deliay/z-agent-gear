@@ -32,7 +32,6 @@ export function MarkdownPreview({ source, readOnly = false, filePath, onConfirm,
     if (!annotate) return;
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
-    const range = selection.getRangeAt(0);
     const anchorEl = (selection.anchorNode?.nodeType === 1
       ? selection.anchorNode
       : selection.anchorNode?.parentElement) as Element | null;

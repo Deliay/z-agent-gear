@@ -183,6 +183,17 @@ export const HOME_OVERVIEW = gql`
         createdAt
       }
       unreadTodoCount
+      sessionReviews {
+        id
+        sessionId
+        files
+        status
+        fileReviews
+        comment
+        cancelReason
+        createdAt
+        resolvedAt
+      }
     }
   }
   ${HOME_WORKFLOW_INSTANCE_FIELDS}

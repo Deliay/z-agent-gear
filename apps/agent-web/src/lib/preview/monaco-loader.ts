@@ -23,7 +23,8 @@ export async function loadMonaco(): Promise<MonacoModule> {
   if (monacoPromise) return monacoPromise;
   monacoPromise = (async () => {
     const monaco = await import('monaco-editor');
-    const worker = await import('monaco-editor/esm/vs/editor/editor.worker?worker');
+    // monaco-editor exports map：`./* → ./esm/vs/*.js`（不含 esm/vs 前缀）
+    const worker = await import('monaco-editor/editor/editor.worker.js?worker');
     (self as unknown as { MonacoEnvironment?: unknown }).MonacoEnvironment = {
       getWorker: () => new worker.default(),
     };

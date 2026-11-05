@@ -226,8 +226,8 @@ export const DELETE_HISTORY_SESSION = gql`
 `
 
 export const SEND_SESSION_MESSAGE = gql`
-  mutation SendSessionMessage($sessionId: ID!, $content: String!, $type: AcpMessageType) {
-    sendSessionMessage(sessionId: $sessionId, content: $content, type: $type) {
+  mutation SendSessionMessage($sessionId: ID!, $content: String!, $type: AcpMessageType, $parts: [PromptPartInput!]) {
+    sendSessionMessage(sessionId: $sessionId, content: $content, type: $type, parts: $parts) {
       id
       sessionId
       direction
