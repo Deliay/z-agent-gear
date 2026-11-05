@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { ElicitationDialog } from './ElicitationDialog';
+import { joinMultiSelectValues } from '../lib/elicitation-multi-select';
 import { resetElicitationDialog } from '../stores/elicitationDialog';
 
 const mockRespondElicitation = vi.fn().mockResolvedValue({});
@@ -353,5 +354,247 @@ describe('ElicitationDialog - 终态', () => {
     render(<ElicitationDialog open onOpenChange={vi.fn()} todo={{ ...baseTodo, resolution: 'accepted' }} />);
     expect(screen.getByTestId('elicitation-status').textContent).toContain('该问询已提交');
     expect(screen.queryByText('提交')).toBeNull();
+  });
+});
+
+describe('ElicitationDialog - 多选 anyOf', () => {
+  // 真实 ACP question 工具形态：type:array + items.anyOf（无 items.enum/oneOf）
+  const multiTodo = {
+    id: 'todo-e4',
+    type: 'elicitation_request',
+    priority: 'immediate',
+    title: 'Agent请求输入：实施选项',
+    description: null,
+    isRead: false,
+    data: null,
+    elicitationData: {
+      requestId: 'el-req-multi',
+      sessionId: 'sess-1',
+      toolCallId: 'tc-multi',
+      mode: 'form' as const,
+      message: '请选择实施选项',
+      requestedSchema: {
+        type: 'object' as const,
+        title: '实施选项',
+        properties: {
+          q0: {
+            type: 'string',
+            title: '实施方式',
+            oneOf: [
+              { const: '自动', title: '自动' },
+              { const: '手动', title: '手动' },
+            ],
+          },
+          q1: {
+            type: 'array',
+            title: '要做的事',
+            description: '可多选',
+            items: {
+              anyOf: [
+                { const: '自动跑测试', title: '自动跑测试', description: '提交前运行单测与 E2E' },
+                { const: '生成文档', title: '生成文档' },
+                { const: '部署', title: '部署' },
+              ],
+            },
+          },
+          extras: {
+            type: 'array',
+            title: '附加项',
+            items: {
+              anyOf: [
+                { const: 'X', title: 'X' },
+                { const: 'Y', title: 'Y' },
+              ],
+            },
+          },
+        },
+        required: ['q1'],
+      },
+      elicitationId: null,
+      url: null,
+    },
+    createdAt: '2026-11-04T00:00:00.000Z',
+  };
+
+  // enum/oneOf 数组 + 单选 + 自由文本的回归基线形态
+  const mixedTodo = {
+    ...multiTodo,
+    id: 'todo-e5',
+    elicitationData: {
+      ...multiTodo.elicitationData,
+      requestId: 'el-req-mixed',
+      requestedSchema: {
+        type: 'object' as const,
+        title: '混合表单',
+        properties: {
+          envs: { type: 'array', title: '环境', items: { enum: ['dev', 'prod'] } },
+          stages: {
+            type: 'array',
+            title: '阶段',
+            items: {
+              oneOf: [
+                { const: 's1', title: '阶段一' },
+                { const: 's2', title: '阶段二' },
+              ],
+            },
+          },
+          target: {
+            type: 'string',
+            title: '目标',
+            oneOf: [
+              { const: 'a', title: 'A' },
+              { const: 'b', title: 'B' },
+            ],
+          },
+          custom: { type: 'string', title: '自定义' },
+          q1: multiTodo.elicitationData.requestedSchema.properties.q1,
+        },
+        required: [],
+      },
+    },
+  };
+
+  beforeEach(() => {
+    mockRespondElicitation.mockClear();
+    mockRespondElicitation.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetElicitationDialog();
+  });
+
+  it('T-QM1: items.anyOf 渲染为勾选组而非文本框', () => {
+    const { container } = render(
+      <ElicitationDialog open onOpenChange={vi.fn()} todo={multiTodo} />,
+    );
+    const group = screen.getByRole('group', { name: '要做的事' });
+    expect(group).toBeDefined();
+    const boxes = within(group).getAllByRole('checkbox');
+    expect(boxes).toHaveLength(3);
+    // 标签取 title
+    expect(within(group).getByText('自动跑测试')).toBeDefined();
+    expect(within(group).getByText('生成文档')).toBeDefined();
+    expect(within(group).getByText('部署')).toBeDefined();
+    // 不再渲染为文本框
+    expect(container.querySelector('#q1')).toBeNull();
+  });
+
+  it('T-QM1b: 选项说明可见', () => {
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={multiTodo} />);
+    expect(screen.getByText('提交前运行单测与 E2E')).toBeDefined();
+  });
+
+  it('T-QM2: 依次勾选后以逗号拼接回传（顺序=勾选顺序）', async () => {
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={multiTodo} />);
+    const group = screen.getByRole('group', { name: '要做的事' });
+    const boxes = within(group).getAllByRole('checkbox');
+    fireEvent.click(boxes[0]);
+    fireEvent.click(boxes[1]);
+    fireEvent.click(screen.getByText('提交'));
+    await waitFor(() => {
+      expect(mockRespondElicitation).toHaveBeenCalledWith({
+        variables: {
+          requestId: 'el-req-multi',
+          action: 'accept',
+          values: expect.objectContaining({ q1: '自动跑测试,生成文档' }),
+        },
+      });
+    });
+  });
+
+  it('T-QM2b: 取消勾选后拼接剩余项；全部取消保持空数组', async () => {
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={multiTodo} />);
+    const q1 = screen.getByRole('group', { name: '要做的事' });
+    const q1Boxes = within(q1).getAllByRole('checkbox');
+    fireEvent.click(q1Boxes[0]);
+    fireEvent.click(q1Boxes[1]);
+    fireEvent.click(q1Boxes[0]);
+
+    const extras = screen.getByRole('group', { name: '附加项' });
+    const extraBoxes = within(extras).getAllByRole('checkbox');
+    fireEvent.click(extraBoxes[0]);
+    fireEvent.click(extraBoxes[0]);
+
+    fireEvent.click(screen.getByText('提交'));
+    await waitFor(() => {
+      expect(mockRespondElicitation).toHaveBeenCalledWith({
+        variables: {
+          requestId: 'el-req-multi',
+          action: 'accept',
+          values: expect.objectContaining({ q1: '生成文档', extras: [] }),
+        },
+      });
+    });
+  });
+
+  it('T-QM3: 必答多选空选时禁用提交并提示', () => {
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={multiTodo} />);
+    expect(screen.getByRole('group', { name: '要做的事' })).toBeDefined();
+    const submitBtn = screen.getByText('提交') as HTMLButtonElement;
+    expect(submitBtn.disabled).toBe(true);
+    expect(screen.getByText(/请填写必填项：要做的事/)).toBeDefined();
+  });
+
+  it('T-QM4: items.enum / items.oneOf 数组字段仍以数组提交', async () => {
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={mixedTodo} />);
+    const envs = screen.getByRole('group', { name: '环境' });
+    fireEvent.click(within(envs).getByText('dev'));
+    const stages = screen.getByRole('group', { name: '阶段' });
+    fireEvent.click(within(stages).getByText('阶段一'));
+    fireEvent.click(screen.getByText('提交'));
+    await waitFor(() => {
+      expect(mockRespondElicitation).toHaveBeenCalledWith({
+        variables: {
+          requestId: 'el-req-mixed',
+          action: 'accept',
+          values: expect.objectContaining({ envs: ['dev'], stages: ['s1'] }),
+        },
+      });
+    });
+  });
+
+  it('T-QM5: 单选与自由文本提交行为不变', async () => {
+    render(<ElicitationDialog open onOpenChange={vi.fn()} todo={mixedTodo} />);
+    fireEvent.click(screen.getByLabelText('A'));
+    fireEvent.change(screen.getByLabelText('自定义'), { target: { value: '自由输入' } });
+    fireEvent.click(screen.getByText('提交'));
+    await waitFor(() => {
+      expect(mockRespondElicitation).toHaveBeenCalledWith({
+        variables: {
+          requestId: 'el-req-mixed',
+          action: 'accept',
+          values: expect.objectContaining({ target: 'a', custom: '自由输入' }),
+        },
+      });
+    });
+  });
+
+  it('T-QM6: joinMultiSelectValues 边界（空数组/含逗号/非字符串/非 anyOf/非数组）', () => {
+    const properties = {
+      q1: {
+        type: 'array',
+        items: { anyOf: [{ const: 'A', title: 'A' }, { const: 'B', title: 'B' }] },
+      },
+      envs: { type: 'array', items: { enum: ['dev', 'prod'] } },
+      stages: { type: 'array', items: { oneOf: [{ const: 's1' }] } },
+      plain: { type: 'string' },
+    };
+
+    expect(joinMultiSelectValues({ q1: [] }, properties)).toEqual({ q1: [] });
+    expect(joinMultiSelectValues({ q1: ['A', 'B'] }, properties)).toEqual({ q1: 'A,B' });
+    expect(joinMultiSelectValues({ q1: ['A,B'] }, properties)).toEqual({ q1: 'A,B' });
+    expect(joinMultiSelectValues({ q1: [{ id: 1 }] }, properties)).toEqual({ q1: '{"id":1}' });
+    expect(joinMultiSelectValues({ envs: ['dev'], stages: ['s1'] }, properties)).toEqual({
+      envs: ['dev'],
+      stages: ['s1'],
+    });
+    // 历史草稿/异常报文：非数组原样透传
+    expect(joinMultiSelectValues({ q1: '手动输入' }, properties)).toEqual({ q1: '手动输入' });
+    // 未涉及的键不丢失
+    expect(joinMultiSelectValues({ plain: '文本', q1: ['A'] }, properties)).toEqual({
+      plain: '文本',
+      q1: 'A',
+    });
   });
 });

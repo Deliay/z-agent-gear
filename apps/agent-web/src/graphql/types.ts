@@ -894,6 +894,7 @@ export interface ElicitationSchemaProperty {
   items?: {
     enum?: unknown[]
     oneOf?: ElicitationSchemaOneOfOption[]
+    anyOf?: ElicitationSchemaOneOfOption[]
   }
 }
 
