@@ -442,6 +442,15 @@ export interface GitRepoInfoData {
   defaultBranch?: string | null
 }
 
+/** 删除工作区影响预查询（contracts/agent-session.graphql）：连带归档的普通会话数 */
+export interface WorkspaceArchiveImpactData {
+  sessionCount: number
+}
+
+export interface WorkspaceArchiveImpactQuery {
+  workspaceArchiveImpact: WorkspaceArchiveImpactData
+}
+
 export interface GitInitResultData {
   success: boolean
 }
@@ -560,6 +569,12 @@ export interface AuthMethodInfoData {
   url?: string | null
 }
 
+/** 会话只读原因（服务端字段 resolver 实时计算；null/缺失 = 可写） */
+export type SessionReadOnlyReason =
+  | 'WORKSPACE_MISSING'
+  | 'CONTROLLER_MISSING'
+  | 'CLOUD_HOST_DESTROYED'
+
 export interface SessionData {
   id: string
   userId: string
@@ -576,6 +591,10 @@ export interface SessionData {
   cwd: string | null
   worktreePath: string | null
   worktreeBranch: string | null
+  /** 归档状态（true=已归档，收纳进侧边栏「已归档」分组） */
+  archived: boolean
+  /** 只读原因：null=可写；三场景（工作区/控制器缺失、云电脑终态）由服务端统一计算 */
+  readOnlyReason?: SessionReadOnlyReason | null
   modes?: AgentModeData[] | null
   currentModeId?: string | null
   availableModels?: AgentModelInfoData[] | null
@@ -1112,8 +1131,11 @@ export interface HomeOverviewWorkspaceData extends ControllerWorkspaceData {
 
 export interface HomeOverviewData {
   controllers: HomeOverviewControllerData[]
+  /** 未归档活跃会话（服务端已按未归档过滤，D12） */
   sessions: SessionData[]
   sessionTotalCount: number
+  /** 已归档会话（侧边栏「已归档（N）」折叠分组，与 sessions 互补） */
+  archivedSessions: SessionData[]
   workspaces: HomeOverviewWorkspaceData[]
   workflowInstances: WorkflowInstanceSummaryData[]
   archivedWorkflowInstances: WorkflowInstanceSummaryData[]

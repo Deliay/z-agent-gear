@@ -49,54 +49,74 @@ export const homeResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       const userId = context.currentUser.id;
-      const [controllers, sessions, workspaces, activeDocs, archivedDocs, todos, unreadTodoCount] =
-        await Promise.all([
-          degrade<Doc[]>(
-            async () => (await controllerService.findAllByUser(userId)) as Doc[],
-            [],
-            'controllers',
-          ),
-          degrade<Doc[]>(
-            async () =>
-              (await sessionService.findAllByUser(userId, {
-                includeWorkflowSessions: false,
-              })) as Doc[],
-            [],
-            'sessions',
-          ),
-          degrade<Doc[]>(
-            async () => (await controllerWorkspaceService.findAllByUser(userId)) as Doc[],
-            [],
-            'workspaces',
-          ),
-          degrade<Doc[]>(
-            async () =>
-              (await workflowInstanceService.list(userId, { archived: false })) as unknown as Doc[],
-            [],
-            'workflowInstances',
-          ),
-          degrade<Doc[]>(
-            async () =>
-              (await workflowInstanceService.list(userId, { archived: true })) as unknown as Doc[],
-            [],
-            'archivedWorkflowInstances',
-          ),
-          degrade<Doc[]>(
-            async () => (await todoService.getTodoList(userId)) as unknown as Doc[],
-            [],
-            'todos',
-          ),
-          degrade<number>(
-            () => todoService.getUnreadTodoCount(userId),
-            0,
-            'unreadTodoCount',
-          ),
-        ]);
+      const [
+        controllers,
+        sessions,
+        archivedSessionDocs,
+        workspaces,
+        activeDocs,
+        archivedDocs,
+        todos,
+        unreadTodoCount,
+      ] = await Promise.all([
+        degrade<Doc[]>(
+          async () => (await controllerService.findAllByUser(userId)) as Doc[],
+          [],
+          'controllers',
+        ),
+        degrade<Doc[]>(
+          async () =>
+            (await sessionService.findAllByUser(userId, {
+              includeWorkflowSessions: false,
+              archived: false,
+            })) as Doc[],
+          [],
+          'sessions',
+        ),
+        // 侧边栏「已归档」分组：与活跃 sessions 口径互补，单分支失败降级 []
+        degrade<Doc[]>(
+          async () =>
+            (await sessionService.findAllByUser(userId, {
+              includeWorkflowSessions: false,
+              archived: true,
+            })) as Doc[],
+          [],
+          'archivedSessions',
+        ),
+        degrade<Doc[]>(
+          async () => (await controllerWorkspaceService.findAllByUser(userId)) as Doc[],
+          [],
+          'workspaces',
+        ),
+        degrade<Doc[]>(
+          async () =>
+            (await workflowInstanceService.list(userId, { archived: false })) as unknown as Doc[],
+          [],
+          'workflowInstances',
+        ),
+        degrade<Doc[]>(
+          async () =>
+            (await workflowInstanceService.list(userId, { archived: true })) as unknown as Doc[],
+          [],
+          'archivedWorkflowInstances',
+        ),
+        degrade<Doc[]>(
+          async () => (await todoService.getTodoList(userId)) as unknown as Doc[],
+          [],
+          'todos',
+        ),
+        degrade<number>(
+          () => todoService.getUnreadTodoCount(userId),
+          0,
+          'unreadTodoCount',
+        ),
+      ]);
 
       return {
         controllers,
         sessions,
         sessionTotalCount: sessions.length,
+        archivedSessions: archivedSessionDocs,
         workspaces,
         workflowInstances: activeDocs.map((doc) => mapInstance(doc)),
         archivedWorkflowInstances: archivedDocs.map((doc) => mapInstance(doc)),

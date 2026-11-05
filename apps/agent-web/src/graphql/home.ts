@@ -80,11 +80,31 @@ export const HOME_OVERVIEW = gql`
         worktreeBranch
         workflowInstanceId
         workflowNodeId
+        archived
         createdAt
         updatedAt
         endedAt
       }
       sessionTotalCount
+      archivedSessions {
+        id
+        userId
+        controllerId
+        controllerName
+        acpServerType
+        status
+        title
+        externalSessionId
+        cwd
+        worktreePath
+        worktreeBranch
+        workflowInstanceId
+        workflowNodeId
+        archived
+        createdAt
+        updatedAt
+        endedAt
+      }
       workspaces {
         id
         userId

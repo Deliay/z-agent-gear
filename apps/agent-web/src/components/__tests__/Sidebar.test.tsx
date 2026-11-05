@@ -155,6 +155,7 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
     cwd: null,
     worktreePath: null,
     worktreeBranch: null,
+    archived: false,
     createdAt: '',
     updatedAt: '',
     endedAt: null,
@@ -202,6 +203,7 @@ function mockHome(overrides: Partial<HomeOverviewData> = {}) {
     controllers: [makeController()],
     sessions: [],
     sessionTotalCount: 0,
+    archivedSessions: [],
     workspaces: [],
     workflowInstances: [],
     archivedWorkflowInstances: [],
@@ -933,6 +935,50 @@ describe('Sidebar 集成测试', () => {
       renderSidebar({ mobile: true });
 
       expect(screen.getByLabelText('Github 项目设置')).toBeInTheDocument();
+    });
+  });
+
+  describe('已归档会话分组（T-WEB2）', () => {
+    it('T-WEB2 默认折叠、计数正确、活跃列表不含已归档，展开后条目可打开', () => {
+      mockHome({
+        sessions: [
+          makeSession({ id: 's-active', title: '活跃会话', updatedAt: '2026-01-02T00:00:00Z' }),
+        ],
+        archivedSessions: [
+          makeSession({ id: 's-archived', title: '归档会话', archived: true, updatedAt: '2026-01-01T00:00:00Z' }),
+        ],
+      });
+
+      render(<Sidebar name="testuser" />);
+
+      const groupButton = screen.getByRole('button', { name: /已归档（1）/ });
+      expect(groupButton).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByText('归档会话')).not.toBeInTheDocument();
+      expect(screen.getByText('活跃会话')).toBeInTheDocument();
+
+      // 活跃列表链接不含已归档会话（服务端已按未归档过滤，D12）
+      const activeLinks = within(screen.getByTestId('sidebar-session-list'))
+        .getAllByRole('link')
+        .map((link) => link.getAttribute('href'));
+      expect(activeLinks).toEqual(['/sessions/s-active']);
+
+      fireEvent.click(groupButton);
+
+      expect(groupButton).toHaveAttribute('aria-expanded', 'true');
+      const archivedList = screen.getByTestId('sidebar-archived-session-list');
+      const archivedLink = within(archivedList).getByText('归档会话').closest('a');
+      expect(archivedLink).toHaveAttribute('href', '/sessions/s-archived');
+      // 展开后归档条目仍只出现在归档分组内，不混入活跃列表直接子项
+      expect(screen.getByTestId('sidebar-session-list').querySelectorAll(':scope > li')).toHaveLength(2);
+    });
+
+    it('T-WEB2 无已归档会话时不渲染分组', () => {
+      mockHome({ sessions: [makeSession({ id: 's-active', title: '活跃会话' })] });
+
+      render(<Sidebar name="testuser" />);
+
+      expect(screen.queryByRole('button', { name: /已归档/ })).not.toBeInTheDocument();
+      expect(screen.getByText('活跃会话')).toBeInTheDocument();
     });
   });
 });

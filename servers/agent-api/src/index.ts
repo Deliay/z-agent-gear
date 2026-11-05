@@ -44,6 +44,7 @@ import * as migration018DropLegacyUniqueIndexes from './migrations/018-drop-lega
 import * as migration019CommitSettingsPerMember from './migrations/019-commit-settings-per-member.js';
 import * as migration020CloudStorageIndexes from './migrations/020-cloud-storage-indexes.js';
 import * as migration021WorkflowInterruptRetry from './migrations/021-workflow-interrupt-retry.js';
+import * as migration022SessionArchiveIndexes from './migrations/022-session-archive-indexes.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -200,6 +201,7 @@ async function start() {
       migration019CommitSettingsPerMember,
       migration020CloudStorageIndexes,
       migration021WorkflowInterruptRetry,
+      migration022SessionArchiveIndexes,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');

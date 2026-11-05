@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import WorkspaceSection from '../WorkspaceSection';
+import { GET_ACP_CAPABILITIES } from '../../../graphql/queries';
+import { WORKSPACE_ARCHIVE_IMPACT, DELETE_WORKSPACE } from '../../../graphql/mutations';
 
 const mockUseQuery = vi.fn();
 const mockUseMutation = vi.fn();
@@ -73,10 +75,13 @@ describe('WorkspaceSection', () => {
     const deleteButtons = screen.getAllByText('删除');
     fireEvent.click(deleteButtons[0]);
 
-    expect(deleteMutate).toHaveBeenCalledWith({
-      variables: { id: 'ws-1' },
-      refetchQueries: [expect.any(Object), expect.any(Object)],
-    });
+    // impact 预查询（契约层 Mutation）为异步：删除经微任务后触发
+    await waitFor(() =>
+      expect(deleteMutate).toHaveBeenCalledWith({
+        variables: { id: 'ws-1' },
+        refetchQueries: [expect.any(Object), expect.any(Object)],
+      }),
+    );
   });
 
   it('should show clear confirmation when click clear', () => {
@@ -124,5 +129,125 @@ describe('WorkspaceSection', () => {
     fireEvent.click(chevronButtons[0]);
 
     expect(screen.getByText('检测 Git 状态中...')).toBeDefined();
+  });
+});
+
+describe('工作区删除/清空连带归档确认（T-WEB4）', () => {
+  const defaultProps = { controllerId: 'ctrl-1' };
+
+  /**
+   * `workspaceArchiveImpact` 在契约层是 Mutation（contracts/agent-session.graphql），
+   * 因此经 `useMutation` 分流返回给定 sessionCount（null = 取数失败/拒绝）；
+   * `useQuery` 只保留工作区列表与 ACP 能力两个查询。
+   */
+  function mockWithImpact(sessionCount: number | null) {
+    const impactMutate =
+      sessionCount == null
+        ? vi.fn().mockRejectedValue(new Error('impact failed'))
+        : vi.fn().mockResolvedValue({ data: { workspaceArchiveImpact: { sessionCount } } });
+    const deleteMutate = vi.fn().mockResolvedValue({});
+    mockUseQuery.mockImplementation((query: unknown) => {
+      if (query === GET_ACP_CAPABILITIES) {
+        return { data: null, loading: false };
+      }
+      return { data: { controllerWorkspaces: baseWorkspaces() }, loading: false, refetch: vi.fn() };
+    });
+    mockUseMutation.mockImplementation((query: unknown) => {
+      if (query === WORKSPACE_ARCHIVE_IMPACT) return [impactMutate];
+      if (query === DELETE_WORKSPACE) return [deleteMutate];
+      return [vi.fn().mockResolvedValue({})];
+    });
+    return { impactMutate, deleteMutate };
+  }
+
+  it('T-WEB4 N>0 时弹出含数量的删除确认框且不直接删除', async () => {
+    const { impactMutate, deleteMutate } = mockWithImpact(3);
+
+    render(<WorkspaceSection {...defaultProps} />);
+    fireEvent.click(screen.getAllByText('删除')[0]);
+
+    expect(
+      await screen.findByText('删除工作区将同时归档其下 3 个会话，是否继续？'),
+    ).toBeInTheDocument();
+    expect(impactMutate).toHaveBeenCalledWith({ variables: { id: 'ws-1' } });
+    expect(deleteMutate).not.toHaveBeenCalled();
+  });
+
+  it('T-WEB4 确认删除后才调用 deleteWorkspace', async () => {
+    const { deleteMutate } = mockWithImpact(3);
+
+    render(<WorkspaceSection {...defaultProps} />);
+    fireEvent.click(screen.getAllByText('删除')[0]);
+    await screen.findByText('删除工作区将同时归档其下 3 个会话，是否继续？');
+
+    fireEvent.click(screen.getByText('确认删除'));
+
+    await waitFor(() =>
+      expect(deleteMutate).toHaveBeenCalledWith({
+        variables: { id: 'ws-1' },
+        refetchQueries: [expect.any(Object), expect.any(Object)],
+      }),
+    );
+  });
+
+  it('T-WEB4 取消删除时不调用 deleteWorkspace', async () => {
+    const { deleteMutate } = mockWithImpact(2);
+
+    render(<WorkspaceSection {...defaultProps} />);
+    fireEvent.click(screen.getAllByText('删除')[0]);
+    await screen.findByText('删除工作区将同时归档其下 2 个会话，是否继续？');
+
+    fireEvent.click(screen.getByText('取消'));
+
+    expect(screen.queryByText(/删除工作区将同时归档其下/)).not.toBeInTheDocument();
+    expect(deleteMutate).not.toHaveBeenCalled();
+  });
+
+  it('T-WEB4 N=0 时不弹确认直接删除（保持现状）', async () => {
+    const { deleteMutate } = mockWithImpact(0);
+
+    render(<WorkspaceSection {...defaultProps} />);
+    fireEvent.click(screen.getAllByText('删除')[0]);
+
+    await waitFor(() =>
+      expect(deleteMutate).toHaveBeenCalledWith({
+        variables: { id: 'ws-1' },
+        refetchQueries: [expect.any(Object), expect.any(Object)],
+      }),
+    );
+    expect(screen.queryByText(/删除工作区将同时归档其下/)).not.toBeInTheDocument();
+  });
+
+  it('T-WEB4 impact 取数失败不阻断：降级为直接删除', async () => {
+    const { impactMutate, deleteMutate } = mockWithImpact(null);
+
+    render(<WorkspaceSection {...defaultProps} />);
+    fireEvent.click(screen.getAllByText('删除')[0]);
+
+    await waitFor(() => expect(impactMutate).toHaveBeenCalledWith({ variables: { id: 'ws-1' } }));
+    await waitFor(() => expect(deleteMutate).toHaveBeenCalledOnce());
+    expect(screen.queryByText(/删除工作区将同时归档其下/)).not.toBeInTheDocument();
+  });
+
+  it('T-WEB4 清空确认追加各工作区连带合计数量', async () => {
+    const { impactMutate } = mockWithImpact(2);
+
+    render(<WorkspaceSection {...defaultProps} />);
+    fireEvent.click(screen.getByText('清空'));
+
+    expect(screen.getByText('确定要清空所有工作区吗？此操作不可撤销。')).toBeDefined();
+    expect(await screen.findByText('将同时归档其下 4 个会话')).toBeInTheDocument();
+    expect(impactMutate).toHaveBeenCalledTimes(2);
+  });
+
+  it('T-WEB4 清空确认取数失败时降级为不展示数量（不阻断确认）', async () => {
+    const { impactMutate } = mockWithImpact(null);
+
+    render(<WorkspaceSection {...defaultProps} />);
+    fireEvent.click(screen.getByText('清空'));
+
+    expect(screen.getByText('确定要清空所有工作区吗？此操作不可撤销。')).toBeDefined();
+    await waitFor(() => expect(impactMutate).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/将同时归档其下/)).not.toBeInTheDocument();
   });
 });
