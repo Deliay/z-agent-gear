@@ -296,6 +296,7 @@ describe('internal management API', () => {
         'storageArchiveFileName',
         'storageArchiveFinishedAt',
         'storageArchiveId',
+        'storageArchiveSkipped',
         'storageArchiveStartedAt',
         'storageArchiveStatus',
         'storageArchiveUsageBytes',
@@ -1102,6 +1103,11 @@ describe('internal management API', () => {
     const allowed = await startRuntimeOnOnlineContainer('507f1f77bcf86cd7994390a1');
     expect(allowed.status).toBe(200);
     expect(runtimeDispatcher.startRuntimeBatch).toHaveBeenCalledTimes(1);
+    // harness 负载：批次条目标记为需要 harness env（Issue #446 的判定输入）。
+    const harnessInput = runtimeDispatcher.startRuntimeBatch.mock.calls[0]![1] as {
+      entries: Array<{ requiresHarnessEnv?: boolean }>;
+    };
+    expect(harnessInput.entries[0]!.requiresHarnessEnv).toBe(true);
 
     // 版本不可得 → 放行 + warn 留痕
     runtimeDispatcher.startRuntimeBatch.mockClear();
@@ -1121,6 +1127,10 @@ describe('internal management API', () => {
     const standard = await startRuntimeOnOnlineContainer('507f1f77bcf86cd7994390a2');
     expect(standard.status).toBe(200);
     expect(runtimeDispatcher.startRuntimeBatch).toHaveBeenCalledTimes(1);
+    const standardInput = runtimeDispatcher.startRuntimeBatch.mock.calls[0]![1] as {
+      entries: Array<{ requiresHarnessEnv?: boolean }>;
+    };
+    expect(standardInput.entries[0]!.requiresHarnessEnv).toBe(false);
   });
 
   it('T-CC15: GET /containers 支持 hostId/userId 过滤，无参数保持全量', async () => {

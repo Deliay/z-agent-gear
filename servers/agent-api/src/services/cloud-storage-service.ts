@@ -50,11 +50,24 @@ export interface ArchiveCallbackInput {
   failureReason?: string | null;
   /** 仅 SUCCEEDED 有意义：源 PVC 是否已释放（false 时记入 currentArchive 留痕）。 */
   sourcePvcReleased?: boolean | null;
+  /** 存储级归档操作单号（D5；仅留痕，不参与幂等判定）。 */
+  operationId?: string | null;
 }
 
 export interface UsageCallbackInput {
   usageBytes: number;
   measuredAt?: string | null;
+}
+
+/** 复原回调（cloud-controller → agent-api，契约 A.2.13）。 */
+export interface RestoreCallbackInput {
+  operationId: string;
+  storageId?: string;
+  status: 'RUNNING' | 'SUCCEEDED' | 'FAILED';
+  usageBytes?: number | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  failureReason?: string | null;
 }
 
 export interface AttachStorageInput {
@@ -130,6 +143,10 @@ export function assertStorageSize(sizeGi: unknown): number {
 }
 
 export function isArchiveTerminal(status: unknown): boolean {
+  return status === 'SUCCEEDED' || status === 'FAILED';
+}
+
+export function isRestoreTerminal(status: unknown): boolean {
   return status === 'SUCCEEDED' || status === 'FAILED';
 }
 
@@ -359,17 +376,23 @@ export class CloudStorageService {
 
     const status = String(doc.status);
     const currentArchive = doc.currentArchive as Doc | null;
+    const currentRestore = doc.currentRestore as Doc | null;
     const archivingFailed =
       status === 'ARCHIVING' && String(currentArchive?.status ?? '') === 'FAILED';
+    const restoringFailed =
+      status === 'RESTORING' && String(currentRestore?.status ?? '') === 'FAILED';
     if (status === 'ATTACHED') throw new Error('storage is attached');
     if (status === 'ARCHIVING' && !archivingFailed) throw new Error('storage is archiving');
-    if (!['IDLE', 'ARCHIVED'].includes(status) && !archivingFailed) {
+    if (status === 'RESTORING' && !restoringFailed) throw new Error('storage is restoring');
+    if (!['IDLE', 'ARCHIVED'].includes(status) && !archivingFailed && !restoringFailed) {
       throw new Error('storage is not destroyable');
     }
 
     const filter: Record<string, unknown> = archivingFailed
       ? { _id: id, status: 'ARCHIVING', 'currentArchive.status': 'FAILED' }
-      : { _id: id, status };
+      : restoringFailed
+        ? { _id: id, status: 'RESTORING', 'currentRestore.status': 'FAILED' }
+        : { _id: id, status };
     const moved = (await CloudStorage.findOneAndUpdate(
       filter,
       { $set: { status: 'DESTROYING' } },
@@ -427,26 +450,49 @@ export class CloudStorageService {
       throw new Error('not allowed to destroy storage');
     }
     const archive = doc.currentArchive as Doc | null;
-    const containerId = str(doc.lastContainerId);
     if (
       String(doc.status) !== 'ARCHIVING' ||
-      !containerId ||
       !archive ||
       String(archive.status) !== 'FAILED'
     ) {
       throw new Error('no archive to retry');
     }
 
+    // D6：以 currentArchive.containerId 判别来源，不得用 lastContainerId
+    // （停止不归档会保留 lastContainerId，会打到旧容器）。
+    const storageLevel = !archive.containerId;
+    const containerId = str(archive.containerId);
+    if (!storageLevel && !containerId) throw new Error('no archive to retry');
+
+    const operationId = new mongoose.Types.ObjectId().toString();
     const archiveId = new mongoose.Types.ObjectId().toString();
-    const cloudHostName = str(archive.cloudHostName) ?? 'cloud-host';
-    const fileName = buildArchiveFileName(cloudHostName);
-    const path = archivePath(String(doc.resourceWorkspaceId), id, fileName);
+    const cloudHostName = storageLevel ? null : (str(archive.cloudHostName) ?? 'cloud-host');
+    const fileName = buildArchiveFileName(storageLevel ? String(doc.name) : cloudHostName!);
+    const workspaceId = String(doc.resourceWorkspaceId);
+    const tenantId = doc.tenantId ? String(doc.tenantId) : null;
+    const path = archivePath(workspaceId, id, fileName);
     try {
-      await this.controllerClient.triggerArchive(containerId, { archiveId, fileName });
+      if (storageLevel) {
+        await this.controllerClient.archiveStorageOperation(id, {
+          operationId,
+          archiveId,
+          fileName,
+          workspaceId,
+          tenantId,
+        });
+      } else {
+        await this.controllerClient.triggerArchive(containerId!, { archiveId, fileName });
+      }
     } catch (err) {
       if (err instanceof CloudControllerRequestError) {
-        if (err.code === 'ARCHIVE_RUNNING') throw new Error('storage is archiving');
-        if (err.code === 'NO_STORAGE' || err.code === 'NOT_FOUND') {
+        if (err.code === 'ARCHIVE_RUNNING' || err.code === 'OPERATION_RUNNING') {
+          throw new Error('storage is archiving');
+        }
+        if (
+          err.code === 'NO_STORAGE' ||
+          err.code === 'NOT_FOUND' ||
+          err.code === 'STORAGE_IN_USE'
+        ) {
           throw new Error('no archive to retry');
         }
       }
@@ -455,8 +501,10 @@ export class CloudStorageService {
 
     const pending = {
       archiveId,
-      containerId,
-      cloudHostId: doc.attachedCloudHostId ?? archive.cloudHostId ?? null,
+      containerId: storageLevel ? null : containerId,
+      cloudHostId: storageLevel
+        ? null
+        : doc.attachedCloudHostId ?? archive.cloudHostId ?? null,
       cloudHostName,
       fileName,
       path,
@@ -465,6 +513,7 @@ export class CloudStorageService {
       startedAt: new Date(),
       finishedAt: null,
       failureReason: null,
+      operationId: storageLevel ? operationId : null,
     };
     const updated = (await CloudStorage.findOneAndUpdate(
       { _id: id, status: 'ARCHIVING' },
@@ -475,7 +524,7 @@ export class CloudStorageService {
       updated ?? ((await CloudStorage.findById(id).lean()) as Doc | null);
     if (!current) throw new Error('storage not found');
     logger.info(
-      { event: 'archive_retry', storageId: id, archiveId },
+      { event: 'archive_retry', storageId: id, archiveId, operationId, storageLevel },
       'cloud storage archive retried',
     );
     return this.present(current);
@@ -631,6 +680,40 @@ export class CloudStorageService {
     return updated;
   }
 
+  /**
+   * 停止云电脑且显式不归档（terminal `storage.archiveSkipped=true`）：
+   * `ATTACHED → IDLE`（CAS），保持 FULL 计费、清空 attached*，保留 lastContainerId/usageBytes。
+   *
+   * 与 `releaseStorage` 的区别：后者回滚到 `attachFromStatus`（启动失败语义），
+   * 本方法恒到 `IDLE`（主动不归档语义）；两者互斥于不同分支。
+   */
+  async detachToIdle(storageId: string, cloudHostId: string): Promise<Doc | null> {
+    if (!mongoose.isValidObjectId(storageId) || !mongoose.isValidObjectId(cloudHostId)) return null;
+    const updated = (await CloudStorage.findOneAndUpdate(
+      { _id: storageId, status: 'ATTACHED', attachedCloudHostId: cloudHostId },
+      {
+        $set: {
+          status: 'IDLE',
+          billingRate: 'FULL',
+          attachedCloudHostId: null,
+          attachedControllerId: null,
+          attachedBy: null,
+          attachedAt: null,
+          attachFromStatus: null,
+        },
+      },
+      { returnDocument: 'after' },
+    ).lean()) as Doc | null;
+    if (updated) {
+      logger.info(
+        { event: 'storage_detached_to_idle', storageId, cloudHostId },
+        'cloud storage detached to idle (archive skipped)',
+      );
+      return this.present(updated);
+    }
+    return (await CloudStorage.findById(storageId).lean()) as Doc | null;
+  }
+
   /** terminal 回调携带 `storage.archiveStatus=pending/running` 时推进 `ATTACHED → ARCHIVING`。
    *  `archiveId`（cloud-controller 本次归档 id）用于开启新归档周期：与旧周期不同则重置
    *  currentArchive 为 PENDING 占位，避免上一轮 SUCCEEDED 污染本轮回调判定。 */
@@ -697,6 +780,547 @@ export class CloudStorageService {
   }
 
   /**
+   * 手动归档（契约 §3.1.2）：仅 IDLE；`IDLE → ARCHIVING`（CAS，写新 currentArchive 占位），
+   * 同步失败回滚 `ARCHIVING → IDLE` 并**恢复旧 currentArchive**（D8，避免失败抹掉可用归档）。
+   * 成功后复用既有 `handleArchiveCallback`（ARCHIVED + HALF）。
+   */
+  async archive(id: string, userId: string): Promise<Doc> {
+    this.assertEnabled();
+    const context = this.requireContext();
+    assertWorkspaceWritable(context);
+    if (!mongoose.isValidObjectId(id)) throw new Error('storage not found');
+    const doc = (await CloudStorage.findOne({ _id: id, destroyedAt: null }).lean()) as Doc | null;
+    if (!doc) throw new Error('storage not found');
+    if (String(doc.status) !== 'IDLE') throw new Error('storage is not archivable');
+
+    const previousArchive = (doc.currentArchive as Doc | null) ?? null;
+    const operationId = new mongoose.Types.ObjectId().toString();
+    const archiveId = new mongoose.Types.ObjectId().toString();
+    const fileName = buildArchiveFileName(String(doc.name));
+    const workspaceId = String(doc.resourceWorkspaceId);
+    const tenantId = doc.tenantId ? String(doc.tenantId) : null;
+    const path = archivePath(workspaceId, id, fileName);
+    const startedAt = new Date();
+
+    const moved = (await CloudStorage.findOneAndUpdate(
+      { _id: id, status: 'IDLE', destroyedAt: null },
+      {
+        $set: {
+          status: 'ARCHIVING',
+          billingRate: 'FULL',
+          currentArchive: {
+            archiveId,
+            containerId: null,
+            cloudHostId: null,
+            cloudHostName: null,
+            fileName,
+            path,
+            status: 'PENDING',
+            usageBytes: null,
+            startedAt,
+            finishedAt: null,
+            failureReason: null,
+            operationId,
+          },
+        },
+      },
+      { returnDocument: 'after' },
+    ).lean()) as Doc | null;
+    if (!moved) throw new Error('storage is not archivable');
+
+    try {
+      await this.controllerClient.archiveStorageOperation(id, {
+        operationId,
+        archiveId,
+        fileName,
+        workspaceId,
+        tenantId,
+      });
+    } catch (err) {
+      // D8：回滚到 IDLE 并回写旧归档快照（fork/复原仍可依赖原归档）。
+      await CloudStorage.updateOne(
+        { _id: id, status: 'ARCHIVING', 'currentArchive.operationId': operationId },
+        { $set: { status: 'IDLE', currentArchive: previousArchive } },
+      ).catch(() => undefined);
+      if (err instanceof CloudControllerRequestError) {
+        if (err.code === 'OPERATION_RUNNING' || err.code === 'ARCHIVE_RUNNING') {
+          throw new Error('storage is archiving');
+        }
+        if (err.code === 'NO_STORAGE' || err.code === 'NOT_FOUND') {
+          throw new Error('storage not found');
+        }
+      }
+      throw new Error('control plane unavailable');
+    }
+
+    logger.info(
+      { event: 'storage_archive_requested', storageId: id, operationId, archiveId },
+      'cloud storage archive requested',
+    );
+    const current = (await CloudStorage.findById(id).lean()) as Doc | null;
+    if (!current) throw new Error('storage not found');
+    return this.present(current);
+  }
+
+  /**
+   * 复原到归档（契约 §3.1.2）：仅 `IDLE + SUCCEEDED 归档`，或 `RESTORING + FAILED` 重试；
+   * 权限：创建人 / 工作区管理员（与销毁同级）。同步失败回滚 `RESTORING → IDLE`（D13）。
+   */
+  async restoreToArchive(id: string, userId: string): Promise<Doc> {
+    this.assertEnabled();
+    const context = this.requireContext();
+    assertWorkspaceWritable(context);
+    if (!mongoose.isValidObjectId(id)) throw new Error('storage not found');
+    const doc = (await CloudStorage.findOne({ _id: id, destroyedAt: null }).lean()) as Doc | null;
+    if (!doc) throw new Error('storage not found');
+    if (String(doc.createdBy) !== userId && context.role !== 'admin') {
+      throw new Error('not allowed to restore storage');
+    }
+
+    const status = String(doc.status);
+    const archive = doc.currentArchive as Doc | null;
+    const currentRestore = doc.currentRestore as Doc | null;
+    const isRetry = status === 'RESTORING';
+    const previousRestore = currentRestore;
+    const operationId = new mongoose.Types.ObjectId().toString();
+    const startedAt = new Date();
+
+    let filter: Record<string, unknown>;
+    if (status === 'RESTORING') {
+      if (String(currentRestore?.status ?? '') !== 'FAILED') {
+        if (
+          currentRestore &&
+          (String(currentRestore.status) === 'PENDING' ||
+            String(currentRestore.status) === 'RUNNING')
+        ) {
+          throw new Error('storage is restoring');
+        }
+        throw new Error('storage is not restorable');
+      }
+      filter = { _id: id, status: 'RESTORING', 'currentRestore.status': 'FAILED' };
+    } else if (status === 'IDLE') {
+      if (!archive || String(archive.status) !== 'SUCCEEDED') {
+        throw new Error('storage has no archive');
+      }
+      filter = { _id: id, status: 'IDLE', 'currentArchive.status': 'SUCCEEDED' };
+    } else if (status === 'ATTACHING' || status === 'ATTACHED') {
+      throw new Error('storage is not restorable');
+    } else {
+      throw new Error('storage is not restorable');
+    }
+
+    if (!archive || String(archive.status) !== 'SUCCEEDED' || !archive.path) {
+      throw new Error('storage has no archive');
+    }
+    const workspaceId = String(doc.resourceWorkspaceId);
+    const tenantId = doc.tenantId ? String(doc.tenantId) : null;
+    const sizeGi = Number(doc.sizeGi);
+    const storageClass = doc.storageClass ? String(doc.storageClass) : null;
+
+    const moved = (await CloudStorage.findOneAndUpdate(
+      filter,
+      {
+        $set: {
+          status: 'RESTORING',
+          billingRate: 'FULL',
+          currentRestore: {
+            operationId,
+            status: 'PENDING',
+            startedAt,
+            finishedAt: null,
+            failureReason: null,
+          },
+          attachedCloudHostId: null,
+          attachedControllerId: null,
+          attachedBy: null,
+          attachedAt: null,
+          attachFromStatus: null,
+        },
+      },
+      { returnDocument: 'after' },
+    ).lean()) as Doc | null;
+    if (!moved) throw new Error('storage is not restorable');
+
+    try {
+      await this.controllerClient.restoreStorageOperation(id, {
+        operationId,
+        workspaceId,
+        tenantId,
+        archivePath: String(archive.path),
+        sizeGi,
+        storageClass,
+      });
+    } catch (err) {
+      const inProgress =
+        err instanceof CloudControllerRequestError &&
+        (err.code === 'OPERATION_RUNNING' || err.code === 'STORAGE_IN_USE');
+      if (inProgress) {
+        // 控制面仍有该存储操作在跑（请求可能已受理但响应丢失）：不回滚、保持 RESTORING，
+        // 由 restores 回调/对账收口；避免把半恢复 PVC 暴露为可挂载的 IDLE。
+        throw new Error('storage is restoring');
+      }
+      const failureReason =
+        err instanceof CloudControllerRequestError && err.code === 'NOT_FOUND'
+          ? 'storage has no archive'
+          : 'control plane unavailable';
+      if (isRetry && previousRestore) {
+        // 重试路径：回写旧 FAILED 快照（对齐 D8），继续保持 RESTORING 可再次重试。
+        await CloudStorage.updateOne(
+          { _id: id, status: 'RESTORING', 'currentRestore.operationId': operationId },
+          { $set: { currentRestore: previousRestore } },
+        ).catch(() => undefined);
+      } else {
+        // 初始路径同样保持 RESTORING + FAILED（PRD 风险表：复原失败不可挂载），可重试/警示后销毁。
+        await CloudStorage.updateOne(
+          { _id: id, status: 'RESTORING', 'currentRestore.operationId': operationId },
+          {
+            $set: {
+              currentRestore: {
+                operationId,
+                status: 'FAILED',
+                startedAt,
+                finishedAt: new Date(),
+                failureReason,
+              },
+            },
+          },
+        ).catch(() => undefined);
+      }
+      if (failureReason === 'storage has no archive') {
+        throw new Error('storage has no archive');
+      }
+      throw new Error('control plane unavailable');
+    }
+
+    logger.info(
+      { event: 'storage_restore_requested', storageId: id, operationId },
+      'cloud storage restore requested',
+    );
+    const current = (await CloudStorage.findById(id).lean()) as Doc | null;
+    if (!current) throw new Error('storage not found');
+    return this.present(current);
+  }
+
+  /**
+   * fork（契约 §3.1.2）：源须有 SUCCEEDED 归档且 `IDLE/ARCHIVED`；新存储容量与源一致
+   * （不可调整），内容从源当前归档恢复，成功后 `CREATING → IDLE` 起算全价。
+   * 任一步同步失败 → `CREATE_FAILED + destroyedAt` + best-effort 删除新 PVC；源零影响。
+   */
+  async fork(
+    id: string,
+    input: { name: string },
+    userId: string,
+  ): Promise<Doc> {
+    this.assertEnabled();
+    const context = this.requireContext();
+    assertWorkspaceWritable(context);
+    if (!mongoose.isValidObjectId(id)) throw new Error('storage not found');
+    const source = (await CloudStorage.findOne({ _id: id, destroyedAt: null }).lean()) as Doc | null;
+    if (!source) throw new Error('storage not found');
+    const sourceStatus = String(source.status);
+    const archive = source.currentArchive as Doc | null;
+    if (
+      (sourceStatus !== 'IDLE' && sourceStatus !== 'ARCHIVED') ||
+      !archive ||
+      String(archive.status) !== 'SUCCEEDED' ||
+      !archive.path
+    ) {
+      throw new Error('storage is not forkable');
+    }
+
+    const name = assertStorageName(input.name);
+    const nameKey = name.toLocaleLowerCase();
+    const workspaceId = String(source.resourceWorkspaceId);
+    const existing = (await CloudStorage.findOne({
+      resourceWorkspaceId: workspaceId,
+      nameKey,
+      destroyedAt: null,
+    })
+      .select('_id')
+      .lean()) as Doc | null;
+    if (existing) throw new Error('storage name already exists');
+
+    const sizeGi = Number(source.sizeGi);
+    const account = await this.resolveAccount(context.tenantId);
+    await this.assertCanAfford(account, sizeGi);
+
+    const storageId = new mongoose.Types.ObjectId();
+    const operationId = new mongoose.Types.ObjectId().toString();
+    const pvcName = `zag-storage-${String(storageId)}`;
+    const storageClass = source.storageClass ? String(source.storageClass) : null;
+    const sourceId = new mongoose.Types.ObjectId(String(source._id));
+    const restoreStartedAt = new Date();
+    const archiveUsageBytes =
+      typeof archive.usageBytes === 'number' ? archive.usageBytes : null;
+    try {
+      await CloudStorage.create({
+        _id: storageId,
+        name,
+        nameKey,
+        sizeGi,
+        status: 'CREATING',
+        tenantId: context.tenantId,
+        resourceWorkspaceId: context.id,
+        createdBy: userId,
+        pvcName,
+        storageClass,
+        billingAccountId: account.id,
+        billingRate: 'FULL',
+        forkedFromStorageId: sourceId,
+        usageBytes: archiveUsageBytes,
+        usageUpdatedAt: archiveUsageBytes !== null ? new Date() : null,
+        currentRestore: {
+          operationId,
+          status: 'PENDING',
+          startedAt: restoreStartedAt,
+          finishedAt: null,
+          failureReason: null,
+        },
+      });
+    } catch (err) {
+      if ((err as { code?: number }).code === 11000) {
+        throw new Error('storage name already exists');
+      }
+      throw err;
+    }
+
+    try {
+      await this.controllerClient.restoreStorageOperation(String(storageId), {
+        operationId,
+        workspaceId,
+        tenantId: context.tenantId,
+        archivePath: String(archive.path),
+        sizeGi,
+        storageClass,
+      });
+    } catch (err) {
+      const failureReason = err instanceof Error ? err.message : String(err);
+      const failedAt = new Date();
+      await CloudStorage.findOneAndUpdate(
+        { _id: storageId, status: 'CREATING' },
+        {
+          $set: {
+            status: 'CREATE_FAILED',
+            failureReason,
+            destroyedAt: failedAt,
+            // 与异步失败口径一致：保留 FAILED 复原记录（便于排障/展示），不置 null。
+            currentRestore: {
+              operationId,
+              status: 'FAILED',
+              startedAt: restoreStartedAt,
+              finishedAt: failedAt,
+              failureReason,
+            },
+          },
+        },
+      ).catch(() => undefined);
+      await this.controllerClient
+        .deleteStorage(String(storageId))
+        .catch((cleanupErr) => {
+          logger.warn(
+            { event: 'storage_fork_cleanup_failed', storageId: String(storageId), err: cleanupErr },
+            'cloud storage fork cleanup failed',
+          );
+        });
+      if (err instanceof CloudControllerRequestError) {
+        if (err.code === 'OPERATION_RUNNING' || err.code === 'STORAGE_IN_USE') {
+          throw new Error('storage is restoring');
+        }
+        if (err.code === 'NOT_FOUND') throw new Error('storage is not forkable');
+      }
+      throw new Error('control plane unavailable');
+    }
+
+    logger.info(
+      { event: 'storage_forked', storageId: String(storageId), sourceStorageId: id, operationId },
+      'cloud storage forked',
+    );
+    const created = (await CloudStorage.findById(storageId).lean()) as Doc | null;
+    if (!created) throw new Error('storage not found');
+    return this.present(created);
+  }
+
+  /**
+   * 复原回调（contracts/cloud-controller-websocket.md A.2.13）：按 operationId 幂等、终态单调。
+   * - SUCCEEDED：RESTORING → IDLE（清 currentRestore，usageBytes=归档占用）；
+   *   fork 的 CREATING → IDLE（写 billingStartedAt，起算 FULL）。
+   * - FAILED：复原保持 RESTORING（可重试/警示后销毁）；fork 置 CREATE_FAILED（不计费）。
+   */
+  async handleRestoreCallback(
+    storageId: string,
+    input: RestoreCallbackInput,
+  ): Promise<Doc | null> {
+    if (!mongoose.isValidObjectId(storageId)) return null;
+    const doc = (await CloudStorage.findById(storageId).lean()) as Doc | null;
+    if (!doc) return null;
+    const restore = doc.currentRestore as Doc | null;
+    if (!restore || String(restore.operationId) !== input.operationId) {
+      // 旧周期/非当前操作的迟到回调：忽略。
+      return this.present(doc);
+    }
+    if (isRestoreTerminal(restore.status)) return this.present(doc);
+
+    const now = new Date();
+    const startedAt =
+      input.startedAt && !Number.isNaN(Date.parse(input.startedAt))
+        ? new Date(input.startedAt)
+        : restore.startedAt instanceof Date
+          ? restore.startedAt
+          : now;
+    const finishedAt =
+      input.finishedAt && !Number.isNaN(Date.parse(input.finishedAt))
+        ? new Date(input.finishedAt)
+        : now;
+    const common = {
+      operationId: input.operationId,
+      startedAt,
+    };
+
+    if (input.status === 'RUNNING') {
+      const updated = (await CloudStorage.findOneAndUpdate(
+        {
+          _id: storageId,
+          'currentRestore.operationId': input.operationId,
+          'currentRestore.status': { $in: ['PENDING', 'RUNNING'] },
+        },
+        {
+          $set: {
+            currentRestore: {
+              ...common,
+              status: 'RUNNING',
+              finishedAt: null,
+              failureReason: null,
+            },
+          },
+        },
+        { returnDocument: 'after' },
+      ).lean()) as Doc | null;
+      return updated ? this.present(updated) : this.present(doc);
+    }
+
+    if (input.status === 'FAILED') {
+      const failureReason = input.failureReason ?? 'restore failed';
+      if (String(doc.status) === 'CREATING') {
+        const failed = (await CloudStorage.findOneAndUpdate(
+          {
+            _id: storageId,
+            status: 'CREATING',
+            'currentRestore.operationId': input.operationId,
+            'currentRestore.status': { $ne: 'SUCCEEDED' },
+          },
+          {
+            $set: {
+              status: 'CREATE_FAILED',
+              failureReason,
+              destroyedAt: finishedAt,
+              currentRestore: {
+                ...common,
+                status: 'FAILED',
+                finishedAt,
+                failureReason,
+              },
+            },
+          },
+          { returnDocument: 'after' },
+        ).lean()) as Doc | null;
+        logger.warn(
+          { event: 'restore_failed', storageId, operationId: input.operationId, failureReason },
+          'cloud storage fork restore failed',
+        );
+        // 异步失败与同步失败同口径：best-effort 删除可能残留的目标 PVC（源存储零影响）。
+        void this.controllerClient.deleteStorage(storageId).catch((cleanupErr) => {
+          logger.warn(
+            { event: 'storage_fork_cleanup_failed', storageId, err: cleanupErr },
+            'cloud storage fork cleanup failed',
+          );
+        });
+        return failed ? this.present(failed) : this.present(doc);
+      }
+      const updated = (await CloudStorage.findOneAndUpdate(
+        {
+          _id: storageId,
+          status: 'RESTORING',
+          'currentRestore.operationId': input.operationId,
+          'currentRestore.status': { $ne: 'SUCCEEDED' },
+        },
+        {
+          $set: {
+            currentRestore: {
+              ...common,
+              status: 'FAILED',
+              finishedAt,
+              failureReason,
+            },
+          },
+        },
+        { returnDocument: 'after' },
+      ).lean()) as Doc | null;
+      logger.warn(
+        { event: 'restore_failed', storageId, operationId: input.operationId, failureReason },
+        'cloud storage restore failed',
+      );
+      return updated ? this.present(updated) : this.present(doc);
+    }
+
+    // SUCCEEDED
+    const archiveUsage = (doc.currentArchive as Doc | null)?.usageBytes;
+    const usageBytes =
+      input.usageBytes ??
+      (typeof archiveUsage === 'number' ? archiveUsage : null) ??
+      (typeof doc.usageBytes === 'number' ? doc.usageBytes : null);
+    if (String(doc.status) === 'CREATING') {
+      const updated = (await CloudStorage.findOneAndUpdate(
+        {
+          _id: storageId,
+          status: 'CREATING',
+          'currentRestore.operationId': input.operationId,
+          'currentRestore.status': { $ne: 'SUCCEEDED' },
+        },
+        {
+          $set: {
+            status: 'IDLE',
+            billingRate: 'FULL',
+            billingStartedAt: now,
+            ...(usageBytes !== null ? { usageBytes, usageUpdatedAt: finishedAt } : {}),
+            currentRestore: null,
+          },
+        },
+        { returnDocument: 'after' },
+      ).lean()) as Doc | null;
+      if (!updated) return this.present(doc);
+      logger.info(
+        { event: 'fork_succeeded', storageId, operationId: input.operationId },
+        'cloud storage fork completed',
+      );
+      return this.present(updated);
+    }
+
+    const updated = (await CloudStorage.findOneAndUpdate(
+      {
+        _id: storageId,
+        status: 'RESTORING',
+        'currentRestore.operationId': input.operationId,
+        'currentRestore.status': { $ne: 'SUCCEEDED' },
+      },
+      {
+        $set: {
+          status: 'IDLE',
+          billingRate: 'FULL',
+          ...(usageBytes !== null ? { usageBytes, usageUpdatedAt: finishedAt } : {}),
+          currentRestore: null,
+        },
+      },
+      { returnDocument: 'after' },
+    ).lean()) as Doc | null;
+    if (!updated) return this.present(doc);
+    logger.info(
+      { event: 'restore_succeeded', storageId, operationId: input.operationId, usageBytes },
+      'cloud storage restored',
+    );
+    return this.present(updated);
+  }
+
+  /**
    * 归档回调（cloud-controller → agent-api）：按 archiveId 幂等、终态单调。
    * - SUCCEEDED：`ARCHIVING → ARCHIVED` + `billingRate=HALF`，清 attached/attachFromStatus；
    * - FAILED：保持 `ARCHIVING` + 失败标记（可重试）；
@@ -745,6 +1369,8 @@ export class CloudStorageService {
       // 裁决 13：归档成功但源 PVC 删除失败时留痕（false），供运维/再挂载先删后建判断。
       sourcePvcReleased:
         input.sourcePvcReleased ?? existing?.sourcePvcReleased ?? null,
+      // D5：存储级归档共用操作单号（仅留痕；幂等仍以 archiveId 为准）。
+      operationId: input.operationId ?? str(existing?.operationId),
     };
 
     if (input.status === 'RUNNING') {
@@ -912,15 +1538,39 @@ export class CloudStorageService {
       .lean()) as Doc[];
     let handled = 0;
     for (const doc of docs) {
-      const containerId = str(doc.lastContainerId);
-      if (!containerId) continue;
+      const storageId = String(doc._id);
+      const currentArchive = doc.currentArchive as Doc | null;
+      const operationId = str(currentArchive?.operationId);
+      const archivedContainerId = str(currentArchive?.containerId);
+      const containerId = archivedContainerId ?? str(doc.lastContainerId);
       try {
+        // D7：存储级来源（containerId 为空）按 operationId 查询台账；容器级保持 getArchive。
+        if (operationId && !archivedContainerId) {
+          const operation = await this.controllerClient.getStorageOperation(
+            storageId,
+            operationId,
+          );
+          if (operation.status !== 'succeeded' && operation.status !== 'failed') continue;
+          await this.handleArchiveCallback(storageId, {
+            archiveId: str(currentArchive?.archiveId) ?? '',
+            operationId,
+            containerId: null,
+            status: operation.status === 'succeeded' ? 'SUCCEEDED' : 'FAILED',
+            usageBytes: operation.usageBytes ?? null,
+            startedAt: operation.startedAt ?? null,
+            finishedAt: operation.finishedAt ?? null,
+            failureReason: operation.failureReason ?? null,
+          });
+          handled += 1;
+          continue;
+        }
+        if (!containerId) continue;
         const archive = await this.controllerClient.getArchive(containerId);
-        const archiveId = str(archive.archiveId) ?? str((doc.currentArchive as Doc | null)?.archiveId);
+        const archiveId = str(archive.archiveId) ?? str(currentArchive?.archiveId);
         if (!archiveId || archive.status === 'NONE' || archive.status === 'PENDING' || archive.status === 'RUNNING') {
           continue;
         }
-        await this.handleArchiveCallback(String(doc._id), {
+        await this.handleArchiveCallback(storageId, {
           archiveId,
           containerId,
           status: archive.status,
@@ -932,8 +1582,53 @@ export class CloudStorageService {
         handled += 1;
       } catch (err) {
         logger.warn(
-          { event: 'archive_reconcile_failed', storageId: String(doc._id), err },
+          { event: 'archive_reconcile_failed', storageId, err },
           'cloud storage archive reconcile failed',
+        );
+      }
+    }
+    return handled;
+  }
+
+  /**
+   * `RESTORING`（含 fork 的 `CREATING`）对账兜底：超过阈值仍未收口时，按 `currentRestore.operationId`
+   * 查询存储级操作台账；已成功/失败的回调漏投时补齐（幂等）。返回实际处理的存储数。
+   */
+  async reconcileRESTORING(options: { olderThanMs?: number } = {}): Promise<number> {
+    const olderThanMs = options.olderThanMs ?? ARCHIVING_RECONCILE_AFTER_MS;
+    const threshold = new Date(Date.now() - olderThanMs);
+    const docs = (await CloudStorage.find({
+      status: { $in: ['RESTORING', 'CREATING'] },
+      'currentRestore.status': { $in: ['PENDING', 'RUNNING'] },
+      updatedAt: { $lte: threshold },
+    })
+      .limit(20)
+      .lean()) as Doc[];
+    let handled = 0;
+    for (const doc of docs) {
+      const storageId = String(doc._id);
+      const restore = doc.currentRestore as Doc | null;
+      const operationId = str(restore?.operationId);
+      if (!operationId) continue;
+      try {
+        const operation = await this.controllerClient.getStorageOperation(
+          storageId,
+          operationId,
+        );
+        if (operation.status !== 'succeeded' && operation.status !== 'failed') continue;
+        await this.handleRestoreCallback(storageId, {
+          operationId,
+          status: operation.status === 'succeeded' ? 'SUCCEEDED' : 'FAILED',
+          usageBytes: operation.usageBytes ?? null,
+          startedAt: operation.startedAt ?? null,
+          finishedAt: operation.finishedAt ?? null,
+          failureReason: operation.failureReason ?? null,
+        });
+        handled += 1;
+      } catch (err) {
+        logger.warn(
+          { event: 'restore_reconcile_failed', storageId, err },
+          'cloud storage restore reconcile failed',
         );
       }
     }
@@ -961,6 +1656,19 @@ export class CloudStorageService {
     };
   }
 
+  private mapRestore(value: unknown): Doc | null {
+    if (!value || typeof value !== 'object') return null;
+    const restore = value as Doc;
+    if (!restore.operationId) return null;
+    return {
+      id: String(restore.operationId),
+      status: restore.status,
+      startedAt: iso(restore.startedAt),
+      finishedAt: iso(restore.finishedAt),
+      failureReason: restore.failureReason ?? null,
+    };
+  }
+
   private mapStorage(doc: Doc): Doc {
     return {
       id: String(doc._id),
@@ -980,6 +1688,8 @@ export class CloudStorageService {
       attachedCloudHostId: doc.attachedCloudHostId ? String(doc.attachedCloudHostId) : null,
       attachedAt: iso(doc.attachedAt),
       currentArchive: this.mapArchive(doc.currentArchive),
+      currentRestore: this.mapRestore(doc.currentRestore),
+      forkedFromStorageId: doc.forkedFromStorageId ? String(doc.forkedFromStorageId) : null,
       failureReason: doc.failureReason ?? null,
       destroyedAt: iso(doc.destroyedAt),
       // 内部字段（resolver/测试使用；不直接暴露）
@@ -1080,12 +1790,18 @@ export function fallbackStorageQuote(sizeGi: number): {
 
 export const cloudStorageService = new CloudStorageService();
 
-/** 定时对账 ARCHIVING（回调最终丢失兜底）；与 admin-api scheduler 同模式，定时器 unref。 */
+/** 定时对账（回调最终丢失兜底）；与 admin-api scheduler 同模式，定时器 unref。 */
 export function scheduleCloudStorageReconcile(intervalMs: number): NodeJS.Timeout {
   const run = () => {
-    void cloudStorageService.reconcileARCHIVING().catch((err) => {
-      logger.warn({ event: 'archive_reconcile_tick_failed', err }, 'storage reconcile tick failed');
-    });
+    void cloudStorageService
+      .reconcileARCHIVING()
+      .then(() => cloudStorageService.reconcileRESTORING())
+      .catch((err) => {
+        logger.warn(
+          { event: 'archive_reconcile_tick_failed', err },
+          'storage reconcile tick failed',
+        );
+      });
   };
   run();
   const timer = setInterval(run, Math.max(intervalMs, 60_000));
@@ -1104,8 +1820,14 @@ const CLOUD_STORAGE_PUBLIC_ERRORS = new Set([
   'storage is not attachable',
   'storage is attached',
   'storage is archiving',
+  'storage is not archivable',
+  'storage has no archive',
+  'storage is not restorable',
+  'storage is restoring',
+  'storage is not forkable',
   'storage is not destroyable',
   'not allowed to destroy storage',
+  'not allowed to restore storage',
   'global workspace is read-only',
   'insufficient balance',
   'no archive to retry',

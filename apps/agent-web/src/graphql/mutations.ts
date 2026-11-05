@@ -493,8 +493,8 @@ export const CREATE_CLOUD_HOST = gql`
 `
 
 export const STOP_CLOUD_HOST = gql`
-  mutation StopCloudHost($id: ID!, $force: Boolean) {
-    stopCloudHost(id: $id, force: $force) {
+  mutation StopCloudHost($id: ID!, $force: Boolean, $archiveStorage: Boolean) {
+    stopCloudHost(id: $id, force: $force, archiveStorage: $archiveStorage) {
       id
       name
       controllerId
@@ -573,6 +573,33 @@ export const RETRY_CLOUD_STORAGE_ARCHIVE = gql`
 export const REFRESH_CLOUD_STORAGE_USAGE = gql`
   mutation RefreshCloudStorageUsage($id: ID!) {
     refreshCloudStorageUsage(id: $id) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+export const ARCHIVE_CLOUD_STORAGE = gql`
+  mutation ArchiveCloudStorage($id: ID!) {
+    archiveCloudStorage(id: $id) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+export const RESTORE_CLOUD_STORAGE_TO_ARCHIVE = gql`
+  mutation RestoreCloudStorageToArchive($id: ID!) {
+    restoreCloudStorageToArchive(id: $id) {
+      ...CloudStorageFields
+    }
+  }
+  ${CLOUD_STORAGE_FIELDS}
+`
+
+export const FORK_CLOUD_STORAGE = gql`
+  mutation ForkCloudStorage($id: ID!, $input: ForkCloudStorageInput!) {
+    forkCloudStorage(id: $id, input: $input) {
       ...CloudStorageFields
     }
   }

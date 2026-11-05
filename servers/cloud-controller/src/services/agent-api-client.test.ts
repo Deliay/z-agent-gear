@@ -1,7 +1,7 @@
 import { afterEach, describe, it, expect } from 'vitest';
 import { createServer, type Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { AgentApiClient } from './agent-api-client.js';
+import { AgentApiClient, buildTerminalStorageState } from './agent-api-client.js';
 
 const TOKEN = 'test-internal-token';
 
@@ -204,5 +204,64 @@ describe('AgentApiClient', () => {
 
     await expect(client.notifyStorageUsage('s1', { usageBytes: 1 })).rejects.toThrow(/500/);
     expect(attempts).toBe(2);
+  });
+
+  it('T-SKIP4c: terminal storage 报文按需携带 archiveSkipped（true 携带 / 缺省不携带 / 未挂载 null）', async () => {
+    const { baseUrl, requests } = await startServer((_req, res) => {
+      res.statusCode = 200;
+      res.end('{}');
+    });
+    const client = new AgentApiClient({ baseUrl, token: TOKEN });
+
+    const skipped = buildTerminalStorageState('storage-1', {
+      archiveStatus: null,
+      archiveId: null,
+      archiveSkipped: true,
+    });
+    expect(skipped).toEqual({
+      id: 'storage-1',
+      archiveStatus: null,
+      archiveId: null,
+      archiveSkipped: true,
+    });
+    await client.notifyTerminal('host-1', 'stopped', undefined, skipped);
+    expect(JSON.parse(requests.at(-1)!.body)).toEqual({
+      status: 'stopped',
+      storage: {
+        id: 'storage-1',
+        archiveStatus: null,
+        archiveId: null,
+        archiveSkipped: true,
+      },
+    });
+
+    // 缺省 / false / 历史 null：不携带 archiveSkipped（旧报文逐字节等价）
+    for (const archiveSkipped of [undefined, false, null]) {
+      const payload = buildTerminalStorageState('storage-1', {
+        archiveStatus: 'pending',
+        archiveId: 'archive-1',
+        archiveSkipped,
+      });
+      expect(payload).toEqual({
+        id: 'storage-1',
+        archiveStatus: 'pending',
+        archiveId: 'archive-1',
+      });
+    }
+    await client.notifyTerminal('host-1', 'stopped', undefined, {
+      ...buildTerminalStorageState('storage-1', {
+        archiveStatus: 'pending',
+        archiveId: 'archive-1',
+      })!,
+    });
+    expect(JSON.parse(requests.at(-1)!.body).storage).not.toHaveProperty('archiveSkipped');
+
+    // 未挂载存储：不携带 storage
+    await client.notifyTerminal('host-1', 'stopped', undefined, null);
+    expect(JSON.parse(requests.at(-1)!.body)).toEqual({ status: 'stopped' });
+
+    // 未挂载（storageId 空）→ null
+    expect(buildTerminalStorageState(null, { archiveSkipped: true })).toBeNull();
+    expect(buildTerminalStorageState(undefined, { archiveSkipped: true })).toBeNull();
   });
 });

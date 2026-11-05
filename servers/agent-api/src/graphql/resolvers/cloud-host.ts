@@ -212,12 +212,17 @@ export const cloudHostResolvers = {
     },
     stopCloudHost: async (
       _parent: unknown,
-      args: { id: string; force?: boolean | null },
+      args: { id: string; force?: boolean | null; archiveStorage?: boolean | null },
       context: AuthContext,
     ) => {
       const userId = requireUser(context);
       try {
-        return await cloudHostService.stop(args.id, userId, args.force === true);
+        return await cloudHostService.stop(
+          args.id,
+          userId,
+          args.force === true,
+          args.archiveStorage,
+        );
       } catch (err) {
         toCloudHostGraphQLError(err);
       }

@@ -62,6 +62,8 @@ import * as migration017WorkloadPnpmScripts from './migrations/017-workload-pnpm
 import * as migration018Pnpm12Upgrade from './migrations/018-pnpm-12-upgrade.js';
 // 019：全部预制工作负载脚本「锚点 + 结尾硬校验 + 可重入」核查与字节匹配刷新（Node.js 新增锚点）
 import * as migration019WorkloadIdempotentAnchors from './migrations/019-workload-idempotent-anchors.js';
+// 020：Docker 镜像代理 shim 识别带值选项，修复 `--name/-e/-p/-v/--platform` 值被误当镜像改写
+import * as migration020DockerShimValueOptions from './migrations/020-docker-shim-value-options.js';
 import { CloudHost } from './models/cloud-host.js';
 import { StorageBillingCursor } from './models/storage-billing-cursor.js';
 import { storageTickService } from './services/billing/storage-tick.js';
@@ -158,6 +160,7 @@ async function start() {
   // 017-workload-pnpm-scripts——预置工作负载全局安装 npm → pnpm（含缺失自举回退）
   // 018-pnpm-12-upgrade——四条 Harness/Playwright 脚本 pnpm 9.15.9 → 12.16.1
   // 019-workload-idempotent-anchors——预制工作负载「锚点 + 结尾硬校验 + 可重入」核查与刷新（标准版本已含 018 的 pnpm 12）
+  // 020-docker-shim-value-options——刷新 Docker 预制脚本为 v5：镜像代理 shim 跳过带值选项（--name/-e/-p/-v 等）
   try {
     await runMigrations([
       migration001,
@@ -181,6 +184,7 @@ async function start() {
       migration017WorkloadPnpmScripts,
       migration018Pnpm12Upgrade,
       migration019WorkloadIdempotentAnchors,
+      migration020DockerShimValueOptions,
     ]);
   } catch (err) {
     logger.error({ err }, 'runMigrations failed (non-fatal)');

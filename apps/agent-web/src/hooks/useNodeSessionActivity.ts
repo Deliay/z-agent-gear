@@ -3,7 +3,7 @@ import { useSessionStream } from './useSessionStream'
 import { parseSessionUpdate } from '@/components/session/group-messages'
 import {
   mergeToolCallMessages,
-  toolCallHeaderTitle,
+  toolCallTitle,
   type ToolCallMessageLike,
 } from '@/components/session/tool-call-state'
 
@@ -63,7 +63,8 @@ function isToolCallUpdate(type: unknown): boolean {
  * 将一组会话消息归一为「最新一行活动 + 最近一次用量」。
  *
  * 口径与会话页一致：思考/文本取结尾 `LIVE_ACTIVITY_TAIL_CHARS` 字符；
- * 工具调用直接复用 `mergeToolCallMessages` / `toolCallHeaderTitle`（禁止另写一套标题逻辑）。
+ * 工具调用直接复用 `mergeToolCallMessages` / `toolCallTitle`（禁止另写一套标题逻辑），
+ * `text` 只保留工具标题本身，供卡片拼接「执行中: {标题}」。
  */
 export function summarizeSessionUpdates(updates: unknown[]): NodeSessionActivity {
   const toolMessages = new Map<string, ToolCallMessageLike[]>()
@@ -95,7 +96,7 @@ export function summarizeSessionUpdates(updates: unknown[]): NodeSessionActivity
         const merged = mergeToolCallMessages([
           { content: parsed as unknown as Record<string, unknown> },
         ])
-        nonTool = { seq, activity: { kind: 'tool_call', text: toolCallHeaderTitle(merged) } }
+        nonTool = { seq, activity: { kind: 'tool_call', text: toolCallTitle(merged) } }
       }
     } else if (type === 'usage_update') {
       const used = parsed.used
@@ -108,7 +109,7 @@ export function summarizeSessionUpdates(updates: unknown[]): NodeSessionActivity
   let activity: NodeLiveActivity | null = nonTool?.activity ?? null
   if (lastToolCallId && lastToolSeq > (nonTool?.seq ?? -1)) {
     const merged = mergeToolCallMessages(toolMessages.get(lastToolCallId) ?? [])
-    activity = { kind: 'tool_call', text: toolCallHeaderTitle(merged) }
+    activity = { kind: 'tool_call', text: toolCallTitle(merged) }
   }
 
   return { activity, tokenUsage }

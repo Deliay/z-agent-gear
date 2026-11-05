@@ -10,6 +10,7 @@ import { assertRuntimeConfig, config } from './config/index.js';
 import { logger as rootLogger, type ObservationLogger } from './observability/logger.js';
 import { httpContext } from './observability/http-context.js';
 import { MongoContainerRepository } from './repositories/container-repository.js';
+import { MongoHarnessSecretRepository } from './repositories/harness-secret-repository.js';
 import { MongoWorkloadRepository } from './repositories/workload-repository.js';
 import { MongoWorkloadLogRepository } from './repositories/workload-log-repository.js';
 import { TokenService } from './services/token-service.js';
@@ -17,13 +18,18 @@ import { createK8sClient } from './services/k8s-client.js';
 import { K8sJobManager } from './services/k8s-job-manager.js';
 import { K8sStorageManager } from './services/k8s-storage-manager.js';
 import { StorageService } from './services/storage-service.js';
+import { MongoStorageOperationRepository } from './repositories/storage-operation-repository.js';
 import { ContainerService } from './services/container-service.js';
 import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
 import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
 import { WorkloadDispatcher } from './services/workload-dispatcher.js';
 import { SecretStore } from './services/secret-store.js';
-import { AgentApiClient, type TerminalStorageState } from './services/agent-api-client.js';
+import {
+  AgentApiClient,
+  buildTerminalStorageState,
+  type TerminalStorageState,
+} from './services/agent-api-client.js';
 import { AdminBillingClient } from './services/admin-billing-client.js';
 import { wireSocketDiagnostics } from './services/socket-diagnostics.js';
 import {
@@ -36,6 +42,8 @@ import { createInternalRouter } from './routes/internal-api.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001CloudcontainersTenantId from './migrations/001-cloudcontainers-tenant-id-backfill.js';
 import * as migration002CloudcontainersWorkspaceId from './migrations/002-cloudcontainers-workspace-id.js';
+import * as migration003CloudStorageOperations from './migrations/003-cloud-storage-operations.js';
+import * as migration004HarnessSecrets from './migrations/004-harness-secrets.js';
 
 export interface CloudControllerApp {
   app: express.Express;
@@ -127,8 +135,10 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     ephemeralStorage: config.jobEphemeralStorage,
     archiverImage: config.archiverImage,
   });
-  // 云电脑运行期 secret（仅内存）与内部回调客户端；地址为空时对应回调为 no-op。
+  // 云电脑运行期 secret：内存 `SecretStore` + Mongo 持久化（重启恢复，Issue #446）；
+  // 地址为空时对应回调为 no-op。
   const secretStore = new SecretStore();
+  const harnessSecretRepository = new MongoHarnessSecretRepository();
   const agentApiClient = new AgentApiClient({
     baseUrl: config.agentApiUrl,
     token: config.internalApiToken,
@@ -172,6 +182,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     repo,
     k8sClient,
     storageManager,
+    operationRepo: new MongoStorageOperationRepository(),
     agentApiClient,
     logger: logger.child({ component: 'cloud-storage' }),
     config: {
@@ -261,13 +272,14 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
           let terminalStorage: TerminalStorageState | null = null;
           if (container.storageId) {
             const fresh = (await containerService.getById(container.id)) ?? container;
-            terminalStorage = {
-              id: container.storageId,
+            terminalStorage = buildTerminalStorageState(container.storageId, {
               // 透传真实归档状态：null = 未触发归档（agent-api 据此 releaseStorage 回滚），
               // 不得强改写为 pending（契约 A.2.10）。
               archiveStatus: fresh.storageArchiveStatus ?? null,
               archiveId: fresh.storageArchiveId ?? null,
-            };
+              // 仅在本次销毁显式跳过归档时携带（契约 A.2.10 扩展）；未挂载/未跳过保持旧报文。
+              archiveSkipped: fresh.storageArchiveSkipped ?? null,
+            });
           }
           try {
             await retryHarnessCallback(
@@ -300,6 +312,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     },
     secretStore,
     storageService,
+    harnessSecretRepository,
   );
   const billingPublisher = new BillingEventPublisher({
     intervalMs: config.outboxRelayIntervalMs,
@@ -384,6 +397,8 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
       await runMigrations([
         migration001CloudcontainersTenantId,
         migration002CloudcontainersWorkspaceId,
+        migration003CloudStorageOperations,
+        migration004HarnessSecrets,
       ]);
     } catch (err) {
       logger.warn({ err }, 'runMigrations failed (non-fatal)');
@@ -395,6 +410,20 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     } catch (err) {
       logger.warn({ component: 'billing', err }, 'billing outbox syncIndexes failed (fatal)');
       throw err;
+    }
+    // Issue #446：把落库的 harness secret 恢复到进程内 SecretStore（随容器创建落库、
+    // 终态删除；启动时顺带清理已终态/不存在容器的孤儿记录）。失败不阻断启动：
+    // 标准负载安装不依赖该 env，harness 负载会得到可读的「secret 缺失」错误。
+    try {
+      const restored = await containerService.restoreHarnessSecrets();
+      if (restored.loaded > 0 || restored.purged > 0) {
+        logger.info(
+          { component: 'harness', loaded: restored.loaded, purged: restored.purged },
+          'harness secrets restored from mongo',
+        );
+      }
+    } catch (err) {
+      logger.error({ component: 'harness', err }, 'failed to restore harness secrets');
     }
     billingPublisher.start();
     await statusSync.start();

@@ -223,6 +223,82 @@ test.describe('ACP Elicitation E2E', () => {
     disconnect();
   });
 
+  test('E2E-QM1: question 工具多选题呈现为勾选组并以逗号拼接回传', async ({ page }) => {
+    const { socket, sessionId, disconnect } = await setupSession(page);
+
+    // 真实 ACP question 工具表单：单选 oneOf + 多选 items.anyOf + 自由文本补充项
+    const QUESTION_SCHEMA = {
+      type: 'object',
+      title: '实施选项',
+      properties: {
+        q0: {
+          type: 'string',
+          title: '实施方式',
+          oneOf: [
+            { const: '自动', title: '自动' },
+            { const: '手动', title: '手动' },
+          ],
+        },
+        q0_custom: { type: 'string', title: '其他实施方式' },
+        q1: {
+          type: 'array',
+          title: '要做的事',
+          items: {
+            anyOf: [
+              { const: '自动跑测试', title: '自动跑测试' },
+              { const: '生成文档', title: '生成文档' },
+              { const: '部署', title: '部署' },
+            ],
+          },
+        },
+        q1_custom: { type: 'string', title: '其他要做的事' },
+      },
+      required: ['q0', 'q1'],
+    };
+
+    const requestId = `elic_multi_e2e_${Date.now()}`;
+    const responsePromise = new Promise<{ requestId: string; action: string; content?: Record<string, unknown> }>((resolve) => {
+      socket.once('acp:elicitation:response', resolve);
+    });
+
+    socket.emit('acp:elicitation', {
+      requestId,
+      sessionId,
+      mode: 'form',
+      message: '请选择实施选项',
+      requestedSchema: QUESTION_SCHEMA,
+    });
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 25000 });
+    await expect(dialog.getByText('Agent请求输入：实施选项')).toBeVisible();
+
+    // 多选字段渲染为勾选组（三个复选框），不是文本框
+    const group = dialog.getByRole('group', { name: '要做的事' });
+    await expect(group).toBeVisible();
+    await expect(group.getByRole('checkbox')).toHaveCount(3);
+
+    // 必答项未填时不可提交
+    await expect(dialog.getByRole('button', { name: '提交' })).toBeDisabled();
+
+    // 定位器一律精确匹配：'自动' 与 '自动跑测试' 存在子串包含关系，
+    // 非 exact 的 getByText 会同时命中两者（strict mode violation）
+    await dialog.getByRole('radiogroup', { name: '实施方式' }).getByText('自动', { exact: true }).click();
+    await group.getByText('自动跑测试', { exact: true }).click();
+    await group.getByText('生成文档', { exact: true }).click();
+    await dialog.getByRole('button', { name: '提交', exact: true }).click();
+
+    const response = await responsePromise;
+    expect(response.requestId).toBe(requestId);
+    expect(response.action).toBe('accept');
+    // q1 以逗号拼接字符串回传（顺序 = 勾选顺序），未填的 *_custom 不出现
+    expect(response.content).toEqual({ q0: '自动', q1: '自动跑测试,生成文档' });
+
+    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+
+    disconnect();
+  });
+
   test('should show url elicitation with highlighted host and open link on consent', async ({ page }) => {
     // Stub window.open to capture the URL instead of opening a real tab
     await page.addInitScript(() => {

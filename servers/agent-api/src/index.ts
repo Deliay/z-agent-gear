@@ -45,6 +45,7 @@ import * as migration019CommitSettingsPerMember from './migrations/019-commit-se
 import * as migration020CloudStorageIndexes from './migrations/020-cloud-storage-indexes.js';
 import * as migration021WorkflowInterruptRetry from './migrations/021-workflow-interrupt-retry.js';
 import * as migration022SessionArchiveIndexes from './migrations/022-session-archive-indexes.js';
+import * as migration022CloudStorageFork from './migrations/022-cloud-storage-fork.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -202,6 +203,7 @@ async function start() {
       migration020CloudStorageIndexes,
       migration021WorkflowInterruptRetry,
       migration022SessionArchiveIndexes,
+      migration022CloudStorageFork,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');

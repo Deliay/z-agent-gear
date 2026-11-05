@@ -67,7 +67,7 @@ describe('summarizeSessionUpdates', () => {
       message({ sessionUpdate: 'tool_call_update', toolCallId: 't1', title: '执行 npm test' }),
     ])
     expect(result.activity?.kind).toBe('tool_call')
-    expect(result.activity?.text).toBe('Tool Call: 执行 npm test')
+    expect(result.activity?.text).toBe('执行 npm test')
   })
 
   it('T-UI4-NA3 普通文本映射为总结中文本', () => {

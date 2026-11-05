@@ -172,6 +172,38 @@ export const cloudStorageResolvers = {
         toCloudStorageGraphQLError(err);
       }
     },
+    archiveCloudStorage: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
+      const userId = requireUser(context);
+      try {
+        return await cloudStorageService.archive(args.id, userId);
+      } catch (err) {
+        toCloudStorageGraphQLError(err);
+      }
+    },
+    restoreCloudStorageToArchive: async (
+      _parent: unknown,
+      args: { id: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      try {
+        return await cloudStorageService.restoreToArchive(args.id, userId);
+      } catch (err) {
+        toCloudStorageGraphQLError(err);
+      }
+    },
+    forkCloudStorage: async (
+      _parent: unknown,
+      args: { id: string; input: { name: string } },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      try {
+        return await cloudStorageService.fork(args.id, args.input, userId);
+      } catch (err) {
+        toCloudStorageGraphQLError(err);
+      }
+    },
   },
   CloudStorage: {
     archiveSpace: () => ({ capacityGi: 100, usedGi: null }),

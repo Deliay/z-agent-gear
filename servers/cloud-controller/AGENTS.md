@@ -19,10 +19,12 @@ src/
 ├── models/
 │   ├── cloud-container.ts      # CloudContainer schema（集合 cloudcontainers，状态含 initializing，含 workloadPlan）
 │   ├── cloud-workload.ts       # 工作负载只读模型（集合 cloudworkloads，含 paramSchema/dependsOnWorkloadIds，供兜底展开与脚本读取）
-│   └── cloud-workload-log.ts   # 执行记录模型（集合 cloudworkloadlogs，含 script/params/required 快照）
+│   ├── cloud-workload-log.ts   # 执行记录模型（集合 cloudworkloadlogs，含 script/params/required 快照）
+│   └── harness-secret.ts       # 云电脑运行期 secret 持久化（集合 cloudcontainersecrets，随容器生命周期）
 ├── repositories/
 │   ├── container-repository.ts # ContainerRepository 接口 + Mongo/InMemory 实现
 │   ├── workload-repository.ts  # WorkloadRepository（findByIds/findById）+ Mongo/InMemory
+│   ├── harness-secret-repository.ts # HarnessSecretRepository（upsert/delete/findAll）+ Mongo/InMemory
 │   └── workload-log-repository.ts # WorkloadLogRepository（createMany/updateById/findByContainer/findActiveByContainer）
 ├── services/
 │   ├── token-service.ts        # 一次性 token 签发/校验（bcrypt，tokenHash）
@@ -33,7 +35,7 @@ src/
 │   ├── container-service.ts    # 生命周期状态机（creating→connecting→initializing?→online→destroying→exited/failed），落库 workloadPlan；显式下发 plan 时由其派生 workloadIds，仅 workloadIds 的旧版请求按选择顺序落库
 │   ├── workload-dispatcher.ts  # 工作负载编排：按 workloadPlan（无 plan 回退 workloadIds）下发脚本与参数/required/结果落库/当前脚本/看门狗/post 批次 + 必须失败裁决（中断 + 锁外强制注销）
 │   ├── workload-plan.ts        # 兜底展开纯函数（仅无 workloadPlan 时用 workloadIds + 只读定义做后序 DFS + 默认参数归一，校验口径镜像 admin-api）
-│   ├── secret-store.ts         # 云电脑运行期 secret 内存仓库（put/get/delete；不落库、不打印）
+│   ├── secret-store.ts         # 云电脑运行期 secret 内存仓库（put/get/delete；读路径，不打印；写路径同步落库）
 │   ├── agent-api-client.ts     # 云电脑 ready/terminal 回调（Bearer INTERNAL_API_TOKEN，AbortController 超时）
 │   ├── admin-billing-client.ts # 按 cloudHostId 撤销模型 Key（幂等，失败只告警）
 │   ├── status-sync.ts          # watch + 断线重连对账 + 超时巡检 + 心跳离线巡检 + 工作负载看门狗
@@ -47,7 +49,9 @@ src/
 │   ├── runner.ts               # 迁移 runner（独立账本 cloud_controller_migrations、锁归属 + 5 分钟 TTL、逐迁移吞错）
 │   ├── models.ts               # 迁移账本模型（name/executedAt/_lock/owner/acquired/expiresAt）
 │   ├── 001-cloudcontainers-tenant-id-backfill.ts # 存量容器 tenantId 回填 + {tenantId:1} 索引（幂等）
-│   └── 002-cloudcontainers-workspace-id.ts # 存量容器 workspaceId 回填（tenantId→global 工作区）+ {workspaceId:1} 索引（幂等）
+│   ├── 002-cloudcontainers-workspace-id.ts # 存量容器 workspaceId 回填（tenantId→global 工作区）+ {workspaceId:1} 索引（幂等）
+│   ├── 003-cloud-storage-operations.ts # 云存储操作台账索引（部分唯一 + 巡检/历史）
+│   └── 004-harness-secrets.ts  # cloudcontainersecrets.containerId 唯一索引（Issue #446）
 └── index.ts                    # createCloudControllerApp + 入口（DB 连接后 await runMigrations 再 listen）
 ```
 
@@ -67,9 +71,9 @@ src/
 - **env 通道**：`ZAG_SERVER_ENDPOINT=wss://<host>/worker`（**不含 token**）与 `ZAG_CONTROLLER_KEY=<token>`（agent-gear 连接时经握手 `auth.token` 携带）。
 - **K8s 客户端可注入**：`K8S_ENABLED=false` 时使用 `InMemoryK8sClient`（本地/测试/E2E 全 mock，不依赖真实集群）。
 - **用途白名单**：`POST /internal/containers` 仅接受 `idle|harness`；其余用途返回 400「该任务类型暂未开放」。`purpose=harness` 必填 `hostId/refId(controllerKeyId)/userId/tenantId/hostName/expiresAt/agentGearMinVersion(三段版本)/secrets`；`harnessTypes` 允许空数组（0-harness 云电脑，非空时须白名单）、`workloadPlan` 允许为空（0 harness + 0 standard 直接 online）；缺失或非法返回 `400 INVALID_HARNESS` 且不创建 Job；`GET /containers?hostId=&userId=` 可选过滤（无参数保持全量）。`tenantId` 与 `userId` 同值（个人专属租户 `_id` 复用 userId）并落库到 `cloudcontainers.tenantId`；滚动升级兜底：旧版 agent-api 未下发 `tenantId` 时回退 `tenantId = userId` 并 `console.warn`（显式下发但空串/非字符串仍 400）。多租户二期起同链路口径追加 `workspaceId`（见「多租户二期」段）。
-- **云电脑 secret 与 TTL**：`secrets{hostEndpoint,hostKey,modelApiKey,modelBaseUrl,modelIds,defaultWorkspace}` 仅存入 `SecretStore`（进程内 Map，不落库、不返回、不打印），容器终态时删除；可选 `secrets.modelContextLengths`（模型 ID → 最长上下文 JSON object 字符串，不参与必填校验），携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传；`expiresAt` 仅落库留存（容器 TTL 留档，**不再关联模型 Key 有效期**——模型 Key 随容器回收：宿主非 `RUNNING`/删除/缺失由网关拒绝并对账撤销），**不再换算 Job 硬截止**（Job 不设 `activeDeadlineSeconds`，最长运行时间无限制）。
+- **云电脑 secret 与 TTL**：`secrets{hostEndpoint,hostKey,modelApiKey,modelBaseUrl,modelIds,defaultWorkspace}` 写入进程内 `SecretStore`（读路径），并同步持久化到集合 `cloudcontainersecrets`（一容器一条，Issue #446：重启/滚动发布后由 `ContainerService.restoreHarnessSecrets()` 在 listen 前加载回内存；只恢复 `purpose=harness` 且非终态的容器，终态/不存在容器的残留记录一并清理）；**不返回、不打印**，容器进入终态（exited/failed/destroying）时内存与落库记录一起删除；可选 `secrets.modelContextLengths`（模型 ID → 最长上下文 JSON object 字符串，不参与必填校验），携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传；`expiresAt` 仅落库留存（容器 TTL 留档，**不再关联模型 Key 有效期**——模型 Key 随容器回收：宿主非 `RUNNING`/删除/缺失由网关拒绝并对账撤销），**不再换算 Job 硬截止**（Job 不设 `activeDeadlineSeconds`，最长运行时间无限制）。
 - **云电脑 env**：Job env 仅追加 `ZAG_HOST_ENDPOINT/ZAG_HOST_KEY/ZAG_HOST_NAME/ZAG_HARNESS_TYPES/ZAG_DEFAULT_WORKSPACE/ZAG_USER_TYPE/ZAG_USER_ID`（`ZAG_CONTROLLER_KEY` 仍为 `/worker` 一次性 token）；模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发（仅 harness，idle 不携带 `env`）。harness secret/模型配置缺失时 dispatcher 判 init 失败、容器不 online。
-- **云电脑生命周期回调**：`onReady` 对 harness（首次 online）与计费事件共用时机，调用 agent-api `POST /internal/cloud-hosts/:hostId/ready`；`onDestroyed` 对 harness 终态调用 `/terminal`（exited→stopped、failed→failed）并按 hostId 调 admin-api `revoke-by-host`。回调均 Bearer `INTERNAL_API_TOKEN`，单次回调内置 4 次退避重试（0/250ms/1s/3s），外层容器钩子再重试 3 次；最终失败记录 error 日志（降级：agent-api 可用过期/对账与容器状态兜底，不阻断容器回收）。`AGENT_API_URL`/`ADMIN_API_URL` 未配置时启动即告警，回调 no-op。**SecretStore 为进程内存**：cloud-controller 重启会丢失在途 harness 的 secrets（该容器初始化将失败/不 online），需通过巡检/重建云电脑恢复；本期不引入持久化 secret。
+- **云电脑生命周期回调**：`onReady` 对 harness（首次 online）与计费事件共用时机，调用 agent-api `POST /internal/cloud-hosts/:hostId/ready`；`onDestroyed` 对 harness 终态调用 `/terminal`（exited→stopped、failed→failed）并按 hostId 调 admin-api `revoke-by-host`。回调均 Bearer `INTERNAL_API_TOKEN`，单次回调内置 4 次退避重试（0/250ms/1s/3s），外层容器钩子再重试 3 次；最终失败记录 error 日志（降级：agent-api 可用过期/对账与容器状态兜底，不阻断容器回收）。`AGENT_API_URL`/`ADMIN_API_URL` 未配置时启动即告警，回调 no-op。**SecretStore 以 Mongo 为恢复源**：云电脑 secret 随容器创建落库、启动时加载、终态删除（Issue #446）；进程重启不再丢失在线容器的 secret。启动加载失败只记 error 不阻断服务（标准负载安装不依赖该 env）。
 - 契约：`contracts/cloud-controller-websocket.md`（含内部 HTTP API 附录 A）。
 
 ## 环境变量
@@ -121,7 +125,7 @@ worker 侧报 `Connection error: websocket error` 而 cloud-controller「无日�
 - 新增内部端点：`POST /internal/containers/:id/workloads`（依赖展开 + 参数校验 + 单批次安装）与 `POST /internal/containers/:id/runtime-scripts`（系统内联单脚本，Git 设置用）。错误码：`404 NOT_FOUND`、`409 CONTAINER_NOT_ONLINE|CONTAINER_BUSY`、`400 INVALID_WORKLOAD|INVALID_SCRIPT`。
 - `WorkloadDispatcher.startRuntimeBatch`：入口要求 `online`，CAS 到 `initializing` 并写 `initTrigger='runtime'`；完成后直接 `markOnline`，不回 `connecting`；同一容器同时只允许一个 runtime 批次。`workload:run` 仅在该批次携带 `githubAuth:true`，普通批次报文形状不变。
 - 已安装集合：`cloudcontainers.installedWorkloads[{workloadId,name,installedAt,source}]` 只在 `success` 时回填（start→`start`，runtime→`user|mcp`），按 workloadId 去重保留首次；`source=system` 的 Git 脚本不写。失败不注销容器（`required=false`）。
-- **runtime harness 安装配套**：`startRuntimeBatch` 对 `purpose=harness` 的容器与 init 同源注入 `workload:run.env`（`resolveRunEnv`；secret/模型配置缺失 → `HarnessEnvironmentUnavailableError`，400 `INVALID_WORKLOAD` 可读原因、不下发半套 env）；harness 负载安装前由 internal-api 做逐类型版本门禁（在线版本取自 gateway `register` 上报值，不可得则放行 + warn）；安装成功且负载 `harnessType` 非空时对 `cloudcontainers.harnessTypes` `$addToSet`（`ContainerRepository.addHarnessType`，standard 不动）。
+- **runtime harness 安装配套**：`startRuntimeBatch` 对 `purpose=harness` 的容器与 init 同源注入 `workload:run.env`（`resolveRunEnv`）；**仅当批次包含 harness 负载**（条目 `requiresHarnessEnv`，由 internal-api 按 `workloadKind=harness`/`harnessType` 判定）时才在 secret/模型配置缺失时抛 `HarnessEnvironmentUnavailableError`（400 `INVALID_WORKLOAD` 可读原因、不下发半套 env）；standard 负载（如 MongoDB）不依赖该 env，secret 缺失时降级为无 env 继续安装（Issue #446）；harness 负载安装前由 internal-api 做逐类型版本门禁（在线版本取自 gateway `register` 上报值，不可得则放行 + warn）；安装成功且负载 `harnessType` 非空时对 `cloudcontainers.harnessTypes` `$addToSet`（`ContainerRepository.addHarnessType`，standard 不动）。
 - 日志：`cloudworkloadlogs.trigger`（`start|runtime`）与 `source`（`admin|user|mcp|system`），历史记录读取缺省 `start/admin`。
 - 门禁：harness `MIN_HARNESS_WORKER_VERSION=2.12.0`（worker 用户 + 保活退出码 42、Worktree 级提交人写入基线），按类型常量（`kimi_code 2.8.0` / `deepseek_harness 2.12.0`）与基线取 max 后恒为 `2.12.0`；普通容器仍 `2.2.0`。harness Job env 新增 `ZAG_AGENT_API_ENDPOINT`（`AGENT_API_URL`）与 `ZAG_CONTROLLER_ID`（请求可选 `controllerId`）；缺失 `AGENT_API_URL` 仅告警。
 
@@ -200,3 +204,15 @@ pnpm run test:coverage
 - **巡检**：`status-sync` 每轮调用 `reconcileArchives`：`pending/running` 超 `ARCHIVE_TIMEOUT_MS` → `failed` + 回调；重启后补跑（源 PVC 未删，原子替换保证旧归档不丢）；`succeeded/failed` 未送达回调重投（进程内记录，重启后每容器一次，agent-api 幂等）。
 - **模型**：`cloudcontainers` 新增 `storageId/storagePvcName/storageSizeGi/storageWorkspaceId/storageStorageClass/storageRestorePath/storageArchive*`（历史行 null 容忍）；读取层（agent-api 只读镜像）同步透出。
 - **部署**：`deploy/k8s/cloud-controller.yaml` RBAC 增加 `persistentvolumeclaims` get/list/watch/create/delete 与 `pods`/`pods/log` get/list；env 见上表。archiver 镜像 `deploy/images/archiver/`（ubuntu + tar + pbzip2 + bzip2 回退，`MODE=archive|restore|usage|cleanup`）。Aspire dev 仍 `K8S_ENABLED=false`（InMemory）但补齐存储 env。
+
+## 云存储归档优化（存储级归档/复原 + 停止不归档）
+
+> 需求 #434；契约 `contracts/cloud-controller-websocket.md` A.2.3/A.2.10/A.2.11~A.2.13。
+
+- **停止不归档（跳过标记）**：`DELETE /internal/containers/:id` body 接受 `storageArchive:false`（非布尔 400 `INVALID_BODY`）。`ContainerService.destroy(id, {reason?,storageArchive?})` 只在 `storageArchive===false && container.storageId` 时，把 `storageArchiveSkipped:true` 与 `destroying` CAS **同一次写入**（无中间窗口）；`prepareStorageArchive`/`maybeStartArchive`/巡检收口统一尊重该标记；显式 `POST /containers/:id/archive`（手动重试）不受限。未挂载/true/缺省不写标记。terminal 报文仅在 `fresh.storageArchiveSkipped===true` 时携带 `archiveSkipped:true`。
+- **存储级操作台账**：`models/cloud-storage-operation.ts`（集合 `cloudstorageoperations`，仅本服务写）`_id=operationId`（24hex）；`repositories/storage-operation-repository.ts` 提供 `create/findById/findInflight/findActive/markRunning/markSucceeded/markFailed/markCallbackDelivered/findStale/findUndelivered`；同存储仅一个 `pending/running` 由部分唯一索引 `uniq_storage_op_inflight` 保证（撞键 409 `OPERATION_RUNNING`），迁移 `003-cloud-storage-operations` 幂等建索引。`StorageService` deps 新增 `operationRepo`。
+- **存储级归档**：`POST /internal/storages/:id/archive`（`operationId/archiveId/fileName/workspaceId/tenantId`）→ 无活跃容器校验（409 `STORAGE_IN_USE`）→ 台账 pending → 锁外 spawn → `archiveMutex`+`awaitCleanup` 串行 → 复用 archiver `MODE=archive` Job（源 PVC RO + 归档卷 RW，Pod 标签 `zag.cloud/storage-op-id`）→ 成功删源 PVC（最多 3 次）→ 既有 A.2.10 归档回调（追加 `operationId`）；失败保留旧归档与源卷。
+- **存储级复原**：`POST /internal/storages/:id/restore`（`operationId/workspaceId/tenantId/archivePath/sizeGi(1..30)/storageClass`）→ `recreateStoragePvc`（存在则删→轮询消失→ensure；fork 新存储直接 ensure）→ restore Job（archiver `MODE=restore`，归档卷 RO + 目标卷 RW，`RESTORE_FILE=archivePath`，校验 `ZAG_RESTORE_DONE`）→ `POST /internal/cloud-storages/:id/restores` 回调；失败不删归档。
+- **操作查询**：`GET /internal/storages/:id/operations/:operationId`（`operationId/type/status/usageBytes/startedAt/finishedAt/failureReason`）。
+- **巡检**：`StatusSyncService` 每轮在 `reconcileArchives` 后调用 `reconcileStorageOperations`：超 `ARCHIVE_TIMEOUT_MS` → failed + 回调；本进程无执行任务（重启）→ 重跑；终态未送达回调 → 重投一次（agent-api 幂等）。
+- **零回归**：`storageArchive` 缺省时 destroy 报文/落库/terminal 与改动前逐字段一致；未挂载存储不写 `storageArchiveSkipped`、不携带 `archiveSkipped`。

@@ -329,6 +329,14 @@ export const CLOUD_HOST_STOP_IMPACT = gql`
         status
         acpServerType
       }
+      storage {
+        id
+        name
+        sizeGi
+        status
+        usageBytes
+        hourlyCredits
+      }
     }
   }
 `
@@ -397,6 +405,14 @@ export const CLOUD_STORAGE_FIELDS = gql`
       failureReason
       sourcePvcReleased
     }
+    currentRestore {
+      id
+      status
+      startedAt
+      finishedAt
+      failureReason
+    }
+    forkedFromStorageId
     archiveSpace {
       capacityGi
       usedGi

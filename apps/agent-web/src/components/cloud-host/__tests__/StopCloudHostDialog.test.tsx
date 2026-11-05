@@ -13,13 +13,18 @@ vi.mock('@apollo/client/react', () => ({
 
 const cloudHost = { id: 'cloud-1', name: '云电脑 A' };
 
-function mockImpact(activeSessionCount: number, sessions: Array<{ id: string; title: string; status: string; acpServerType: string }> = []) {
+function mockImpact(
+  activeSessionCount: number,
+  sessions: Array<{ id: string; title: string; status: string; acpServerType: string }> = [],
+  storage?: { id: string; name: string; sizeGi: number; status: string; usageBytes: number | null; hourlyCredits: number },
+) {
   mockUseQuery.mockReturnValue({
     data: {
       cloudHostStopImpact: {
         activeSessionCount,
         sessionsWillBeLost: activeSessionCount > 0,
         sessions,
+        storage: storage ?? null,
       },
     },
     loading: false,
@@ -171,5 +176,82 @@ describe('StopCloudHostDialog', () => {
     );
     expect(onStopped).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: '继续停止' })).not.toBeDisabled();
+  });
+
+  it('T-WEB1 挂载存储：不自动停止、勾选默认 true、说明文案、提交携带 archiveStorage', async () => {
+    mockImpact(0, [], {
+      id: 'storage-1',
+      name: '设计资料',
+      sizeGi: 20,
+      status: 'ATTACHED',
+      usageBytes: 1024,
+      hourlyCredits: 15,
+    });
+    render(
+      <StopCloudHostDialog open cloudHost={cloudHost} onClose={vi.fn()} onStopped={vi.fn()} />,
+    );
+
+    const checkbox = await screen.findByLabelText('归档云存储');
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText(/勾选：归档后按半价计费/)).toBeInTheDocument();
+    // 挂载存储时不自动停止
+    expect(mockStopCloudHost).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '继续停止' }));
+    await waitFor(() => {
+      expect(mockStopCloudHost).toHaveBeenCalledWith({
+        variables: { id: 'cloud-1', force: false, archiveStorage: true },
+      });
+    });
+  });
+
+  it('T-WEB1 取消勾选归档 → archiveStorage:false', async () => {
+    mockImpact(0, [], {
+      id: 'storage-1',
+      name: '设计资料',
+      sizeGi: 20,
+      status: 'ATTACHED',
+      usageBytes: 1024,
+      hourlyCredits: 15,
+    });
+    render(
+      <StopCloudHostDialog open cloudHost={cloudHost} onClose={vi.fn()} onStopped={vi.fn()} />,
+    );
+
+    const checkbox = await screen.findByLabelText('归档云存储');
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: '继续停止' }));
+    await waitFor(() => {
+      expect(mockStopCloudHost).toHaveBeenCalledWith({
+        variables: { id: 'cloud-1', force: false, archiveStorage: false },
+      });
+    });
+  });
+
+  it('T-WEB1 存储尚未挂载完成（ATTACHING）→ 勾选禁用且不下发该字段', async () => {
+    mockImpact(0, [], {
+      id: 'storage-1',
+      name: '设计资料',
+      sizeGi: 20,
+      status: 'ATTACHING',
+      usageBytes: null,
+      hourlyCredits: 15,
+    });
+    render(
+      <StopCloudHostDialog open cloudHost={cloudHost} onClose={vi.fn()} onStopped={vi.fn()} />,
+    );
+
+    const checkbox = await screen.findByLabelText('归档云存储');
+    expect(checkbox).toBeDisabled();
+    expect(screen.getByText(/存储尚未挂载完成/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '继续停止' }));
+    await waitFor(() => {
+      expect(mockStopCloudHost).toHaveBeenCalledWith({
+        variables: { id: 'cloud-1', force: false },
+      });
+    });
   });
 });

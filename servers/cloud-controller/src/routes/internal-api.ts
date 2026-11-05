@@ -27,9 +27,12 @@ import {
   ContainerActiveError,
   ContainerNotActiveError,
   NoStorageError,
+  InvalidOperationIdError,
+  OperationRunningError,
   StorageArchiveRunningError,
   StorageContainerNotFoundError,
   StorageInUseError,
+  StorageNotFoundError,
   type StartStorageInput,
   type StorageService,
 } from '../services/storage-service.js';
@@ -107,6 +110,7 @@ export interface CloudContainerJson {
   storageArchiveStartedAt: string | null;
   storageArchiveFinishedAt: string | null;
   storageArchiveFailure: string | null;
+  storageArchiveSkipped: boolean | null;
 }
 
 /** 严格对齐契约附录 A.3 的 JSON 结构。 */
@@ -163,6 +167,12 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
       ? entity.storageArchiveFinishedAt.toISOString()
       : null,
     storageArchiveFailure: entity.storageArchiveFailure ?? null,
+    storageArchiveSkipped:
+      entity.storageArchiveSkipped === true
+        ? true
+        : entity.storageArchiveSkipped === false
+          ? false
+          : null,
   };
 }
 
@@ -540,6 +550,17 @@ export async function parseHarnessRequest(
   };
 }
 
+/** 工作负载是否为 harness 类别（`workloadKind=harness` 或带 `harnessType`）。 */
+function isHarnessWorkload(workload: {
+  workloadKind?: string | null;
+  harnessType?: string | null;
+}): boolean {
+  return (
+    String(workload.workloadKind ?? '').toLowerCase() === 'harness' ||
+    Boolean(workload.harnessType)
+  );
+}
+
 /**
  * runtime 安装 harness 负载的逐类型版本门禁（契约 A.2.5 第 3 条）。
  *
@@ -554,10 +575,7 @@ function checkRuntimeHarnessVersionGate(
   getWorkerVersion?: (containerId: string) => string | undefined,
 ): string | null {
   if (!workload) return null;
-  const isHarness =
-    String(workload.workloadKind ?? '').toLowerCase() === 'harness' ||
-    Boolean(workload.harnessType);
-  if (!isHarness) return null;
+  if (!isHarnessWorkload(workload)) return null;
 
   const harnessType = workload.harnessType ?? '';
   const required = harnessType
@@ -877,6 +895,7 @@ export function createInternalRouter(
             workloadName: workload.name,
             script,
             params: entry.params ?? {},
+            requiresHarnessEnv: isHarnessWorkload(workload),
           };
         })
         .filter(
@@ -983,9 +1002,24 @@ export function createInternalRouter(
         typeof rawReason === 'string' && rawReason.trim().length > 0
           ? rawReason.trim()
           : undefined;
+      // 契约 A.2.3：`storageArchive` 仅接受布尔；缺省/true = 归档，false = 落跳过标记。
+      const rawStorageArchive = req.body?.storageArchive;
+      if (
+        rawStorageArchive !== undefined &&
+        rawStorageArchive !== null &&
+        typeof rawStorageArchive !== 'boolean'
+      ) {
+        res.status(400).json({ error: 'INVALID_BODY', message: 'storageArchive 必须为布尔值' });
+        return;
+      }
+      const destroyOptions: { reason?: string; storageArchive?: boolean } = {};
+      if (reason) destroyOptions.reason = reason;
+      if (typeof rawStorageArchive === 'boolean') {
+        destroyOptions.storageArchive = rawStorageArchive;
+      }
       const result = await containerService.destroy(
         Array.isArray(req.params.id) ? req.params.id[0] : req.params.id,
-        reason ? { reason } : undefined,
+        Object.keys(destroyOptions).length > 0 ? destroyOptions : undefined,
       );
       // 契约 A.2.3：透出 deletedJob，调用方可观察本次是否真实回收了残留 Job（问题 50）。
       res.json({ success: result.success, deletedJob: result.deletedJob });
@@ -1008,6 +1042,10 @@ export function createInternalRouter(
       res.status(404).json({ error: 'NOT_FOUND', message: err.message });
       return;
     }
+    if (err instanceof StorageNotFoundError) {
+      res.status(404).json({ error: 'STORAGE_NOT_FOUND', message: err.message });
+      return;
+    }
     if (err instanceof StoragePvcConflictError) {
       res.status(409).json({ error: 'STORAGE_PVC_CONFLICT', message: err.message });
       return;
@@ -1022,6 +1060,14 @@ export function createInternalRouter(
         message: err.message,
         ...(err.archiveId ? { archiveId: err.archiveId } : {}),
       });
+      return;
+    }
+    if (err instanceof OperationRunningError) {
+      res.status(409).json({ error: 'OPERATION_RUNNING', message: err.message });
+      return;
+    }
+    if (err instanceof InvalidOperationIdError) {
+      res.status(400).json({ error: 'INVALID_BODY', message: err.message });
       return;
     }
     if (err instanceof ContainerActiveError) {
@@ -1208,6 +1254,129 @@ export function createInternalRouter(
       failureReason: container.storageArchiveFailure ?? null,
     });
   });
+
+  // ---- 存储级归档/复原/操作查询（契约 A.2.11 ~ A.2.13） ----
+
+  /** operationId 形态统一 24 位 hex（D10）。 */
+  const OPERATION_ID_PATTERN = /^[a-f0-9]{24}$/;
+
+  router.post('/storages/:storageId/archive', async (req: Request, res: Response) => {
+    const service = requireStorageService(res);
+    if (!service) return;
+    const storageId = paramString(req.params.storageId);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const operationId = nonEmptyString(body.operationId);
+    const archiveId = nonEmptyString(body.archiveId);
+    const fileName = nonEmptyString(body.fileName);
+    const workspaceId = nonEmptyString(body.workspaceId);
+    if (
+      !operationId ||
+      !OPERATION_ID_PATTERN.test(operationId) ||
+      !archiveId ||
+      archiveId.length > 128 ||
+      !fileName ||
+      fileName.includes('..') ||
+      !ARCHIVE_FILE_NAME_PATTERN.test(fileName) ||
+      !workspaceId
+    ) {
+      res.status(400).json({
+        error: 'INVALID_BODY',
+        message: 'operationId(24 位 hex)/archiveId/fileName/workspaceId 非法',
+      });
+      return;
+    }
+    try {
+      const result = await service.startStorageArchive(storageId, {
+        operationId,
+        archiveId,
+        fileName,
+        workspaceId,
+        tenantId: nonEmptyString(body.tenantId),
+      });
+      res.json(result);
+    } catch (err) {
+      respondStorageError(res, err);
+    }
+  });
+
+  router.post('/storages/:storageId/restore', async (req: Request, res: Response) => {
+    const service = requireStorageService(res);
+    if (!service) return;
+    const storageId = paramString(req.params.storageId);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const operationId = nonEmptyString(body.operationId);
+    const workspaceId = nonEmptyString(body.workspaceId);
+    const archivePath = nonEmptyString(body.archivePath);
+    const sizeGi = body.sizeGi;
+    if (
+      !operationId ||
+      !OPERATION_ID_PATTERN.test(operationId) ||
+      !workspaceId ||
+      !archivePath ||
+      archivePath.includes('..') ||
+      !ARCHIVE_PATH_PATTERN.test(archivePath) ||
+      typeof sizeGi !== 'number' ||
+      !Number.isInteger(sizeGi) ||
+      sizeGi < 1 ||
+      sizeGi > 30
+    ) {
+      res.status(400).json({
+        error: 'INVALID_BODY',
+        message: 'operationId(24 位 hex)/workspaceId/archivePath/sizeGi(1..30) 非法',
+      });
+      return;
+    }
+    let storageClass: string | null = null;
+    const rawClass = body.storageClass;
+    if (rawClass !== undefined && rawClass !== null && rawClass !== '') {
+      if (
+        typeof rawClass !== 'string' ||
+        rawClass.length > 63 ||
+        !STORAGE_CLASS_PATTERN.test(rawClass)
+      ) {
+        res.status(400).json({ error: 'INVALID_BODY', message: 'storageClass 非法' });
+        return;
+      }
+      storageClass = rawClass;
+    }
+    try {
+      const result = await service.startStorageRestore(storageId, {
+        operationId,
+        workspaceId,
+        tenantId: nonEmptyString(body.tenantId),
+        archivePath,
+        sizeGi,
+        storageClass,
+      });
+      res.json(result);
+    } catch (err) {
+      respondStorageError(res, err);
+    }
+  });
+
+  router.get(
+    '/storages/:storageId/operations/:operationId',
+    async (req: Request, res: Response) => {
+      const service = requireStorageService(res);
+      if (!service) return;
+      const storageId = paramString(req.params.storageId);
+      const operationId = paramString(req.params.operationId);
+      if (!OPERATION_ID_PATTERN.test(operationId)) {
+        res.status(400).json({ error: 'INVALID_BODY', message: 'operationId 非法' });
+        return;
+      }
+      try {
+        const operation = await service.getOperation(storageId, operationId);
+        if (!operation) {
+          res.status(404).json({ error: 'NOT_FOUND', message: 'operation not found' });
+          return;
+        }
+        res.json(operation);
+      } catch (err) {
+        respondStorageError(res, err);
+      }
+    },
+  );
 
   return router;
 }

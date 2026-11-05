@@ -183,6 +183,50 @@ describe('IssuesTriggerRunner PENDING_WORKSPACE', () => {
     expect(h.createOperation).not.toHaveBeenCalled();
   });
 
+  it('T-452a: 云电脑已设置工作区 → 直接复用，不再 Git 初始化/设置工作区', async () => {
+    h.findHost.mockResolvedValue({ status: 'RUNNING', userId: USER_ID, workspaceId: WORKSPACE_ID });
+    h.workspaceFindOne.mockImplementation((filter: Record<string, unknown>) =>
+      lean(filter._id === WORKSPACE_ID ? { _id: WORKSPACE_ID } : null),
+    );
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.workspaceFindOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: WORKSPACE_ID }),
+    );
+    expect(h.defaultWorkspace).not.toHaveBeenCalled();
+    expect(h.createOperation).not.toHaveBeenCalled();
+    expect(h.ensureWorkspace).not.toHaveBeenCalled();
+    expect(h.triggerUpdateOne).toHaveBeenCalledWith(
+      { _id: TRIGGER_ID, status: 'PENDING_WORKSPACE' },
+      { $set: { workspaceId: WORKSPACE_ID, status: 'PENDING_INSTANTIATE' } },
+    );
+  });
+
+  it('T-452b: 云电脑 workspaceId 指向的工作区已不存在 → 回退路径判定并初始化', async () => {
+    h.findHost.mockResolvedValue({ status: 'RUNNING', userId: USER_ID, workspaceId: WORKSPACE_ID });
+    h.workspaceFindOne.mockReturnValue(lean(null));
+    h.opFindOne.mockReturnValue(lean(null));
+    h.createOperation.mockResolvedValue({ id: '507f1f77bcf86cd799439027' });
+    h.opFindById.mockReturnValue(lean({ status: 'SUCCEEDED' }));
+    h.ensureWorkspace.mockResolvedValue({ id: '507f1f77bcf86cd799439028' });
+
+    await runner.advance(TRIGGER_ID);
+
+    expect(h.createOperation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        controllerId: CONTROLLER_ID,
+        repoFullName: 'Deliay/z-agent-gear',
+        targetPath: '/home/worker/workspace',
+        createSession: false,
+      }),
+    );
+    expect(h.triggerUpdateOne).toHaveBeenCalledWith(
+      { _id: TRIGGER_ID, status: 'PENDING_WORKSPACE' },
+      { $set: { workspaceId: '507f1f77bcf86cd799439028', status: 'PENDING_INSTANTIATE' } },
+    );
+  });
+
   it('工作区缺失 → createOperation(createSession:false) → 轮询终态后建工作区', async () => {
     h.opFindOne.mockReturnValue(lean(null));
     h.createOperation.mockResolvedValue({ id: '507f1f77bcf86cd799439027' });

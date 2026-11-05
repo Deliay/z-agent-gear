@@ -157,6 +157,8 @@ type CloudHostStopImpact {
   activeSessionCount: Int!
   sessionsWillBeLost: Boolean!
   sessions: [CloudHostSessionSummary!]!
+  # 当前挂载的云存储摘要；未挂载为 null（停止对话框据此展示归档勾选项）
+  storage: CloudStorageSummary
 }
 
 type CloudHostCapabilities {
@@ -257,10 +259,17 @@ extend type Query {
 extend type Mutation {
   createCloudHost(input: CreateCloudHostInput!): CloudHost!
   # 有活动会话时必须 force=true；已 STOPPED/FAILED 幂等返回当前状态
-  stopCloudHost(id: ID!, force: Boolean): CloudHost!
+  # archiveStorage：仅挂载云存储时有意义；缺省/null = 归档（与现状一致，向后兼容）；
+  # false = 停止后存储直接回到「待挂载」（IDLE），数据保留、继续全价计费。
+  # 非主动销毁（失败/欠费强拆）不经过该入口，始终归档。
+  stopCloudHost(id: ID!, force: Boolean, archiveStorage: Boolean): CloudHost!
   # 仅 STOPPED/FAILED 可删除；软删除并撤销 Key，Controller/会话保留
   deleteCloudHost(id: ID!): Boolean!
   installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!
+  # Git 项目设置幂等口径：目标目录已是同一仓库（remote 归一后精确匹配）时直接复用该目录，
+  # 不拉取、不改动目录内容；目标目录为空目录时自动移除后继续克隆；
+  # 被其他项目占用（其他仓库 / 非空普通目录 / 同名文件）时失败并提示
+  # 「目标目录已存在其他项目，请修改前缀地址」，被占用内容不被改动。
   setupCloudHostGithubProject(input: SetupCloudHostGithubProjectInput!): CloudHostSetupOperation!
   retryCloudHostSetupOperation(id: ID!): CloudHostSetupOperation!
   # Issues 联动配置：create/update 校验通过落库后逐仓库同步标签（失败汇总报错，配置已保存）
