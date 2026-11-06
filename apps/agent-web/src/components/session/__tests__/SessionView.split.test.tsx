@@ -167,3 +167,45 @@ describe('SessionView 分屏 / Review 状态 / 会话切换（T-SVIEW / 返工 A
     expect(screen.getByTestId('session-split-root').getAttribute('data-split-mode')).toBe('vertical');
   });
 });
+
+describe('Review 深链响应式消费（返工 A1）', () => {
+  beforeEach(() => {
+    cleanup();
+    localStorage.clear();
+    Object.defineProperty(window, 'matchMedia', {
+      value: (query: string) => ({
+        matches: true,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+      configurable: true,
+    });
+    window.history.replaceState({}, '', '/sessions/sess-a');
+    destroyPreviewStore('sess-a');
+  });
+
+  it('同会话二次深链（不重挂载）打开第二个 Review 标签', async () => {
+    installQueryMock('sess-a');
+    render(<SessionView sessionId="sess-a" />);
+
+    // SPA 导航至 ?review=rev-1（同会话、不重挂载）
+    window.history.pushState({}, '', '/sessions/sess-a?review=rev-1');
+    await waitFor(() =>
+      expect(getPreviewStore('sess-a').getSnapshot().tabs.some((tab) => tab.kind === 'review' && (tab as { reviewId: string }).reviewId === 'rev-1')).toBe(true),
+    );
+    // 消费后清参
+    await waitFor(() => expect(window.location.search).toBe(''));
+
+    // 再次导航至 ?review=rev-2：仍应打开第二个 Review 标签
+    window.history.pushState({}, '', '/sessions/sess-a?review=rev-2');
+    await waitFor(() =>
+      expect(getPreviewStore('sess-a').getSnapshot().tabs.some((tab) => tab.kind === 'review' && (tab as { reviewId: string }).reviewId === 'rev-2')).toBe(true),
+    );
+    const reviewIds = getPreviewStore('sess-a')
+      .getSnapshot()
+      .tabs.filter((tab) => tab.kind === 'review')
+      .map((tab) => (tab as { reviewId: string }).reviewId);
+    expect(reviewIds).toEqual(['rev-1', 'rev-2']);
+  });
+});

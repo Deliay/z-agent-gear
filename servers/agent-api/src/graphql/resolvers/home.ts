@@ -1,4 +1,6 @@
 import { GraphQLError } from 'graphql';
+import mongoose from 'mongoose';
+import { Session } from '../../models/session.js';
 import { logger as rootLogger } from '../../observability/logger.js';
 import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
@@ -112,9 +114,23 @@ export const homeResolvers = {
           0,
           'unreadTodoCount',
         ),
-        // Review 列表（PENDING 在前、终态 resolvedAt 倒序、上限 20）；单分支失败降级 []
+        // Review 列表（PENDING 在前、终态 resolvedAt 倒序、上限 20）；单分支失败降级 []；
+        // B3：批量补齐 sessionTitle（侧边栏辨识来源会话）
         degrade<Doc[]>(
-          async () => (await sessionReviewService.listByUser(userId)) as unknown as Doc[],
+          async () => {
+            const reviews = (await sessionReviewService.listByUser(userId)) as unknown as Doc[];
+            const sessionIds = [
+              ...new Set(reviews.map((review) => String(review.sessionId)).filter((value) => mongoose.isValidObjectId(value))),
+            ];
+            const sessions = await Session.find({ _id: { $in: sessionIds } })
+              .select('title')
+              .lean();
+            const titleById = new Map(sessions.map((session) => [String(session._id), (session as Doc).title ?? null]));
+            return reviews.map((review) => ({
+              ...review,
+              sessionTitle: titleById.get(String(review.sessionId)) ?? null,
+            }));
+          },
           [],
           'sessionReviews',
         ),

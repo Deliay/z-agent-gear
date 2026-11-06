@@ -17,12 +17,14 @@ export interface MarkdownPreviewProps {
   source: string;
   readOnly?: boolean;
   filePath?: string;
+  /** 内容因 maxBytes 截断（顶部提示条） */
+  truncated?: boolean;
   onConfirm: (batch: AnnotationBatch) => void;
   /** 注入测试用提示（默认 alert，测试可注入 spy） */
   onUnmappable?: () => void;
 }
 
-export function MarkdownPreview({ source, filePath, onConfirm, onUnmappable }: MarkdownPreviewProps) {
+export function MarkdownPreview({ source, filePath, truncated = false, onConfirm, onUnmappable }: MarkdownPreviewProps) {
   const [annotate, setAnnotate] = useState(false);
   const [comments, setComments] = useState<ReviewComment[]>([]);
   const [pending, setPending] = useState<{ text: string; startOffset: number; endOffset: number } | null>(null);
@@ -85,11 +87,19 @@ export function MarkdownPreview({ source, filePath, onConfirm, onUnmappable }: M
       comments,
       ...(summary.trim() !== '' ? { summary: summary.trim() } : {}),
     });
+    // A2：确认回传后清空批注状态
+    setComments([]);
+    setSummary('');
   }, [comments, filePath, onConfirm, summary]);
 
   // 批注模式注入 data-sourcepos（MarkdownContent annotate 通道，预览模式零开销）
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="markdown-preview">
+      {truncated && (
+        <div className="border-b border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-xs" data-testid="md-truncated">
+          文件过大，内容已截断展示
+        </div>
+      )}
       <div className="flex items-center gap-2 border-b border-border px-2 py-1">
         <button
           type="button"

@@ -29,7 +29,7 @@ function ReviewRow({ review }: { review: SessionReviewSummaryData }) {
     >
       <Eye className="size-3 shrink-0" />
       <span className="min-w-0 flex-1 truncate">
-        {review.sessionId.slice(-8)} · {review.files.length} 文件
+        {review.sessionTitle || review.sessionId.slice(-8)} · {review.files.length} 文件
       </span>
       <span
         className={`size-2 shrink-0 rounded-full ${

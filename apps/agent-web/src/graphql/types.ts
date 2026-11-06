@@ -1176,6 +1176,8 @@ export interface HomeOverviewData {
 export interface SessionReviewSummaryData {
   id: string
   sessionId: string
+  /** 所属会话标题（HomeOverview 聚合补齐；B3） */
+  sessionTitle?: string | null
   files: string[]
   status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'COMMENTED' | 'CANCELLED'
   fileReviews: unknown

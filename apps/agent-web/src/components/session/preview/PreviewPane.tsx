@@ -51,6 +51,7 @@ export function PreviewPane({ sessionId, onAnnotation, reviewStatuses = {}, rend
         )}
         {active && active.kind === 'file' && (
           <FileTabContent
+            key={`${active.filePath}:${active.nonce ?? 0}`}
             sessionId={sessionId}
             filePath={active.filePath}
             diff={active.diff}
@@ -97,10 +98,10 @@ function FileTabContent({
   const truncated = diff ? false : data!.sessionFileContent.truncated;
 
   if (kind === 'markdown') {
-    return <MarkdownPreview source={content} filePath={filePath} onConfirm={onAnnotation} />;
+    return <MarkdownPreview source={content} filePath={filePath} truncated={truncated} onConfirm={onAnnotation} />;
   }
   if (kind === 'html') {
-    return <HtmlPreview html={content} filePath={filePath} onConfirm={onAnnotation} />;
+    return <HtmlPreview html={content} filePath={filePath} truncated={truncated} onConfirm={onAnnotation} />;
   }
   return (
     <CodePreview

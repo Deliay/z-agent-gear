@@ -172,6 +172,8 @@ export const sessionTypeDefs = `#graphql
     sessionId: ID!
     # 待评审文件（相对会话工作区的展示路径）
     files: [String!]!
+    # 所属会话标题（HomeOverview 聚合时补齐，侧边栏辨识用；其余查询为 null）
+    sessionTitle: String
     status: SessionReviewStatus!
     # 按文件聚合的批注：{ [file: string]: ReviewComment[] }；PENDING/CANCELLED 为 null
     fileReviews: JSON

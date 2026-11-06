@@ -53,6 +53,7 @@ import { mergeText, type PromptPart } from '../../lib/preview/prompt-parts';
 import type { AnnotationBatch } from '../../lib/preview/types';
 import { GET_SESSION_REVIEWS, type SessionReviewData } from '../../graphql/preview';
 import { useUserEventStream } from '../../hooks/useUserEventStream';
+import { useUrlSearch } from '../../hooks/useUrlSearch';
 
 interface AcpMessage {
   id: string;
@@ -132,8 +133,9 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const client = useApolloClient();
 
   // ---- 分屏 / 预览区（#461，Phase 6） ----
-  // Review 深链参数经 window.location 读取（router 无关，消费后 replaceState 清参）
-  const [reviewDeepLink] = useState(() => new URLSearchParams(window.location.search).get('review'));
+  // Review 深链：响应式消费（A1 返工）——同会话 SPA 导航（不重挂载）也能打开新 Review 标签
+  const urlSearch = useUrlSearch();
+  const reviewDeepLink = new URLSearchParams(urlSearch).get('review');
   const [splitMode, setSplitModeState] = useState<SplitMode>(() => getSplitMode(id));
   const [live, setLive] = useState(false);
   const [wideEnoughForHorizontal, setWideEnoughForHorizontal] = useState(
@@ -210,6 +212,16 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   useEffect(() => {
     const reviewId = reviewDeepLink;
     if (!reviewId) return;
+    const store = getPreviewStore(id);
+    if (store.getSnapshot().tabs.some((tab) => tab.kind === 'review' && tab.reviewId === reviewId)) {
+      // 已打开（重复深链）：仅清参
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('review') === reviewId) {
+        url.searchParams.delete('review');
+        window.history.replaceState(window.history.state, '', url.toString());
+      }
+      return;
+    }
     getPreviewStore(id).openReview(reviewId);
     if (getSplitMode(id) === 'chat') {
       setSplitModeState(wideEnoughForHorizontal ? 'horizontal' : 'vertical');

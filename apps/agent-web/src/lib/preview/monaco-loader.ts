@@ -14,6 +14,7 @@ export interface MonacoModule {
   KeyMod: typeof import('monaco-editor').KeyMod;
   KeyCode: typeof import('monaco-editor').KeyCode;
   Range: typeof import('monaco-editor').Range;
+  Uri: typeof import('monaco-editor').Uri;
 }
 
 let monacoPromise: Promise<MonacoModule> | null = null;

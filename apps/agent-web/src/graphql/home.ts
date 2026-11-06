@@ -186,6 +186,7 @@ export const HOME_OVERVIEW = gql`
       sessionReviews {
         id
         sessionId
+        sessionTitle
         files
         status
         fileReviews

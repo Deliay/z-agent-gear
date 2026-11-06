@@ -39,8 +39,34 @@ export interface CodePreviewProps {
   onConfirm?: (batch: AnnotationBatch) => void;
 }
 
-// model / viewState 按 filePath 复用（切 tab 保留滚动与光标位置）
+// model / viewState 按 filePath 复用（切 tab 保留滚动与光标位置）。
+// model 以 uri 为键 getOrCreate（B2 返工：内容更新不再隐式建 model 导致泄漏）。
 const viewStates = new Map<string, unknown>();
+const modelCache = new Map<string, unknown>();
+
+function getOrCreateModel(
+  monaco: MonacoModule,
+  filePath: string,
+  content: string,
+  language: string,
+): { setValue: (value: string) => void } {
+  const uri = monaco.Uri.parse(`file:///${filePath}`);
+  let model = modelCache.get(filePath) as { setValue: (value: string) => void } | undefined;
+  if (!model) {
+    const existing = monaco.editor.getModel(uri) as { setValue: (value: string) => void } | null;
+    model = existing ?? (monaco.editor.createModel(content, language, uri) as unknown as { setValue: (value: string) => void });
+    modelCache.set(filePath, model);
+  } else {
+    model.setValue(content);
+  }
+  return model;
+}
+
+/** 测试辅助：清空 model 缓存 */
+export function resetCodePreviewModels(): void {
+  modelCache.clear();
+  viewStates.clear();
+}
 
 type MouseDownHost = {
   onMouseDown?: (fn: (e: { target: { position?: { lineNumber: number } }; event: { shiftKey: boolean } }) => void) => void;
@@ -126,8 +152,9 @@ export function CodePreview({
         };
         return;
       }
+      const model = getOrCreateModel(monaco, filePath, content, language);
       const created = monaco.editor.create(containerRef.current, {
-        value: content,
+        model: model as never,
         language,
         readOnly,
         theme,
@@ -205,6 +232,10 @@ export function CodePreview({
       comments,
       ...(summary.trim() !== '' ? { summary: summary.trim() } : {}),
     });
+    // A2：确认回传后清空批注状态（防止同一批注重复回传/跨文件残留）
+    setComments([]);
+    setSummary('');
+    setRange(null);
   }, [comments, filePath, onConfirm, summary]);
 
   return (

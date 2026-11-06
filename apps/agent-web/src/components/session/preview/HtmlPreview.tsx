@@ -16,6 +16,8 @@ export interface HtmlPreviewProps {
   html: string;
   readOnly?: boolean;
   filePath?: string;
+  /** 内容因 maxBytes 截断（顶部提示条） */
+  truncated?: boolean;
   onConfirm: (batch: AnnotationBatch) => void;
 }
 
@@ -26,7 +28,7 @@ interface SelectionEntry {
 
 const INNER_HTML_STORE_LIMIT = 4000;
 
-export function HtmlPreview({ html, filePath, onConfirm }: HtmlPreviewProps) {
+export function HtmlPreview({ html, filePath, truncated = false, onConfirm }: HtmlPreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [token, setToken] = useState(() => generateToken());
   const [annotate, setAnnotate] = useState(false);
@@ -86,10 +88,19 @@ export function HtmlPreview({ html, filePath, onConfirm }: HtmlPreviewProps) {
       comments,
       ...(summary.trim() !== '' ? { summary: summary.trim() } : {}),
     });
+    // A2：确认回传后清空批注状态
+    setComments([]);
+    setSummary('');
+    setSelection([]);
   };
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="html-preview">
+      {truncated && (
+        <div className="border-b border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-xs" data-testid="html-truncated">
+          文件过大，内容已截断展示
+        </div>
+      )}
       <div className="flex items-center gap-2 border-b border-border px-2 py-1">
         <button
           type="button"

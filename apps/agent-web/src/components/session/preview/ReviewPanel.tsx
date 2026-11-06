@@ -55,7 +55,7 @@ const STATUS_BADGES: Record<SessionReviewData['status'], { label: string; classN
   CANCELLED: { label: '已取消', className: 'bg-muted text-muted-foreground italic' },
 };
 
-export function ReviewPanel({ reviewId, sessionId, onAnnotation }: ReviewPanelProps) {
+export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [fileReviews, setFileReviews] = useState<Record<string, SessionReviewCommentData[]>>({});
   const [summary, setSummary] = useState('');
@@ -89,13 +89,14 @@ export function ReviewPanel({ reviewId, sessionId, onAnnotation }: ReviewPanelPr
 
   const handleFileAnnotation = useCallback(
     (file: string) => (batch: AnnotationBatch) => {
+      // A2：批注按文件聚合进 file_reviews（key 隔离 + 组件确认后清空，无跨文件串扰）。
+      // B5-1：Review 场景批注经 file_reviews 结构化回传 Agent，不回传输入区（PRD §3.3）。
       setFileReviews((prev) => ({
         ...prev,
         [file]: batch.comments as unknown as SessionReviewCommentData[],
       }));
-      onAnnotation?.(batch);
     },
-    [onAnnotation],
+    [],
   );
 
   const submit = useCallback(
@@ -170,6 +171,7 @@ export function ReviewPanel({ reviewId, sessionId, onAnnotation }: ReviewPanelPr
           {/* B2：内容恒只读（含 PENDING），批注恒可用 */}
           {activeFile && fileData?.sessionFileContent && (
             <ReviewFileContent
+              key={activeFile}
               filePath={activeFile}
               data={fileData.sessionFileContent}
               readOnly

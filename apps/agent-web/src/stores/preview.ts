@@ -18,6 +18,8 @@ export interface PreviewFileTab {
   pinned: boolean;
   focusLine?: number;
   diff?: { oldText: string | null; newText: string };
+  /** 每次 openFile 更新 +1：驱动内容组件重取（B5-4，同文件重复读取内容刷新） */
+  nonce?: number;
 }
 
 export interface PreviewReviewTab {
@@ -71,6 +73,7 @@ export function reduceTabs(state: PreviewState, action: PreviewAction): PreviewS
             ...existing,
             focusLine: input.focusLine ?? existing.focusLine,
             diff: input.diff ?? existing.diff,
+            nonce: (existing.nonce ?? 0) + 1,
           };
           return {
             tabs: state.tabs.map((tab) => (tab.id === existing.id ? updated : tab)),
@@ -95,6 +98,7 @@ export function reduceTabs(state: PreviewState, action: PreviewAction): PreviewS
           filePath: input.filePath,
           focusLine: input.focusLine,
           diff: input.diff,
+          nonce: (preview.nonce ?? 0) + 1,
         };
         return {
           tabs: state.tabs.map((tab) => (tab.id === preview.id ? updated : tab)),

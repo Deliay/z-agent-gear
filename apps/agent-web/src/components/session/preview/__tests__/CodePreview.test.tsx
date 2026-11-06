@@ -8,10 +8,12 @@ const diffEditors: Array<Record<string, any>> = [];
 
 vi.mock('../../../../lib/preview/monaco-loader', () => ({
   loadMonaco: vi.fn(async () => ({
+    Uri: { parse: (value: string) => value },
     Range: class {
       constructor(_a: number, _b: number, _c: number, _d: number) {}
     },
     editor: {
+      getModel: vi.fn(() => null),
       create: (_el: unknown, options: Record<string, unknown>) => {
         const editor = {
           options,
@@ -43,18 +45,19 @@ vi.mock('../../../../lib/preview/monaco-loader', () => ({
         diffEditors.push({ diff, modified, original });
         return diff;
       },
-      createModel: vi.fn(() => ({ dispose: vi.fn() })),
+      createModel: vi.fn(() => ({ dispose: vi.fn(), setValue: vi.fn() })),
     },
   })),
 }));
 
-import { CodePreview } from '../CodePreview';
+import { CodePreview, resetCodePreviewModels } from '../CodePreview';
 
 describe('CodePreview（T-CP / 返工 A1/A5/B1/B2）', () => {
   beforeEach(() => {
     cleanup();
     createdEditors.length = 0;
     diffEditors.length = 0;
+    resetCodePreviewModels();
     vi.clearAllMocks();
   });
 
