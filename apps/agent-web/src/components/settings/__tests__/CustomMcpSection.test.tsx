@@ -7,6 +7,7 @@ import type {
   WorkspaceTenantData,
 } from '@/graphql/types';
 import { resetWorkspaceStore, selectWorkspace, syncWorkspaceContext } from '@/stores/workspace';
+import { GET_CUSTOM_MCP_SERVERS, GET_VALUT_ENTRIES, GET_VALUT_MANUAL_OPTIONS } from '@/graphql/queries';
 
 const mocks = vi.hoisted(() => ({ navigate: vi.fn() }));
 
@@ -151,6 +152,16 @@ function mockMutations() {
 async function openCreateDialog() {
   fireEvent.click(screen.getByRole('button', { name: '新增自定义 MCP' }));
   return await screen.findByRole('dialog');
+}
+
+/** 取组件挂载时传给 `useMutation(query, options)` 的 `refetchQueries` */
+function refetchQueriesOf(operationName: string): unknown[] {
+  const call = mockUseMutation.mock.calls.find(
+    ([query]) =>
+      (query as { definitions?: Array<{ name?: { value?: string } }> })?.definitions?.[0]?.name
+        ?.value === operationName,
+  );
+  return (call?.[1] as { refetchQueries?: unknown[] } | undefined)?.refetchQueries ?? [];
 }
 
 async function openEditDialog(name: string) {
@@ -351,6 +362,10 @@ describe('CustomMcpSection', () => {
 
       fireEvent.click(within(dialog).getByRole('button', { name: '前往 Valut 编辑' }));
 
+      // 穿透前先关本区块弹窗：ValutSection deep-link 随即再开 Valut 编辑弹窗，不关会双 modal 叠加
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
       expect(mocks.navigate).toHaveBeenCalledWith('/settings?section=valut&entry=mv-1');
     });
 
@@ -405,6 +420,48 @@ describe('CustomMcpSection', () => {
     });
   });
 
+  // T-WEB2：变更联动 Valut 刷新（MINOR-7）
+  describe('T-WEB2 变更联动 Valut 刷新', () => {
+    it('新建 bearer 后 refetchQueries 含 GET_VALUT_ENTRIES / GET_VALUT_MANUAL_OPTIONS', async () => {
+      render(<CustomMcpSection />);
+      const dialog = await openCreateDialog();
+
+      fillBasicFields(dialog);
+      fireEvent.click(within(dialog).getByRole('radio', { name: 'Bearer Token' }));
+      fireEvent.change(within(dialog).getByLabelText('Bearer token'), {
+        target: { value: 'tok-123' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: '创建' }));
+
+      await waitFor(() => {
+        expect(mockCreateCustomMcpServer).toHaveBeenCalled();
+      });
+      const refetch = refetchQueriesOf('CreateCustomMcpServer');
+      expect(refetch).toContain(GET_CUSTOM_MCP_SERVERS);
+      expect(refetch).toContain(GET_VALUT_ENTRIES);
+      expect(refetch).toContain(GET_VALUT_MANUAL_OPTIONS);
+      // 更新路径同源（同一 refetch 集合）
+      expect(refetchQueriesOf('UpdateCustomMcpServer')).toContain(GET_VALUT_ENTRIES);
+    });
+
+    it('删除自建 token 后 refetchQueries 含 GET_VALUT_ENTRIES（Valut 区块同步刷新，不留悬空行）', async () => {
+      mockQueries([MANAGED_BEARER]);
+      render(<CustomMcpSection />);
+      fireEvent.click(screen.getByRole('button', { name: '删除 托管 Bearer MCP' }));
+
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '删除' }));
+
+      await waitFor(() => {
+        expect(mockDeleteCustomMcpServer).toHaveBeenCalledWith({ variables: { id: 'cmcp-2' } });
+      });
+      const refetch = refetchQueriesOf('DeleteCustomMcpServer');
+      expect(refetch).toContain(GET_CUSTOM_MCP_SERVERS);
+      expect(refetch).toContain(GET_VALUT_ENTRIES);
+      expect(refetch).toContain(GET_VALUT_MANUAL_OPTIONS);
+    });
+  });
+
   // T-WEB2：错误映射
   describe('T-WEB2 错误文案映射', () => {
     it('服务端 invalid mcp endpoint 映射为中文且对话框保持打开', async () => {
@@ -445,6 +502,31 @@ describe('CustomMcpSection', () => {
         'endpoint 必须以 http:// 或 https:// 开头',
       );
       expect(mockCreateCustomMcpServer).not.toHaveBeenCalled();
+    });
+
+    it('同名请求头两行本地拦截为「请求头名称重复」且不发请求（MINOR-8）', async () => {
+      render(<CustomMcpSection />);
+      const dialog = await openCreateDialog();
+
+      fillBasicFields(dialog);
+      fireEvent.click(within(dialog).getByRole('button', { name: '添加请求头' }));
+      fireEvent.change(within(dialog).getByLabelText('请求头名称 1'), {
+        target: { value: 'X-Api-Key' },
+      });
+      fireEvent.change(within(dialog).getByLabelText('请求头值 1'), { target: { value: 'a' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: '添加请求头' }));
+      fireEvent.change(within(dialog).getByLabelText('请求头名称 2'), {
+        target: { value: 'X-Api-Key' },
+      });
+      fireEvent.change(within(dialog).getByLabelText('请求头值 2'), { target: { value: 'b' } });
+
+      fireEvent.click(within(dialog).getByRole('button', { name: '创建' }));
+
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+        '请求头名称重复：X-Api-Key',
+      );
+      expect(mockCreateCustomMcpServer).not.toHaveBeenCalled();
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
   });
 

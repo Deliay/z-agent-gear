@@ -64,7 +64,9 @@ export const CUSTOM_MCP_MAX_HEADERS = 32
 export const CUSTOM_MCP_MAX_HEADER_VALUE_LENGTH = 4096
 
 /**
- * 请求头与服务端同源：key 禁空白与冒号、单值 ≤4096、总条数 ≤32。
+ * 请求头与服务端同源：key 禁空白与冒号、单值 ≤4096、总条数 ≤32、**同名 key 不得跨行重复**
+ * （服务端 `validateHeaders` 按 `seen` 集合拒绝重复 key → 泛化 `invalid custom headers`，
+ * 本地先行拦截并给出可定位文案）。多值请写在同一行（每行一个值）。
  * 返回归一后的非空条目（key/value 均 trim，空行直接丢弃）。
  */
 export function normalizeCustomMcpHeaders(
@@ -80,10 +82,15 @@ export function normalizeCustomMcpHeaders(
   if (normalized.length > CUSTOM_MCP_MAX_HEADERS) {
     return { headers: [], error: `自定义请求头最多 ${CUSTOM_MCP_MAX_HEADERS} 条` }
   }
+  const seen = new Set<string>()
   for (const header of normalized) {
     if (!header.key || /[\s:]/.test(header.key)) {
       return { headers: [], error: '请求头名称不能为空且不能包含空白或冒号' }
     }
+    if (seen.has(header.key)) {
+      return { headers: [], error: `请求头名称重复：${header.key}` }
+    }
+    seen.add(header.key)
     if (header.values.length === 0) {
       return { headers: [], error: `请求头 ${header.key} 至少需要一个值` }
     }

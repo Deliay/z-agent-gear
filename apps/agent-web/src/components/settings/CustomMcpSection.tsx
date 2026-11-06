@@ -3,7 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { ExternalLink, Pencil, Plus, Trash2 } from 'lucide-react'
-import { GET_CUSTOM_MCP_SERVERS, GET_VALUT_MANUAL_OPTIONS } from '@/graphql/queries'
+import {
+  GET_CUSTOM_MCP_SERVERS,
+  GET_VALUT_ENTRIES,
+  GET_VALUT_MANUAL_OPTIONS,
+} from '@/graphql/queries'
 import {
   CREATE_CUSTOM_MCP_SERVER,
   DELETE_CUSTOM_MCP_SERVER,
@@ -78,6 +82,17 @@ const FIELD_CLASS =
   'w-full min-w-0 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring'
 
 /**
+ * 三个 custom MCP mutation 共用的 refetch 集合：
+ * 变更联动 Valut（bearer 自建 token 落/删 `mcp-bearer-tokens` 条目、引用换绑改 refs），
+ * 同页 ValutSection 与「选择 token」数据源必须一并刷新（否则删除后残留悬空行）。
+ */
+const CUSTOM_MCP_REFETCH_QUERIES = [
+  GET_CUSTOM_MCP_SERVERS,
+  GET_VALUT_ENTRIES,
+  GET_VALUT_MANUAL_OPTIONS,
+]
+
+/**
  * 设置页「自定义 MCP」区块（工作区级 HTTP MCP，contracts/custom-mcp.graphql）。
  *
  * - bearer 两条路径：填写 token（自建，写入 Valut `service-mcp-bearer-tokens`）/ 选择 token（仅 manual）；
@@ -94,15 +109,15 @@ export default function CustomMcpSection() {
   })
   const [createCustomMcpServer] = useMutation<CreateCustomMcpServerMutation>(
     CREATE_CUSTOM_MCP_SERVER,
-    { refetchQueries: [GET_CUSTOM_MCP_SERVERS] },
+    { refetchQueries: CUSTOM_MCP_REFETCH_QUERIES },
   )
   const [updateCustomMcpServer] = useMutation<UpdateCustomMcpServerMutation>(
     UPDATE_CUSTOM_MCP_SERVER,
-    { refetchQueries: [GET_CUSTOM_MCP_SERVERS] },
+    { refetchQueries: CUSTOM_MCP_REFETCH_QUERIES },
   )
   const [deleteCustomMcpServer] = useMutation<DeleteCustomMcpServerMutation>(
     DELETE_CUSTOM_MCP_SERVER,
-    { refetchQueries: [GET_CUSTOM_MCP_SERVERS] },
+    { refetchQueries: CUSTOM_MCP_REFETCH_QUERIES },
   )
 
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -569,9 +584,12 @@ export default function CustomMcpSection() {
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 text-sm text-primary underline-offset-2 hover:underline"
-                    onClick={() =>
+                    onClick={() => {
+                      // 先关本区块弹窗再导航：ValutSection deep-link 会再开 Valut 编辑弹窗，
+                      // 不关会双 modal 叠加
+                      closeDialog()
                       navigate(`/settings?section=valut&entry=${bearerEntryLink}`)
-                    }
+                    }}
                   >
                     <ExternalLink className="h-3.5 w-3.5" />
                     前往 Valut 编辑
