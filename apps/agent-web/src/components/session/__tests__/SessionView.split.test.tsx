@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
+import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-library/react';
 import SessionView from '../SessionView';
 import { GET_SESSION, GET_CONTROLLERS } from '../../../graphql/queries';
 import { GET_SESSION_REVIEWS } from '../../../graphql/preview';
@@ -25,8 +26,10 @@ class MockEventSource {
   url: string;
   constructor(url: string) {
     this.url = url;
+    eventSources.push(this);
   }
 }
+const eventSources: MockEventSource[] = [];
 vi.stubGlobal('EventSource', MockEventSource);
 
 function sessionData(id: string) {
@@ -73,6 +76,7 @@ function installQueryMock(sessionId: string) {
 describe('SessionView 分屏 / Review 状态 / 会话切换（T-SVIEW / 返工 A2/A4）', () => {
   beforeEach(() => {
     cleanup();
+    eventSources.length = 0;
     localStorage.clear();
     // 默认宽视口（≥1024px）
     Object.defineProperty(window, 'matchMedia', {
@@ -89,22 +93,77 @@ describe('SessionView 分屏 / Review 状态 / 会话切换（T-SVIEW / 返工 A
     reviewStatusRows = [];
   });
 
-  it('T-SVIEW1 grid 三模式类名随偏好切换', async () => {
+  it('T-SVIEW1 标题栏独占一行，内容行按偏好切三模式类名', async () => {
     localStorage.setItem('session-split-mode:sess-a', 'horizontal');
     installQueryMock('sess-a');
     render(<SessionView sessionId="sess-a" />);
 
     const root = screen.getByTestId('session-split-root');
+    const header = screen.getByTestId('session-header');
+    const body = screen.getByTestId('session-split-body');
     expect(root.getAttribute('data-split-mode')).toBe('horizontal');
-    expect(root.className).toContain('grid-cols-[4fr_6fr]');
+    // 标题栏与内容行是根容器下的兄弟节点：标题栏整行，内容行承载对话 + 预览两栏
+    expect(header.parentElement).toBe(root);
+    expect(body.parentElement).toBe(root);
+    expect(header.contains(body)).toBe(false);
+    expect(body.className).toContain('flex-1');
+    expect(body.className).toContain('grid-cols-[4fr_6fr]');
+    expect(header.className).not.toContain('grid-cols-[4fr_6fr]');
 
     fireEvent.click(screen.getByTestId('split-mode-vertical'));
     expect(root.getAttribute('data-split-mode')).toBe('vertical');
-    expect(root.className).toContain('grid-rows-[3fr_7fr]');
+    expect(body.className).toContain('grid-rows-[3fr_7fr]');
+    expect(body.className).not.toContain('grid-cols-[4fr_6fr]');
 
     fireEvent.click(screen.getByTestId('split-mode-chat'));
     expect(root.getAttribute('data-split-mode')).toBe('chat');
+    expect(body.className).toContain('grid-cols-1');
     expect(screen.queryByTestId('preview-pane')).toBeNull();
+  });
+
+  it('T-LIVE-STRICT：StrictMode 双挂载下实况跟随仍写入 PreviewPane 读取的 store', async () => {
+    localStorage.setItem('session-split-mode:sess-strict', 'horizontal');
+    installQueryMock('sess-strict');
+    window.history.replaceState({}, '', '/sessions/sess-strict');
+
+    render(
+      <StrictMode>
+        <SessionView sessionId="sess-strict" />
+      </StrictMode>,
+    );
+
+    fireEvent.click(screen.getByTestId('live-toggle'));
+    expect(screen.getByTestId('preview-empty')).toBeVisible();
+
+    // fake controller 推送 read 工具调用（对齐真实会话 6aed6ae1 的消息形状）
+    const stream = eventSources[eventSources.length - 1];
+    act(() => {
+      stream.onmessage?.({
+        data: JSON.stringify({
+          type: 'message',
+          data: {
+            id: 'msg-live-1',
+            sessionId: 'sess-strict',
+            direction: 'output',
+            type: 'tool_call',
+            content: {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: 'call_read_1',
+              kind: 'read',
+              status: 'in_progress',
+              title: 'read',
+              locations: [{ path: '/ws/apps/demo/package.json' }],
+            },
+            metadata: null,
+            messageId: null,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+      } as MessageEvent);
+    });
+
+    await waitFor(() => expect(screen.getByTestId('preview-tab')).toBeVisible());
+    expect(screen.getByTestId('preview-tab')).toHaveTextContent('package.json');
   });
 
   it('T-SVIEW2 窄视口偏好 horizontal 渲染 vertical 且不改写偏好', () => {

@@ -388,3 +388,161 @@ describe('SessionHeader 归档入口（T-WEB1）', () => {
     expect(screen.getByRole('button', { name: '归档' })).toBeDisabled();
   });
 });
+
+describe('SessionHeader 工具栏溢出收纳（省略号下拉）', () => {
+  const baseSession = {
+    id: 'sess-1',
+    userId: 'user-1',
+    controllerId: 'ctrl-1',
+    controllerName: 'My Dev Machine',
+    acpServerType: 'opencode',
+    status: 'running',
+    externalSessionId: null,
+    cwd: '/home/user/project',
+    createdAt: '2026-05-19T10:00:00.000Z',
+    updatedAt: '2026-05-19T10:00:00.000Z',
+    endedAt: null,
+  };
+
+  /** jsdom 无布局：显式 stub 测量宽度后经 resize 事件驱动重新测量 */
+  function stubHeaderWidth(width: number) {
+    Object.defineProperty(screen.getByTestId('session-header'), 'clientWidth', {
+      configurable: true,
+      get: () => width,
+    });
+  }
+
+  function stubToolbarWidth(width: number) {
+    const toolbar = screen.getByTestId('session-header-toolbar');
+    Object.defineProperty(toolbar, 'scrollWidth', {
+      configurable: true,
+      get: () => width,
+    });
+  }
+
+  function triggerMeasure() {
+    fireEvent(window, new Event('resize'));
+  }
+
+  it('宽度充足时渲染完整工具栏，不出现省略号收纳', () => {
+    render(<SessionHeader session={baseSession} status="running" onClose={vi.fn()} onDelete={vi.fn()} onExport={vi.fn()} onArchiveToggle={vi.fn()} splitMode="vertical" onSplitModeChange={vi.fn()} live onLiveChange={vi.fn()} />);
+    stubHeaderWidth(1280);
+    stubToolbarWidth(620);
+    triggerMeasure();
+
+    expect(screen.getByTestId('session-header-toolbar')).toBeInTheDocument();
+    expect(screen.getByTestId('split-mode-buttons')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-header-overflow')).toBeNull();
+  });
+
+  it('宽度不足时工具栏整体收成省略号按钮', () => {
+    render(<SessionHeader session={baseSession} status="running" onClose={vi.fn()} onDelete={vi.fn()} onExport={vi.fn()} onArchiveToggle={vi.fn()} splitMode="vertical" onSplitModeChange={vi.fn()} live onLiveChange={vi.fn()} />);
+    stubHeaderWidth(480);
+    stubToolbarWidth(620);
+    triggerMeasure();
+
+    expect(screen.getByTestId('session-header-overflow')).toBeInTheDocument();
+    expect(screen.queryByTestId('session-header-toolbar')).toBeNull();
+    expect(screen.queryByTestId('split-mode-buttons')).toBeNull();
+    expect(screen.queryByRole('button', { name: '关闭' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '删除' })).toBeNull();
+  });
+
+  it('点击省略号展开下拉，展示 icon+文字按钮组并触发导出', async () => {
+    const onExport = vi.fn();
+    render(<SessionHeader session={baseSession} status="running" onClose={vi.fn()} onDelete={vi.fn()} onExport={onExport} onArchiveToggle={vi.fn()} splitMode="vertical" onSplitModeChange={vi.fn()} live onLiveChange={vi.fn()} />);
+    stubHeaderWidth(480);
+    stubToolbarWidth(620);
+    triggerMeasure();
+
+    fireEvent.click(screen.getByTestId('session-header-overflow'));
+
+    expect(await screen.findByTestId('session-header-overflow-menu')).toBeInTheDocument();
+    for (const label of ['能力清单', '仅会话', '左右分栏', '上下分栏', '实况跟随', '导出对话', '归档', '关闭', '删除']) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByText('导出对话'));
+    expect(onExport).toHaveBeenCalledOnce();
+  });
+
+  it('下拉中的分屏切换触发 onSplitModeChange', async () => {
+    const onSplitModeChange = vi.fn();
+    render(<SessionHeader session={baseSession} status="running" onClose={vi.fn()} onDelete={vi.fn()} splitMode="vertical" onSplitModeChange={onSplitModeChange} live onLiveChange={vi.fn()} />);
+    stubHeaderWidth(480);
+    stubToolbarWidth(620);
+    triggerMeasure();
+
+    fireEvent.click(screen.getByTestId('session-header-overflow'));
+    await screen.findByTestId('session-header-overflow-menu');
+
+    fireEvent.click(screen.getByText('仅会话'));
+    expect(onSplitModeChange).toHaveBeenCalledWith('chat');
+  });
+
+  it('宽度恢复后重新展开完整工具栏', () => {
+    render(<SessionHeader session={baseSession} status="running" onClose={vi.fn()} onDelete={vi.fn()} onExport={vi.fn()} splitMode="vertical" onSplitModeChange={vi.fn()} live onLiveChange={vi.fn()} />);
+    stubHeaderWidth(480);
+    stubToolbarWidth(620);
+    triggerMeasure();
+    expect(screen.getByTestId('session-header-overflow')).toBeInTheDocument();
+
+    stubHeaderWidth(1200);
+    triggerMeasure();
+
+    expect(screen.queryByTestId('session-header-overflow')).toBeNull();
+    expect(screen.getByTestId('session-header-toolbar')).toBeInTheDocument();
+    expect(screen.getByTestId('split-mode-buttons')).toBeInTheDocument();
+  });
+
+  it('已归档会话下拉入口为「取消归档」，归档中禁用', async () => {
+    render(<SessionHeader session={{ ...baseSession, archived: true }} status="ended" onClose={vi.fn()} onDelete={vi.fn()} onArchiveToggle={vi.fn()} archiving />);
+    stubHeaderWidth(480);
+    stubToolbarWidth(620);
+    triggerMeasure();
+
+    fireEvent.click(screen.getByTestId('session-header-overflow'));
+    await screen.findByTestId('session-header-overflow-menu');
+
+    const item = screen.getByText('归档中...');
+    expect(item).toBeInTheDocument();
+    expect(item.closest('[data-disabled], [aria-disabled="true"]')).not.toBeNull();
+    expect(screen.queryByText('取消归档')).toBeNull();
+    expect(screen.queryByText('归档')).toBeNull();
+  });
+
+  it('已归档但非进行中：下拉入口为「取消归档」且可点击', async () => {
+    const onArchiveToggle = vi.fn();
+    render(<SessionHeader session={{ ...baseSession, archived: true }} status="ended" onClose={vi.fn()} onDelete={vi.fn()} onArchiveToggle={onArchiveToggle} />);
+    stubHeaderWidth(480);
+    stubToolbarWidth(620);
+    triggerMeasure();
+
+    fireEvent.click(screen.getByTestId('session-header-overflow'));
+    await screen.findByTestId('session-header-overflow-menu');
+
+    fireEvent.click(screen.getByText('取消归档'));
+    expect(onArchiveToggle).toHaveBeenCalledOnce();
+  });
+
+  it('下拉中「继续」受能力门控与控制器在线状态禁用', async () => {
+    render(
+      <SessionHeader
+        session={baseSession}
+        status="ended"
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onContinue={vi.fn()}
+        controllerOnline={false}
+      />,
+    );
+    stubHeaderWidth(480);
+    stubToolbarWidth(620);
+    triggerMeasure();
+
+    fireEvent.click(screen.getByTestId('session-header-overflow'));
+    await screen.findByTestId('session-header-overflow-menu');
+
+    const item = screen.getByText('继续');
+    expect(item.closest('[data-disabled], [aria-disabled="true"]')).not.toBeNull();
+  });
+});
