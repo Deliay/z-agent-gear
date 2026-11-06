@@ -191,7 +191,11 @@ pnpm run preview  # Preview production build
 
 - **布局**：`SessionView` 根容器为纵向 flex——标题栏（`SessionHeader` / 协议与只读提示）独占一行，
   下方 `session-split-body` 内容行再按模式切 CSS Grid（`chat` 单列 / `horizontal` `grid-cols-[4fr_6fr]` /
-  `vertical` `grid-rows-[3fr_7fr]`），对话列（`MessageList` + `InputBox`）与预览列并排或上下；偏好
+  `vertical` `grid-rows-[3fr_7fr]`），对话列（`MessageList` + `InputBox`）与预览列并排或上下；标题栏
+  工具栏在宽度不足（完整工具栏自然宽度 > 标题栏宽 − 信息区最小 192px）时**整体**收成省略号按钮
+  （`data-testid="session-header-overflow"`），点击展开 icon+文字下拉（能力清单/分屏/实况/导出/归档/
+  关闭/继续/删除，与展开态同回调同门控），宽度恢复后自动展开；jsdom 无布局默认展开，测试经 stub
+  `clientWidth`/`scrollWidth` + window resize 驱动测量；偏好
   `lib/split-prefs.ts`（`session-split-mode:{sessionId}`，
   非法回退 chat）；宽度门控 `matchMedia('(min-width: 1024px)')`：不足隐藏「左右分栏」入口，
   偏好 horizontal 但宽度不足**渲染 vertical 不改写偏好**；`?review=` 深链临时分屏（不写偏好），
