@@ -221,15 +221,18 @@ pnpm run start   # Start production server
 - **无工作区上下文守卫（租户隔离红线）**：`applyWorkspaceScope` 在无 ALS store 时静默不注入可见集
   过滤，故 `listGrouped`/`updateValue`/`deleteEntry`/`deleteEntryCascade` 入口 `requireContext()`
   一律抛 `workspace not found`（范式同 `cloud-storage-service.requireContext`；`createManualEntry`/
-  `createRef` 既有守卫 `valut workspace context is required` 保持不变）；**内部原语保留无上下文能力**
+  `createRef` 的旧守卫已同步收敛到 `requireContext()` 同一文案——旧文案
+  `valut workspace context is required` 仅剩 `createManagedEntry` 的 `!params.workspaceId`
+  参数校验（`valut-service.ts`，内部编码期防漏）；**内部原语保留无上下文能力**
   ——`resolveValue`/`inspectEntry`/`loadEntryNamespaces`（custom-mcp-forwarder 转发链路
   `runWithWorkspace(undefined, …)` 依赖）、`listManualOptions` 无上下文返回空集。
-  该文案未列于 `contracts/valut.graphql` 错误表，GraphQL `wrap()` 按既有规则收敛 `internal error`
-  （安全收敛、不外泄实现细节；如需透传须主控同步契约错误表 + 白名单）。
+  入口守卫文案 `workspace not found` **已列 `contracts/valut.graphql` 错误表**、
+  `resolvers/valut.ts` 白名单逐字透传（非成员上下文与无上下文同一口径）；
+  仅上述 `createManagedEntry` 参数校验文案未列契约，走 `internal error` 收敛例外。
 - **错误文案（白名单逐字，resolver `wrap()` 透传，未命中收敛 `internal error`）**：
   `valut entry not found` / `valut key already exists` / `invalid valut key` / `invalid valut value` /
   `valut entry is not editable` / `valut entry is not deletable` / `valut entry has refs` /
-  `global workspace is read-only` / `Not found` / `Not authenticated`。
+  `global workspace is read-only` / `Not found` / `workspace not found` / `Not authenticated`。
 - **启动自检（D13）**：`src/index.ts` 在迁移完成后、就绪之前调用
   `ensureNamespace('mcp-bearer-tokens', 'MCP Bearer Tokens')`，失败仅 `logger.warn` 告警、不阻塞就绪。
 
@@ -249,8 +252,9 @@ pnpm run start   # Start production server
   `authType` none|bearer；`bearerValutEntryId` ref `ValutEntry`（bearer 必填、none 恒 null）。
   **本集合不存 bearer token**（token 只存 `valutentries.valueEncrypted`）。
 - **服务**：`services/custom-mcp-service.ts` 为唯一读写口（`list/get/create/update/delete`）；
-  全部入口 `requireContext()`（无 ALS 工作区上下文 → `custom mcp workspace context is required`，
-  与 `valut-service` 同类守卫，封堵半迁移回退链路的跨租户读写面）：
+  全部入口 `requireContext()`（无 ALS 工作区上下文 → `workspace not found`，与 `valut-service`、
+  `middleware/auth` 同一文案，已列 `contracts/custom-mcp.graphql` 错误表并经 `wrap()` 白名单
+  逐字透传，封堵半迁移回退链路的跨租户读写面）：
   - **bearer 两路径（create）**：`newToken` → **预生成 MCP `_id` 一次成型**（计划要点 1 裁决）——
     **先** `valutService.createManagedEntry('mcp-bearer-tokens', refId=MCP id, refLabel=key=name,
     editable=true, deletable=false)` **再** 落 MCP（`bearerValutEntryId` 随首次 save 一并写入，
@@ -289,14 +293,15 @@ pnpm run start   # Start production server
   错误表：`custom mcp server not found` / `invalid mcp name` / `invalid mcp endpoint` /
   `invalid custom headers` / `invalid mcp description` / `bearer token is required` /
   `valut entry not found`（`existingEntryId` 不存在）/ `bearer entry must be manual namespace` /
-  `bearer entry not editable in place` / `global workspace is read-only` / `Not found`，未命中一律
+  `bearer entry not editable in place` / `global workspace is read-only` / `Not found` /
+  `workspace not found`，未命中一律
   `internal error`；未认证 `Not authenticated`。`bearerEntryManaged` 由服务层派生，**无类型级 resolver**。
 - **权限**：读=独占型可见集（`list`/`get` 随 `x-workspace-id` 切换）；写=入口
   `assertWorkspaceWritable` + 插件写过滤/只读拦截（全局工作区 developer →
   `global workspace is read-only`）；跨工作区 id → `Not found`（存在性探针区分）、不存在 id →
   `custom mcp server not found`；`customMcpServer(id)` 可空出参对不存在返回 `null`。
   无工作区上下文（半迁移回退）→ 全部入口 `requireContext()` 拒绝
-  （`custom mcp workspace context is required`，未列契约 → `internal error` 收敛）。
+  （`workspace not found`，已列契约错误表并经 `wrap()` 白名单逐字透传）。
 - **测试**：`services/custom-mcp-service.test.ts`（T-CMCP1~5 真库：新建 entry/ref 落库与 editable/
   deletable、**落 MCP 失败 → entry/ref 回滚**、引用仅 manual 与多 MCP 共引独立 ref、删除级联与并发
   只级联一次、编辑就地改值不回显/manual 拒绝/换绑两方向无孤儿（含 `updateOne` 抛错与 `createRef`

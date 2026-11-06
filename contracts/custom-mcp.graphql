@@ -19,7 +19,8 @@
 # 错误口径（白名单，逐字透传）：
 #   `custom mcp server not found` / `invalid mcp name` / `invalid mcp endpoint` /
 #   `invalid custom headers` / `invalid mcp description`（description >512）/
-#   `bearer token is required` / `valut entry not found`（existingEntryId 不存在或不可见）/
+#   `bearer token is required` / `valut entry not found`（existingEntryId 不存在；
+#   跨工作区不可见 → `Not found`）/
 #   `bearer entry must be manual namespace` / `bearer entry not editable in place` /
 #   `workspace not found`（非成员上下文 / 无工作区上下文）/
 #   `global workspace is read-only` / `Not found` / `Not authenticated`
