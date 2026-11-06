@@ -37,7 +37,7 @@ describe('SessionPage 新建会话参数映射', () => {
     });
   });
 
-  it('R-1: 9 个位置参数按序映射到 CreateSessionInput（modeId/modelId 不错位）', async () => {
+  it('R-1: 10 个位置参数按序映射到 CreateSessionInput（modeId/modelId/customMcpServerIds 不错位）', async () => {
     render(<SessionPage />);
     fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
 
@@ -56,6 +56,7 @@ describe('SessionPage 新建会话参数映射', () => {
       '/repo/.worktrees/feat-a',
       'mode-1',
       'model-1',
+      ['cmcp-1'],
     );
 
     await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1));
@@ -71,6 +72,7 @@ describe('SessionPage 新建会话参数映射', () => {
           existingWorktreePath: '/repo/.worktrees/feat-a',
           modeId: 'mode-1',
           modelId: 'model-1',
+          customMcpServerIds: ['cmcp-1'],
         },
       },
       refetchQueries: expect.any(Array),
@@ -88,11 +90,14 @@ describe('SessionPage 新建会话参数映射', () => {
     await props.onCreate('ctrl-1', 'opencode', 'ws-1');
 
     await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1));
-    expect(mocks.createSession.mock.calls[0][0].variables.input).toMatchObject({
+    const input = mocks.createSession.mock.calls[0][0].variables.input as Record<string, unknown>;
+    expect(input).toMatchObject({
       existingWorktreePath: null,
       modeId: null,
       modelId: null,
       mcpServerIds: null,
     });
+    // 未传第 10 参：保持旧报文形状（不含该键）
+    expect(input).not.toHaveProperty('customMcpServerIds');
   });
 });

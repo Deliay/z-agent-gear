@@ -6,6 +6,7 @@ import {
   GET_CONTROLLER_WORKSPACES_ENABLED,
   DETECT_GIT_REPO,
   GET_MCP_SERVERS,
+  GET_CUSTOM_MCP_SERVERS,
 } from '../../graphql/queries';
 import { REFRESH_ACP_SERVER_OPTIONS } from '../../graphql/mutations';
 import type {
@@ -13,6 +14,7 @@ import type {
   CloudHostData,
   ControllerDefaultMcpData,
   ControllerWorkspaceData,
+  CustomMcpServerData,
   GetAcpServerOptionsQuery,
   GitRepoInfoData,
   RefreshAcpServerOptionsMutation,
@@ -57,6 +59,10 @@ interface GetMcpServersData {
   mcpServers: McpServer[];
 }
 
+interface GetCustomMcpServersData {
+  customMcpServers: CustomMcpServerData[];
+}
+
 interface NewSessionDialogProps {
   controllers: Controller[];
   onClose: () => void;
@@ -70,6 +76,8 @@ interface NewSessionDialogProps {
     existingWorktreePath?: string,
     modeId?: string,
     modelId?: string,
+    /** 第 10 参：自定义 MCP（工作区）；缺省/[] 均不注入，与 mcpServerIds 正交 */
+    customMcpServerIds?: string[],
   ) => void;
   existingWorktreePath?: string;
   existingControllerId?: string;
@@ -94,6 +102,8 @@ export default function NewSessionDialog({
   const [selectedAcpServer, setSelectedAcpServer] = useState<string>('');
   const [selectedWorkspace, setSelectedWorkspace] = useState<string>(existingWorkspaceId ?? '');
   const [selectedMcpServerIds, setSelectedMcpServerIds] = useState<string[]>([]);
+  // D9：自定义 MCP 无「控制器默认注入」语义，缺省不勾选、两组勾选独立
+  const [selectedCustomMcpIds, setSelectedCustomMcpIds] = useState<string[]>([]);
   const [mcpSearch, setMcpSearch] = useState('');
   const [selectedModeId, setSelectedModeId] = useState('');
   const [selectedModelId, setSelectedModelId] = useState('');
@@ -126,11 +136,14 @@ export default function NewSessionDialog({
   const selectedControllerSelectable = onlineControllers.some((c) => c.id === selectedController);
 
   const { data: mcpData } = useQuery<GetMcpServersData>(GET_MCP_SERVERS);
+  // 「自定义 MCP（工作区）」组：随 x-workspace-id 上下文切换，与个人级 MCP 分组展示
+  const { data: customMcpData } = useQuery<GetCustomMcpServersData>(GET_CUSTOM_MCP_SERVERS);
 
   // 云会话由服务端自动并入 agent-cloud-host-tools，前端不作为可选项
   const enabledMcpServers = (mcpData?.mcpServers ?? []).filter(
     (s) => s.enabled && s.name !== AGENT_CLOUD_HOST_TOOLS_MCP,
   );
+  const customMcpServers = customMcpData?.customMcpServers ?? [];
   const filteredMcpServers = mcpSearch
     ? enabledMcpServers.filter((s) => s.name.toLowerCase().includes(mcpSearch.toLowerCase()))
     : enabledMcpServers;
@@ -281,6 +294,8 @@ export default function NewSessionDialog({
         isPreselected ? existingWorktreePath : undefined,
         selectedModeId || undefined,
         selectedModelId || undefined,
+        // 第 10 参：自定义 MCP；未勾选不传（保持旧报文形状），勾选才注入
+        selectedCustomMcpIds.length > 0 ? selectedCustomMcpIds : undefined,
       );
       onClose();
     }
@@ -594,6 +609,47 @@ export default function NewSessionDialog({
                       )}
                     </div>
                   </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {selectedController && customMcpData !== undefined && (
+            <div className="mb-6">
+              <label className="mb-2 block text-sm font-medium text-card-foreground">
+                自定义 MCP（工作区）
+              </label>
+              <div className="rounded-md border border-border p-3">
+                <p className="mb-2 text-xs text-muted-foreground">
+                  工作区级自定义 MCP，默认不勾选；经平台代理转发
+                </p>
+                {customMcpServers.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">暂无自定义 MCP</p>
+                ) : (
+                  <div className="max-h-40 space-y-1 overflow-y-auto">
+                    {customMcpServers.map((server) => (
+                      <label key={server.id} className="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedCustomMcpIds.includes(server.id)}
+                          onChange={(e) => {
+                            setSelectedCustomMcpIds((prev) =>
+                              e.target.checked
+                                ? [...prev, server.id]
+                                : prev.filter((id) => id !== server.id),
+                            );
+                          }}
+                          className="h-4 w-4"
+                        />
+                        <span className="min-w-0 truncate text-sm text-foreground">
+                          {server.name}
+                        </span>
+                        <span className="min-w-0 truncate text-xs text-muted-foreground">
+                          {server.endpoint}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>

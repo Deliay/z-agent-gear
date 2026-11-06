@@ -140,6 +140,7 @@ token  accessToken  refreshToken  idToken
 password  passwordHash  secret  clientSecret  privateKey
 apiKey  modelApiKey
 *.token  *.password  *.secret  *.apiKey
+*.newToken  *.input.value  *.input.newToken   # D4：Valut/自定义 MCP 契约入参嵌套形态（禁止裸 *.value）
 secrets  secrets.*
 err.config.headers.authorization
 ```

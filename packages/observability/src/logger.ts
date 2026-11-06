@@ -33,6 +33,8 @@ export const REDACT_PATHS: string[] = [
   'password', 'passwordHash', 'secret', 'clientSecret', 'privateKey',
   'apiKey', 'modelApiKey',
   '*.token', '*.password', '*.secret', '*.apiKey', '*.authorization',
+  // D4（MCP+Valut）：契约入参嵌套形态精确路径；禁止裸 `*.value`（误伤计费/计量日志）
+  '*.newToken', '*.input.value', '*.input.newToken',
   'secrets', 'secrets.*',
   'err.config.headers.authorization',
 ];

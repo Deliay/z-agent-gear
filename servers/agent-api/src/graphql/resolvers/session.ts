@@ -146,7 +146,7 @@ export const sessionResolvers = {
   Mutation: {
     createSession: async (
       _parent: unknown,
-      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; existingWorktreePath?: string; mcpServerIds?: string[] | null; modeId?: string | null; modelId?: string | null } },
+      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; existingWorktreePath?: string; mcpServerIds?: string[] | null; customMcpServerIds?: string[] | null; modeId?: string | null; modelId?: string | null } },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -168,6 +168,8 @@ export const sessionResolvers = {
           worktreeBranchSuffix: args.input.worktreeBranchSuffix ?? undefined,
           existingWorktreePath: args.input.existingWorktreePath ?? undefined,
           mcpServerIds: explicitMcpServerIds,
+          // 自定义 MCP：与 mcpServerIds 正交（缺省/[]均不注入，null 归一 undefined）
+          customMcpServerIds: args.input.customMcpServerIds ?? undefined,
           modeId: args.input.modeId ?? undefined,
           modelId: args.input.modelId ?? undefined,
         });

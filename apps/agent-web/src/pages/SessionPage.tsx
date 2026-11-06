@@ -28,6 +28,7 @@ export default function SessionPage() {
     existingWorktreePath?: string,
     modeId?: string,
     modelId?: string,
+    customMcpServerIds?: string[],
   ) => {
     try {
       const { data } = await createSession({
@@ -43,6 +44,10 @@ export default function SessionPage() {
             existingWorktreePath: existingWorktreePath || null,
             modeId: modeId || null,
             modelId: modelId || null,
+            // 第 10 参：自定义 MCP；undefined/[] 不注入（保持旧报文形状不含该键）
+            ...(customMcpServerIds && customMcpServerIds.length > 0
+              ? { customMcpServerIds }
+              : {}),
           },
         },
         refetchQueries: [{ query: GET_SESSIONS }],
