@@ -66,10 +66,14 @@ describe('home resolvers', () => {
     vi.mocked(controllerService.findAllByUser).mockResolvedValue([
       { id: 'ctrl-1', name: '控制器1' },
     ] as never);
-    vi.mocked(sessionService.findAllByUser).mockResolvedValue([
-      { id: 's-1' },
-      { id: 's-2' },
-    ] as never);
+    vi.mocked(sessionService.findAllByUser).mockImplementation(
+      (_userId: string, options?: { archived?: boolean }) =>
+        Promise.resolve(
+          (options?.archived
+            ? [{ id: 's-arch' }]
+            : [{ id: 's-1' }, { id: 's-2' }]) as never,
+        ),
+    );
     vi.mocked(controllerWorkspaceService.findAllByUser).mockResolvedValue([
       { id: 'ws-1', controllerId: 'ctrl-1', name: 'project' },
     ] as never);
@@ -95,6 +99,11 @@ describe('home resolvers', () => {
     expect(controllerService.findAllByUser).toHaveBeenCalledWith('user-1');
     expect(sessionService.findAllByUser).toHaveBeenCalledWith('user-1', {
       includeWorkflowSessions: false,
+      archived: false,
+    });
+    expect(sessionService.findAllByUser).toHaveBeenCalledWith('user-1', {
+      includeWorkflowSessions: false,
+      archived: true,
     });
     expect(controllerWorkspaceService.findAllByUser).toHaveBeenCalledWith('user-1');
     expect(workflowInstanceService.list).toHaveBeenCalledWith('user-1', { archived: false });
@@ -103,6 +112,8 @@ describe('home resolvers', () => {
     expect(result.controllers).toHaveLength(1);
     expect(result.sessions).toHaveLength(2);
     expect(result.sessionTotalCount).toBe(2);
+    // 已归档会话与活跃 sessions 口径互补
+    expect(result.archivedSessions).toEqual([{ id: 's-arch' }]);
     expect(result.workspaces).toHaveLength(1);
     expect(result.workflowInstances[0]).toMatchObject({ id: 'inst-1', name: '需求A开发' });
     expect(result.archivedWorkflowInstances[0]).toMatchObject({ id: 'inst-arch' });
@@ -120,6 +131,23 @@ describe('home resolvers', () => {
     // 其余分支不受影响
     expect(result.controllers).toHaveLength(1);
     expect(result.sessionTotalCount).toBe(2);
+    expect(result.unreadTodoCount).toBe(3);
+  });
+
+  it('archivedSessions 分支失败降级为空数组，其余信息流不受影响', async () => {
+    vi.mocked(sessionService.findAllByUser).mockImplementation(
+      (_userId: string, options?: { archived?: boolean }) =>
+        options?.archived
+          ? Promise.reject(new Error('mongo 挂了'))
+          : Promise.resolve([{ id: 's-1' }] as never),
+    );
+
+    const result = await homeResolvers.Query.homeOverview({}, {}, ctx);
+
+    expect(result.archivedSessions).toEqual([]);
+    expect(result.sessions).toEqual([{ id: 's-1' }]);
+    expect(result.sessionTotalCount).toBe(1);
+    expect(result.controllers).toHaveLength(1);
     expect(result.unreadTodoCount).toBe(3);
   });
 

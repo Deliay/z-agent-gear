@@ -314,3 +314,77 @@ describe('SessionHeader - 能力入口与门控', () => {
     expect(screen.queryByRole('button', { name: '导出对话' })).toBeNull();
   });
 });
+
+describe('SessionHeader 归档入口（T-WEB1）', () => {
+  const baseSession = {
+    id: 'sess-1',
+    userId: 'user-1',
+    controllerId: 'ctrl-1',
+    controllerName: 'My Dev Machine',
+    acpServerType: 'opencode',
+    status: 'ended',
+    externalSessionId: null,
+    cwd: '/home/user/project',
+    createdAt: '2026-05-19T10:00:00.000Z',
+    updatedAt: '2026-05-19T10:00:00.000Z',
+    endedAt: '2026-05-19T11:00:00.000Z',
+  };
+
+  it('未传 onArchiveToggle 时不渲染归档按钮（工作流节点会话口径）', () => {
+    render(<SessionHeader session={baseSession} status="ended" onClose={vi.fn()} onDelete={vi.fn()} />);
+
+    expect(screen.queryByRole('button', { name: '归档' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '取消归档' })).toBeNull();
+  });
+
+  it('传入 onArchiveToggle 时渲染「归档」按钮，位置在「导出对话」之后', () => {
+    const onArchiveToggle = vi.fn();
+    render(
+      <SessionHeader
+        session={baseSession}
+        status="ended"
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onExport={vi.fn()}
+        onArchiveToggle={onArchiveToggle}
+      />,
+    );
+
+    const labels = screen.getAllByRole('button').map((button) => button.getAttribute('aria-label'));
+    expect(labels.indexOf('归档')).toBeGreaterThan(labels.indexOf('导出对话'));
+
+    fireEvent.click(screen.getByRole('button', { name: '归档' }));
+    expect(onArchiveToggle).toHaveBeenCalledOnce();
+  });
+
+  it('已归档会话显示「已归档」徽标并把入口切换为「取消归档」', () => {
+    render(
+      <SessionHeader
+        session={{ ...baseSession, archived: true }}
+        status="ended"
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchiveToggle={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('已归档')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '取消归档' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '归档' })).toBeNull();
+  });
+
+  it('归档进行中（archiving）按钮禁用', () => {
+    render(
+      <SessionHeader
+        session={baseSession}
+        status="ended"
+        onClose={vi.fn()}
+        onDelete={vi.fn()}
+        onArchiveToggle={vi.fn()}
+        archiving
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: '归档' })).toBeDisabled();
+  });
+});

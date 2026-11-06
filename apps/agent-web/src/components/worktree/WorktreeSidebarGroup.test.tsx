@@ -30,6 +30,7 @@ function makeSession(overrides: Partial<SessionData> = {}): SessionData {
     cwd: null,
     worktreePath: '/repo/.worktrees/feat-a',
     worktreeBranch: 'feat-a',
+    archived: false,
     createdAt: '2026-08-17T00:00:00Z',
     updatedAt: '2026-08-17T00:00:00Z',
     endedAt: null,

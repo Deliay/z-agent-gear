@@ -153,6 +153,7 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
   const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
 
   const sessions = data?.sessions ?? [];
+  const archivedSessions = data?.archivedSessions ?? [];
   const controllers = data?.controllers ?? [];
   const allWorkspaces = data?.workspaces ?? [];
   const workflowInstances = data?.workflowInstances ?? [];
@@ -281,6 +282,7 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
     })),
   );
   const sortedSessions = sortByUpdatedAtDesc(sessions.map((session) => ({ ...session, updatedAt: session.updatedAt ?? '' })));
+  const sortedArchivedSessions = sortByUpdatedAtDesc(archivedSessions.map((session) => ({ ...session, updatedAt: session.updatedAt ?? '' })));
   const sortedWorkflows = sortByUpdatedAtDesc(workflowInstances);
   const sortedArchivedWorkflows = sortByUpdatedAtDesc(archivedWorkflowInstances);
   const gatewayCount = gatewayRows.length;
@@ -555,32 +557,23 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
         >
           <ul className="space-y-0.5" data-testid="sidebar-session-list">
             {sortedSessions.map((session) => {
-              const wsName = getWorkspaceNameForSession(session);
               const controller = controllers.find((item) => item.id === session.controllerId);
               return (
-                <li key={session.id}>
-                  <NavLink
-                    to={`/sessions/${session.id}`}
-                    title={controller ? `${session.title || 'New Session'} · ${controller.name || controller.hostname}` : undefined}
-                    className={({ isActive }) =>
-                      `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-                        isActive
-                          ? 'bg-sidebar-accent text-sidebar-foreground'
-                          : 'text-sidebar-foreground hover:bg-sidebar-accent'
-                      }`
-                    }
-                  >
-                    <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate">{session.title || 'New Session'}</div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {wsName || <span className="text-muted-foreground/50">未知工作区</span>}
-                      </div>
-                    </div>
-                  </NavLink>
-                </li>
+                <SessionListEntry
+                  key={session.id}
+                  session={session}
+                  title={controller ? `${session.title || 'New Session'} · ${controller.name || controller.hostname}` : undefined}
+                  resolveWorkspaceName={getWorkspaceNameForSession}
+                />
               );
             })}
+            {sortedArchivedSessions.length > 0 && (
+              <ArchivedSessionGroup
+                sessions={sortedArchivedSessions}
+                controllers={controllers}
+                resolveWorkspaceName={getWorkspaceNameForSession}
+              />
+            )}
           </ul>
         </SidebarSection>
 
@@ -749,6 +742,84 @@ function ArchivedWorkflowGroup({ instances }: { instances: WorkflowInstanceSumma
           {instances.map((instance) => (
             <WorkflowInstanceCard key={instance.id} instance={instance} />
           ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+/** 会话条目（活跃列表与已归档分组共用同一结构，点击直达会话页） */
+function SessionListEntry({
+  session,
+  title,
+  resolveWorkspaceName,
+}: {
+  session: SessionData;
+  title: string | undefined;
+  resolveWorkspaceName: (session: SessionData) => string;
+}) {
+  const wsName = resolveWorkspaceName(session);
+  return (
+    <li>
+      <NavLink
+        to={`/sessions/${session.id}`}
+        title={title}
+        className={({ isActive }) =>
+          `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
+            isActive
+              ? 'bg-sidebar-accent text-sidebar-foreground'
+              : 'text-sidebar-foreground hover:bg-sidebar-accent'
+          }`
+        }
+      >
+        <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate">{session.title || 'New Session'}</div>
+          <div className="truncate text-xs text-muted-foreground">
+            {wsName || <span className="text-muted-foreground/50">未知工作区</span>}
+          </div>
+        </div>
+      </NavLink>
+    </li>
+  );
+}
+
+/** 已归档会话：自折叠分组（复刻 ArchivedWorkflowGroup 交互，默认折叠，条目可打开） */
+function ArchivedSessionGroup({
+  sessions,
+  controllers,
+  resolveWorkspaceName,
+}: {
+  sessions: SessionData[];
+  controllers: Array<{ id: string; name: string; hostname: string }>;
+  resolveWorkspaceName: (session: SessionData) => string;
+}) {
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  return (
+    <li>
+      <button
+        type="button"
+        className="flex items-center gap-1 rounded px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+        onClick={() => setArchivedOpen((prev) => !prev)}
+        aria-expanded={archivedOpen}
+      >
+        {archivedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+        <Archive className="size-3" />
+        已归档（{sessions.length}）
+      </button>
+      {archivedOpen && (
+        <ul className="ml-4 space-y-1" data-testid="sidebar-archived-session-list">
+          {sessions.map((session) => {
+            const controller = controllers.find((item) => item.id === session.controllerId);
+            return (
+              <SessionListEntry
+                key={session.id}
+                session={session}
+                title={controller ? `${session.title || 'New Session'} · ${controller.name || controller.hostname}` : undefined}
+                resolveWorkspaceName={resolveWorkspaceName}
+              />
+            );
+          })}
         </ul>
       )}
     </li>

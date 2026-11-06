@@ -853,6 +853,8 @@ Agent 在 `initialize` 响应中返回的协议版本与客户端不兼容时上
 | `elicitationId` | `string` | url 必填 | Agent 侧 Elicitation ID（URL 模式，用于匹配完成通知） |
 | `url` | `string` | url 必填 | 引导用户打开的 URL |
 
+> 多选字段（`type: 'array'` + `items.anyOf`）的响应值形态见 §2.32（客户端以逗号拼接字符串回传）。
+
 **客户端行为：**
 
 1. AcpSessionBridge 暂停等待用户响应（Promise）
@@ -871,6 +873,8 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 | `requestId` | `string` | 是 | 对应的请求ID |
 | `action` | `'accept' \| 'decline' \| 'cancel'` | 是 | 用户动作：提交 / 明确拒绝 / 取消 |
 | `content` | `object` | 否 | 表单数据（`action=accept` 且 form 模式时），键值符合 `requestedSchema` |
+
+> `type: 'array'` 且 `items.anyOf` 的字段（ACP question 工具多选题）由客户端将所选值以逗号拼接为字符串回传（如 `"A,B"`，顺序同勾选顺序）；其余 array 字段（`items.enum` / `items.oneOf`）仍按数组回传。
 
 **客户端行为：**
 

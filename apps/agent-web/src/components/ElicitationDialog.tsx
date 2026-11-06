@@ -12,11 +12,8 @@ import { Label } from './ui/label';
 import { Checkbox } from './ui/checkbox';
 import { RESPOND_ELICITATION } from '../graphql/mutations';
 import { logger } from '../lib/logger';
-import {
-  clearElicitationDraft,
-  getElicitationDraft,
-  saveElicitationDraft,
-} from '../stores/elicitationDialog';
+import { clearElicitationDraft, getElicitationDraft, saveElicitationDraft } from '../stores/elicitationDialog';
+import { joinMultiSelectValues, optionLabel } from '../lib/elicitation-multi-select';
 import type {
   TodoItemData,
   RespondElicitationMutation,
@@ -49,10 +46,6 @@ function buildDefaults(schema: ElicitationRequestedSchema | null | undefined): R
 
 function isEmptyValue(value: unknown): boolean {
   return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);
-}
-
-function optionLabel(value: unknown): string {
-  return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
 interface UrlParts {
@@ -150,11 +143,12 @@ export function ElicitationDialog({ open, onOpenChange, todo, stale = false, onR
 
     setResponding(true);
     try {
+      const payload = data.mode === 'form' ? joinMultiSelectValues(values, properties) : null;
       await respondElicitation({
         variables: {
           requestId: data.requestId,
           action,
-          values: action === 'accept' && data.mode === 'form' ? values : null,
+          values: action === 'accept' && data.mode === 'form' ? payload : null,
         },
       });
       clearElicitationDraft(draftKey);
@@ -261,14 +255,24 @@ export function ElicitationDialog({ open, onOpenChange, todo, stale = false, onR
       );
     }
 
-    // array：多选勾选组（items.enum / items.oneOf）
-    if (prop.type === 'array' && (prop.items?.enum || prop.items?.oneOf)) {
+    // array：多选勾选组（items.oneOf → items.anyOf → items.enum）
+    if (prop.type === 'array' && (prop.items?.enum || prop.items?.oneOf || prop.items?.anyOf)) {
       const options = prop.items.oneOf
-        ? prop.items.oneOf.map((o) => ({ value: o.const, label: o.title || optionLabel(o.const) }))
-        : (prop.items.enum ?? []).map((v) => ({ value: v, label: optionLabel(v) }));
+        ? prop.items.oneOf.map((o) => ({
+            value: o.const,
+            label: o.title || optionLabel(o.const),
+            description: o.description,
+          }))
+        : prop.items.anyOf
+          ? prop.items.anyOf.map((o) => ({
+              value: o.const,
+              label: o.title || optionLabel(o.const),
+              description: o.description,
+            }))
+          : (prop.items.enum ?? []).map((v) => ({ value: v, label: optionLabel(v), description: undefined }));
       const selected = Array.isArray(value) ? value : [];
       return (
-        <div key={name} className="space-y-2">
+        <div key={name} className="space-y-2" role="group" aria-label={label}>
           <Label>
             {label}
             {required && <span className="text-destructive">*</span>}
@@ -281,7 +285,12 @@ export function ElicitationDialog({ open, onOpenChange, todo, stale = false, onR
                   checked={selected.includes(option.value)}
                   onCheckedChange={(checked) => toggleArrayValue(name, option.value, checked === true)}
                 />
-                <span>{option.label}</span>
+                <span>
+                  {option.label}
+                  {option.description && (
+                    <span className="block text-xs text-muted-foreground">{option.description}</span>
+                  )}
+                </span>
               </label>
             ))}
           </div>

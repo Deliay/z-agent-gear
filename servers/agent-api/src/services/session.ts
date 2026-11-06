@@ -68,6 +68,29 @@ export function resolveInitialMcpServerIds(
   return Array.from(new Set(subset));
 }
 
+/** 会话只读原因（契约 `SessionReadOnlyReason`；写路径与字段 resolver 共用同一判定） */
+export type SessionReadOnlyReason =
+  | 'WORKSPACE_MISSING'
+  | 'CONTROLLER_MISSING'
+  | 'CLOUD_HOST_DESTROYED';
+
+/** 统一只读判定所需的会话上下文（原始 lean 文档与 `mapSession` 输出均满足） */
+interface WritableSessionContext {
+  controllerId: unknown;
+  controllerWorkspaceId?: unknown;
+  cwd?: unknown;
+  worktreePath?: unknown;
+}
+
+/** `archiveByWorkspace` / `matchWorkspaceSessions` 的工作区入参（原始文档与 `mapWorkspace` 输出均满足） */
+export interface WorkspaceMatchTarget {
+  _id?: unknown;
+  id?: unknown;
+  controllerId: unknown;
+  path?: unknown;
+  name?: unknown;
+}
+
 export class SessionService {
   /** 会话进入 ended 时的回调（由工作流 Orchestrator 注册用于兜底检查，避免循环依赖） */
   private sessionEndedCallback?: (sessionId: string) => void | Promise<void>;
@@ -130,12 +153,14 @@ export class SessionService {
 
   async findAllByUser(
     userId: string,
-    options: { includeWorkflowSessions?: boolean; controllerId?: string } = {},
+    options: { includeWorkflowSessions?: boolean; controllerId?: string; archived?: boolean } = {},
   ): Promise<Record<string, unknown>[]> {
     // 默认排除工作流节点会话（workflowInstanceId != null）
     const filter: Record<string, unknown> = options.includeWorkflowSessions
       ? { ...actorFilter(userId) }
       : { ...actorFilter(userId), workflowInstanceId: null };
+    // 归档口径与节点会话排除正交：缺省/false=活跃（未归档），true=已归档
+    filter.archivedAt = options.archived ? { $ne: null } : null;
     if (options.controllerId) {
       filter.controllerId = options.controllerId;
     }
@@ -150,36 +175,127 @@ export class SessionService {
   }
 
   /**
+   * 归档/取消归档会话（D1：对齐工作流实例的 `archivedAt` 语义，仅分组展示差异——
+   * 不终止进程、不触发任何 acp 命令、不影响 `session:status` 通道）。
+   * 归属口径 `actorFilter`（他人会话 → `Session not found`）；工作流节点会话拒绝
+   * `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED`（D2，且不写库）；重复操作幂等。
+   */
+  async setArchived(userId: string, id: string, archived: boolean): Promise<boolean> {
+    const session = await Session.findOne({ _id: id, ...actorFilter(userId) }).lean();
+    if (!session) {
+      throw new Error('Session not found');
+    }
+    if (session.workflowInstanceId != null) {
+      throw new Error('ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED');
+    }
+    await Session.updateOne(
+      { _id: id, ...actorFilter(userId) },
+      { $set: { archivedAt: archived ? new Date() : null } },
+    );
+    return true;
+  }
+
+  /**
    * A-2/B15：会话写路径统一只读判定。
-   * 云电脑（Controller.type=cloud）缺失/软删除/非 RUNNING（STOPPING/STOPPED/FAILED）→ `session is ended`；
-   * 普通本地/GitHub 会话不受影响。
+   * 三场景统一（会话管理优化）：
+   * - 控制器缺失（unbind 删除）→ `session is ended`；
+   * - 云电脑（Controller.type=cloud）缺失/软删除/非 RUNNING（STOPPING/STOPPED/FAILED）→ `session is ended`；
+   * - 本地/GitHub 控制器的项目工作区缺失 → `session is ended`（精确 + cwd 回退，见 `isWorkspaceMissing`）。
    */
   async assertSessionWritable(sessionId: string, userId: string): Promise<void> {
     const session = await Session.findOne({ _id: sessionId, ...actorFilter(userId) }).lean();
     if (!session) throw new Error('Session not found');
-    await this.assertControllerWritable(session.controllerId, userId);
+    await this.assertControllerWritable(session, userId);
   }
 
-  private async assertControllerWritable(controllerId: unknown, userId: string): Promise<void> {
-    const controllerRef = controllerId as mongoose.Types.ObjectId;
+  /** 写路径统一判定入口（保留函数名兼容调用点）：任一场景缺失即统一拒绝文案 `session is ended` */
+  private async assertControllerWritable(session: WritableSessionContext, userId: string): Promise<void> {
+    const reason = await this.resolveReadOnlyReason(session, userId);
+    if (reason) throw new Error('session is ended');
+  }
+
+  /**
+   * `Session.readOnlyReason` 字段 resolver 入口（D5：与写路径同一判定函数的只读版，实时计算不落库）。
+   * 返回四态：null（可写）/ WORKSPACE_MISSING / CONTROLLER_MISSING / CLOUD_HOST_DESTROYED。
+   */
+  async resolveSessionReadOnlyReason(
+    session: Record<string, unknown>,
+    userId: string,
+  ): Promise<SessionReadOnlyReason | null> {
+    return this.resolveReadOnlyReason(
+      {
+        controllerId: session.controllerId,
+        controllerWorkspaceId: session.controllerWorkspaceId,
+        cwd: session.cwd,
+        worktreePath: session.worktreePath,
+      },
+      userId,
+    );
+  }
+
+  /** 统一只读判定核心：返回只读原因，null 表示可写 */
+  private async resolveReadOnlyReason(
+    session: WritableSessionContext,
+    userId: string,
+  ): Promise<SessionReadOnlyReason | null> {
+    const controllerRef = session.controllerId as mongoose.Types.ObjectId;
     const controller = await Controller.findOne({
       _id: controllerRef,
       ...actorFilter(userId),
     }).lean();
-    if (controller?.type !== 'cloud') return;
-    const host = await CloudHost.findOne({
-      controllerId: controllerRef,
-      ...actorFilter(userId),
-      deletedAt: null,
-    }).lean();
-    if (
-      !host ||
-      host.status === 'STOPPING' ||
-      host.status === 'STOPPED' ||
-      host.status === 'FAILED'
-    ) {
-      throw new Error('session is ended');
+    // 控制器缺失（已解绑）：运行环境不存在
+    if (!controller) return 'CONTROLLER_MISSING';
+    if (controller.type === 'cloud') {
+      const host = await CloudHost.findOne({
+        controllerId: controllerRef,
+        ...actorFilter(userId),
+        deletedAt: null,
+      }).lean();
+      if (
+        !host ||
+        host.status === 'STOPPING' ||
+        host.status === 'STOPPED' ||
+        host.status === 'FAILED'
+      ) {
+        return 'CLOUD_HOST_DESTROYED';
+      }
+      return null;
     }
+    // 本地 / GitHub 控制器：项目工作区缺失判定
+    if (await this.isWorkspaceMissing(session, controller, userId)) return 'WORKSPACE_MISSING';
+    return null;
+  }
+
+  /**
+   * 项目工作区缺失判定（只对非 cloud 控制器生效）：
+   * - `controllerWorkspaceId` 非空：`ControllerWorkspace.exists({_id})` 不存在即缺失；
+   * - 为空（存量旧数据）回退：根目录会话按 `cwd == ws.path` 或前缀 `ws.path + '/'` 匹配
+   *   该控制器任一工作区，匹配不到即缺失；
+   * - worktree 会话（`worktreePath != null`）与无 cwd 会话无法可靠判定 → 放行（D8：误伤代价高于漏判）。
+   */
+  private async isWorkspaceMissing(
+    session: WritableSessionContext,
+    controller: Record<string, unknown>,
+    userId: string,
+  ): Promise<boolean> {
+    const workspaceId = session.controllerWorkspaceId;
+    if (workspaceId) {
+      const exists = await ControllerWorkspace.exists({ _id: workspaceId, ...actorFilter(userId) });
+      return !exists;
+    }
+    if (session.worktreePath != null) return false;
+    const cwd = session.cwd as string | null | undefined;
+    if (!cwd) return false;
+    const workspaces = (await ControllerWorkspace.find({
+      controllerId: session.controllerId as mongoose.Types.ObjectId,
+      ...actorFilter(userId),
+    }).lean()) as Array<{ path: string }>;
+    const platform = (controller.platform as string | null | undefined) ?? null;
+    const normalizedCwd = normalizeForCompare(cwd, platform);
+    return !workspaces.some((workspace) => {
+      const wsPath = normalizeForCompare(String(workspace.path), platform);
+      return normalizedCwd === wsPath || normalizedCwd.startsWith(`${wsPath}/`);
+    });
   }
 
   async create(userId: string, input: {
@@ -417,6 +533,8 @@ export class SessionService {
       cwd,
       worktreePath,
       worktreeBranch,
+      // 项目工作区归属（D3：仅 create/import 3 处落库，存量不回填，旧数据走回退匹配）
+      controllerWorkspaceId: input.workspaceId,
       ...(input.resourceWorkspaceId ? { workspaceId: input.resourceWorkspaceId } : {}),
       ...(input.workflowInstanceId ? { workflowInstanceId: input.workflowInstanceId } : {}),
       ...(input.workflowNodeId ? { workflowNodeId: input.workflowNodeId } : {}),
@@ -585,7 +703,7 @@ export class SessionService {
     if (!session) return false;
 
     // A-2：只读留档会话不得继续（cancel 亦属于 session:command 写路径）。
-    await this.assertControllerWritable(session.controllerId, userId);
+    await this.assertControllerWritable(session, userId);
 
     const redis = getRedisClient();
     await publish('session:command', {
@@ -605,25 +723,11 @@ export class SessionService {
       return { success: false, status: session.status, error: 'Session is not ended' };
     }
 
-    // 云电脑终态后会话只读：历史消息保留，但不允许继续（不新增 Session 字段）。
-    const controller = await Controller.findOne({
-      _id: session.controllerId,
-      ...actorFilter(userId),
-    }).lean();
-    if (controller?.type === 'cloud') {
-      const host = await CloudHost.findOne({
-        controllerId: session.controllerId,
-        ...actorFilter(userId),
-        deletedAt: null,
-      }).lean();
-      if (
-        !host ||
-        host.status === 'STOPPING' ||
-        host.status === 'STOPPED' ||
-        host.status === 'FAILED'
-      ) {
-        return { success: false, status: 'ended', error: 'session is ended' };
-      }
+    // 统一只读判定（F6：删除 resume 内重复的云电脑判定，收敛为与写路径同一判定函数）：
+    // 控制器缺失 / 工作区缺失 / 云电脑终态三场景一律只读，拒绝文案统一 `session is ended`。
+    const readOnlyReason = await this.resolveReadOnlyReason(session, userId);
+    if (readOnlyReason) {
+      return { success: false, status: 'ended', error: 'session is ended' };
     }
 
     // Re-issue a fresh MCP endpoint (do not reuse the revoked token)
@@ -689,6 +793,104 @@ export class SessionService {
       return true;
     }
     return false;
+  }
+
+  /**
+   * 匹配工作区下的普通会话——`archiveByWorkspace` 与 resolver 的 `workspaceArchiveImpact`
+   * **共用同一匹配函数**，保证删除确认提示数量 = 实际归档数量。口径：
+   * 1. 精确：`{ controllerId, controllerWorkspaceId }`（新数据主口径）；
+   * 2. 回退（`controllerWorkspaceId == null` 的旧数据）：根目录会话按 `cwd` 等值/前缀匹配，
+   *    worktree 会话按 worktree scope 前缀匹配（复用 worktree-utils，含 homeDir 缺失退化规则，F13）；
+   * 3. 两类均排除工作流节点会话（`workflowInstanceId != null`，D2）。
+   */
+  async matchWorkspaceSessions(
+    workspace: WorkspaceMatchTarget,
+    userId: string,
+  ): Promise<Record<string, unknown>[]> {
+    const workspaceId = workspace._id ?? workspace.id;
+    const baseFilter: Record<string, unknown> = {
+      controllerId: workspace.controllerId,
+      workflowInstanceId: null,
+      ...actorFilter(userId),
+    };
+    const exact: Record<string, unknown>[] = workspaceId
+      ? await Session.find({ ...baseFilter, controllerWorkspaceId: workspaceId }).lean()
+      : [];
+    const wsPath = workspace.path == null ? null : String(workspace.path);
+    const legacy: Record<string, unknown>[] = wsPath
+      ? await Session.find({ ...baseFilter, controllerWorkspaceId: null }).lean()
+      : [];
+    if (legacy.length === 0) return exact;
+
+    const controller = (await Controller.findOne({
+      _id: workspace.controllerId,
+      ...actorFilter(userId),
+    }).lean()) as {
+      worktreeDir?: string | null;
+      homeDir?: string | null;
+      platform?: string | null;
+    } | null;
+    const platform = controller?.platform ?? null;
+    const homeDir = controller?.homeDir ?? null;
+    const effectiveDir = resolveEffectiveWorktreeDir(controller);
+    // 旧控制器未上报 homeDir 且生效目录含 `~`：无法可靠展开 → scope 退化为 null
+    // （不按 scope 归组），与 `worktreeService.list` 的退化规则同源（F13/D8）
+    const scopePrefix =
+      (effectiveDir.startsWith('~/') || effectiveDir === '~') && !homeDir
+        ? null
+        : normalizeForCompare(
+            worktreeScopePrefix(effectiveDir, String(workspace.name ?? ''), homeDir),
+            platform,
+          );
+    const normalizedWsPath = normalizeForCompare(wsPath!, platform);
+    const matched = legacy.filter((doc) => {
+      const worktreePath = doc.worktreePath as string | null | undefined;
+      if (worktreePath != null) {
+        if (!scopePrefix) return false;
+        return normalizeForCompare(worktreePath, platform).startsWith(scopePrefix);
+      }
+      const cwd = doc.cwd as string | null | undefined;
+      if (!cwd) return false;
+      const normalizedCwd = normalizeForCompare(cwd, platform);
+      return (
+        normalizedCwd === normalizedWsPath || normalizedCwd.startsWith(`${normalizedWsPath}/`)
+      );
+    });
+    return [...exact, ...matched];
+  }
+
+  /**
+   * 删除/清空工作区连带归档（D7「先结束后归档」）：
+   * 1. 匹配其下普通会话（共用 `matchWorkspaceSessions`）；
+   * 2. 非 ended 会话逐个 `close(suppressFallback, reason='workspace_deleted')`——
+   *    单会话 close 失败仅记日志不阻断（对齐 `deleteInstance` 口径）；
+   * 3. `updateMany({_id:{$in}, archivedAt:null})` 幂等归档，返回本次实际归档数量。
+   * 第 3 步失败会抛错：调用方必须中止工作区删除，避免「工作区没了、会话未归档」中间态。
+   */
+  async archiveByWorkspace(userId: string, workspace: WorkspaceMatchTarget): Promise<number> {
+    const matched = await this.matchWorkspaceSessions(workspace, userId);
+    if (matched.length === 0) return 0;
+
+    for (const doc of matched) {
+      if (doc.status === 'ended') continue;
+      try {
+        await this.close(String(doc._id), userId, {
+          suppressFallback: true,
+          reason: 'workspace_deleted',
+        });
+      } catch (err) {
+        logger.error(
+          { event: 'close-session-before-archive-failed', sessionId: String(doc._id), err },
+          'close session before workspace archive failed',
+        );
+      }
+    }
+
+    const result = await Session.updateMany(
+      { _id: { $in: matched.map((doc) => doc._id) }, archivedAt: null, ...actorFilter(userId) },
+      { $set: { archivedAt: new Date() } },
+    );
+    return result.modifiedCount ?? 0;
   }
 
   async delete(id: string, userId: string, opts?: { skipAckWait?: boolean }): Promise<boolean> {
@@ -1064,6 +1266,12 @@ export class SessionService {
         ? (session as any).workflowInstanceId.toString()
         : null,
       workflowNodeId: (session as any).workflowNodeId || null,
+      // 归档状态（契约 `Session.archived`；不透出 archivedAt 原文）
+      archived: Boolean(session.archivedAt),
+      // 项目工作区归属（契约外内部字段：`readOnlyReason` 字段 resolver 实时判定用，GraphQL 不会返回）
+      controllerWorkspaceId: session.controllerWorkspaceId
+        ? String(session.controllerWorkspaceId)
+        : null,
       createdAt: (session.createdAt as Date).toISOString(),
       updatedAt: (session.updatedAt as Date).toISOString(),
       endedAt: session.endedAt ? (session.endedAt as Date).toISOString() : null,

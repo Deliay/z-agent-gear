@@ -17,6 +17,7 @@ function makeSession(features: SessionData['features'], agentInfo: SessionData['
     cwd: null,
     worktreePath: null,
     worktreeBranch: null,
+    archived: false,
     createdAt: '2026-10-21T00:00:00.000Z',
     updatedAt: '2026-10-21T00:00:00.000Z',
     endedAt: null,

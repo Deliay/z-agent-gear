@@ -71,6 +71,15 @@ pnpm run start   # Start production server
 
 新增 Query/类型级 resolver（含 `WorkflowInstance.workspace` / `controller`）必须登记 `graphql/resolvers/index.ts`，否则线上不生效。
 
+## 会话归档与只读
+
+- **模型与迁移**：`Session.archivedAt`（Date|null，default null）与 `Session.controllerWorkspaceId`（ObjectId ref ControllerWorkspace，default null）+ 索引 `{userId,archivedAt,createdAt:-1}`、`{controllerId,controllerWorkspaceId}`；迁移 `022-session-archive-indexes`（幂等「先建后用」，生产 `autoIndex=false` 兜底，已登记 `index.ts` 的启动 runner）。存量零回填：`archivedAt` 缺省即未归档，`controllerWorkspaceId` 为 null 的旧会话走回退匹配（D3）。
+- **落库点**：`controllerWorkspaceId` 仅两处写入——`sessionService.create`（存 `input.workspaceId`）与 `sessionImportService.importSessions`（循环内单点，含单条/批量导入）。
+- **归档服务**：`setArchived(userId,id,archived)`（`actorFilter` 归属 → `Session not found`；`workflowInstanceId != null` → `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED` 且不写库；`$set archivedAt` 幂等）；`findAllByUser({archived})` 追加 `archivedAt: archived ? {$ne:null} : null`（与 `includeWorkflowSessions` 排除口径正交，缺省 = 活跃）；`mapSession` 输出 `archived: Boolean(archivedAt)`（**不透出 `archivedAt` 原文**）。归档不发任何 acp 命令、不撤销 endpoint、不改状态机（D1）。
+- **统一只读判定（三场景）**：`assertControllerWritable`（保留函数名）委托 `resolveReadOnlyReason` 返回四态 `null` / `CONTROLLER_MISSING`（`Controller.findOne` 空）/ `CLOUD_HOST_DESTROYED`（cloud 且 host 缺失/软删/STOPPING/STOPPED/FAILED，口径未变）/ `WORKSPACE_MISSING`（非 cloud：`controllerWorkspaceId` 非空 → `ControllerWorkspace.exists({_id})` 不存在即缺失；为空回退根目录 `cwd == ws.path` 或前缀 `ws.path + '/'` 匹配该控制器任一工作区；`worktreePath != null` 或无 cwd 无法判定 → 放行，D8）。接入点：`assertSessionWritable`（`sendSessionMessage`）、`cancelGeneration`、`resume`——`resume` 已删除重复云电脑判定收敛为同一判定（ended/disconnected 门禁与返回形状 `{success:false,status:'ended',error:'session is ended'}` 不变）。写路径统一文案 `session is ended`（D4）；原因展示由 `Session.readOnlyReason` 字段 resolver 调 `resolveSessionReadOnlyReason(session,userId)` 实时计算（D5，不落库），**必须落在 `sessionResolvers.Session` 内**（`resolvers/index.ts` spread 登记，`resolvers/index.test.ts` 守卫）。
+- **工作区删除连带**：`matchWorkspaceSessions(workspace,userId)` 为匹配**唯一口径**（精确 `{controllerId, controllerWorkspaceId}`；旧数据根目录 cwd 等值/前缀、worktree 按 `worktreeScopePrefix` 前缀匹配，复用 `worktree-utils` 并保留 homeDir 缺失退化；查询层 `workflowInstanceId: null` 排除节点会话）——`archiveByWorkspace` 与 resolver `workspaceArchiveImpact` 共用（提示数量 = 实际归档数量）。`archiveByWorkspace`：匹配 → 非 ended 逐个 `close(suppressFallback:true, reason:'workspace_deleted')`（单会话失败仅记日志不阻断）→ `updateMany({_id:{$in}, archivedAt:null, ...actorFilter})` 幂等归档并返回数量；`controllerWorkspaceService.delete/clear` 删除前先连带（`clear` 逐个工作区执行），**归档失败抛错中止删除**（D7：工作区行保留，避免「工作区没了、会话未归档」中间态）。
+- **首页聚合**：`homeOverview.archivedSessions` 分支（`findAllByUser({includeWorkflowSessions:false, archived:true})`，`degrade` 兜底 `[]`）与活跃 `sessions`（`archived:false`）互补，`sessionTotalCount` 为未归档口径。
+
 ## 前台云电脑（harness）
 
 - 领域入口：`services/cloud-host-service.ts`；GraphQL：`graphql/schemas/cloud-host.ts` + `graphql/resolvers/cloud-host.ts`；契约 `contracts/cloud-host.graphql`。

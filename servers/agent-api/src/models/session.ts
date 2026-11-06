@@ -44,11 +44,19 @@ const sessionSchema = new mongoose.Schema({
   // 工作流打标（引擎内部创建节点会话时写入；GraphQL CreateSessionInput 不暴露）
   workflowInstanceId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowInstance' },
   workflowNodeId: { type: String },
+  // 归档时间（对齐 WorkflowInstance.archivedAt：null=未归档；仅分组展示差异，不影响进程与消息）
+  archivedAt: { type: Date, default: null },
+  // 项目工作区归属（create/import 落库；旧数据为 null 走 cwd/worktree scope 回退匹配）
+  controllerWorkspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerWorkspace', default: null },
 }, { timestamps: true });
 
 sessionSchema.index({ userId: 1, createdAt: -1 });
 sessionSchema.index({ controllerId: 1, status: 1 });
 sessionSchema.index({ tenantId: 1, workspaceId: 1 });
+// 会话归档列表（活跃/已归档双口径）
+sessionSchema.index({ userId: 1, archivedAt: 1, createdAt: -1 });
+// 删除工作区连带归档的精确匹配
+sessionSchema.index({ controllerId: 1, controllerWorkspaceId: 1 });
 
 applyTenantScope(sessionSchema);
 applyWorkspaceScope(sessionSchema);

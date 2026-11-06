@@ -76,6 +76,7 @@ export const GET_SESSIONS = gql`
       cwd
       worktreePath
       worktreeBranch
+      archived
       createdAt
       updatedAt
       endedAt
@@ -178,6 +179,8 @@ export const GET_SESSION = gql`
       supportsAdditionalDirectories
       workflowInstanceId
       workflowNodeId
+      archived
+      readOnlyReason
       createdAt
       updatedAt
       endedAt
@@ -536,6 +539,10 @@ export const GET_WORKSPACES = gql`
     }
   }
 `
+
+// WORKSPACE_ARCHIVE_IMPACT 定义在 mutations.ts：契约（contracts/agent-session.graphql）
+// 将 workspaceArchiveImpact 放在 Mutation，只能经 useMutation 执行（useQuery 会报
+// Cannot query field "workspaceArchiveImpact" on type "Query"）。
 
 export const BROWSE_FOLDER = gql`
   query BrowseFolder($controllerId: ID!, $path: String) {

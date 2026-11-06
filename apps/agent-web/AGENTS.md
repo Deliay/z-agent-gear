@@ -46,6 +46,7 @@ pnpm run preview  # Preview production build
 - 生效入口：模型切换（`config.model`）、模式切换（`config.mode`）、布尔配置项（`config.boolean`）、会话「继续」（`session.resume` 与 `session.load` 同时 unsupported 才禁用）；命令列表、历史导入/删除不门控。
 - 会话内挂载 `PendingElicitationBanner`：消费首页聚合的 `todos`，筛选本会话未 resolved 的问询，保证移动端（Sidebar 未挂载）也能打开 `ElicitationDialog`。
 - `ElicitationDialog` 按 `resolution` / 已过期的 `expiresAt` 展示「已过期/已取消/已失效/已提交/已拒绝」并隐藏操作；到期用定时器就地重渲染（`now = Date.now()`，不得用 `useState` 快照冻结）。
+- `ElicitationDialog` 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**仅** `type: 'array'` + `items.anyOf`（ACP question 工具多选题）在提交前经 `lib/elicitation-multi-select.ts#joinMultiSelectValues` 以逗号拼接为字符串回传（顺序 = 勾选顺序，空数组保持 `[]`），`items.enum` / `items.oneOf` 数组字段仍提交数组；`anyOf` 与 `enum`/`oneOf` 并存的字段（真实 question 报文不会产生）不参与拼接、提交保持数组；勾选状态始终以数组存于 edits（必答校验/草稿不变），`q*_custom` 仍为文本框。
 - 问询弹窗打开权由 `stores/elicitationDialog.ts` 共享（`todoId + owner + 打开时快照`）：`PendingElicitationBanner`（owner=banner）与 `TodoListPanel`（owner=todo）互斥，同一时刻只渲染一个弹窗；弹窗数据按 todo id 从全量 todos 派生（不过滤 resolution），pending 清空后仍保留到终态展示，避免填表中被卸载；todo 被 TTL/limit 从列表移除时用快照渲染「已从待办移除」终态
   （stale 判定与 owner 无关，banner/todo 任一持有 stale 都不阻塞后续 immediate）；`close(owner)` 只允许持有方关闭；
   **真实卸载**时 cleanup 经微任务确认（排除 StrictMode 的 mount→cleanup→mount 模拟卸载）后关闭 `owner='todo'` 弹窗，
@@ -229,6 +230,17 @@ pnpm run preview  # Preview production build
 - **详情抽屉排序**：`NodeDetailDrawer` 中「关联 Pull Request」区块在「产物」之前（其余结构不变）。
 - **图表自动定位**：`graph/graph-layout.ts` 的纯函数 `pickFocusWindow(nodes, activeIds, before=2, after=2)` 按 `position.y` 升序（同 y 按 x）定位**第一个**执行中节点，返回「前 2 + 自身 + 后 2」id 窗口（越界收敛，无执行中返回 `[]`）。`WorkflowGraphView` 用 `onInit` 保存 React Flow 实例并置 `rfReady`，effect **仅依赖 `[rfReady, activeKey]`**（执行中 id 集合拼接；节点列表经 ref 读取），首次 `duration:0`、切换 `duration:300`；无执行中节点不主动 `fitView`（保留整图首屏）。**禁止把 `nodes`/`instance` 加入该 effect 依赖**：5s 轮询每轮重建节点对象，会导致反复 fitView 抖动。
 - **测试入口**：`pages/__tests__/WorkflowInstancePage.test.tsx`（T-RNWEB1~4）、`components/workflow/graph/__tests__/WorkflowNodeCard.test.tsx`（T-WFI-NC1~3）、`components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-WFI-TC1）、`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-WFI-SH1）、`components/workflow/graph/__tests__/graph-layout.test.ts`（T-WFI1~5）、`components/workflow/__tests__/WorkflowGraphView.test.tsx`（T-WFI-V1~4，mock React Flow 断言窗口 fitView 与防抖动）、`tests/e2e/src/workflow-graph.spec.ts`（E2E-WFI1~3）。
+
+## 会话归档与只读（会话管理优化）
+
+> 契约：`contracts/agent-session.graphql`（`Session.archived` / `SessionReadOnlyReason` / `archiveSession` / `workspaceArchiveImpact`）、`contracts/home.graphql`（`HomeOverview.archivedSessions`）。实现计划见 `docs/engineering/plan/20261104-feat-session-management-optimization.md` Phase 6~8。
+
+- **归档入口**：`SessionHeader` 按钮组在「导出对话」之后渲染「归档/取消归档」图标按钮（lucide `Archive`/`ArchiveRestore`，对齐工作流实例页形态，`archiving` 期间禁用）；`onArchiveToggle` 不传即不渲染——`SessionView` 对工作流节点会话（`workflowInstanceId` 非空）不传该回调（服务端同样拒绝 `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED`）。已归档会话在状态徽标旁展示「已归档」徽标（`data-testid="session-archived-badge"`），入口切换为「取消归档」。
+- **归档接线**：`SessionView` 调 `ARCHIVE_SESSION`，归档成功 toast「会话已归档」并经 `onDeleted` 回调返回列表（`SessionPage` 传 `navigate('/sessions')`，对齐工作流实例归档后导航）；取消归档 toast「已取消归档」并 `refetchQueries: [GET_SESSION, HOME_OVERVIEW]` 就地生效（徽标与侧边栏同批刷新）。错误原样 toast，不吞错。
+- **侧边栏已归档分组**：`Sidebar` 会话分区列表尾部的 `ArchivedSessionGroup` 复刻 `ArchivedWorkflowGroup` 自折叠交互（默认折叠、`Archive` 图标、「已归档（N）」、`aria-expanded`），数据源 `HOME_OVERVIEW.archivedSessions`（为空不渲染）；条目与活跃条目共用 `SessionListEntry`（状态点 + 标题 + 所属工作区，点击直达 `/sessions/{id}`），归档分组列表带 `data-testid="sidebar-archived-session-list"`。**活跃列表不含已归档由服务端保证**（D12：`GET_SESSIONS`/`HOME_OVERVIEW.sessions` 不加归档参数消费，活跃过滤走服务端默认口径）。
+- **只读收敛（`readOnlyReason`）**：`SessionView` 只读判定唯一来源为 `GET_SESSION.readOnlyReason != null`，**替代旧 `readOnlyCloudHost` 计算**（`controllerType/cloudHost` 查询字段保留兼容，不再参与判定）。提示条按原因三态文案：`WORKSPACE_MISSING`「工作区已不存在，会话记录仅供只读回看。」/ `CONTROLLER_MISSING`「控制器已不存在，会话记录仅供只读回看。」/ `CLOUD_HOST_DESTROYED`「云电脑已销毁，会话记录仅供只读回看。」；统一 `data-testid="session-readonly-notice"`（附 `data-readonly-reason`），云电脑场景额外嵌套 `data-testid="cloud-host-readonly-notice"` 承载文案，保持 E2E 回归（D10）。只读时隐藏 `InputBox`，`SessionHeader`「继续」由统一 `readOnly` 门控隐藏；归档/取消归档/删除/导出对只读会话仍可用。
+- **工作区删除确认（含连带数量）**：`WorkspaceSection` 单删点击「删除」先经 `WORKSPACE_ARCHIVE_IMPACT` 取数：N>0 弹确认框「删除工作区将同时归档其下 N 个会话，是否继续？」（确认才调 `deleteWorkspace`，取消不调用），N=0 与取数失败保持现状直接删除（D9，取数失败不阻断）；「清空」沿用既有内联确认面板并追加「将同时归档其下 N 个会话」合计——确认面板打开时按工作区渲染 `WorkspaceArchiveImpactProbe` 探针逐个取数求和，任一失败降级为不展示数量（确认本身不阻断）。
+- **测试入口**：`components/session/SessionHeader.test.tsx`（T-WEB1 归档入口渲染/回调/徽标）、`components/session/__tests__/SessionView.archive.test.tsx`（T-WEB1 归档 mutation、归档后导航、取消归档就地、节点会话不渲染）、`components/session/__tests__/SessionView.readonly.test.tsx`（T-WEB3 三态文案与入口隐藏）、`components/__tests__/Sidebar.test.tsx`（T-WEB2 已归档分组折叠/计数/可打开/活跃列表不含已归档）、`components/settings/__tests__/WorkspaceSection.test.tsx`（T-WEB4 删除与清空确认数量）。
 
 ## 云存储归档优化（停止归档勾选 / 归档 / 复原到归档 / fork）
 

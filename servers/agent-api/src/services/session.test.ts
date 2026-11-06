@@ -12,6 +12,7 @@ vi.mock('../models/session.js', () => ({
     deleteOne: vi.fn(),
     create: vi.fn(),
     updateOne: vi.fn(),
+    updateMany: vi.fn(),
   },
 }));
 
@@ -39,6 +40,8 @@ vi.mock('../models/cloud-host.js', () => ({
 vi.mock('../models/controller-workspace.js', () => ({
   ControllerWorkspace: {
     findOne: vi.fn(),
+    find: vi.fn(),
+    exists: vi.fn(),
   },
 }));
 
@@ -170,7 +173,7 @@ describe('SessionService', () => {
 
       const result = await sessionService.findAllByUser('user-1');
 
-      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1', workflowInstanceId: null });
+      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1', workflowInstanceId: null, archivedAt: null });
       expect(result).toHaveLength(2);
       expect(result[0].id).toBe('sess-1');
     });
@@ -1782,6 +1785,17 @@ describe('SessionService', () => {
   });
 
   describe('resume', () => {
+    // 会话管理优化：resume 收敛为统一只读判定（控制器缺失/工作区缺失/云电脑终态 → session is ended），
+    // 成功路径需控制器存在且工作区匹配（旧数据 cwd 回退口径）才放行。
+    beforeEach(() => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'local' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.find).mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ path: '/home/user/project' }]),
+      } as never);
+    });
+
     it('should return error when session not found', async () => {
       vi.mocked(Session.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(null),
@@ -2159,7 +2173,7 @@ describe('SessionService', () => {
       } as never);
 
       await sessionService.findAllByUser('user-1');
-      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1', workflowInstanceId: null });
+      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1', workflowInstanceId: null, archivedAt: null });
     });
 
     it('findAllByUser should include workflow sessions when includeWorkflowSessions=true', async () => {
@@ -2168,7 +2182,7 @@ describe('SessionService', () => {
       } as never);
 
       await sessionService.findAllByUser('user-1', { includeWorkflowSessions: true });
-      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1' });
+      expect(Session.find).toHaveBeenCalledWith({ userId: 'user-1', archivedAt: null });
     });
   });
 
@@ -2227,6 +2241,14 @@ describe('SessionService', () => {
   });
 
   describe('cloud host guards', () => {
+    // 会话管理优化：本地会话写路径新增「项目工作区缺失」判定（旧数据 cwd 回退匹配），
+    // 运行环境完好的用例需存在匹配工作区才放行。
+    beforeEach(() => {
+      vi.mocked(ControllerWorkspace.find).mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ path: '/home/user/project' }]),
+      } as never);
+    });
+
     it('rejects createSession on a non-RUNNING cloud host', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud', name: 'cloud' }),
@@ -2642,5 +2664,491 @@ describe('SessionService.onSessionStatus', () => {
       select: vi.fn(() => ({ lean: vi.fn(async () => null) })),
     } as never);
     await expect(sessionService.getSessionStatusRaw('sess-x')).resolves.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 会话管理优化（T-ARCH / T-RO / T-WSARC）：归档、统一只读判定、工作区删除连带归档
+// ---------------------------------------------------------------------------
+
+/** `find/findOne(...).lean()` 链式 mock */
+function leanQuery(value: unknown) {
+  return { lean: vi.fn().mockResolvedValue(value) } as never;
+}
+
+const workspaceTarget = {
+  _id: 'ws-1',
+  controllerId: 'ctrl-1',
+  path: '/home/user/project',
+  name: 'project',
+};
+
+/** 精确匹配与旧数据回退两次 `Session.find` 的返回序列 */
+function mockMatchResults(exact: unknown[], legacy: unknown[]) {
+  vi.mocked(Session.find)
+    .mockReturnValueOnce(leanQuery(exact))
+    .mockReturnValueOnce(leanQuery(legacy));
+}
+
+describe('SessionService 归档（T-ARCH1~4）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    vi.mocked(Session.updateOne).mockResolvedValue({ acknowledged: true } as never);
+  });
+
+  it('T-ARCH1: 归档/取消归档往返（archivedAt 置位/置空），重复操作幂等', async () => {
+    vi.mocked(Session.findOne).mockReturnValue(leanQuery(mockSessionDoc()));
+
+    await expect(sessionService.setArchived('user-1', 'sess-1', true)).resolves.toBe(true);
+    expect(Session.updateOne).toHaveBeenCalledWith(
+      { _id: 'sess-1', userId: 'user-1' },
+      { $set: { archivedAt: expect.any(Date) } },
+    );
+
+    await expect(sessionService.setArchived('user-1', 'sess-1', false)).resolves.toBe(true);
+    expect(Session.updateOne).toHaveBeenLastCalledWith(
+      { _id: 'sess-1', userId: 'user-1' },
+      { $set: { archivedAt: null } },
+    );
+
+    // 幂等：重复归档结果一致、不报错
+    await expect(sessionService.setArchived('user-1', 'sess-1', true)).resolves.toBe(true);
+    expect(Session.updateOne).toHaveBeenCalledTimes(3);
+  });
+
+  it('T-ARCH2: 他人会话 Session not found；节点会话 ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED 且不写库', async () => {
+    vi.mocked(Session.findOne).mockReturnValue(leanQuery(null));
+    await expect(sessionService.setArchived('user-2', 'sess-1', true)).rejects.toThrow(
+      'Session not found',
+    );
+    expect(Session.updateOne).not.toHaveBeenCalled();
+
+    vi.mocked(Session.findOne).mockReturnValue(
+      leanQuery(mockSessionDoc({ workflowInstanceId: oid('inst-1'), workflowNodeId: 'n1' })),
+    );
+    await expect(sessionService.setArchived('user-1', 'sess-1', true)).rejects.toThrow(
+      'ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED',
+    );
+    expect(Session.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('T-ARCH3: mapSession 输出 archived 映射正确，不透出 archivedAt 原文', async () => {
+    vi.mocked(Session.findOne).mockReturnValue(
+      leanQuery(mockSessionDoc({ archivedAt: new Date('2026-11-05T00:00:00Z') })),
+    );
+    const archived = await sessionService.findById('sess-1', 'user-1');
+    expect(archived!.archived).toBe(true);
+    expect(archived).not.toHaveProperty('archivedAt');
+
+    vi.mocked(Session.findOne).mockReturnValue(leanQuery(mockSessionDoc({ archivedAt: null })));
+    const active = await sessionService.findById('sess-1', 'user-1');
+    expect(active!.archived).toBe(false);
+    expect(active).not.toHaveProperty('archivedAt');
+  });
+
+  it('T-ARCH4: findAllByUser(archived) 三档口径（默认活跃 / 仅已归档 / 与 includeWorkflowSessions 正交）', async () => {
+    vi.mocked(Session.find).mockReturnValue({
+      sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+    } as never);
+
+    await sessionService.findAllByUser('user-1');
+    expect(Session.find).toHaveBeenLastCalledWith({
+      userId: 'user-1',
+      workflowInstanceId: null,
+      archivedAt: null,
+    });
+
+    await sessionService.findAllByUser('user-1', { archived: true });
+    expect(Session.find).toHaveBeenLastCalledWith({
+      userId: 'user-1',
+      workflowInstanceId: null,
+      archivedAt: { $ne: null },
+    });
+
+    await sessionService.findAllByUser('user-1', { archived: true, includeWorkflowSessions: true });
+    expect(Session.find).toHaveBeenLastCalledWith({
+      userId: 'user-1',
+      archivedAt: { $ne: null },
+    });
+
+    await sessionService.findAllByUser('user-1', { archived: false, controllerId: 'ctrl-1' });
+    expect(Session.find).toHaveBeenLastCalledWith({
+      userId: 'user-1',
+      workflowInstanceId: null,
+      archivedAt: null,
+      controllerId: 'ctrl-1',
+    });
+  });
+});
+
+describe('SessionService 统一只读判定（T-RO1~7）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    vi.mocked(Session.findOne).mockReturnValue(leanQuery(mockSessionDoc({ status: 'ended' })));
+    vi.mocked(ControllerWorkspace.find).mockReturnValue(leanQuery([]));
+  });
+
+  it('T-RO1: 控制器缺失（unbind 删除）→ 写路径拒绝 session is ended', async () => {
+    vi.mocked(Controller.findOne).mockReturnValue(leanQuery(null));
+
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).rejects.toThrow(
+      'session is ended',
+    );
+    await expect(sessionService.cancelGeneration('sess-1', 'user-1')).rejects.toThrow(
+      'session is ended',
+    );
+    expect(mockRedis.publish).not.toHaveBeenCalled();
+  });
+
+  it('T-RO2: 云电脑三终态 + host 缺失/软删（回归）拒绝，RUNNING 放行', async () => {
+    vi.mocked(Controller.findOne).mockReturnValue(
+      leanQuery({ _id: 'ctrl-1', type: 'cloud' }),
+    );
+
+    for (const status of ['STOPPING', 'STOPPED', 'FAILED']) {
+      vi.mocked(CloudHost.findOne).mockReturnValue(leanQuery({ status }));
+      await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).rejects.toThrow(
+        'session is ended',
+      );
+    }
+
+    // 软删除：查询带 deletedAt:null 过滤后为空
+    vi.mocked(CloudHost.findOne).mockReturnValue(leanQuery(null));
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).rejects.toThrow(
+      'session is ended',
+    );
+
+    vi.mocked(CloudHost.findOne).mockReturnValue(leanQuery({ status: 'RUNNING' }));
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).resolves.toBeUndefined();
+    expect(ControllerWorkspace.find).not.toHaveBeenCalled();
+  });
+
+  it('T-RO3: 工作区缺失拒绝（controllerWorkspaceId 精确判定），存在则放行', async () => {
+    const workspaceRef = oid('ws-1');
+    vi.mocked(Controller.findOne).mockReturnValue(leanQuery({ _id: 'ctrl-1', type: 'local' }));
+    vi.mocked(Session.findOne).mockReturnValue(
+      leanQuery(mockSessionDoc({ status: 'ended', controllerWorkspaceId: workspaceRef })),
+    );
+
+    vi.mocked(ControllerWorkspace.exists).mockResolvedValue(null);
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).rejects.toThrow(
+      'session is ended',
+    );
+    expect(ControllerWorkspace.exists).toHaveBeenCalledWith({
+      _id: workspaceRef,
+      userId: 'user-1',
+    });
+    // 精确口径命中时不走 cwd 回退
+    expect(ControllerWorkspace.find).not.toHaveBeenCalled();
+
+    vi.mocked(ControllerWorkspace.exists).mockResolvedValue({ _id: 'ws-1' } as never);
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).resolves.toBeUndefined();
+  });
+
+  it('T-RO4: 旧数据 cwd 等值/前缀回退——无匹配拒绝、等值与子目录放行、异路径拒绝', async () => {
+    const sessionDoc = mockSessionDoc({ status: 'ended', cwd: '/home/user/project' });
+    vi.mocked(Controller.findOne).mockReturnValue(leanQuery({ _id: 'ctrl-1', type: 'local' }));
+    vi.mocked(Session.findOne).mockReturnValue(leanQuery(sessionDoc));
+
+    vi.mocked(ControllerWorkspace.find).mockReturnValue(leanQuery([]));
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).rejects.toThrow(
+      'session is ended',
+    );
+    expect(ControllerWorkspace.find).toHaveBeenCalledWith({
+      controllerId: sessionDoc.controllerId,
+      userId: 'user-1',
+    });
+
+    vi.mocked(ControllerWorkspace.find).mockReturnValue(
+      leanQuery([{ path: '/home/user/project' }]),
+    );
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).resolves.toBeUndefined();
+
+    vi.mocked(ControllerWorkspace.find).mockReturnValue(leanQuery([{ path: '/home/user' }]));
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).resolves.toBeUndefined();
+
+    // 前缀必须带路径分隔符：/home/user/project2 不得误判为父目录
+    vi.mocked(ControllerWorkspace.find).mockReturnValue(
+      leanQuery([{ path: '/home/user/project2' }]),
+    );
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).rejects.toThrow(
+      'session is ended',
+    );
+  });
+
+  it('T-RO5: 工作区存在放行；worktree 旧数据（worktreePath != null）无法判定放行不误伤', async () => {
+    vi.mocked(Controller.findOne).mockReturnValue(leanQuery({ _id: 'ctrl-1', type: 'local' }));
+
+    // 工作区存在（旧数据 cwd 匹配）
+    vi.mocked(Session.findOne).mockReturnValue(
+      leanQuery(mockSessionDoc({ status: 'ended', cwd: '/home/user/project' })),
+    );
+    vi.mocked(ControllerWorkspace.find).mockReturnValue(
+      leanQuery([{ path: '/home/user/project' }]),
+    );
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).resolves.toBeUndefined();
+
+    // worktree 旧数据：无法可靠判定 → 放行，且不发起工作区查询
+    vi.mocked(Session.findOne).mockReturnValue(
+      leanQuery(
+        mockSessionDoc({
+          status: 'ended',
+          cwd: '/worktrees/project/feat-abc',
+          worktreePath: '/worktrees/project/feat-abc',
+        }),
+      ),
+    );
+    vi.mocked(ControllerWorkspace.find).mockClear();
+    vi.mocked(ControllerWorkspace.exists).mockClear();
+    await expect(sessionService.assertSessionWritable('sess-1', 'user-1')).resolves.toBeUndefined();
+    expect(ControllerWorkspace.find).not.toHaveBeenCalled();
+    expect(ControllerWorkspace.exists).not.toHaveBeenCalled();
+  });
+
+  it('T-RO6: resolveSessionReadOnlyReason 四态映射（null / 三枚举）', async () => {
+    const session = {
+      controllerId: 'ctrl-1',
+      controllerWorkspaceId: 'ws-1',
+      cwd: '/home/user/project',
+      worktreePath: null,
+    };
+
+    vi.mocked(Controller.findOne).mockReturnValue(leanQuery(null));
+    await expect(sessionService.resolveSessionReadOnlyReason(session, 'user-1')).resolves.toBe(
+      'CONTROLLER_MISSING',
+    );
+
+    vi.mocked(Controller.findOne).mockReturnValue(leanQuery({ _id: 'ctrl-1', type: 'cloud' }));
+    vi.mocked(CloudHost.findOne).mockReturnValue(leanQuery({ status: 'STOPPED' }));
+    await expect(sessionService.resolveSessionReadOnlyReason(session, 'user-1')).resolves.toBe(
+      'CLOUD_HOST_DESTROYED',
+    );
+
+    vi.mocked(Controller.findOne).mockReturnValue(leanQuery({ _id: 'ctrl-1', type: 'github' }));
+    vi.mocked(ControllerWorkspace.exists).mockResolvedValue(null);
+    await expect(sessionService.resolveSessionReadOnlyReason(session, 'user-1')).resolves.toBe(
+      'WORKSPACE_MISSING',
+    );
+
+    vi.mocked(ControllerWorkspace.exists).mockResolvedValue({ _id: 'ws-1' } as never);
+    await expect(sessionService.resolveSessionReadOnlyReason(session, 'user-1')).resolves.toBeNull();
+  });
+
+  it('T-RO7: resume 收敛统一判定——门禁文案不变，控制器缺失/工作区缺失返回 session is ended', async () => {
+    // 门禁：非 ended/disconnected 依旧拒绝
+    vi.mocked(Session.findOne).mockReturnValue(leanQuery(mockSessionDoc({ status: 'running' })));
+    await expect(sessionService.resume('sess-1', 'user-1')).resolves.toEqual({
+      success: false,
+      status: 'running',
+      error: 'Session is not ended',
+    });
+
+    vi.mocked(Session.findOne).mockReturnValue(leanQuery(mockSessionDoc({ status: 'ended' })));
+
+    // 控制器缺失
+    vi.mocked(Controller.findOne).mockReturnValue(leanQuery(null));
+    await expect(sessionService.resume('sess-1', 'user-1')).resolves.toEqual({
+      success: false,
+      status: 'ended',
+      error: 'session is ended',
+    });
+    expect(mockRedis.publish).not.toHaveBeenCalled();
+
+    // 工作区缺失（旧数据回退无匹配）
+    vi.mocked(Controller.findOne).mockReturnValue(leanQuery({ _id: 'ctrl-1', type: 'local' }));
+    vi.mocked(ControllerWorkspace.find).mockReturnValue(leanQuery([]));
+    await expect(sessionService.resume('sess-1', 'user-1')).resolves.toEqual({
+      success: false,
+      status: 'ended',
+      error: 'session is ended',
+    });
+    expect(mockRedis.publish).not.toHaveBeenCalled();
+  });
+});
+
+describe('SessionService 工作区删除连带归档（T-WSARC1~3、T-WSARC5）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    vi.mocked(Session.updateOne).mockResolvedValue({ acknowledged: true } as never);
+    vi.mocked(Session.findOneAndUpdate).mockResolvedValue(mockSessionDoc() as never);
+  });
+
+  it('T-WSARC1: 精确匹配 + cwd 前缀/worktree scope 回退，查询层排除节点会话', async () => {
+    const exact = {
+      _id: oid('s-exact'),
+      controllerWorkspaceId: oid('ws-1'),
+      status: 'ended',
+    };
+    const root = {
+      _id: oid('s-root'),
+      controllerWorkspaceId: null,
+      cwd: '/home/user/project/sub',
+      worktreePath: null,
+      status: 'ended',
+    };
+    const wt = {
+      _id: oid('s-wt'),
+      controllerWorkspaceId: null,
+      cwd: '/worktrees/project/feat-abc',
+      worktreePath: '/worktrees/project/feat-abc',
+      status: 'ended',
+    };
+    const foreign = {
+      _id: oid('s-foreign'),
+      controllerWorkspaceId: null,
+      cwd: '/home/other',
+      worktreePath: '/worktrees/other/feat-x',
+      status: 'ended',
+    };
+    mockMatchResults([exact], [root, wt, foreign]);
+    vi.mocked(Controller.findOne).mockReturnValue(
+      leanQuery({
+        _id: 'ctrl-1',
+        type: 'local',
+        worktreeDir: '/worktrees',
+        homeDir: '/home/user',
+        platform: 'linux',
+      }),
+    );
+
+    const matched = await sessionService.matchWorkspaceSessions(workspaceTarget, 'user-1');
+
+    expect(matched.map((doc) => String(doc._id))).toEqual(['s-exact', 's-root', 's-wt']);
+    // 两类匹配都在查询层排除工作流节点会话（D2）
+    expect(Session.find).toHaveBeenNthCalledWith(1, {
+      controllerId: 'ctrl-1',
+      workflowInstanceId: null,
+      userId: 'user-1',
+      controllerWorkspaceId: 'ws-1',
+    });
+    expect(Session.find).toHaveBeenNthCalledWith(2, {
+      controllerId: 'ctrl-1',
+      workflowInstanceId: null,
+      userId: 'user-1',
+      controllerWorkspaceId: null,
+    });
+  });
+
+  it('T-WSARC1b: homeDir 缺失时 worktree scope 退化（不按 scope 归组），worktree 旧数据不误伤', async () => {
+    const wt = {
+      _id: oid('s-wt'),
+      controllerWorkspaceId: null,
+      cwd: '~/.zag/worktrees/project/feat-abc',
+      worktreePath: '~/.zag/worktrees/project/feat-abc',
+      status: 'ended',
+    };
+    mockMatchResults([], [wt]);
+    vi.mocked(Controller.findOne).mockReturnValue(
+      leanQuery({ _id: 'ctrl-1', type: 'local', worktreeDir: '~/.zag/worktrees', homeDir: null }),
+    );
+
+    const matched = await sessionService.matchWorkspaceSessions(workspaceTarget, 'user-1');
+    expect(matched).toEqual([]);
+  });
+
+  it('T-WSARC2: 非 ended 会话先 close（acp:stop + ended）后归档；已 ended 直接归档', async () => {
+    const activeDoc = {
+      _id: oid('sess-active'),
+      userId: oid('user-1'),
+      controllerId: oid('ctrl-1'),
+      status: 'idling',
+      cwd: '/home/user/project',
+      archivedAt: null,
+    };
+    const endedDoc = { ...activeDoc, _id: oid('sess-ended'), status: 'ended' };
+    mockMatchResults([activeDoc, endedDoc], []);
+    vi.mocked(Session.findOne).mockReturnValue(
+      leanQuery(mockSessionDoc({ _id: oid('sess-active'), status: 'idling' })),
+    );
+    vi.mocked(Session.updateMany).mockResolvedValue({ modifiedCount: 2 } as never);
+
+    const count = await sessionService.archiveByWorkspace('user-1', workspaceTarget);
+
+    // 先结束：仅非 ended 会话 close
+    expect(Session.findOneAndUpdate).toHaveBeenCalledTimes(1);
+    expect(Session.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: 'sess-active', userId: 'user-1' },
+      { status: 'ended', endedAt: expect.any(Date) },
+    );
+    expect(mockRedis.publish).toHaveBeenCalledTimes(1);
+    expect(mockRedis.publish).toHaveBeenCalledWith(
+      'session:command',
+      expect.stringContaining('"type":"acp:stop"'),
+    );
+    expect(mockRedis.publish).toHaveBeenCalledWith(
+      'session:command',
+      expect.stringContaining('"reason":"workspace_deleted"'),
+    );
+    // 后归档：archivedAt:null 条件幂等
+    expect(Session.updateMany).toHaveBeenCalledWith(
+      {
+        _id: { $in: [activeDoc._id, endedDoc._id] },
+        archivedAt: null,
+        userId: 'user-1',
+      },
+      { $set: { archivedAt: expect.any(Date) } },
+    );
+    expect(count).toBe(2);
+  });
+
+  it('T-WSARC3: 幂等——归档以 archivedAt:null 为条件，第二次执行零增量', async () => {
+    const doc = {
+      _id: oid('sess-1'),
+      userId: oid('user-1'),
+      controllerId: oid('ctrl-1'),
+      status: 'ended',
+      cwd: '/home/user/project',
+      archivedAt: null,
+    };
+    vi.mocked(Session.updateMany)
+      .mockResolvedValueOnce({ modifiedCount: 1 } as never)
+      .mockResolvedValueOnce({ modifiedCount: 0 } as never);
+
+    mockMatchResults([doc], []);
+    await expect(sessionService.archiveByWorkspace('user-1', workspaceTarget)).resolves.toBe(1);
+
+    mockMatchResults([doc], []);
+    await expect(sessionService.archiveByWorkspace('user-1', workspaceTarget)).resolves.toBe(0);
+
+    expect(Session.updateMany).toHaveBeenCalledTimes(2);
+    expect(Session.updateMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ archivedAt: null }),
+      expect.anything(),
+    );
+    expect(Session.updateMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ archivedAt: null }),
+      expect.anything(),
+    );
+    // 已 ended 会话不重复 close
+    expect(Session.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('T-WSARC5: close 单会话失败仅记录日志不阻断归档', async () => {
+    const activeDoc = {
+      _id: oid('sess-active'),
+      userId: oid('user-1'),
+      controllerId: oid('ctrl-1'),
+      status: 'idling',
+      cwd: '/home/user/project',
+      archivedAt: null,
+    };
+    mockMatchResults([activeDoc], []);
+    vi.mocked(Session.findOne).mockRejectedValue(new Error('db down') as never);
+    vi.mocked(Session.updateMany).mockResolvedValue({ modifiedCount: 1 } as never);
+    testLog.reset();
+
+    await expect(sessionService.archiveByWorkspace('user-1', workspaceTarget)).resolves.toBe(1);
+
+    expect(Session.updateMany).toHaveBeenCalled();
+    const record = testLog.records.find(
+      (r) => r.level === 'error' && r.event === 'close-session-before-archive-failed',
+    );
+    expect(record).toBeDefined();
+    expect(String(record?.sessionId)).toBe('sess-active');
   });
 });
