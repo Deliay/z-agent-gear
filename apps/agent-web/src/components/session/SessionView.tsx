@@ -137,8 +137,8 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const urlSearch = useUrlSearch();
   const reviewDeepLink = new URLSearchParams(urlSearch).get('review');
   const [splitMode, setSplitModeState] = useState<SplitMode>(() => getSplitMode(id));
-  // 实况跟随默认开启：挂载时偏好已为分屏，或从 chat 切入分栏时默认开；
-  // horizontal↔vertical 互切保留用户手动设置；切回 chat 关闭。
+  // 实况跟随默认开启：挂载时偏好已为分屏时默认开；之后每次点击分栏入口（含互切/重选）都默认开启，
+  // 切回 chat 关闭。
   const [live, setLive] = useState(() => getSplitMode(id) !== 'chat');
   const [wideEnoughForHorizontal, setWideEnoughForHorizontal] = useState(
     () => typeof window === 'undefined' || window.matchMedia('(min-width: 1024px)').matches,
@@ -244,13 +244,10 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     setTempSplit(false);
     setSplitModeState(mode);
     setSplitMode(id, mode);
-    if (mode === 'chat') {
-      setLive(false);
-    } else if (splitMode === 'chat') {
-      // 开启分栏时默认开启实况跟随（分屏互切保留用户手动设置）
-      setLive(true);
-    }
-  }, [id, splitMode]);
+    // 点击分栏入口即默认开启实况跟随（含互切/重选当前模式，覆盖 Review 深链临时分屏与手动关闭后再选）；
+    // 切回 chat 关闭
+    setLive(mode !== 'chat');
+  }, [id]);
 
   // 偏好 horizontal 但宽度不足：渲染 vertical 且不改写偏好（拉宽后自动恢复）
   const effectiveSplitMode: SplitMode =

@@ -326,7 +326,7 @@ describe('开启分栏默认开启实况跟随（T-LIVE-DEF）', () => {
     expect(screen.getByTestId('preview-tab')).toHaveTextContent('package.json');
   });
 
-  it('T-LIVE-DEF2 手动关闭实况后分屏互切保持关闭', () => {
+  it('T-LIVE-DEF2 手动关闭实况后点击分栏入口（含互切）重新默认开启', () => {
     installQueryMock('sess-a');
     render(<SessionView sessionId="sess-a" />);
 
@@ -336,11 +336,15 @@ describe('开启分栏默认开启实况跟随（T-LIVE-DEF）', () => {
     fireEvent.click(screen.getByTestId('live-toggle'));
     expect(screen.getByTestId('live-toggle').className).not.toContain('bg-secondary');
 
-    // horizontal↔vertical 互切保留手动关闭
+    // 手动关闭后切换分栏布局：点击分栏入口重新默认开启
     fireEvent.click(screen.getByTestId('split-mode-vertical'));
+    expect(screen.getByTestId('live-toggle').className).toContain('bg-secondary');
+
+    // 重选当前模式同样重新默认开启
+    fireEvent.click(screen.getByTestId('live-toggle'));
     expect(screen.getByTestId('live-toggle').className).not.toContain('bg-secondary');
-    fireEvent.click(screen.getByTestId('split-mode-horizontal'));
-    expect(screen.getByTestId('live-toggle').className).not.toContain('bg-secondary');
+    fireEvent.click(screen.getByTestId('split-mode-vertical'));
+    expect(screen.getByTestId('live-toggle').className).toContain('bg-secondary');
   });
 
   it('T-LIVE-DEF3 挂载偏好为分屏默认开启；切回 chat 关闭、再开分栏重新默认开启', () => {
@@ -354,6 +358,20 @@ describe('开启分栏默认开启实况跟随（T-LIVE-DEF）', () => {
     expect(screen.queryByTestId('live-toggle')).toBeNull();
 
     fireEvent.click(screen.getByTestId('split-mode-vertical'));
+    expect(screen.getByTestId('live-toggle').className).toContain('bg-secondary');
+  });
+
+  it('T-LIVE-DEF4 Review 深链临时分屏不开实况，点击分栏入口后默认开启', async () => {
+    window.history.replaceState({}, '', '/sessions/sess-a?review=rev-live-def');
+    installQueryMock('sess-a');
+    render(<SessionView sessionId="sess-a" />);
+
+    // 深链临时分屏：分栏已开、实况默认不开（Review 专注场景）
+    expect(screen.getByTestId('session-preview-column')).toBeVisible();
+    expect(screen.getByTestId('live-toggle').className).not.toContain('bg-secondary');
+
+    // 点击「左右分栏」（当前模式）→ 实况默认开启
+    fireEvent.click(screen.getByTestId('split-mode-horizontal'));
     expect(screen.getByTestId('live-toggle').className).toContain('bg-secondary');
   });
 });
