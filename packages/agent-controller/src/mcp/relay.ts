@@ -27,6 +27,27 @@ interface PendingRequest {
 
 const REQUEST_TIMEOUT_MS = 60_000;
 
+/** Review 等长等待 MCP 服务超时默认值（30min，契约 §2.12.1；env MCP_REVIEW_TIMEOUT_MS 可调） */
+const MCP_REVIEW_TIMEOUT_DEFAULT_MS = 1_800_000;
+
+/** 平台内建长时工具服务：会话 Review（agent-api agent-session-preview-tools） */
+const PREVIEW_TOOLS_SERVER_NAME = 'agent-session-preview-tools';
+
+function getMcpReviewTimeoutMs(): number {
+  const raw = process.env.MCP_REVIEW_TIMEOUT_MS;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : MCP_REVIEW_TIMEOUT_DEFAULT_MS;
+}
+
+/** 按 serverName 取超时的常量表（裁决 9）：仅 preview-tools 放宽，其余 server 保持 60s */
+const SERVER_TIMEOUT_OVERRIDES: Record<string, () => number> = {
+  [PREVIEW_TOOLS_SERVER_NAME]: getMcpReviewTimeoutMs,
+};
+
+export function resolveServerTimeoutMs(serverName: string): number {
+  return SERVER_TIMEOUT_OVERRIDES[serverName]?.() ?? REQUEST_TIMEOUT_MS;
+}
+
 export class McpRelay {
   private pendingRequests = new Map<string, PendingRequest>();
   private sessionEndpoints = new Map<string, SessionEndpoint>();
@@ -73,14 +94,15 @@ export class McpRelay {
       () => {
         this.log.debug({ event: 'mcp_forward', requestId, sessionId, serverName, method }, 'mcp forward');
         return new Promise<McpRelayResult>((resolve) => {
+          const timeoutMs = resolveServerTimeoutMs(serverName);
           const timer = setTimeout(() => {
             this.pendingRequests.delete(requestId);
             this.log.info(
-              { event: 'mcp_forward_timeout', requestId, timeoutMs: REQUEST_TIMEOUT_MS },
+              { event: 'mcp_forward_timeout', requestId, timeoutMs },
               'mcp request timed out',
             );
             resolve({ status: 504, body: { error: 'TIMEOUT', message: 'MCP request timed out' } });
-          }, REQUEST_TIMEOUT_MS);
+          }, timeoutMs);
           this.pendingRequests.set(requestId, { sessionId, resolve, timer });
           this.emitMcpRequest({ requestId, sessionId, serverName, token: endpoint.token, body });
         });

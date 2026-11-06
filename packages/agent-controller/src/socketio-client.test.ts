@@ -555,3 +555,45 @@ describe('ACP bridge lifecycle wiring (reconcile / disconnect)', () => {
     expect(bridge.settlePendingOnDisconnect).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('fs:read-file 事件（T-RF8）', () => {
+  beforeEach(() => {
+    fake.handlers.clear();
+    fake.socket.emit.mockClear();
+    setup();
+  });
+
+  it('fs:read-file → fs:read-file:result 回包 requestId 与结果透传', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('fs');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const { fsHandler } = await import('./fs-handler.js');
+
+    const dir = mkdtempSync(join(tmpdir(), 'sio-read-'));
+    writeFileSync(join(dir, 'a.txt'), 'content');
+    fsHandler.registerAllowedPath(dir);
+    try {
+      const handler = fake.handlers.get('fs:read-file') as (payload: unknown) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      await handler({ requestId: 'r1', path: join(dir, 'a.txt') });
+      expect(fake.socket.emit).toHaveBeenCalledWith('fs:read-file:result', {
+        requestId: 'r1',
+        success: true,
+        content: 'content',
+        truncated: false,
+        sizeBytes: 7,
+      });
+
+      await handler({ requestId: 'r2', path: '/etc/passwd' });
+      expect(fake.socket.emit).toHaveBeenCalledWith('fs:read-file:result', {
+        requestId: 'r2',
+        success: false,
+        error: 'not found',
+      });
+    } finally {
+      fsHandler.unregisterAllowedPath(dir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

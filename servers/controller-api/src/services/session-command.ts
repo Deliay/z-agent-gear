@@ -14,6 +14,7 @@ import { folderBrowserService } from './folder-browser.js';
 import { gitBrowserService } from './git-browser.js';
 import { worktreeService } from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
+import { fsReadFileService } from './fs-read-file-service.js';
 
 const SESSION_COMMAND_CHANNEL = 'session:command';
 const SESSION_MESSAGE_CHANNEL = 'session:message';
@@ -35,6 +36,8 @@ interface SessionCommandPayload {
   value?: string | boolean;
   parentPath?: string;
   folderName?: string;
+  /** fs:read-file 读取上限（缺省 512KiB，agent-gear 侧硬上限 2MiB 钳制） */
+  maxBytes?: number;
   repoPath?: string;
   worktreePath?: string;
   branch?: string;
@@ -179,6 +182,8 @@ export class SessionCommandService {
       await this.handleAcpDeleteHistorySession(command.requestId, command.controllerId, command.sessionId as string, command.externalSessionId as string, command.cwd as string, command.serverType ?? 'opencode');
     } else if (command.type === 'fs:mkdir' && command.requestId && command.controllerId && command.parentPath && command.folderName) {
       await fsMkdirService.handleMkdir(command.requestId, command.controllerId, command.parentPath as string, command.folderName as string);
+    } else if (command.type === 'fs:read-file' && command.requestId && command.controllerId && command.path) {
+      await fsReadFileService.handleReadFile(command.requestId, command.controllerId, command.path as string, command.maxBytes);
     } else if (command.type === 'git:worktree:add' && command.requestId && command.controllerId && command.repoPath && command.worktreePath && command.branch) {
       await worktreeService.handleAdd(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, command.branch as string, command.committer);
     } else if (command.type === 'git:worktree:remove' && command.requestId && command.controllerId && command.repoPath && command.worktreePath) {
@@ -195,11 +200,12 @@ export class SessionCommandService {
     }
   }
 
-  private async handleInputMessage(sessionId: string, message: { id: string; type: string; content: string }): Promise<void> {
+  private async handleInputMessage(sessionId: string, message: { id: string; type: string; content: string; parts?: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }): Promise<void> {
     // Forward input message to the controller via WebSocket only (DB already saved by agent-api)
     acpSessionManager.forwardToController(sessionId, {
       type: message.type,
       content: message.content,
+      ...(message.parts && message.parts.length > 0 ? { parts: message.parts } : {}),
     });
   }
 

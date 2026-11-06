@@ -1220,3 +1220,97 @@ describe('AcpSessionBridge - elicitation observability', () => {
     expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation:resolved', expect.anything());
   });
 });
+
+describe('AcpSessionBridge - processPrompt 有序 parts（2.17.0）', () => {
+  let mockSocket: ReturnType<typeof createMockSocket>;
+  let mockSpawner: MockAcpSpawner;
+
+  function createBridge() {
+    return new AcpSessionBridge(
+      mockSocket as never,
+      { sessionId: 'sess-parts', cwd: '/home/user', logger: testLog.logger },
+      mockSpawner as never,
+    );
+  }
+
+  function connectionPrompt(): ReturnType<typeof vi.fn> {
+    const last = mockClientSideConnection.mock.results.at(-1)?.value as { prompt: ReturnType<typeof vi.fn> };
+    return last.prompt;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSocket = createMockSocket();
+    mockSpawner = new MockAcpSpawner();
+    testLog = createTestLogger('acp-bridge');
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('T-BR1 parts 非空保序：[text,image,text] 精确一致且不追加 content 文本块', async () => {
+    const bridge = createBridge();
+    await bridge.start();
+    const prompt = connectionPrompt();
+
+    bridge.sendInput({
+      type: 'text',
+      content: '合并文本（不应进入 prompt）',
+      parts: [
+        { type: 'text', text: 'a' },
+        { type: 'image', data: 'BASE64DATA', mimeType: 'image/png' },
+        { type: 'text', text: 'b' },
+      ],
+    });
+
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt.mock.calls[0][0].prompt).toEqual([
+      { type: 'text', text: 'a' },
+      { type: 'image', data: 'BASE64DATA', mimeType: 'image/png' },
+      { type: 'text', text: 'b' },
+    ]);
+  });
+
+  it('T-BR2 parts 为空：旧形态 [...attachments, {type:text,text:content}] 零回归', async () => {
+    const bridge = createBridge();
+    await bridge.start();
+    const prompt = connectionPrompt();
+
+    bridge.sendInput({
+      type: 'text',
+      content: 'hello',
+      attachments: [{ type: 'image', data: 'X', mimeType: 'image/png' }],
+    });
+
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+    expect(prompt.mock.calls[0][0].prompt).toEqual([
+      { type: 'image', data: 'X', mimeType: 'image/png' },
+      { type: 'text', text: 'hello' },
+    ]);
+
+    bridge.sendInput({ type: 'text', content: 'plain' });
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
+    expect(prompt.mock.calls[1][0].prompt).toEqual([{ type: 'text', text: 'plain' }]);
+  });
+
+  it('T-BR3 activePrompt 排队：parts 报文入队后按序消费', async () => {
+    const bridge = createBridge();
+    await bridge.start();
+    const prompt = connectionPrompt();
+    let resolveFirst!: (value: unknown) => void;
+    prompt.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+
+    bridge.sendInput({ type: 'text', content: 'one', parts: [{ type: 'text', text: 'first' }] });
+    bridge.sendInput({ type: 'text', content: 'two', parts: [{ type: 'image', data: 'IMG', mimeType: 'image/jpeg' }, { type: 'text', text: 'second' }] });
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+    resolveFirst({ stopReason: 'end_turn' });
+
+    await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
+    expect(prompt.mock.calls[1][0].prompt).toEqual([
+      { type: 'image', data: 'IMG', mimeType: 'image/jpeg' },
+      { type: 'text', text: 'second' },
+    ]);
+  });
+});

@@ -15,7 +15,7 @@ describe('InputBox', () => {
     const textarea = screen.getByPlaceholderText(/Type your message/);
     fireEvent.change(textarea, { target: { value: 'Hello' } });
     fireEvent.click(screen.getByText('Send'));
-    expect(onSend).toHaveBeenCalledWith('Hello');
+    expect(onSend).toHaveBeenCalledWith([expect.objectContaining({ type: 'text', text: 'Hello' })]);
   });
 
   it('should clear input after sending', async () => {
@@ -51,7 +51,7 @@ describe('InputBox', () => {
     const textarea = screen.getByPlaceholderText(/Type your message/);
     fireEvent.change(textarea, { target: { value: 'Hello' } });
     fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true });
-    expect(onSend).toHaveBeenCalledWith('Hello');
+    expect(onSend).toHaveBeenCalledWith([expect.objectContaining({ type: 'text', text: 'Hello' })]);
   });
 
   it('should submit on Cmd+Enter', async () => {
@@ -60,7 +60,7 @@ describe('InputBox', () => {
     const textarea = screen.getByPlaceholderText(/Type your message/);
     fireEvent.change(textarea, { target: { value: 'Hello' } });
     fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true });
-    expect(onSend).toHaveBeenCalledWith('Hello');
+    expect(onSend).toHaveBeenCalledWith([expect.objectContaining({ type: 'text', text: 'Hello' })]);
   });
 
   it('should not submit on Ctrl+Enter with empty input', async () => {

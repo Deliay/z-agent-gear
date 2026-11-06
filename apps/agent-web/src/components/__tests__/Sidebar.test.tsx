@@ -209,6 +209,7 @@ function mockHome(overrides: Partial<HomeOverviewData> = {}) {
     archivedWorkflowInstances: [],
     todos: [],
     unreadTodoCount: 0,
+    sessionReviews: [],
     ...overrides,
   };
   mockUseHomeOverview.mockReturnValue({ data, loading: false, error: undefined, refetch: mockRefetch });
