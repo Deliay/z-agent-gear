@@ -59,7 +59,7 @@ pnpm test
 
 | 脚本 | 说明 |
 |------|------|
-| `pnpm test` | 运行全部常规测试文件（52 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `pnpm test` | 运行全部常规测试文件（62 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `pnpm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `pnpm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -78,7 +78,7 @@ pnpm test
 | `CONTROLLER_API_URL` | controller-api **基础地址**（Socket.IO 直连，**不要**带 `/graphql`；带路径会导致注册超时级联） | `http://localhost:35273` |
 | `INTERNAL_API_TOKEN` | agent-api 内部 API Bearer token。**多租户一期起为测试用户开户的唯一引导**：`src/support/front-users.ts` 的 `createFrontUser()` 调 `POST /internal/users`（Bearer 本 token）再 `login` 取 token；缺失时所有需要造用户的套件显式报错（不再静默跳过）。云电脑 ready/terminal、cloud-host-callback、billing 内部 REST 同用 | - |
 | `HARNESS_ENABLED` | 置 `true` 时运行云电脑 harness 套件；缺省/false 时走 feature-disabled 分支（会误跳过 T-CH2 等用例） | `false` |
-| `REDIS_URL` | workflow 套件直连 Redis（断言 channel/缓存）；需与 agent-api `REDIS_URI` 同一实例 | `redis://localhost:6379` |
+| `REDIS_URL` | workflow 套件直连 Redis（断言 channel/缓存）；需与 agent-api `REDIS_URI` 同一实例。Aspire 编排下为 `rediss://`（dev 自签证书）：测试进程需 `NODE_EXTRA_CA_CERTS` 指向 Aspire 签发的 `cert.pem`（`/tmp/aspire-*/<resource>/cert.pem`）或 `NODE_TLS_REJECT_UNAUTHORIZED=0`，否则 ioredis 报 `self-signed certificate` | `redis://localhost:6379` |
 | `EVENT_CALLBACK_TOKEN` | 工作流 PR 联动事件回调平台凭据（T-PR* / T-CR* 用例；缺失时整套跳过） | - |
 | `GITHUB_API_BASE` | Check Runs 出站用例（T-CR*）的 GitHub API 地址。需在启动 Aspire 前指向本地 mock（示例：`GITHUB_API_BASE=http://127.0.0.1:19418 aspire start`，端口即 `MOCK_GITHUB_PORT`）；缺失时整套跳过 | - |
 | `GITHUB_WEBHOOK_SECRET` | 事件回调 / GitHub 原生 webhook（T-GHWH* / T-GHI* 整套依赖）HMAC-SHA256 验签密钥 | - |
@@ -218,6 +218,48 @@ pnpm test
 | T-WS-ISO8 成员/管理员辅助与操作路径（需 `MONGODB_URI`） | browseFolder/getHomeDirectory/listHistorySessions/cloudHostIssuesLinkages/retryCloudHostSetupOperation/setupCloudHostGithubProject（本工作区 + 全局共享绑定）；developer 在 admin 创建的 RUNNING 云电脑上创建会话（回归 `sessionService.create` 的云电脑按工作区成员口径查询） |
 
 
+### Valut 契约全链路 (`agent-api/valut.test.ts` API-VAL)
+
+> MCP+Valut Phase 5（计划测试矩阵 API-VAL / T-VAL5~7）；契约 `contracts/valut.graphql`。
+> 需要 agent-api 就绪 + `INTERNAL_API_TOKEN`（开户）；`MONGODB_URI` 可选（T-VAL7 库内无明文断言，
+> 缺省跳过该分支；**Aspire Mongo 自签 TLS：连接串须带 `tlsAllowInvalidCertificates=true`**，
+> 否则 mongoose.connect 挂起至用例超时假红）。夹具为 T-WS 模式（team 租户 + admin/developer/outsider + 普通工作区）。
+
+| 测试 | 描述 |
+|------|------|
+| T-VAL0 鉴权 | Query/Mutation 全入口未认证 → `Not authenticated` |
+| T-VAL1 全链路 | create（namespace=manual、展示名「自定义密钥」、editable/deletable）→ list（manual 组在前、组头 displayName）→ update（仅重写值、key 不可改）→ delete → 再访问 `valut entry not found`；重 key `valut key already exists`、非法 key（空白/空串）`invalid valut key`、非法 value（空 / >16384）`invalid valut value` 逐字 |
+| T-VAL5 权限矩阵 | 全局工作区 developer 读通、create/update/delete 一律 `global workspace is read-only`；admin 写通（create/update）；普通工作区成员读写通（developer 读 admin 创建的条目、developer 建/改/删）；非成员 header → `workspace not found`；跨工作区 id → `Not found`（列表独占：全局↔普通互不可见）；不存在 id → `valut entry not found` |
+| T-VAL6 manual options | `valutManualOptions` 仅 manual 且仅当前工作区（service 条目、跨工作区条目均不出现）；`service-mcp-bearer-tokens` 分组 managed=true / displayName=`MCP Bearer Tokens` / 条目 editable=true、deletable=false，拒删 `valut entry is not deletable` |
+| T-VAL-REFS refs | 引用路径（自定义 MCP `existingEntryId`）→ manual 条目 refs 展开（feature `mcp-bearer-tokens`、refId/refLabel 指向 MCP）；有 refs 拒删 `valut entry has refs`；删除引用 MCP 仅解绑 ref（条目保留）；删除自建 token MCP → entry+ref 级联消失 |
+| T-VAL7 无明文 | 成功路径（create/list/manualOptions/update）与 6 类错误分支（重复 key、不存在 id、非法 value×2、跨工作区 `Not found`、只读拦截、`deletable=false` 拒删）响应任意路径均无 value 明文；出参对象恒无 `value`/`valueEncrypted` 字段；`MONGODB_URI` 提供时直读 `valutentries` 断言 `valueEncrypted{iv,ciphertext,tag}` 密文形态且库内无明文 |
+
+### 自定义 MCP 与转发 (`agent-api/custom-mcp.test.ts` API-CMCP)
+
+> MCP+Valut Phase 5（计划测试矩阵 API-CMCP / T-CMCP* + T-CF*）；契约 `contracts/custom-mcp.graphql`
+> + `contracts/agent-session.graphql`（`customMcpServerIds`）。需要 agent-api + controller-api + Redis
+> 就绪（Aspire）+ `INTERNAL_API_TOKEN`；fake controller 走真实 Socket.IO relay
+> （`mcp:request` → `mcp:response`，controller-api → Redis → agent-api mcp-dispatch）；转发用例
+> mock 真实 HTTP endpoint（进程内 http server，记录收到的请求头/body 并回 JSON-RPC 响应）。
+> `MONGODB_URI` 可选（`mcpsessionendpoints` 快照落库断言，缺省跳过该分支；**Aspire Mongo 自签 TLS：
+> 连接串须带 `tlsAllowInvalidCertificates=true`**，否则直连 Mongo 分支挂起至用例超时假红）。夹具同 T-WS 模式。
+
+| 测试 | 描述 |
+|------|------|
+| T-CMCP-C1 none CRUD | 创建/列表/单查；出参白名单恒无 token 字段；`customMcpServer(不存在)`=null；工作区重名 `invalid mcp name`；删除后列表消失 |
+| T-CMCP-C2 校验矩阵 | name 空/超 64、endpoint 非 URL / 非 http(s)、header key 含冒号/重复/空 values/超 32 条、bearer 缺 token、auth type 非法（收敛 `internal error`）逐字；引用非 manual 条目 → `bearer entry must be manual namespace` 且失败不留 MCP（补偿删除） |
+| T-CMCP-C3 bearer 新建 | entry 落 `service-mcp-bearer-tokens`（key=name、editable=true、deletable=false、ref `{feature:'mcp-bearer-tokens', refId=MCP id}`）、`bearerEntryManaged=true`、响应无 token 明文 |
+| T-CMCP-C4 bearer 引用 | 仅 manual 可引用（`bearerEntryManaged=false`）、仅建 ref；多条 MCP 共引同一条目各自独立 ref |
+| T-CMCP-C5 编辑 | name/description/endpoint 直改；manual 引用 bearer+newToken 就地改值 → `bearer entry not editable in place`；自建 token 就地更新（同 bearerEntryId、不回显）；auth 省略 = 不动 |
+| T-CMCP-C6 删除 | 引用删除仅解绑（manual 条目保留、ref 消失）、自建删除级联删 entry+ref；跨工作区 id → `Not found`；不存在 id → `custom mcp server not found` |
+| T-CMCP-P1 权限矩阵 | 与 Valut 同口径：全局 developer 读通、写拒 `global workspace is read-only`；admin 全局写通；普通工作区成员读写通；非成员 header → `workspace not found`；跨工作区 id → `Not found`；列表独占（全局↔普通互不可见） |
+| T-CF1 会话签发 | `customMcpServerIds` 非法 id / 不可见 id（全局 MCP + 普通工作区上下文）→ `custom mcp server not found` 且**不建会话**（sessions 计数不变）；可见 id + 显式 `mcpServerIds: []` → `acp:start.mcpEndpoint.serverNames` 恰为 custom 名（custom-only 可签发）；`mcpsessionendpoints.customMcpServers=[{id,name}]` 快照与 status/tokenHash 落库（需 `MONGODB_URI`） |
+| T-CF4/T-CF5 转发 200 | relay 转发 → mock endpoint 收到 `Authorization: Bearer <解密明文>`、同名多值 header 两个值均在、JSON-RPC body 原样；响应 200 + result；acp:start 载荷、会话查询、MCP/Valut 列表、mcp:response 全链路无凭据明文 |
+| T-CF3 作用域/通知 | name 不在会话作用域 → 200 + `SERVER_NOT_FOUND`（message `Server not assembled in this session` 逐字）；JSON-RPC 通知（无 id）→ 202 |
+| T-CF3 删除 410 | 删除自定义 MCP 后同会话转发 → 410 `Custom MCP server has been deleted`（会话仍 active：scope 校验仍 200） |
+| T-CF4 不可达 502 | endpoint 不可达 → 502 `FORWARD_ERROR`，报文不回显 endpoint / `ECONNREFUSED` 错误正文 |
+| T-CF3 终态 401 | 关闭会话后转发 → 401 `ENDPOINT_REVOKED` / `Invalid token`（诊断优先级 401 先于 410） |
+
 ### Admin Team 租户 API (`admin-api/tenant-team.test.ts` T-TT-API)
 
 > `contracts/admin-tenant.graphql`：admin-api 仅转发 agent-api `/internal/tenants*`。需要 admin-api + agent-api
@@ -337,6 +379,33 @@ pnpm test
 | acp:check:result - opencode | 普通 acp:check:result 响应（仅 opencode） |
 | acp:check:result - 多 Server | acp:check:result 响应包含 opencode + github_copilot 两个 server |
 | gc:start - github_copilot | 创建 session 时 acpServerType=github_copilot，验证 serverType 正确传递 |
+
+### 会话归档与工作区连带归档 API (`agent-api/session-archive.test.ts` T-ARCH-API* / T-WSARC-API*)
+
+> 会话管理优化 Phase 9（计划 §4.2）。复用 `createFrontUser` + fake controller（应答 `acp:check`/`acp:start`/
+> `git:worktree:list`/`acp:stop` ack）+ `mongoDb()` DB 断言；**每条用例独立开户**，避免 `homeOverview` /
+> `sessions` 计数被同套件其它用例污染。需要 agent-api + controller-api 就绪、`INTERNAL_API_TOKEN`（开户）
+> 与 `MONGODB_URI`（DB 断言，缺省整套 skip）。
+
+| 测试 | 描述 |
+|------|------|
+| T-ARCH-API1 | `archiveSession` 未认证 → `Not authenticated` |
+| T-ARCH-API2 | 归档/取消归档成功：DB `archivedAt` 置位/置空往返 + 重复归档幂等；`session.archived` 透出，会话在活跃/已归档列表间即时进出 |
+| T-ARCH-API3 | 工作流节点会话 `archiveSession` → `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED` 且不写库；`sessions(archived)` 三档口径（缺省=活跃、`archived:false`=活跃、`archived:true`=仅已归档）且与 `includeWorkflowSessions` 正交（直写归档的节点会话仅在 `includeWorkflowSessions=true` 时出现） |
+| T-ARCH-API4 | `homeOverview.archivedSessions` 与活跃 `sessions` 互补（互不相交且并集为全量），`sessionTotalCount == sessions.length`（未归档计数） |
+| T-WSARC-API1 | `deleteWorkspace` 连带：DB 断言会话 `archivedAt` 非空、原活跃会话 `status=ended`、工作区行被删除；会话从活跃列表消失并进入 `sessions(archived:true)` |
+| T-WSARC-API2 | `workspaceArchiveImpact.sessionCount`=2 = 实际连带归档集合（逐 id 对齐），另一工作区会话不受影响（`archivedAt` 仍为 null） |
+
+### 会话统一只读判定 API (`agent-api/session-readonly.test.ts` T-RO-API*)
+
+> 与既有云电脑只读用例同文件、同 `skipIf(!MONGODB_URI)` 口径（既有 5 条云电脑用例保持不变）。
+> 直插本地控制器 / 项目工作区 / 会话夹具（新数据带 `controllerWorkspaceId` + `cwd`，落个人全局租户工作区）。
+
+| 测试 | 描述 |
+|------|------|
+| T-RO-API1 | 删除控制器后 `resumeSession` → `{success:false, status:'ended', error:'session is ended'}`；`sendSessionMessage` → GraphQL error `session is ended` |
+| T-RO-API2 | `deleteWorkspace` 连带归档后取消归档 → 会话仍只读：`resume`/`sendSessionMessage` 同口径拒绝，`session.readOnlyReason=WORKSPACE_MISSING` |
+| T-RO-API3 | `session.readOnlyReason` 三态透出：`CONTROLLER_MISSING`（控制器行删除）/ `WORKSPACE_MISSING`（工作区行删除）/ `CLOUD_HOST_DESTROYED`（STOPPED 云电脑），运行环境完好会话为 `null` |
 
 ### Session SSE API (`agent-api/session.test.ts`)
 
@@ -719,6 +788,7 @@ pnpm test
 | T-IA 预制 Playwright 参数化下载 | 预制「Playwright」`paramSchema` 仅 `playwright_download_host`（TEXT 默认 = 内网代理地址 `https://nexus.internal.fffdan.com/repository/playwright-proxy/`）；`dependsOnWorkloadIds` 等于 Node.js 预制项；`initScript` 含 `pnpm add -g playwright`/`playwright install chromium`/`WORKLOAD_PARAM_PLAYWRIGHT_DOWNLOAD_HOST`、`/etc/profile.d/playwright.sh` 与 root/worker `~/.bashrc` 持久化写入、结尾 `playwright --version` 与 `chromium-*` 硬校验，**不含**内置浏览器下载地址（`playwright-proxy` 仅出现在失败指引占位形态） |
 | T-IA pnpm 脚本口径 | 四条预制脚本（OpenCode / Kimi Code / DeepSeek Harness / Playwright）`initScript` 均含统一 pnpm 自举回退块（`command -v pnpm` + `npm install -g "pnpm@9.15.9"` + `PNPM_HOME`/PATH 前置）与 `pnpm add -g` 安装行；**不含**旧 `npm install -g "@opencode`/`"@moonshot`/`"@deepseek`/`playwright` 安装形态；预制项计数仍为 10 |
 | T-IA 预制 Aspire 代理下载 | 预制「Aspire」`paramSchema` 含 `aspire_cli_url`（TEXT 默认 = 内网缓存代理安装包直链 `https://nexus.internal.fffdan.com/repository/misc-cache/dotnet/aspire-cli-linux-x64.tar.gz`）；`initScript` 含 `curl -fsSL`/`tar -xzf` 直连下载解压，**不含** `install.sh`/`aspire.dev`/`aka.ms`/`ASPIRE_INSTALL_URL`（迁移 004 升级结果，脚本内不内置默认地址）；重复查询预制项 ID 集合稳定 |
+| T-IA 预制 Docker registry-mirrors | 预制「Docker」`paramSchema` 按 key 含 `docker_apt_url` + `docker_registry_mirrors`（TEXT 默认 = `https://core.harbor.internal.fffdan.com/docker-hub-proxy`，按 key 断言而非下标）；`initScript` 含 `registry-mirrors` 与 `/etc/docker/daemon.json`，**不含** `normalize_image`/`HARBOR_PROXY`/`SHIM_PATH`（迁移 021 升级结果：shim 退役、改用 dockerd 原生加速）；预制项计数仍为 10 |
 | T-IA 日志 params | 直写 `cloudworkloadlogs.params` 后按执行顺序返回参数快照；历史无 `params` 归一为 `{}` |
 
 ### Cloud Controller Worker 握手 (`cloud-controller/worker-handshake.test.ts` T-IW*)
@@ -796,7 +866,7 @@ pnpm test
 | `tests/api/src/agent-api/cloud-host-billing-quote.test.ts` | `cloudHostBillingQuote` 转发价目（创建 5 credits / 运行 1 credit/分钟；需 `ADMIN_API_URL`） |
 | `tests/api/src/agent-api/cloud-host.test.ts` | `cloudHostCapabilities`（`HARNESS_ENABLED=true` 才运行）、创建/校验/多台并行/属主隔离/停止/删除/软删除/`Controller.cloudHost`/鉴权；KIMI_CODE 多选创建与逐容器 `agentGearMinVersion=2.12.0`（基线 2.12.0）；DEEPSEEK_HARNESS 创建同为 2.12.0 |
 | `tests/api/src/agent-api/cloud-host-callback.test.ts` | 内部 ready（单 harness 默认会话、多 harness 不建、幂等）、terminal（会话 ENDED/幂等、未 ready 自动退款留痕、已 ready 不退）、鉴权/404（需 `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
-| `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝（需 `MONGODB_URI`） |
+| `tests/api/src/agent-api/session-readonly.test.ts` | 停止后 resume 返回 `session is ended`；非 RUNNING 云电脑 createSession 拒绝；控制器/工作区删除后的统一只读与 `readOnlyReason` 三态（T-RO-API1~3，见「会话统一只读判定 API」小节）（需 `MONGODB_URI`） |
 | `tests/api/src/agent-api/harness-login.test.ts` | Kimi Code 登录引导（fake controller 注入 `harness:login:required/succeeded/failed`）：todo 创建/链接与验证码逐字、`succeeded→accepted`、取消下发 + `cancelled`、重复 required 单条、`timeout→expired` 后可重试、归属隔离、无 auth、用户级 SSE（`?token=`）、`KIMI_CODE` 创建落库 `agentGearMinVersion=2.12.0`（基线 2.12.0）（需 `HARNESS_ENABLED=true` + `MONGODB_URI`；能力列表断言需 preset 009 已迁移） |
 
 > `K8S_ENABLED=false` 下无法产生真实 RUNNING 容器；在线、OpenCode ACP、真实默认会话链路由单测 + 真实集群手工验收覆盖，不引入测试后门。

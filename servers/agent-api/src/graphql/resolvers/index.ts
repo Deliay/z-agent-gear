@@ -15,6 +15,8 @@ import { billingResolvers } from './billing.js';
 import { cloudHostResolvers } from './cloud-host.js';
 import { cloudStorageResolvers } from './cloud-storage.js';
 import { workspaceResolvers } from './workspace.js';
+import { valutResolvers } from './valut.js';
+import { customMcpResolvers } from './custom-mcp.js';
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -35,6 +37,8 @@ export const resolvers = {
     ...cloudHostResolvers.Query,
     ...cloudStorageResolvers.Query,
     ...workspaceResolvers.Query,
+    ...valutResolvers.Query,
+    ...customMcpResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -52,6 +56,8 @@ export const resolvers = {
     ...cloudHostResolvers.Mutation,
     ...cloudStorageResolvers.Mutation,
     ...workspaceResolvers.Mutation,
+    ...valutResolvers.Mutation,
+    ...customMcpResolvers.Mutation,
   },
   User: {
     ...authResolvers.User,

@@ -63,7 +63,10 @@ type Query {
 
 type Mutation {
   createWorkspace(input: CreateWorkspaceInput!): ControllerWorkspace!
+  # 删除工作区（删除/清空前将其下普通会话——workflowInstanceId == null——先结束后归档，
+  # 幂等；归档失败中止删除，工作区行保留）
   deleteWorkspace(id: ID!): Boolean!
+  # 清空控制器下全部工作区（与 deleteWorkspace 同口径逐个连带归档；任一失败中止后续删除）
   clearWorkspaces(controllerId: ID!): Boolean!
   toggleWorkspace(id: ID!): ControllerWorkspace!
   initGitRepo(controllerId: ID!, workspaceId: ID!): Boolean!

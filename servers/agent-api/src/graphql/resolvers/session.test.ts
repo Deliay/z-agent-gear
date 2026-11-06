@@ -19,6 +19,15 @@ vi.mock('../../services/session.js', () => ({
     refreshAcpCapabilities: vi.fn(),
     refreshAcpServerOptions: vi.fn(),
     assertSessionWritable: vi.fn(),
+    setArchived: vi.fn(),
+    resolveSessionReadOnlyReason: vi.fn(),
+    matchWorkspaceSessions: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/controller-workspace.js', () => ({
+  controllerWorkspaceService: {
+    findById: vi.fn(),
   },
 }));
 
@@ -56,6 +65,7 @@ vi.mock('../../models/cloud-host.js', () => ({
 
 import { sessionResolvers } from './session.js';
 import { sessionService } from '../../services/session.js';
+import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { modelService } from '../../services/model.js';
 import { Controller } from '../../models/controller.js';
 import { CloudHost } from '../../models/cloud-host.js';
@@ -269,6 +279,28 @@ describe('sessionResolvers.Mutation.createSession', () => {
     expect(Object.prototype.hasOwnProperty.call(arg, 'mcpServerIds')).toBe(true);
   });
 
+  it('forwards customMcpServerIds (null normalized to undefined)', async () => {
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-1' } as never);
+
+    await sessionResolvers.Mutation.createSession(
+      {},
+      {
+        input: {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          customMcpServerIds: ['64b0000000000000000000c1'],
+        },
+      },
+      context,
+    );
+
+    expect(sessionService.create).toHaveBeenCalledWith(
+      'user-1',
+      expect.objectContaining({ customMcpServerIds: ['64b0000000000000000000c1'] }),
+    );
+  });
+
   it('forwards modeId/modelId and normalizes null to undefined', async () => {
     vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-1' } as never);
 
@@ -326,5 +358,127 @@ describe('sessionResolvers.Mutation.refreshAcpServerOptions', () => {
         { currentUser: null } as never,
       ),
     ).rejects.toThrow('Not authenticated');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 会话管理优化（T-RES1~3）：archiveSession / sessions(archived) / readOnlyReason /
+// workspaceArchiveImpact
+// ---------------------------------------------------------------------------
+
+describe('sessionResolvers 会话归档与只读（T-RES1~3）', () => {
+  const context = createContext();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('T-RES1: 未认证拒绝（archiveSession / workspaceArchiveImpact / sessions）', async () => {
+    const anon = { currentUser: null } as never;
+
+    await expect(
+      sessionResolvers.Mutation.archiveSession({}, { id: 's-1', archived: true }, anon),
+    ).rejects.toThrow('Not authenticated');
+    await expect(
+      sessionResolvers.Mutation.workspaceArchiveImpact({}, { id: 'ws-1' }, anon),
+    ).rejects.toThrow('Not authenticated');
+    await expect(sessionResolvers.Query.sessions({}, {}, anon)).rejects.toThrow(
+      'Not authenticated',
+    );
+    expect(sessionService.setArchived).not.toHaveBeenCalled();
+    expect(sessionService.findAllByUser).not.toHaveBeenCalled();
+  });
+
+  it('archiveSession 透传 userId/id/archived，服务层错误文案原样透传', async () => {
+    vi.mocked(sessionService.setArchived).mockResolvedValue(true as never);
+    await expect(
+      sessionResolvers.Mutation.archiveSession({}, { id: 's-1', archived: true }, context),
+    ).resolves.toBe(true);
+    expect(sessionService.setArchived).toHaveBeenCalledWith('user-1', 's-1', true);
+
+    vi.mocked(sessionService.setArchived).mockRejectedValue(new Error('Session not found'));
+    await expect(
+      sessionResolvers.Mutation.archiveSession({}, { id: 's-1', archived: true }, context),
+    ).rejects.toThrow('Session not found');
+
+    vi.mocked(sessionService.setArchived).mockRejectedValue(
+      new Error('ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED'),
+    );
+    await expect(
+      sessionResolvers.Mutation.archiveSession({}, { id: 's-1', archived: true }, context),
+    ).rejects.toThrow('ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED');
+  });
+
+  it('T-RES2: Query.sessions 透传 archived（与 includeWorkflowSessions/controllerId 正交）', async () => {
+    vi.mocked(sessionService.findAllByUser).mockResolvedValue([] as never);
+
+    await sessionResolvers.Query.sessions(
+      {},
+      { archived: true, includeWorkflowSessions: true, controllerId: 'ctrl-1' },
+      context,
+    );
+    expect(sessionService.findAllByUser).toHaveBeenCalledWith('user-1', {
+      controllerId: 'ctrl-1',
+      includeWorkflowSessions: true,
+      archived: true,
+    });
+
+    await sessionResolvers.Query.sessions({}, {}, context);
+    expect(sessionService.findAllByUser).toHaveBeenLastCalledWith('user-1', {
+      controllerId: undefined,
+      includeWorkflowSessions: undefined,
+      archived: undefined,
+    });
+  });
+
+  it('T-RES2b: workspaceArchiveImpact 与连带共用匹配函数，仅计未归档会话', async () => {
+    vi.mocked(controllerWorkspaceService.findById).mockResolvedValue({
+      id: 'ws-1',
+      controllerId: 'ctrl-1',
+      path: '/home/user/project',
+      name: 'project',
+    } as never);
+    vi.mocked(sessionService.matchWorkspaceSessions).mockResolvedValue([
+      { _id: 's-1', archivedAt: null },
+      { _id: 's-2', archivedAt: new Date() },
+      { _id: 's-3' },
+    ] as never);
+
+    await expect(
+      sessionResolvers.Mutation.workspaceArchiveImpact({}, { id: 'ws-1' }, context),
+    ).resolves.toEqual({ sessionCount: 2 });
+
+    expect(sessionService.matchWorkspaceSessions).toHaveBeenCalledWith(
+      { _id: 'ws-1', controllerId: 'ctrl-1', path: '/home/user/project', name: 'project' },
+      'user-1',
+    );
+
+    vi.mocked(controllerWorkspaceService.findById).mockResolvedValue(null);
+    await expect(
+      sessionResolvers.Mutation.workspaceArchiveImpact({}, { id: 'ws-1' }, context),
+    ).rejects.toThrow('Workspace not found');
+  });
+
+  it('T-RES3: Session.readOnlyReason 透出四态，未认证返回 null', async () => {
+    vi.mocked(sessionService.resolveSessionReadOnlyReason).mockResolvedValue('WORKSPACE_MISSING');
+    await expect(
+      sessionResolvers.Session.readOnlyReason(parent, {}, context),
+    ).resolves.toBe('WORKSPACE_MISSING');
+    expect(sessionService.resolveSessionReadOnlyReason).toHaveBeenCalledWith(parent, 'user-1');
+
+    vi.mocked(sessionService.resolveSessionReadOnlyReason).mockResolvedValue('CLOUD_HOST_DESTROYED');
+    await expect(
+      sessionResolvers.Session.readOnlyReason(parent, {}, context),
+    ).resolves.toBe('CLOUD_HOST_DESTROYED');
+
+    vi.mocked(sessionService.resolveSessionReadOnlyReason).mockResolvedValue(null);
+    await expect(
+      sessionResolvers.Session.readOnlyReason(parent, {}, context),
+    ).resolves.toBeNull();
+
+    await expect(
+      sessionResolvers.Session.readOnlyReason(parent, {}, { currentUser: null } as never),
+    ).resolves.toBeNull();
+    expect(sessionService.resolveSessionReadOnlyReason).toHaveBeenCalledTimes(3);
   });
 });

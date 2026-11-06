@@ -29,6 +29,7 @@
     "graphql": "^16.14.0",
     "lucide-react": "^1.16.0",
     "mermaid": "^12.2.0",
+    "monaco-editor": "0.57.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",

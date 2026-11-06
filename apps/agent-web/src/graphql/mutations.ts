@@ -139,6 +139,7 @@ export const CREATE_SESSION = gql`
         status
         externalSessionId
         cwd
+        archived
         createdAt
         updatedAt
         endedAt
@@ -195,6 +196,25 @@ export const DELETE_SESSION = gql`
   }
 `
 
+/** 归档/取消归档会话（仅分组展示差异，不终止进程）；工作流节点会话服务端拒绝 */
+export const ARCHIVE_SESSION = gql`
+  mutation ArchiveSession($id: ID!, $archived: Boolean!) {
+    archiveSession(id: $id, archived: $archived)
+  }
+`
+
+/**
+ * 删除工作区影响预查询：将连带归档的普通会话数（删除/清空确认提示，与实际归档同口径）。
+ * 契约位置为 Mutation（`contracts/agent-session.graphql`），必须经 `useMutation` 执行。
+ */
+export const WORKSPACE_ARCHIVE_IMPACT = gql`
+  mutation WorkspaceArchiveImpact($id: ID!) {
+    workspaceArchiveImpact(id: $id) {
+      sessionCount
+    }
+  }
+`
+
 export const DELETE_HISTORY_SESSION = gql`
   mutation DeleteHistorySession($sessionId: ID!, $syncAgent: Boolean) {
     deleteHistorySession(sessionId: $sessionId, syncAgent: $syncAgent) {
@@ -206,8 +226,8 @@ export const DELETE_HISTORY_SESSION = gql`
 `
 
 export const SEND_SESSION_MESSAGE = gql`
-  mutation SendSessionMessage($sessionId: ID!, $content: String!, $type: AcpMessageType) {
-    sendSessionMessage(sessionId: $sessionId, content: $content, type: $type) {
+  mutation SendSessionMessage($sessionId: ID!, $content: String!, $type: AcpMessageType, $parts: [PromptPartInput!]) {
+    sendSessionMessage(sessionId: $sessionId, content: $content, type: $type, parts: $parts) {
       id
       sessionId
       direction
@@ -774,5 +794,96 @@ export const CHANGE_TENANT_MEMBER_ROLE = gql`
       role
       createdAt
     }
+  }
+`
+
+// ---------- MCP+Valut 功能迭代：Valut / 自定义 MCP（contracts/valut.graphql、contracts/custom-mcp.graphql） ----------
+
+/** Valut 条目出参（**无 value 字段**——安全红线，编辑=重写新值不回显）。 */
+const VALUT_ENTRY_FIELDS = gql`
+  fragment ValutEntryFields on ValutEntry {
+    id
+    namespace
+    namespaceDisplayName
+    key
+    editable
+    deletable
+    refs {
+      feature
+      refId
+      refLabel
+      createdAt
+    }
+    createdBy
+    createdAt
+    updatedAt
+  }
+`
+
+export const CREATE_VALUT_ENTRY = gql`
+  mutation CreateValutEntry($input: CreateValutEntryInput!) {
+    createValutEntry(input: $input) {
+      ...ValutEntryFields
+    }
+  }
+  ${VALUT_ENTRY_FIELDS}
+`
+
+export const UPDATE_VALUT_ENTRY = gql`
+  mutation UpdateValutEntry($id: ID!, $value: String!) {
+    updateValutEntry(id: $id, value: $value) {
+      ...ValutEntryFields
+    }
+  }
+  ${VALUT_ENTRY_FIELDS}
+`
+
+export const DELETE_VALUT_ENTRY = gql`
+  mutation DeleteValutEntry($id: ID!) {
+    deleteValutEntry(id: $id)
+  }
+`
+
+const CUSTOM_MCP_SERVER_FIELDS = gql`
+  fragment CustomMcpServerFields on CustomMcpServer {
+    id
+    name
+    description
+    endpoint
+    authType
+    customHeaders {
+      key
+      values
+    }
+    bearerEntryId
+    bearerEntryManaged
+    workspaceId
+    createdBy
+    createdAt
+    updatedAt
+  }
+`
+
+export const CREATE_CUSTOM_MCP_SERVER = gql`
+  mutation CreateCustomMcpServer($input: CreateCustomMcpServerInput!) {
+    createCustomMcpServer(input: $input) {
+      ...CustomMcpServerFields
+    }
+  }
+  ${CUSTOM_MCP_SERVER_FIELDS}
+`
+
+export const UPDATE_CUSTOM_MCP_SERVER = gql`
+  mutation UpdateCustomMcpServer($id: ID!, $input: UpdateCustomMcpServerInput!) {
+    updateCustomMcpServer(id: $id, input: $input) {
+      ...CustomMcpServerFields
+    }
+  }
+  ${CUSTOM_MCP_SERVER_FIELDS}
+`
+
+export const DELETE_CUSTOM_MCP_SERVER = gql`
+  mutation DeleteCustomMcpServer($id: ID!) {
+    deleteCustomMcpServer(id: $id)
   }
 `

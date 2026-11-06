@@ -1,16 +1,90 @@
 import { GraphQLError } from 'graphql';
+import path from 'path';
 import { sessionService } from '../../services/session.js';
 import { sessionImportService } from '../../services/session-import.js';
+import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { modelService } from '../../services/model.js';
 import { featuresFromSnapshot } from '../../services/agent-capabilities.js';
 import { inferModelSource } from '../../services/model-source.js';
 import { cloudHostService } from '../../services/cloud-host-service.js';
+import { sessionReviewService } from '../../services/session-review-service.js';
 import { Controller } from '../../models/controller.js';
 import { CloudHost } from '../../models/cloud-host.js';
+import { Session } from '../../models/session.js';
 import { actorFilter } from '../../services/workspace-context.js';
+import { getRedisClient } from '../../middleware/redis.js';
+import { publish } from '../../middleware/publish.js';
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
+
+/** sessionFileContent 轮询口径（裁决 4）：500ms × 30 ≈ 15s */
+const FILE_CONTENT_POLL_INTERVAL_MS = 500;
+const FILE_CONTENT_POLL_ATTEMPTS = 30;
+const FILE_CONTENT_TIMEOUT_MESSAGE = 'Controller offline or file read timeout';
+/** 错误文案白名单（裁决 12） */
+const FILE_CONTENT_ERROR_WHITELIST = new Set([
+  'file too large',
+  'binary file',
+  'not found',
+  'permission denied',
+]);
+
+/**
+ * 会话文件读取（fs:read-file relay）：路径守卫（裁决 12，与 controller 白名单双保险）+
+ * 发布 session:command + 轮询 Redis `fs:read-file:{requestId}`。只读会话允许读取。
+ */
+async function fetchSessionFileContent(
+  session: Doc,
+  rawPath: string,
+): Promise<{ path: string; content: string; truncated: boolean; sizeBytes: number }> {
+  const root = path.resolve(String(session.worktreePath ?? session.cwd ?? ''));
+  const absPath = path.resolve(root, rawPath);
+  const rel = path.relative(root, absPath);
+  const outside = rel === '' || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+  if (outside) {
+    throw new GraphQLError('path out of session workspace', { extensions: { code: 'BAD_USER_INPUT' } });
+  }
+  const display = rel.split(path.sep).join('/');
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const redis = getRedisClient();
+  await publish('session:command', {
+    type: 'fs:read-file',
+    requestId,
+    controllerId: String(session.controllerId),
+    path: absPath,
+  });
+  for (let i = 0; i < FILE_CONTENT_POLL_ATTEMPTS; i++) {
+    await new Promise((resolve) => setTimeout(resolve, FILE_CONTENT_POLL_INTERVAL_MS));
+    const raw = await redis.get(`fs:read-file:${requestId}`);
+    if (!raw) continue;
+    let parsed: {
+      success?: boolean;
+      content?: string;
+      truncated?: boolean;
+      sizeBytes?: number;
+      error?: string;
+    };
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      break;
+    }
+    if (parsed.success) {
+      return {
+        path: display,
+        content: parsed.content ?? '',
+        truncated: Boolean(parsed.truncated),
+        sizeBytes: Number(parsed.sizeBytes ?? 0),
+      };
+    }
+    const message = typeof parsed.error === 'string' && FILE_CONTENT_ERROR_WHITELIST.has(parsed.error)
+      ? parsed.error
+      : 'not found';
+    throw new GraphQLError(message, { extensions: { code: 'BAD_USER_INPUT' } });
+  }
+  throw new GraphQLError(FILE_CONTENT_TIMEOUT_MESSAGE, { extensions: { code: 'BAD_USER_INPUT' } });
+}
 
 export const sessionResolvers = {
   Session: {
@@ -43,6 +117,20 @@ export const sessionResolvers = {
       return cloudHostService.mapCloudHost(host as Doc, 0);
     },
     agentCapabilities: (session: Record<string, unknown>) => session.agentCapabilities ?? null,
+    /**
+     * 统一只读原因（D5：与写路径同一判定函数的只读版，实时计算不落库）。
+     * 三场景：控制器缺失 / 项目工作区缺失 / 云电脑终态；null=可写。
+     * **必须落在 `sessionResolvers.Session` 内**（`resolvers/index.ts` spread 登记，backend-rules 陷阱）。
+     */
+    readOnlyReason: async (
+      parent: Doc,
+      _args: unknown,
+      context: AuthContext,
+    ) => {
+      const userId = context.currentUser?.id;
+      if (!userId) return null;
+      return sessionService.resolveSessionReadOnlyReason(parent, userId);
+    },
     features: (session: Record<string, unknown>) => featuresFromSnapshot(session.agentCapabilities),
     availableModels: async (
       session: Record<string, unknown>,
@@ -68,7 +156,7 @@ export const sessionResolvers = {
   Query: {
     sessions: async (
       _parent: unknown,
-      args: { controllerId?: string; includeWorkflowSessions?: boolean },
+      args: { controllerId?: string; includeWorkflowSessions?: boolean; archived?: boolean },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -77,6 +165,7 @@ export const sessionResolvers = {
       return sessionService.findAllByUser(context.currentUser.id, {
         controllerId: args.controllerId,
         includeWorkflowSessions: args.includeWorkflowSessions,
+        archived: args.archived,
       });
     },
     session: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
@@ -142,11 +231,46 @@ export const sessionResolvers = {
         throw new GraphQLError((err as Error).message);
       }
     },
+    sessionReview: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      return sessionReviewService.findById(context.currentUser.id, args.id);
+    },
+    sessionReviews: async (
+      _parent: unknown,
+      args: { status?: string; sessionId?: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      return sessionReviewService.listByUser(context.currentUser.id, {
+        status: args.status,
+        sessionId: args.sessionId,
+      });
+    },
+    sessionFileContent: async (
+      _parent: unknown,
+      args: { sessionId: string; path: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      const userId = context.currentUser.id;
+      // 归属校验（非归属 Session not found）；只读会话允许读取（预览场景）
+      const session = await Session.findOne({ _id: args.sessionId, ...actorFilter(userId) }).lean();
+      if (!session) {
+        throw new GraphQLError('Session not found');
+      }
+      return fetchSessionFileContent(session as unknown as Doc, args.path);
+    },
   },
   Mutation: {
     createSession: async (
       _parent: unknown,
-      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; existingWorktreePath?: string; mcpServerIds?: string[] | null; modeId?: string | null; modelId?: string | null } },
+      args: { input: { controllerId: string; acpServerType: string; workspaceId: string; enableWorktree?: boolean; worktreeBranchSuffix?: string; existingWorktreePath?: string; mcpServerIds?: string[] | null; customMcpServerIds?: string[] | null; modeId?: string | null; modelId?: string | null } },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -168,6 +292,8 @@ export const sessionResolvers = {
           worktreeBranchSuffix: args.input.worktreeBranchSuffix ?? undefined,
           existingWorktreePath: args.input.existingWorktreePath ?? undefined,
           mcpServerIds: explicitMcpServerIds,
+          // 自定义 MCP：与 mcpServerIds 正交（缺省/[]均不注入，null 归一 undefined）
+          customMcpServerIds: args.input.customMcpServerIds ?? undefined,
           modeId: args.input.modeId ?? undefined,
           modelId: args.input.modelId ?? undefined,
         });
@@ -223,9 +349,55 @@ export const sessionResolvers = {
         throw new GraphQLError((err as Error).message);
       }
     },
+    // 归档/取消归档（D1：仅分组展示差异；工作流节点会话拒绝 ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED）
+    archiveSession: async (
+      _parent: unknown,
+      args: { id: string; archived: boolean },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await sessionService.setArchived(context.currentUser.id, args.id, args.archived);
+      } catch (err) {
+        if (err instanceof GraphQLError) throw err;
+        throw new GraphQLError((err as Error).message);
+      }
+    },
+    // 删除工作区影响预查询：连带归档的普通会话数（与实际连带归档共用同一匹配函数）
+    workspaceArchiveImpact: async (
+      _parent: unknown,
+      args: { id: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      const userId = context.currentUser.id;
+      const workspace = await controllerWorkspaceService.findById(args.id, userId);
+      if (!workspace) {
+        throw new GraphQLError('Workspace not found');
+      }
+      const matched = await sessionService.matchWorkspaceSessions(
+        {
+          _id: workspace.id,
+          controllerId: workspace.controllerId,
+          path: workspace.path,
+          name: workspace.name,
+        },
+        userId,
+      );
+      return { sessionCount: matched.filter((doc) => !doc.archivedAt).length };
+    },
     sendSessionMessage: async (
       _parent: unknown,
-      args: { sessionId: string; content: string; type: string },
+      args: {
+        sessionId: string;
+        content: string;
+        type: string;
+        parts?: Array<{ type: string; text?: string; data?: string; mimeType?: string; name?: string }>;
+      },
       context: AuthContext,
     ) => {
       if (!context.currentUser) {
@@ -246,7 +418,30 @@ export const sessionResolvers = {
         direction: 'input',
         type: args.type,
         content: args.content,
+        ...(args.parts && args.parts.length > 0 ? { parts: args.parts } : {}),
       });
+    },
+    submitSessionReview: async (
+      _parent: unknown,
+      args: {
+        id: string;
+        input: { fileReviews: Record<string, unknown>; comment?: string; status: 'approve' | 'reject' | 'comment' };
+      },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      try {
+        return await sessionReviewService.submit(context.currentUser.id, args.id, {
+          fileReviews: args.input.fileReviews,
+          comment: args.input.comment,
+          status: args.input.status,
+        });
+      } catch (err) {
+        // wrap() 同口径：错误文案原样透传（Review not found or already resolved）
+        throw new GraphQLError((err as Error).message);
+      }
     },
     cancelGeneration: async (
       _parent: unknown,

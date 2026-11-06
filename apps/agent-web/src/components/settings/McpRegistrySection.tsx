@@ -87,7 +87,7 @@ export default function McpRegistrySection() {
           <p className="text-sm text-muted-foreground">加载中...</p>
         ) : servers.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            暂无已注册的 MCP 服务。使用 MCP 代理密钥注册本地 MCP 命令。
+            暂无已注册的 MCP 服务
           </p>
         ) : (
           <div className="space-y-4">

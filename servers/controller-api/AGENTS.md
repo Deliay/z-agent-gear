@@ -104,6 +104,20 @@ pnpm run test    # Run tests
   `packages/agent-controller/AGENTS.md`）；旧版本 worker 忽略未知字段优雅降级。
 - 契约：`contracts/agent-session-websocket.md` §3.12 + Redis relay 附录。
 
+## fs:read-file relay 与 parts 透传（#461，2.17.0 口径）
+
+- **`fs:read-file` relay（契约 §3.25/§3.26）**：`session:command` 白名单新增 `fs:read-file`
+  （`requestId && controllerId && path`，缺任一忽略不分发）→ `fs-read-file-service.handleReadFile`
+  （对齐 `fs-mkdir-service` 形态：Controller → socketId → `socket.emit('fs:read-file', withTraceMeta({requestId, path, maxBytes}))`；
+  离线/查不到仅记 error，不写 Redis 不崩溃）；`fs:read-file:result` 经 `socketio.ts` 注册监听 →
+  `handleReadFileResult` 写 Redis `fs:read-file:{requestId}`（`EX 60`，裁决 4），agent-api 轮询消费。
+- **`parts` 透传（契约 §2.6）**：`handleInputMessage` 载荷白名单追加 `parts`（有序提示词块，
+  `{type:'text',text}` / `{type:'image',data,mimeType}`），经 `acpSessionManager.forwardToController`
+  在 `acp:message` 携带；parts 为空不携带（旧报文形状不变）。
+- **MCP 按 serverName 超时（契约 §2.12.1，裁决 9）**：`mcp-relay.ts` `SERVER_TIMEOUT_OVERRIDES` 仅
+  `agent-session-preview-tools` 放宽至 `MCP_REVIEW_TIMEOUT_MS`（默认 1_800_000，env 可调，与 agent-gear
+  同常量同默认），其余 server 保持 60s 504 零回归。
+
 ## 日志与可观测性
 
 - **日志形态**：pino 单行 JSON（vendored `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。
@@ -147,6 +161,7 @@ pnpm run test    # Run tests
 ## 多租户一期（共写集合 tenantId）
 
 - `controllers`/`sessions`/`controllerkeys`/`mcpservers`/`mcpsessionendpoints` 由本服务与 agent-api **共写**：两侧都必须 `userId + tenantId` 双写、查询 `tenantId + userId` 双条件（personal 期 tenantId==userId）。
+- `mcp_session_endpoints.customMcpServers`（`[{id,name}]`，`_id:false` 子文档，缺省 `[]`）为 **只读镜像字段**（MCP+Valut 功能迭代 Phase 3）：agent-api 签发/重签时随 tokenHash 写入，本服务不读不写、无新端点；**不得**借镜像改动 `expiresAt` / TTL 索引语义（两侧模型差异现状保留，计划 F4）。
 - 复用/移植 agent-api `services/tenant-scope.ts` 插件（Mongoose v9 同步钩子；查询/更新/upsert/insertMany 自动补齐）；新增带 userId 的模型必须声明 `tenantId` 并 `applyTenantScope(schema)`。
 - 注册 upsert 是「顶层 userId + $set（timestamps）」形态，插件需同时识别顶层与 `$set`/`$setOnInsert` 的 userId。
 - 历史行由 agent-api 迁移 `014-tenant-id-rebackfill` 补齐（013 已在旧环境执行过，不会重跑）。

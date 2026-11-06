@@ -681,6 +681,20 @@ describe('Admin Cloud Workload API', () => {
     // Aspire 依赖 Docker → .NET（顺序即初始化顺序）
     expect(aspire.dependsOnWorkloadIds).toEqual([docker.id, dotnet.id]);
 
+    // Docker：迁移 021 口径——registry-mirrors 参数（默认内网 Harbor）+ 脚本 v6 无 shim 残留。
+    // 参数按 key 查找而非下标断言：追加顺序是迁移实现细节，不作为产品约束（实现计划 裁决 5）。
+    const dockerParams = new Map(docker.paramSchema?.map((field) => [field.key, field]));
+    expect([...dockerParams.keys()].sort()).toEqual(['docker_apt_url', 'docker_registry_mirrors']);
+    expect(dockerParams.get('docker_registry_mirrors')).toMatchObject({
+      type: 'TEXT',
+      defaultValue: 'https://core.harbor.internal.fffdan.com/docker-hub-proxy',
+    });
+    expect(docker.initScript).toContain('registry-mirrors');
+    expect(docker.initScript).toContain('/etc/docker/daemon.json');
+    expect(docker.initScript).not.toContain('normalize_image');
+    expect(docker.initScript).not.toContain('HARBOR_PROXY');
+    expect(docker.initScript).not.toContain('SHIM_PATH');
+
     const nodejs = byName.get('Node.js')!;
     expect(nodejs.paramSchema?.map((field) => field.key)).toEqual(['version', 'package_manager']);
     expect(nodejs.paramSchema?.[0]).toMatchObject({ type: 'TEXT', defaultValue: '22' });

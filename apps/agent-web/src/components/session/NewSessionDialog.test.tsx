@@ -6,8 +6,9 @@ import {
   GET_ACP_SERVER_OPTIONS,
   GET_CONTROLLER_WORKSPACES_ENABLED,
   GET_MCP_SERVERS,
+  GET_CUSTOM_MCP_SERVERS,
 } from '../../graphql/queries';
-import type { CloudHostData, ControllerWorkspaceData } from '../../graphql/types';
+import type { CloudHostData, ControllerWorkspaceData, CustomMcpServerData } from '../../graphql/types';
 
 const mockUseQuery = vi.fn();
 const mockRefreshOptions = vi.fn();
@@ -205,6 +206,7 @@ function makeWorkspace(overrides: Partial<ControllerWorkspaceData> = {}): Contro
 
 interface MockDialogOptions {
   mcpServers?: Array<{ id: string; name: string; enabled: boolean }>;
+  customMcpServers?: CustomMcpServerData[];
   workspaces?: ControllerWorkspaceData[];
   options?: {
     modes: Array<{ id: string; name: string }>;
@@ -215,6 +217,7 @@ interface MockDialogOptions {
 
 function mockDialogQueries({
   mcpServers = [],
+  customMcpServers = [],
   workspaces = [makeWorkspace()],
   options,
   refetchWorkspaces = vi.fn().mockResolvedValue(undefined),
@@ -242,6 +245,9 @@ function mockDialogQueries({
         },
         loading: false,
       };
+    }
+    if (query === GET_CUSTOM_MCP_SERVERS) {
+      return { data: { customMcpServers }, loading: false };
     }
     if (query === GET_ACP_SERVER_OPTIONS) {
       return {
@@ -446,5 +452,108 @@ describe('NewSessionDialog 默认 MCP 与模型/模式', () => {
     fireEvent.change(screen.getByLabelText('控制器'), { target: { value: 'ctrl-1' } });
 
     await waitFor(() => expect(refetchWorkspaces).toHaveBeenCalled());
+  });
+});
+
+function makeCustomMcp(id: string, name: string, endpoint: string): CustomMcpServerData {
+  return {
+    id,
+    name,
+    description: null,
+    endpoint,
+    authType: 'none',
+    customHeaders: [],
+    bearerEntryId: null,
+    bearerEntryManaged: null,
+    workspaceId: 'ws-1',
+    createdBy: 'alice',
+    createdAt: '',
+    updatedAt: '',
+  };
+}
+
+// T-WEB4 / D9：MCP 两组展示、勾选独立、onCreate 第 10 参
+describe('NewSessionDialog 自定义 MCP 分组（D9）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('「MCP 服务」与「自定义 MCP（工作区）」两组分别展示，自定义组缺省不勾选', () => {
+    mockDialogQueries({
+      mcpServers: [{ id: 'm1', name: 'MCP A', enabled: true }],
+      customMcpServers: [
+        makeCustomMcp('cmcp-1', '内部文档 MCP', 'https://doc.example.com/mcp'),
+        makeCustomMcp('cmcp-2', '内部聊天 MCP', 'https://chat.example.com/mcp'),
+      ],
+    });
+    render(
+      <NewSessionDialog
+        controllers={[{ id: 'ctrl-1', name: 'Controller 1', status: 'online' }]}
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('控制器'), { target: { value: 'ctrl-1' } });
+
+    expect(screen.getByText('MCP 服务')).toBeInTheDocument();
+    expect(screen.getByText('自定义 MCP（工作区）')).toBeInTheDocument();
+    // 既有个人级 MCP 过滤口径（enabled && name !== agent-cloud-host-tools）不变
+    expect(screen.getByLabelText('MCP A')).toBeChecked();
+    // 自定义组无「控制器默认注入」语义，缺省不勾选
+    expect(screen.getByLabelText(/内部文档 MCP/)).not.toBeChecked();
+    expect(screen.getByLabelText(/内部聊天 MCP/)).not.toBeChecked();
+  });
+
+  it('两组勾选独立，提交时第 10 参携带勾选的自定义 MCP id', async () => {
+    mockDialogQueries({
+      mcpServers: [{ id: 'm1', name: 'MCP A', enabled: true }],
+      customMcpServers: [
+        makeCustomMcp('cmcp-1', '内部文档 MCP', 'https://doc.example.com/mcp'),
+        makeCustomMcp('cmcp-2', '内部聊天 MCP', 'https://chat.example.com/mcp'),
+      ],
+    });
+    const onCreate = await renderSessionDialog();
+
+    // 取消个人级 MCP、勾选一个自定义 MCP：互不影响
+    fireEvent.click(screen.getByLabelText('MCP A'));
+    fireEvent.click(screen.getByLabelText(/内部文档 MCP/));
+
+    expect(screen.getByLabelText('MCP A')).not.toBeChecked();
+    expect(screen.getByLabelText(/内部文档 MCP/)).toBeChecked();
+    expect(screen.getByLabelText(/内部聊天 MCP/)).not.toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: '创建会话' }));
+
+    expect(onCreate).toHaveBeenCalledTimes(1);
+    const args = onCreate.mock.calls[0];
+    expect(args[5]).toEqual([]);
+    expect(args[9]).toEqual(['cmcp-1']);
+  });
+
+  it('未勾选自定义 MCP 时第 10 参为 undefined（保持旧报文形状）', async () => {
+    mockDialogQueries({
+      mcpServers: [{ id: 'm1', name: 'MCP A', enabled: true }],
+      customMcpServers: [makeCustomMcp('cmcp-1', '内部文档 MCP', 'https://doc.example.com/mcp')],
+    });
+    const onCreate = await renderSessionDialog();
+
+    fireEvent.click(screen.getByRole('button', { name: '创建会话' }));
+
+    const args = onCreate.mock.calls[0];
+    expect(args[9]).toBeUndefined();
+  });
+
+  it('自定义 MCP 为空时展示「暂无自定义 MCP」', () => {
+    mockDialogQueries({ customMcpServers: [] });
+    render(
+      <NewSessionDialog
+        controllers={[{ id: 'ctrl-1', name: 'Controller 1', status: 'online' }]}
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText('控制器'), { target: { value: 'ctrl-1' } });
+
+    expect(screen.getByText('暂无自定义 MCP')).toBeInTheDocument();
   });
 });

@@ -25,6 +25,7 @@ vi.mock('./acp-session-manager.js', () => ({
     cancelGeneration: vi.fn(),
     stopSession: vi.fn(),
     setConfigOption: vi.fn(),
+    forwardToController: vi.fn(),
   },
 }));
 
@@ -69,6 +70,13 @@ vi.mock('./fs-mkdir-service.js', () => ({
   },
 }));
 
+vi.mock('./fs-read-file-service.js', () => ({
+  fsReadFileService: {
+    handleReadFile: vi.fn(),
+    handleReadFileResult: vi.fn(),
+  },
+}));
+
 import { SessionCommandService } from './session-command.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { acpSessionManager } from './acp-session-manager.js';
@@ -77,6 +85,7 @@ import { acpSessionSyncService } from './acp-session-sync.js';
 import { Controller } from '../models/controller.js';
 import { worktreeService} from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
+import { fsReadFileService } from './fs-read-file-service.js';
 import { createTestLogger } from '../observability/testing.js';
 
 function createMockRedis() {
@@ -942,6 +951,90 @@ describe('SessionCommandService', () => {
       expect(boolRec).toMatchObject({ valueType: 'boolean' });
       expect(boolRec).not.toHaveProperty('value');
       expect(JSON.stringify(testLog.records)).not.toContain('"value"');
+    });
+  });
+});
+
+describe('fs:read-file 与 parts 透传（#461）', () => {
+  it('T-FSR1 白名单分发：session:command fs:read-file → handleReadFile', async () => {
+    const mockRedis = createMockRedis();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+    const service = new SessionCommandService();
+    service.start(createMockIO() as never);
+
+    mockRedis._emitMessage('session:command', JSON.stringify({
+      type: 'fs:read-file',
+      requestId: 'req-1',
+      controllerId: 'ctrl-1',
+      path: '/home/user/a.txt',
+      maxBytes: 4096,
+    }));
+
+    await vi.waitFor(() => {
+      expect(fsReadFileService.handleReadFile).toHaveBeenCalledWith('req-1', 'ctrl-1', '/home/user/a.txt', 4096);
+    });
+  });
+
+  it('T-FSR4 非法 command（缺 path）忽略不分发', async () => {
+    const mockRedis = createMockRedis();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+    const service = new SessionCommandService();
+    service.start(createMockIO() as never);
+
+    mockRedis._emitMessage('session:command', JSON.stringify({
+      type: 'fs:read-file',
+      requestId: 'req-2',
+      controllerId: 'ctrl-1',
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(fsReadFileService.handleReadFile).not.toHaveBeenCalled();
+  });
+
+  it('T-SCMD1 input 消息带 parts：acp:message 透传 parts 原文', async () => {
+    const mockRedis = createMockRedis();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+    const service = new SessionCommandService();
+    service.start(createMockIO() as never);
+
+    const parts = [
+      { type: 'text', text: 'a' },
+      { type: 'image', data: 'BASE64', mimeType: 'image/png' },
+    ];
+    mockRedis._emitMessage('session:message', JSON.stringify({
+      sessionId: 'sess-1',
+      message: { id: 'm1', direction: 'input', type: 'text', content: 'a', parts },
+    }));
+
+    await vi.waitFor(() => {
+      expect(acpSessionManager.forwardToController).toHaveBeenCalledWith('sess-1', {
+        type: 'text',
+        content: 'a',
+        parts,
+      });
+    });
+  });
+
+  it('T-SCMD1b 不带 parts 旧形状不变', async () => {
+    const mockRedis = createMockRedis();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+    const service = new SessionCommandService();
+    service.start(createMockIO() as never);
+
+    mockRedis._emitMessage('session:message', JSON.stringify({
+      sessionId: 'sess-2',
+      message: { id: 'm2', direction: 'input', type: 'text', content: 'plain' },
+    }));
+
+    await vi.waitFor(() => {
+      expect(acpSessionManager.forwardToController).toHaveBeenCalledWith('sess-2', {
+        type: 'text',
+        content: 'plain',
+      });
     });
   });
 });

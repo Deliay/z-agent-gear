@@ -80,11 +80,31 @@ export const HOME_OVERVIEW = gql`
         worktreeBranch
         workflowInstanceId
         workflowNodeId
+        archived
         createdAt
         updatedAt
         endedAt
       }
       sessionTotalCount
+      archivedSessions {
+        id
+        userId
+        controllerId
+        controllerName
+        acpServerType
+        status
+        title
+        externalSessionId
+        cwd
+        worktreePath
+        worktreeBranch
+        workflowInstanceId
+        workflowNodeId
+        archived
+        createdAt
+        updatedAt
+        endedAt
+      }
       workspaces {
         id
         userId
@@ -163,6 +183,18 @@ export const HOME_OVERVIEW = gql`
         createdAt
       }
       unreadTodoCount
+      sessionReviews {
+        id
+        sessionId
+        sessionTitle
+        files
+        status
+        fileReviews
+        comment
+        cancelReason
+        createdAt
+        resolvedAt
+      }
     }
   }
   ${HOME_WORKFLOW_INSTANCE_FIELDS}

@@ -4,6 +4,9 @@
 
 定义 agent-api MCP 入口与 controller-api 副本之间通过 Redis 完成的 MCP 请求-响应转发契约。复用 `port-forward:command/response` 既有模式，解决 controller-api 多副本部署下请求落点与代理连接持有者解耦的问题。
 
+> 注：自定义 MCP（工作区级）的代理转发**不经**本频道——`mcp:forward:*` 仅承载 registered_proxy
+> 路径；custom 路由口径见 [agent-session-websocket.md §2.12.1](./agent-session-websocket.md)。
+
 ### 1.1 角色
 
 | 角色 | 说明 |

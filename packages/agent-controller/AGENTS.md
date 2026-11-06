@@ -57,7 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.17.0`（major 保持 2；已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.17.0`（major 保持 2；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.11.0 起提升，当前基线 `2.12.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -66,6 +66,19 @@ src/
   （2.11.0 及更早版本为 `2.10.0`）——上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
   `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
   仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。
+
+## fs:read-file / 有序 parts / MCP 按名超时（2.17.0）
+
+- **`fs:read-file`（契约 §3.25/§3.26）**：`fs-handler.readFile(path, maxBytes?)` 复用 `registerAllowedPath` 白名单
+  （`resolve` 前缀校验 + `realpath` 防符号链接逃逸，不扩张白名单）；`maxBytes` 缺省 512KiB、硬上限 2MiB 钳制；
+  前 8KiB 检出 NUL 判二进制；产出 `{success, content, truncated, sizeBytes}` 或 `{success:false, error}`，
+  错误文案白名单 `file too large`/`binary file`/`not found`/`permission denied`（白名单拒绝统一 `not found`，不读盘）。
+  `socketio-client` 注册 `fs:read-file` 事件 → `fs:read-file:result` 回包（字段与契约逐字一致）。
+- **有序 `parts`（契约 §2.6）**：`bridge.sendInput/processPrompt` 可选 `parts`（`AcpPromptPart`：text/image）——
+  非空时**保序**映射 ContentBlock 且不再追加 content 文本块（content 为合并文本兼容字段）；
+  为空/缺省沿用旧形态 `[...attachments, {type:'text', text: content}]`（零回归）；activePrompt 排队按序消费。
+- **MCP 按 serverName 超时（契约 §2.12.1，裁决 9）**：`mcp/relay.ts` `SERVER_TIMEOUT_OVERRIDES` 仅
+  `agent-session-preview-tools` 放宽至 `MCP_REVIEW_TIMEOUT_MS`（默认 1_800_000，env 可调），其余 server 保持 60s。
 
 ## DeepSeek Harness 注入（2.9.0；insert 受管条目 2.11.0）
 

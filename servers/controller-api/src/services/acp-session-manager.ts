@@ -718,7 +718,7 @@ export class ACPSessionManager {
     return null;
   }
 
-  forwardToController(sessionId: string, message: { type: string; content: string | Record<string, unknown> }): boolean {
+  forwardToController(sessionId: string, message: { type: string; content: string | Record<string, unknown>; parts?: Array<{ type: string; text?: string; data?: string; mimeType?: string }> }): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) {
       // 会话尚未进入 active map（start/resume 进行中）：入队等待补发，不再静默丢弃
@@ -741,7 +741,12 @@ export class ACPSessionManager {
 
     session.controllerSocket.emit('acp:message', withTraceMeta({
       sessionId,
-      message: { type: message.type, content: rawContent },
+      message: {
+        type: message.type,
+        content: rawContent,
+        // parts 为有序提示词块（契约 §2.6）；非空时透传，为空不携带（旧报文形状不变）
+        ...(message.parts && message.parts.length > 0 ? { parts: message.parts } : {}),
+      },
     }));
     return true;
   }

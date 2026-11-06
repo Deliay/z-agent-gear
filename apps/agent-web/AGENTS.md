@@ -46,6 +46,7 @@ pnpm run preview  # Preview production build
 - 生效入口：模型切换（`config.model`）、模式切换（`config.mode`）、布尔配置项（`config.boolean`）、会话「继续」（`session.resume` 与 `session.load` 同时 unsupported 才禁用）；命令列表、历史导入/删除不门控。
 - 会话内挂载 `PendingElicitationBanner`：消费首页聚合的 `todos`，筛选本会话未 resolved 的问询，保证移动端（Sidebar 未挂载）也能打开 `ElicitationDialog`。
 - `ElicitationDialog` 按 `resolution` / 已过期的 `expiresAt` 展示「已过期/已取消/已失效/已提交/已拒绝」并隐藏操作；到期用定时器就地重渲染（`now = Date.now()`，不得用 `useState` 快照冻结）。
+- `ElicitationDialog` 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**仅** `type: 'array'` + `items.anyOf`（ACP question 工具多选题）在提交前经 `lib/elicitation-multi-select.ts#joinMultiSelectValues` 以逗号拼接为字符串回传（顺序 = 勾选顺序，空数组保持 `[]`），`items.enum` / `items.oneOf` 数组字段仍提交数组；`anyOf` 与 `enum`/`oneOf` 并存的字段（真实 question 报文不会产生）不参与拼接、提交保持数组；勾选状态始终以数组存于 edits（必答校验/草稿不变），`q*_custom` 仍为文本框。
 - 问询弹窗打开权由 `stores/elicitationDialog.ts` 共享（`todoId + owner + 打开时快照`）：`PendingElicitationBanner`（owner=banner）与 `TodoListPanel`（owner=todo）互斥，同一时刻只渲染一个弹窗；弹窗数据按 todo id 从全量 todos 派生（不过滤 resolution），pending 清空后仍保留到终态展示，避免填表中被卸载；todo 被 TTL/limit 从列表移除时用快照渲染「已从待办移除」终态
   （stale 判定与 owner 无关，banner/todo 任一持有 stale 都不阻塞后续 immediate）；`close(owner)` 只允许持有方关闭；
   **真实卸载**时 cleanup 经微任务确认（排除 StrictMode 的 mount→cleanup→mount 模拟卸载）后关闭 `owner='todo'` 弹窗，
@@ -56,7 +57,8 @@ pnpm run preview  # Preview production build
 - **工作区/工作流列表实时刷新**：`NewSessionDialog` 的 `GET_CONTROLLER_WORKSPACES_ENABLED`、`InstantiateWorkflowDialog` 的来源查询、`WorkflowSection` 的来源列表统一 `cache-and-network` + 打开/挂载 `refetch()`；加载分支只认 `loading && !data`，刷新期间不卸载表单、不清空输入，失败展示「刷新失败，可重试」并保留旧列表。
 - **默认 MCP 预选**：按 `controller.defaultMcp` 在「打开 / 切换控制器」时计算一次（`useAllEnabled=false` 取 `serverIds` 与已启用集合交集，否则全部已启用）；用户调整后后台轮询不得覆盖。提交时**显式传数组**：`[]` = 不注入，`undefined` 才走服务端默认。
 - **默认 MCP 设置**：控制器配置页「默认 MCP」页签（`McpDefaultSection`）保存 `SET_CONTROLLER_DEFAULT_MCP`；`MCP_SERVER_NOT_FOUND` 映射为「所选 MCP 已停用或不存在，请重新选择」，成功后提示「对后续新建会话生效」。移动端 tab 常驻滚动容器外。
-- **模式/模型前置选择**：选定 ACP 工具后读 `acpServerOptions`（与工作流节点同源），下拉首项「默认」= 不传 `modeId/modelId`；「刷新」调 `refreshAcpServerOptions` 后就地替换选项，探测中/无选项不阻断提交。`onCreate` 为 9 个位置参数（`controllerId, acpServerType, workspaceId, enableWorktree?, worktreeBranchSuffix?, mcpServerIds?, existingWorktreePath?, modeId?, modelId?`），三个调用点 `Sidebar`、`SessionPage`、`WorktreeSidebarGroup` 必须同步透传全部参数（`WorktreeSidebarGroup` 的 `existingWorktreePath` 回退预选路径）；每个调用点保留映射单测，防止位置参数演进漏改。
+- **模式/模型前置选择**：选定 ACP 工具后读 `acpServerOptions`（与工作流节点同源），下拉首项「默认」= 不传 `modeId/modelId`；「刷新」调 `refreshAcpServerOptions` 后就地替换选项，探测中/无选项不阻断提交。`onCreate` 为 **10 个位置参数**（`controllerId, acpServerType, workspaceId, enableWorktree?, worktreeBranchSuffix?, mcpServerIds?, existingWorktreePath?, modeId?, modelId?, customMcpServerIds?`），三个调用点 `Sidebar`、`SessionPage`、`WorktreeSidebarGroup` 必须同步透传全部参数（`WorktreeSidebarGroup` 的 `existingWorktreePath` 回退预选路径）；每个调用点保留映射单测，防止位置参数演进漏改。
+- **自定义 MCP 分组（D9）**：`NewSessionDialog` 的 MCP 选择分两组——「MCP 服务」组（`GET_MCP_SERVERS`，过滤口径 `enabled && name !== agent-cloud-host-tools` 不变）+「自定义 MCP（工作区）」组（`GET_CUSTOM_MCP_SERVERS`）；两组勾选状态独立，自定义组**无控制器默认注入语义、缺省不勾选**。第 10 参仅在勾选时携带；三调用点以条件展开注入 `input.customMcpServerIds`——`undefined`/`[]` 一律**不下发该键**，保持旧报文形状（服务端 `[]` 与缺省同义，均为不注入）。
 
 ## 云电脑（Cloud Host）约定
 
@@ -106,6 +108,49 @@ pnpm run preview  # Preview production build
   `components/settings/__tests__/ImportGithubAccountDialog.test.tsx`；
   E2E `tests/e2e/src/settings-git.spec.ts`。
 
+## Valut / 自定义 MCP（设置页）
+
+> 契约 `contracts/valut.graphql`、`contracts/custom-mcp.graphql`；实现计划见
+> `docs/engineering/plan/20261104-feat-mcp-valut-iteration.md` Phase 4。
+
+- **挂载与导航**：`pages/SettingsPage.tsx` 中 `<ValutSection />`、`<CustomMcpSection />` 紧随 `#mcp-section`
+  之后（section id `valut-section` / `custom-mcp-section` 由组件自持）；NAV 组 label「MCP」组内项为
+  「MCP 管理 / Valut / 自定义 MCP」，两区块标题后均带 `<Badge>工作区</Badge>`。
+- **「MCP 代理」入口已移除（D5，仅前端）**：`components/settings/McpProxyKeySection.tsx` 与 `api/mcp-proxy.ts`
+  （含其单测）已删除；`#mcp-section` 标题「MCP 代理」→「MCP 管理」、NAV 组名「MCP 代理」→「MCP」、
+  `McpRegistrySection` 空态改为「暂无已注册的 MCP 服务」（去掉代理密钥引导）。
+  **后端不动**：controller-api `/api/mcp-proxy*` 路由、`mcp-proxy-key` 模型与
+  `tests/e2e/src/mcp-session.spec.ts`（直打 REST）零改动保留；`tests/e2e/src/settings-mcp-proxy.spec.ts` 随入口删除。
+- **Valut 区块**：数据源 `GET_VALUT_ENTRIES`（namespace 聚合 + refs + editable/deletable，**选择集无 value 字段**）、
+  `GET_VALUT_MANUAL_OPTIONS`（仅 manual）；增删改走 `CREATE/UPDATE/DELETE_VALUT_ENTRY`。
+  按 namespace 分组展示（组头 displayName），**任何状态不回显明文值**；编辑对话框 key 只读、value 恒空
+  （placeholder「输入新值（旧值不可见）」），提交 `updateValutEntry(id, value)`；
+  行操作受 `editable/deletable` 收敛（`service-*` 条目 `deletable=false` 无删除入口，manual 有 refs 时服务端拒绝删除）；
+  refs 行内展开查看；空态「暂无密钥条目」。
+- **D11 穿透定位**：`ValutSection` 挂载时读 `searchParams`——`section=valut` 滚动到本区块、`entry=<id>` 命中且
+  可编辑时自动展开该条目编辑对话框（每个 id 只处理一次，用户关闭后不回弹；只读上下文只滚动不弹窗）。
+- **自定义 MCP 区块**：`GET_CUSTOM_MCP_SERVERS` 列表（名称 / endpoint / 验证方式）；新增/编辑对话框含名称、
+  描述、endpoint、自定义请求头编辑器（key + 每行一个值 = 同名多值，≤32 条）与验证方式 `none|bearer` 二选一；
+  Bearer 下「填写 token / 选择 token」二选一，选择态数据源 `GET_VALUT_MANUAL_OPTIONS`（仅 manual，
+  仅对话框打开且选 Bearer 时拉取）。编辑时 `bearerEntryManaged=true` 就地重填 token（value 空待重填、不回显），
+  `false` 默认落选择态并展示「前往 Valut 编辑」链接（react-router 导航 `/settings?section=valut&entry=<bearerEntryId>`）；
+  删除二次确认，自建 token 额外提示联动删除 Valut 条目；空态「暂无自定义 MCP」。
+- **auth 下发口径**：编辑时仅在验证方式发生变化（或填写了新 token / 改选了引用条目）时才带 `auth` 字段，
+  **省略 = 不动**；`bearer → none` 显式下发 `{type:'none'}`；未改 token 的编辑报文不含 `auth` 键。
+- **权限只是展示层收敛**：`useWorkspaceAccess().readOnly`（全局工作区 + developer）时隐藏两区块的
+  新增/编辑/删除入口；服务端插件才是权威，兜底文案 `global workspace is read-only` 映射为中文提示。
+  错误白名单映射单一来源：`lib/valut.ts`（`valut key already exists` 等）与 `lib/custom-mcp.ts`
+  （`invalid mcp endpoint`、`bearer token is required` 等），未命中的文案原样展示。
+- **工作区切换与刷新**：两区块数据随 `x-workspace-id` 上下文自动切换（既有 apollo `workspaceLink`），
+  查询统一 `fetchPolicy: 'cache-and-network'` + mutation `refetchQueries`，沿用既有切工作区 `resetStore` 口径；
+  加载分支只认 `loading && !data`。
+- **测试入口**：`components/settings/__tests__/ValutSection.test.tsx`（T-WEB1）、
+  `components/settings/__tests__/CustomMcpSection.test.tsx`（T-WEB2）、
+  `pages/__tests__/SettingsPage.test.tsx`（T-WEB3：代理三处移除 / 新 NAV / 区块顺序）、
+  `components/session/NewSessionDialog.test.tsx`（T-WEB4：两组独立勾选与第 10 参）与
+  三调用点映射单测（`components/__tests__/Sidebar.test.tsx`、`pages/__tests__/SessionPage.test.tsx`、
+  `components/worktree/WorktreeSidebarGroup.test.tsx`）。
+
 ## 多租户一期（注册硬关闭与展示名）
 
 - **前台注册已硬关闭**：注册页与注册路由、注册 mutation 均已在页面/路由/契约三层移除；开户仅由后台经 agent-api `POST /internal/users` 发起。登录页不提供任何注册入口。
@@ -142,6 +187,50 @@ pnpm run preview  # Preview production build
 - **详情抽屉**：`components/ui/sheet.tsx`（Base UI 原语自实现，右侧滑出/全高/遮罩/Esc 关闭）+ `NodeDetailDrawer`（节点/资源两形态）；`WorkflowInstancePage` 提升抽屉状态，图表与列表视图共用；列表视图 `WorkflowNodeTree` 节点头部提供「详情」入口。
 - **共享人类节点操作**：`hooks/useHumanNodeActions.ts` + `HumanNodeActions` 组件，列表/卡片/抽屉三处同源（草稿键 `workflow-node-draft:{instanceId}:{nodeId}`）。
 - **测试入口**：`components/__tests__/Sidebar.test.tsx`（T-UI4-SEC/AGG）、`SidebarResizer.test.tsx`（T-UI4-RES）、`tree/__tests__/TreeSection.test.tsx`（T-UI4-TREE）、`workflow/__tests__/WorkflowInstanceCard.test.tsx`（T-UI4-IC）、`workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-UI4-TC）、`workflow/graph/__tests__/*`（T-UI4-GL/NC/RC）、`workflow/__tests__/NodeDetailDrawer.test.tsx`（T-UI4-SH）、`hooks/useNodeSessionActivity.test.tsx`（T-UI4-NA）、`hooks/useHumanNodeActions.test.tsx`（T-UI4-HA）、`tests/e2e/src/sidebar-phase4.spec.ts`（E2E-UI4S1~S6）与 `tests/e2e/src/workflow-graph.spec.ts`（E2E-UI4G1~G10）。
+
+## 会话内容预览子系统（#461）
+
+- **布局**：`SessionView` 根容器为纵向 flex——标题栏（`SessionHeader` / 协议与只读提示）独占一行，
+  下方 `session-split-body` 内容行再按模式切 CSS Grid（`chat` 单列 / `horizontal` `grid-cols-[4fr_6fr]` /
+  `vertical` `grid-rows-[3fr_7fr]`），对话列（`MessageList` + `InputBox`）与预览列并排或上下；标题栏
+  工具栏在宽度不足（完整工具栏自然宽度 > 标题栏宽 − 信息区最小 192px）时**整体**收成省略号按钮
+  （`data-testid="session-header-overflow"`），点击展开 icon+文字下拉（能力清单/分屏/实况/导出/归档/
+  关闭/继续/删除，与展开态同回调同门控），宽度恢复后自动展开；jsdom 无布局默认展开，测试经 stub
+  `clientWidth`/`scrollWidth` + window resize 驱动测量；偏好
+  `lib/split-prefs.ts`（`session-split-mode:{sessionId}`，
+  非法回退 chat）；宽度门控 `matchMedia('(min-width: 1024px)')`：不足隐藏「左右分栏」入口，
+  偏好 horizontal 但宽度不足**渲染 vertical 不改写偏好**；`?review=` 深链临时分屏（不写偏好），
+  关闭最后一个 Review 标签回退 chat，消费后 `history.replaceState` 清参。
+- **store（裁决 1，不引入 zustand）**：`stores/preview.ts`（`reduceTabs` 纯函数 +
+  `usePreviewStore(sessionId)` 模块级 Map 工厂：读→单共享预览 tab 替换、写→pinned 就地更新、
+  review 幂等、关闭激活回退）与 `stores/prompt-composer.ts`（批注回传片段，`origin` 徽标）；
+  `SessionView` 卸载 `destroy(sessionId)`。`getSnapshot` 必须返回缓存引用（useSyncExternalStore）。
+- **内容组件**：`CodePreview`（monaco-editor@0.57.0 精确锁版，`lib/preview/monaco-loader.ts` 唯一
+  seam 动态加载、editor.api/vs 独立 chunk 首屏不加载；行定位高亮 3s 淡出、DiffEditor 首块聚焦、
+  批注模式选行/Shift 连选/overlay/确认回传）；`HtmlPreview`（iframe `sandbox="allow-scripts"` 无
+  allow-same-origin、srcDoc 注入随机令牌、postMessage 经 event.source+token 双校验）；
+  `MarkdownPreview`（`MarkdownContent annotate` 通道注入 `data-sourcepos`（预览零开销）、选区→
+  源文 offset 并集映射，复用 `group-messages`/`tool-call-state` 之外的 `lib/preview/markdown-sourcepos`）。
+  三者「确认回传」产物为 `AnnotationBatch`（`lib/preview/types.ts`），经 `annotations-to-part.ts`
+  转文本片段进 prompt-composer。
+- **实况跟随**：`hooks/useLiveFileTracking.ts` 复用 `groupMessages` + `mergeToolCallMessages` 合并口径
+  （禁止另写解析）；edit/diff→pinned tab + `computeDiff` 首 added 行聚焦、read→共享预览 tab；
+  `toolCallId+内容指纹` 去重；仅跟踪开启后到达的调用。**开启分栏默认开启**：挂载偏好为分屏时默认开；
+  之后每次点击分栏入口（左右/上下，含互切与重选当前模式）都默认开启实况跟随（覆盖 Review 深链
+  临时分屏、手动关闭后再选），切回 chat 关闭；Review 深链临时分屏本身不开实况（临时分屏回退 chat
+  时同步关闭）。
+- **Review**：`ReviewPanel`（左目录树+批注计数徽标 / 右扩展名分流组件只读+批注、`sessionFileContent`
+  懒加载骨架、通过/驳回/仅评论提交、成功只读化结论徽标、失败 toast 可重试）；标签四态色
+  （PENDING 黄/APPROVED 绿/REJECTED 红/COMMENTED·CANCELLED 灰）；侧边栏 `components/sidebar/ReviewSection.tsx`
+  （待 Review 默认展开 / 已 Review 默认折叠、空分区不渲染、点击深链 `?review=`）；
+  用户级 SSE `session_review_*` 经 `useUserEventStream.onSessionReview` 触发 HOME_OVERVIEW refetch。
+- **InputBox 片段化**：`onSend(parts: PromptPart[])`（裁决 6）；片段区（文本首行摘要 ≤80 字 +
+  来源徽标 / 图片缩略 / 逐行删除）；粘贴与文件选择加图片（单图 5MB、合计 10MB，超限 toast）；
+  发送组装 `[...parts, ...(trim(input) ? [textPart] : [])]`；草稿 `session_input_parts_{id}`
+  （>2MB 不持久化）；`prompt.image` 能力门控（隐藏图片入口、发送时降级 `[图片 name]`）。
+  `MessageItem` 读 `metadata.parts` 渲染图片缩略（点击放大）。
+- 契约查询集中于 `graphql/preview.ts`（GET_SESSION_FILE_CONTENT/GET_SESSION_REVIEW/SUBMIT_SESSION_REVIEW），
+  `SEND_SESSION_MESSAGE` 带 `$parts`。
 
 ## 日志
 
@@ -186,6 +275,17 @@ pnpm run preview  # Preview production build
 - **详情抽屉排序**：`NodeDetailDrawer` 中「关联 Pull Request」区块在「产物」之前（其余结构不变）。
 - **图表自动定位**：`graph/graph-layout.ts` 的纯函数 `pickFocusWindow(nodes, activeIds, before=2, after=2)` 按 `position.y` 升序（同 y 按 x）定位**第一个**执行中节点，返回「前 2 + 自身 + 后 2」id 窗口（越界收敛，无执行中返回 `[]`）。`WorkflowGraphView` 用 `onInit` 保存 React Flow 实例并置 `rfReady`，effect **仅依赖 `[rfReady, activeKey]`**（执行中 id 集合拼接；节点列表经 ref 读取），首次 `duration:0`、切换 `duration:300`；无执行中节点不主动 `fitView`（保留整图首屏）。**禁止把 `nodes`/`instance` 加入该 effect 依赖**：5s 轮询每轮重建节点对象，会导致反复 fitView 抖动。
 - **测试入口**：`pages/__tests__/WorkflowInstancePage.test.tsx`（T-RNWEB1~4）、`components/workflow/graph/__tests__/WorkflowNodeCard.test.tsx`（T-WFI-NC1~3）、`components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-WFI-TC1）、`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-WFI-SH1）、`components/workflow/graph/__tests__/graph-layout.test.ts`（T-WFI1~5）、`components/workflow/__tests__/WorkflowGraphView.test.tsx`（T-WFI-V1~4，mock React Flow 断言窗口 fitView 与防抖动）、`tests/e2e/src/workflow-graph.spec.ts`（E2E-WFI1~3）。
+
+## 会话归档与只读（会话管理优化）
+
+> 契约：`contracts/agent-session.graphql`（`Session.archived` / `SessionReadOnlyReason` / `archiveSession` / `workspaceArchiveImpact`）、`contracts/home.graphql`（`HomeOverview.archivedSessions`）。实现计划见 `docs/engineering/plan/20261104-feat-session-management-optimization.md` Phase 6~8。
+
+- **归档入口**：`SessionHeader` 按钮组在「导出对话」之后渲染「归档/取消归档」图标按钮（lucide `Archive`/`ArchiveRestore`，对齐工作流实例页形态，`archiving` 期间禁用）；`onArchiveToggle` 不传即不渲染——`SessionView` 对工作流节点会话（`workflowInstanceId` 非空）不传该回调（服务端同样拒绝 `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED`）。已归档会话在状态徽标旁展示「已归档」徽标（`data-testid="session-archived-badge"`），入口切换为「取消归档」。
+- **归档接线**：`SessionView` 调 `ARCHIVE_SESSION`，归档成功 toast「会话已归档」并经 `onDeleted` 回调返回列表（`SessionPage` 传 `navigate('/sessions')`，对齐工作流实例归档后导航）；取消归档 toast「已取消归档」并 `refetchQueries: [GET_SESSION, HOME_OVERVIEW]` 就地生效（徽标与侧边栏同批刷新）。错误原样 toast，不吞错。
+- **侧边栏已归档分组**：`Sidebar` 会话分区列表尾部的 `ArchivedSessionGroup` 复刻 `ArchivedWorkflowGroup` 自折叠交互（默认折叠、`Archive` 图标、「已归档（N）」、`aria-expanded`），数据源 `HOME_OVERVIEW.archivedSessions`（为空不渲染）；条目与活跃条目共用 `SessionListEntry`（状态点 + 标题 + 所属工作区，点击直达 `/sessions/{id}`），归档分组列表带 `data-testid="sidebar-archived-session-list"`。**活跃列表不含已归档由服务端保证**（D12：`GET_SESSIONS`/`HOME_OVERVIEW.sessions` 不加归档参数消费，活跃过滤走服务端默认口径）。
+- **只读收敛（`readOnlyReason`）**：`SessionView` 只读判定唯一来源为 `GET_SESSION.readOnlyReason != null`，**替代旧 `readOnlyCloudHost` 计算**（`controllerType/cloudHost` 查询字段保留兼容，不再参与判定）。提示条按原因三态文案：`WORKSPACE_MISSING`「工作区已不存在，会话记录仅供只读回看。」/ `CONTROLLER_MISSING`「控制器已不存在，会话记录仅供只读回看。」/ `CLOUD_HOST_DESTROYED`「云电脑已销毁，会话记录仅供只读回看。」；统一 `data-testid="session-readonly-notice"`（附 `data-readonly-reason`），云电脑场景额外嵌套 `data-testid="cloud-host-readonly-notice"` 承载文案，保持 E2E 回归（D10）。只读时隐藏 `InputBox`，`SessionHeader`「继续」由统一 `readOnly` 门控隐藏；归档/取消归档/删除/导出对只读会话仍可用。
+- **工作区删除确认（含连带数量）**：`WorkspaceSection` 单删点击「删除」先经 `WORKSPACE_ARCHIVE_IMPACT` 取数：N>0 弹确认框「删除工作区将同时归档其下 N 个会话，是否继续？」（确认才调 `deleteWorkspace`，取消不调用），N=0 与取数失败保持现状直接删除（D9，取数失败不阻断）；「清空」沿用既有内联确认面板并追加「将同时归档其下 N 个会话」合计——确认面板打开时按工作区渲染 `WorkspaceArchiveImpactProbe` 探针逐个取数求和，任一失败降级为不展示数量（确认本身不阻断）。
+- **测试入口**：`components/session/SessionHeader.test.tsx`（T-WEB1 归档入口渲染/回调/徽标）、`components/session/__tests__/SessionView.archive.test.tsx`（T-WEB1 归档 mutation、归档后导航、取消归档就地、节点会话不渲染）、`components/session/__tests__/SessionView.readonly.test.tsx`（T-WEB3 三态文案与入口隐藏）、`components/__tests__/Sidebar.test.tsx`（T-WEB2 已归档分组折叠/计数/可打开/活跃列表不含已归档）、`components/settings/__tests__/WorkspaceSection.test.tsx`（T-WEB4 删除与清空确认数量）。
 
 ## 云存储归档优化（停止归档勾选 / 归档 / 复原到归档 / fork）
 

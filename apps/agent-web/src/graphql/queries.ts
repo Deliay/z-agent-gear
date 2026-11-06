@@ -76,6 +76,7 @@ export const GET_SESSIONS = gql`
       cwd
       worktreePath
       worktreeBranch
+      archived
       createdAt
       updatedAt
       endedAt
@@ -178,6 +179,8 @@ export const GET_SESSION = gql`
       supportsAdditionalDirectories
       workflowInstanceId
       workflowNodeId
+      archived
+      readOnlyReason
       createdAt
       updatedAt
       endedAt
@@ -536,6 +539,10 @@ export const GET_WORKSPACES = gql`
     }
   }
 `
+
+// WORKSPACE_ARCHIVE_IMPACT 定义在 mutations.ts：契约（contracts/agent-session.graphql）
+// 将 workspaceArchiveImpact 放在 Mutation，只能经 useMutation 执行（useQuery 会报
+// Cannot query field "workspaceArchiveImpact" on type "Query"）。
 
 export const BROWSE_FOLDER = gql`
   query BrowseFolder($controllerId: ID!, $path: String) {
@@ -957,6 +964,87 @@ export const SEARCH_ACCOUNTS = gql`
       username
       name
       userId
+    }
+  }
+`
+
+// ---------- MCP+Valut 功能迭代：Valut / 自定义 MCP（contracts/valut.graphql、contracts/custom-mcp.graphql） ----------
+
+/**
+ * Valut 条目按 namespace 聚合（当前工作区可见集，随 x-workspace-id 上下文切换）。
+ * 安全红线：选择集**不含 value 字段**——界面任何状态都拿不到明文值，编辑 = 重填新值（D10）。
+ */
+export const GET_VALUT_ENTRIES = gql`
+  query GetValutEntries {
+    valutEntries {
+      namespace {
+        name
+        displayName
+        managed
+      }
+      entries {
+        id
+        namespace
+        namespaceDisplayName
+        key
+        editable
+        deletable
+        refs {
+          feature
+          refId
+          refLabel
+          createdAt
+        }
+        createdBy
+        createdAt
+        updatedAt
+      }
+    }
+  }
+`
+
+/** 自定义 MCP「选择 token」数据源：仅 manual namespace、当前工作区可见集（服务端强制过滤）。 */
+export const GET_VALUT_MANUAL_OPTIONS = gql`
+  query GetValutManualOptions {
+    valutManualOptions {
+      id
+      namespace
+      namespaceDisplayName
+      key
+      editable
+      deletable
+      refs {
+        feature
+        refId
+        refLabel
+        createdAt
+      }
+      createdBy
+      createdAt
+      updatedAt
+    }
+  }
+`
+
+/** 自定义 MCP（工作区）列表：endpoint 仅展示地址本身，真实凭据不出服务端（平台代理转发）。 */
+export const GET_CUSTOM_MCP_SERVERS = gql`
+  query GetCustomMcpServers {
+    customMcpServers {
+      id
+      name
+      description
+      endpoint
+      authType
+      customHeaders {
+        key
+        values
+      }
+      bearerEntryId
+      bearerEntryManaged
+      workspaceId
+      createdBy
+      createdAt
+      updatedAt
     }
   }
 `

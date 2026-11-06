@@ -17,7 +17,9 @@ import {
   SET_SESSION_MODE,
   SET_SESSION_MODEL,
   SET_SESSION_CONFIG_OPTION,
+  ARCHIVE_SESSION,
 } from '../../graphql/mutations';
+import { HOME_OVERVIEW } from '../../graphql/home';
 import type {
   GetSessionQuery,
   GetSessionMessagesQuery,
@@ -28,6 +30,7 @@ import type {
   AgentModeData,
   AgentModelInfoData,
   SessionConfigOptionData,
+  SessionReadOnlyReason,
 } from '../../graphql/types';
 import { getApiBase } from '../../lib/api-base';
 import { logger } from '../../lib/logger';
@@ -36,11 +39,21 @@ import MessageList from './MessageList';
 import InputBox from './InputBox';
 import ResumeConfirmDialog from './ResumeConfirmDialog';
 import { PendingElicitationBanner } from './PendingElicitationBanner';
-import { isReadOnlyCloudHost } from '../cloud-host/cloud-host-status';
 import { useCommandState } from '../../hooks/useCommandState';
 import { useAgentCapabilities } from '../../hooks/useAgentCapabilities';
 import { threadToMarkdown, downloadThreadMarkdown } from '../../lib/export-thread';
 import { collectFullHistory } from '../../lib/session-messages';
+import { PreviewPane } from './preview/PreviewPane';
+import { destroyPreviewStore, getPreviewStore } from '../../stores/preview';
+import { getPromptComposer, destroyPromptComposer } from '../../stores/prompt-composer';
+import { getSplitMode, setSplitMode, type SplitMode } from '../../lib/split-prefs';
+import { useLiveFileTracking } from '../../hooks/useLiveFileTracking';
+import { annotationsToPartText } from '../../lib/preview/annotations-to-part';
+import { mergeText, type PromptPart } from '../../lib/preview/prompt-parts';
+import type { AnnotationBatch } from '../../lib/preview/types';
+import { GET_SESSION_REVIEWS, type SessionReviewData } from '../../graphql/preview';
+import { useUserEventStream } from '../../hooks/useUserEventStream';
+import { useUrlSearch } from '../../hooks/useUrlSearch';
 
 interface AcpMessage {
   id: string;
@@ -77,9 +90,16 @@ function getErrorMessage(error?: string): string {
   return error ? (errorMessages[error] || `Failed to resume session: ${error}`) : 'Failed to resume session. Please try again.';
 }
 
+/** 只读提示文案：三场景统一「会话记录仅供只读回看」语义（服务端 readOnlyReason 为唯一判定来源） */
+const READ_ONLY_NOTICES: Record<SessionReadOnlyReason, string> = {
+  WORKSPACE_MISSING: '工作区已不存在，会话记录仅供只读回看。',
+  CONTROLLER_MISSING: '控制器已不存在，会话记录仅供只读回看。',
+  CLOUD_HOST_DESTROYED: '云电脑已销毁，会话记录仅供只读回看。',
+};
+
 interface SessionViewProps {
   sessionId: string;
-  /** 会话删除后的回调（路由页用于跳转回列表页） */
+  /** 会话删除/归档后的返回列表回调（路由页用于跳转回 /sessions） */
   onDeleted?: () => void;
 }
 
@@ -93,6 +113,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const autoPromptAfterResumeRef = useRef(false);
   const [closing, setClosing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [modes, setModes] = useState<AgentModeData[]>([]);
   const [sseLoading, setSseLoading] = useState(false);
   const [sseError, setSseError] = useState(false);
@@ -110,6 +131,138 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const [configOptions, setConfigOptions] = useState<SessionConfigOptionData[]>([]);
   const { commands: availableCommands, updateCommands } = useCommandState();
   const client = useApolloClient();
+
+  // ---- 分屏 / 预览区（#461，Phase 6） ----
+  // Review 深链：响应式消费（A1 返工）——同会话 SPA 导航（不重挂载）也能打开新 Review 标签
+  const urlSearch = useUrlSearch();
+  const reviewDeepLink = new URLSearchParams(urlSearch).get('review');
+  const [splitMode, setSplitModeState] = useState<SplitMode>(() => getSplitMode(id));
+  // 实况跟随默认开启：挂载时偏好已为分屏时默认开；之后每次点击分栏入口（含互切/重选）都默认开启，
+  // 切回 chat 关闭。
+  const [live, setLive] = useState(() => getSplitMode(id) !== 'chat');
+  const [wideEnoughForHorizontal, setWideEnoughForHorizontal] = useState(
+    () => typeof window === 'undefined' || window.matchMedia('(min-width: 1024px)').matches,
+  );
+  // 预览 store 不能在 ref 里缓存实例：StrictMode 的 mount→cleanup→mount 会经
+  // destroyPreviewStore 注销旧实例，若 ref 仍指向旧实例，实况跟随写入的 tab 不会出现在
+  // PreviewPane 重新取到的 store 上（右侧恒为「暂无预览内容」）。按 id 每次解析（Map 查找）。
+  const previewStore = getPreviewStore(id);
+
+  // 批注回传 → 提示词片段区（来源徽标 origin）
+  const handleAnnotation = useCallback((batch: AnnotationBatch) => {
+    if (batch.comments.length === 0 && !batch.summary) return;
+    getPromptComposer(id).appendPart({
+      id: `ann-${Date.now()}`,
+      type: 'text',
+      text: annotationsToPartText(batch),
+      origin: batch,
+    });
+    toast.success('批注已回传到输入区');
+  }, [id]);
+
+  // A2：Review 标签状态色（session_review_* SSE 即时 + sessionReviews 15s 轮询兜底）
+  const [reviewStatuses, setReviewStatuses] = useState<Record<string, SessionReviewData['status']>>({});
+  type ReviewStatusRow = { id: string; status: SessionReviewData['status'] };
+  const { refetch: refetchReviewStatuses } = useQuery<{ sessionReviews: ReviewStatusRow[] }>(
+    GET_SESSION_REVIEWS as never,
+    {
+      variables: { sessionId: id },
+      pollInterval: 15000,
+      fetchPolicy: 'cache-and-network',
+      onCompleted: (data: { sessionReviews: ReviewStatusRow[] }) => {
+        const map: Record<string, SessionReviewData['status']> = {};
+        for (const review of data?.sessionReviews ?? []) map[review.id] = review.status;
+        setReviewStatuses(map);
+      },
+    } as never,
+  );
+  useUserEventStream({
+    enabled: true,
+    onSessionReview: (event) => {
+      const review = (event as { review?: ReviewStatusRow }).review;
+      if (review?.id) {
+        setReviewStatuses((prev) => ({ ...prev, [review.id]: review.status }));
+        void refetchReviewStatuses?.();
+      }
+    },
+  });
+
+  // 深链临时分屏标记（不写偏好）：关闭最后一个 Review 标签后回退 chat
+  const [tempSplit, setTempSplit] = useState(false);
+  const [hasReviewTab, setHasReviewTab] = useState(false);
+  useEffect(() => {
+    const store = getPreviewStore(id);
+    setHasReviewTab(store.getSnapshot().tabs.some((tab) => tab.kind === 'review'));
+    return store.subscribe(() => {
+      setHasReviewTab(store.getSnapshot().tabs.some((tab) => tab.kind === 'review'));
+    });
+  }, [id]);
+
+  useEffect(() => {
+    if (tempSplit && !hasReviewTab) {
+      setTempSplit(false);
+      setSplitModeState('chat');
+      setLive(false);
+    }
+  }, [tempSplit, hasReviewTab]);
+
+  // 宽度门控：不足 1024px 隐藏「左右分栏」入口（偏好不改写）
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const onChange = (): void => setWideEnoughForHorizontal(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  // Review 深链（裁决 13）：chat 时按宽度临时分屏（不写偏好），消费后清参防重复打开
+  useEffect(() => {
+    const reviewId = reviewDeepLink;
+    if (!reviewId) return;
+    const store = getPreviewStore(id);
+    if (store.getSnapshot().tabs.some((tab) => tab.kind === 'review' && tab.reviewId === reviewId)) {
+      // 已打开（重复深链）：仅清参
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('review') === reviewId) {
+        url.searchParams.delete('review');
+        window.history.replaceState(window.history.state, '', url.toString());
+      }
+      return;
+    }
+    getPreviewStore(id).openReview(reviewId);
+    if (getSplitMode(id) === 'chat') {
+      setSplitModeState(wideEnoughForHorizontal ? 'horizontal' : 'vertical');
+      setTempSplit(true);
+    }
+    // 消费后清参（replaceState 防重复打开）
+    const url = new URL(window.location.href);
+    url.searchParams.delete('review');
+    window.history.replaceState(window.history.state, '', url.toString());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, reviewDeepLink]);
+
+  const handleSplitModeChange = useCallback((mode: SplitMode) => {
+    setTempSplit(false);
+    setSplitModeState(mode);
+    setSplitMode(id, mode);
+    // 点击分栏入口即默认开启实况跟随（含互切/重选当前模式，覆盖 Review 深链临时分屏与手动关闭后再选）；
+    // 切回 chat 关闭
+    setLive(mode !== 'chat');
+  }, [id]);
+
+  // 偏好 horizontal 但宽度不足：渲染 vertical 且不改写偏好（拉宽后自动恢复）
+  const effectiveSplitMode: SplitMode =
+    splitMode === 'horizontal' && !wideEnoughForHorizontal ? 'vertical' : splitMode;
+
+  // 实况跟随（复用 mergeToolCallMessages 合并口径）
+  useLiveFileTracking({ sessionId: id, messages, live: live && splitMode !== 'chat', store: previewStore });
+
+  // 卸载清理（裁决 1）：预览 / 片段 store 按会话销毁
+  useEffect(() => {
+    return () => {
+      destroyPreviewStore(id);
+      destroyPromptComposer(id);
+    };
+  }, [id]);
 
   const isWorking = status === 'running';
 
@@ -155,17 +308,21 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const [setSessionMode] = useMutation(SET_SESSION_MODE);
   const [setSessionModel] = useMutation(SET_SESSION_MODEL);
   const [setSessionConfigOption] = useMutation<SetSessionConfigOptionMutation>(SET_SESSION_CONFIG_OPTION);
+  const [archiveSession] = useMutation(ARCHIVE_SESSION);
 
-  const handleSendMessage = useCallback(async (content: string) => {
-    if (!id) return;
+  const handleSendMessage = useCallback(async (parts: PromptPart[]) => {
+    if (!id || parts.length === 0) return;
     try {
       lastMessageIsSettingUpdateRef.current = false;
       setSending(true);
+      // 裁决 6：content=合并文本（非空文本 \n\n 连接，兼容旧渲染与标题提取），parts 透传契约参数
+      const content = mergeText(parts);
       await sendMessage({
         variables: {
           sessionId: id,
           content,
           type: 'text',
+          parts: parts.map(({ id: _partId, origin: _origin, ...part }) => part),
         },
       });
     } catch (err) {
@@ -246,7 +403,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           // 断连恢复 ready：自动发送工作流继续提示词，引导 AI 调 MCP 工具推进节点
           if (autoPromptAfterResumeRef.current) {
             autoPromptAfterResumeRef.current = false;
-            handleSendMessage(WORKFLOW_CONTINUE_PROMPT);
+            handleSendMessage([{ id: 'workflow-continue', type: 'text', text: WORKFLOW_CONTINUE_PROMPT }]);
           }
         }
         if (data.data.modes) setModes(data.data.modes);
@@ -364,6 +521,36 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
 
   const isWorkflowNodeSession = Boolean(sessionData?.session?.workflowInstanceId);
 
+  /**
+   * 归档/取消归档：
+   * - 归档成功 toast 并返回会话列表（复用 onDeleted 路由回调 = navigate('/sessions')，对齐工作流实例归档）；
+   * - 取消归档就地生效（refetch GET_SESSION 刷新徽标与入口）。
+   * 工作流节点会话不渲染入口（服务端同样拒绝 ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED）。
+   */
+  const handleArchiveToggle = async () => {
+    const session = sessionData?.session;
+    if (!session) return;
+    const nextArchived = !session.archived;
+    setArchiving(true);
+    try {
+      await archiveSession({
+        variables: { id, archived: nextArchived },
+        refetchQueries: [{ query: GET_SESSION }, { query: HOME_OVERVIEW }],
+      });
+      if (nextArchived) {
+        toast.success('会话已归档');
+        onDeleted?.();
+      } else {
+        toast.success('已取消归档');
+      }
+    } catch (error) {
+      logger.error({ err: error }, 'Failed to archive session');
+      toast.error(error instanceof Error ? error.message : '操作失败，请重试');
+    } finally {
+      setArchiving(false);
+    }
+  };
+
   /** 「继续」入口：断连会话先弹确认框，已结束会话直接 resume */
   const handleContinueClick = () => {
     if (status === 'disconnected') {
@@ -468,17 +655,10 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     (c) => c.id === sessionData?.session?.controllerId,
   );
   const controllerOnline = sessionController?.status === 'online';
-  // D-1：只读判定不依赖 controller 列表命中（软删除后列表会过滤该 Controller）。
-  // 优先使用 GET_SESSION 返回的 controllerType/cloudHost（cloudHost 含软删除留档）。
-  const isCloudSession =
-    sessionData?.session?.controllerType === 'cloud' || sessionController?.type === 'cloud';
-  const sessionCloudHost = sessionData?.session?.cloudHost;
-  const cloudHost = isCloudSession
-    ? sessionCloudHost ?? sessionController?.cloudHost ?? null
-    : null;
-  // 云电脑 STOPPED/FAILED/deletedAt/缺失：会话只读回看（服务端同样拒绝 resume/command）
-  const readOnlyCloudHost =
-    isCloudSession && (cloudHost == null || isReadOnlyCloudHost(cloudHost));
+  // 只读判定收敛为服务端 readOnlyReason（D5：规则集中后端，前端零规则重复）：
+  // 控制器缺失 / 项目工作区缺失 / 云电脑终态三场景统一由字段 resolver 实时计算。
+  const readOnlyReason = sessionData?.session?.readOnlyReason ?? null;
+  const readOnly = readOnlyReason != null;
 
   if (sessionLoading) {
     return (
@@ -541,7 +721,12 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full min-h-0 min-w-0 flex-col"
+      data-testid="session-split-root"
+      data-split-mode={effectiveSplitMode}
+    >
+      {/* 标题栏（含协议提示/只读提示）独立占一行 */}
       {protocolMismatch && (
         <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
           ⚠️ Agent 协议版本不兼容：期望 v{protocolMismatch.expectedVersion}，Agent 返回 v{protocolMismatch.agentVersion}。部分功能可能无法正常工作。
@@ -561,6 +746,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           createdAt: sessionData.session.createdAt,
           updatedAt: sessionData.session.updatedAt,
           endedAt: sessionData.session.endedAt,
+          archived: sessionData.session.archived,
         } : null}
         status={status}
         onClose={handleCloseSession}
@@ -572,44 +758,83 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         controllerOnline={controllerOnline}
         capabilities={capabilities}
         capabilitySession={sessionData?.session ?? null}
-        readOnly={readOnlyCloudHost}
+        readOnly={readOnly}
         onExport={handleExportThread}
+        onArchiveToggle={isWorkflowNodeSession ? undefined : handleArchiveToggle}
+        archiving={archiving}
+        splitMode={splitMode}
+        onSplitModeChange={handleSplitModeChange}
+        live={live}
+        onLiveChange={setLive}
+        wideEnoughForHorizontal={wideEnoughForHorizontal}
       />
       <PendingElicitationBanner sessionId={id} />
-      {readOnlyCloudHost && (
-        <div className="border-b border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground" data-testid="cloud-host-readonly-notice">
-          云电脑已销毁，会话记录仅供只读回看。
+      {readOnly && readOnlyReason && (
+        <div
+          className="border-b border-border bg-muted/50 px-4 py-2 text-sm text-muted-foreground"
+          data-testid="session-readonly-notice"
+          data-readonly-reason={readOnlyReason}
+        >
+          {readOnlyReason === 'CLOUD_HOST_DESTROYED' ? (
+            <span data-testid="cloud-host-readonly-notice">{READ_ONLY_NOTICES[readOnlyReason]}</span>
+          ) : (
+            READ_ONLY_NOTICES[readOnlyReason]
+          )}
         </div>
       )}
-      <MessageList
-        messages={messages}
-        sseLoading={sseLoading}
-        sseError={sseError}
-        hasMore={hasMore}
-        onLoadMore={handleLoadMore}
-        loadingMore={loadingMore}
-      />
-      {!readOnlyCloudHost && (
-        <InputBox
-          sessionId={id}
-          onSend={handleSendMessage}
-          onStop={handleCancelGeneration}
-          disabled={status !== 'idling' && status !== 'running'}
-          sending={sending}
-          isWorking={isWorking}
-          modes={modes}
-          currentModeId={currentModeId}
-          onSetMode={handleSetMode}
-          status={status}
-          availableModels={availableModels}
-          currentModelId={currentModelId}
-          onSetModel={handleSetModel}
-          availableCommands={availableCommands}
-          configOptions={configOptions}
-          onSetConfigOption={handleSetConfigOption}
-          capabilities={capabilities}
-        />
-      )}
+      {/* 内容行：对话一栏 + 预览一栏（chat 模式仅对话） */}
+      <div
+        className={`grid min-h-0 min-w-0 flex-1 ${
+          effectiveSplitMode === 'chat'
+            ? 'grid-cols-1'
+            : effectiveSplitMode === 'horizontal'
+              ? 'grid-cols-[4fr_6fr]'
+              : 'grid-cols-1 grid-rows-[3fr_7fr]'
+        }`}
+        data-testid="session-split-body"
+      >
+        <div className="flex min-h-0 min-w-0 flex-col">
+          <MessageList
+            messages={messages}
+            sseLoading={sseLoading}
+            sseError={sseError}
+            hasMore={hasMore}
+            onLoadMore={handleLoadMore}
+            loadingMore={loadingMore}
+          />
+          {!readOnly && (
+            <InputBox
+              sessionId={id}
+              onSend={handleSendMessage}
+              onStop={handleCancelGeneration}
+              disabled={status !== 'idling' && status !== 'running'}
+              sending={sending}
+              isWorking={isWorking}
+              modes={modes}
+              currentModeId={currentModeId}
+              onSetMode={handleSetMode}
+              status={status}
+              availableModels={availableModels}
+              currentModelId={currentModelId}
+              onSetModel={handleSetModel}
+              availableCommands={availableCommands}
+              configOptions={configOptions}
+              onSetConfigOption={handleSetConfigOption}
+              capabilities={capabilities}
+            />
+          )}
+        </div>
+        {effectiveSplitMode !== 'chat' && (
+          <div
+            className={`flex h-full min-h-0 min-w-0 flex-col border-border ${
+              effectiveSplitMode === 'horizontal' ? 'border-l' : 'border-t'
+            }`}
+            data-testid="session-preview-column"
+          >
+            <PreviewPane sessionId={id} onAnnotation={handleAnnotation} reviewStatuses={reviewStatuses} />
+          </div>
+        )}
+      </div>
       <ResumeConfirmDialog
         open={resumeConfirmOpen}
         onOpenChange={setResumeConfirmOpen}

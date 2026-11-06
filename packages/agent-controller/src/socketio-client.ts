@@ -1551,6 +1551,13 @@ export function connectToServer(
     socket.emit('fs:remove-dir:result', { requestId: data.requestId, ...result });
   });
 
+  // FS read-file event（契约 §3.25/§3.26：白名单限量文本读取）
+  socket.on('fs:read-file', async (data: { requestId: string; path: string; maxBytes?: number }) => {
+    log.info({ event: 'fs_read_file', requestId: data.requestId, path: data.path }, 'fs:read-file received');
+    const result = await fsHandler.readFile(data.path, data.maxBytes);
+    socket.emit('fs:read-file:result', { requestId: data.requestId, ...result });
+  });
+
   // Reconnection reconciliation
   socket.on('acp:reconcile', async (data: { activeSessionIds: string[]; pendingKillSessionIds: string[] }) => {
     if (!data || !isStringArray(data.activeSessionIds) || !isStringArray(data.pendingKillSessionIds)) {

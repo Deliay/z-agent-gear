@@ -18,6 +18,7 @@ import { gitBrowserService } from './git-browser.js';
 import { acpSessionSyncService } from './acp-session-sync.js';
 import { worktreeService } from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
+import { fsReadFileService } from './fs-read-file-service.js';
 import { gatewayRelayService } from './gateway-relay.js';
 import { permissionManager } from './permission-manager.js';
 import { elicitationManager } from './elicitation-manager.js';
@@ -684,6 +685,12 @@ export function createSocketIOServer(
     onEvent(socket, 'fs:mkdir:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await fsMkdirService.handleMkdirResult(payload.requestId, payload);
+    });
+
+    // fs:read-file 结果（契约 §3.26）：写 Redis fs:read-file:{requestId}（TTL 60s）供 agent-api 轮询
+    onEvent(socket, 'fs:read-file:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await fsReadFileService.handleReadFileResult(payload.requestId, payload);
     });
 
     onEvent(socket, 'git:worktree:add:result', async (payload: { requestId: string } & Record<string, unknown>) => {

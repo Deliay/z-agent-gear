@@ -468,6 +468,15 @@ export interface GitRepoInfoData {
   defaultBranch?: string | null
 }
 
+/** 删除工作区影响预查询（contracts/agent-session.graphql）：连带归档的普通会话数 */
+export interface WorkspaceArchiveImpactData {
+  sessionCount: number
+}
+
+export interface WorkspaceArchiveImpactQuery {
+  workspaceArchiveImpact: WorkspaceArchiveImpactData
+}
+
 export interface GitInitResultData {
   success: boolean
 }
@@ -586,6 +595,12 @@ export interface AuthMethodInfoData {
   url?: string | null
 }
 
+/** 会话只读原因（服务端字段 resolver 实时计算；null/缺失 = 可写） */
+export type SessionReadOnlyReason =
+  | 'WORKSPACE_MISSING'
+  | 'CONTROLLER_MISSING'
+  | 'CLOUD_HOST_DESTROYED'
+
 export interface SessionData {
   id: string
   userId: string
@@ -602,6 +617,10 @@ export interface SessionData {
   cwd: string | null
   worktreePath: string | null
   worktreeBranch: string | null
+  /** 归档状态（true=已归档，收纳进侧边栏「已归档」分组） */
+  archived: boolean
+  /** 只读原因：null=可写；三场景（工作区/控制器缺失、云电脑终态）由服务端统一计算 */
+  readOnlyReason?: SessionReadOnlyReason | null
   modes?: AgentModeData[] | null
   currentModeId?: string | null
   availableModels?: AgentModelInfoData[] | null
@@ -894,6 +913,7 @@ export interface ElicitationSchemaProperty {
   items?: {
     enum?: unknown[]
     oneOf?: ElicitationSchemaOneOfOption[]
+    anyOf?: ElicitationSchemaOneOfOption[]
   }
 }
 
@@ -1138,13 +1158,33 @@ export interface HomeOverviewWorkspaceData extends ControllerWorkspaceData {
 
 export interface HomeOverviewData {
   controllers: HomeOverviewControllerData[]
+  /** 未归档活跃会话（服务端已按未归档过滤，D12） */
   sessions: SessionData[]
   sessionTotalCount: number
+  /** 已归档会话（侧边栏「已归档（N）」折叠分组，与 sessions 互补） */
+  archivedSessions: SessionData[]
   workspaces: HomeOverviewWorkspaceData[]
   workflowInstances: WorkflowInstanceSummaryData[]
   archivedWorkflowInstances: WorkflowInstanceSummaryData[]
   todos: TodoItemData[]
   unreadTodoCount: number
+  /** Review 列表（PENDING 在前、终态 resolvedAt 倒序、上限 20） */
+  sessionReviews: SessionReviewSummaryData[]
+}
+
+/** Review 摘要（HOME_OVERVIEW.sessionReviews / GET_SESSION_REVIEW 共用） */
+export interface SessionReviewSummaryData {
+  id: string
+  sessionId: string
+  /** 所属会话标题（HomeOverview 聚合补齐；B3） */
+  sessionTitle?: string | null
+  files: string[]
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'COMMENTED' | 'CANCELLED'
+  fileReviews: unknown
+  comment: string | null
+  cancelReason: string | null
+  createdAt: string
+  resolvedAt: string | null
 }
 
 export interface HomeOverviewQuery {
@@ -1309,4 +1349,141 @@ export interface CleanupCloudHostIssuesLabelsResultData {
 
 export interface CleanupCloudHostIssuesLabelsMutation {
   cleanupCloudHostIssuesLabels: CleanupCloudHostIssuesLabelsResultData
+}
+
+// ---------- MCP+Valut 功能迭代：Valut / 自定义 MCP（contracts/valut.graphql、contracts/custom-mcp.graphql） ----------
+
+/** 契约枚举 `CustomMcpAuthType` */
+export type CustomMcpAuthType = 'none' | 'bearer'
+
+/** `ValutRef`：哪些数据在引用该条目（可多条） */
+export interface ValutRefData {
+  feature: string
+  refId: string
+  refLabel: string | null
+  createdAt: string
+}
+
+/**
+ * `ValutEntry`——**无 value 字段**（契约安全红线：明文不出服务端，任何选择集均不含值）。
+ */
+export interface ValutEntryData {
+  id: string
+  namespace: string
+  namespaceDisplayName: string
+  key: string
+  editable: boolean
+  deletable: boolean
+  refs: ValutRefData[]
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ValutNamespaceData {
+  /** manual | service-{feature} */
+  name: string
+  displayName: string
+  /** true=服务托管（service-*），用户不可直接新增 */
+  managed: boolean
+}
+
+export interface ValutNamespaceGroupData {
+  namespace: ValutNamespaceData
+  entries: ValutEntryData[]
+}
+
+export interface GetValutEntriesQuery {
+  valutEntries: ValutNamespaceGroupData[]
+}
+
+export interface GetValutManualOptionsQuery {
+  valutManualOptions: ValutEntryData[]
+}
+
+export interface CreateValutEntryInput {
+  key: string
+  value: string
+}
+
+export interface CreateValutEntryMutation {
+  createValutEntry: ValutEntryData
+}
+
+export interface UpdateValutEntryMutation {
+  updateValutEntry: ValutEntryData
+}
+
+export interface DeleteValutEntryMutation {
+  deleteValutEntry: boolean
+}
+
+/** `CustomMcpHeader`：同名 header 允许多值 */
+export interface CustomMcpHeaderData {
+  key: string
+  values: string[]
+}
+
+export interface CustomMcpServerData {
+  id: string
+  name: string
+  description: string | null
+  /** http(s) URL（仅地址本身；调用由平台代理转发完成） */
+  endpoint: string
+  authType: CustomMcpAuthType
+  customHeaders: CustomMcpHeaderData[]
+  /** bearer 时对应的 Valut 条目（自建或引用） */
+  bearerEntryId: string | null
+  /** true=自建（service-mcp-bearer-tokens，可就地更新）；false=引用 manual（穿透编辑） */
+  bearerEntryManaged: boolean | null
+  workspaceId: string
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface GetCustomMcpServersQuery {
+  customMcpServers: CustomMcpServerData[]
+}
+
+export interface CustomMcpHeaderInput {
+  key: string
+  values: string[]
+}
+
+export interface CustomMcpAuthInput {
+  type: CustomMcpAuthType
+  /** type=bearer 且新建/就地重填：token 明文（仅入参，永不回显） */
+  newToken?: string | null
+  /** type=bearer 且引用：仅 manual 条目 */
+  existingEntryId?: string | null
+}
+
+export interface CreateCustomMcpServerInput {
+  name: string
+  description?: string | null
+  endpoint: string
+  auth: CustomMcpAuthInput
+  customHeaders?: CustomMcpHeaderInput[] | null
+}
+
+export interface UpdateCustomMcpServerInput {
+  name?: string
+  description?: string | null
+  endpoint?: string
+  /** 省略=不动；bearer+newToken=更新自建值；bearer+existingEntryId=改挂 manual 引用 */
+  auth?: CustomMcpAuthInput | null
+  customHeaders?: CustomMcpHeaderInput[] | null
+}
+
+export interface CreateCustomMcpServerMutation {
+  createCustomMcpServer: CustomMcpServerData
+}
+
+export interface UpdateCustomMcpServerMutation {
+  updateCustomMcpServer: CustomMcpServerData
+}
+
+export interface DeleteCustomMcpServerMutation {
+  deleteCustomMcpServer: boolean
 }

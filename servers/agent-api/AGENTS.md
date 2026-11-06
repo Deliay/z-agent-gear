@@ -71,6 +71,15 @@ pnpm run start   # Start production server
 
 新增 Query/类型级 resolver（含 `WorkflowInstance.workspace` / `controller`）必须登记 `graphql/resolvers/index.ts`，否则线上不生效。
 
+## 会话归档与只读
+
+- **模型与迁移**：`Session.archivedAt`（Date|null，default null）与 `Session.controllerWorkspaceId`（ObjectId ref ControllerWorkspace，default null）+ 索引 `{userId,archivedAt,createdAt:-1}`、`{controllerId,controllerWorkspaceId}`；迁移 `022-session-archive-indexes`（幂等「先建后用」，生产 `autoIndex=false` 兜底，已登记 `index.ts` 的启动 runner）。存量零回填：`archivedAt` 缺省即未归档，`controllerWorkspaceId` 为 null 的旧会话走回退匹配（D3）。
+- **落库点**：`controllerWorkspaceId` 仅两处写入——`sessionService.create`（存 `input.workspaceId`）与 `sessionImportService.importSessions`（循环内单点，含单条/批量导入）。
+- **归档服务**：`setArchived(userId,id,archived)`（`actorFilter` 归属 → `Session not found`；`workflowInstanceId != null` → `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED` 且不写库；`$set archivedAt` 幂等）；`findAllByUser({archived})` 追加 `archivedAt: archived ? {$ne:null} : null`（与 `includeWorkflowSessions` 排除口径正交，缺省 = 活跃）；`mapSession` 输出 `archived: Boolean(archivedAt)`（**不透出 `archivedAt` 原文**）。归档不发任何 acp 命令、不撤销 endpoint、不改状态机（D1）。
+- **统一只读判定（三场景）**：`assertControllerWritable`（保留函数名）委托 `resolveReadOnlyReason` 返回四态 `null` / `CONTROLLER_MISSING`（`Controller.findOne` 空）/ `CLOUD_HOST_DESTROYED`（cloud 且 host 缺失/软删/STOPPING/STOPPED/FAILED，口径未变）/ `WORKSPACE_MISSING`（非 cloud：`controllerWorkspaceId` 非空 → `ControllerWorkspace.exists({_id})` 不存在即缺失；为空回退根目录 `cwd == ws.path` 或前缀 `ws.path + '/'` 匹配该控制器任一工作区；`worktreePath != null` 或无 cwd 无法判定 → 放行，D8）。接入点：`assertSessionWritable`（`sendSessionMessage`）、`cancelGeneration`、`resume`——`resume` 已删除重复云电脑判定收敛为同一判定（ended/disconnected 门禁与返回形状 `{success:false,status:'ended',error:'session is ended'}` 不变）。写路径统一文案 `session is ended`（D4）；原因展示由 `Session.readOnlyReason` 字段 resolver 调 `resolveSessionReadOnlyReason(session,userId)` 实时计算（D5，不落库），**必须落在 `sessionResolvers.Session` 内**（`resolvers/index.ts` spread 登记，`resolvers/index.test.ts` 守卫）。
+- **工作区删除连带**：`matchWorkspaceSessions(workspace,userId)` 为匹配**唯一口径**（精确 `{controllerId, controllerWorkspaceId}`；旧数据根目录 cwd 等值/前缀、worktree 按 `worktreeScopePrefix` 前缀匹配，复用 `worktree-utils` 并保留 homeDir 缺失退化；查询层 `workflowInstanceId: null` 排除节点会话）——`archiveByWorkspace` 与 resolver `workspaceArchiveImpact` 共用（提示数量 = 实际归档数量）。`archiveByWorkspace`：匹配 → 非 ended 逐个 `close(suppressFallback:true, reason:'workspace_deleted')`（单会话失败仅记日志不阻断）→ `updateMany({_id:{$in}, archivedAt:null, ...actorFilter})` 幂等归档并返回数量；`controllerWorkspaceService.delete/clear` 删除前先连带（`clear` 逐个工作区执行），**归档失败抛错中止删除**（D7：工作区行保留，避免「工作区没了、会话未归档」中间态）。
+- **首页聚合**：`homeOverview.archivedSessions` 分支（`findAllByUser({includeWorkflowSessions:false, archived:true})`，`degrade` 兜底 `[]`）与活跃 `sessions`（`archived:false`）互补，`sessionTotalCount` 为未归档口径。
+
 ## 前台云电脑（harness）
 
 - 领域入口：`services/cloud-host-service.ts`；GraphQL：`graphql/schemas/cloud-host.ts` + `graphql/resolvers/cloud-host.ts`；契约 `contracts/cloud-host.graphql`。
@@ -84,6 +93,39 @@ pnpm run start   # Start production server
 - `KeyedMutex` 非可重入：同异步上下文嵌套同 key 会立即抛错（`AsyncLocalStorage` 检测），避免永久挂起。
 - 删除：仅 `STOPPED/FAILED`，软删除 `cloudhosts.deletedAt`、撤销 ControllerKey、`Controller.status=offline`；Controller/会话/消息保留，列表与首页过滤。`Controller.cloudHost` 对软删除返回 null，前端对 `type=cloud && cloudHost=null` 同样按只读渲染。`Controller.cloudHost` 与 `myCloudHosts` 同为**工作区成员口径**（`actorFilter`，团队工作区成员可见他人创建的云电脑；无工作区上下文的引擎/内部链路仍按 `userId` 归属校验）。
 - 开关：`HARNESS_ENABLED=false` 时 capabilities 隐藏/禁用、create 返回 `harness feature is disabled`；存量仍可 list/stop/delete。
+
+## SessionReview 与会话预览工具（#461）
+
+- **领域**：`models/session-review.ts`（`sessionreviews`，`tenantId` 声明 + `applyTenantScope`，无唯一索引）+
+  迁移 `023-session-reviews`（幂等建 `{userId,status,createdAt:-1}`、`{sessionId,status}`）；
+  查询一律 `actorFilter(userId)`（多租户二期口径）。集合矩阵在 `models/tenant-isolation.test.ts`
+  与 `TENANT_ID_COLLECTIONS`（迁移 013 的集合注册表，回填对新集合为 no-op）双注册（20 集合）。
+- **状态机**：PENDING →（submit PENDING CAS）APPROVED/REJECTED/COMMENTED；→（超时/会话结束 CAS）
+  CANCELLED（`cancelReason: timeout | session_closed`）。CAS 未命中抛 `Review not found or already resolved`。
+- **等待器**（`services/session-review-service.ts`）：进程内 `Map<reviewId, {resolve, timer}>`，
+  `timer.unref()`，30min 到点自行 CAS 取消（`MCP_REVIEW_TIMEOUT_MS` 默认 1_800_000，env 可调）；
+  **单实例前提**（与 `KeyedMutex` / 中断重试调度器同前提）。会话 `ended/removed` 经
+  `sessionService.onSessionStatus` 批量取消（index.ts 注册）。
+- **平台 MCP**：`agent-session-preview-tools`（`services/session-preview-tools.ts`，`transport/source=platform`，
+  唯一工具 `review`）——`sessionService.create` **公共路径恒装配**（普通/云/节点会话全覆盖，与 controller.type
+  无关）并去重；「全部已启用」候选与 `setControllerDefaultMcp` 校验排除口径为
+  `$nin: [agent-cloud-host-tools, agent-session-preview-tools]`（选平台服务报 `MCP_SERVER_NOT_SELECTABLE`）；
+  `mcp-dispatch` platform 直发分支同名路由。review handler：归属校验（actorFilter）→ 文件解析
+  （相对基于 `worktreePath ?? cwd`，越界剔除标 `skipped`、去重、≤50）→ `createForMcp`（SSE
+  `session_review_requested`）→ `waitForResolution` → 终态回包 `{file_reviews, comment, status: Approve|Reject|Comment}`
+  / 取消回包 `{cancelled:true, reason}`（isError=false）。MCP 转发超时按 serverName 放宽 30min（契约 §2.12.1）。
+- **sessionFileContent**（resolver `resolvers/session.ts`）：归属校验（非归属 `Session not found`）+
+  **只读会话允许** + 路径守卫（归一后必须以会话根为前缀否则 `BAD_USER_INPUT`，与 controller 白名单双保险）→
+  发布 `session:command fs:read-file` → 轮询 Redis `fs:read-file:{requestId}` 500ms×30（≈15s）→
+  超时 `Controller offline or file read timeout`；错误文案白名单 `file too large`/`binary file`/`not found`/
+  `permission denied`/`Controller offline or file read timeout`。
+- **addMessage parts**（裁决 6/8）：服务端再过滤 trim 空文本/无 data 图片，全空抛
+  `BAD_USER_INPUT('empty prompt')`；合并文本（非空文本 `\n\n` 连接）写 `content`（标题取自合并文本）、
+  `metadata=JSON.stringify({parts})`（全量含图片）、parts JSON >12MB 拒绝；Redis `session:message`
+  载荷带 `parts`（controller-api 透传 `acp:message`）；无 parts 旧行为逐字不变。
+- `express.json({ limit: '20mb' })`（图片片段 base64 放宽；webhook 路由保持在其前挂载）。
+- 回归：`session-review-service.test.ts`（T-SR1~6）、`session-preview-tools.test.ts`（T-SPT1~7）、
+  `session.test.ts`（T-PARTS1~5、T-SPT6 装配）、`023-session-reviews.test.ts`（T-MIG-SR1~3，真库）。
 
 ## 云主机工作负载与 Github 项目设置（本期）
 
@@ -184,6 +226,190 @@ pnpm run start   # Start production server
 - **会话通用状态通道**：`sessionService.onSessionStatus/notifySessionStatus`（多监听者，注册返回注销函数）在 `session-lifecycle-subscriber` 的 `handled` 过滤**之前**透传全量 `session:status`；按高频豁免口径只记结构化日志、不逐条开 span。
 - **人工入口**：`restartNode` 与 MCP `resumeFailedNode` 均接受 `RETRY_FAILED`；前端列表/抽屉提供重启入口，阻断 banner 与 toast 分档文案。
 - **已知取舍（D9）**：人工在会话页点「关闭」仍计为一次中断并纳入自动重试（回调只带 sessionId，平台无法区分来源）；复用旧口径，仅次数放大。如需区分须另立提案。
+
+## Valut 工作区密钥管理
+
+> MCP+Valut 功能迭代 Phase 1；契约 `contracts/valut.graphql`；计划 `docs/engineering/plan/20261104-feat-mcp-valut-iteration.md`。
+
+- **三集合**（agent-api 唯一写方，迁移 `023-valut-foundations` 随启动执行）：
+  - `valutnamespaces`：全局注册表，`name`（`manual` | `service-{feature}`）**跨租户唯一索引**
+    `uniq_valut_namespace_name`；**不挂任何 scope 插件**（D3）；`manual`（展示名「自定义密钥」）
+    由迁移 023 播种，`service-*` 由 `valut-service.ensureNamespace` 启动自检幂等 upsert（managed=true、
+    `$setOnInsert` 不覆盖存量）；不提供用户侧 namespace 管理入口。
+  - `valutentries`：工作区归属（`tenantId` + `workspaceId` 挂 `applyWorkspaceScope` **独占型**；
+    `applyTenantScope` 对无 `userId` 集合为 no-op，`tenantId` 由服务层显式写入）；唯一索引
+    `uniq_valut_entry_workspace_namespace_key` `{workspaceId,namespace,key}`（与迁移同名）；
+    `valueEncrypted{iv,ciphertext,tag}`（AES-256-GCM，复用 `services/crypto.ts` +
+    `CREDENTIAL_ENCRYPTION_KEY`，未配置即抛错）；`editable`/`deletable` 默认 true；
+    `key` trim 后 1..128 禁空白与控制字符。
+  - `valutrefs`：独立关联集合（一条 entry 可多条 ref），`{feature,refId}` 唯一
+    `uniq_valut_ref_feature_refid` + `{valutEntryId}` 索引 `valut_ref_entry`；
+    `feature` 存功能点名（**不带 `service-` 前缀**）；挂 `applyTenantScope`、**不挂 workspace 插件**（D3，
+    始终经 entry 归属校验）；`tenantId/workspaceId` 为冗余清扫维度。
+- **明文边界（安全红线）**：GraphQL 契约无 value 出参；`encrypt` 仅在
+  `createManualEntry`/`createManagedEntry`/`updateValue` 内调用；解密唯一入口
+  `valut-service.resolveValue` **不被任何 resolver 引用**（本期唯一消费点 = custom-mcp-forwarder
+  内存请求头组装）；所有 list/get 装配（`mapEntry`）显式不含 `valueEncrypted`；
+  `REDACT_PATHS` 增补精确路径 `*.newToken`/`*.input.value`/`*.input.newToken`（**禁止裸 `*.value`**，
+  会误伤计费/计量日志）。改共享日志模块走 `packages/observability/src` → `node scripts/sync-observability.mjs`。
+- **服务与入口**：`services/valut-service.ts` 为**唯一读写口**
+  （`ensureNamespace`/`listGrouped`/`listManualOptions`/`createManualEntry`/`updateValue`/
+  `deleteEntry`/`createManagedEntry`/`resolveValue`/`removeRef`/`deleteEntryCascade`）；
+  GraphQL：`graphql/schemas/valut.ts` + `graphql/resolvers/valut.ts`（均须登记
+  `schemas/index.ts` / `resolvers/index.ts`，漏登记运行时无效）。`listGrouped` 的 refs 反查用
+  `{valutEntryId:{$in:[...]}}` 一次查询；`createManagedEntry` 顺序写 entry→ref、失败补偿删 entry（D14）；
+  `listManualOptions` 服务层强制 `workspaceId=当前工作区`（防跨工作区 id 猜测）。
+- **权限口径（复用 workspaceAccess/workspace-scope，零新机制）**：读=独占型可见集（仅当前工作区）；
+  写=每个变更方法入口 `assertWorkspaceWritable` + 插件写过滤/只读拦截——全局工作区 developer 写统一
+  `global workspace is read-only`、admin 写通；普通工作区成员读写通；跨工作区 id → `Not found`
+  （存在性探针区分）、不存在 id → `valut entry not found`；非成员/跨租户在 `resolveWorkspaceContext`
+  即 `workspace not found`。
+- **无工作区上下文守卫（租户隔离红线）**：`applyWorkspaceScope` 在无 ALS store 时静默不注入可见集
+  过滤，故 `listGrouped`/`updateValue`/`deleteEntry`/`deleteEntryCascade` 入口 `requireContext()`
+  一律抛 `workspace not found`（范式同 `cloud-storage-service.requireContext`；`createManualEntry`/
+  `createRef` 的旧守卫已同步收敛到 `requireContext()` 同一文案——旧文案
+  `valut workspace context is required` 仅剩 `createManagedEntry` 的 `!params.workspaceId`
+  参数校验（`valut-service.ts`，内部编码期防漏）；**内部原语保留无上下文能力**
+  ——`resolveValue`/`inspectEntry`/`loadEntryNamespaces`（custom-mcp-forwarder 转发链路
+  `runWithWorkspace(undefined, …)` 依赖）、`listManualOptions` 无上下文返回空集。
+  入口守卫文案 `workspace not found` **已列 `contracts/valut.graphql` 错误表**、
+  `resolvers/valut.ts` 白名单逐字透传（非成员上下文与无上下文同一口径）；
+  仅上述 `createManagedEntry` 参数校验文案未列契约，走 `internal error` 收敛例外。
+- **错误文案（白名单逐字，resolver `wrap()` 透传，未命中收敛 `internal error`）**：
+  `valut entry not found` / `valut key already exists` / `invalid valut key` / `invalid valut value` /
+  `valut entry is not editable` / `valut entry is not deletable` / `valut entry has refs` /
+  `global workspace is read-only` / `Not found` / `workspace not found` / `Not authenticated`。
+- **启动自检（D13）**：`src/index.ts` 在迁移完成后、就绪之前调用
+  `ensureNamespace('mcp-bearer-tokens', 'MCP Bearer Tokens')`，失败仅 `logger.warn` 告警、不阻塞就绪。
+
+## 自定义 MCP（工作区）
+
+> MCP+Valut 功能迭代 Phase 2；契约 `contracts/custom-mcp.graphql`；计划
+> `docs/engineering/plan/20261104-feat-mcp-valut-iteration.md` Phase 2（关键实现要点 1~4 / D14）。
+
+- **模型**：`models/custom-mcp-server.ts`（集合 `custommcpservers`，agent-api 唯一写方）——
+  `tenantId`（`applyTenantScope` 对无 `userId` 集合为 no-op，`tenantId` 由服务层显式写入）+
+  `workspaceId` 挂 `applyWorkspaceScope`（**独占型**）；`name` trim 后 1..64 工作区内唯一，唯一索引
+  `uniq_custom_mcp_workspace_name` `{workspaceId,name}`（**与迁移 023 已建索引同名同键**）；
+  `endpoint` 仅 `http://`/`https://` 且 ≤1024；`description?` ≤512（schema `maxlength` +
+  服务层 `invalid mcp description`——契约错误表已列该文案，`wrap()` 白名单逐字透传）；
+  `customHeaders` 为 `Map<String,[String]>` 同名多值（key 禁空白/冒号，并规避 Mongoose Map/BSON
+  键限制：禁点号、`$` 与 `constructor/prototype/__proto__` 保留键名；单值 ≤4096、header 总数 ≤32）；
+  `authType` none|bearer；`bearerValutEntryId` ref `ValutEntry`（bearer 必填、none 恒 null）。
+  **本集合不存 bearer token**（token 只存 `valutentries.valueEncrypted`）。
+- **服务**：`services/custom-mcp-service.ts` 为唯一读写口（`list/get/create/update/delete`）；
+  全部入口 `requireContext()`（无 ALS 工作区上下文 → `workspace not found`，与 `valut-service`、
+  `middleware/auth` 同一文案，已列 `contracts/custom-mcp.graphql` 错误表并经 `wrap()` 白名单
+  逐字透传，封堵半迁移回退链路的跨租户读写面）：
+  - **bearer 两路径（create）**：`newToken` → **预生成 MCP `_id` 一次成型**（计划要点 1 裁决）——
+    **先** `valutService.createManagedEntry('mcp-bearer-tokens', refId=MCP id, refLabel=key=name,
+    editable=true, deletable=false)` **再** 落 MCP（`bearerValutEntryId` 随首次 save 一并写入，
+    无回写、无中间态）；落 MCP 失败补偿 `deleteEntryCascade`（entry+ref 同删，不留悬空行）。
+    `existingEntryId` → **三分口径**校验（不存在 → `valut entry not found`；存在但跨工作区不可见 →
+    `Not found`；非 manual → `bearer entry must be manual namespace`）→ 落 MCP →
+    `valutService.createRef` 仅建 ref（失败补偿删 MCP）。两参数同时给出时 **`newToken` 优先**；
+    均缺 → `bearer token is required`。
+  - **删除（D14）**：读 MCP → 判条目**实际 namespace**（不以前端标记为准）→ **以 `_id` 删除
+    `deletedCount===1` 为「执行级联」凭证**（并发输家不重复级联、只级联一次）→ 自建
+    （`service-mcp-bearer-tokens`）级联 `deleteEntryCascade`（ref+entry 同删）、manual/悬空条目仅
+    `removeRef`；MCP 已随 `deleteOne` 删除。
+  - **编辑（穿透）**：name/description/endpoint/customHeaders 直改（校验先行、改名重名预检）；
+    `auth` 省略/null = 不动。`bearer+newToken` → 仅自建条目走 `valutService.updateValue`
+    **内部重写值路径**（不回显、不走 GraphQL），manual 引用拒绝 `bearer entry not editable in place`
+    （前端 `bearerEntryManaged=false` 走「前往 Valut 编辑」穿透链接 D11）；
+    `bearer+existingEntryId` → **换绑 = 先删旧 ref 再建新 ref**（旧关联按删除同口径：自建旧条目
+    级联删、manual 旧引用仅删 ref），同目标幂等；`auth.type=none` 解绑同口径——**换绑两方向无孤儿**。
+    **有副作用的步骤（删旧 ref / 建新 ref / 级联删旧条目 / 就地改值）一律放在 `updateOne`
+    持久化确认之后**：持久化失败 → 旧关联从未被触碰（直接上抛，天然无孤儿）；副作用失败 →
+    回滚本次 `$set` 到进入前快照并恢复旧 ref（「旧关联完好或已回滚」，换绑/解绑两方向均覆盖）。
+  - **`bearerEntryManaged` 派生**（服务层批量 `valutService.loadEntryNamespaces` 一次 `$in` 查询防
+    N+1）：namespace `service-mcp-bearer-tokens` → true；`manual` → false；无条目/悬空 → null。
+- **与 Valut 联动不变量**：
+  1. 自建条目恒落 `service-mcp-bearer-tokens`、`editable=true/deletable=false`、`key=MCP name`、
+     ref `{feature:'mcp-bearer-tokens', refId:MCP _id}`（feature **不带 `service-` 前缀**）；
+  2. 引用**仅限 manual**；多条 MCP 共引同一条目各自独立 ref（`{feature,refId}` 唯一）；
+  3. 删除/解绑/换绑的旧关联一律按删除同口径回收（自建 entry+ref 级联、manual 仅删 ref）——
+     MCP 与条目同生灭，不留孤儿 entry/ref；
+  4. 改名**不同步**已建条目 key 与 refLabel（`key=name` 仅创建期锚定；改名后遗留旧 key 撞键由
+     `mapBearerKeyError` 收敛为白名单 `invalid mcp name`，不外泄 Valut 内部文案）；
+  5. bearer token 明文不出服务端：GraphQL 出参装配（`mapServer`）显式白名单字段、恒不含 token；
+     resolver 不引用 `resolveValue`/`decrypt`（单测扫描断言）。
+- **GraphQL**：`graphql/schemas/custom-mcp.ts` + `graphql/resolvers/custom-mcp.ts`（均须登记
+  `schemas/index.ts` / `resolvers/index.ts`，**漏登记运行时无效**）；`wrap()` 白名单逐字透传契约
+  错误表：`custom mcp server not found` / `invalid mcp name` / `invalid mcp endpoint` /
+  `invalid custom headers` / `invalid mcp description` / `bearer token is required` /
+  `valut entry not found`（`existingEntryId` 不存在）/ `bearer entry must be manual namespace` /
+  `bearer entry not editable in place` / `global workspace is read-only` / `Not found` /
+  `workspace not found`，未命中一律
+  `internal error`；未认证 `Not authenticated`。`bearerEntryManaged` 由服务层派生，**无类型级 resolver**。
+- **权限**：读=独占型可见集（`list`/`get` 随 `x-workspace-id` 切换）；写=入口
+  `assertWorkspaceWritable` + 插件写过滤/只读拦截（全局工作区 developer →
+  `global workspace is read-only`）；跨工作区 id → `Not found`（存在性探针区分）、不存在 id →
+  `custom mcp server not found`；`customMcpServer(id)` 可空出参对不存在返回 `null`。
+  无工作区上下文（半迁移回退）→ 全部入口 `requireContext()` 拒绝
+  （`workspace not found`，已列契约错误表并经 `wrap()` 白名单逐字透传）。
+- **测试**：`services/custom-mcp-service.test.ts`（T-CMCP1~5 真库：新建 entry/ref 落库与 editable/
+  deletable、**落 MCP 失败 → entry/ref 回滚**、引用仅 manual 与多 MCP 共引独立 ref、删除级联与并发
+  只级联一次、编辑就地改值不回显/manual 拒绝/换绑两方向无孤儿（含 `updateOne` 抛错与 `createRef`
+  抛错的补偿回归）、校验矩阵逐字命中 + 权限矩阵 + 无工作区上下文拒绝）、`graphql/schemas/custom-mcp.test.ts`
+  （契约逐字段对齐 + 出参无 token 字段）、`graphql/resolvers/custom-mcp.test.ts`（认证/白名单逐字/
+  委托/登记）、`services/custom-mcp-forwarder.test.ts`（T-CF5 先脱敏后截断，secret 跨 300 边界不落明文）。
+
+## 会话签发与代理转发（MCP+Valut Phase 3）
+
+> 计划 `docs/engineering/plan/20261104-feat-mcp-valut-iteration.md` Phase 3（裁决 D1/D2/D6/D7/D8、
+> 事实 F3/F4/F5/F10/F11/F15、关键实现要点 1~4）；契约 `contracts/agent-session.graphql`
+> （`CreateSessionInput.customMcpServerIds`）+ `contracts/agent-session-websocket.md` §2.12.1 路由口径。
+
+- **签发校验（D2 / T-CF1）**：`sessionService.create` 对 `customMcpServerIds` 去重 → ObjectId
+  合法性 → `CustomMcpServer.find({_id:{$in}}).select('name').lean()` 命中数必须相等（可见集由
+  workspace-scope 独占型插件注入；无 ALS 上下文的内部链路不注入，与既有口径一致）；**不可见 /
+  不存在 / 非法 id 统一抛 `custom mcp server not found`，且在建会话之前拒绝（不建会话）**。
+  命中后按入参顺序组装 `[{id,name}]` 快照。
+- **签发触发与落库**：触发条件 `mcpServerIds.length > 0 || customMcpServers.length > 0`
+  （**custom-only 会话同样签发**，否则只勾自定义 MCP 的会话拿不到代理地址，F5）；失败沿用既有
+  fail-fast 形态（删会话 + `MCP endpoint 创建失败：…`）。`createEndpoint(sessionId, userId,
+  mcpServerIds, workflow?, customMcpServers=[])`：
+  - `serverNames` = 个人 MCP 名 ∪ custom 名（`Set` 去重，同名冲突由分流的 custom 优先裁决）；
+  - `customMcpServers` 快照与 `tokenHash` **同一次 `findOneAndUpdate`**（沿用 upsert 形态）落
+    `mcp_session_endpoints`（`_id:false` 子文档，缺省 `[]`；存量行缺省按空数组兜底）；
+  - `acp:start` 载荷形态与既有完全一致（仅 serverNames 集合变大，F10）；TTL / revoke /
+    `getStatus` 口径零改动；
+  - `reissueEndpoint` 空判定 = **`mcpServerIds` 与 `customMcpServers` 均空**才返回 `null`，
+    重签沿用两份快照与 workflow 作用域（T-CF2）。
+- **分流（D1 / F3）**：`mcp-dispatch.dispatch()` 在 `payload.serverNames` 作用域校验通过后、
+  `McpServer.findOne` **之前**读 `McpSessionEndpoint.findOne({sessionId}).lean()`（唯一索引、
+  relay 请求路径每请求一次；不引入 Redis 快照缓存——删除即时失效优先于省一次查询）；快照 name
+  命中 → `custom-mcp-forwarder`（**custom 优先于同名个人 MCP**），未命中走既有 platform /
+  registered_proxy 路径零变化。`getStatus=active` 401 校验位置不动；诊断优先级
+  `401 > 作用域 > 410 > 502`（D6）；name 不在作用域仍 `200 + SERVER_NOT_FOUND`（**不新增 403**）。
+- **转发器（`services/custom-mcp-forwarder.ts`，入口 `forward({sessionId, snapshotEntry, body})`）**：
+  按快照 id **每次请求实时** `CustomMcpServer.findById`（`runWithWorkspace(undefined, …)` 显式清空
+  ALS 工作区上下文，绕过 `applyWorkspaceScope` 读过滤——服务端内部读的显式条件）→ 不存在/非法 id
+  → `410`（**删除即全端点失效**，无需逐会话回收 key，D9）；存在则组装请求——customHeaders 同名
+  多值 `Headers.append` 展开（Map 与 plain object 双形态归一）、`authType=bearer` →
+  `Authorization: Bearer <valut-service.resolveValue(bearerValutEntryId)>`（**解密仅内存**，D8；
+  托管凭据 `set` 覆盖同名自定义 authorization；条目加载失败 → `410` 同口径防御式）→ POST 真实
+  endpoint（AbortController 30s，不可达/超时 → `502`，与 relay 60s 双层兜底）→ 回传
+  `{status, body}`（真实状态码与响应体原样透传，`410/502` 亦然，F12 status 枚举已覆盖）。
+- **改名/改配置实时生效（关键要点 4 / T-CF6）**：路由用**快照 name**、配置按**快照 id 实时加载**
+  ——MCP 改名不影响存量会话路由；endpoint/headers/token 编辑后新调用立即用新值。
+- **通知形态（D7）**：JSON-RPC body 无 `id` → 立即 `202` 并 fire-and-forget（不阻塞 MCP 握手），
+  后台转发失败仅 `warn` 日志。
+- **日志与明文红线（D4/D8）**：真实 endpoint 响应正文、错误正文、请求头、endpoint、token
+  **一律不入日志**（错误信息对 endpoint/token **先替换敏感片段、再截断**后落——顺序不可颠倒，
+  否则 secret 跨 300 边界时前半段明文会进日志）；只记
+  `sessionId/mcpId/name/status/reason/errName` 白名单字段；会话文档与 relay 载荷均无凭据明文。
+  自定义 MCP **不经 `mcp:forward:*` Redis 频道**（该频道仅 registered_proxy，F12）。
+- **controller-api 镜像（F4）**：`servers/controller-api/src/models/mcp-session-endpoint.ts`
+  仅同步增加 `customMcpServers` 只读镜像字段（本服务不读不写、无新端点）；**不得**借镜像改动
+  `expiresAt` / TTL 索引语义。
+- **测试**：`services/mcp-endpoint.test.ts`（T-CF1 签发合并/快照落库/custom-only、T-CF2 重签两快照
+  含 workflow 作用域）、`services/mcp-dispatch.test.ts`（custom 优先于同名个人 MCP、未命中走既有、
+  410 透传、通知 202、401 先于快照读、快照 name 路由）、`services/custom-mcp-forwarder.test.ts`
+  （T-CF3 删除 410、T-CF4 bearer 注入/同名多值展开/不可达与超时 502、T-CF5 日志与返回无凭据明文、
+  T-CF6 编辑即时生效/改名不影响）、`services/session.test.ts`（T-CF1 不可见 id 拒绝且不建会话）、
+  `graphql/schemas/session.test.ts`（契约 `customMcpServerIds: [ID!]` 对齐）。
 
 ## Related Rules
 

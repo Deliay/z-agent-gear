@@ -173,6 +173,75 @@ input MessageAttachmentInput {
   title: String
 }
 
+# 提示词片段类型（本期 text/image；音频/视频类型预留不开放）
+enum PromptPartType {
+  text
+  image
+}
+
+# 提示词片段：文本或图片（本期）；音频/视频类型预留不开放
+input PromptPartInput {
+  type: PromptPartType!
+  # type=text 必填；trim 为空将被服务端过滤
+  text: String
+  # type=image 必填：base64（不含 data: 前缀）
+  data: String
+  # type=image 必填：如 image/png
+  mimeType: String
+  # 可选展示名（如截图文件名）
+  name: String
+}
+
+# Review 状态：PENDING 待评审；APPROVED 通过；REJECTED 驳回；COMMENTED 仅评论；CANCELLED 已取消（超时/会话结束）
+enum SessionReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMMENTED
+  CANCELLED
+}
+
+# 提交动作（对齐 GitHub PR Review 语义）
+enum SessionReviewAction {
+  approve
+  reject
+  comment
+}
+
+# 会话内建 Review（Agent 经平台 MCP review 工具发起，用户逐文件批注并给出总体结论）
+type SessionReview {
+  id: ID!
+  sessionId: ID!
+  # 待评审文件（相对会话工作区的展示路径）
+  files: [String!]!
+  # 所属会话标题（HomeOverview 聚合时补齐，侧边栏辨识用；其余查询为 null）
+  sessionTitle: String
+  status: SessionReviewStatus!
+  # 按文件聚合的批注：{ [file: string]: ReviewComment[] }；PENDING/CANCELLED 为 null
+  fileReviews: JSON
+  # 总体评审意见
+  comment: String
+  # 取消原因（status=CANCELLED 时）：timeout | session_closed
+  cancelReason: String
+  createdAt: String!
+  resolvedAt: String
+}
+
+# 文件内容（经 fs:read-file relay；仅会话工作区内路径）
+type SessionFileContent {
+  path: String!
+  content: String!
+  truncated: Boolean!
+  sizeBytes: Int!
+}
+
+input SubmitSessionReviewInput {
+  # 按文件聚合的批注：{ [file: string]: ReviewComment[] }
+  fileReviews: JSON!
+  comment: String
+  status: SessionReviewAction!
+}
+
 type PermissionOption {
   optionId: String!
   name: String!
@@ -299,9 +368,30 @@ type Session {
   workflowInstanceId: ID
   # 归属实例节点（工作流节点会话才有，普通会话为 null）
   workflowNodeId: ID
+  # 归档状态（true=已归档，收纳进侧边栏「已归档」分组；仅分组展示差异，不影响会话数据与进程）
+  archived: Boolean!
+  # 只读原因：null=可写；取值见 SessionReadOnlyReason。
+  # 控制器缺失 / 项目工作区缺失 / 云电脑终态三场景统一（写路径拒绝文案统一 session is ended）
+  readOnlyReason: SessionReadOnlyReason
   createdAt: String!
   updatedAt: String!
   endedAt: String
+}
+
+# 会话只读原因（统一只读判定的三场景，由服务端字段 resolver 实时计算，不落库）
+enum SessionReadOnlyReason {
+  # 项目工作区已删除
+  WORKSPACE_MISSING
+  # 控制器已解绑（不存在）
+  CONTROLLER_MISSING
+  # 云电脑已停止/销毁/删除
+  CLOUD_HOST_DESTROYED
+}
+
+# 删除工作区影响预查询（删除确认提示的连带会话数量；与实际连带归档共用同一匹配口径）
+type WorkspaceArchiveImpact {
+  # 该工作区下将连带归档的普通会话数（不含工作流节点会话与已归档会话）
+  sessionCount: Int!
 }
 
 type AcpMessage {
@@ -389,6 +479,13 @@ input CreateSessionInput {
   # 语义：缺省 = 按控制器 defaultMcp 解析；显式传数组（含 []）= 以调用方为准。
   # 云会话仍自动并入 agent-cloud-host-tools。
   mcpServerIds: [ID!]
+  # 自定义 MCP（工作区级，contracts/custom-mcp.graphql）：
+  # 缺省 / 显式 [] 均不注入；与 mcpServerIds 正交、可叠加。
+  # 经平台代理转发提供——会话仅获得既有代理地址（loopback /mcp/<sessionId>/<name>）
+  # 与会话级密钥；真实 endpoint / customHeaders / bearer token 不出服务端。
+  # 签发时校验条目存在且当前工作区可见（不可见/不存在 → `custom mcp server not found`），
+  # mcp_session_endpoints.customMcpServers=[{id,name}] 快照随 tokenHash 落库。
+  customMcpServerIds: [ID!]
   additionalDirectories: [String!]
   # 新增：拉起前选择的模式/模型；缺省使用工具默认值
   modeId: ID
@@ -404,7 +501,8 @@ type ResumeSessionPayload {
 type Query {
   # 默认排除工作流节点会话；includeWorkflowSessions=true 时包含（供工作流实例视图使用）
   # controllerId 可选，按控制器过滤
-  sessions(controllerId: ID, includeWorkflowSessions: Boolean): [Session!]!
+  # archived 可选：缺省/false 返回活跃（未归档）会话，true 返回已归档会话；与 includeWorkflowSessions 正交
+  sessions(controllerId: ID, includeWorkflowSessions: Boolean, archived: Boolean): [Session!]!
   session(id: ID!): Session
   # 返回按时间升序排列的消息列表
   # before: 可选游标，仅返回该消息之前（更早）的消息
@@ -417,13 +515,27 @@ type Query {
   listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
   getTodoList: [TodoItem!]!
   getUnreadTodoCount: Int!
+  # Review 查询：status 过滤；sessionId 过滤；缺省返回当前用户全部（PENDING 在前）
+  sessionReview(id: ID!): SessionReview
+  sessionReviews(status: SessionReviewStatus, sessionId: ID): [SessionReview!]!
+  # 读取会话工作区内文件内容（fs:read-file relay；只读会话同样允许）
+  sessionFileContent(sessionId: ID!, path: String!): SessionFileContent!
 }
 
 type Mutation {
   createSession(input: CreateSessionInput!): CreateSessionPayload!
   closeSession(id: ID!): Boolean!
   deleteSession(id: ID!): Boolean!
-  sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text, attachments: [MessageAttachmentInput!]): AcpMessage!
+  # 归档/取消归档会话（仅分组展示差异，不终止进程、不触发 acp 命令）；
+  # 工作流节点会话拒绝 ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED
+  archiveSession(id: ID!, archived: Boolean!): Boolean!
+  # 删除工作区影响预查询：将连带归档的普通会话数（用于删除确认提示，数量与实际归档一致）
+  workspaceArchiveImpact(id: ID!): WorkspaceArchiveImpact!
+  # parts 为有序提示词片段（text/image）；parts 非空时以 parts 为准组装提示词，content 保留合并文本兼容。
+  # 服务端过滤 trim 为空的文本片段，全空抛 BAD_USER_INPUT('empty prompt')。
+  sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text, attachments: [MessageAttachmentInput!], parts: [PromptPartInput!]): AcpMessage!
+  # 提交 Review 结论（PENDING→终态 CAS，重复提交抛 Review not found or already resolved）
+  submitSessionReview(id: ID!, input: SubmitSessionReviewInput!): SessionReview!
   cancelGeneration(sessionId: ID!): Boolean!
   resumeSession(id: ID!, additionalDirectories: [String!]): ResumeSessionPayload!
   importHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode, sessionIds: [String!]!): [ImportSessionResult!]!

@@ -168,6 +168,32 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-GIT4 | 存量等价回显：`commitSettings` 返回 custom 的 login + noreply 邮箱 → 表单回显一致，直接保存提交值与回显值相同（刷新后仍一致） |
 | E2E-CB1 | 「与 bot 共同提交」默认不勾选；未设置提交人时置灰并提示「设置提交人后可勾选」；自定义勾选后保存 `commitWithBot=true`，刷新后回显勾选 |
 
+### Settings Valut E2E (`settings-valut.spec.ts` E2E-VAL)
+
+> MCP+Valut Phase 5；契约 `contracts/valut.graphql`。走真实后端（agent-api GraphQL + 迁移 023 播种的
+> manual namespace）；造用户经 `registerUser`（`INTERNAL_API_TOKEN` 或 `MONGODB_URI` 回落）；
+> refs 夹具经 GraphQL API 预置（manual 条目 + 自定义 MCP 引用）。全程断言页面无 value 明文。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-VAL1 全链路 | 区块结构（标题 + 「工作区」badge + 只读提示 + 导航项）→ 新增（名称/值）→ toast「密钥条目已创建」、列表出现且页面全文无明文值 → 编辑（key 只读、value 空 + placeholder「输入新值（旧值不可见）」、旧值不可见）→ 保存后新旧值均不可见 → 删除二次确认（带条目名）→ 列表消失 + API 回读确认 |
+| E2E-VAL2 refs 展示 | API 预置 manual 条目 + 自定义 MCP 引用 → 行内「引用 1」展开 → 展示 refLabel（MCP 名）与 feature `mcp-bearer-tokens`；明文值不可见；测试后清理（删 MCP 解绑 → 删条目） |
+| E2E-VAL3 错误映射 | 重名创建 → 服务端白名单 `valut key already exists` 映射「该密钥名称已存在」、对话框保持打开、列表不出现重复条目（值不可见由 E2E-VAL1/VAL2 覆盖） |
+
+### Settings Custom MCP E2E (`settings-custom-mcp.spec.ts` E2E-CMCP)
+
+> MCP+Valut Phase 5；契约 `contracts/custom-mcp.graphql` / `contracts/valut.graphql`。走真实后端；
+> UI 覆盖新增（无验证 / Bearer 两路径）、删除联动提示、穿透链接（D11）与「MCP 代理」入口移除（F8）。
+> `mcp-session.spec.ts`（直打 controller-api REST）零改动保留；`settings-mcp-proxy.spec.ts` 已随入口删除。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-CMCP1 区块与无验证新增 | 区块结构（标题 + 「工作区」badge + 转发提示 + 导航项）→ 新增（默认无验证）→ 列表展示名称/endpoint/「无验证」badge；API 回读 `authType=none`、`bearerEntryId=null` |
+| E2E-CMCP2 Bearer 两路径 | 路径 A「填写 token」→ badge「Bearer Token」、页面无 token 明文、API `bearerEntryManaged=true`；路径 B「选择 token」→ 下拉仅 manual 条目（service 条目 key 不出现）、创建后 API `bearerEntryManaged=false` 且 `bearerEntryId` 指向 manual 条目；Valut API 回读无任何明文 |
+| E2E-CMCP3 删除联动 | 自建 token → 确认框含「会同时删除关联的 Valut 自建 token 条目」；引用 → 普通提示（无联动文案）；删除后 API 断言自建条目级联消失、manual 条目保留且 refs 清空 |
+| E2E-CMCP4 穿透链接 | manual 引用编辑 → 「选择 token」态 + 旧值不回显 →「前往 Valut 编辑」→ URL `/settings?section=valut&entry=<id>` → 自动展开「编辑条目」对话框（key 只读、value 空） |
+| E2E-CMCP5 代理入口移除 | 页面无「MCP 代理」标题/组名/「MCP Proxy Keys」/「Generate Key」/代理空态文案；`#mcp-section`「MCP 管理」+「MCP 目录」+ 平台内置 `agent-workflow-admin-tools` 零回归；导航组「MCP」含「MCP 管理 / Valut / 自定义 MCP」 |
+
 ### Settings LLM E2E (`settings-llm.spec.ts`)
 
 | 测试 | 描述 |
@@ -237,6 +263,20 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | 关闭会话 | 点击关闭 → 状态更新为已关闭 |
 | 删除会话 | 点击删除 → 跳转回会话列表 |
 | 未登录重定向 | 直接访问 `/sessions` → 重定向到登录页 |
+
+### 会话归档与只读 E2E (`session-archive.spec.ts` E2E-SARCH* / E2E-SRO1)
+
+> 会话管理优化 Phase 9（计划 §4.3）。fake controller 应答 `acp:check`/`acp:start`/`git:worktree:list` 与
+> `acp:stop` ack（连带归档会先结束活跃会话）；会话与工作区经 GraphQL 造数，E2E-SRO1 用真实
+> `sendSessionMessage` 先落历史消息、再 `deleteWorkspace` 构造只读态。需要 agent-web / agent-api /
+> controller-api 就绪与 `INTERNAL_API_TOKEN`（开户；缺省回落 admin-api `adminCreateFrontUser`），
+> 无需 `MONGODB_URI`。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-SARCH1 | 会话页「归档」→ toast「会话已归档」并返回 `/sessions` → 侧边栏活跃列表该条消失、「已归档（1）」出现 → 展开分组条目可打开（`session-archived-badge` + 「取消归档」入口）→「取消归档」toast 后恢复活跃分组、归档分组消失 |
+| E2E-SARCH2 | 删除工作区前置 `workspaceArchiveImpact` 取数：确认框文案「删除工作区将同时归档其下 2 个会话，是否继续？」→ 确认删除 → 配置页空态 + 侧边栏「已归档（2）」两条可打开 |
+| E2E-SRO1 | 删除工作区后的会话只读回看：`session-readonly-notice`（`data-readonly-reason=WORKSPACE_MISSING`，文案「工作区已不存在，会话记录仅供只读回看。」）出现、输入框（textbox）与「继续」按钮数量为 0、先前写入的历史消息仍可见。云电脑销毁只读回归由 `cloud-host-readonly.spec.ts`（T-AW10 / R2-10，需 `MONGODB_URI`，缺省 skip）覆盖，本套件不重复 |
 
 ### Settings History Session E2E (`settings-history-session.spec.ts`)
 

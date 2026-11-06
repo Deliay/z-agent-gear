@@ -40,10 +40,10 @@ describe('migration 013 tenantId backfill', () => {
     vi.restoreAllMocks();
   });
 
-  it('copies userId into tenantId for all 19 collections and keeps userId', async () => {
+  it('copies userId into tenantId for all 20 collections and keeps userId', async () => {
     await migration.run();
 
-    expect(collections.size).toBe(19);
+    expect(collections.size).toBe(20);
     for (const fake of collections.values()) {
       expect(fake.find).toHaveBeenCalledWith(
         { userId: { $exists: true }, tenantId: { $exists: false } },

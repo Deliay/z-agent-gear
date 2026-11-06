@@ -186,6 +186,8 @@ export class SessionImportService {
           title,
           externalSessionId: acpSessionId,
           cwd,
+          // 项目工作区归属（D3：导入落库点之一，与 create 同口径）
+          controllerWorkspaceId: workspaceId,
           endedAt: new Date(),
         });
 
