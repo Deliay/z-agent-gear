@@ -313,6 +313,16 @@ interface GitWorktreeAddPayload {
   };
 }
 
+interface GitWorktreeCoAuthorPayload {
+  requestId: string;
+  worktreePath: string;
+  /** 缺省 = 关闭共同作者（仅清理本平台写入的受管配置）。 */
+  coAuthor?: {
+    name: string;
+    email: string;
+  };
+}
+
 interface GitWorktreeRemovePayload {
   requestId: string;
   repoPath: string;
@@ -1499,6 +1509,11 @@ export function connectToServer(
       fsHandler.registerAllowedPath(data.worktreePath);
     }
     socket.emit('git:worktree:add:result', { requestId: data.requestId, ...result });
+  });
+
+  socket.on('git:worktree:coauthor', async (data: GitWorktreeCoAuthorPayload) => {
+    const result = await worktreeHandler.configureCoAuthor(data.worktreePath, data.coAuthor);
+    socket.emit('git:worktree:coauthor:result', { requestId: data.requestId, ...result });
   });
 
   socket.on('git:worktree:remove', async (data: GitWorktreeRemovePayload & { force?: boolean }) => {

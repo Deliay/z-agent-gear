@@ -478,6 +478,77 @@ describe('SessionService', () => {
         const types = mockRedis.publish.mock.calls.map((c) => JSON.parse(String(c[1])).type);
         expect(types).not.toContain('git:worktree:add');
       });
+
+      it('C3e: 已有 Worktree 会话按当前设置同步共同作者（不重建 Worktree）', async () => {
+        vi.mocked(Controller.findOne).mockReturnValue({
+          lean: vi.fn().mockResolvedValue({ name: 'my-server', worktreeDir: '/worktrees' }),
+        } as never);
+        vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+          lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+        } as never);
+        vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue({
+          name: 'Deliay',
+          email: 'deliay@example.com',
+          coAuthorName: 'zag-bot[bot]',
+          coAuthorEmail: '123456+zag-bot[bot]@users.noreply.github.com',
+        });
+        mockRedis.publish.mockResolvedValue(1);
+        mockRedis.get.mockResolvedValue(JSON.stringify({ success: true }));
+        vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+        await sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          existingWorktreePath: '/worktrees/my-project/existing',
+        });
+
+        const types = mockRedis.publish.mock.calls.map((c) => JSON.parse(String(c[1])).type);
+        expect(types).not.toContain('git:worktree:add');
+        const coAuthorPayload = mockRedis.publish.mock.calls
+          .map((c) => JSON.parse(String(c[1])))
+          .find((p: { type?: string }) => p.type === 'git:worktree:coauthor');
+        expect(coAuthorPayload).toMatchObject({
+          controllerId: 'ctrl-1',
+          worktreePath: '/worktrees/my-project/existing',
+          coAuthor: {
+            name: 'zag-bot[bot]',
+            email: '123456+zag-bot[bot]@users.noreply.github.com',
+          },
+        });
+        expect(commitSettingsService.resolveWorktreeCommitter).toHaveBeenCalledWith('user-1');
+      });
+
+      it('C3f: 已有 Worktree + 未勾选共同作者 → 下发空 coAuthor（worker 清理受管配置）', async () => {
+        vi.mocked(Controller.findOne).mockReturnValue({
+          lean: vi.fn().mockResolvedValue({ name: 'my-server', worktreeDir: '/worktrees' }),
+        } as never);
+        vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+          lean: vi.fn().mockResolvedValue({ path: '/home/user/project', name: 'my-project' }),
+        } as never);
+        vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue({
+          name: 'Deliay',
+          email: 'deliay@example.com',
+        });
+        mockRedis.publish.mockResolvedValue(1);
+        mockRedis.get.mockResolvedValue(JSON.stringify({ success: true }));
+        vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+        await sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          existingWorktreePath: '/worktrees/my-project/existing',
+        });
+
+        const coAuthorPayload = mockRedis.publish.mock.calls
+          .map((c) => JSON.parse(String(c[1])))
+          .find((p: { type?: string }) => p.type === 'git:worktree:coauthor');
+        expect(coAuthorPayload).toMatchObject({
+          worktreePath: '/worktrees/my-project/existing',
+        });
+        expect(coAuthorPayload).not.toHaveProperty('coAuthor');
+      });
     });
 
     it('should throw on worktree add failure (non-retryable error)', async () => {      vi.mocked(Controller.findOne).mockReturnValue({

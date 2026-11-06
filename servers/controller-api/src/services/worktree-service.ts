@@ -51,6 +51,28 @@ export class WorktreeService {
     });
   }
 
+  /**
+   * 同步已有 Worktree 的共同作者配置（不改变作者身份）。
+   * `coAuthor` 缺省 = 关闭共同作者：worker 仅清理本平台写入的受管 hooksPath / zag.* 配置。
+   */
+  async handleCoAuthor(
+    requestId: string,
+    controllerId: string,
+    worktreePath: string,
+    coAuthor?: { name: string; email: string },
+  ): Promise<void> {
+    await this.emitToController(controllerId, 'git:worktree:coauthor', {
+      requestId,
+      worktreePath,
+      ...(coAuthor ? { coAuthor } : {}),
+    });
+  }
+
+  async handleCoAuthorResult(requestId: string, result: Record<string, unknown>): Promise<void> {
+    const redis = getRedisClient();
+    await redis.set(`git:worktree:coauthor:${requestId}`, JSON.stringify(result), 'EX', 60);
+  }
+
   async handleRemove(requestId: string, controllerId: string, repoPath: string, worktreePath: string, force?: boolean): Promise<void> {
     await this.emitToController(controllerId, 'git:worktree:remove', { requestId, repoPath, worktreePath, ...(force ? { force: true } : {}) });
   }

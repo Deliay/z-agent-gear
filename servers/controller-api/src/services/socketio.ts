@@ -698,6 +698,11 @@ export function createSocketIOServer(
       await worktreeService.handleAddResult(payload.requestId, payload);
     });
 
+    onEvent(socket, 'git:worktree:coauthor:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await worktreeService.handleCoAuthorResult(payload.requestId, payload);
+    });
+
     onEvent(socket, 'git:worktree:remove:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await worktreeService.handleRemoveResult(payload.requestId, payload);

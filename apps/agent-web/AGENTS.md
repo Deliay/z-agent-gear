@@ -93,7 +93,8 @@ pnpm run preview  # Preview production build
   与当前工作区无关（无共享/继承、无只读禁用）。
 - 「与 bot 共同提交」：提交人下方的 checkbox，默认不勾选；仅 `committerType=CUSTOM` 可用，
   `UNSET` 时置灰并提示「设置提交人后可勾选」；保存随 `commitWithBot` 提交（`UNSET` 归一 `false`）。
-  勾选后 Worktree 提交以成员为主作者、平台 bot 为共同作者（见 agent-api / agent-controller 段）。
+  勾选后 Worktree 提交以成员为主作者、平台 bot 为共同作者；新建与已有 Worktree 均在成员新建会话时
+  按当前设置同步（见 agent-api / agent-controller 段）。
 - 导入弹窗：列出 `personalGithubAccounts`（头像 + 帐号名），选择后回填 `customName=githubLogin`、
   `customEmail=<githubUserId>+<githubLogin>@users.noreply.github.com`（可继续编辑）；空态引导
   「先到『GitHub 绑定』绑定帐号」。

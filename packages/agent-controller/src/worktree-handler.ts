@@ -100,6 +100,11 @@ function normalizeCommitter(committer?: WorktreeCommitter): WorktreeCommitter | 
   return coAuthor ? { name, email, ...coAuthor } : { name, email };
 }
 
+export interface WorktreeCoAuthorResult {
+  success: boolean;
+  error?: string;
+}
+
 export interface WorktreeRemoveResult {
   success: boolean;
   error?: string;
@@ -199,6 +204,52 @@ export class WorktreeHandler {
   }
 
   /**
+   * 更新已有 Worktree 的共同作者配置（不改变作者身份）。
+   *
+   * 设置页勾选/取消只影响「之后创建的 Worktree」时，用户在旧 Worktree 上提交会看不到变化；
+   * 本方法在已有 Worktree 上重新同步：`coAuthor` 缺省 = 移除受管 trailer 配置（仅清理本平台写入的值）。
+   */
+  async configureCoAuthor(
+    worktreePath: string,
+    coAuthor?: { name: string; email: string },
+  ): Promise<WorktreeCoAuthorResult> {
+    try {
+      const resolvedPath = expandTilde(worktreePath);
+      const normalized = coAuthor
+        ? normalizeCoAuthor({
+            coAuthorName: coAuthor.name,
+            coAuthorEmail: coAuthor.email,
+          })
+        : undefined;
+      if (normalized) {
+        await this.applyWorktreeCoAuthor(
+          resolvedPath,
+          normalized.coAuthorName,
+          normalized.coAuthorEmail,
+        );
+      } else {
+        await this.clearWorktreeCoAuthor(resolvedPath);
+      }
+      return { success: true };
+    } catch (err) {
+      this.log.warn({ err }, '更新 worktree 共同作者配置失败（忽略）');
+      return { success: false, error: (err as Error).message };
+    }
+  }
+
+  /** Worktree 共享 git 目录下的受管 hook 目录（多 worktree 共用同一份 hook 文件）。 */
+  private async resolveHookDir(worktreePath: string): Promise<string> {
+    const pathArg = shellQuote(worktreePath);
+    const { stdout } = await execAsync(
+      `git -C ${pathArg} rev-parse --path-format=absolute --git-common-dir`,
+    );
+    const commonDir = stdout.trim();
+    if (!commonDir) throw new Error('git-common-dir is empty');
+    // `--path-format=absolute` 保证绝对路径；兼容旧 git 的相对输出时以 worktree 为基准解析。
+    return join(resolve(worktreePath, commonDir), CO_AUTHOR_HOOK_DIR);
+  }
+
+  /**
    * 安装 worktree 级共同作者 hook（仅作用于该 worktree）。
    *
    * - 通过 `rev-parse --path-format=absolute --git-common-dir` 定位共享 git 目录，
@@ -214,13 +265,7 @@ export class WorktreeHandler {
     const pathArg = shellQuote(worktreePath);
     let hookDir: string;
     try {
-      const { stdout } = await execAsync(
-        `git -C ${pathArg} rev-parse --path-format=absolute --git-common-dir`,
-      );
-      const commonDir = stdout.trim();
-      if (!commonDir) throw new Error('git-common-dir is empty');
-      // `--path-format=absolute` 保证绝对路径；兼容旧 git 的相对输出时以 worktree 为基准解析。
-      hookDir = join(resolve(worktreePath, commonDir), CO_AUTHOR_HOOK_DIR);
+      hookDir = await this.resolveHookDir(worktreePath);
       mkdirSync(hookDir, { recursive: true });
       const hookPath = join(hookDir, CO_AUTHOR_HOOK_NAME);
       writeFileSync(hookPath, renderCoAuthorHook(), { mode: 0o755 });
@@ -232,6 +277,8 @@ export class WorktreeHandler {
     }
 
     const commands = [
+      // 已有 Worktree 可能由旧版本/手工创建，补齐 worktree config 开关后 `--worktree` 才生效。
+      `git -C ${pathArg} config extensions.worktreeConfig true`,
       `git -C ${pathArg} config --worktree core.hooksPath ${shellQuote(hookDir)}`,
       `git -C ${pathArg} config --worktree zag.coAuthorName ${shellQuote(coAuthorName)}`,
       `git -C ${pathArg} config --worktree zag.coAuthorEmail ${shellQuote(coAuthorEmail)}`,
@@ -242,6 +289,40 @@ export class WorktreeHandler {
       } catch (err) {
         // 不输出共同作者值（服务端数据），仅记录失败步骤与原因
         this.log.warn({ err }, '写入 worktree 共同作者配置失败（忽略）');
+      }
+    }
+  }
+
+  /**
+   * 移除 worktree 级共同作者配置（幂等）。
+   *
+   * - 仅当该 worktree 的 `core.hooksPath` 恰为受管目录时才 unset，用户自建 hooks 零触碰；
+   * - 共享 hook 文件保留（其他 worktree 可能仍在引用），仅移除本 worktree 的配置。
+   */
+  private async clearWorktreeCoAuthor(worktreePath: string): Promise<void> {
+    const pathArg = shellQuote(worktreePath);
+    let hookDir: string;
+    try {
+      hookDir = await this.resolveHookDir(worktreePath);
+    } catch (err) {
+      this.log.warn({ err }, '读取 worktree 共同作者配置失败（忽略）');
+      return;
+    }
+
+    try {
+      const { stdout } = await execAsync(`git -C ${pathArg} config --worktree --get core.hooksPath`);
+      if (stdout.trim() === hookDir) {
+        await execAsync(`git -C ${pathArg} config --worktree --unset core.hooksPath`);
+      }
+    } catch {
+      // key 不存在（git 退出码 1）或未启用 worktree config：本就没有可清理的受管路径。
+    }
+
+    for (const key of ['zag.coAuthorName', 'zag.coAuthorEmail']) {
+      try {
+        await execAsync(`git -C ${pathArg} config --worktree --unset ${key}`);
+      } catch {
+        // key 不存在 = 已清理，无需告警
       }
     }
   }
