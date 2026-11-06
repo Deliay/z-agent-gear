@@ -437,9 +437,27 @@ export class WorkspaceService {
     userId: string | undefined,
   ): Promise<WorkspaceContext | undefined> {
     if (!sessionId || !mongoose.isValidObjectId(sessionId) || !userId) return undefined;
-    const session = await Session.findById(sessionId).select('workspaceId userId').lean();
-    if (!session?.workspaceId) return undefined;
-    const workspace = await Workspace.findById(session.workspaceId).lean();
+    const session = await Session.findById(sessionId)
+      .select('workspaceId controllerId userId')
+      .lean();
+    if (!session) return undefined;
+    // 租户工作区优先取会话自身；历史/后台链路可能缺失（如云电脑自动建会话），
+    // 回退到控制器（再回退云电脑）的租户工作区，保证 MCP 工具与工作区成员口径一致。
+    let workspaceId = session.workspaceId ? String(session.workspaceId) : '';
+    if (!workspaceId && session.controllerId) {
+      const controller = await Controller.findById(session.controllerId)
+        .select('workspaceId')
+        .lean();
+      workspaceId = controller?.workspaceId ? String(controller.workspaceId) : '';
+      if (!workspaceId) {
+        const host = await CloudHost.findOne({ controllerId: session.controllerId })
+          .select('resourceWorkspaceId')
+          .lean();
+        workspaceId = host?.resourceWorkspaceId ? String(host.resourceWorkspaceId) : '';
+      }
+    }
+    if (!workspaceId) return undefined;
+    const workspace = await Workspace.findById(workspaceId).lean();
     if (!workspace) return undefined;
     const tenantId = String(workspace.tenantId);
     const membership = await TenantMember.findOne({

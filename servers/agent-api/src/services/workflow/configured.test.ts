@@ -36,6 +36,7 @@ import { WorkflowTemplate } from '../../models/workflow-template.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { Controller } from '../../models/controller.js';
 import { getRedisClient } from '../../middleware/redis.js';
+import { runWithWorkspace } from '../workspace-context.js';
 
 const mockRedis = { get: vi.fn() };
 
@@ -186,6 +187,29 @@ describe('ConfiguredWorkflowService.configure', () => {
         controllerId: 'ctrl-1',
         name: '我的开发流',
         sourceTemplateVersion: 3,
+      }),
+    );
+  });
+
+  it('T-CFG-TEAM: 团队工作区上下文内显式落租户工作区/租户（成员可见）', async () => {
+    vi.mocked(ConfiguredWorkflow.create).mockResolvedValue({ _id: oid('cfg-1') } as never);
+
+    await runWithWorkspace(
+      {
+        id: 'ws-team',
+        tenantId: 'tenant-team',
+        type: 'normal',
+        role: 'developer',
+        readOnly: false,
+        globalWorkspaceId: 'ws-global',
+      },
+      () => configuredWorkflowService.configure('user-1', 'tpl-1', makeInput() as never),
+    );
+
+    expect(ConfiguredWorkflow.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resourceWorkspaceId: 'ws-team',
+        tenantId: 'tenant-team',
       }),
     );
   });

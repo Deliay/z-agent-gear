@@ -1,7 +1,7 @@
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
-import { actorFilter } from './workspace-context.js';
+import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
@@ -168,6 +168,15 @@ export class SessionImportService {
       throw new Error('Workspace not found');
     }
 
+    // 租户工作区归属与 create 同口径：上下文优先，后台/内部链路从控制器继承。
+    const workspaceContext = getWorkspaceContext();
+    const targetTenantId =
+      workspaceContext?.tenantId ??
+      (controller.tenantId ? String(controller.tenantId) : undefined);
+    const targetWorkspaceId =
+      workspaceContext?.id ??
+      (controller.workspaceId ? String(controller.workspaceId) : undefined);
+
     const cwd = workspace.path;
     const results: ImportSessionResult[] = [];
 
@@ -188,6 +197,8 @@ export class SessionImportService {
           cwd,
           // 项目工作区归属（D3：导入落库点之一，与 create 同口径）
           controllerWorkspaceId: workspaceId,
+          ...(targetTenantId ? { tenantId: targetTenantId } : {}),
+          ...(targetWorkspaceId ? { workspaceId: targetWorkspaceId } : {}),
           endedAt: new Date(),
         });
 
