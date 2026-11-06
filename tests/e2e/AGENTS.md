@@ -178,7 +178,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 |------|------|
 | E2E-VAL1 全链路 | 区块结构（标题 + 「工作区」badge + 只读提示 + 导航项）→ 新增（名称/值）→ toast「密钥条目已创建」、列表出现且页面全文无明文值 → 编辑（key 只读、value 空 + placeholder「输入新值（旧值不可见）」、旧值不可见）→ 保存后新旧值均不可见 → 删除二次确认（带条目名）→ 列表消失 + API 回读确认 |
 | E2E-VAL2 refs 展示 | API 预置 manual 条目 + 自定义 MCP 引用 → 行内「引用 1」展开 → 展示 refLabel（MCP 名）与 feature `mcp-bearer-tokens`；明文值不可见；测试后清理（删 MCP 解绑 → 删条目） |
-| E2E-VAL3 错误映射 | 重名创建 → 服务端白名单 `valut key already exists` 映射「该密钥名称已存在」、对话框保持打开、提交值不可见 |
+| E2E-VAL3 错误映射 | 重名创建 → 服务端白名单 `valut key already exists` 映射「该密钥名称已存在」、对话框保持打开、列表不出现重复条目（值不可见由 E2E-VAL1/VAL2 覆盖） |
 
 ### Settings Custom MCP E2E (`settings-custom-mcp.spec.ts` E2E-CMCP)
 

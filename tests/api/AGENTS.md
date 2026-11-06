@@ -59,7 +59,7 @@ pnpm test
 
 | 脚本 | 说明 |
 |------|------|
-| `pnpm test` | 运行全部常规测试文件（52 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
+| `pnpm test` | 运行全部常规测试文件（62 个：admin-api / agent-api / cloud-controller / controller-api；`fileParallelism: false` 串行，不含 `acp-real-*`） |
 | `pnpm run test:real` | 仅运行 `acp-real-*` 测试（6 个，串行，超时 30s） |
 | `pnpm run test:all` | 先运行 `acp-real-*` 再运行常规测试 |
 
@@ -222,13 +222,14 @@ pnpm test
 
 > MCP+Valut Phase 5（计划测试矩阵 API-VAL / T-VAL5~7）；契约 `contracts/valut.graphql`。
 > 需要 agent-api 就绪 + `INTERNAL_API_TOKEN`（开户）；`MONGODB_URI` 可选（T-VAL7 库内无明文断言，
-> 缺省跳过该分支）。夹具为 T-WS 模式（team 租户 + admin/developer/outsider + 普通工作区）。
+> 缺省跳过该分支；**Aspire Mongo 自签 TLS：连接串须带 `tlsAllowInvalidCertificates=true`**，
+> 否则 mongoose.connect 挂起至用例超时假红）。夹具为 T-WS 模式（team 租户 + admin/developer/outsider + 普通工作区）。
 
 | 测试 | 描述 |
 |------|------|
 | T-VAL0 鉴权 | Query/Mutation 全入口未认证 → `Not authenticated` |
 | T-VAL1 全链路 | create（namespace=manual、展示名「自定义密钥」、editable/deletable）→ list（manual 组在前、组头 displayName）→ update（仅重写值、key 不可改）→ delete → 再访问 `valut entry not found`；重 key `valut key already exists`、非法 key（空白/空串）`invalid valut key`、非法 value（空 / >16384）`invalid valut value` 逐字 |
-| T-VAL5 权限矩阵 | 全局工作区 developer 读通、create/update/delete 一律 `global workspace is read-only`；admin 写通（create/update）；普通工作区成员读写通（developer 读 admin 创建的条目、admin 切入可读写）；非成员 header → `workspace not found`；跨工作区 id → `Not found`（列表独占：全局↔普通互不可见）；不存在 id → `valut entry not found` |
+| T-VAL5 权限矩阵 | 全局工作区 developer 读通、create/update/delete 一律 `global workspace is read-only`；admin 写通（create/update）；普通工作区成员读写通（developer 读 admin 创建的条目、developer 建/改/删）；非成员 header → `workspace not found`；跨工作区 id → `Not found`（列表独占：全局↔普通互不可见）；不存在 id → `valut entry not found` |
 | T-VAL6 manual options | `valutManualOptions` 仅 manual 且仅当前工作区（service 条目、跨工作区条目均不出现）；`service-mcp-bearer-tokens` 分组 managed=true / displayName=`MCP Bearer Tokens` / 条目 editable=true、deletable=false，拒删 `valut entry is not deletable` |
 | T-VAL-REFS refs | 引用路径（自定义 MCP `existingEntryId`）→ manual 条目 refs 展开（feature `mcp-bearer-tokens`、refId/refLabel 指向 MCP）；有 refs 拒删 `valut entry has refs`；删除引用 MCP 仅解绑 ref（条目保留）；删除自建 token MCP → entry+ref 级联消失 |
 | T-VAL7 无明文 | 成功路径（create/list/manualOptions/update）与 6 类错误分支（重复 key、不存在 id、非法 value×2、跨工作区 `Not found`、只读拦截、`deletable=false` 拒删）响应任意路径均无 value 明文；出参对象恒无 `value`/`valueEncrypted` 字段；`MONGODB_URI` 提供时直读 `valutentries` 断言 `valueEncrypted{iv,ciphertext,tag}` 密文形态且库内无明文 |
@@ -240,7 +241,8 @@ pnpm test
 > 就绪（Aspire）+ `INTERNAL_API_TOKEN`；fake controller 走真实 Socket.IO relay
 > （`mcp:request` → `mcp:response`，controller-api → Redis → agent-api mcp-dispatch）；转发用例
 > mock 真实 HTTP endpoint（进程内 http server，记录收到的请求头/body 并回 JSON-RPC 响应）。
-> `MONGODB_URI` 可选（`mcpsessionendpoints` 快照落库断言，缺省跳过该分支）。夹具同 T-WS 模式。
+> `MONGODB_URI` 可选（`mcpsessionendpoints` 快照落库断言，缺省跳过该分支；**Aspire Mongo 自签 TLS：
+> 连接串须带 `tlsAllowInvalidCertificates=true`**，否则直连 Mongo 分支挂起至用例超时假红）。夹具同 T-WS 模式。
 
 | 测试 | 描述 |
 |------|------|

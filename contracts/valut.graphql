@@ -15,12 +15,13 @@
 #   - 全局工作区 = 租户全员可读、仅 admin 可写（developer 写被插件拦截
 #     `global workspace is read-only`）；
 #   - 普通工作区 = 成员可读写；
-#   - 跨工作区/非成员访问一律 `Not found`（不泄露存在性）。
+#   - 跨工作区 id 访问 → `Not found`（不泄露存在性）；非成员/无工作区上下文 → `workspace not found`。
 #
 # 错误口径（白名单，逐字透传）：
 #   `valut entry not found` / `valut key already exists` / `invalid valut key` /
 #   `invalid valut value` / `valut entry is not editable` / `valut entry is not deletable` /
-#   `valut entry has refs` / `global workspace is read-only` / `Not found` / `Not authenticated`
+#   `valut entry has refs` / `global workspace is read-only` / `Not found`（跨工作区 id）/
+#   `workspace not found`（非成员/无工作区上下文）/ `Not authenticated`
 
 type ValutNamespace {
   name: String!          # manual | service-{feature}

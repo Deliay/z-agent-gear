@@ -165,16 +165,16 @@ flowchart TD
 | 文件 | 操作 | 说明 |
 |------|------|------|
 | `servers/agent-api/src/models/custom-mcp-server.ts` | 新增 | `custommcpservers`：`tenantId`（`applyTenantScope`）+ `workspaceId`（`applyWorkspaceScope` 独占型）、`name`（trim 1..64，唯一索引 `{workspaceId,name}`）、`description?`（≤512）、`endpoint`（仅 http/https，≤1024）、`authType`（none\|bearer）、`customHeaders`（Map<String,[String]>，key 禁空白/冒号，value ≤4096，≤32 条）、`bearerValutEntryId`（ObjectId ref ValutEntry，bearer 必填）、`createdBy`、timestamps |
-| `servers/agent-api/src/services/custom-mcp-service.ts`(+test) | 新增 | CRUD + bearer 联动：create（none 直接落库；bearer+newToken → `createManagedEntry('mcp-bearer-tokens', mcpId, name, key=name, value=token, editable=true, deletable=false)`；bearer+existingEntryId → 校验条目存在、当前工作区可见、namespace=manual，否则 `bearer entry must be manual namespace`，仅建 ref）；update（name/description/endpoint/customHeaders 直改；auth 省略不动；bearer+newToken → 自建条目 `resolveValue` 同级内部路径重写值（不回显）；bearer+existingEntryId → 换绑=先删旧 ref 再建新 ref；**manual 引用就地改值拒绝** `bearer entry not editable in place`）；delete（D14：读 MCP → 判条目 namespace → 自建级联删 ref+entry / 引用仅删 ref → 删 MCP，`deletedCount===1` 为级联凭证）；`bearerEntryManaged` 派生（条目 namespace===`service-mcp-bearer-tokens`） |
+| `servers/agent-api/src/services/custom-mcp-service.ts`(+test) | 新增 | CRUD + bearer 联动：create（none 直接落库；bearer+newToken → **预生成 MCP `_id`：先 `createManagedEntry('mcp-bearer-tokens', mcpId, name, key=name, value=token, editable=true, deletable=false)` 再落 MCP，落 MCP 失败补偿 `deleteEntryCascade`（无回写、无中间态）**；bearer+existingEntryId → 校验条目存在、当前工作区可见、namespace=manual，否则 `bearer entry must be manual namespace`，仅建 ref）；update（name/description/endpoint/customHeaders 直改；auth 省略不动；bearer+newToken → 自建条目 `resolveValue` 同级内部路径重写值（不回显）；bearer+existingEntryId → 换绑=先删旧 ref 再建新 ref；**manual 引用就地改值拒绝** `bearer entry not editable in place`）；delete（D14：读 MCP → 判条目 namespace → **删 MCP，`deletedCount===1` 为执行级联凭证 → 凭证命中才级联**（自建删 ref+entry / 引用仅删 ref），输家零级联）；`bearerEntryManaged` 派生（条目 namespace===`service-mcp-bearer-tokens`） |
 | `servers/agent-api/src/graphql/schemas/custom-mcp.ts` | 新增 | 与契约逐字段一致；登记 `schemas/index.ts` |
 | `servers/agent-api/src/graphql/resolvers/custom-mcp.ts` | 新增 | resolver + `wrap()` 白名单透传；登记 `resolvers/index.ts` |
 | `servers/agent-api/AGENTS.md` | 修改 | 补「自定义 MCP」段（bearer 两路径/级联/穿透/与 Valut 的联动不变量） |
 
 ### 关键实现要点
 
-1. **创建时序**：bearer+newToken 路径需先落 MCP 拿到 `_id` 再 `createManagedEntry`（refId=MCP id）——顺序：校验 → 落 MCP（bearerValutEntryId 暂空）→ 建 entry+ref → 回写 MCP.bearerValutEntryId；中途失败补偿删 MCP（D14 同惯例）。或先建 entry（refId 用预生成 ObjectId）再落 MCP——**采用预生成 MCP `_id`** 一次成型，无中间态。
+1. **创建时序**：bearer+newToken 路径**采用预生成 MCP `_id` 一次成型、无中间态**——顺序：校验 → 预生成 `_id` → `createManagedEntry('mcp-bearer-tokens', refId=预生成 id, …)`（先写 entry+ref）→ 落 MCP（`bearerValutEntryId` 随首次 save 写入，无回写）；落 MCP 失败补偿 `deleteEntryCascade`（D14 同惯例）。（返工修正：原「先落 MCP → 建 entry+ref → 回写」的中间态会留下转发恒 410 的悬空行，已废弃。）
 2. **删除级联 namespace 判定**：以条目实际 `namespace` 为准（`service-mcp-bearer-tokens` → 级联删；`manual` → 仅删 ref），不以前端标记为准。
-3. **校验**：`invalid mcp name`/`invalid mcp endpoint`/`invalid custom headers`/`bearer token is required`/`bearer entry must be manual namespace`/`custom mcp server not found` 全部进白名单；endpoint 仅允许 `http://`/`https://`  scheme 校验。
+3. **校验**：`invalid mcp name`/`invalid mcp endpoint`/`invalid custom headers`/`invalid mcp description`/`bearer token is required`/`valut entry not found`/`bearer entry must be manual namespace`/`custom mcp server not found`/`workspace not found` 全部进白名单；endpoint 仅允许 `http://`/`https://`  scheme 校验。
 4. **换绑语义**：update 把 bearer 从自建改为引用（或反向）时，旧关联按删除同口径处理（自建旧条目级联删除、manual 旧引用仅删 ref），再按新值建立关联——避免孤儿条目。
 
 ### 验收 checklist
