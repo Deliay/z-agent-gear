@@ -444,6 +444,14 @@ export class SessionService {
       }
       cwd = input.existingWorktreePath;
       worktreePath = input.existingWorktreePath;
+
+      // 已有 Worktree 不会重新走 git:worktree:add，共同作者配置只在创建时写入一次；
+      // 成员在创建后勾选/取消「与 bot 共同提交」时，需在新建会话时重新同步一次。
+      const existingCommitter =
+        input.worktreeCommitter !== undefined
+          ? input.worktreeCommitter
+          : await this.resolveWorktreeCommitter(userId);
+      await this.syncWorktreeCoAuthor(input.controllerId, worktreePath, existingCommitter);
     } else if (input.enableWorktree && input.worktreeBranchSuffix && workspace.name) {
       // Create a new worktree via controller git:worktree:add
       // 使用随机后缀天然去重，避免多实例/多节点并发碰撞
@@ -633,6 +641,58 @@ export class SessionService {
     } catch (err) {
       logger.warn({ event: 'resolve-committer-failed', err }, 'resolve worktree committer failed');
       return null;
+    }
+  }
+
+  /**
+   * 同步已有 Worktree 的共同作者配置（仅 trailer，不改变作者身份）。
+   *
+   * 共同作者是附加信息：控制器离线 / 旧 worker 忽略 / 超时均只告警，不阻断建会话。
+   * 等待 worker ack 是为了保证后续 `acp:start` 启动 Agent 前配置已落盘。
+   */
+  private async syncWorktreeCoAuthor(
+    controllerId: string,
+    worktreePath: string,
+    committer: ResolvedWorktreeCommitter | null | undefined,
+  ): Promise<void> {
+    const coAuthor =
+      committer?.coAuthorName && committer.coAuthorEmail
+        ? { name: committer.coAuthorName, email: committer.coAuthorEmail }
+        : undefined;
+    const requestId = `wtc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      await publish('session:command', {
+        type: 'git:worktree:coauthor',
+        requestId,
+        controllerId,
+        worktreePath,
+        ...(coAuthor ? { coAuthor } : {}),
+      });
+      // 关闭共同作者只需尽力下发清理，不必等待 ack（避免未开启成员承担额外延迟）；
+      // 启用时等待 ack，确保后续 acp:start 启动 Agent 前 hook 已就绪。
+      if (!coAuthor) return;
+      const redis = getRedisClient();
+      for (let i = 0; i < 20; i++) {
+        const result = await redis.get(`git:worktree:coauthor:${requestId}`);
+        if (result) {
+          await redis.del(`git:worktree:coauthor:${requestId}`);
+          const parsed = JSON.parse(result) as { success?: boolean };
+          if (parsed.success === false) {
+            logger.warn(
+              { event: 'worktree-coauthor-sync-failed', worktreePath },
+              'worktree co-author sync failed',
+            );
+          }
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      logger.warn(
+        { event: 'worktree-coauthor-sync-timeout', worktreePath },
+        'worktree co-author sync timed out',
+      );
+    } catch (err) {
+      logger.warn({ event: 'worktree-coauthor-sync-error', err }, 'worktree co-author sync failed');
     }
   }
 

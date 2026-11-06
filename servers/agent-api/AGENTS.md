@@ -185,6 +185,10 @@ pnpm run start   # Start production server
   worktree（`orchestrator.startNodeSession → session.create`）复用同一快照；独立会话在 `session.create` 内
   实时解析创建者设置。缺省不写身份 = 沿用容器级 bot；旧 worker（<2.12.0）忽略未知字段优雅降级，
   <2.13.0 忽略 `coAuthor*`（仅缺失共同作者 trailer）。
+- **已有 Worktree 共同作者同步（修复 #455）**：`existingWorktreePath` 会话不会重新走 `git:worktree:add`，
+  因此在 `session.create` 中按当前成员设置再下发一次 `git:worktree:coauthor {worktreePath, coAuthor?}`
+  （`coAuthor` 缺省 = 关闭）：启用时等待 ≤2s ack 后继续，关闭时只尽力下发清理不等 ack；超时/失败仅告警，不阻断建会话。新建 Worktree 仍由
+  `git:worktree:add` 一次性写入，不受影响。
 - Issue 触发人：`github-issues-webhook-payload` 解析 `sender {id,login}` → `IssueWorkflowTrigger`
   落 `triggerSenderId/triggerSenderLogin/triggerUserId`（`GitHubAccount.githubUserId` 匹配）；
   `IssuesTriggerRunner.createInstance` 身份优先级「触发人提交人 → sender 的 GitHub 身份

@@ -57,6 +57,7 @@ vi.mock('./folder-browser.js', () => ({
 vi.mock('./worktree-service.js', () => ({
   worktreeService: {
     handleAdd: vi.fn(),
+    handleCoAuthor: vi.fn(),
     handleRemove: vi.fn(),
     handleStatus: vi.fn(),
     handleCommit: vi.fn(),
@@ -748,6 +749,59 @@ describe('SessionCommandService', () => {
           '/wt',
           'feat/branch',
           committer,
+        );
+      });
+    });
+
+    it('T-CB-C3: should pass existing-worktree co-author sync through to worktreeService.handleCoAuthor', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      const coAuthor = {
+        name: 'zag-bot[bot]',
+        email: '123456+zag-bot[bot]@users.noreply.github.com',
+      };
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'git:worktree:coauthor',
+        requestId: 'req-2',
+        controllerId: 'ctrl-1',
+        worktreePath: '/wt',
+        coAuthor,
+      }));
+
+      await vi.waitFor(() => {
+        expect(worktreeService.handleCoAuthor).toHaveBeenCalledWith(
+          'req-2',
+          'ctrl-1',
+          '/wt',
+          coAuthor,
+        );
+      });
+    });
+
+    it('T-CB-C4: co-author sync without coAuthor means clear (worker removes managed config)', async () => {
+      const mockRedis = createMockRedis();
+      vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+      const service = new SessionCommandService();
+      service.start(createMockIO() as never);
+
+      mockRedis._emitMessage('session:command', JSON.stringify({
+        type: 'git:worktree:coauthor',
+        requestId: 'req-3',
+        controllerId: 'ctrl-1',
+        worktreePath: '/wt',
+      }));
+
+      await vi.waitFor(() => {
+        expect(worktreeService.handleCoAuthor).toHaveBeenCalledWith(
+          'req-3',
+          'ctrl-1',
+          '/wt',
+          undefined,
         );
       });
     });

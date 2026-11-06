@@ -263,7 +263,16 @@ exit 0
 - E2E：设置页勾选保存、回显、未设置时置灰；
 - 人工验收：真实云电脑 Worktree 内提交，核对 author 与 `Co-authored-by`，重复提交不叠加。
 
-## 7. 相关文档
+## 7. 后续修复（#455）
+
+原方案只在 Worktree 创建时写入共同作者配置，成员在已有 Worktree 上勾选/取消不生效。补充：
+`session.create` 处理 `existingWorktreePath` 时按当前成员设置（工作流节点复用实例快照）下发
+`git:worktree:coauthor {worktreePath, coAuthor?}`，controller-api 透传到 worker；worker 的
+`configureCoAuthor` 有共同作者时重写受管 hook 与 `--worktree` 配置，缺省时仅清理本 Worktree 的
+受管 `core.hooksPath` 与 `zag.coAuthorName/Email`。agent-gear 版本 `2.16.0 → 2.17.0`；旧 worker
+忽略新事件，保持创建时配置。新建 Worktree 仍由 `git:worktree:add` 一次性完成。
+
+## 8. 相关文档
 
 - [[../product/draft/20261031-commit-with-bot-coauthor.md]] — 产品方案
 - [[../plan/20261031-feat-commit-with-bot-coauthor.md]] — 实现计划

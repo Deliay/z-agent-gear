@@ -52,6 +52,11 @@ interface SessionCommandPayload {
     coAuthorName?: string;
     coAuthorEmail?: string;
   };
+  /** 已有 Worktree 的共同作者同步（缺省 = 关闭，worker 仅清理受管配置）。 */
+  coAuthor?: {
+    name: string;
+    email: string;
+  };
   _meta?: { traceparent?: string };
 }
 
@@ -186,6 +191,8 @@ export class SessionCommandService {
       await fsReadFileService.handleReadFile(command.requestId, command.controllerId, command.path as string, command.maxBytes);
     } else if (command.type === 'git:worktree:add' && command.requestId && command.controllerId && command.repoPath && command.worktreePath && command.branch) {
       await worktreeService.handleAdd(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, command.branch as string, command.committer);
+    } else if (command.type === 'git:worktree:coauthor' && command.requestId && command.controllerId && command.worktreePath) {
+      await worktreeService.handleCoAuthor(command.requestId, command.controllerId, command.worktreePath as string, command.coAuthor);
     } else if (command.type === 'git:worktree:remove' && command.requestId && command.controllerId && command.repoPath && command.worktreePath) {
       const force = command.force === true;
       await worktreeService.handleRemove(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, force);
