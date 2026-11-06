@@ -214,7 +214,9 @@ pnpm run preview  # Preview production build
   转文本片段进 prompt-composer。
 - **实况跟随**：`hooks/useLiveFileTracking.ts` 复用 `groupMessages` + `mergeToolCallMessages` 合并口径
   （禁止另写解析）；edit/diff→pinned tab + `computeDiff` 首 added 行聚焦、read→共享预览 tab；
-  `toolCallId+内容指纹` 去重；仅跟踪开启后到达的调用。
+  `toolCallId+内容指纹` 去重；仅跟踪开启后到达的调用。**开启分栏默认开启**：挂载偏好为分屏或从
+  chat 切入分栏时实况默认开，horizontal↔vertical 互切保留手动设置，切回 chat 关闭；
+  Review 深链临时分屏不开实况（临时分屏回退 chat 时同步关闭）。
 - **Review**：`ReviewPanel`（左目录树+批注计数徽标 / 右扩展名分流组件只读+批注、`sessionFileContent`
   懒加载骨架、通过/驳回/仅评论提交、成功只读化结论徽标、失败 toast 可重试）；标签四态色
   （PENDING 黄/APPROVED 绿/REJECTED 红/COMMENTED·CANCELLED 灰）；侧边栏 `components/sidebar/ReviewSection.tsx`
