@@ -80,6 +80,31 @@ describe('workspace store（多租户二期 Phase 8）', () => {
     expect(getCurrentWorkspaceId()).toBe('ws-p-global');
   });
 
+  it('周期轮询返回等值列表时不重复 emit（避免切换器/工作区树每 15s 重渲染）', () => {
+    const first = syncWorkspaceContext({
+      workspaces: [PERSONAL_GLOBAL, TEAM_GLOBAL, TEAM_NORMAL],
+      tenants: [PERSONAL_MEMBERSHIP, TEAM_MEMBERSHIP],
+      userId: 'u1',
+    });
+    expect(first.changed).toBe(true);
+
+    const second = syncWorkspaceContext({
+      workspaces: [PERSONAL_GLOBAL, TEAM_GLOBAL, TEAM_NORMAL].map((item) => ({ ...item })),
+      tenants: [PERSONAL_MEMBERSHIP, TEAM_MEMBERSHIP].map((item) => ({ ...item })),
+      userId: 'u1',
+    });
+    expect(second).toEqual({ fallback: false, changed: false });
+
+    // 列表新增工作区（团队管理员新建/加入）时必须更新 store
+    const third = syncWorkspaceContext({
+      workspaces: [PERSONAL_GLOBAL, TEAM_GLOBAL, TEAM_NORMAL, workspace('ws-t-new', '项目 B', 'normal', TEAM_TENANT)],
+      tenants: [PERSONAL_MEMBERSHIP, TEAM_MEMBERSHIP],
+      userId: 'u1',
+    });
+    expect(third.changed).toBe(false);
+    expect(getWorkspaceState().myWorkspaces.map((item) => item.id)).toContain('ws-t-new');
+  });
+
   it('刷新时按 userId 隔离恢复持久化选择', () => {
     syncWorkspaceContext({
       workspaces: [PERSONAL_GLOBAL, TEAM_GLOBAL, TEAM_NORMAL],

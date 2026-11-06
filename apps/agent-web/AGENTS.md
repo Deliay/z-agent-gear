@@ -254,7 +254,7 @@ pnpm run preview  # Preview production build
 > 纯前端上下文与展示收敛；服务端为权限权威（契约见 `contracts/workspace.graphql`）。计划见 `docs/engineering/plan/20261028-feat-multi-tenant-phase2.md` Phase 8。
 
 - **状态与持久化**：`stores/workspace.ts` 保存当前工作区 + `myWorkspaces`/`myTenants`（含角色）。选择写入 `localStorage['zag:current-workspace:<userId>']`（按 userId 隔离），刷新/重登恢复；缺省=个人租户全局工作区。
-- **失效回退**：`hooks/useWorkspaceContextSync.ts` 在 `myWorkspaces` 刷新后校验当前/持久化工作区；不在可见集（被移出团队/工作区已删除）时回退个人全局、清理持久化并 `resetStore()`，避免持续 `workspace not found`。
+- **失效回退**：`hooks/useWorkspaceContextSync.ts` 在 `myWorkspaces` 刷新后校验当前/持久化工作区；不在可见集（被移出团队/工作区已删除）时回退个人全局、清理持久化并 `resetStore()`，避免持续 `workspace not found`。**上下文查询每 15s 轮询 + 窗口 focus/visibility 时立即刷新**（与首页 `HOME_OVERVIEW` 同节奏）：团队管理员新建工作区/把成员加入工作区后，已登录用户无需整页刷新即可在切换器看到并进入；持久化工作区已不可达（请求直接返回 `workspace not found`）时清空选择并重新拉取，避免 header 永久指向失效工作区导致所有请求失败。
 - **上下文注入**：`lib/apollo.ts` 的 `workspaceLink` 注入 `x-workspace-id`（`stores/workspace.ts#getCurrentWorkspaceId`）；无选择时不发头 → 服务端回退个人全局（与一期等价）。
 - **切换器**：`components/WorkspaceSwitcher.tsx` 挂在 `Sidebar` 顶部，按租户分组、按角色过滤；未加入任何 team（仅个人租户）不渲染；切换后 `client.resetStore()` 重拉 `HOME_OVERVIEW` 等活跃查询。管理入口：`/workspaces`（team admin）与 `/tenants/:tenantId/members`（本租户 admin）。
 - **工作区管理页**：`pages/WorkspacePage.tsx` 仅 admin 可操作（developer 展示无权限提示、无入口）；列表展示名称/类型/成员数；创建/改名/删除（`workspace is not empty` 映射「工作区非空，无法删除」）/成员添加移除；全局工作区无改名/删除/成员入口；personal 租户无管理入口。
