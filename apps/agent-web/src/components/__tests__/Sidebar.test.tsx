@@ -242,7 +242,7 @@ describe('Sidebar 集成测试', () => {
     mockHome();
   });
 
-  it('U-5: Sidebar 的新建会话回调 9 参映射到 CreateSessionInput', async () => {
+  it('U-5: Sidebar 的新建会话回调 10 参映射到 CreateSessionInput', async () => {
     mockHome({
       workspaces: [makeWorkspace()],
     });
@@ -267,6 +267,7 @@ describe('Sidebar 集成测试', () => {
       '/repo/.worktrees/feat-a',
       'mode-1',
       'model-1',
+      ['cmcp-1'],
     );
 
     expect(mockUseMutation).toHaveBeenCalledWith({
@@ -275,10 +276,18 @@ describe('Sidebar 集成测试', () => {
           modeId: 'mode-1',
           modelId: 'model-1',
           existingWorktreePath: '/repo/.worktrees/feat-a',
+          customMcpServerIds: ['cmcp-1'],
         }),
       },
       refetchQueries: expect.any(Array),
     });
+
+    // 未传第 10 参：报文保持旧形状（不含 customMcpServerIds 键）
+    await props.onCreate('ctrl-1', 'opencode', 'ws-1');
+    const calls = mockUseMutation.mock.calls;
+    const lastCall = calls[calls.length - 1];
+    const input = lastCall?.[0]?.variables?.input as Record<string, unknown>;
+    expect(input).not.toHaveProperty('customMcpServerIds');
   });
 
   describe('① 四个平级分组渲染', () => {

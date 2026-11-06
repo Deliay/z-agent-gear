@@ -46,12 +46,14 @@ import * as migration020CloudStorageIndexes from './migrations/020-cloud-storage
 import * as migration021WorkflowInterruptRetry from './migrations/021-workflow-interrupt-retry.js';
 import * as migration022SessionArchiveIndexes from './migrations/022-session-archive-indexes.js';
 import * as migration022CloudStorageFork from './migrations/022-cloud-storage-fork.js';
+import * as migration023ValutFoundations from './migrations/023-valut-foundations.js';
 import * as migration023SessionReviews from './migrations/023-session-reviews.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
 import { scheduleTenantSelfCheck } from './services/tenant-self-check.js';
 import { scheduleCloudStorageReconcile } from './services/cloud-storage-service.js';
+import { valutService } from './services/valut-service.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
 import { harnessLoginSubscriberService } from './services/harness-login-subscriber.js';
@@ -209,10 +211,23 @@ async function start() {
       migration021WorkflowInterruptRetry,
       migration022SessionArchiveIndexes,
       migration022CloudStorageFork,
+      migration023ValutFoundations,
       migration023SessionReviews,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');
+  }
+
+  // Valut namespace 启动自检（D13）：迁移完成后、就绪之前注册 service-mcp-bearer-tokens；
+  // 失败仅告警不阻塞就绪（PRD 非功能要求：不阻塞服务就绪）。
+  try {
+    const registered = await valutService.ensureNamespace('mcp-bearer-tokens', 'MCP Bearer Tokens');
+    logger.info(
+      { component: 'valut', namespace: registered.name },
+      'valut namespace self-check completed',
+    );
+  } catch (err) {
+    logger.warn({ component: 'valut', err }, 'valut namespace self-check failed');
   }
 
   // Issues 联动触发状态机：启动扫描 + 1s 定时（Redis 不可用也照常运行）

@@ -58,6 +58,16 @@ vi.mock('../models/mcp-server.js', () => ({
   },
 }));
 
+vi.mock('../models/custom-mcp-server.js', () => ({
+  CustomMcpServer: {
+    find: vi.fn(() => ({
+      select: vi.fn(() => ({
+        lean: vi.fn(async () => []),
+      })),
+    })),
+  },
+}));
+
 vi.mock('./session-preview-tools.js', () => ({
   SESSION_PREVIEW_TOOLS_SERVER_NAME: 'agent-session-preview-tools',
   ensureSessionPreviewToolsServer: vi.fn(async () => 'mcp-preview-tools'),
@@ -100,6 +110,7 @@ import { Controller } from '../models/controller.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { McpServer } from '../models/mcp-server.js';
+import { CustomMcpServer } from '../models/custom-mcp-server.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 import { commitSettingsService } from './commit-settings-service.js';
@@ -583,8 +594,14 @@ describe('SessionService', () => {
         mcpServerIds: ['server-1'],
       });
 
-      // T-SPT6：会话预览平台工具（mcp-preview-tools）恒装配并去重
-      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith('sess-1', 'user-1', ['server-1', 'mcp-preview-tools'], undefined);
+      // T-SPT6：会话预览平台工具（mcp-preview-tools）恒装配并去重；custom 快照空数组
+      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
+        'sess-1',
+        'user-1',
+        ['server-1', 'mcp-preview-tools'],
+        undefined,
+        [],
+      );
       expect(mockRedis.publish).toHaveBeenCalledWith(
         'session:command',
         expect.stringContaining('"type":"acp:start"'),
@@ -615,7 +632,13 @@ describe('SessionService', () => {
       });
 
       // 用户未选 MCP 时仍装配会话预览平台工具（全部类型会话公共路径）
-      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith('sess-1', 'user-1', ['mcp-preview-tools'], undefined);
+      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
+        'sess-1',
+        'user-1',
+        ['mcp-preview-tools'],
+        undefined,
+        [],
+      );
       expect(mockRedis.publish).toHaveBeenCalledWith(
         'session:command',
         expect.stringContaining('"type":"acp:start"'),
@@ -668,6 +691,139 @@ describe('SessionService', () => {
 
       expect(Session.create).not.toHaveBeenCalled();
       expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
+    });
+
+    // --- 自定义 MCP 签发（Phase 3 / T-CF1）---
+
+    function mockCustomMcpRows(rows: unknown[]) {
+      vi.mocked(CustomMcpServer.find).mockReturnValue({
+        select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(rows) }),
+      } as never);
+    }
+
+    function mockCreatePrereqs() {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+    }
+
+    it('T-CF1: 不可见/不存在的 customMcpServerIds 拒绝且不建会话', async () => {
+      mockCreatePrereqs();
+      // 可见集为空（不存在或跨工作区）：请求 1 条、命中 0 条
+      mockCustomMcpRows([]);
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          mcpServerIds: [],
+          customMcpServerIds: ['64b0000000000000000000c1'],
+        }),
+      ).rejects.toThrow('custom mcp server not found');
+
+      expect(Session.create).not.toHaveBeenCalled();
+      expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
+      expect(mockRedis.publish).not.toHaveBeenCalled();
+    });
+
+    it('T-CF1: 非法 customMcpServerIds 直接拒绝（不发起查询）', async () => {
+      mockCreatePrereqs();
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          mcpServerIds: [],
+          customMcpServerIds: ['not-an-object-id'],
+        }),
+      ).rejects.toThrow('custom mcp server not found');
+
+      expect(CustomMcpServer.find).not.toHaveBeenCalled();
+      expect(Session.create).not.toHaveBeenCalled();
+    });
+
+    it('T-CF1: 可见 custom id 组装 [{id,name}] 快照并入 createEndpoint（custom-only 会话可签发）', async () => {
+      mockCreatePrereqs();
+      const customId = '64b0000000000000000000c1';
+      mockCustomMcpRows([{ _id: { toString: () => customId }, name: 'custom-a' }]);
+      vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+        token: 'mcp-token',
+        serverNames: ['custom-a'],
+      });
+
+      await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        mcpServerIds: [],
+        customMcpServerIds: [customId],
+      });
+
+      expect(CustomMcpServer.find).toHaveBeenCalledWith({ _id: { $in: [customId] } });
+      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
+        'sess-1',
+        'user-1',
+        ['mcp-preview-tools'],
+        undefined,
+        [{ id: customId, name: 'custom-a' }],
+      );
+      expect(mockRedis.publish).toHaveBeenCalledWith(
+        'session:command',
+        expect.stringContaining('"mcpEndpoint":{"token":"mcp-token","serverNames":["custom-a"]}'),
+      );
+    });
+
+    it('T-CF1: custom 与个人 MCP 同时选择时快照一并下发', async () => {
+      mockCreatePrereqs();
+      const customId = '64b0000000000000000000c2';
+      mockCustomMcpRows([{ _id: { toString: () => customId }, name: 'custom-a' }]);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+      vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+        token: 'mcp-token',
+        serverNames: ['fluentui-mcp', 'custom-a'],
+      });
+
+      await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-1',
+        mcpServerIds: ['server-1'],
+        customMcpServerIds: [customId],
+      });
+
+      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
+        'sess-1',
+        'user-1',
+        ['server-1', 'mcp-preview-tools'],
+        undefined,
+        [{ id: customId, name: 'custom-a' }],
+      );
+    });
+
+    it('T-CF1: custom-only 会话签发失败同样 fail-fast 删会话', async () => {
+      mockCreatePrereqs();
+      vi.mocked(Session.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
+      const customId = '64b0000000000000000000c1';
+      mockCustomMcpRows([{ _id: { toString: () => customId }, name: 'custom-a' }]);
+      vi.mocked(mcpEndpointService.createEndpoint).mockRejectedValue(new Error('boom'));
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'opencode',
+          workspaceId: 'ws-1',
+          mcpServerIds: [],
+          customMcpServerIds: [customId],
+        }),
+      ).rejects.toThrow('MCP endpoint 创建失败');
+
+      expect(Session.deleteOne).toHaveBeenCalledWith({ _id: expect.anything() });
     });
 
     it('should reject when both existingWorktreePath and enableWorktree are provided', async () => {
@@ -2020,10 +2176,16 @@ describe('SessionService', () => {
         workflowNodeId: 'node-1',
       });
 
-      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith('sess-1', 'user-1', ['server-1', 'mcp-preview-tools'], {
-        instanceId: 'inst-1',
-        nodeId: 'node-1',
-      });
+      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
+        'sess-1',
+        'user-1',
+        ['server-1', 'mcp-preview-tools'],
+        {
+          instanceId: 'inst-1',
+          nodeId: 'node-1',
+        },
+        [],
+      );
     });
 
     it('findAllByUser should exclude workflow sessions by default', async () => {
@@ -2427,6 +2589,7 @@ describe('SessionService.create default MCP injection', () => {
       'user-1',
       ['srv-a', 'srv-b', 'mcp-preview-tools'],
       undefined,
+      [],
     );
   });
 
@@ -2450,6 +2613,7 @@ describe('SessionService.create default MCP injection', () => {
       'user-1',
       ['mcp-preview-tools'],
       undefined,
+      [],
     );
   });
 

@@ -75,6 +75,7 @@ describe('McpEndpointService', () => {
           $set: {
             userId: 'user-1',
             mcpServerIds: ['server-1', 'server-2'],
+            customMcpServers: [],
             tokenHash: expect.any(String),
             status: 'active',
             workflowInstanceId: null,
@@ -84,6 +85,67 @@ describe('McpEndpointService', () => {
         { upsert: true },
       );
       expect(mockRedis.set).toHaveBeenCalledWith('mcp:endpoint:session-1', 'active', 'EX', 86400);
+    });
+
+    it('T-CF1: serverNames = 个人 MCP 名 ∪ custom 名（去重）且 custom 快照随 tokenHash 落库', async () => {
+      vi.mocked(McpServer.find).mockResolvedValue([{ _id: 'server-1', name: 'shared-mcp' }] as never);
+      vi.mocked(McpSessionEndpoint.findOneAndUpdate).mockResolvedValue({} as never);
+
+      const customMcpServers = [
+        { id: '64b0000000000000000000c1', name: 'shared-mcp' },
+        { id: '64b0000000000000000000c2', name: 'custom-a' },
+      ];
+      const result = await mcpEndpointService.createEndpoint(
+        'session-1',
+        'user-1',
+        ['server-1'],
+        undefined,
+        customMcpServers,
+      );
+
+      // 同名去重：个人 MCP 与 custom 同名只下发一次
+      expect(result.serverNames).toEqual(['shared-mcp', 'custom-a']);
+      const payload = jwt.decode(result.token) as { serverNames: string[] };
+      expect(payload.serverNames).toEqual(['shared-mcp', 'custom-a']);
+
+      expect(McpSessionEndpoint.findOneAndUpdate).toHaveBeenCalledWith(
+        { sessionId: 'session-1' },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            mcpServerIds: ['server-1'],
+            customMcpServers,
+          }),
+        }),
+        { upsert: true },
+      );
+    });
+
+    it('T-CF1: custom-only 会话（mcpServerIds=[]）仍可签发', async () => {
+      vi.mocked(McpServer.find).mockResolvedValue([] as never);
+      vi.mocked(McpSessionEndpoint.findOneAndUpdate).mockResolvedValue({} as never);
+
+      const customMcpServers = [{ id: '64b0000000000000000000c1', name: 'custom-a' }];
+      const result = await mcpEndpointService.createEndpoint(
+        'session-1',
+        'user-1',
+        [],
+        undefined,
+        customMcpServers,
+      );
+
+      expect(McpServer.find).toHaveBeenCalledWith({
+        _id: { $in: [] },
+        userId: 'user-1',
+        enabled: true,
+      });
+      expect(result.serverNames).toEqual(['custom-a']);
+      expect(McpSessionEndpoint.findOneAndUpdate).toHaveBeenCalledWith(
+        { sessionId: 'session-1' },
+        expect.objectContaining({
+          $set: expect.objectContaining({ mcpServerIds: [], customMcpServers }),
+        }),
+        { upsert: true },
+      );
     });
 
     it('should throw SERVER_NOT_FOUND when a selected server is missing or disabled', async () => {
@@ -145,6 +207,7 @@ describe('McpEndpointService', () => {
           $set: {
             userId: 'user-1',
             mcpServerIds: ['server-1'],
+            customMcpServers: [],
             tokenHash: expect.any(String),
             status: 'active',
             workflowInstanceId: 'inst-1',
@@ -203,6 +266,82 @@ describe('McpEndpointService', () => {
 
       const payload = jwt.decode(result!.token) as Record<string, unknown>;
       expect(payload).not.toHaveProperty('workflow');
+    });
+
+    it('T-CF2: mcpServerIds 与 customMcpServers 均空才返回 null（兼容无 customMcpServers 字段的存量行）', async () => {
+      vi.mocked(McpSessionEndpoint.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ sessionId: 'session-1', mcpServerIds: [], customMcpServers: [] }),
+      } as never);
+
+      await expect(mcpEndpointService.reissueEndpoint('session-1', 'user-1')).resolves.toBeNull();
+      expect(McpServer.find).not.toHaveBeenCalled();
+      expect(McpSessionEndpoint.findOneAndUpdate).not.toHaveBeenCalled();
+
+      vi.mocked(McpSessionEndpoint.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ sessionId: 'session-1', mcpServerIds: [] }),
+      } as never);
+
+      await expect(mcpEndpointService.reissueEndpoint('session-1', 'user-1')).resolves.toBeNull();
+      expect(McpServer.find).not.toHaveBeenCalled();
+    });
+
+    it('T-CF2: custom-only 会话（mcpServerIds 空）重签沿用 custom 快照', async () => {
+      const customMcpServers = [{ id: '64b0000000000000000000c1', name: 'custom-a' }];
+      vi.mocked(McpSessionEndpoint.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ sessionId: 'session-1', mcpServerIds: [], customMcpServers }),
+      } as never);
+      vi.mocked(Session.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ workflowInstanceId: null, workflowNodeId: null }),
+      } as never);
+      vi.mocked(McpServer.find).mockResolvedValue([] as never);
+      vi.mocked(McpSessionEndpoint.findOneAndUpdate).mockResolvedValue({} as never);
+
+      const result = await mcpEndpointService.reissueEndpoint('session-1', 'user-1');
+
+      const payload = jwt.decode(result!.token) as { serverNames: string[] };
+      expect(payload.serverNames).toEqual(['custom-a']);
+      expect(McpSessionEndpoint.findOneAndUpdate).toHaveBeenCalledWith(
+        { sessionId: 'session-1' },
+        expect.objectContaining({
+          $set: expect.objectContaining({ mcpServerIds: [], customMcpServers }),
+        }),
+        { upsert: true },
+      );
+    });
+
+    it('T-CF2: 重签同时保留两份快照与 workflow 作用域', async () => {
+      const customMcpServers = [{ id: '64b0000000000000000000c1', name: 'custom-a' }];
+      vi.mocked(McpSessionEndpoint.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          sessionId: 'session-1',
+          mcpServerIds: ['server-1'],
+          customMcpServers,
+        }),
+      } as never);
+      vi.mocked(Session.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          workflowInstanceId: { toString: () => 'inst-1' },
+          workflowNodeId: 'node-1',
+        }),
+      } as never);
+      vi.mocked(McpServer.find).mockResolvedValue([{ _id: 'server-1', name: 'github-mcp' }] as never);
+      vi.mocked(McpSessionEndpoint.findOneAndUpdate).mockResolvedValue({} as never);
+
+      const result = await mcpEndpointService.reissueEndpoint('session-1', 'user-1');
+
+      const payload = jwt.decode(result!.token) as {
+        serverNames: string[];
+        workflow?: { instanceId: string; nodeId: string };
+      };
+      expect(payload.serverNames).toEqual(['github-mcp', 'custom-a']);
+      expect(payload.workflow).toEqual({ instanceId: 'inst-1', nodeId: 'node-1' });
+      expect(McpSessionEndpoint.findOneAndUpdate).toHaveBeenCalledWith(
+        { sessionId: 'session-1' },
+        expect.objectContaining({
+          $set: expect.objectContaining({ mcpServerIds: ['server-1'], customMcpServers }),
+        }),
+        { upsert: true },
+      );
     });
   });
 

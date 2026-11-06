@@ -38,6 +38,8 @@ interface WorktreeSidebarGroupProps {
     existingWorktreePath?: string,
     modeId?: string,
     modelId?: string,
+    /** 第 10 参：自定义 MCP（工作区）；缺省/[] 均不注入 */
+    customMcpServerIds?: string[],
   ) => void
 }
 
@@ -181,7 +183,7 @@ export default function WorktreeSidebarGroup({
               setShowNewSession(false)
               setNewSessionWorktreePath(undefined)
             }}
-            onCreate={(controllerId, acpServerType, workspaceId, enableWorktree, worktreeBranchSuffix, mcpServerIds, existingWorktreePath, modeId, modelId) => {
+            onCreate={(controllerId, acpServerType, workspaceId, enableWorktree, worktreeBranchSuffix, mcpServerIds, existingWorktreePath, modeId, modelId, customMcpServerIds) => {
               onCreate(
                 controllerId,
                 acpServerType,
@@ -192,6 +194,7 @@ export default function WorktreeSidebarGroup({
                 existingWorktreePath ?? newSessionWorktreePath,
                 modeId,
                 modelId,
+                customMcpServerIds,
               )
               setShowNewSession(false)
               setNewSessionWorktreePath(undefined)

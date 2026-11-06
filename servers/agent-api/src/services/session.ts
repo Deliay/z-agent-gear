@@ -10,7 +10,8 @@ import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { McpServer } from '../models/mcp-server.js';
-import { mcpEndpointService } from './mcp-endpoint.js';
+import { CustomMcpServer } from '../models/custom-mcp-server.js';
+import { mcpEndpointService, type CustomMcpSnapshotEntry } from './mcp-endpoint.js';
 import { ensureCloudHostToolsServer, CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
 import {
   ensureSessionPreviewToolsServer,
@@ -319,6 +320,11 @@ export class SessionService {
     worktreeBranchSuffix?: string;
     existingWorktreePath?: string;
     mcpServerIds?: string[];
+    /**
+     * 自定义 MCP（工作区级，Phase 3 / D2）：与 `mcpServerIds` 正交可叠加；
+     * 缺省 / 显式 `[]` 均不注入。签发期校验条目存在且当前工作区可见。
+     */
+    customMcpServerIds?: string[];
     /** 工作流内部打标（引擎编排节点会话时使用，不暴露到 GraphQL CreateSessionInput） */
     workflowInstanceId?: string;
     workflowNodeId?: string;
@@ -503,6 +509,30 @@ export class SessionService {
       }
     }
 
+    // 自定义 MCP 签发校验（Phase 3 / T-CF1）：条目存在且当前工作区可见——可见集由
+    // workspace-scope 独占型插件注入（无 ALS 上下文的内部链路不注入，与既有口径一致）。
+    // 不可见 / 不存在 / 非法 id 统一 `custom mcp server not found`，且必须在建会话前拒绝。
+    const requestedCustomIds = Array.from(new Set((input.customMcpServerIds ?? []).map(String)));
+    let customMcpServers: CustomMcpSnapshotEntry[] = [];
+    if (requestedCustomIds.length > 0) {
+      if (!requestedCustomIds.every((id) => mongoose.isValidObjectId(id))) {
+        throw new Error('custom mcp server not found');
+      }
+      const rows = (await CustomMcpServer.find({ _id: { $in: requestedCustomIds } })
+        .select('name')
+        .lean()) as unknown as Array<{ _id: unknown; name?: unknown }>;
+      if (rows.length !== requestedCustomIds.length) {
+        throw new Error('custom mcp server not found');
+      }
+      const names = new Map(rows.map((row) => [String(row._id), row.name === undefined ? null : String(row.name)]));
+      customMcpServers = requestedCustomIds.map((id) => {
+        const name = names.get(id);
+        if (name === null || name === undefined) throw new Error('custom mcp server not found');
+        // 快照：name 供 loopback 路由、id 供转发器每次请求实时加载配置（提案 D10）
+        return { id, name };
+      });
+    }
+
     // A-3：创建会话与 stop/terminal 无原子性——长耗时 worktree/MCP 流程结束后、
     // 落库前复查云电脑仍在允许状态，缩小「终态后残留 creating 幽灵会话」窗口。
     if (controller.type === 'cloud') {
@@ -555,21 +585,23 @@ export class SessionService {
       }
     }
 
-    // Create MCP endpoint if mcpServerIds provided (user explicitly selected MCP servers)
+    // Create MCP endpoint when either personal MCP servers or custom MCP servers were
+    // selected (D2：custom-only 会话同样要拿到代理地址；触发条件两份选择正交可叠加)
     let mcpEndpoint: { token: string; serverNames: string[] } | undefined;
-    if (mcpServerIds && mcpServerIds.length > 0) {
+    if ((mcpServerIds && mcpServerIds.length > 0) || customMcpServers.length > 0) {
       try {
         mcpEndpoint = await mcpEndpointService.createEndpoint(
           session._id.toString(),
           userId,
-          mcpServerIds,
+          mcpServerIds ?? [],
           // 工作流节点会话：token 扩展节点作用域
           input.workflowInstanceId && input.workflowNodeId
             ? { instanceId: input.workflowInstanceId, nodeId: input.workflowNodeId }
             : undefined,
+          customMcpServers,
         );
       } catch (err) {
-        // 当会话显式携带 mcpServerIds 时 fail-fast：删除已创建的会话并抛错
+        // 当会话显式携带 MCP 选择时 fail-fast：删除已创建的会话并抛错
         await Session.deleteOne({ _id: session._id });
         throw new Error(
           `MCP endpoint 创建失败：${err instanceof Error ? err.message : String(err)}`,

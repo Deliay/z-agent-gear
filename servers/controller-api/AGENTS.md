@@ -157,6 +157,7 @@ pnpm run test    # Run tests
 ## 多租户一期（共写集合 tenantId）
 
 - `controllers`/`sessions`/`controllerkeys`/`mcpservers`/`mcpsessionendpoints` 由本服务与 agent-api **共写**：两侧都必须 `userId + tenantId` 双写、查询 `tenantId + userId` 双条件（personal 期 tenantId==userId）。
+- `mcp_session_endpoints.customMcpServers`（`[{id,name}]`，`_id:false` 子文档，缺省 `[]`）为 **只读镜像字段**（MCP+Valut 功能迭代 Phase 3）：agent-api 签发/重签时随 tokenHash 写入，本服务不读不写、无新端点；**不得**借镜像改动 `expiresAt` / TTL 索引语义（两侧模型差异现状保留，计划 F4）。
 - 复用/移植 agent-api `services/tenant-scope.ts` 插件（Mongoose v9 同步钩子；查询/更新/upsert/insertMany 自动补齐）；新增带 userId 的模型必须声明 `tenantId` 并 `applyTenantScope(schema)`。
 - 注册 upsert 是「顶层 userId + $set（timestamps）」形态，插件需同时识别顶层与 `$set`/`$setOnInsert` 的 userId。
 - 历史行由 agent-api 迁移 `014-tenant-id-rebackfill` 补齐（013 已在旧环境执行过，不会重跑）。

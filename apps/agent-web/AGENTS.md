@@ -57,7 +57,8 @@ pnpm run preview  # Preview production build
 - **工作区/工作流列表实时刷新**：`NewSessionDialog` 的 `GET_CONTROLLER_WORKSPACES_ENABLED`、`InstantiateWorkflowDialog` 的来源查询、`WorkflowSection` 的来源列表统一 `cache-and-network` + 打开/挂载 `refetch()`；加载分支只认 `loading && !data`，刷新期间不卸载表单、不清空输入，失败展示「刷新失败，可重试」并保留旧列表。
 - **默认 MCP 预选**：按 `controller.defaultMcp` 在「打开 / 切换控制器」时计算一次（`useAllEnabled=false` 取 `serverIds` 与已启用集合交集，否则全部已启用）；用户调整后后台轮询不得覆盖。提交时**显式传数组**：`[]` = 不注入，`undefined` 才走服务端默认。
 - **默认 MCP 设置**：控制器配置页「默认 MCP」页签（`McpDefaultSection`）保存 `SET_CONTROLLER_DEFAULT_MCP`；`MCP_SERVER_NOT_FOUND` 映射为「所选 MCP 已停用或不存在，请重新选择」，成功后提示「对后续新建会话生效」。移动端 tab 常驻滚动容器外。
-- **模式/模型前置选择**：选定 ACP 工具后读 `acpServerOptions`（与工作流节点同源），下拉首项「默认」= 不传 `modeId/modelId`；「刷新」调 `refreshAcpServerOptions` 后就地替换选项，探测中/无选项不阻断提交。`onCreate` 为 9 个位置参数（`controllerId, acpServerType, workspaceId, enableWorktree?, worktreeBranchSuffix?, mcpServerIds?, existingWorktreePath?, modeId?, modelId?`），三个调用点 `Sidebar`、`SessionPage`、`WorktreeSidebarGroup` 必须同步透传全部参数（`WorktreeSidebarGroup` 的 `existingWorktreePath` 回退预选路径）；每个调用点保留映射单测，防止位置参数演进漏改。
+- **模式/模型前置选择**：选定 ACP 工具后读 `acpServerOptions`（与工作流节点同源），下拉首项「默认」= 不传 `modeId/modelId`；「刷新」调 `refreshAcpServerOptions` 后就地替换选项，探测中/无选项不阻断提交。`onCreate` 为 **10 个位置参数**（`controllerId, acpServerType, workspaceId, enableWorktree?, worktreeBranchSuffix?, mcpServerIds?, existingWorktreePath?, modeId?, modelId?, customMcpServerIds?`），三个调用点 `Sidebar`、`SessionPage`、`WorktreeSidebarGroup` 必须同步透传全部参数（`WorktreeSidebarGroup` 的 `existingWorktreePath` 回退预选路径）；每个调用点保留映射单测，防止位置参数演进漏改。
+- **自定义 MCP 分组（D9）**：`NewSessionDialog` 的 MCP 选择分两组——「MCP 服务」组（`GET_MCP_SERVERS`，过滤口径 `enabled && name !== agent-cloud-host-tools` 不变）+「自定义 MCP（工作区）」组（`GET_CUSTOM_MCP_SERVERS`）；两组勾选状态独立，自定义组**无控制器默认注入语义、缺省不勾选**。第 10 参仅在勾选时携带；三调用点以条件展开注入 `input.customMcpServerIds`——`undefined`/`[]` 一律**不下发该键**，保持旧报文形状（服务端 `[]` 与缺省同义，均为不注入）。
 
 ## 云电脑（Cloud Host）约定
 
@@ -105,6 +106,49 @@ pnpm run preview  # Preview production build
 - 测试：`components/settings/__tests__/GitSettingsSection.test.tsx`、
   `components/settings/__tests__/ImportGithubAccountDialog.test.tsx`；
   E2E `tests/e2e/src/settings-git.spec.ts`。
+
+## Valut / 自定义 MCP（设置页）
+
+> 契约 `contracts/valut.graphql`、`contracts/custom-mcp.graphql`；实现计划见
+> `docs/engineering/plan/20261104-feat-mcp-valut-iteration.md` Phase 4。
+
+- **挂载与导航**：`pages/SettingsPage.tsx` 中 `<ValutSection />`、`<CustomMcpSection />` 紧随 `#mcp-section`
+  之后（section id `valut-section` / `custom-mcp-section` 由组件自持）；NAV 组 label「MCP」组内项为
+  「MCP 管理 / Valut / 自定义 MCP」，两区块标题后均带 `<Badge>工作区</Badge>`。
+- **「MCP 代理」入口已移除（D5，仅前端）**：`components/settings/McpProxyKeySection.tsx` 与 `api/mcp-proxy.ts`
+  （含其单测）已删除；`#mcp-section` 标题「MCP 代理」→「MCP 管理」、NAV 组名「MCP 代理」→「MCP」、
+  `McpRegistrySection` 空态改为「暂无已注册的 MCP 服务」（去掉代理密钥引导）。
+  **后端不动**：controller-api `/api/mcp-proxy*` 路由、`mcp-proxy-key` 模型与
+  `tests/e2e/src/mcp-session.spec.ts`（直打 REST）零改动保留；`tests/e2e/src/settings-mcp-proxy.spec.ts` 随入口删除。
+- **Valut 区块**：数据源 `GET_VALUT_ENTRIES`（namespace 聚合 + refs + editable/deletable，**选择集无 value 字段**）、
+  `GET_VALUT_MANUAL_OPTIONS`（仅 manual）；增删改走 `CREATE/UPDATE/DELETE_VALUT_ENTRY`。
+  按 namespace 分组展示（组头 displayName），**任何状态不回显明文值**；编辑对话框 key 只读、value 恒空
+  （placeholder「输入新值（旧值不可见）」），提交 `updateValutEntry(id, value)`；
+  行操作受 `editable/deletable` 收敛（`service-*` 条目 `deletable=false` 无删除入口，manual 有 refs 时服务端拒绝删除）；
+  refs 行内展开查看；空态「暂无密钥条目」。
+- **D11 穿透定位**：`ValutSection` 挂载时读 `searchParams`——`section=valut` 滚动到本区块、`entry=<id>` 命中且
+  可编辑时自动展开该条目编辑对话框（每个 id 只处理一次，用户关闭后不回弹；只读上下文只滚动不弹窗）。
+- **自定义 MCP 区块**：`GET_CUSTOM_MCP_SERVERS` 列表（名称 / endpoint / 验证方式）；新增/编辑对话框含名称、
+  描述、endpoint、自定义请求头编辑器（key + 每行一个值 = 同名多值，≤32 条）与验证方式 `none|bearer` 二选一；
+  Bearer 下「填写 token / 选择 token」二选一，选择态数据源 `GET_VALUT_MANUAL_OPTIONS`（仅 manual，
+  仅对话框打开且选 Bearer 时拉取）。编辑时 `bearerEntryManaged=true` 就地重填 token（value 空待重填、不回显），
+  `false` 默认落选择态并展示「前往 Valut 编辑」链接（react-router 导航 `/settings?section=valut&entry=<bearerEntryId>`）；
+  删除二次确认，自建 token 额外提示联动删除 Valut 条目；空态「暂无自定义 MCP」。
+- **auth 下发口径**：编辑时仅在验证方式发生变化（或填写了新 token / 改选了引用条目）时才带 `auth` 字段，
+  **省略 = 不动**；`bearer → none` 显式下发 `{type:'none'}`；未改 token 的编辑报文不含 `auth` 键。
+- **权限只是展示层收敛**：`useWorkspaceAccess().readOnly`（全局工作区 + developer）时隐藏两区块的
+  新增/编辑/删除入口；服务端插件才是权威，兜底文案 `global workspace is read-only` 映射为中文提示。
+  错误白名单映射单一来源：`lib/valut.ts`（`valut key already exists` 等）与 `lib/custom-mcp.ts`
+  （`invalid mcp endpoint`、`bearer token is required` 等），未命中的文案原样展示。
+- **工作区切换与刷新**：两区块数据随 `x-workspace-id` 上下文自动切换（既有 apollo `workspaceLink`），
+  查询统一 `fetchPolicy: 'cache-and-network'` + mutation `refetchQueries`，沿用既有切工作区 `resetStore` 口径；
+  加载分支只认 `loading && !data`。
+- **测试入口**：`components/settings/__tests__/ValutSection.test.tsx`（T-WEB1）、
+  `components/settings/__tests__/CustomMcpSection.test.tsx`（T-WEB2）、
+  `pages/__tests__/SettingsPage.test.tsx`（T-WEB3：代理三处移除 / 新 NAV / 区块顺序）、
+  `components/session/NewSessionDialog.test.tsx`（T-WEB4：两组独立勾选与第 10 参）与
+  三调用点映射单测（`components/__tests__/Sidebar.test.tsx`、`pages/__tests__/SessionPage.test.tsx`、
+  `components/worktree/WorktreeSidebarGroup.test.tsx`）。
 
 ## 多租户一期（注册硬关闭与展示名）
 

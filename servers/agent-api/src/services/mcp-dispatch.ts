@@ -2,9 +2,11 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config/index.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { McpServer } from '../models/mcp-server.js';
+import { McpSessionEndpoint } from '../models/mcp-session-endpoint.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { mcpEndpointService } from './mcp-endpoint.js';
 import { mcpForwarder, ForwardError } from './mcp-forwarder.js';
+import { customMcpForwarder } from './custom-mcp-forwarder.js';
 import {
   handlePlatformMcpRequest,
   PLATFORM_SERVER_NAME,
@@ -97,6 +99,44 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
   // The target server must have been assembled into this session at creation time.
   if (payload.serverNames && !payload.serverNames.includes(serverName)) {
     return { status: 200, body: jsonRpcError(request.id, 'SERVER_NOT_FOUND', 'Server not assembled in this session') };
+  }
+
+  // F3/D1：custom 分流点在 mcp-dispatch —— 作用域校验通过后、既有 mcpservers 查询之前，
+  // 按 sessionId 读会话端点 customMcpServers 快照（sessionId 唯一索引，一次 findOne）。
+  // 快照 name 命中 → custom-mcp-forwarder（custom 优先于同名个人 MCP，提案 §2.3）；
+  // 未命中走既有路径（platform / registered_proxy）零变化。
+  const endpointSnapshot = await McpSessionEndpoint.findOne({ sessionId }).lean();
+  const rawCustomServers = endpointSnapshot?.customMcpServers;
+  const customEntries = (Array.isArray(rawCustomServers) ? rawCustomServers : []) as unknown as Array<{
+    id?: unknown;
+    name?: unknown;
+  }>;
+  const customEntry = customEntries.find((entry) => entry && entry.name === serverName);
+  if (customEntry) {
+    const snapshotEntry = { id: String(customEntry.id), name: String(customEntry.name) };
+    // D7：JSON-RPC 通知（无 id）立即 202、fire-and-forget——不阻塞 MCP 握手，
+    // 后台转发失败仅 warn 日志。
+    const isCustomNotification = request.id === undefined || request.id === null;
+    if (isCustomNotification) {
+      customMcpForwarder
+        .forward({ sessionId, snapshotEntry, body })
+        .catch((err: Error) => {
+          rootLogger.warn(
+            {
+              component: 'mcp-dispatch',
+              event: 'custom-notification-forward-failed',
+              sessionId,
+              serverName,
+              method: request.method,
+              err,
+            },
+            'Custom MCP notification forward failed',
+          );
+        });
+      return { status: 202, body: undefined };
+    }
+    // 请求：转发结果（200/410/502…）原样透传（D6 状态语义）
+    return await customMcpForwarder.forward({ sessionId, snapshotEntry, body });
   }
 
   const server = await McpServer.findOne({ userId: payload.userId, name: serverName, enabled: true });

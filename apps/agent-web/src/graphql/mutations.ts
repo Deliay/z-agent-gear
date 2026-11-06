@@ -796,3 +796,94 @@ export const CHANGE_TENANT_MEMBER_ROLE = gql`
     }
   }
 `
+
+// ---------- MCP+Valut 功能迭代：Valut / 自定义 MCP（contracts/valut.graphql、contracts/custom-mcp.graphql） ----------
+
+/** Valut 条目出参（**无 value 字段**——安全红线，编辑=重写新值不回显）。 */
+const VALUT_ENTRY_FIELDS = gql`
+  fragment ValutEntryFields on ValutEntry {
+    id
+    namespace
+    namespaceDisplayName
+    key
+    editable
+    deletable
+    refs {
+      feature
+      refId
+      refLabel
+      createdAt
+    }
+    createdBy
+    createdAt
+    updatedAt
+  }
+`
+
+export const CREATE_VALUT_ENTRY = gql`
+  mutation CreateValutEntry($input: CreateValutEntryInput!) {
+    createValutEntry(input: $input) {
+      ...ValutEntryFields
+    }
+  }
+  ${VALUT_ENTRY_FIELDS}
+`
+
+export const UPDATE_VALUT_ENTRY = gql`
+  mutation UpdateValutEntry($id: ID!, $value: String!) {
+    updateValutEntry(id: $id, value: $value) {
+      ...ValutEntryFields
+    }
+  }
+  ${VALUT_ENTRY_FIELDS}
+`
+
+export const DELETE_VALUT_ENTRY = gql`
+  mutation DeleteValutEntry($id: ID!) {
+    deleteValutEntry(id: $id)
+  }
+`
+
+const CUSTOM_MCP_SERVER_FIELDS = gql`
+  fragment CustomMcpServerFields on CustomMcpServer {
+    id
+    name
+    description
+    endpoint
+    authType
+    customHeaders {
+      key
+      values
+    }
+    bearerEntryId
+    bearerEntryManaged
+    workspaceId
+    createdBy
+    createdAt
+    updatedAt
+  }
+`
+
+export const CREATE_CUSTOM_MCP_SERVER = gql`
+  mutation CreateCustomMcpServer($input: CreateCustomMcpServerInput!) {
+    createCustomMcpServer(input: $input) {
+      ...CustomMcpServerFields
+    }
+  }
+  ${CUSTOM_MCP_SERVER_FIELDS}
+`
+
+export const UPDATE_CUSTOM_MCP_SERVER = gql`
+  mutation UpdateCustomMcpServer($id: ID!, $input: UpdateCustomMcpServerInput!) {
+    updateCustomMcpServer(id: $id, input: $input) {
+      ...CustomMcpServerFields
+    }
+  }
+  ${CUSTOM_MCP_SERVER_FIELDS}
+`
+
+export const DELETE_CUSTOM_MCP_SERVER = gql`
+  mutation DeleteCustomMcpServer($id: ID!) {
+    deleteCustomMcpServer(id: $id)
+  }
+`
