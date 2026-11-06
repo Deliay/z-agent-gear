@@ -132,7 +132,8 @@ describe('SessionView 分屏 / Review 状态 / 会话切换（T-SVIEW / 返工 A
       </StrictMode>,
     );
 
-    fireEvent.click(screen.getByTestId('live-toggle'));
+    // 偏好为分屏时实况跟随默认开启（T-LIVE-DEF），无需手动打开
+    expect(screen.getByTestId('live-toggle').className).toContain('bg-secondary');
     expect(screen.getByTestId('preview-empty')).toBeVisible();
 
     // fake controller 推送 read 工具调用（对齐真实会话 6aed6ae1 的消息形状）
@@ -266,5 +267,93 @@ describe('Review 深链响应式消费（返工 A1）', () => {
       .tabs.filter((tab) => tab.kind === 'review')
       .map((tab) => (tab as { reviewId: string }).reviewId);
     expect(reviewIds).toEqual(['rev-1', 'rev-2']);
+  });
+});
+
+describe('开启分栏默认开启实况跟随（T-LIVE-DEF）', () => {
+  beforeEach(() => {
+    cleanup();
+    eventSources.length = 0;
+    localStorage.clear();
+    Object.defineProperty(window, 'matchMedia', {
+      value: (query: string) => ({
+        matches: true,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+      configurable: true,
+    });
+    window.history.replaceState({}, '', '/sessions/sess-a');
+    destroyPreviewStore('sess-a');
+  });
+
+  it('T-LIVE-DEF1 chat → 分栏：实况默认开启，read 推送即出预览 tab', async () => {
+    installQueryMock('sess-a');
+    render(<SessionView sessionId="sess-a" />);
+
+    fireEvent.click(screen.getByTestId('split-mode-vertical'));
+    expect(screen.getByTestId('live-toggle').className).toContain('bg-secondary');
+
+    // 不点 live-toggle，fake controller 推送 read 即应跟随
+    const stream = eventSources[eventSources.length - 1];
+    act(() => {
+      stream.onmessage?.({
+        data: JSON.stringify({
+          type: 'message',
+          data: {
+            id: 'msg-live-def-1',
+            sessionId: 'sess-a',
+            direction: 'output',
+            type: 'tool_call',
+            content: {
+              sessionUpdate: 'tool_call_update',
+              toolCallId: 'call_read_def_1',
+              kind: 'read',
+              status: 'in_progress',
+              title: 'read',
+              locations: [{ path: '/ws/apps/demo/package.json' }],
+            },
+            metadata: null,
+            messageId: null,
+            createdAt: new Date().toISOString(),
+          },
+        }),
+      } as MessageEvent);
+    });
+
+    await waitFor(() => expect(screen.getByTestId('preview-tab')).toBeVisible());
+    expect(screen.getByTestId('preview-tab')).toHaveTextContent('package.json');
+  });
+
+  it('T-LIVE-DEF2 手动关闭实况后分屏互切保持关闭', () => {
+    installQueryMock('sess-a');
+    render(<SessionView sessionId="sess-a" />);
+
+    fireEvent.click(screen.getByTestId('split-mode-horizontal'));
+    expect(screen.getByTestId('live-toggle').className).toContain('bg-secondary');
+
+    fireEvent.click(screen.getByTestId('live-toggle'));
+    expect(screen.getByTestId('live-toggle').className).not.toContain('bg-secondary');
+
+    // horizontal↔vertical 互切保留手动关闭
+    fireEvent.click(screen.getByTestId('split-mode-vertical'));
+    expect(screen.getByTestId('live-toggle').className).not.toContain('bg-secondary');
+    fireEvent.click(screen.getByTestId('split-mode-horizontal'));
+    expect(screen.getByTestId('live-toggle').className).not.toContain('bg-secondary');
+  });
+
+  it('T-LIVE-DEF3 挂载偏好为分屏默认开启；切回 chat 关闭、再开分栏重新默认开启', () => {
+    localStorage.setItem('session-split-mode:sess-a', 'vertical');
+    installQueryMock('sess-a');
+    render(<SessionView sessionId="sess-a" />);
+
+    expect(screen.getByTestId('live-toggle').className).toContain('bg-secondary');
+
+    fireEvent.click(screen.getByTestId('split-mode-chat'));
+    expect(screen.queryByTestId('live-toggle')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('split-mode-vertical'));
+    expect(screen.getByTestId('live-toggle').className).toContain('bg-secondary');
   });
 });

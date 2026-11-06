@@ -137,7 +137,9 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const urlSearch = useUrlSearch();
   const reviewDeepLink = new URLSearchParams(urlSearch).get('review');
   const [splitMode, setSplitModeState] = useState<SplitMode>(() => getSplitMode(id));
-  const [live, setLive] = useState(false);
+  // 实况跟随默认开启：挂载时偏好已为分屏，或从 chat 切入分栏时默认开；
+  // horizontal↔vertical 互切保留用户手动设置；切回 chat 关闭。
+  const [live, setLive] = useState(() => getSplitMode(id) !== 'chat');
   const [wideEnoughForHorizontal, setWideEnoughForHorizontal] = useState(
     () => typeof window === 'undefined' || window.matchMedia('(min-width: 1024px)').matches,
   );
@@ -200,6 +202,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     if (tempSplit && !hasReviewTab) {
       setTempSplit(false);
       setSplitModeState('chat');
+      setLive(false);
     }
   }, [tempSplit, hasReviewTab]);
 
@@ -241,8 +244,13 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     setTempSplit(false);
     setSplitModeState(mode);
     setSplitMode(id, mode);
-    if (mode === 'chat') setLive(false);
-  }, [id]);
+    if (mode === 'chat') {
+      setLive(false);
+    } else if (splitMode === 'chat') {
+      // 开启分栏时默认开启实况跟随（分屏互切保留用户手动设置）
+      setLive(true);
+    }
+  }, [id, splitMode]);
 
   // 偏好 horizontal 但宽度不足：渲染 vertical 且不改写偏好（拉宽后自动恢复）
   const effectiveSplitMode: SplitMode =
