@@ -22,6 +22,7 @@ const VALUT_PUBLIC_ERRORS = new Set([
   'valut entry has refs',
   'global workspace is read-only',
   'Not found',
+  'workspace not found',
 ]);
 
 async function wrap<T>(fn: () => Promise<T>): Promise<T> {

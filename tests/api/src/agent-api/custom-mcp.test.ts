@@ -925,6 +925,8 @@ describe('Custom MCP API（API-CMCP / T-CMCP / T-CF）', () => {
         expect(doc!.customMcpServers).toEqual([{ id: cfMcpId, name: cfMcpName }]);
         expect(doc!.status).toBe('active');
         expect(doc!.tokenHash).toBeTruthy();
+        // T-CF5 会话文档无凭据明文（快照/tokenHash 之外任何字段均不得出现 bearer token）
+        expect(JSON.stringify(doc)).not.toContain(cfBearerToken);
       }
     },
     90_000,

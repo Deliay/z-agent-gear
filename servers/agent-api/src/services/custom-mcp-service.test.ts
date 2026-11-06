@@ -144,7 +144,7 @@ async function assertNoOrphanLinks(): Promise<void> {
 
 describe('custom-mcp-service（T-CMCP1~5，真库）', () => {
   describe('T-CMCP1 bearer 新建', () => {
-    it('bearer+newToken：预生成 MCP _id 一次成型，entry 落 service-*、editable/deletable 正确、ref 指向 MCP', async () => {
+    it('bearer+newToken：先建 entry+ref（refId=预生成 MCP id）再落 MCP 一次成型，entry 落 service-*、editable/deletable 正确、ref 指向 MCP', async () => {
       const view = await createBearerNew('mcp-a', 'tok-plain-1');
 
       expect(view).toMatchObject({
@@ -185,6 +185,19 @@ describe('custom-mcp-service（T-CMCP1~5，真库）', () => {
       await expect(valutService.resolveValue(view.bearerEntryId!)).resolves.toBe('tok-plain-1');
       // 出参无明文
       expect(JSON.stringify(view)).not.toContain('tok-plain-1');
+      await assertNoOrphanLinks();
+    });
+
+    it('bearer+newToken：落 MCP 失败 → entry/ref 已回滚（不留悬空行与半态 MCP）', async () => {
+      // 同名 MCP 已存在：entry 先建之后首次 save 撞 uniq_custom_mcp_workspace_name
+      await createNone('dup-bearer');
+
+      await expect(createBearerNew('dup-bearer', 'orphan-token')).rejects.toThrow('invalid mcp name');
+
+      // 补偿：已建 entry+ref 被 deleteEntryCascade 回收，仅剩既有 MCP
+      expect(await mcpCollection().countDocuments({})).toBe(1);
+      expect(await entryCollection().countDocuments({})).toBe(0);
+      expect(await refCollection().countDocuments({})).toBe(0);
       await assertNoOrphanLinks();
     });
 
@@ -465,6 +478,97 @@ describe('custom-mcp-service（T-CMCP1~5，真库）', () => {
       expect(await entryCollection().countDocuments({ _id: new mongoose.Types.ObjectId(first.id) })).toBe(
         1,
       );
+      await assertNoOrphanLinks();
+    });
+
+    it('换绑 updateOne 抛错 → 无孤儿（旧关联完好、新 ref 未建）', async () => {
+      const mcp = await createBearerNew('rebind-db-fail', 'rfail-token');
+      const manual = await createManualEntry(ctxA, 'manual-rebind-fail');
+      const oldEntryId = new mongoose.Types.ObjectId(mcp.bearerEntryId!);
+
+      const spy = vi
+        .spyOn(CustomMcpServer, 'updateOne')
+        .mockRejectedValueOnce(new Error('db down'));
+      try {
+        await expect(
+          runWithWorkspace(ctxA, () =>
+            customMcpService.update(
+              mcp.id,
+              patch({ auth: { type: 'bearer', existingEntryId: manual.id } }),
+            ),
+          ),
+        ).rejects.toThrow('db down');
+      } finally {
+        spy.mockRestore();
+      }
+
+      // 持久化失败 → 有副作用步骤尚未执行：旧关联完好、无新 ref、无孤儿
+      expect(String((await rawMcp(mcp.id))!.bearerValutEntryId)).toBe(mcp.bearerEntryId);
+      expect(await entryCollection().countDocuments({ _id: oldEntryId })).toBe(1);
+      expect(
+        await refCollection().countDocuments({ refId: mcp.id, valutEntryId: oldEntryId }),
+      ).toBe(1);
+      expect(
+        await refCollection().countDocuments({
+          valutEntryId: new mongoose.Types.ObjectId(manual.id),
+        }),
+      ).toBe(0);
+      await assertNoOrphanLinks();
+    });
+
+    it('解绑 updateOne 抛错 → 无孤儿（旧条目与 ref 均保留）', async () => {
+      const mcp = await createBearerNew('detach-db-fail', 'dfail-token');
+      const oldEntryId = new mongoose.Types.ObjectId(mcp.bearerEntryId!);
+
+      const spy = vi
+        .spyOn(CustomMcpServer, 'updateOne')
+        .mockRejectedValueOnce(new Error('db down'));
+      try {
+        await expect(
+          runWithWorkspace(ctxA, () => customMcpService.update(mcp.id, patch({ auth: { type: 'none' } }))),
+        ).rejects.toThrow('db down');
+      } finally {
+        spy.mockRestore();
+      }
+
+      const doc = await rawMcp(mcp.id);
+      expect(doc!.authType).toBe('bearer');
+      expect(String(doc!.bearerValutEntryId)).toBe(mcp.bearerEntryId);
+      expect(await entryCollection().countDocuments({ _id: oldEntryId })).toBe(1);
+      expect(await refCollection().countDocuments({ refId: mcp.id })).toBe(1);
+      await assertNoOrphanLinks();
+    });
+
+    it('换绑 createRef 失败 → 回滚持久化并恢复旧 ref（旧关联完好、新条目无 ref）', async () => {
+      const mcp = await createBearerNew('rebind-ref-fail', 'refail-token');
+      const manual = await createManualEntry(ctxA, 'manual-ref-fail');
+      const oldEntryId = new mongoose.Types.ObjectId(mcp.bearerEntryId!);
+
+      const spy = vi.spyOn(valutService, 'createRef').mockRejectedValueOnce(new Error('ref boom'));
+      try {
+        await expect(
+          runWithWorkspace(ctxA, () =>
+            customMcpService.update(
+              mcp.id,
+              patch({ auth: { type: 'bearer', existingEntryId: manual.id } }),
+            ),
+          ),
+        ).rejects.toThrow('ref boom');
+      } finally {
+        spy.mockRestore();
+      }
+
+      // 副作用失败补偿：回滚本次 $set + 恢复旧 ref（换绑方向不留孤儿）
+      expect(String((await rawMcp(mcp.id))!.bearerValutEntryId)).toBe(mcp.bearerEntryId);
+      expect(await entryCollection().countDocuments({ _id: oldEntryId })).toBe(1);
+      expect(
+        await refCollection().countDocuments({ refId: mcp.id, valutEntryId: oldEntryId }),
+      ).toBe(1);
+      expect(
+        await refCollection().countDocuments({
+          valutEntryId: new mongoose.Types.ObjectId(manual.id),
+        }),
+      ).toBe(0);
       await assertNoOrphanLinks();
     });
 
@@ -795,10 +899,28 @@ describe('custom-mcp-service（T-CMCP1~5，真库）', () => {
       );
     });
 
-    it('无工作区上下文（引擎/内部链路）→ 拒绝写入', async () => {
+    it('无工作区上下文（引擎/内部链路）→ 读写一律拒绝', async () => {
       await expect(customMcpService.create(input({ name: 'no-ctx' }))).rejects.toThrow(
-        'custom mcp workspace context is required',
+        'workspace not found',
       );
+      await expect(customMcpService.list()).rejects.toThrow(
+        'workspace not found',
+      );
+      await expect(customMcpService.get('000000000000000000000000')).rejects.toThrow(
+        'workspace not found',
+      );
+
+      const existing = await createNone('no-ctx-existing');
+      await expect(
+        customMcpService.update(existing.id, patch({ name: 'no-ctx-renamed' })),
+      ).rejects.toThrow('workspace not found');
+      await expect(customMcpService.delete(existing.id)).rejects.toThrow(
+        'workspace not found',
+      );
+
+      // 未被改写/删除（不跨租户读写面）
+      expect(await mcpCollection().countDocuments({})).toBe(1);
+      expect(String((await rawMcp(existing.id))!.name)).toBe('no-ctx-existing');
     });
 
     it('安全红线：视图与库内文档均无 token/value 明文', async () => {

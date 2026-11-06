@@ -25,11 +25,14 @@ const CUSTOM_MCP_PUBLIC_ERRORS = new Set([
   'invalid mcp name',
   'invalid mcp endpoint',
   'invalid custom headers',
+  'invalid mcp description',
   'bearer token is required',
+  'valut entry not found',
   'bearer entry must be manual namespace',
   'bearer entry not editable in place',
   'global workspace is read-only',
   'Not found',
+  'workspace not found',
 ]);
 
 async function wrap<T>(fn: () => Promise<T>): Promise<T> {

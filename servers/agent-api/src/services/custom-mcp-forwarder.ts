@@ -20,7 +20,7 @@ import { logger as rootLogger } from '../observability/logger.js';
  * - **失败语义**：真实 endpoint 不可达 / 30s 超时 → `502`；条目加载失败按 `410` 同口径
  *   防御式（MCP 与自建条目同生灭，正常路径不可达，D8）。
  * - **日志**：响应正文/错误正文/请求头一律不入日志（`mcp-relay-consumer`「响应正文不入日志」
- *   同口径）；错误信息对 endpoint 与 token 做替换后再落日志。
+ *   同口径）；错误信息对 endpoint 与 token **先替换再截断**后落日志。
  * - **通知形态**（JSON-RPC body 无 id）由 `mcp-dispatch` fire-and-forget（D7），本模块只管转发。
  */
 
@@ -73,13 +73,19 @@ function headerEntries(raw: unknown): Array<[string, string[]]> {
   return [];
 }
 
-/** 错误信息落日志前替换敏感片段（endpoint / token），并截断长度。 */
+/**
+ * 错误信息落日志前替换敏感片段（endpoint / token），并截断长度。
+ *
+ * **顺序不可颠倒（返工 MINOR-5）**：先全量替换敏感片段、再截断——若先截断，
+ * secret 跨 300 边界时前半段明文会落日志；替换后的结果再截断最多丢 `[redacted]`
+ * 尾巴，不会复现明文。
+ */
 function sanitizeMessage(message: string, secrets: Array<string | null | undefined>): string {
-  let out = message.length > 300 ? `${message.slice(0, 300)}…` : message;
+  let out = message;
   for (const secret of secrets) {
     if (secret && secret.length > 0) out = out.split(secret).join('[redacted]');
   }
-  return out;
+  return out.length > 300 ? `${out.slice(0, 300)}…` : out;
 }
 
 export class CustomMcpForwarder {

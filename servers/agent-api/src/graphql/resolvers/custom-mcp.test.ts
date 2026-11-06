@@ -72,12 +72,14 @@ describe('Custom MCP resolvers', () => {
       'invalid mcp name',
       'invalid mcp endpoint',
       'invalid custom headers',
+      'invalid mcp description',
       'bearer token is required',
+      'valut entry not found',
       'bearer entry must be manual namespace',
       'bearer entry not editable in place',
       'global workspace is read-only',
       'Not found',
-    ])('服务层错误 %s 原样透传', async (message) => {
+    ])('服务层错误 %s 原样透传（不再收敛 internal error）', async (message) => {
       vi.mocked(customMcpService.create).mockRejectedValue(new Error(message));
       await expect(
         customMcpResolvers.Mutation.createCustomMcpServer(

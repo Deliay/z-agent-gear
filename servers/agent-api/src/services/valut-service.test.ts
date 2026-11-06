@@ -765,6 +765,73 @@ describe('valut-service（T-VAL1~4 / T-VAL7，真库）', () => {
     });
   });
 
+  describe('无工作区上下文守卫（租户隔离红线，返工 MAJOR-1）', () => {
+    it('listGrouped/updateValue/deleteEntry/deleteEntryCascade 无上下文一律拒绝（不泄漏、不误删）', async () => {
+      const view = await runWithWorkspace(ctxA, () =>
+        valutService.createManualEntry({ key: 'no-ctx-key', value: 'no-ctx-secret', createdBy: USER }),
+      );
+      await insertEntryRaw(WS_B, { key: 'other-workspace-key' });
+      const otherId = String((await entryCollection().findOne({ key: 'other-workspace-key' }))!._id);
+
+      // 无 ALS 工作区上下文（半迁移回退 / 内部链路误入）→ 四个方法一律拒绝
+      await expect(runWithWorkspace(undefined, () => valutService.listGrouped())).rejects.toThrow(
+        'workspace not found',
+      );
+      await expect(
+        runWithWorkspace(undefined, () => valutService.updateValue(view.id, 'hacked')),
+      ).rejects.toThrow('workspace not found');
+      await expect(runWithWorkspace(undefined, () => valutService.deleteEntry(view.id))).rejects.toThrow(
+        'workspace not found',
+      );
+      await expect(
+        runWithWorkspace(undefined, () => valutService.deleteEntryCascade(view.id)),
+      ).rejects.toThrow('workspace not found');
+      // 他工作区条目同样不可达（不存在跨租户读写面）
+      await expect(runWithWorkspace(undefined, () => valutService.deleteEntry(otherId))).rejects.toThrow(
+        'workspace not found',
+      );
+      await expect(
+        runWithWorkspace(undefined, () => valutService.updateValue(otherId, 'x')),
+      ).rejects.toThrow('workspace not found');
+
+      // 未泄漏、未误删、未改写
+      expect(await entryCollection().countDocuments({})).toBe(2);
+      expect(await refCollection().countDocuments({})).toBe(0);
+      await expect(valutService.resolveValue(view.id)).resolves.toBe('no-ctx-secret');
+      const groups = await runWithWorkspace(ctxA, () => valutService.listGrouped());
+      const keys = groups.flatMap((group) => group.entries).map((entry) => entry.key);
+      expect(keys).toContain('no-ctx-key');
+      expect(keys).not.toContain('other-workspace-key');
+    });
+
+    it('内部原语保留无上下文能力（转发链路依赖）；listManualOptions 无上下文仍返回空集', async () => {
+      const view = await runWithWorkspace(ctxA, () =>
+        valutService.createManualEntry({
+          key: 'internal-key',
+          value: 'internal-secret',
+          createdBy: USER,
+        }),
+      );
+
+      // custom-mcp-forwarder 以 runWithWorkspace(undefined, …) 调用的原语不受守卫影响
+      await expect(
+        runWithWorkspace(undefined, () => valutService.resolveValue(view.id)),
+      ).resolves.toBe('internal-secret');
+      await expect(
+        runWithWorkspace(undefined, () => valutService.inspectEntry(view.id)),
+      ).resolves.toEqual({ id: view.id, namespace: 'manual', workspaceId: WS_A });
+      const namespaces = await runWithWorkspace(undefined, () =>
+        valutService.loadEntryNamespaces([view.id]),
+      );
+      expect(namespaces.get(view.id)).toBe('manual');
+
+      // listManualOptions 既有守卫保持：无上下文 → 空集（不抛错、不泄漏）
+      await expect(runWithWorkspace(undefined, () => valutService.listManualOptions())).resolves.toEqual(
+        [],
+      );
+    });
+  });
+
   describe('T-VAL7 日志脱敏（D4 精确路径）', () => {
     it('REDACT_PATHS 含三条精确路径、不含裸 *.value', () => {
       expect(REDACT_PATHS).toContain('*.newToken');

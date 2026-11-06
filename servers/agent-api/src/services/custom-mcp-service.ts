@@ -1,23 +1,32 @@
 import mongoose from 'mongoose';
 import { CustomMcpServer } from '../models/custom-mcp-server.js';
 import { MANUAL_NAMESPACE, valutService } from './valut-service.js';
-import { assertWorkspaceWritable, getWorkspaceContext } from './workspace-context.js';
+import {
+  assertWorkspaceWritable,
+  getWorkspaceContext,
+  type WorkspaceContext,
+} from './workspace-context.js';
 
 /**
  * 自定义 MCP **唯一读写口**（MCP+Valut 功能迭代 Phase 2；契约 `contracts/custom-mcp.graphql`）。
  *
  * 语义（计划 Phase 2 关键实现要点 / 提案 §5.2 实现点 3/4）：
- * - **create**：校验（name/endpoint/customHeaders/auth，白名单逐字）→ `none` 直接落库；
- *   bearer+newToken → **预生成 MCP `_id` 一次成型**：落 MCP（bearerValutEntryId 暂空）→
- *   `createManagedEntry('mcp-bearer-tokens', refId=MCP id, key=name, editable=true/deletable=false)`
- *   → 回写 `bearerValutEntryId`；中途失败补偿删除 MCP（D14 同惯例）；
- *   bearer+existingEntryId → 校验条目存在/当前工作区可见/namespace=manual（否则
- *   `bearer entry must be manual namespace`）→ 落 MCP → `createRef` 仅建 ref（失败补偿删 MCP）。
+ * - **create**：校验（name/endpoint/customHeaders/description/auth，白名单逐字）→ `none`
+ *   直接落库；bearer+newToken → **预生成 MCP `_id` 一次成型**：先
+ *   `createManagedEntry('mcp-bearer-tokens', refId=MCP id, key=name, editable=true/
+ *   deletable=false)` 再落 MCP（`bearerValutEntryId` 随首次 save 写入，无回写、无中间态），
+ *   落 MCP 失败补偿 `deleteEntryCascade`（D14 同惯例，不留悬空行）；
+ *   bearer+existingEntryId → **三分口径**校验（不存在 → `valut entry not found`；存在但跨工作区
+ *   不可见 → `Not found`；非 manual → `bearer entry must be manual namespace`）→ 落 MCP →
+ *   `createRef` 仅建 ref（失败补偿删 MCP）。
  * - **update**：name/description/endpoint/customHeaders 直改（校验先行，重名预检）；
  *   `auth` 省略/null = 不动；bearer+newToken → 自建条目走 `updateValue` 内部重写值路径
  *   （不回显、不走 GraphQL），manual 引用 → `bearer entry not editable in place`（穿透编辑）；
  *   bearer+existingEntryId → **换绑 = 先删旧 ref 再建新 ref**（旧关联按删除同口径：自建旧条目
  *   `deleteEntryCascade`、manual 旧引用仅 `removeRef`），同目标幂等；bearer+none → 解绑（同口径）。
+ *   **有副作用的步骤（删旧 ref / 建新 ref / 级联删旧条目 / 就地改值）一律放在 `updateOne`
+ *   持久化确认之后**：持久化失败即原样抛出（旧关联从未被触碰 → 无孤儿）；副作用失败则回滚
+ *   本次 `$set` 并恢复旧 ref（换绑/解绑两方向均覆盖）。
  * - **delete（D14）**：读 MCP → 判条目实际 `namespace` → 以 `_id` 删除 `deletedCount===1`
  *   为「执行级联」凭证（防双级联，输家不重复级联）→ 自建级联删 ref+entry / 引用仅删 ref。
  *   条目存在性由 entry namespace 判定，不以前端标记为准。
@@ -39,7 +48,7 @@ export const MCP_BEARER_FEATURE = 'mcp-bearer-tokens';
 /** 自建条目 namespace（`valut-service.ensureNamespace` 启动自检创建）。 */
 const MCP_BEARER_NAMESPACE = `service-${MCP_BEARER_FEATURE}`;
 
-const WORKSPACE_CONTEXT_REQUIRED = 'custom mcp workspace context is required';
+const WORKSPACE_NOT_FOUND = 'workspace not found';
 
 const NAME_MIN_LENGTH = 1;
 const NAME_MAX_LENGTH = 64;
@@ -134,7 +143,7 @@ function validateName(raw: unknown): string {
 function validateDescription(raw: unknown): string | null {
   if (raw === null || raw === undefined) return null;
   if (typeof raw !== 'string' || raw.length > DESCRIPTION_MAX_LENGTH) {
-    // 契约错误表未列 description 文案（前端 maxlength 同步收敛），此处按服务层约束拒绝
+    // 契约错误表已列该文案（`invalid mcp description`，白名单逐字透传）
     throw new Error('invalid mcp description');
   }
   const description = raw.trim();
@@ -261,16 +270,30 @@ function mapServer(doc: Doc, namespaces: Map<string, string>): CustomMcpServerVi
 }
 
 export class CustomMcpService {
-  /** 当前工作区自定义 MCP 列表（独占型可见集）。 */
+  /**
+   * 工作区上下文守卫（与 `valut-service.requireContext` 同范式，返工 MAJOR-1 同类缺口）：
+   * 无 ALS 上下文时 `applyWorkspaceScope` 不注入可见集过滤，读会退化为全租户、写会绕过
+   * 工作区收敛；文案与 middleware/auth、valut-service 同为 `workspace not found`
+   * （契约白名单口径，GraphQL 层可透传而非坍缩 internal error）。
+   */
+  private requireContext(): WorkspaceContext {
+    const context = getWorkspaceContext();
+    if (!context) throw new Error(WORKSPACE_NOT_FOUND);
+    return context;
+  }
+
+  /** 当前工作区自定义 MCP 列表（独占型可见集）；无上下文 → 拒绝（不跨租户列举）。 */
   async list(): Promise<CustomMcpServerView[]> {
+    this.requireContext();
     const docs = (await CustomMcpServer.find({})
       .sort({ createdAt: 1, _id: 1 })
       .lean()) as unknown as Doc[];
     return this.mapDocs(docs);
   }
 
-  /** 单条查询：不存在 → null（契约可空出参）；跨工作区 → `Not found`。 */
+  /** 单条查询：不存在 → null（契约可空出参）；跨工作区 → `Not found`；无上下文 → 拒绝。 */
   async get(id: string): Promise<CustomMcpServerView | null> {
+    this.requireContext();
     try {
       return await this.loadView(id);
     } catch (err) {
@@ -280,9 +303,8 @@ export class CustomMcpService {
   }
 
   async create(params: CreateCustomMcpServerParams): Promise<CustomMcpServerView> {
-    assertWorkspaceWritable(getWorkspaceContext());
-    const context = getWorkspaceContext();
-    if (!context) throw new Error(WORKSPACE_CONTEXT_REQUIRED);
+    const context = this.requireContext();
+    assertWorkspaceWritable(context);
 
     // 校验顺序：name → endpoint → customHeaders → description → auth（白名单逐字）
     const name = validateName(params.name);
@@ -311,32 +333,25 @@ export class CustomMcpService {
     }
 
     if (auth.token) {
-      // bearer + newToken：预生成 MCP _id 一次成型——落 MCP → 建 entry+ref → 回写
-      await this.saveNew(doc);
-      let createdId: string;
+      // bearer + newToken：预生成 MCP `_id` 一次成型（计划关键要点 1 裁决）——
+      // **先**建 entry+ref（refId=预生成 MCP id）**再**落 MCP（bearerValutEntryId 随首次
+      // save 一并写入，无回写、无中间态）；落 MCP 失败即补偿 `deleteEntryCascade`
+      // （entry+ref 同删），不留悬空行/半态 MCP。
+      const createdId = await this.createBearerEntry({
+        mcpId: String(mcpId),
+        name,
+        token: auth.token,
+        workspaceId: context.id,
+        tenantId: context.tenantId,
+        createdBy: params.createdBy,
+      });
+      doc.bearerValutEntryId = new mongoose.Types.ObjectId(createdId);
       try {
-        createdId = await this.createBearerEntry({
-          mcpId: String(mcpId),
-          name,
-          token: auth.token,
-          workspaceId: context.id,
-          tenantId: context.tenantId,
-          createdBy: params.createdBy,
-        });
+        await this.saveNew(doc);
       } catch (err) {
-        // D14 补偿：entry/ref 中途失败即删除已落 MCP，不留半态
-        await CustomMcpServer.deleteOne({ _id: mcpId }).catch(() => undefined);
-        throw err;
-      }
-      try {
-        await CustomMcpServer.updateOne(
-          { _id: mcpId },
-          { $set: { bearerValutEntryId: createdId } },
-        );
-      } catch (err) {
+        // D14 补偿：MCP 落库失败即回滚已建 entry+ref（避免孤儿条目）
         await valutService.deleteEntryCascade(createdId).catch(() => undefined);
-        await CustomMcpServer.deleteOne({ _id: mcpId }).catch(() => undefined);
-        throw mapWriteError(err);
+        throw err;
       }
       return this.loadView(String(mcpId));
     }
@@ -364,9 +379,8 @@ export class CustomMcpService {
   }
 
   async update(id: string, params: UpdateCustomMcpServerParams): Promise<CustomMcpServerView> {
-    assertWorkspaceWritable(getWorkspaceContext());
-    const context = getWorkspaceContext();
-    if (!context) throw new Error(WORKSPACE_CONTEXT_REQUIRED);
+    const context = this.requireContext();
+    assertWorkspaceWritable(context);
     const mcp = await this.loadMcp(id);
     const mcpId = str(mcp._id);
     const currentName = str(mcp.name);
@@ -390,15 +404,38 @@ export class CustomMcpService {
     const currentEntryId = mcp.bearerValutEntryId ? str(mcp.bearerValutEntryId) : null;
     /** 本次 attach 新建的自建条目（updateOne 失败时补偿回收）。 */
     let attachedEntryId: string | null = null;
+    /** 本次 `$set` 的进入前快照（副作用失败时整体回滚，避免半态字段）。 */
+    const prevValues: McpUpdate = {
+      name: currentName,
+      description:
+        mcp.description === null || mcp.description === undefined ? null : str(mcp.description),
+      endpoint: str(mcp.endpoint),
+      authType: str(mcp.authType) === 'bearer' ? 'bearer' : 'none',
+      bearerValutEntryId: currentEntryId ? new mongoose.Types.ObjectId(currentEntryId) : null,
+      customHeaders: toHeaderMap(mapHeaders(mcp.customHeaders)),
+    };
+    /**
+     * **有副作用的步骤延后到 `updateOne` 持久化确认之后**（返工 MINOR-3）：
+     * - 持久化失败 → 旧关联从未被触碰（换绑/解绑两方向天然无孤儿，直接上抛）；
+     * - 副作用失败 → 回滚本次 `$set` + 恢复旧 ref（「旧关联完好或已回滚」）。
+     */
+    let postPersist: (() => Promise<void>) | null = null;
+    /** 副作用是否触碰过 ref（失败补偿时需要恢复旧 ref）。 */
+    let refTouched = false;
 
     const auth =
       params.auth === undefined || params.auth === null ? null : resolveAuth(params.auth);
     if (auth) {
       if (auth.type === 'none') {
-        // 解绑：旧关联按删除同口径处理
-        if (currentEntryId) await this.detachBearer(mcpId, currentEntryId);
+        // 解绑：先持久化（authType=none + 清 bearerValutEntryId），确认后再回收旧关联
         $set.authType = 'none';
         $set.bearerValutEntryId = null;
+        if (currentEntryId) {
+          const oldEntryId = currentEntryId;
+          const oldNamespace = await this.entryNamespace(oldEntryId);
+          refTouched = true;
+          postPersist = () => this.detachEntry(mcpId, oldEntryId, oldNamespace);
+        }
       } else if (auth.token) {
         $set.authType = 'bearer';
         if (currentEntryId) {
@@ -407,7 +444,11 @@ export class CustomMcpService {
           if (entry.namespace !== MCP_BEARER_NAMESPACE) {
             throw new Error('bearer entry not editable in place');
           }
-          await valutService.updateValue(currentEntryId, auth.token);
+          const entryId = currentEntryId;
+          const token = auth.token;
+          postPersist = async () => {
+            await valutService.updateValue(entryId, token);
+          };
         } else {
           attachedEntryId = await this.createBearerEntry({
             mcpId,
@@ -423,15 +464,24 @@ export class CustomMcpService {
         $set.authType = 'bearer';
         await this.assertManualEntry(auth.existingEntryId);
         if (auth.existingEntryId !== currentEntryId) {
-          // 换绑 = 先删旧 ref 再建新 ref（旧关联按删除同口径），两方向不留孤儿
-          if (currentEntryId) await this.detachBearer(mcpId, currentEntryId);
-          await valutService.createRef({
-            entryId: auth.existingEntryId,
-            feature: MCP_BEARER_FEATURE,
-            refId: mcpId,
-            refLabel: name,
-          });
-          $set.bearerValutEntryId = new mongoose.Types.ObjectId(auth.existingEntryId);
+          const newEntryId = auth.existingEntryId;
+          const oldEntryId = currentEntryId;
+          const oldNamespace = oldEntryId ? await this.entryNamespace(oldEntryId) : null;
+          $set.bearerValutEntryId = new mongoose.Types.ObjectId(newEntryId);
+          refTouched = true;
+          postPersist = async () => {
+            // 换绑 = 先删旧 ref（`{feature,refId}` 唯一）→ 建新 ref → 持久化后回收旧自建条目
+            await valutService.removeRef(MCP_BEARER_FEATURE, mcpId);
+            await valutService.createRef({
+              entryId: newEntryId,
+              feature: MCP_BEARER_FEATURE,
+              refId: mcpId,
+              refLabel: name,
+            });
+            if (oldEntryId && oldNamespace === MCP_BEARER_NAMESPACE) {
+              await valutService.deleteEntryCascade(oldEntryId);
+            }
+          };
         }
       } else {
         throw new Error('bearer token is required');
@@ -449,7 +499,43 @@ export class CustomMcpService {
         throw mapWriteError(err);
       }
     }
+
+    if (postPersist) {
+      try {
+        await postPersist();
+      } catch (err) {
+        // 失败补偿：回滚本次持久化 + 恢复旧 ref（换绑/解绑两方向不留孤儿）
+        await this.rollbackUpdate(mcp._id, $set, prevValues);
+        if (refTouched && currentEntryId) {
+          await valutService.removeRef(MCP_BEARER_FEATURE, mcpId).catch(() => undefined);
+          await valutService
+            .createRef({
+              entryId: currentEntryId,
+              feature: MCP_BEARER_FEATURE,
+              refId: mcpId,
+              refLabel: name,
+            })
+            .catch(() => undefined);
+        }
+        throw err;
+      }
+    }
     return this.loadView(mcpId);
+  }
+
+  /** 副作用失败补偿：把本次 `$set` 涉及的字段整体回滚到进入前快照（best-effort，不外抛）。 */
+  private async rollbackUpdate(
+    id: unknown,
+    $set: McpUpdate,
+    prevValues: McpUpdate,
+  ): Promise<void> {
+    const rollback = Object.fromEntries(
+      (Object.keys($set) as Array<keyof McpUpdate>).map((key) => [key, prevValues[key]]),
+    ) as McpUpdate;
+    await CustomMcpServer.updateOne(
+      { _id: id as mongoose.Types.ObjectId },
+      { $set: rollback },
+    ).catch(() => undefined);
   }
 
   /**
@@ -457,35 +543,19 @@ export class CustomMcpService {
    * 「执行级联」凭证（并发输家不重复级联）→ 自建级联删 ref+entry / 引用仅删 ref → 删 MCP。
    */
   async delete(id: string): Promise<boolean> {
-    assertWorkspaceWritable(getWorkspaceContext());
+    const context = this.requireContext();
+    assertWorkspaceWritable(context);
     const mcp = await this.loadMcp(id);
     const mcpId = str(mcp._id);
     const entryId = mcp.bearerValutEntryId ? str(mcp.bearerValutEntryId) : null;
 
-    // 删除前判定 namespace（条目存在性由 entry 判定，不以前端标记为准）
-    let namespace: string | null = null;
-    if (entryId) {
-      try {
-        namespace = (await valutService.inspectEntry(entryId)).namespace;
-      } catch (err) {
-        if (err instanceof Error && err.message === 'valut entry not found') {
-          namespace = null; // 悬空条目：仅清理 ref
-        } else {
-          throw err;
-        }
-      }
-    }
+    // 删除前判定 namespace（条目存在性由 entry 判定，不以前端标记为准；悬空条目 → null）
+    const namespace = entryId ? await this.entryNamespace(entryId) : null;
 
     const result = await CustomMcpServer.deleteOne({ _id: mcp._id });
     if (result.deletedCount !== 1) return false; // 并发：赢家才执行级联
 
-    if (entryId) {
-      if (namespace === MCP_BEARER_NAMESPACE) {
-        await valutService.deleteEntryCascade(entryId);
-      } else {
-        await valutService.removeRef(MCP_BEARER_FEATURE, mcpId);
-      }
-    }
+    if (entryId) await this.detachEntry(mcpId, entryId, namespace);
     return true;
   }
 
@@ -524,18 +594,26 @@ export class CustomMcpService {
     }
   }
 
-  /** 解绑旧关联（与删除同口径）：自建条目级联删、manual/悬空仅删 ref。 */
-  private async detachBearer(mcpId: string, entryId: string): Promise<void> {
-    let namespace: string | null = null;
+  /**
+   * 条目 namespace 读取原语（删除/解绑判定用）：
+   * 不存在（悬空）→ `null`（调用方按「仅清理 ref」处理）；跨工作区/非法 id 按 `loadEntry`
+   * 口径上抛（`Not found` / `valut entry not found`）。
+   */
+  private async entryNamespace(entryId: string): Promise<string | null> {
     try {
-      namespace = (await valutService.inspectEntry(entryId)).namespace;
+      return (await valutService.inspectEntry(entryId)).namespace;
     } catch (err) {
-      if (err instanceof Error && err.message === 'valut entry not found') {
-        namespace = null;
-      } else {
-        throw err;
-      }
+      if (err instanceof Error && err.message === 'valut entry not found') return null;
+      throw err;
     }
+  }
+
+  /** 解绑/删除同口径回收：自建条目级联删 entry+ref，manual/悬空仅删 ref。 */
+  private async detachEntry(
+    mcpId: string,
+    entryId: string,
+    namespace: string | null,
+  ): Promise<void> {
     if (namespace === MCP_BEARER_NAMESPACE) {
       await valutService.deleteEntryCascade(entryId);
     } else {

@@ -242,6 +242,34 @@ describe('custom-mcp-forwarder', () => {
     }
   });
 
+  it('T-CF5: 错误信息先脱敏再截断——secret 跨 300 边界不落明文（顺序颠倒即红）', async () => {
+    const token = 'super-secret-token-0123456789abcdef';
+    vi.mocked(CustomMcpServer.findById).mockResolvedValue(
+      serverDoc({ authType: 'bearer', bearerValutEntryId: ENTRY_ID }) as never,
+    );
+    vi.mocked(valutService.resolveValue).mockResolvedValue(token);
+    // 超长错误串且 token 起点落在 300 字符截断边界之内（先截断会把前半段明文落日志）
+    const longError = `${'E'.repeat(290)} ${token} ${'tail'.repeat(80)}`;
+    expect(longError.length).toBeGreaterThan(300);
+    expect(longError.indexOf(token)).toBeLessThan(300);
+    fetchMock.mockRejectedValue(new Error(longError));
+
+    const result = await forward();
+
+    expect(result.status).toBe(502);
+    const logs = JSON.stringify(testLog.records);
+    expect(logs).not.toContain(token);
+    // 跨边界被截断的前半段同样不得出现
+    expect(logs).not.toContain(token.slice(0, 16));
+    const failed = testLog.records.find((record) => record.event === 'custom-mcp-forward-failed');
+    expect(failed).toBeTruthy();
+    const errMessage = String(failed!.errMessage);
+    expect(errMessage).not.toContain(token);
+    expect(errMessage).not.toContain(token.slice(0, 16));
+    expect(errMessage.length).toBeLessThanOrEqual(301); // 脱敏后仍截断（300 + 省略号）
+    expect(JSON.stringify(result.body)).not.toContain(token);
+  });
+
   it('T-CF5: 成功路径不记录真实 endpoint 响应正文（即使回显凭据也只回传不落日志）', async () => {
     vi.mocked(CustomMcpServer.findById).mockResolvedValue(
       serverDoc({ authType: 'bearer', bearerValutEntryId: ENTRY_ID }) as never,

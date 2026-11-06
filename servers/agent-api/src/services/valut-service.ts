@@ -3,7 +3,11 @@ import { ValutEntry } from '../models/valut-entry.js';
 import { ValutNamespace } from '../models/valut-namespace.js';
 import { ValutRef } from '../models/valut-ref.js';
 import { decrypt, encrypt, type EncryptedData } from './crypto.js';
-import { assertWorkspaceWritable, getWorkspaceContext } from './workspace-context.js';
+import {
+  assertWorkspaceWritable,
+  getWorkspaceContext,
+  type WorkspaceContext,
+} from './workspace-context.js';
 
 /**
  * Valut 工作区密钥管理**唯一读写口**（MCP+Valut 功能迭代 / 提案 §3.2、计划 Phase 1）。
@@ -19,6 +23,12 @@ import { assertWorkspaceWritable, getWorkspaceContext } from './workspace-contex
  * - 读：`applyWorkspaceScope` 独占型可见集（当前工作区）；
  * - 写：每个变更方法入口 `assertWorkspaceWritable`（全局工作区 developer →
  *   `global workspace is read-only`）+ 插件写过滤/只读拦截兜底；
+ * - **无工作区上下文即抛 `workspace not found`（租户隔离红线）**：`applyWorkspaceScope`
+ *   在无 ALS store 时静默不注入可见集过滤（workspace-scope.ts），因此 `listGrouped` /
+ *   `updateValue` / `deleteEntry` / `deleteEntryCascade` 入口必须先 `requireContext()`
+ *   （范式同 cloud-storage-service.requireContext），否则退化为全租户读写；
+ *   反之 `resolveValue` / `inspectEntry` / `loadEntryNamespaces` 等**内部原语保留无上下文能力**
+ *   （custom-mcp-forwarder 转发链路以 `runWithWorkspace(undefined, …)` 显式调用）；
  * - 跨工作区 id → `Not found`（存在性探针区分：确实不存在 → `valut entry not found`）；
  * - `listManualOptions` 服务层强制 `workspaceId=当前工作区`（防跨工作区 id 猜测）。
  *
@@ -158,6 +168,21 @@ function mapNamespace(doc: Doc): ValutNamespaceView {
 
 export class ValutService {
   /**
+   * 工作区上下文守卫（租户隔离红线，返工 MAJOR-1）：无 ALS 上下文**一律拒绝**，
+   * 文案与既有服务口径一致（`cloud-storage-service.requireContext` / `middleware/auth`
+   * 同为 `workspace not found`）。写/列表入口必须先过此守卫——否则 `applyWorkspaceScope`
+   * 不注入可见集过滤，`ValutEntry.find({})` 等会退化为全租户扫描。
+   *
+   * **不适用于**内部原语（`resolveValue` / `inspectEntry` / `loadEntryNamespaces` /
+   * `listManualOptions`）：转发链路（custom-mcp-forwarder）与派生查询依赖其无上下文能力。
+   */
+  private requireContext(): WorkspaceContext {
+    const context = getWorkspaceContext();
+    if (!context) throw new Error('workspace not found');
+    return context;
+  }
+
+  /**
    * 功能点 namespace 注册器（D13）：幂等 upsert `service-{feature}`（managed=true，
    * `$setOnInsert` 不覆盖存量行）。启动序列在迁移完成后调用，失败仅告警不阻塞就绪。
    */
@@ -176,9 +201,11 @@ export class ValutService {
 
   /**
    * 当前工作区条目按 namespace 聚合（契约 `valutEntries`）。
-   * refs 反查 `{valutEntryId:{$in:[...]}}` **一次查询**装配（避免 N+1）。
+   * refs 反查 `{valutEntryId:{$in:[...]}}` **一次查询**装配（避免 N+1）；
+   * 无工作区上下文 → `workspace not found`（不静默退化为全租户扫描）。
    */
   async listGrouped(): Promise<ValutNamespaceGroupView[]> {
+    this.requireContext();
     const entries = (await ValutEntry.find({})
       .sort({ createdAt: 1, _id: 1 })
       .lean()) as unknown as Doc[];
@@ -245,9 +272,8 @@ export class ValutService {
     value: string;
     createdBy: string;
   }): Promise<ValutEntryView> {
-    assertWorkspaceWritable(getWorkspaceContext());
-    const context = getWorkspaceContext();
-    if (!context) throw new Error('valut workspace context is required');
+    const context = this.requireContext();
+    assertWorkspaceWritable(context);
 
     const key = validateKey(params.key);
     const value = validateValue(params.value);
@@ -274,9 +300,10 @@ export class ValutService {
     return this.loadView(String(entry._id));
   }
 
-  /** 仅重写 value（key 不可改，D7）；`editable=false` 拒绝。 */
+  /** 仅重写 value（key 不可改，D7）；`editable=false` 拒绝；无上下文 → `workspace not found`。 */
   async updateValue(id: string, value: string): Promise<ValutEntryView> {
-    assertWorkspaceWritable(getWorkspaceContext());
+    // 先过上下文守卫（无 ALS 上下文即抛），再做只读拦截
+    assertWorkspaceWritable(this.requireContext());
     const next = validateValue(value);
     const entry = await this.loadEntry(id);
     if (entry.editable === false) throw new Error('valut entry is not editable');
@@ -294,10 +321,11 @@ export class ValutService {
 
   /**
    * 删除条目（契约 `deleteValutEntry`）：`deletable=false` 拒绝；
-   * manual 条目存在 refs 拒绝（D8，防误删导致运行期失凭据）；其余同时清理 refs。
+   * manual 条目存在 refs 拒绝（D8，防误删导致运行期失凭据）；其余同时清理 refs；
+   * 无工作区上下文 → `workspace not found`（不误删他租户条目）。
    */
   async deleteEntry(id: string): Promise<boolean> {
-    assertWorkspaceWritable(getWorkspaceContext());
+    assertWorkspaceWritable(this.requireContext());
     const entry = await this.loadEntry(id);
     if (entry.deletable === false) throw new Error('valut entry is not deletable');
     if (str(entry.namespace) === MANUAL_NAMESPACE) {
@@ -418,9 +446,8 @@ export class ValutService {
     refId: string;
     refLabel: string;
   }): Promise<void> {
-    assertWorkspaceWritable(getWorkspaceContext());
-    const context = getWorkspaceContext();
-    if (!context) throw new Error('valut workspace context is required');
+    const context = this.requireContext();
+    assertWorkspaceWritable(context);
     if (!params.feature?.trim() || !params.refId?.trim() || !params.refLabel?.trim()) {
       throw new Error('valut ref is required');
     }
@@ -447,9 +474,9 @@ export class ValutService {
     return result.deletedCount === 1;
   }
 
-  /** 删除联动原语：强制级联删除 entry + 其 refs（忽略 deletable，供自建 token 级联）。 */
+  /** 删除联动原语：强制级联删除 entry + 其 refs（忽略 deletable，供自建 token 级联）；无上下文 → `workspace not found`。 */
   async deleteEntryCascade(id: string): Promise<boolean> {
-    assertWorkspaceWritable(getWorkspaceContext());
+    assertWorkspaceWritable(this.requireContext());
     let entry: Doc;
     try {
       entry = await this.loadEntry(id);

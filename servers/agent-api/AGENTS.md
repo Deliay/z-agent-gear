@@ -218,6 +218,14 @@ pnpm run start   # Start production server
   `global workspace is read-only`、admin 写通；普通工作区成员读写通；跨工作区 id → `Not found`
   （存在性探针区分）、不存在 id → `valut entry not found`；非成员/跨租户在 `resolveWorkspaceContext`
   即 `workspace not found`。
+- **无工作区上下文守卫（租户隔离红线）**：`applyWorkspaceScope` 在无 ALS store 时静默不注入可见集
+  过滤，故 `listGrouped`/`updateValue`/`deleteEntry`/`deleteEntryCascade` 入口 `requireContext()`
+  一律抛 `workspace not found`（范式同 `cloud-storage-service.requireContext`；`createManualEntry`/
+  `createRef` 既有守卫 `valut workspace context is required` 保持不变）；**内部原语保留无上下文能力**
+  ——`resolveValue`/`inspectEntry`/`loadEntryNamespaces`（custom-mcp-forwarder 转发链路
+  `runWithWorkspace(undefined, …)` 依赖）、`listManualOptions` 无上下文返回空集。
+  该文案未列于 `contracts/valut.graphql` 错误表，GraphQL `wrap()` 按既有规则收敛 `internal error`
+  （安全收敛、不外泄实现细节；如需透传须主控同步契约错误表 + 白名单）。
 - **错误文案（白名单逐字，resolver `wrap()` 透传，未命中收敛 `internal error`）**：
   `valut entry not found` / `valut key already exists` / `invalid valut key` / `invalid valut value` /
   `valut entry is not editable` / `valut entry is not deletable` / `valut entry has refs` /
@@ -235,17 +243,20 @@ pnpm run start   # Start production server
   `workspaceId` 挂 `applyWorkspaceScope`（**独占型**）；`name` trim 后 1..64 工作区内唯一，唯一索引
   `uniq_custom_mcp_workspace_name` `{workspaceId,name}`（**与迁移 023 已建索引同名同键**）；
   `endpoint` 仅 `http://`/`https://` 且 ≤1024；`description?` ≤512（schema `maxlength` +
-  服务层 `invalid mcp description`——契约错误表未列该文案，GraphQL `wrap()` 收敛 `internal error`）；
+  服务层 `invalid mcp description`——契约错误表已列该文案，`wrap()` 白名单逐字透传）；
   `customHeaders` 为 `Map<String,[String]>` 同名多值（key 禁空白/冒号，并规避 Mongoose Map/BSON
   键限制：禁点号、`$` 与 `constructor/prototype/__proto__` 保留键名；单值 ≤4096、header 总数 ≤32）；
   `authType` none|bearer；`bearerValutEntryId` ref `ValutEntry`（bearer 必填、none 恒 null）。
   **本集合不存 bearer token**（token 只存 `valutentries.valueEncrypted`）。
-- **服务**：`services/custom-mcp-service.ts` 为唯一读写口（`list/get/create/update/delete`）：
-  - **bearer 两路径（create）**：`newToken` → **预生成 MCP `_id` 一次成型**——落 MCP
-    （`bearerValutEntryId` 暂空）→ `valutService.createManagedEntry('mcp-bearer-tokens',
-    refId=MCP id, refLabel=key=name, editable=true, deletable=false)` → 回写 `bearerValutEntryId`；
-    中途失败补偿删除 MCP（D14 同惯例）。`existingEntryId` → 校验条目存在、当前工作区可见、
-    namespace=manual（否则 `bearer entry must be manual namespace`）→ 落 MCP →
+- **服务**：`services/custom-mcp-service.ts` 为唯一读写口（`list/get/create/update/delete`）；
+  全部入口 `requireContext()`（无 ALS 工作区上下文 → `custom mcp workspace context is required`，
+  与 `valut-service` 同类守卫，封堵半迁移回退链路的跨租户读写面）：
+  - **bearer 两路径（create）**：`newToken` → **预生成 MCP `_id` 一次成型**（计划要点 1 裁决）——
+    **先** `valutService.createManagedEntry('mcp-bearer-tokens', refId=MCP id, refLabel=key=name,
+    editable=true, deletable=false)` **再** 落 MCP（`bearerValutEntryId` 随首次 save 一并写入，
+    无回写、无中间态）；落 MCP 失败补偿 `deleteEntryCascade`（entry+ref 同删，不留悬空行）。
+    `existingEntryId` → **三分口径**校验（不存在 → `valut entry not found`；存在但跨工作区不可见 →
+    `Not found`；非 manual → `bearer entry must be manual namespace`）→ 落 MCP →
     `valutService.createRef` 仅建 ref（失败补偿删 MCP）。两参数同时给出时 **`newToken` 优先**；
     均缺 → `bearer token is required`。
   - **删除（D14）**：读 MCP → 判条目**实际 namespace**（不以前端标记为准）→ **以 `_id` 删除
@@ -258,6 +269,9 @@ pnpm run start   # Start production server
     （前端 `bearerEntryManaged=false` 走「前往 Valut 编辑」穿透链接 D11）；
     `bearer+existingEntryId` → **换绑 = 先删旧 ref 再建新 ref**（旧关联按删除同口径：自建旧条目
     级联删、manual 旧引用仅删 ref），同目标幂等；`auth.type=none` 解绑同口径——**换绑两方向无孤儿**。
+    **有副作用的步骤（删旧 ref / 建新 ref / 级联删旧条目 / 就地改值）一律放在 `updateOne`
+    持久化确认之后**：持久化失败 → 旧关联从未被触碰（直接上抛，天然无孤儿）；副作用失败 →
+    回滚本次 `$set` 到进入前快照并恢复旧 ref（「旧关联完好或已回滚」，换绑/解绑两方向均覆盖）。
   - **`bearerEntryManaged` 派生**（服务层批量 `valutService.loadEntryNamespaces` 一次 `$in` 查询防
     N+1）：namespace `service-mcp-bearer-tokens` → true；`manual` → false；无条目/悬空 → null。
 - **与 Valut 联动不变量**：
@@ -273,18 +287,22 @@ pnpm run start   # Start production server
 - **GraphQL**：`graphql/schemas/custom-mcp.ts` + `graphql/resolvers/custom-mcp.ts`（均须登记
   `schemas/index.ts` / `resolvers/index.ts`，**漏登记运行时无效**）；`wrap()` 白名单逐字透传契约
   错误表：`custom mcp server not found` / `invalid mcp name` / `invalid mcp endpoint` /
-  `invalid custom headers` / `bearer token is required` / `bearer entry must be manual namespace` /
+  `invalid custom headers` / `invalid mcp description` / `bearer token is required` /
+  `valut entry not found`（`existingEntryId` 不存在）/ `bearer entry must be manual namespace` /
   `bearer entry not editable in place` / `global workspace is read-only` / `Not found`，未命中一律
   `internal error`；未认证 `Not authenticated`。`bearerEntryManaged` 由服务层派生，**无类型级 resolver**。
 - **权限**：读=独占型可见集（`list`/`get` 随 `x-workspace-id` 切换）；写=入口
   `assertWorkspaceWritable` + 插件写过滤/只读拦截（全局工作区 developer →
   `global workspace is read-only`）；跨工作区 id → `Not found`（存在性探针区分）、不存在 id →
   `custom mcp server not found`；`customMcpServer(id)` 可空出参对不存在返回 `null`。
+  无工作区上下文（半迁移回退）→ 全部入口 `requireContext()` 拒绝
+  （`custom mcp workspace context is required`，未列契约 → `internal error` 收敛）。
 - **测试**：`services/custom-mcp-service.test.ts`（T-CMCP1~5 真库：新建 entry/ref 落库与 editable/
-  deletable、引用仅 manual 与多 MCP 共引独立 ref、删除级联与并发只级联一次、编辑就地改值不回显/
-  manual 拒绝/换绑两方向无孤儿、校验矩阵逐字命中 + 权限矩阵）、`graphql/schemas/custom-mcp.test.ts`
-  （契约逐字段对齐 + 出参无 token 字段）、`graphql/resolvers/custom-mcp.test.ts`（认证/白名单/委托/
-  登记）。
+  deletable、**落 MCP 失败 → entry/ref 回滚**、引用仅 manual 与多 MCP 共引独立 ref、删除级联与并发
+  只级联一次、编辑就地改值不回显/manual 拒绝/换绑两方向无孤儿（含 `updateOne` 抛错与 `createRef`
+  抛错的补偿回归）、校验矩阵逐字命中 + 权限矩阵 + 无工作区上下文拒绝）、`graphql/schemas/custom-mcp.test.ts`
+  （契约逐字段对齐 + 出参无 token 字段）、`graphql/resolvers/custom-mcp.test.ts`（认证/白名单逐字/
+  委托/登记）、`services/custom-mcp-forwarder.test.ts`（T-CF5 先脱敏后截断，secret 跨 300 边界不落明文）。
 
 ## 会话签发与代理转发（MCP+Valut Phase 3）
 
@@ -328,7 +346,8 @@ pnpm run start   # Start production server
 - **通知形态（D7）**：JSON-RPC body 无 `id` → 立即 `202` 并 fire-and-forget（不阻塞 MCP 握手），
   后台转发失败仅 `warn` 日志。
 - **日志与明文红线（D4/D8）**：真实 endpoint 响应正文、错误正文、请求头、endpoint、token
-  **一律不入日志**（错误信息先对 endpoint/token 做替换再落）；只记
+  **一律不入日志**（错误信息对 endpoint/token **先替换敏感片段、再截断**后落——顺序不可颠倒，
+  否则 secret 跨 300 边界时前半段明文会进日志）；只记
   `sessionId/mcpId/name/status/reason/errName` 白名单字段；会话文档与 relay 载荷均无凭据明文。
   自定义 MCP **不经 `mcp:forward:*` Redis 频道**（该频道仅 registered_proxy，F12）。
 - **controller-api 镜像（F4）**：`servers/controller-api/src/models/mcp-session-endpoint.ts`
