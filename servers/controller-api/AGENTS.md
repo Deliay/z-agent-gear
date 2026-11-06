@@ -100,6 +100,20 @@ pnpm run test    # Run tests
   `packages/agent-controller/AGENTS.md`）；旧版本 worker 忽略未知字段优雅降级。
 - 契约：`contracts/agent-session-websocket.md` §3.12 + Redis relay 附录。
 
+## fs:read-file relay 与 parts 透传（#461，2.17.0 口径）
+
+- **`fs:read-file` relay（契约 §3.25/§3.26）**：`session:command` 白名单新增 `fs:read-file`
+  （`requestId && controllerId && path`，缺任一忽略不分发）→ `fs-read-file-service.handleReadFile`
+  （对齐 `fs-mkdir-service` 形态：Controller → socketId → `socket.emit('fs:read-file', withTraceMeta({requestId, path, maxBytes}))`；
+  离线/查不到仅记 error，不写 Redis 不崩溃）；`fs:read-file:result` 经 `socketio.ts` 注册监听 →
+  `handleReadFileResult` 写 Redis `fs:read-file:{requestId}`（`EX 60`，裁决 4），agent-api 轮询消费。
+- **`parts` 透传（契约 §2.6）**：`handleInputMessage` 载荷白名单追加 `parts`（有序提示词块，
+  `{type:'text',text}` / `{type:'image',data,mimeType}`），经 `acpSessionManager.forwardToController`
+  在 `acp:message` 携带；parts 为空不携带（旧报文形状不变）。
+- **MCP 按 serverName 超时（契约 §2.12.1，裁决 9）**：`mcp-relay.ts` `SERVER_TIMEOUT_OVERRIDES` 仅
+  `agent-session-preview-tools` 放宽至 `MCP_REVIEW_TIMEOUT_MS`（默认 1_800_000，env 可调，与 agent-gear
+  同常量同默认），其余 server 保持 60s 504 零回归。
+
 ## 日志与可观测性
 
 - **日志形态**：pino 单行 JSON（vendored `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。

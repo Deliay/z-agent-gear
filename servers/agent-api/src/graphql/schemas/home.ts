@@ -19,6 +19,8 @@ export const homeTypeDefs = `#graphql
     todos: [TodoItem!]!
     # 未读待办数
     unreadTodoCount: Int!
+    # Review 列表（PENDING 在前，其后按 resolvedAt 倒序的最近终态；总量上限 20；单分支失败降级 []）
+    sessionReviews: [SessionReview!]!
   }
 
   extend type Controller {

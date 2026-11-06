@@ -13,6 +13,11 @@ import { McpServer } from '../models/mcp-server.js';
 import { CustomMcpServer } from '../models/custom-mcp-server.js';
 import { mcpEndpointService, type CustomMcpSnapshotEntry } from './mcp-endpoint.js';
 import { ensureCloudHostToolsServer, CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
+import {
+  ensureSessionPreviewToolsServer,
+  SESSION_PREVIEW_TOOLS_SERVER_NAME,
+} from './session-preview-tools.js';
+import { sessionReviewService } from './session-review-service.js';
 import { actorFilter } from './workspace-context.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 import {
@@ -37,6 +42,15 @@ export interface SessionStatusEvent {
   promptCompleted?: boolean;
   /** 会话意外结束的错误码（CONTROLLER_OFFLINE / ACP_RESUME_FAILED 等） */
   error?: string;
+}
+
+/** 提示词片段（契约 PromptPartInput；type=text 时 text 必填、type=image 时 data/mimeType 必填） */
+export interface PromptPartInput {
+  type: string;
+  text?: string;
+  data?: string;
+  mimeType?: string;
+  name?: string;
 }
 
 /**
@@ -356,12 +370,12 @@ export class SessionService {
     // 未显式指定（含 undefined）时按控制器 defaultMcp 解析；显式空数组表示不注入。
     let mcpServerIds = input.mcpServerIds;
     if (mcpServerIds === undefined) {
-      // 平台内置 agent-cloud-host-tools 仅由云会话自动并入（与前端可选列表口径一致），
-      // 不作为「默认 MCP」候选，避免非云会话被注入云主机工具。
+      // 平台内置服务（agent-cloud-host-tools / agent-session-preview-tools）仅由会话创建时自动并入
+      // （与前端可选列表口径一致），不作为「默认 MCP」候选（裁决 5：排除口径 $ne → $nin）。
       const enabledServers = await McpServer.find({
         userId,
         enabled: true,
-        name: { $ne: CLOUD_HOST_TOOLS_SERVER_NAME },
+        name: { $nin: [CLOUD_HOST_TOOLS_SERVER_NAME, SESSION_PREVIEW_TOOLS_SERVER_NAME] },
       })
         .select('_id')
         .lean();
@@ -372,10 +386,21 @@ export class SessionService {
       );
     }
 
+    // 平台内置服务（agent-cloud-host-tools / agent-session-preview-tools）在下方自动并入，
+    // 不参与「用户所选 MCP 有效性」前置校验（平台 id 由装配点保证存在且启用）。
+    const userSelectedMcpIds = mcpServerIds ?? [];
+
     // 云会话自动装配云主机平台 MCP 工具（workload_list/workload_install）；非云会话不装配。
     if (controller.type === 'cloud') {
       const cloudToolsId = await ensureCloudHostToolsServer(userId);
       mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), cloudToolsId]));
+    }
+
+    // 会话预览平台 MCP 工具（agent-session-preview-tools.review）：全部类型会话
+    // （普通/云/工作流节点会话）公共路径装配并去重（裁决 5 / D7）。
+    {
+      const previewToolsId = await ensureSessionPreviewToolsServer(userId);
+      mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), previewToolsId]));
     }
 
     const workspace = await ControllerWorkspace.findOne({ _id: input.workspaceId, userId, controllerId: input.controllerId }).lean();
@@ -473,13 +498,13 @@ export class SessionService {
 
     // Validate selected MCP servers up front so an invalid selection fails the
     // mutation instead of silently creating a session without MCP.
-    if (mcpServerIds && mcpServerIds.length > 0) {
+    if (userSelectedMcpIds.length > 0) {
       const selectable = await McpServer.countDocuments({
-        _id: { $in: mcpServerIds },
+        _id: { $in: userSelectedMcpIds },
         userId,
         enabled: true,
       });
-      if (selectable !== mcpServerIds.length) {
+      if (selectable !== userSelectedMcpIds.length) {
         throw new Error('MCP_SERVER_NOT_FOUND: some selected MCP servers are invalid or disabled');
       }
     }
@@ -1040,15 +1065,41 @@ export class SessionService {
     return messages.reverse().map(this.mapMessage.bind(this));
   }
 
-  async addMessage(sessionId: string, message: { direction: string; type: string; content: unknown; metadata?: string }): Promise<Record<string, unknown>> {
+  async addMessage(sessionId: string, message: { direction: string; type: string; content: unknown; metadata?: string; parts?: PromptPartInput[] }): Promise<Record<string, unknown>> {
+    let contentValue = message.content;
+    let metadata = message.metadata;
+    let keptParts: PromptPartInput[] | undefined;
+    if (message.parts !== undefined) {
+      // 多片段输入（裁决 6/8）：服务端再过滤 trim 空文本片段 / 无 data 图片；
+      // 过滤后全空抛 BAD_USER_INPUT('empty prompt')；合并文本写 content（标题取自合并文本）；
+      // metadata = {parts}（全量含图片）；体积 >12MB 拒绝（Mongo 16MB 文档上限安全余量）。
+      const kept = message.parts.filter((part) =>
+        part.type === 'image'
+          ? typeof part.data === 'string' && part.data.length > 0
+          : typeof part.text === 'string' && part.text.trim() !== '',
+      );
+      if (kept.length === 0) {
+        throw new GraphQLError('empty prompt', { extensions: { code: 'BAD_USER_INPUT' } });
+      }
+      keptParts = kept;
+      const sizeBytes = Buffer.byteLength(JSON.stringify(kept), 'utf8');
+      if (sizeBytes > 12 * 1024 * 1024) {
+        throw new GraphQLError('prompt parts too large', { extensions: { code: 'BAD_USER_INPUT' } });
+      }
+      contentValue = kept
+        .filter((part) => part.type === 'text')
+        .map((part) => (part.text ?? '').trim())
+        .join('\n\n');
+      metadata = JSON.stringify({ parts: kept });
+    }
     const acpMessage = await AcpMessage.create({
       sessionId,
       direction: message.direction as 'input' | 'output',
       type: message.type as 'text' | 'image' | 'tool_call' | 'tool_result' | 'plan' | 'error',
-      content: typeof message.content === 'string'
-        ? (() => { try { return JSON.parse(message.content); } catch { return { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: message.content } }; } })()
-        : message.content,
-      metadata: message.metadata,
+      content: typeof contentValue === 'string'
+        ? (() => { try { return JSON.parse(contentValue); } catch { return { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: contentValue } }; } })()
+        : contentValue,
+      metadata,
     });
 
     // Set session title from first user message
@@ -1056,14 +1107,14 @@ export class SessionService {
       const messageCount = await AcpMessage.countDocuments({ sessionId, direction: 'input' });
       if (messageCount === 1) {
         // First user message - extract text content as title
-        let title = message.content as string;
+        let title = contentValue as string;
         let parsedContent: Record<string, unknown> | null = null;
-        if (typeof message.content === 'string') {
+        if (typeof contentValue === 'string') {
           try {
-            parsedContent = JSON.parse(message.content);
+            parsedContent = JSON.parse(contentValue);
           } catch { /* use raw content */ }
         } else {
-          parsedContent = message.content as Record<string, unknown>;
+          parsedContent = contentValue as Record<string, unknown>;
         }
         if (parsedContent?.sessionUpdate === 'user_message_chunk' && (parsedContent.content as Record<string, unknown>)?.text) {
           title = (parsedContent.content as Record<string, unknown>).text as string;
@@ -1078,11 +1129,14 @@ export class SessionService {
 
     const mappedMessage = this.mapMessage(acpMessage.toObject());
 
-    // Publish to Redis for SSE
+    // Publish to Redis for SSE（多片段输入时载荷携带 parts，controller-api 透传 acp:message）
     const redis = getRedisClient();
     publish('session:message', {
       sessionId,
-      message: mappedMessage,
+      message: {
+        ...mappedMessage,
+        ...(keptParts && keptParts.length > 0 ? { parts: keptParts } : {}),
+      },
     });
 
     return mappedMessage;

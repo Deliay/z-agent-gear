@@ -1,3 +1,4 @@
+import { useMemo, useState } from 'react';
 import type { SessionUpdate } from '@agentclientprotocol/sdk';
 import MarkdownContent from './MarkdownContent';
 import MessageActions from './MessageActions';
@@ -19,6 +20,17 @@ interface MessageItemProps {
 
 export default function MessageItem({ message }: MessageItemProps) {
   const isUser = message.direction === 'input';
+  const [zoomImage, setZoomImage] = useState<string | null>(null);
+  // 多片段历史（裁决 16）：metadata.parts 提取图片片段（text 片段已并入 content 渲染）
+  const partImages = useMemo(() => {
+    if (!isUser || !message.metadata) return [];
+    try {
+      const parsed = JSON.parse(message.metadata) as { parts?: Array<{ type?: string; data?: string; mimeType?: string; name?: string }> };
+      return (parsed.parts ?? []).filter((part) => part.type === 'image' && typeof part.data === 'string');
+    } catch {
+      return [];
+    }
+  }, [isUser, message.metadata]);
 
   const acpUpdate = (() => {
     if (typeof message.content === 'object') return message.content as unknown as SessionUpdate;
@@ -127,10 +139,40 @@ export default function MessageItem({ message }: MessageItemProps) {
             <MarkdownContent content={displayContent} />
           )}
         </div>
+        {/* 多片段历史渲染（裁决 16）：metadata.parts 存在时追加图片缩略（点击放大）与片段分隔 */}
+        {partImages.length > 0 && (
+          <div className="mt-2 space-y-1 border-t border-current/10 pt-2" data-testid="message-parts">
+            {partImages.map((image, index) => (
+              <button
+                key={index}
+                type="button"
+                className="block"
+                onClick={() => setZoomImage(`data:${image.mimeType ?? 'image/png'};base64,${image.data}`)}
+                data-testid="message-part-image"
+              >
+                <img
+                  src={`data:${image.mimeType ?? 'image/png'};base64,${image.data}`}
+                  alt={image.name ?? 'image'}
+                  className="max-h-32 rounded"
+                />
+                {image.name && <div className="text-[10px] opacity-70">{image.name}</div>}
+              </button>
+            ))}
+          </div>
+        )}
         <div className={`mt-1 text-xs ${isUser ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
           {new Date(message.createdAt).toLocaleTimeString()}
         </div>
       </div>
+      {zoomImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          onClick={() => setZoomImage(null)}
+          data-testid="message-image-zoom"
+        >
+          <img src={zoomImage} alt="preview" className="max-h-[90vh] max-w-[90vw]" />
+        </div>
+      )}
     </div>
   );
 }

@@ -118,6 +118,88 @@ export const sessionTypeDefs = `#graphql
     url: String
   }
 
+  input MessageAttachmentInput {
+    # image | audio | resource | resource_link
+    type: String!
+    data: String
+    mimeType: String
+    uri: String
+    text: String
+    name: String
+    description: String
+    size: Int
+    title: String
+  }
+
+  # 提示词片段类型（本期 text/image；音频/视频类型预留不开放）
+  enum PromptPartType {
+    text
+    image
+  }
+
+  # 提示词片段：文本或图片（本期）；音频/视频类型预留不开放
+  input PromptPartInput {
+    type: PromptPartType!
+    # type=text 必填；trim 为空将被服务端过滤
+    text: String
+    # type=image 必填：base64（不含 data: 前缀）
+    data: String
+    # type=image 必填：如 image/png
+    mimeType: String
+    # 可选展示名（如截图文件名）
+    name: String
+  }
+
+  # Review 状态：PENDING 待评审；APPROVED 通过；REJECTED 驳回；COMMENTED 仅评论；CANCELLED 已取消（超时/会话结束）
+  enum SessionReviewStatus {
+    PENDING
+    APPROVED
+    REJECTED
+    COMMENTED
+    CANCELLED
+  }
+
+  # 提交动作（对齐 GitHub PR Review 语义）
+  enum SessionReviewAction {
+    approve
+    reject
+    comment
+  }
+
+  # 会话内建 Review（Agent 经平台 MCP review 工具发起，用户逐文件批注并给出总体结论）
+  type SessionReview {
+    id: ID!
+    sessionId: ID!
+    # 待评审文件（相对会话工作区的展示路径）
+    files: [String!]!
+    # 所属会话标题（HomeOverview 聚合时补齐，侧边栏辨识用；其余查询为 null）
+    sessionTitle: String
+    status: SessionReviewStatus!
+    # 按文件聚合的批注：{ [file: string]: ReviewComment[] }；PENDING/CANCELLED 为 null
+    fileReviews: JSON
+    # 总体评审意见
+    comment: String
+    # 取消原因（status=CANCELLED 时）：timeout | session_closed
+    cancelReason: String
+    createdAt: String!
+    resolvedAt: String
+  }
+
+  # 文件内容（经 fs:read-file relay；仅会话工作区内路径）
+  type SessionFileContent {
+    path: String!
+    content: String!
+    truncated: Boolean!
+    sizeBytes: Int!
+  }
+
+  input SubmitSessionReviewInput {
+    # 按文件聚合的批注：{ [file: string]: ReviewComment[] }
+    fileReviews: JSON!
+    comment: String
+    status: SessionReviewAction!
+  }
+
   type Session {
     id: ID!
     userId: ID!
@@ -276,6 +358,11 @@ export const sessionTypeDefs = `#graphql
     acpCapabilities(controllerId: ID!): [AcpCapability!]!
     acpServerOptions(controllerId: ID!, acpServerType: AcpServerType!): AcpServerOptions!
     listHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode): [HistorySessionInfo!]!
+    # Review 查询：status 过滤；sessionId 过滤；缺省返回当前用户全部（PENDING 在前）
+    sessionReview(id: ID!): SessionReview
+    sessionReviews(status: SessionReviewStatus, sessionId: ID): [SessionReview!]!
+    # 读取会话工作区内文件内容（fs:read-file relay；只读会话同样允许）
+    sessionFileContent(sessionId: ID!, path: String!): SessionFileContent!
   }
 
   extend type Mutation {
@@ -287,7 +374,11 @@ export const sessionTypeDefs = `#graphql
     archiveSession(id: ID!, archived: Boolean!): Boolean!
     # 删除工作区影响预查询：将连带归档的普通会话数（用于删除确认提示，数量与实际归档一致）
     workspaceArchiveImpact(id: ID!): WorkspaceArchiveImpact!
-    sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text): AcpMessage!
+    # parts 为有序提示词片段（text/image）；parts 非空时以 parts 为准组装提示词，content 保留合并文本兼容。
+    # 服务端过滤 trim 为空的文本片段，全空抛 BAD_USER_INPUT('empty prompt')。
+    sendSessionMessage(sessionId: ID!, content: String!, type: AcpMessageType = text, attachments: [MessageAttachmentInput!], parts: [PromptPartInput!]): AcpMessage!
+    # 提交 Review 结论（PENDING→终态 CAS，重复提交抛 Review not found or already resolved）
+    submitSessionReview(id: ID!, input: SubmitSessionReviewInput!): SessionReview!
     cancelGeneration(sessionId: ID!): Boolean!
     resumeSession(id: ID!): ResumeSessionPayload!
     importHistorySessions(controllerId: ID!, workspaceId: ID!, acpServerType: AcpServerType = opencode, sessionIds: [String!]!): [ImportSessionResult!]!

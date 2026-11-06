@@ -287,8 +287,18 @@
 |------|------|------|------|
 | `type` | `string` | 是 | 消息类型（`text`） |
 | `content` | `string` | 是 | 消息内容 |
+| `parts` | `AcpPromptPart[]` | 否 | 有序提示词块（新版多片段输入）；非空时 Controller 按序组装 `session/prompt` 的 ContentBlock，`content` 保留合并文本兼容旧消费者 |
 
-**客户端行为：** 将消息写入 OpenCode 的 stdin（JSON-RPC 格式）。
+**`AcpPromptPart` 结构（有序，保序传递）：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `type` | `string` | 是 | `text` 或 `image` |
+| `text` | `string` | type=text 时必填 | 文本内容 |
+| `data` | `string` | type=image 时必填 | base64（不含 `data:` 前缀） |
+| `mimeType` | `string` | type=image 时必填 | 如 `image/png` |
+
+**客户端行为：** 将消息写入 OpenCode 的 stdin（JSON-RPC 格式）；`parts` 非空时按序映射为 ContentBlock（`text`→`{type:'text',text}`、`image`→`{type:'image',data,mimeType}`），为空时沿用旧形态（`[...attachments, {type:'text', text: content}]`）。
 
 ### 2.7 `acp:message`（Controller → Server）
 
@@ -453,6 +463,7 @@ Controller 转发 ACP 输出。
 
 - sessionId 归属校验：若该 sessionId 不属于当前 Controller，直接回 404，不转发。
 - 单次请求 60s 超时：无响应回 504。
+- **按 serverName 放宽超时**：平台内建长时工具服务 `agent-session-preview-tools`（会话 Review）的请求超时时限在 controller-api 与 Controller 双侧按 serverName 放宽至 30 分钟（`MCP_REVIEW_TIMEOUT_MS` 可调），其余 server 保持 60s；旧版本 Controller 不放宽（60s 后 504，优雅降级）。
 - Controller 断线：全部 pending 立即 503 快速失败，不挂起。
 - Socket.IO 单帧体积上限：controller-api `maxHttpBufferSize` 调为 16MB，超限回 502。
 
@@ -1069,6 +1080,8 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 | Controller → Server | `git:status:result` | 返回工作区状态 |
 | Server → Controller | `git:commit` | 请求在指定路径执行 Git 提交 |
 | Controller → Server | `git:commit:result` | 返回提交结果 |
+| Server → Controller | `fs:read-file` | 请求读取文件内容（文本，限量截断） |
+| Controller → Server | `fs:read-file:result` | 返回文件内容 |
 
 ### 3.2 `fs:browse`（Server → Controller）
 
@@ -1627,6 +1640,65 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
 3. 等待 `git:commit:result`（30s 超时）
 4. 成功时：缓存结果到 Redis `git:commit:{requestId}`（TTL 60s）
 5. 失败时：缓存空结果
+
+### 3.25 `fs:read-file`（Server → Controller）
+
+请求读取文件内容（文本，限量截断）。用于会话内容预览与 Review 的文件内容拉取。
+
+**Payload:**
+
+```json
+{
+  "requestId": "string",
+  "path": "string",
+  "maxBytes": 524288
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `path` | `string` | 是 | 文件绝对路径 |
+| `maxBytes` | `number` | 否 | 读取上限；缺省 512 KiB、硬上限 2 MiB（超出钳制为 2 MiB） |
+
+**约束：**
+
+- 路径白名单与 `fs:remove-dir`（§3.18）同口径：仅允许该 Controller 已注册/活跃会话持有的工作区（cwd / worktree）范围内路径及其子路径，拒绝越界（`..` 逃逸、绝对路径出域）；符号链接经 `realpath` 解析后再校验。
+- 前 8 KiB 内检出 NUL 字节判为二进制：`success: false, error: 'binary file'`。
+- 超过 `maxBytes` 截断返回 `truncated: true`，`sizeBytes` 为文件原始大小。
+- 错误文案白名单：`file too large` / `binary file` / `not found` / `permission denied`。
+
+### 3.26 `fs:read-file:result`（Controller → Server）
+
+返回文件内容。
+
+**Payload:**
+
+```json
+{
+  "requestId": "string",
+  "success": true,
+  "content": "string",
+  "truncated": false,
+  "sizeBytes": 1234,
+  "error": "string"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 是否读取成功 |
+| `content` | `string` | 成功时必填 | 文件内容（UTF-8） |
+| `truncated` | `boolean` | 成功时必填 | 是否因 `maxBytes` 截断 |
+| `sizeBytes` | `number` | 成功时必填 | 文件原始字节数 |
+| `error` | `string` | 失败时必填 | 错误文案（白名单见 §3.25） |
+
+**服务端行为：**
+
+1. 查找 controller socket，发送 `fs:read-file` Socket.IO 事件（含 `requestId`, `path`, `maxBytes`）
+2. 等待 `fs:read-file:result`（约 15s 超时）
+3. 结果写入 Redis `fs:read-file:{requestId}`（TTL 60s），agent-api 轮询消费（与 `fs:browse` 同型）
 
 ---
 

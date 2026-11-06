@@ -109,6 +109,8 @@ paths:
         `url`、`userCode`、`expiresAt`、`todoId`（对应待办 ID，供前端关联待办；可缺省）。
         `harness_login_resolved.data` 字段：`requestId`、`result`（`succeeded`/`cancelled`/`expired`/`failed`）、
         `account?`、`error?`。
+        `session_review_requested.data` 字段：`review`（SessionReview，Review 创建/MCP 调用到达时推送）。
+        `session_review_updated.data` 字段：`review`（SessionReview，提交/取消后的终态）。
       tags:
         - User SSE
       parameters:
@@ -138,6 +140,14 @@ paths:
                   summary: 登录流程结束
                   value: |
                     data: {"type":"harness_login_resolved","data":{"requestId":"hl_1","result":"succeeded","account":"managed:kimi-code"}}
+                session_review_requested:
+                  summary: Review 请求创建（MCP review 工具调用到达）
+                  value: |
+                    data: {"type":"session_review_requested","data":{"review":{"id":"rev_1","sessionId":"sess_1","files":["src/app.ts","README.md"],"status":"PENDING","fileReviews":null,"comment":null,"cancelReason":null,"createdAt":"2026-11-05T12:00:00.000Z","resolvedAt":null}}}
+                session_review_updated:
+                  summary: Review 终态（提交/取消）
+                  value: |
+                    data: {"type":"session_review_updated","data":{"review":{"id":"rev_1","sessionId":"sess_1","files":["src/app.ts","README.md"],"status":"APPROVED","fileReviews":{"src/app.ts":[{"id":"c1","anchor":{"kind":"code","filePath":"src/app.ts","startLine":12,"endLine":14},"body":"这里应该用 readonly 数组","createdAt":"2026-11-05T12:05:00.000Z"}]},"comment":"整体 OK","cancelReason":null,"createdAt":"2026-11-05T12:00:00.000Z","resolvedAt":"2026-11-05T12:06:00.000Z"}}}
                 heartbeat:
                   summary: 心跳（每30s）
                   value: |

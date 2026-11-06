@@ -72,6 +72,10 @@ export default function MainLayout() {
       }
       if (matched) void refetch();
     },
+    // Review 创建/终态：刷新侧边栏 Review 分区（T-RSEC 实时性）
+    onSessionReview: () => {
+      void refetch();
+    },
   });
 
   // D-2：云电脑就绪且服务端已建好默认会话时，自动进入该会话。

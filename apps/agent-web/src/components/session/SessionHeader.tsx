@@ -3,11 +3,12 @@ import { getStatusBadgeClass, STATUS_LABELS } from './status-colors';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import MobileBackButton from '../MobileBackButton';
 import { Button } from '../ui/button';
-import { GitFork, Info, Loader2, Download, Archive, ArchiveRestore } from 'lucide-react';
+import { GitFork, Info, Loader2, Download, Archive, ArchiveRestore, MessageSquare, Columns2, Rows2, Activity } from 'lucide-react';
 import { AgentCapabilityPanel } from './AgentCapabilityPanel';
 import type { AgentCapabilitiesController } from '../../hooks/useAgentCapabilities';
 import type { SessionData } from '../../graphql/types';
 import { harnessLabel } from '../../lib/harness-labels';
+import type { SplitMode } from '../../lib/split-prefs';
 
 interface Session {
   id: string;
@@ -55,9 +56,17 @@ interface SessionHeaderProps {
   onArchiveToggle?: () => void;
   /** 归档/取消归档进行中（按钮禁用） */
   archiving?: boolean;
+  /** 分屏布局模式（chat/horizontal/vertical；偏好按会话记忆） */
+  splitMode?: SplitMode;
+  onSplitModeChange?: (mode: SplitMode) => void;
+  /** 实况跟随开关（仅非 chat 渲染） */
+  live?: boolean;
+  onLiveChange?: (live: boolean) => void;
+  /** 宽度门控：不足 1024px 隐藏「左右分栏」入口 */
+  wideEnoughForHorizontal?: boolean;
 }
 
-export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline, capabilities, capabilitySession, readOnly, onExport, onArchiveToggle, archiving }: SessionHeaderProps) {
+export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline, capabilities, capabilitySession, readOnly, onExport, onArchiveToggle, archiving, splitMode, onSplitModeChange, live, onLiveChange, wideEnoughForHorizontal }: SessionHeaderProps) {
   const isMobile = useIsMobile();
   const [capabilityOpen, setCapabilityOpen] = useState(false);
 
@@ -112,6 +121,50 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
         >
           <Info className="size-4" />
         </Button>
+        {onSplitModeChange && splitMode && (
+          <div className="flex items-center gap-1" data-testid="split-mode-buttons">
+            <Button
+              variant={splitMode === 'chat' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => onSplitModeChange('chat')}
+              title="仅会话"
+              data-testid="split-mode-chat"
+            >
+              <MessageSquare className="h-4 w-4" />
+            </Button>
+            {wideEnoughForHorizontal !== false && (
+              <Button
+                variant={splitMode === 'horizontal' ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => onSplitModeChange('horizontal')}
+                title="左右分栏"
+                data-testid="split-mode-horizontal"
+              >
+                <Columns2 className="h-4 w-4" />
+              </Button>
+            )}
+            <Button
+              variant={splitMode === 'vertical' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => onSplitModeChange('vertical')}
+              title="上下分栏"
+              data-testid="split-mode-vertical"
+            >
+              <Rows2 className="h-4 w-4" />
+            </Button>
+            {splitMode !== 'chat' && onLiveChange && (
+              <Button
+                variant={live ? 'secondary' : 'ghost'}
+                size="sm"
+                onClick={() => onLiveChange(!live)}
+                title="实况跟随"
+                data-testid="live-toggle"
+              >
+                <Activity className="h-4 w-4" />
+              </Button>
+            )}
+          </div>
+        )}
         {onExport && (
           <Button
             variant="ghost"

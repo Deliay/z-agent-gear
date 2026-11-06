@@ -187,6 +187,41 @@ pnpm run preview  # Preview production build
 - **共享人类节点操作**：`hooks/useHumanNodeActions.ts` + `HumanNodeActions` 组件，列表/卡片/抽屉三处同源（草稿键 `workflow-node-draft:{instanceId}:{nodeId}`）。
 - **测试入口**：`components/__tests__/Sidebar.test.tsx`（T-UI4-SEC/AGG）、`SidebarResizer.test.tsx`（T-UI4-RES）、`tree/__tests__/TreeSection.test.tsx`（T-UI4-TREE）、`workflow/__tests__/WorkflowInstanceCard.test.tsx`（T-UI4-IC）、`workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-UI4-TC）、`workflow/graph/__tests__/*`（T-UI4-GL/NC/RC）、`workflow/__tests__/NodeDetailDrawer.test.tsx`（T-UI4-SH）、`hooks/useNodeSessionActivity.test.tsx`（T-UI4-NA）、`hooks/useHumanNodeActions.test.tsx`（T-UI4-HA）、`tests/e2e/src/sidebar-phase4.spec.ts`（E2E-UI4S1~S6）与 `tests/e2e/src/workflow-graph.spec.ts`（E2E-UI4G1~G10）。
 
+## 会话内容预览子系统（#461）
+
+- **布局**：`SessionView` 根容器 CSS Grid 三模式（`chat` 单列 / `horizontal` `grid-cols-[4fr_6fr]` /
+  `vertical` `grid-rows-[3fr_7fr]`），偏好 `lib/split-prefs.ts`（`session-split-mode:{sessionId}`，
+  非法回退 chat）；宽度门控 `matchMedia('(min-width: 1024px)')`：不足隐藏「左右分栏」入口，
+  偏好 horizontal 但宽度不足**渲染 vertical 不改写偏好**；`?review=` 深链临时分屏（不写偏好），
+  关闭最后一个 Review 标签回退 chat，消费后 `history.replaceState` 清参。
+- **store（裁决 1，不引入 zustand）**：`stores/preview.ts`（`reduceTabs` 纯函数 +
+  `usePreviewStore(sessionId)` 模块级 Map 工厂：读→单共享预览 tab 替换、写→pinned 就地更新、
+  review 幂等、关闭激活回退）与 `stores/prompt-composer.ts`（批注回传片段，`origin` 徽标）；
+  `SessionView` 卸载 `destroy(sessionId)`。`getSnapshot` 必须返回缓存引用（useSyncExternalStore）。
+- **内容组件**：`CodePreview`（monaco-editor@0.57.0 精确锁版，`lib/preview/monaco-loader.ts` 唯一
+  seam 动态加载、editor.api/vs 独立 chunk 首屏不加载；行定位高亮 3s 淡出、DiffEditor 首块聚焦、
+  批注模式选行/Shift 连选/overlay/确认回传）；`HtmlPreview`（iframe `sandbox="allow-scripts"` 无
+  allow-same-origin、srcDoc 注入随机令牌、postMessage 经 event.source+token 双校验）；
+  `MarkdownPreview`（`MarkdownContent annotate` 通道注入 `data-sourcepos`（预览零开销）、选区→
+  源文 offset 并集映射，复用 `group-messages`/`tool-call-state` 之外的 `lib/preview/markdown-sourcepos`）。
+  三者「确认回传」产物为 `AnnotationBatch`（`lib/preview/types.ts`），经 `annotations-to-part.ts`
+  转文本片段进 prompt-composer。
+- **实况跟随**：`hooks/useLiveFileTracking.ts` 复用 `groupMessages` + `mergeToolCallMessages` 合并口径
+  （禁止另写解析）；edit/diff→pinned tab + `computeDiff` 首 added 行聚焦、read→共享预览 tab；
+  `toolCallId+内容指纹` 去重；仅跟踪开启后到达的调用。
+- **Review**：`ReviewPanel`（左目录树+批注计数徽标 / 右扩展名分流组件只读+批注、`sessionFileContent`
+  懒加载骨架、通过/驳回/仅评论提交、成功只读化结论徽标、失败 toast 可重试）；标签四态色
+  （PENDING 黄/APPROVED 绿/REJECTED 红/COMMENTED·CANCELLED 灰）；侧边栏 `components/sidebar/ReviewSection.tsx`
+  （待 Review 默认展开 / 已 Review 默认折叠、空分区不渲染、点击深链 `?review=`）；
+  用户级 SSE `session_review_*` 经 `useUserEventStream.onSessionReview` 触发 HOME_OVERVIEW refetch。
+- **InputBox 片段化**：`onSend(parts: PromptPart[])`（裁决 6）；片段区（文本首行摘要 ≤80 字 +
+  来源徽标 / 图片缩略 / 逐行删除）；粘贴与文件选择加图片（单图 5MB、合计 10MB，超限 toast）；
+  发送组装 `[...parts, ...(trim(input) ? [textPart] : [])]`；草稿 `session_input_parts_{id}`
+  （>2MB 不持久化）；`prompt.image` 能力门控（隐藏图片入口、发送时降级 `[图片 name]`）。
+  `MessageItem` 读 `metadata.parts` 渲染图片缩略（点击放大）。
+- 契约查询集中于 `graphql/preview.ts`（GET_SESSION_FILE_CONTENT/GET_SESSION_REVIEW/SUBMIT_SESSION_REVIEW），
+  `SEND_SESSION_MESSAGE` 带 `$parts`。
+
 ## 日志
 
 - `src/lib/logger.ts` 是全包**唯一 console 出口**：业务代码一律 `logger.debug/info/warn/error(objOrMsg, msg?)`（签名与后端 pino 一致，变量进对象字段、错误进 `err` 字段），禁止直接调用 `console.*`（`vite.config.ts` 的构建期提示为登记例外）。

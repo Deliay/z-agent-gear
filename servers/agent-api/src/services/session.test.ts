@@ -68,6 +68,11 @@ vi.mock('../models/custom-mcp-server.js', () => ({
   },
 }));
 
+vi.mock('./session-preview-tools.js', () => ({
+  SESSION_PREVIEW_TOOLS_SERVER_NAME: 'agent-session-preview-tools',
+  ensureSessionPreviewToolsServer: vi.fn(async () => 'mcp-preview-tools'),
+}));
+
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
@@ -160,6 +165,12 @@ describe('SessionService', () => {
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
     vi.mocked(Session.updateOne).mockResolvedValue({ acknowledged: true } as never);
     vi.mocked(commitSettingsService.resolveWorktreeCommitter).mockResolvedValue(null);
+    // 默认成功（T-SPT6 后 create 恒装配 preview tools、必达 createEndpoint）；
+    // 需要失败语义的用例在本用例内重新 mockRejectedValue 覆盖
+    vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+      token: 'tok',
+      serverNames: ['agent-session-preview-tools'],
+    } as never);
   });
 
   describe('findAllByUser', () => {
@@ -583,10 +594,11 @@ describe('SessionService', () => {
         mcpServerIds: ['server-1'],
       });
 
+      // T-SPT6：会话预览平台工具（mcp-preview-tools）恒装配并去重；custom 快照空数组
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1'],
+        ['server-1', 'mcp-preview-tools'],
         undefined,
         [],
       );
@@ -600,7 +612,7 @@ describe('SessionService', () => {
       );
     });
 
-    it('should not issue MCP endpoint when mcpServerIds is empty', async () => {
+    it('should assemble preview tools even without user MCP selection（T-SPT6）', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue({ name: 'my-server' }),
       } as never);
@@ -608,6 +620,10 @@ describe('SessionService', () => {
         lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
       } as never);
       vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+      vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+        token: 'mcp-token',
+        serverNames: ['agent-session-preview-tools'],
+      });
 
       await sessionService.create('user-1', {
         controllerId: 'ctrl-1',
@@ -615,13 +631,18 @@ describe('SessionService', () => {
         workspaceId: 'ws-1',
       });
 
-      expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
+      // 用户未选 MCP 时仍装配会话预览平台工具（全部类型会话公共路径）
+      expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
+        'sess-1',
+        'user-1',
+        ['mcp-preview-tools'],
+        undefined,
+        [],
+      );
       expect(mockRedis.publish).toHaveBeenCalledWith(
         'session:command',
         expect.stringContaining('"type":"acp:start"'),
       );
-      const startCall = mockRedis.publish.mock.calls.find((c) => String(c[1]).includes('"type":"acp:start"'));
-      expect(String(startCall?.[1])).not.toContain('mcpEndpoint');
     });
 
     it('should fail session creation when MCP endpoint issuance fails and mcpServerIds provided', async () => {
@@ -748,7 +769,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        [],
+        ['mcp-preview-tools'],
         undefined,
         [{ id: customId, name: 'custom-a' }],
       );
@@ -779,7 +800,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1'],
+        ['server-1', 'mcp-preview-tools'],
         undefined,
         [{ id: customId, name: 'custom-a' }],
       );
@@ -2158,7 +2179,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1'],
+        ['server-1', 'mcp-preview-tools'],
         {
           instanceId: 'inst-1',
           nodeId: 'node-1',
@@ -2502,6 +2523,10 @@ describe('SessionService.create default MCP injection', () => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
     vi.mocked(Session.updateOne).mockResolvedValue({ acknowledged: true } as never);
+    vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+      token: 'tok',
+      serverNames: ['agent-session-preview-tools'],
+    } as never);
     vi.mocked(McpServer.find).mockReturnValue({
       select: vi.fn().mockReturnThis(),
       lean: vi.fn().mockResolvedValue([]),
@@ -2557,19 +2582,23 @@ describe('SessionService.create default MCP injection', () => {
     expect(McpServer.find).toHaveBeenCalledWith({
       userId: 'user-1',
       enabled: true,
-      name: { $ne: 'agent-cloud-host-tools' },
+      name: { $nin: ['agent-cloud-host-tools', 'agent-session-preview-tools'] },
     });
     expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
       'sess-1',
       'user-1',
-      ['srv-a', 'srv-b'],
+      ['srv-a', 'srv-b', 'mcp-preview-tools'],
       undefined,
       [],
     );
   });
 
-  it('does not create an endpoint for an explicit empty array, even with useAllEnabled=true', async () => {
+  it('explicit empty array skips default resolution but still assembles preview tools（T-SPT6）', async () => {
     setupCreateMocks();
+    vi.mocked(mcpEndpointService.createEndpoint).mockResolvedValue({
+      token: 'tok',
+      serverNames: ['agent-session-preview-tools'],
+    } as never);
 
     await sessionService.create('user-1', {
       controllerId: 'ctrl-1',
@@ -2579,7 +2608,13 @@ describe('SessionService.create default MCP injection', () => {
     });
 
     expect(McpServer.find).not.toHaveBeenCalled();
-    expect(mcpEndpointService.createEndpoint).not.toHaveBeenCalled();
+    expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
+      'sess-1',
+      'user-1',
+      ['mcp-preview-tools'],
+      undefined,
+      [],
+    );
   });
 
   it('skips disabled servers listed in the controller default subset', async () => {
@@ -3150,5 +3185,126 @@ describe('SessionService 工作区删除连带归档（T-WSARC1~3、T-WSARC5）'
     );
     expect(record).toBeDefined();
     expect(String(record?.sessionId)).toBe('sess-active');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// addMessage 多片段输入（T-PARTS1~5，裁决 6/8）
+// ---------------------------------------------------------------------------
+
+describe('SessionService.addMessage parts', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    vi.mocked(AcpMessage.create).mockImplementation(async (doc: unknown) => ({
+      toObject: () => ({ _id: 'msg-1', createdAt: new Date(), ...(doc as Record<string, unknown>) }),
+    }) as never);
+    vi.mocked(AcpMessage.countDocuments).mockResolvedValue(0 as never);
+    vi.mocked(Session.findByIdAndUpdate).mockResolvedValue({} as never);
+  });
+
+  it('T-PARTS1 parts 过滤：trim 空文本片段被滤；全空抛 BAD_USER_INPUT(empty prompt)', async () => {
+    await expect(
+      sessionService.addMessage('sess-1', {
+        direction: 'input',
+        type: 'text',
+        content: '',
+        parts: [{ type: 'text', text: '   ' }, { type: 'text', text: '' }],
+      }),
+    ).rejects.toThrow('empty prompt');
+
+    await expect(
+      sessionService.addMessage('sess-1', {
+        direction: 'input',
+        type: 'text',
+        content: '',
+        parts: [],
+      }),
+    ).rejects.toThrow('empty prompt');
+
+    expect(AcpMessage.create).not.toHaveBeenCalled();
+  });
+
+  it('T-PARTS2 持久化：content=合并文本(\\n\\n)、metadata.parts 全量含图片、标题取自合并文本', async () => {
+    vi.mocked(AcpMessage.countDocuments).mockResolvedValue(1 as never);
+
+    await sessionService.addMessage('sess-1', {
+      direction: 'input',
+      type: 'text',
+      content: 'ignored',
+      parts: [
+        { type: 'text', text: 'a' },
+        { type: 'image', data: 'BASE64', mimeType: 'image/png', name: 'shot.png' },
+        { type: 'text', text: '   ' },
+        { type: 'text', text: 'b' },
+      ],
+    });
+
+    const doc = vi.mocked(AcpMessage.create).mock.calls[0][0] as Record<string, unknown>;
+    expect(doc.content).toEqual({
+      sessionUpdate: 'user_message_chunk',
+      content: { type: 'text', text: 'a\n\nb' },
+    });
+    expect(JSON.parse(doc.metadata as string)).toEqual({
+      parts: [
+        { type: 'text', text: 'a' },
+        { type: 'image', data: 'BASE64', mimeType: 'image/png', name: 'shot.png' },
+        { type: 'text', text: 'b' },
+      ],
+    });
+    expect(Session.findByIdAndUpdate).toHaveBeenCalledWith('sess-1', { title: 'a\n\nb' });
+  });
+
+  it('T-PARTS3 发布：Redis session:message 载荷带 parts', async () => {
+    await sessionService.addMessage('sess-1', {
+      direction: 'input',
+      type: 'text',
+      content: '',
+      parts: [
+        { type: 'text', text: 'hello' },
+        { type: 'image', data: 'IMG', mimeType: 'image/png' },
+      ],
+    });
+
+    const publishCall = mockRedis.publish.mock.calls.find((c) => c[0] === 'session:message');
+    expect(publishCall).toBeTruthy();
+    const payload = JSON.parse(String(publishCall![1])) as { message: { parts?: unknown[] } };
+    expect(payload.message.parts).toEqual([
+      { type: 'text', text: 'hello' },
+      { type: 'image', data: 'IMG', mimeType: 'image/png' },
+    ]);
+  });
+
+  it('T-PARTS4 体积：parts JSON >12MB 拒绝', async () => {
+    const huge = 'x'.repeat(13 * 1024 * 1024);
+    await expect(
+      sessionService.addMessage('sess-1', {
+        direction: 'input',
+        type: 'text',
+        content: '',
+        parts: [{ type: 'text', text: huge }],
+      }),
+    ).rejects.toThrow('prompt parts too large');
+    expect(AcpMessage.create).not.toHaveBeenCalled();
+  });
+
+  it('T-PARTS5 兼容：无 parts 旧调用逐字不变（metadata 原样、发布不带 parts）', async () => {
+    await sessionService.addMessage('sess-1', {
+      direction: 'input',
+      type: 'text',
+      content: 'plain text',
+      metadata: '{"k":1}',
+    });
+
+    const doc = vi.mocked(AcpMessage.create).mock.calls[0][0] as Record<string, unknown>;
+    expect(doc.content).toEqual({
+      sessionUpdate: 'user_message_chunk',
+      content: { type: 'text', text: 'plain text' },
+    });
+    expect(doc.metadata).toBe('{"k":1}');
+
+    const publishCall = mockRedis.publish.mock.calls.find((c) => c[0] === 'session:message');
+    const payload = JSON.parse(String(publishCall![1])) as { message: { parts?: unknown[] } };
+    expect(payload.message.parts).toBeUndefined();
   });
 });

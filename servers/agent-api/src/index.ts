@@ -47,6 +47,7 @@ import * as migration021WorkflowInterruptRetry from './migrations/021-workflow-i
 import * as migration022SessionArchiveIndexes from './migrations/022-session-archive-indexes.js';
 import * as migration022CloudStorageFork from './migrations/022-cloud-storage-fork.js';
 import * as migration023ValutFoundations from './migrations/023-valut-foundations.js';
+import * as migration023SessionReviews from './migrations/023-session-reviews.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -59,6 +60,8 @@ import { harnessLoginSubscriberService } from './services/harness-login-subscrib
 import { mcpEndpointRevokeSubscriber } from './services/mcp-endpoint-subscriber.js';
 import { mcpRelayConsumer } from './services/mcp-relay-consumer.js';
 import { sessionLifecycleSubscriber } from './services/session-lifecycle-subscriber.js';
+import { sessionService } from './services/session.js';
+import { sessionReviewService } from './services/session-review-service.js';
 import { workflowOrchestrator } from './services/workflow/orchestrator.js';
 import { prHandlerRegistry } from './services/workflow/pr-handler-registry.js';
 import { issuesTriggerRunner } from './services/workflow/issues-event-handler.js';
@@ -80,7 +83,9 @@ app.use(cookieParser());
 // 事件回调需读取原始报文验签：必须在全局 express.json() 之前挂载
 app.use('/api', eventCallbackRouter);
 app.use('/api', githubWebhookRouter);
-app.use(express.json());
+// 图片提示词片段（合计 ≤10MB，base64 ≈13.4MB）需要放宽 body 上限（裁决 8 / F22）；
+// webhook/事件回调路由在其之前挂载、读原始报文验签，不受影响。
+app.use(express.json({ limit: '20mb' }));
 
 const schema = makeExecutableSchema({ typeDefs, resolvers });
 
@@ -207,6 +212,7 @@ async function start() {
       migration022SessionArchiveIndexes,
       migration022CloudStorageFork,
       migration023ValutFoundations,
+      migration023SessionReviews,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');
@@ -257,6 +263,15 @@ async function start() {
     // Workflow session lifecycle events (removed / prompt-completed idling)
     sessionLifecycleSubscriber.start();
     logger.info({ component: 'session-lifecycle-subscriber' }, 'session lifecycle subscriber started');
+
+    // Review 自动取消（T-SR5）：会话 close/ended/removed 收敛其 PENDING Review（session_closed）
+    sessionService.onSessionStatus((event) => {
+      if (event.status === 'ended' || event.status === 'removed') {
+        void sessionReviewService.cancelBySession(event.sessionId, 'session_closed').catch((err: unknown) => {
+          logger.warn({ err, sessionId: event.sessionId }, 'cancel session reviews failed');
+        });
+      }
+    });
 
     // Workflow todo panel → check-run 子项同步
     prCheckRunSubscriber.start();

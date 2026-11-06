@@ -38,6 +38,17 @@ export interface AcpBridgeOptions {
 interface QueuedInput {
   type: string;
   content: string;
+  attachments?: Array<Record<string, unknown>>;
+  /** 有序提示词块（2.17.0 多片段输入）；非空时按序组装 ContentBlock，忽略 content 文本块 */
+  parts?: AcpPromptPart[];
+}
+
+/** acp:message parts 元素（契约 agent-session-websocket.md §2.6 AcpPromptPart） */
+export interface AcpPromptPart {
+  type: 'text' | 'image';
+  text?: string;
+  data?: string;
+  mimeType?: string;
 }
 
 export interface SessionConfigOptionData {
@@ -711,7 +722,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     return this.supportsAdditionalDirectories;
   }
 
-  sendInput(message: { type: string; content: string; attachments?: Array<Record<string, unknown>> }): void {
+  sendInput(message: { type: string; content: string; attachments?: Array<Record<string, unknown>>; parts?: AcpPromptPart[] }): void {
     if (this.activePrompt) {
       this.inputQueue.push(message);
       return;
@@ -719,14 +730,25 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.processPrompt(message);
   }
 
-  private async processPrompt(message: QueuedInput & { attachments?: Array<Record<string, unknown>> }): Promise<void> {
+  private async processPrompt(message: QueuedInput): Promise<void> {
     if (!this.connection || !this.acpSessionId || this.stopped) return;
 
     const prompt: acp.ContentBlock[] = [];
-    for (const attachment of message.attachments ?? []) {
-      prompt.push(attachment as acp.ContentBlock);
+    if (message.parts && message.parts.length > 0) {
+      // parts 非空：按序映射（保序），不追加 content 文本块（content 仅为合并文本兼容字段）
+      for (const part of message.parts) {
+        if (part.type === 'text') {
+          prompt.push({ type: 'text' as const, text: part.text ?? '' });
+        } else {
+          prompt.push({ type: 'image' as const, data: part.data ?? '', mimeType: part.mimeType ?? 'image/png' });
+        }
+      }
+    } else {
+      for (const attachment of message.attachments ?? []) {
+        prompt.push(attachment as acp.ContentBlock);
+      }
+      prompt.push({ type: 'text' as const, text: message.content });
     }
-    prompt.push({ type: 'text' as const, text: message.content });
 
     // session.prompt：一条 prompt 一个 span（流式 chunk 不逐条开 span）
     await withSpan('session.prompt', { sessionId: this.sessionId }, async (span) => {

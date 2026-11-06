@@ -238,7 +238,7 @@ describe('ControllerService', () => {
         _id: { $in: [id] },
         userId: 'user1',
         enabled: true,
-        name: { $ne: 'agent-cloud-host-tools' },
+        name: { $nin: ['agent-cloud-host-tools', 'agent-session-preview-tools'] },
       });
       expect(doc.set).toHaveBeenCalledWith('defaultMcp', {
         useAllEnabled: false,

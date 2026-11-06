@@ -7,6 +7,7 @@ import { McpServer } from '../models/mcp-server.js';
 import { evictKeyById } from './key-cache.js';
 import { commandService } from './command.js';
 import { CLOUD_HOST_TOOLS_SERVER_NAME } from './cloud-host-tools.js';
+import { SESSION_PREVIEW_TOOLS_SERVER_NAME } from './session-preview-tools.js';
 
 export interface ControllerDefaultMcpInput {
   useAllEnabled: boolean;
@@ -136,7 +137,7 @@ export class ControllerService {
           _id: { $in: serverIds },
           userId,
           enabled: true,
-          name: { $ne: CLOUD_HOST_TOOLS_SERVER_NAME },
+          name: { $nin: [CLOUD_HOST_TOOLS_SERVER_NAME, SESSION_PREVIEW_TOOLS_SERVER_NAME] },
         });
         if (selectable !== serverIds.length) {
           // C-11：平台云工具服务由系统自动注入，不可手动选择——给出专用错误，
@@ -144,7 +145,7 @@ export class ControllerService {
           const platformSelected = await McpServer.exists({
             _id: { $in: serverIds },
             userId,
-            name: CLOUD_HOST_TOOLS_SERVER_NAME,
+            name: { $in: [CLOUD_HOST_TOOLS_SERVER_NAME, SESSION_PREVIEW_TOOLS_SERVER_NAME] },
           });
           throw new Error(platformSelected ? 'MCP_SERVER_NOT_SELECTABLE' : 'MCP_SERVER_NOT_FOUND');
         }

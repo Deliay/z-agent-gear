@@ -86,7 +86,7 @@ export default function SessionPage() {
 
   return (
     <>
-      <SessionView sessionId={id} onDeleted={() => navigate('/sessions')} />
+      <SessionView key={id} sessionId={id} onDeleted={() => navigate('/sessions')} />
 
       {showNewSessionDialog && (
         <NewSessionDialog

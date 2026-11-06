@@ -43,6 +43,17 @@ import { useCommandState } from '../../hooks/useCommandState';
 import { useAgentCapabilities } from '../../hooks/useAgentCapabilities';
 import { threadToMarkdown, downloadThreadMarkdown } from '../../lib/export-thread';
 import { collectFullHistory } from '../../lib/session-messages';
+import { PreviewPane } from './preview/PreviewPane';
+import { destroyPreviewStore, getPreviewStore } from '../../stores/preview';
+import { getPromptComposer, destroyPromptComposer } from '../../stores/prompt-composer';
+import { getSplitMode, setSplitMode, type SplitMode } from '../../lib/split-prefs';
+import { useLiveFileTracking } from '../../hooks/useLiveFileTracking';
+import { annotationsToPartText } from '../../lib/preview/annotations-to-part';
+import { mergeText, type PromptPart } from '../../lib/preview/prompt-parts';
+import type { AnnotationBatch } from '../../lib/preview/types';
+import { GET_SESSION_REVIEWS, type SessionReviewData } from '../../graphql/preview';
+import { useUserEventStream } from '../../hooks/useUserEventStream';
+import { useUrlSearch } from '../../hooks/useUrlSearch';
 
 interface AcpMessage {
   id: string;
@@ -121,6 +132,130 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const { commands: availableCommands, updateCommands } = useCommandState();
   const client = useApolloClient();
 
+  // ---- 分屏 / 预览区（#461，Phase 6） ----
+  // Review 深链：响应式消费（A1 返工）——同会话 SPA 导航（不重挂载）也能打开新 Review 标签
+  const urlSearch = useUrlSearch();
+  const reviewDeepLink = new URLSearchParams(urlSearch).get('review');
+  const [splitMode, setSplitModeState] = useState<SplitMode>(() => getSplitMode(id));
+  const [live, setLive] = useState(false);
+  const [wideEnoughForHorizontal, setWideEnoughForHorizontal] = useState(
+    () => typeof window === 'undefined' || window.matchMedia('(min-width: 1024px)').matches,
+  );
+  const previewStoreRef = useRef(getPreviewStore(id));
+
+  // 批注回传 → 提示词片段区（来源徽标 origin）
+  const handleAnnotation = useCallback((batch: AnnotationBatch) => {
+    if (batch.comments.length === 0 && !batch.summary) return;
+    getPromptComposer(id).appendPart({
+      id: `ann-${Date.now()}`,
+      type: 'text',
+      text: annotationsToPartText(batch),
+      origin: batch,
+    });
+    toast.success('批注已回传到输入区');
+  }, [id]);
+
+  // A2：Review 标签状态色（session_review_* SSE 即时 + sessionReviews 15s 轮询兜底）
+  const [reviewStatuses, setReviewStatuses] = useState<Record<string, SessionReviewData['status']>>({});
+  type ReviewStatusRow = { id: string; status: SessionReviewData['status'] };
+  const { refetch: refetchReviewStatuses } = useQuery<{ sessionReviews: ReviewStatusRow[] }>(
+    GET_SESSION_REVIEWS as never,
+    {
+      variables: { sessionId: id },
+      pollInterval: 15000,
+      fetchPolicy: 'cache-and-network',
+      onCompleted: (data: { sessionReviews: ReviewStatusRow[] }) => {
+        const map: Record<string, SessionReviewData['status']> = {};
+        for (const review of data?.sessionReviews ?? []) map[review.id] = review.status;
+        setReviewStatuses(map);
+      },
+    } as never,
+  );
+  useUserEventStream({
+    enabled: true,
+    onSessionReview: (event) => {
+      const review = (event as { review?: ReviewStatusRow }).review;
+      if (review?.id) {
+        setReviewStatuses((prev) => ({ ...prev, [review.id]: review.status }));
+        void refetchReviewStatuses?.();
+      }
+    },
+  });
+
+  // 深链临时分屏标记（不写偏好）：关闭最后一个 Review 标签后回退 chat
+  const [tempSplit, setTempSplit] = useState(false);
+  const [hasReviewTab, setHasReviewTab] = useState(false);
+  useEffect(() => {
+    const store = getPreviewStore(id);
+    setHasReviewTab(store.getSnapshot().tabs.some((tab) => tab.kind === 'review'));
+    return store.subscribe(() => {
+      setHasReviewTab(store.getSnapshot().tabs.some((tab) => tab.kind === 'review'));
+    });
+  }, [id]);
+
+  useEffect(() => {
+    if (tempSplit && !hasReviewTab) {
+      setTempSplit(false);
+      setSplitModeState('chat');
+    }
+  }, [tempSplit, hasReviewTab]);
+
+  // 宽度门控：不足 1024px 隐藏「左右分栏」入口（偏好不改写）
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const onChange = (): void => setWideEnoughForHorizontal(mq.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  // Review 深链（裁决 13）：chat 时按宽度临时分屏（不写偏好），消费后清参防重复打开
+  useEffect(() => {
+    const reviewId = reviewDeepLink;
+    if (!reviewId) return;
+    const store = getPreviewStore(id);
+    if (store.getSnapshot().tabs.some((tab) => tab.kind === 'review' && tab.reviewId === reviewId)) {
+      // 已打开（重复深链）：仅清参
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('review') === reviewId) {
+        url.searchParams.delete('review');
+        window.history.replaceState(window.history.state, '', url.toString());
+      }
+      return;
+    }
+    getPreviewStore(id).openReview(reviewId);
+    if (getSplitMode(id) === 'chat') {
+      setSplitModeState(wideEnoughForHorizontal ? 'horizontal' : 'vertical');
+      setTempSplit(true);
+    }
+    // 消费后清参（replaceState 防重复打开）
+    const url = new URL(window.location.href);
+    url.searchParams.delete('review');
+    window.history.replaceState(window.history.state, '', url.toString());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, reviewDeepLink]);
+
+  const handleSplitModeChange = useCallback((mode: SplitMode) => {
+    setTempSplit(false);
+    setSplitModeState(mode);
+    setSplitMode(id, mode);
+    if (mode === 'chat') setLive(false);
+  }, [id]);
+
+  // 偏好 horizontal 但宽度不足：渲染 vertical 且不改写偏好（拉宽后自动恢复）
+  const effectiveSplitMode: SplitMode =
+    splitMode === 'horizontal' && !wideEnoughForHorizontal ? 'vertical' : splitMode;
+
+  // 实况跟随（复用 mergeToolCallMessages 合并口径）
+  useLiveFileTracking({ sessionId: id, messages, live: live && splitMode !== 'chat', store: previewStoreRef.current });
+
+  // 卸载清理（裁决 1）：预览 / 片段 store 按会话销毁
+  useEffect(() => {
+    return () => {
+      destroyPreviewStore(id);
+      destroyPromptComposer(id);
+    };
+  }, [id]);
+
   const isWorking = status === 'running';
 
   const { data: sessionData, loading: sessionLoading, error: sessionError } = useQuery<GetSessionQuery>(GET_SESSION, {
@@ -167,16 +302,19 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const [setSessionConfigOption] = useMutation<SetSessionConfigOptionMutation>(SET_SESSION_CONFIG_OPTION);
   const [archiveSession] = useMutation(ARCHIVE_SESSION);
 
-  const handleSendMessage = useCallback(async (content: string) => {
-    if (!id) return;
+  const handleSendMessage = useCallback(async (parts: PromptPart[]) => {
+    if (!id || parts.length === 0) return;
     try {
       lastMessageIsSettingUpdateRef.current = false;
       setSending(true);
+      // 裁决 6：content=合并文本（非空文本 \n\n 连接，兼容旧渲染与标题提取），parts 透传契约参数
+      const content = mergeText(parts);
       await sendMessage({
         variables: {
           sessionId: id,
           content,
           type: 'text',
+          parts: parts.map(({ id: _partId, origin: _origin, ...part }) => part),
         },
       });
     } catch (err) {
@@ -257,7 +395,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           // 断连恢复 ready：自动发送工作流继续提示词，引导 AI 调 MCP 工具推进节点
           if (autoPromptAfterResumeRef.current) {
             autoPromptAfterResumeRef.current = false;
-            handleSendMessage(WORKFLOW_CONTINUE_PROMPT);
+            handleSendMessage([{ id: 'workflow-continue', type: 'text', text: WORKFLOW_CONTINUE_PROMPT }]);
           }
         }
         if (data.data.modes) setModes(data.data.modes);
@@ -575,7 +713,18 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className={`grid h-full min-w-0 ${
+        effectiveSplitMode === 'chat'
+          ? 'grid-cols-1'
+          : effectiveSplitMode === 'horizontal'
+            ? 'grid-cols-[4fr_6fr]'
+            : 'grid-cols-1 grid-rows-[3fr_7fr]'
+      }`}
+      data-testid="session-split-root"
+      data-split-mode={effectiveSplitMode}
+    >
+      <div className="flex min-h-0 min-w-0 flex-col">
       {protocolMismatch && (
         <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
           ⚠️ Agent 协议版本不兼容：期望 v{protocolMismatch.expectedVersion}，Agent 返回 v{protocolMismatch.agentVersion}。部分功能可能无法正常工作。
@@ -611,6 +760,11 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         onExport={handleExportThread}
         onArchiveToggle={isWorkflowNodeSession ? undefined : handleArchiveToggle}
         archiving={archiving}
+        splitMode={splitMode}
+        onSplitModeChange={handleSplitModeChange}
+        live={live}
+        onLiveChange={setLive}
+        wideEnoughForHorizontal={wideEnoughForHorizontal}
       />
       <PendingElicitationBanner sessionId={id} />
       {readOnly && readOnlyReason && (
@@ -661,6 +815,12 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         onConfirm={handleConfirmResume}
         isWorkflowNode={isWorkflowNodeSession}
       />
+      </div>
+      {effectiveSplitMode !== 'chat' && (
+        <div className="flex h-full min-h-0 min-w-0 flex-col border-l border-border" data-testid="session-preview-column">
+          <PreviewPane sessionId={id} onAnnotation={handleAnnotation} reviewStatuses={reviewStatuses} />
+        </div>
+      )}
     </div>
   );
 }
