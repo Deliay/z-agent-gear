@@ -1046,10 +1046,10 @@ export class CloudHostService {
   async defaultWorkspace(host: Doc): Promise<string> {
     const workspaceId = host.workspaceId ? String(host.workspaceId) : '';
     if (!workspaceId) return config.cloudHostDefaultWorkspace;
-    const workspace = await ControllerWorkspace.findOne({
-      _id: workspaceId,
-      userId: host.userId,
-    } as any).lean();
+    const filter = getWorkspaceContext()
+      ? { _id: workspaceId, controllerId: host.controllerId }
+      : { _id: workspaceId, userId: host.userId };
+    const workspace = await ControllerWorkspace.findOne(filter as any).lean();
     return workspace?.path ? String(workspace.path) : config.cloudHostDefaultWorkspace;
   }
 

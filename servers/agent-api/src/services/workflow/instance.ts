@@ -145,12 +145,12 @@ class WorkflowInstanceService {
       throw new Error('来源为模板时必须提供 templateId');
     }
 
-    // 2. controller/workspace 归属校验
-    const workspace = await ControllerWorkspace.findOne({
-      _id: input.workspaceId,
-      userId,
-      controllerId: input.controllerId,
-    }).lean();
+    // 2. controller/workspace 归属校验（项目工作区跟随控制器可见性，团队成员可复用）
+    const workspace = await ControllerWorkspace.findOne(
+      getWorkspaceContext()
+        ? { _id: input.workspaceId, controllerId: input.controllerId }
+        : { _id: input.workspaceId, userId, controllerId: input.controllerId },
+    ).lean();
     if (!workspace) {
       throw new Error('工作区不存在、无权限或不属于该控制器');
     }

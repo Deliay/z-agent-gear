@@ -462,7 +462,8 @@ pnpm run start   # Start production server
 - **请求链路**：已归属工作区的资源（`sessions` / `controllers` / `controllerkeys` / `cloudhosts` / `cloudstorages` / `configuredworkflows` / `workflowinstances` / `workflowtemplates` / `githubaccounts` / `providers` / `models`）一律用 `actorFilter(userId)` 组合查询，**禁止显式写 `userId`**：工作区上下文存在时返回 `{}`，由 `applyWorkspaceScope` 注入可见集；无上下文（引擎/内部/迁移）才回退 `{userId}` 归属校验。典型回归：`Controller.cloudHost`、`sessionService.create` 的云电脑状态校验、云电脑创建时选择共享 GitHub 绑定、Issue 联动实例化时读取已配置工作流、会话级权限超时设置。
 - **异步链路**：Issue/PR 回调、SSE 等无请求头链路先 `runWithWorkspace(...)` 建立上下文，再执行同样口径的查询。
 - **写入继承（团队可见性）**：`sessionService.create` / `sessionImportService.importSessions` 的租户工作区归属按「显式传值 → 请求上下文 → 控制器（云电脑）归属」补齐并显式落 `workspaceId/tenantId`；云电脑 ready 默认会话与 Git 项目设置会话显式传 `resourceWorkspaceId`；`buildSessionWorkspaceContext` 在会话缺 `workspaceId` 时回退控制器（再回退 `CloudHost.resourceWorkspaceId`），保证后台会话里的 MCP 工具调用（如 `createConfiguredWorkflow`）仍落团队工作区。`configuredWorkflowService.configure/configureFromContent` 也显式写当前工作区/租户（插件之外的第二道保证）。存量空归属由迁移 `024-resource-workspace-backfill` 按控制器/已配置工作流补齐（opaque：无法推导的行不猜测）。
-- **保留 `{userId}` 的例外**（按一期口径仍跟随成员本人）：个人 MCP 配置、待办通知、网关、未绑定 `ControllerKey` 的创建清理（避免误删他人 key）、本地控制器项目工作区（`ControllerWorkspace`）及按项目工作区归组的 Worktree 会话查询、`CloudHostSetupOperation` 等内部操作单、`CloudHostIssuesLinkage` 等个人联动配置。
+- **保留 `{userId}` 的例外**（按一期口径仍跟随成员本人）：个人 MCP 配置、待办通知、网关、未绑定 `ControllerKey` 的创建清理（避免误删他人 key）、`CloudHostSetupOperation` 等内部操作单、`CloudHostIssuesLinkage` 等个人联动配置。
+- **项目工作区（ControllerWorkspace）跟随控制器成员口径（修复 B 看不到 A 的 working directory）**：`controllerWorkspaceService` 在请求工作区上下文内按「控制器可见集」查询/校验（`Controller.find/findOne` + `actorFilter`），不再用创建者 `userId`；`homeOverview.workspaces`、控制器设置-工作区、worktree 列表、会话创建/导入、工作流实例化与默认分支解析同步收敛。无 ALS 上下文（引擎/内部/迁移）仍沿用 `{controllerId,userId}` 旧口径，避免后台链路越权。项目工作区按 `{controllerId,path}` 在团队内幂等共享。
 
 ## 云存储归档优化（停止归档可选 + 归档/复原/fork）
 
