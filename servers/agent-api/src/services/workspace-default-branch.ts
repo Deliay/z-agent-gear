@@ -3,6 +3,7 @@ import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { githubService } from './github.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
 import { normalizeWorkspacePrefix, resolveClonePath } from './workspace-path.js';
+import { getWorkspaceContext } from './workspace-context.js';
 
 /** 候选默认分支（按优先级取第一个本地存在的）。 */
 export const DEFAULT_BRANCH_CANDIDATES = ['main', 'master', 'release'] as const;
@@ -56,11 +57,11 @@ async function backfill(workspaceId: string, branch: string): Promise<void> {
 export async function resolveWorkspaceDefaultBranch(
   input: ResolveWorkspaceDefaultBranchInput,
 ): Promise<string | null> {
-  const workspace = await ControllerWorkspace.findOne({
-    _id: input.workspaceId,
-    userId: input.userId,
-    controllerId: input.controllerId,
-  }).lean();
+  const workspace = await ControllerWorkspace.findOne(
+    getWorkspaceContext()
+      ? { _id: input.workspaceId, controllerId: input.controllerId }
+      : { _id: input.workspaceId, userId: input.userId, controllerId: input.controllerId },
+  ).lean();
   if (!workspace) {
     throw new Error('Workspace not found');
   }
