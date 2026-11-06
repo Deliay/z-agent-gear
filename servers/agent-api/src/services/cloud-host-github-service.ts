@@ -422,9 +422,17 @@ export class CloudHostGithubService {
       // 否则会话创建失败时 hasDefaultWorkspace 仍为 false，无法区分「无工作区」与「默认会话创建失败」。
       // 初始化已在 gitSetup 收尾执行，此处为幂等兜底（ensureWorkspace upsert + CAS 未命中即 no-op）。
       const workspace = await this.initializeWorkspace(op, targetPath);
+      // 会话继承云电脑的租户工作区（后台链路无 ALS 上下文，需显式传值，
+      // 否则后续 MCP 工具调用会落到个人租户、团队工作区成员不可见）。
+      const host = op.hostId
+        ? await CloudHost.findById(op.hostId).select('resourceWorkspaceId').lean()
+        : null;
       const session = await this.createSession(String(op.userId), {
         controllerId: String(op.controllerId),
         workspaceId: String(workspace.id),
+        ...(host?.resourceWorkspaceId
+          ? { resourceWorkspaceId: String(host.resourceWorkspaceId) }
+          : {}),
         acpServerType: 'opencode',
       });
       // D2：项目会话成功后回填云电脑默认会话（CAS：仅当仍为空，避免覆盖既有默认会话）。

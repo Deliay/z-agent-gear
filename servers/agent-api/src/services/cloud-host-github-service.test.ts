@@ -111,6 +111,9 @@ describe('CloudHostGithubService', () => {
     vi.mocked(CloudHostGithubBinding.findOneAndUpdate).mockResolvedValue({} as never);
     vi.mocked(CloudHostSetupOperation.updateOne).mockResolvedValue({} as never);
     vi.mocked(CloudHost.updateOne).mockResolvedValue({} as never);
+    vi.mocked(CloudHost.findById).mockReturnValue({
+      select: vi.fn().mockReturnValue(lean(null)),
+    } as never);
   });
 
   it('T-CHG1: 三步成功，sessionId 回填', async () => {

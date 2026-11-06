@@ -1,5 +1,5 @@
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
-import { actorFilter, actorOrBuiltinFilter } from '../workspace-context.js';
+import { actorFilter, actorOrBuiltinFilter, getWorkspaceContext } from '../workspace-context.js';
 import { WorkflowTemplate } from '../../models/workflow-template.js';
 import { validateTemplateGraph, assertAiOwned, type WorkflowCreatedBy } from './template.js';
 import { getAvailableServerTypes } from './capability.js';
@@ -141,8 +141,10 @@ class ConfiguredWorkflowService {
     const snapshot = copyFromTemplate(template, input);
     // 校验模板节点图的 agentConfig 完整性 + capabilities
     validateAgentConfigs(snapshot.nodes as unknown as SourceNodeLike[], availableServerTypes);
+    const workspaceFields = this.currentWorkspaceFields();
     return ConfiguredWorkflow.create({
       userId,
+      ...workspaceFields,
       controllerId: input.controllerId,
       name: snapshot.name,
       sourceTemplateId: template._id,
@@ -191,6 +193,13 @@ class ConfiguredWorkflowService {
     return true;
   }
 
+  /** 显式落当前请求工作区/租户（插件兜底之外的第二道保证，防后台链路漏写）。 */
+  private currentWorkspaceFields(): Record<string, string> {
+    const context = getWorkspaceContext();
+    if (!context) return {};
+    return { resourceWorkspaceId: context.id, tenantId: context.tenantId };
+  }
+
   /** 将输入节点归一化为完整节点结构（补默认值，供图校验与落库） */
   private normalizeConfiguredNodes(nodes: ConfiguredWorkflowNodeInput[]) {
     return nodes.map((n) => ({
@@ -222,8 +231,10 @@ class ConfiguredWorkflowService {
     const fullNodes = this.normalizeConfiguredNodes(input.nodes);
     validateTemplateGraph(fullNodes as never);
     validateAgentConfigs(fullNodes as unknown as SourceNodeLike[], availableServerTypes);
+    const workspaceFields = this.currentWorkspaceFields();
     return ConfiguredWorkflow.create({
       userId,
+      ...workspaceFields,
       controllerId: input.controllerId,
       name: input.name,
       sourceTemplateId: undefined,

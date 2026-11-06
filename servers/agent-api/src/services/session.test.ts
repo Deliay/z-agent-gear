@@ -285,6 +285,34 @@ describe('SessionService', () => {
       expect(result.id).toBe('sess-1');
     });
 
+    it('T-SS-TEAM3: 后台链路无 ALS 上下文时继承控制器的租户工作区与租户', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          name: 'cloud-ctrl',
+          workspaceId: 'ws-team',
+          tenantId: 'tenant-team',
+          type: 'local',
+        }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+      await sessionService.create('user-1', {
+        controllerId: 'ctrl-1',
+        acpServerType: 'opencode',
+        workspaceId: 'ws-project',
+      });
+
+      expect(Session.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceId: 'ws-team',
+          tenantId: 'tenant-team',
+        }),
+      );
+    });
+
     it('should throw when controller not found', async () => {
       vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(null),

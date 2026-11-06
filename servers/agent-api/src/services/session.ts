@@ -18,7 +18,7 @@ import {
   SESSION_PREVIEW_TOOLS_SERVER_NAME,
 } from './session-preview-tools.js';
 import { sessionReviewService } from './session-review-service.js';
-import { actorFilter } from './workspace-context.js';
+import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 import {
   commitSettingsService,
@@ -345,6 +345,18 @@ export class SessionService {
     if (!controller) {
       throw new Error('Controller not found');
     }
+    // 租户工作区归属（对齐计划「sessions.workspaceId = 其控制器/云电脑」）：
+    // 优先调用方显式传值（工作流节点继承实例）→ 请求上下文 → 控制器归属。
+    // 后台链路（云电脑 ready / Git 项目设置）没有 ALS 上下文，但控制器仍带工作区，
+    // 必须在此补齐，否则会话及其后续 MCP 工具调用会落到个人租户、团队工作区不可见。
+    const workspaceContext = getWorkspaceContext();
+    const targetWorkspaceId =
+      input.resourceWorkspaceId ??
+      workspaceContext?.id ??
+      (controller.workspaceId ? String(controller.workspaceId) : undefined);
+    const targetTenantId =
+      workspaceContext?.tenantId ??
+      (controller.tenantId ? String(controller.tenantId) : undefined);
     const cloudHostRunning = (host: { status?: string } | null): boolean =>
       host?.status === 'RUNNING' ||
       (input.allowStartingCloudHost === true && host?.status === 'STARTING');
@@ -568,7 +580,9 @@ export class SessionService {
       worktreeBranch,
       // 项目工作区归属（D3：仅 create/import 3 处落库，存量不回填，旧数据走回退匹配）
       controllerWorkspaceId: input.workspaceId,
-      ...(input.resourceWorkspaceId ? { workspaceId: input.resourceWorkspaceId } : {}),
+      // 租户工作区/租户归属显式落库（后台链路无 ALS 上下文时由控制器继承，见上）
+      ...(targetTenantId ? { tenantId: targetTenantId } : {}),
+      ...(targetWorkspaceId ? { workspaceId: targetWorkspaceId } : {}),
       ...(input.workflowInstanceId ? { workflowInstanceId: input.workflowInstanceId } : {}),
       ...(input.workflowNodeId ? { workflowNodeId: input.workflowNodeId } : {}),
     });

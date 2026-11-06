@@ -8,6 +8,7 @@ import { Workspace } from './../models/workspace.js';
 import { TenantMember } from './../models/tenant-member.js';
 import { WorkspaceMember } from './../models/workspace-member.js';
 import { Session } from './../models/session.js';
+import { Controller } from './../models/controller.js';
 import { CloudStorage } from './../models/cloud-storage.js';
 import { WorkflowInstance } from './../models/workflow-instance.js';
 import { workspaceService, WORKSPACE_ERRORS } from './workspace-service.js';
@@ -431,5 +432,57 @@ describe('WorkspaceService.systemWorkspaceContext（团队租户，真库）', (
     await expect(
       workspaceService.systemWorkspaceContext(String(new mongoose.Types.ObjectId())),
     ).resolves.toBeUndefined();
+  }, 20_000);
+
+  it('T-WSP-SYS3: 会话缺租户工作区时按控制器回退（团队 MCP 工具上下文）', async () => {
+    const team = await createTeam('team-ctx');
+    const creator = await createUser('creator');
+    const member = await createUser('member');
+    const global = await workspaceService.ensureGlobalWorkspace(String(team._id), {
+      adminUserId: String(creator._id),
+    });
+    const normal = await workspaceService.createWorkspace(
+      String(creator._id),
+      String(team._id),
+      'ctx-ws',
+    );
+    await TenantMember.create({ tenantId: team._id, userId: member._id, role: 'developer' });
+    await WorkspaceMember.create({
+      tenantId: team._id,
+      workspaceId: normal.id,
+      userId: member._id,
+    });
+
+    const controller = await Controller.create({
+      userId: creator._id,
+      tenantId: team._id,
+      workspaceId: new mongoose.Types.ObjectId(normal.id),
+      keyId: new mongoose.Types.ObjectId(),
+      hostname: 'ctx-host',
+      type: 'cloud',
+      version: '1',
+    });
+    // 模拟后台链路创建的会话：没有租户工作区字段
+    const session = await Session.create({
+      userId: creator._id,
+      tenantId: team._id,
+      controllerId: controller._id,
+      controllerName: 'ctx-host',
+      acpServerType: 'opencode',
+      status: 'idling',
+    });
+    expect(session.workspaceId ?? null).toBeNull();
+
+    const context = await workspaceService.buildSessionWorkspaceContext(
+      String(session._id),
+      String(member._id),
+    );
+    expect(context).toMatchObject({
+      id: normal.id,
+      tenantId: String(team._id),
+      type: 'normal',
+      role: 'developer',
+      globalWorkspaceId: global.id,
+    });
   }, 20_000);
 });

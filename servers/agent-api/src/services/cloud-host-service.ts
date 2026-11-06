@@ -798,6 +798,9 @@ export class CloudHostService {
           const session = await sessionService.create(String(host.userId), {
             controllerId: String(host.controllerId),
             workspaceId: String(host.workspaceId),
+            resourceWorkspaceId: host.resourceWorkspaceId
+              ? String(host.resourceWorkspaceId)
+              : undefined,
             acpServerType: HARNESS_ACP_TYPES[harnessTypes[0]] ?? 'opencode',
             allowStartingCloudHost: true,
           });
@@ -850,6 +853,9 @@ export class CloudHostService {
         const session = await sessionService.create(String(current.userId), {
           controllerId: String(current.controllerId),
           workspaceId: String(current.workspaceId),
+          resourceWorkspaceId: current.resourceWorkspaceId
+            ? String(current.resourceWorkspaceId)
+            : undefined,
           acpServerType: HARNESS_ACP_TYPES[harnessTypes[0]] ?? 'opencode',
         });
         await CloudHost.updateOne(
