@@ -72,7 +72,7 @@ export function HtmlPreview({ html, filePath, truncated = false, onConfirm }: Ht
     if (body === '') return;
     const now = new Date().toISOString();
     const created = selection.map((entry, index) => ({
-      id: `html-${Date.now()}-${index}`,
+      id: `html-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${index}`,
       anchor: { kind: 'html' as const, selector: entry.selector, innerHtml: entry.innerHtml },
       body,
       createdAt: now,

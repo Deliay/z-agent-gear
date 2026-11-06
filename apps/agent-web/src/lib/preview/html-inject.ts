@@ -12,9 +12,18 @@ export interface HtmlInjectOptions {
   token: string;
 }
 
+/**
+ * 选择高亮样式（B1 返工）：必须注入 iframe 文档内部——父文档 index.css
+ * 不作用于 srcDoc 文档，脚本设置的 data-zag-* 属性需要随附 <style> 才有视觉反馈。
+ */
+export const SELECTION_STYLE = `<style data-zag-preview-style="1">
+[data-zag-hover] { outline: 2px solid #3b82f6; outline-offset: -1px; }
+[data-zag-selected] { outline: 2px solid #f59e0b; outline-offset: -1px; background-color: rgba(245, 158, 11, 0.12); }
+</style>`;
+
 /** 生成注入用选择脚本（与 html-selector.ts 的 computeSelector 同源算法） */
 export function buildSelectionScript(token: string): string {
-  return `<script data-zag-preview="1">
+  return `${SELECTION_STYLE}<script data-zag-preview="1">
 (function () {
   var TOKEN = ${JSON.stringify(token)};
   function esc(v) { return String(v).replace(/([ !"#$%&'()*+,./:;<=>?@[\\\\^\`{|}~])/g, '\\\\$1'); }

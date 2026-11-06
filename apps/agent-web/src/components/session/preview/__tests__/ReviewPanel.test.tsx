@@ -4,6 +4,7 @@ import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/re
 
 const submitReview = vi.fn().mockResolvedValue({ data: {} });
 let reviewRow: Record<string, unknown> | null = null;
+let commentSeq = 0;
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (query: unknown) => {
@@ -31,9 +32,9 @@ vi.mock('../CodePreview', () => ({
             target: { source: 'code', filePath: props.filePath },
             comments: [
               {
-                id: `c-${props.filePath}`,
+                id: `c-${props.filePath}-${(commentSeq += 1)}`,
                 anchor: { kind: 'code', filePath: props.filePath, startLine: 1, endLine: 1 },
-                body: `issue in ${props.filePath}`,
+                body: `issue in ${props.filePath} #${commentSeq}`,
                 createdAt: '2026-11-06T00:00:00Z',
               },
             ],
@@ -118,8 +119,38 @@ describe('ReviewPanel（B4 提交三态/只读化；A2 跨文件批注隔离）'
     expect(Object.keys(fileReviews).sort()).toEqual(['src/a.ts', 'src/b.ts']);
     expect(fileReviews['src/a.ts']).toHaveLength(1);
     expect(fileReviews['src/b.ts']).toHaveLength(1);
-    expect((fileReviews['src/a.ts'][0] as { body: string }).body).toBe('issue in src/a.ts');
-    expect((fileReviews['src/b.ts'][0] as { body: string }).body).toBe('issue in src/b.ts');
+    expect((fileReviews['src/a.ts'][0] as { body: string }).body).toContain('issue in src/a.ts');
+    expect((fileReviews['src/b.ts'][0] as { body: string }).body).toContain('issue in src/b.ts');
+  });
+
+  it('A1 同文件多轮批注聚合不丢失（确认后清空 + 合并追加）', async () => {
+    render(<ReviewPanel reviewId="rev-1" sessionId="sess-1" />);
+    // 第一轮 c1
+    fireEvent.click(screen.getByTestId('mock-annotate'));
+    // 第二轮 c2（组件确认后清空，ReviewPanel 合并追加）
+    fireEvent.click(screen.getByTestId('mock-annotate'));
+    fireEvent.click(screen.getByTestId('review-approve'));
+    await waitFor(() => expect(submitReview).toHaveBeenCalledTimes(1));
+    const fileReviews = submitReview.mock.calls[0][0].variables.input.fileReviews as Record<string, unknown[]>;
+    expect(fileReviews['src/a.ts']).toHaveLength(2);
+    const bodies = fileReviews['src/a.ts'].map((comment) => (comment as { body: string }).body);
+    expect(new Set(bodies).size).toBe(2);
+  });
+
+  it('A1 切文件往返后继续批注聚合（key 重建不丢既有批注）', async () => {
+    render(<ReviewPanel reviewId="rev-1" sessionId="sess-1" />);
+    fireEvent.click(screen.getByTestId('mock-annotate')); // a.ts 第 1 条
+    // 往返切换（key 重建）
+    fireEvent.click(screen.getAllByTestId('review-file-item')[1]);
+    await waitFor(() => expect(screen.getByTestId('mock-code-src/b.ts')).toBeTruthy());
+    fireEvent.click(screen.getAllByTestId('review-file-item')[0]);
+    await waitFor(() => expect(screen.getByTestId('mock-code-src/a.ts')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('mock-annotate')); // a.ts 第 2 条（往返后）
+
+    fireEvent.click(screen.getByTestId('review-approve'));
+    await waitFor(() => expect(submitReview).toHaveBeenCalledTimes(1));
+    const fileReviews = submitReview.mock.calls[0][0].variables.input.fileReviews as Record<string, unknown[]>;
+    expect(fileReviews['src/a.ts']).toHaveLength(2);
   });
 
   it('Review 场景批注不回传输入区（B5-1）', async () => {

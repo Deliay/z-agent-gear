@@ -216,7 +216,7 @@ export function CodePreview({
     setComments((prev) => [
       ...prev,
       {
-        id: `code-${Date.now()}-${prev.length}`,
+        id: `code-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${prev.length}`,
         anchor: { kind: 'code', filePath, startLine: range.startLine, endLine: range.endLine },
         body,
         createdAt: new Date().toISOString(),

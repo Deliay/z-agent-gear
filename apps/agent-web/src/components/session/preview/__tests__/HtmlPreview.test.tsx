@@ -89,6 +89,17 @@ describe('HtmlPreview（T-HTML1~6）', () => {
     expect(srcDoc).toContain('innerHtml.length > 4000');
   });
 
+  it('B1：批注模式 srcDoc 内嵌选择高亮样式（iframe 文档内生效）', () => {
+    render(<HtmlPreview html={html} onConfirm={vi.fn()} />);
+    fireEvent.click(screen.getByTestId('html-annotate-toggle'));
+    const frame = screen.getByTestId('html-preview-frame') as HTMLIFrameElement;
+    const srcDoc = frame.getAttribute('srcdoc') ?? '';
+    // 父文档 CSS 不作用于 srcDoc 文档：样式必须随注入脚本进入 iframe
+    expect(srcDoc).toContain('data-zag-preview-style');
+    expect(srcDoc).toContain('[data-zag-hover]');
+    expect(srcDoc).toContain('[data-zag-selected]');
+  });
+
   it('T-HTML4 srcDoc 变更重建 iframe（key 变化）', () => {
     const { rerender } = render(<HtmlPreview html={html} onConfirm={vi.fn()} />);
     const first = screen.getByTestId('html-preview-frame');

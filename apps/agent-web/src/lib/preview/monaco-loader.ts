@@ -23,7 +23,11 @@ let monacoPromise: Promise<MonacoModule> | null = null;
 export async function loadMonaco(): Promise<MonacoModule> {
   if (monacoPromise) return monacoPromise;
   monacoPromise = (async () => {
-    const monaco = await import('monaco-editor');
+    // 裁决 7（C1 返工）：仅 editor core（editor.api）+ basic-languages，
+    // 不引入 ts/css/html/json rich language contributions——rich 客户端会与
+    // 单一 editor.worker 通信产生错误 worker 报错噪声；main 入口为全量 bundle，禁用。
+    const monaco = await import('monaco-editor/editor/editor.api.js');
+    await import('monaco-editor/basic-languages/monaco.contribution.js');
     // monaco-editor exports map：`./* → ./esm/vs/*.js`（不含 esm/vs 前缀）
     const worker = await import('monaco-editor/editor/editor.worker.js?worker');
     (self as unknown as { MonacoEnvironment?: unknown }).MonacoEnvironment = {

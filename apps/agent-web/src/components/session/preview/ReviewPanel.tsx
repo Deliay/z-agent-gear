@@ -90,11 +90,17 @@ export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
   const handleFileAnnotation = useCallback(
     (file: string) => (batch: AnnotationBatch) => {
       // A2：批注按文件聚合进 file_reviews（key 隔离 + 组件确认后清空，无跨文件串扰）。
+      // A1（三轮返工）：组件确认后清空本地列表，本侧按 id 合并追加——
+      // 同文件多轮/往返批注累积不丢失（文件树计数徽标随聚合增长）。
       // B5-1：Review 场景批注经 file_reviews 结构化回传 Agent，不回传输入区（PRD §3.3）。
-      setFileReviews((prev) => ({
-        ...prev,
-        [file]: batch.comments as unknown as SessionReviewCommentData[],
-      }));
+      setFileReviews((prev) => {
+        const existing = prev[file] ?? [];
+        const seen = new Set(existing.map((comment) => comment.id));
+        const additions = (batch.comments as unknown as SessionReviewCommentData[]).filter(
+          (comment) => !seen.has(comment.id),
+        );
+        return { ...prev, [file]: [...existing, ...additions] };
+      });
     },
     [],
   );

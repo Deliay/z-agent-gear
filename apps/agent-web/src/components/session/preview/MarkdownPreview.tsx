@@ -72,7 +72,7 @@ export function MarkdownPreview({ source, filePath, truncated = false, onConfirm
     setComments((prev) => [
       ...prev,
       {
-        id: `md-${Date.now()}-${prev.length}`,
+        id: `md-${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${prev.length}`,
         anchor: { kind: 'markdown', text: pending.text, startOffset: pending.startOffset, endOffset: pending.endOffset },
         body,
         createdAt: new Date().toISOString(),
