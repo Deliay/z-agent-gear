@@ -5,10 +5,11 @@ import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/re
 // seam mock：记录 monaco 交互注册（A5 批注行选、B1 高亮装饰类）
 const createdEditors: Array<Record<string, any>> = [];
 const diffEditors: Array<Record<string, any>> = [];
+const uriParses: string[] = [];
 
 vi.mock('../../../../lib/preview/monaco-loader', () => ({
   loadMonaco: vi.fn(async () => ({
-    Uri: { parse: (value: string) => value },
+    Uri: { parse: (value: string) => { uriParses.push(value); return value; } },
     Range: class {
       constructor(_a: number, _b: number, _c: number, _d: number) {}
     },
@@ -57,8 +58,15 @@ describe('CodePreview（T-CP / 返工 A1/A5/B1/B2）', () => {
     cleanup();
     createdEditors.length = 0;
     diffEditors.length = 0;
+    uriParses.length = 0;
     resetCodePreviewModels();
     vi.clearAllMocks();
+  });
+
+  it('绝对路径生成合法 file URI（避免 // 开头的非法 path 触发 UriError）', async () => {
+    render(<CodePreview filePath="/home/worker/workspace/src/a.ts" content="x" onConfirm={vi.fn()} />);
+    await waitFor(() => expect(uriParses.length).toBe(1));
+    expect(uriParses[0]).toBe('file:///home/worker/workspace/src/a.ts');
   });
 
   it('A1 高度链：根容器 h-full，编辑器宿主 flex-1（Monaco 可见前提）', () => {

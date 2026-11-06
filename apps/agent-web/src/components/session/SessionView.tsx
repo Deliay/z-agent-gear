@@ -141,7 +141,10 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const [wideEnoughForHorizontal, setWideEnoughForHorizontal] = useState(
     () => typeof window === 'undefined' || window.matchMedia('(min-width: 1024px)').matches,
   );
-  const previewStoreRef = useRef(getPreviewStore(id));
+  // 预览 store 不能在 ref 里缓存实例：StrictMode 的 mount→cleanup→mount 会经
+  // destroyPreviewStore 注销旧实例，若 ref 仍指向旧实例，实况跟随写入的 tab 不会出现在
+  // PreviewPane 重新取到的 store 上（右侧恒为「暂无预览内容」）。按 id 每次解析（Map 查找）。
+  const previewStore = getPreviewStore(id);
 
   // 批注回传 → 提示词片段区（来源徽标 origin）
   const handleAnnotation = useCallback((batch: AnnotationBatch) => {
@@ -246,7 +249,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     splitMode === 'horizontal' && !wideEnoughForHorizontal ? 'vertical' : splitMode;
 
   // 实况跟随（复用 mergeToolCallMessages 合并口径）
-  useLiveFileTracking({ sessionId: id, messages, live: live && splitMode !== 'chat', store: previewStoreRef.current });
+  useLiveFileTracking({ sessionId: id, messages, live: live && splitMode !== 'chat', store: previewStore });
 
   // 卸载清理（裁决 1）：预览 / 片段 store 按会话销毁
   useEffect(() => {

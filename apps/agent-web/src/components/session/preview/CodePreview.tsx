@@ -50,7 +50,10 @@ function getOrCreateModel(
   content: string,
   language: string,
 ): { setValue: (value: string) => void } {
-  const uri = monaco.Uri.parse(`file:///${filePath}`);
+  // filePath 可能是绝对路径（真实 ACP 工具调用的 locations.path）或相对路径；
+  // 绝对路径直接拼 `file:///` 会得到 `file:////...`，Monaco Uri.parse 抛
+  // 「path cannot begin with two slash characters」。统一压成一个前导斜杠。
+  const uri = monaco.Uri.parse(`file:///${filePath.replace(/^\/+/, '')}`);
   let model = modelCache.get(filePath) as { setValue: (value: string) => void } | undefined;
   if (!model) {
     const existing = monaco.editor.getModel(uri) as { setValue: (value: string) => void } | null;
