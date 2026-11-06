@@ -10,6 +10,7 @@ import { sessionService } from './session.js';
 import { controllerService } from './controller.js';
 import { cloudHostService } from './cloud-host-service.js';
 import { workflowTemplateService } from './workflow/template.js';
+import { configuredWorkflowService } from './workflow/configured.js';
 import { workflowInstanceService } from './workflow/instance.js';
 import { runWithWorkspace, type WorkspaceContext } from './workspace-context.js';
 
@@ -160,8 +161,32 @@ describe('工作区资源共享（T-WS 跨成员可见性，真库）', () => {
     });
   });
 
-  it('团队租户显式 {_id,userId} 查询在上下文命中（阻断-H：tenantId 注入取 context.tenantId）', async () => {
-    const hostId = new mongoose.Types.ObjectId();
+  it('已配置工作流按工作区共享（A 配置、同工作区 B 可见）', async () => {
+    const controllerId = new mongoose.Types.ObjectId();
+    await mongoose.connection.collection('configuredworkflows').insertOne({
+      userId: USER_A,
+      tenantId: TENANT,
+      resourceWorkspaceId: WS,
+      controllerId,
+      name: '团队配置',
+      nodes: [],
+      createdBy: 'HUMAN',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const list = await runWithWorkspace(context('developer'), () =>
+      configuredWorkflowService.listForUser(String(USER_B)),
+    );
+    expect(list.map((item) => item.name)).toContain('团队配置');
+
+    const detail = await runWithWorkspace(context('developer'), () =>
+      configuredWorkflowService.findById(String((list[0] as { _id: unknown })._id), String(USER_B)),
+    );
+    expect(detail).not.toBeNull();
+  });
+
+  it('团队租户显式 {_id,userId} 查询在上下文命中（阻断-H：tenantId 注入取 context.tenantId）', async () => {    const hostId = new mongoose.Types.ObjectId();
     await mongoose.connection.collection('cloudhosts').insertOne({
       _id: hostId,
       userId: USER_A,

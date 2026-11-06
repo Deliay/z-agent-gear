@@ -186,6 +186,41 @@ export interface SyncWorkspaceResult {
   changed: boolean;
 }
 
+function sameWorkspaceList(a: WorkspaceData[], b: WorkspaceData[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => {
+    const other = b[index];
+    return (
+      item.id === other.id &&
+      item.name === other.name &&
+      item.type === other.type &&
+      item.myRole === other.myRole &&
+      item.readOnly === other.readOnly &&
+      item.memberCount === other.memberCount &&
+      item.tenant.id === other.tenant.id &&
+      item.tenant.name === other.tenant.name &&
+      item.tenant.type === other.tenant.type &&
+      item.tenant.memberCount === other.tenant.memberCount
+    );
+  });
+}
+
+function sameTenantList(a: TenantMembershipData[], b: TenantMembershipData[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => {
+    const other = b[index];
+    return (
+      item.role === other.role &&
+      item.tenant.id === other.tenant.id &&
+      item.tenant.name === other.tenant.name &&
+      item.tenant.type === other.tenant.type &&
+      item.tenant.memberCount === other.tenant.memberCount
+    );
+  });
+}
+
 /** 用服务端最新 myWorkspaces/myTenants 同步状态并执行失效回退。 */
 export function syncWorkspaceContext(input: {
   workspaces: WorkspaceData[];
@@ -199,7 +234,13 @@ export function syncWorkspaceContext(input: {
 
   const desired = desiredId ? workspaces.find((workspace) => workspace.id === desiredId) : undefined;
   if (desired) {
-    const changed = state.current?.id !== desired.id || state.userId !== userId;
+    const currentChanged = state.current?.id !== desired.id || state.userId !== userId;
+    const listsChanged =
+      !state.initialized ||
+      !sameWorkspaceList(state.myWorkspaces, workspaces) ||
+      !sameTenantList(state.myTenants, tenants);
+    // 周期轮询会重复返回同一份可见集：无变化时不 emit，避免整棵工作区树每 15s 重渲染。
+    if (!currentChanged && !listsChanged) return { fallback: false, changed: false };
     emit({
       current: desired,
       myWorkspaces: workspaces,
@@ -207,25 +248,31 @@ export function syncWorkspaceContext(input: {
       userId,
       initialized: true,
     });
-    if (changed) persistWorkspaceId(userId, desired.id);
-    return { fallback: false, changed };
+    if (currentChanged) persistWorkspaceId(userId, desired.id);
+    return { fallback: false, changed: currentChanged };
   }
 
   const fallback = getPersonalGlobalWorkspace(workspaces) ?? workspaces[0] ?? null;
   // 失效工作区：清理持久化，避免下一次请求继续携带非法 id。
   if (persistedId) clearPersistedWorkspaceId(userId);
-  const changed =
+  const currentChanged =
     state.current?.id !== (fallback?.id ?? null) ||
     state.userId !== userId ||
     !state.initialized;
-  emit({
-    current: fallback,
-    myWorkspaces: workspaces,
-    myTenants: tenants,
-    userId,
-    initialized: true,
-  });
-  return { fallback: persistedId !== null || currentId !== null, changed };
+  const listsChanged =
+    !state.initialized ||
+    !sameWorkspaceList(state.myWorkspaces, workspaces) ||
+    !sameTenantList(state.myTenants, tenants);
+  if (currentChanged || listsChanged) {
+    emit({
+      current: fallback,
+      myWorkspaces: workspaces,
+      myTenants: tenants,
+      userId,
+      initialized: true,
+    });
+  }
+  return { fallback: persistedId !== null || currentId !== null, changed: currentChanged };
 }
 
 /** 用户主动切换（仅允许切到可见集内的工作区）。 */
