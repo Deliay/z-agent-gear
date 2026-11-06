@@ -717,17 +717,11 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
 
   return (
     <div
-      className={`grid h-full min-w-0 ${
-        effectiveSplitMode === 'chat'
-          ? 'grid-cols-1'
-          : effectiveSplitMode === 'horizontal'
-            ? 'grid-cols-[4fr_6fr]'
-            : 'grid-cols-1 grid-rows-[3fr_7fr]'
-      }`}
+      className="flex h-full min-h-0 min-w-0 flex-col"
       data-testid="session-split-root"
       data-split-mode={effectiveSplitMode}
     >
-      <div className="flex min-h-0 min-w-0 flex-col">
+      {/* 标题栏（含协议提示/只读提示）独立占一行 */}
       {protocolMismatch && (
         <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
           ⚠️ Agent 协议版本不兼容：期望 v{protocolMismatch.expectedVersion}，Agent 返回 v{protocolMismatch.agentVersion}。部分功能可能无法正常工作。
@@ -783,47 +777,65 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           )}
         </div>
       )}
-      <MessageList
-        messages={messages}
-        sseLoading={sseLoading}
-        sseError={sseError}
-        hasMore={hasMore}
-        onLoadMore={handleLoadMore}
-        loadingMore={loadingMore}
-      />
-      {!readOnly && (
-        <InputBox
-          sessionId={id}
-          onSend={handleSendMessage}
-          onStop={handleCancelGeneration}
-          disabled={status !== 'idling' && status !== 'running'}
-          sending={sending}
-          isWorking={isWorking}
-          modes={modes}
-          currentModeId={currentModeId}
-          onSetMode={handleSetMode}
-          status={status}
-          availableModels={availableModels}
-          currentModelId={currentModelId}
-          onSetModel={handleSetModel}
-          availableCommands={availableCommands}
-          configOptions={configOptions}
-          onSetConfigOption={handleSetConfigOption}
-          capabilities={capabilities}
-        />
-      )}
+      {/* 内容行：对话一栏 + 预览一栏（chat 模式仅对话） */}
+      <div
+        className={`grid min-h-0 min-w-0 flex-1 ${
+          effectiveSplitMode === 'chat'
+            ? 'grid-cols-1'
+            : effectiveSplitMode === 'horizontal'
+              ? 'grid-cols-[4fr_6fr]'
+              : 'grid-cols-1 grid-rows-[3fr_7fr]'
+        }`}
+        data-testid="session-split-body"
+      >
+        <div className="flex min-h-0 min-w-0 flex-col">
+          <MessageList
+            messages={messages}
+            sseLoading={sseLoading}
+            sseError={sseError}
+            hasMore={hasMore}
+            onLoadMore={handleLoadMore}
+            loadingMore={loadingMore}
+          />
+          {!readOnly && (
+            <InputBox
+              sessionId={id}
+              onSend={handleSendMessage}
+              onStop={handleCancelGeneration}
+              disabled={status !== 'idling' && status !== 'running'}
+              sending={sending}
+              isWorking={isWorking}
+              modes={modes}
+              currentModeId={currentModeId}
+              onSetMode={handleSetMode}
+              status={status}
+              availableModels={availableModels}
+              currentModelId={currentModelId}
+              onSetModel={handleSetModel}
+              availableCommands={availableCommands}
+              configOptions={configOptions}
+              onSetConfigOption={handleSetConfigOption}
+              capabilities={capabilities}
+            />
+          )}
+        </div>
+        {effectiveSplitMode !== 'chat' && (
+          <div
+            className={`flex h-full min-h-0 min-w-0 flex-col border-border ${
+              effectiveSplitMode === 'horizontal' ? 'border-l' : 'border-t'
+            }`}
+            data-testid="session-preview-column"
+          >
+            <PreviewPane sessionId={id} onAnnotation={handleAnnotation} reviewStatuses={reviewStatuses} />
+          </div>
+        )}
+      </div>
       <ResumeConfirmDialog
         open={resumeConfirmOpen}
         onOpenChange={setResumeConfirmOpen}
         onConfirm={handleConfirmResume}
         isWorkflowNode={isWorkflowNodeSession}
       />
-      </div>
-      {effectiveSplitMode !== 'chat' && (
-        <div className="flex h-full min-h-0 min-w-0 flex-col border-l border-border" data-testid="session-preview-column">
-          <PreviewPane sessionId={id} onAnnotation={handleAnnotation} reviewStatuses={reviewStatuses} />
-        </div>
-      )}
     </div>
   );
 }

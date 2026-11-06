@@ -75,7 +75,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
   const continueDisabled = resuming || !controllerOnline || continueBlocked;
 
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-border bg-background px-4 py-3">
+    <div className="flex items-center justify-between gap-2 border-b border-border bg-background px-4 py-3" data-testid="session-header">
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1">
         {isMobile && <MobileBackButton to="/sessions" />}
         <h1 className="truncate text-lg font-semibold">

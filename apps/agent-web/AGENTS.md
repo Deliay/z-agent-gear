@@ -189,8 +189,10 @@ pnpm run preview  # Preview production build
 
 ## 会话内容预览子系统（#461）
 
-- **布局**：`SessionView` 根容器 CSS Grid 三模式（`chat` 单列 / `horizontal` `grid-cols-[4fr_6fr]` /
-  `vertical` `grid-rows-[3fr_7fr]`），偏好 `lib/split-prefs.ts`（`session-split-mode:{sessionId}`，
+- **布局**：`SessionView` 根容器为纵向 flex——标题栏（`SessionHeader` / 协议与只读提示）独占一行，
+  下方 `session-split-body` 内容行再按模式切 CSS Grid（`chat` 单列 / `horizontal` `grid-cols-[4fr_6fr]` /
+  `vertical` `grid-rows-[3fr_7fr]`），对话列（`MessageList` + `InputBox`）与预览列并排或上下；偏好
+  `lib/split-prefs.ts`（`session-split-mode:{sessionId}`，
   非法回退 chat）；宽度门控 `matchMedia('(min-width: 1024px)')`：不足隐藏「左右分栏」入口，
   偏好 horizontal 但宽度不足**渲染 vertical 不改写偏好**；`?review=` 深链临时分屏（不写偏好），
   关闭最后一个 Review 标签回退 chat，消费后 `history.replaceState` 清参。

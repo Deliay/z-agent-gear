@@ -93,21 +93,31 @@ describe('SessionView 分屏 / Review 状态 / 会话切换（T-SVIEW / 返工 A
     reviewStatusRows = [];
   });
 
-  it('T-SVIEW1 grid 三模式类名随偏好切换', async () => {
+  it('T-SVIEW1 标题栏独占一行，内容行按偏好切三模式类名', async () => {
     localStorage.setItem('session-split-mode:sess-a', 'horizontal');
     installQueryMock('sess-a');
     render(<SessionView sessionId="sess-a" />);
 
     const root = screen.getByTestId('session-split-root');
+    const header = screen.getByTestId('session-header');
+    const body = screen.getByTestId('session-split-body');
     expect(root.getAttribute('data-split-mode')).toBe('horizontal');
-    expect(root.className).toContain('grid-cols-[4fr_6fr]');
+    // 标题栏与内容行是根容器下的兄弟节点：标题栏整行，内容行承载对话 + 预览两栏
+    expect(header.parentElement).toBe(root);
+    expect(body.parentElement).toBe(root);
+    expect(header.contains(body)).toBe(false);
+    expect(body.className).toContain('flex-1');
+    expect(body.className).toContain('grid-cols-[4fr_6fr]');
+    expect(header.className).not.toContain('grid-cols-[4fr_6fr]');
 
     fireEvent.click(screen.getByTestId('split-mode-vertical'));
     expect(root.getAttribute('data-split-mode')).toBe('vertical');
-    expect(root.className).toContain('grid-rows-[3fr_7fr]');
+    expect(body.className).toContain('grid-rows-[3fr_7fr]');
+    expect(body.className).not.toContain('grid-cols-[4fr_6fr]');
 
     fireEvent.click(screen.getByTestId('split-mode-chat'));
     expect(root.getAttribute('data-split-mode')).toBe('chat');
+    expect(body.className).toContain('grid-cols-1');
     expect(screen.queryByTestId('preview-pane')).toBeNull();
   });
 
