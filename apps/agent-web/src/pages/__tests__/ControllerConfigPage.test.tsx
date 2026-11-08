@@ -1,14 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ControllerConfigPage from '../ControllerConfigPage';
 import type { CloudHostData, ControllerData } from '@/graphql/types';
+import { resetRepoWorkflowPrompted } from '@/stores/repo-workflow-prompt';
 
 const mockUseQuery = vi.fn();
+const mockClientQuery = vi.fn();
+const mockUseApolloClient = vi.fn(() => ({ query: mockClientQuery }));
 const mockIsMobile = vi.fn(() => false);
 const mockNavigate = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
+  useApolloClient: () => mockUseApolloClient(),
 }));
 
 vi.mock('../../hooks/useIsMobile', () => ({
@@ -20,7 +24,14 @@ vi.mock('react-router-dom', () => ({
 }));
 
 vi.mock('@/components/settings/WorkspaceSection', () => ({
-  default: () => <div data-testid="workspace-section">WorkspaceSection</div>,
+  default: ({ onWorkspaceCreated }: { onWorkspaceCreated?: (w: { id: string }) => void }) => (
+    <div data-testid="workspace-section">
+      WorkspaceSection
+      <button type="button" onClick={() => onWorkspaceCreated?.({ id: 'ws-1' })}>
+        mock-workspace-created
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock('@/components/settings/HarnessToolsSection', () => ({
@@ -50,13 +61,17 @@ vi.mock('@/components/cloud-host/CloudHostIssuesLinkageSection', () => ({
 }));
 
 vi.mock('@/components/cloud-host/GithubProjectSetupDialog', () => ({
-  default: ({ open, controllerId, cloudHost }: {
+  default: ({ open, controllerId, cloudHost, onFinished }: {
     open: boolean;
     controllerId: string;
     cloudHost: CloudHostData;
+    onFinished?: (operation: { status: string }) => void;
   }) => open ? (
     <div data-testid="github-setup-dialog" data-controller-id={controllerId}>
       {cloudHost.name}
+      <button type="button" onClick={() => onFinished?.({ status: 'SUCCEEDED' })}>
+        mock-github-finished
+      </button>
     </div>
   ) : null,
 }));
@@ -65,6 +80,22 @@ vi.mock('@/components/settings/McpDefaultSection', () => ({
   default: ({ controller }: { controller: ControllerData }) => (
     <div data-testid="mcp-default-section" data-controller-id={controller.id} />
   ),
+}));
+
+vi.mock('@/components/cloud-host/RepoWorkflowSection', () => ({
+  default: ({ controllerId, controllerVersion }: { controllerId: string; controllerVersion?: string | null }) => (
+    <div data-testid="repo-workflow-section" data-controller-id={controllerId} data-version={controllerVersion} />
+  ),
+}));
+
+vi.mock('@/components/cloud-host/RepoWorkflowPromptDialog', () => ({
+  default: ({ open, templates }: { open: boolean; templates: unknown[] }) =>
+    open ? <div data-testid="repo-workflow-prompt-dialog">{templates.length}</div> : null,
+}));
+
+vi.mock('@/components/workflow/ConfigureRepoWorkflowDialog', () => ({
+  default: ({ open, template }: { open: boolean; template: { fileName: string } | null }) =>
+    open ? <div data-testid="configure-repo-workflow-dialog">{template?.fileName}</div> : null,
 }));
 
 function makeCloudHost(overrides: Partial<CloudHostData> = {}): CloudHostData {
@@ -446,5 +477,124 @@ describe('ControllerConfigPage 默认 MCP 页签', () => {
 
     fireEvent.click(mcpTab);
     expect(scrollArea).toContainElement(screen.getByTestId('mcp-default-section'));
+  });
+});
+
+describe('ControllerConfigPage 工作流页签（T-RW-WEB6）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetRepoWorkflowPrompted();
+    mockIsMobile.mockReturnValue(false);
+  });
+
+  it('cloud 主机桌面端渲染 config-tab-workflow 并挂载区块（版本透传）', () => {
+    mockControllers([
+      makeController({
+        type: 'cloud',
+        version: '2.18.0',
+        cloudHost: makeCloudHost({ status: 'RUNNING' }),
+      }),
+    ]);
+
+    render(<ControllerConfigPage controllerId="ctrl-1" onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId('config-tab-workflow'));
+    expect(screen.getByTestId('repo-workflow-section')).toHaveAttribute('data-version', '2.18.0');
+    expect(screen.getByTestId('repo-workflow-section')).toHaveAttribute('data-controller-id', 'ctrl-1');
+  });
+
+  it('cloud 主机移动端渲染 config-tab-workflow，且页签常驻滚动容器外', () => {
+    mockIsMobile.mockReturnValue(true);
+    mockControllers([
+      makeController({ type: 'cloud', cloudHost: makeCloudHost({ status: 'RUNNING' }) }),
+    ]);
+
+    render(<ControllerConfigPage controllerId="ctrl-1" onBack={vi.fn()} />);
+
+    const scrollArea = screen.getByTestId('mobile-section-scroll');
+    const workflowTab = screen.getByTestId('config-tab-workflow');
+    expect(scrollArea).not.toContainElement(workflowTab);
+
+    fireEvent.click(workflowTab);
+    expect(scrollArea).toContainElement(screen.getByTestId('repo-workflow-section'));
+  });
+
+  it('非 cloud 主机不渲染工作流页签', () => {
+    mockControllers([makeController({ type: 'local' })]);
+
+    render(<ControllerConfigPage controllerId="ctrl-1" onBack={vi.fn()} />);
+
+    expect(screen.queryByTestId('config-tab-workflow')).not.toBeInTheDocument();
+  });
+
+  it('手工新增工作目录后检测到合法模板 → 弹出提示（同工作区仅一次）', async () => {
+    mockControllers([
+      makeController({
+        type: 'cloud',
+        version: '2.18.0',
+        cloudHost: makeCloudHost({
+          status: 'RUNNING',
+          defaultWorkspace: '/home/worker/workspace/project',
+        }),
+      }),
+    ]);
+    mockClientQuery.mockResolvedValue({
+      data: {
+        repoWorkflowTemplates: [
+          { fileName: 'dev.json', name: '开发流程', valid: true, errors: [], nodes: [] },
+        ],
+      },
+    });
+
+    render(<ControllerConfigPage controllerId="ctrl-1" onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'mock-workspace-created' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('repo-workflow-prompt-dialog')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'mock-workspace-created' }));
+    await waitFor(() => {
+      expect(mockClientQuery).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('GitHub 项目设置成功 → 按 defaultWorkspace 定位工作区并检测提示', async () => {
+    mockControllers([
+      makeController({
+        type: 'cloud',
+        version: '2.18.0',
+        cloudHost: makeCloudHost({
+          status: 'RUNNING',
+          defaultWorkspace: '/home/worker/workspace/project',
+        }),
+      }),
+    ]);
+    mockClientQuery
+      .mockResolvedValueOnce({
+        data: {
+          controllerWorkspaces: [
+            { id: 'ws-default', path: '/home/worker/workspace/project' },
+          ],
+        },
+      })
+      .mockResolvedValueOnce({
+        data: {
+          repoWorkflowTemplates: [
+            { fileName: 'dev.json', name: '开发流程', valid: true, errors: [], nodes: [] },
+          ],
+        },
+      });
+
+    render(<ControllerConfigPage controllerId="ctrl-1" onBack={vi.fn()} />);
+
+    fireEvent.click(screen.getByTestId('config-tab-github'));
+    fireEvent.click(screen.getByRole('button', { name: 'Github 项目设置' }));
+    fireEvent.click(screen.getByRole('button', { name: 'mock-github-finished' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('repo-workflow-prompt-dialog')).toBeInTheDocument();
+    });
   });
 });

@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { SETUP_CLOUD_HOST_GITHUB_PROJECT } from '../../graphql/mutations'
 import type {
   CloudHostData,
+  CloudHostSetupOperationData,
   SetupCloudHostGithubProjectMutation,
 } from '../../graphql/types'
 import GithubSetupProgressDialog from './GithubSetupProgressDialog'
@@ -27,6 +28,8 @@ interface GithubProjectSetupDialogProps {
     'id' | 'name' | 'status' | 'deletedAt' | 'defaultWorkspace' | 'hasDefaultWorkspace' | 'githubAccountId'
   >
   onClose: () => void
+  /** 操作终态（成功/失败）回调；用于检测项目工作流模板等附带动作 */
+  onFinished?: (operation: CloudHostSetupOperationData) => void
 }
 
 function getErrorMessage(error: unknown): string {
@@ -43,6 +46,7 @@ export default function GithubProjectSetupDialog({
   controllerId,
   cloudHost,
   onClose,
+  onFinished,
 }: GithubProjectSetupDialogProps) {
   const navigate = useNavigate()
   const [submitting, setSubmitting] = useState(false)
@@ -135,6 +139,7 @@ export default function GithubProjectSetupDialog({
           setOperationId(null)
           onClose()
         }}
+        onFinished={onFinished}
       />
     )
   }

@@ -22,13 +22,15 @@ import {
 interface WorkspaceSectionProps {
   controllerId: string;
   controllerOnline?: boolean;
+  /** 手工新增工作目录成功（refetch 完成）后的可选回调；普通主机与设置页不传（零行为变化） */
+  onWorkspaceCreated?: (workspace: { id: string }) => void;
 }
 
 /** 会话/工作区列表刷新（纯常量，供各操作的 refetchQueries 复用） */
 const refetchSessions = () => ({ query: GET_SESSIONS });
 const refetchWorkspaces = () => ({ query: GET_WORKSPACES });
 
-export default function WorkspaceSection({ controllerId, controllerOnline = false }: WorkspaceSectionProps) {
+export default function WorkspaceSection({ controllerId, controllerOnline = false, onWorkspaceCreated }: WorkspaceSectionProps) {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -120,6 +122,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
     // 即时 Git 发现：创建成功后立即触发 detectGitRepo
     const newWorkspaceId = data?.createWorkspace?.id;
     if (newWorkspaceId) {
+      onWorkspaceCreated?.({ id: newWorkspaceId });
       setGitStates((prev) => ({ ...prev, [newWorkspaceId]: { loading: true } }));
       try {
         const gitData = await refetchGitState(newWorkspaceId);

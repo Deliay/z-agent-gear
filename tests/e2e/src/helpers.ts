@@ -306,7 +306,16 @@ export interface FakeController {
   socket: Socket;
 }
 
-export function registerController(rawKey: string): Promise<FakeController> {
+/** 可选：项目工作流模板扫描应答 fixture（与 agent-gear 真实回包同形态） */
+export interface FakeControllerOptions {
+  version?: string;
+  workflowTemplates?: Array<{ fileName: string; content?: string; error?: string }>;
+}
+
+export function registerController(
+  rawKey: string,
+  options: FakeControllerOptions = {},
+): Promise<FakeController> {
   return new Promise((resolve, reject) => {
     const client = SocketIOClient(CONTROLLER_API_URL, { transports: ['websocket'], reconnection: false, forceNew: true });
     const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout')); }, 10000);
@@ -316,6 +325,16 @@ export function registerController(rawKey: string): Promise<FakeController> {
       client.emit('acp:check:result', {
         requestId: data.requestId,
         servers: [{ type: 'opencode', available: true, version: '1.0.0' }],
+      });
+    });
+
+    // workflow-templates:scan - 项目模板扫描（契约 §3.27/§3.28）
+    client.on('workflow-templates:scan', (data: { requestId: string }) => {
+      client.emit('workflow-templates:scan:result', {
+        requestId: data.requestId,
+        success: true,
+        templates: options.workflowTemplates ?? [],
+        truncated: false,
       });
     });
 
@@ -340,7 +359,7 @@ export function registerController(rawKey: string): Promise<FakeController> {
     client.emit('register', {
       key: rawKey,
       hostname: 'e2e-host',
-      version: '2.0.0',
+      version: options.version ?? '2.0.0',
       homeDir: '/home/fake',
       platform: 'linux',
     });

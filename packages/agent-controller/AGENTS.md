@@ -57,7 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.17.0`（major 保持 2；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.18.0`（major 保持 2；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.11.0 起提升，当前基线 `2.12.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -79,6 +79,18 @@ src/
   为空/缺省沿用旧形态 `[...attachments, {type:'text', text: content}]`（零回归）；activePrompt 排队按序消费。
 - **MCP 按 serverName 超时（契约 §2.12.1，裁决 9）**：`mcp/relay.ts` `SERVER_TIMEOUT_OVERRIDES` 仅
   `agent-session-preview-tools` 放宽至 `MCP_REVIEW_TIMEOUT_MS`（默认 1_800_000，env 可调），其余 server 保持 60s。
+
+## 项目工作流模板扫描（2.18.0）
+
+- **`workflow-templates:scan`（契约 §3.27/§3.28）**：`workflow-templates.scanWorkflowTemplates(workspacePath)`
+  直读 `<workspacePath>/.zag/workflow/templates/`（**不递归**、仅 `.json` 常规文件；符号链接按 `stat` 判定为常规文件才读取），
+  按文件名 `localeCompare` 排序；上限 20 文件 / 单文件 128KiB / 总量 1MiB（超出该文件 `error:'file too large'` 或停止读取并
+  `truncated:true`）；目录不存在返回 `{success:true, templates:[], truncated:false}`，读取权限失败返回
+  `{success:false, error:'permission denied'}`。
+- **事件注册**：`socketio-client` 注册 `workflow-templates:scan` → 回 `workflow-templates:scan:result`
+  `{requestId, success, templates:[{fileName, content|error}], truncated, error?}`；日志 `workflow_templates_scan`
+  只含 `requestId/path`，不记录文件内容。该事件**不复用** `fs:read-file` 白名单（检测发生在会话启动前），
+  仅直读约定子目录，不回写、不执行。
 
 ## DeepSeek Harness 注入（2.9.0；insert 受管条目 2.11.0）
 

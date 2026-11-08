@@ -11,6 +11,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -291,7 +292,10 @@ export default function InstantiateWorkflowDialog({
                           )}
                           onClick={() => handleSourceIdSelect(workflow.id, workflow.name)}
                         >
-                          {workflow.name}
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            {workflow.name}
+                            {workflow.sourceKind === 'REPO' && <Badge variant="outline">项目模板</Badge>}
+                          </span>
                         </button>
                       ))}
                     </div>

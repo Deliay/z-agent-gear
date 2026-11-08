@@ -916,3 +916,13 @@ pnpm test
 | `src/agent-api/workspace.test.ts` | 工作区资源口径 10→11 由 `servers/agent-api/src/services/workspace-service.test.ts` 的 `T-WSP-CS1` 覆盖（存在未销毁云存储时拒绝删除工作区） |
 
 > 存储相关 E2E 使用 `CLOUD_STORAGE_ENABLED=true`（缺省）+ `HARNESS_ENABLED=true` + `MONGODB_URI`；关闭能力时用例显式 skip。
+
+## 工作流模板项目持久化（`src/agent-api/repo-workflow.test.ts`）
+
+- T-REPO-API1：未认证查询/变更均 `Not authenticated`。
+- T-REPO-API2：`repoWorkflowTemplates` 形状（合法/不合法/逐文件隔离）；他人工作区 `Workspace not found`。
+- T-REPO-API3：控制器版本 `2.17.0` → `[]`（不发扫描事件、降级不抛错）。
+- T-REPO-API5a：非 cloud 控制器 `configureRepoWorkflow` → `repo workflow only supports cloud host`。
+- T-REPO-API6：存量 `configureWorkflow` 落库 `sourceKind` 归一为 `PLATFORM`（回归基线）。
+- T-REPO-API4 / 5b / 7（需 `MONGODB_URI`）：cloud 控制器配置成功与列表透出；错误白名单逐字；`deleteCloudHost` 级联删除 REPO、PLATFORM 保留。
+- 前提：`INTERNAL_API_TOKEN`；fake controller 应答 `workflow-templates:scan`（fixture 与 agent-gear 真实回包同形态）。

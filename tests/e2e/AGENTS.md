@@ -582,3 +582,11 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 - E2E-CS1/CS2：设置-云存储创建（报价全价/归档半价）→ 新建云电脑挂载 → 已挂载存储不再出现在可挂载下拉且无销毁入口 → 停止云电脑归档（`ARCHIVED` 且半价）→ 销毁 → 主列表移除、「已销毁」折叠区默认折叠、展开后可见。
 - 依赖：`HARNESS_ENABLED=true`、`CLOUD_STORAGE_ENABLED`（缺省 true）、`INTERNAL_API_TOKEN`（ready/归档回调模拟）、`MONGODB_URI`（测试用户充值）；`K8S_ENABLED=false` 时归档由 InMemory Job 完成，真实恢复/压缩由内网集群手工验收覆盖。
+
+## 工作流模板项目持久化（`src/cloud-host-repo-workflow.spec.ts`）
+
+- E2E-RW1：云电脑配置页「工作流」页签展示合法模板可配置、不合法项标示原因，「重新检测」刷新。
+- E2E-RW2：选模板 → 补 AI 节点 Harness 工具 → 提交 → 已配置列表出现并展示来源路径。
+- E2E-RW5：非 cloud 控制器无「工作流」页签（零回归）。
+- 依赖：`MONGODB_URI`（云电脑/控制器夹具）、`INTERNAL_API_TOKEN`；fake controller 注册 version `2.18.0` 并应答 `workflow-templates:scan`。
+- 检测提示（GitHub 设置成功 / 手工新增工作目录）由 `ControllerConfigPage` 组件单测覆盖触发接线。
