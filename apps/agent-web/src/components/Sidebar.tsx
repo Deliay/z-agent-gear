@@ -500,7 +500,7 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
         <SidebarSection
           sectionKey="workflows"
           title="工作流"
-          count={sortedWorkflows.length + sortedArchivedWorkflows.length}
+          count={sortedWorkflows.length}
           expanded={sections.workflows}
           onToggle={() => toggleSection('workflows')}
           actions={controllers.length > 0 && (
