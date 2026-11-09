@@ -167,6 +167,7 @@ flowchart LR
 - [[draft/20261104-mcp-valut-iteration.md]] — MCP+Valut 功能迭代（Valut 工作区级加密密钥存储：namespace 聚合、值加密不回显、「工作区」权限、refs 引用展示、对外仅可选 manual；MCP 迭代：前端移除「MCP 代理」入口、新增工作区级自定义 HTTP MCP 支持无验证/Bearer 且 token 落 Valut、删除编辑联动；自定义 MCP 经平台代理转发、访问密钥随会话生灭、删除即全端点失效）
 - [[draft/20261104-question-tool-multi-select.md]] — question 工具多选题呈现修复（ACP 问询多选题由文本输入框改为勾选组呈现，可多选作答，所选答案按逗号拼接回传 Agent；单选等其他题型零回归）
 - [[draft/20261105-session-interaction-content-preview.md]] — 新版会话交互与内容预览（内容组件：代码组件行定位/差异/批注模式 + HTML/Markdown 预览与批注回传；会话代码分屏三模式与宽度门控、实况跟随工具调用读写（写=常开 Tab 差异聚焦、读=共享预览 Tab）；会话内建 Review 工具：逐文件批注 + 通过/驳回/仅评论结构化回传、Review 侧边栏待办；输入框重构为附件式提示词片段（本期文本/图片））
+- [[draft/20261107-workflow-template-project-persistence.md]] — 工作流模板项目持久化（工作流模板放置在仓库 .zag/workflow/templates/、一个 JSON 文件一个模板；新增工作目录/设置 GitHub 项目后自动检测并提示配置；云电脑设置中可随时查看与配置；项目来源已配置工作流生命周期跟随云电脑、销毁时一并销毁）
 
 ### 实现中文档（`shipping/`）
 

@@ -92,11 +92,35 @@ export const workflowTypeDefs = `#graphql
     controllerId: ID!
     sourceTemplateId: ID
     sourceTemplateVersion: Int
+    # 来源（缺省 PLATFORM；存量行无字段视为 PLATFORM）
+    sourceKind: ConfiguredWorkflowSourceKind!
+    # REPO 来源：模板文件相对仓库根的路径（如 .zag/workflow/templates/dev-flow.json）
+    sourceRepoPath: String
+    # REPO 来源：模板所在项目工作区 id
+    sourceWorkspaceId: ID
     nodes: [ConfiguredWorkflowNode!]!
     createdBy: ResourceCreatedBy!
     resourceWorkspaceId: ID!
     createdAt: String!
     updatedAt: String!
+  }
+
+  # 已配置工作流来源：PLATFORM（平台模板/空白创建，默认）/ REPO（项目仓库模板）
+  enum ConfiguredWorkflowSourceKind {
+    PLATFORM
+    REPO
+  }
+
+  # 项目（仓库）内工作流模板：.zag/workflow/templates/ 下的 JSON 文件（一文件一模板）
+  type RepoWorkflowTemplate {
+    fileName: String!
+    name: String
+    description: String
+    nodeCount: Int
+    valid: Boolean!
+    errors: [String!]!
+    # valid=true 时为解析归一后的节点图；valid=false 时为空数组
+    nodes: [WorkflowTemplateNode!]!
   }
 
   # ---------- 工作流实例 ----------
@@ -259,6 +283,16 @@ export const workflowTypeDefs = `#graphql
     nodes: [ConfiguredWorkflowNodeInput!]!
   }
 
+  input ConfigureRepoWorkflowInput {
+    # 项目工作区（ControllerWorkspace）id：服务端推导 controllerId 与来源路径
+    workspaceId: ID!
+    # 来源模板文件名（.zag/workflow/templates/ 下的文件名，纯展示与追溯）
+    fileName: String!
+    name: String!
+    # 全量节点图（以项目模板为基础，含每个 AI 节点的 agentConfig）；完整图校验
+    nodes: [ConfiguredWorkflowNodeInput!]!
+  }
+
   # ---------- 统一实例化 ----------
 
   input InstantiateWorkflowInput {
@@ -296,6 +330,9 @@ export const workflowTypeDefs = `#graphql
     workflowTemplate(id: ID!): WorkflowTemplate
     configuredWorkflows(controllerId: ID): [ConfiguredWorkflow!]!
     configuredWorkflow(id: ID!): ConfiguredWorkflow
+    # 扫描指定项目工作区（ControllerWorkspace）的项目工作流模板。
+    # 控制器离线/版本不足/目录不存在时返回空列表（前端按云电脑状态另行提示）。
+    repoWorkflowTemplates(workspaceId: ID!): [RepoWorkflowTemplate!]!
     # workspaceId / controllerId 均可选：都不传 = 当前用户全部实例；二者同传取交集
     workflowInstances(workspaceId: ID, controllerId: ID, archived: Boolean): [WorkflowInstance!]!
     workflowInstance(id: ID!): WorkflowInstance
@@ -308,6 +345,7 @@ export const workflowTypeDefs = `#graphql
     configureWorkflow(templateId: ID!, input: ConfigureWorkflowInput!): ConfiguredWorkflow!
     updateConfiguredWorkflow(id: ID!, input: ConfigureWorkflowInput!): ConfiguredWorkflow!
     deleteConfiguredWorkflow(id: ID!): Boolean!
+    configureRepoWorkflow(input: ConfigureRepoWorkflowInput!): ConfiguredWorkflow!
     instantiateWorkflow(input: InstantiateWorkflowInput!): WorkflowInstance!
     updateWorkflowNode(instanceId: ID!, nodeId: ID!, input: WorkflowNodeUpdateInput!): WorkflowNode!
     completeHumanNode(instanceId: ID!, nodeId: ID!, input: String): WorkflowNode!

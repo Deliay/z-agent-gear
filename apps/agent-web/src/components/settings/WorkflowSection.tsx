@@ -212,11 +212,19 @@ export default function WorkflowSection() {
             return (
               <Card key={workflow.id} size="sm">
                 <CardHeader>
-                  <CardTitle>{workflow.name}</CardTitle>
+                  <CardTitle>
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      {workflow.name}
+                      {workflow.sourceKind === 'REPO' && <Badge variant="outline">项目模板</Badge>}
+                    </span>
+                  </CardTitle>
                   <CardDescription>
                     Controller：{controllerName(workflow.controllerId)}
-                    {workflow.sourceTemplateVersion != null &&
-                      ` · 复制自模板 v${workflow.sourceTemplateVersion}`}
+                    {workflow.sourceKind === 'REPO' && workflow.sourceRepoPath
+                      ? ` · ${workflow.sourceRepoPath}`
+                      : workflow.sourceTemplateVersion != null
+                        ? ` · 复制自模板 v${workflow.sourceTemplateVersion}`
+                        : ''}
                   </CardDescription>
                   <CardAction className="flex gap-1">
                     <Button

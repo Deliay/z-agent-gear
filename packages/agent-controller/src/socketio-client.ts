@@ -16,6 +16,7 @@ import { AcpSyncBridge } from './acp/sync-bridge.js';
 import { gitHandler } from './git-handler.js';
 import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
+import { scanWorkflowTemplates } from './workflow-templates.js';
 import { gatewayManager } from './gateway.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
@@ -1556,6 +1557,16 @@ export function connectToServer(
     log.info({ event: 'fs_read_file', requestId: data.requestId, path: data.path }, 'fs:read-file received');
     const result = await fsHandler.readFile(data.path, data.maxBytes);
     socket.emit('fs:read-file:result', { requestId: data.requestId, ...result });
+  });
+
+  // 项目工作流模板扫描（契约 §3.27/§3.28：固定子目录 + .json + 体积上限）
+  socket.on('workflow-templates:scan', async (data: { requestId: string; path: string }) => {
+    log.info(
+      { event: 'workflow_templates_scan', requestId: data.requestId, path: data.path },
+      'workflow-templates:scan received',
+    );
+    const result = await scanWorkflowTemplates(data.path);
+    socket.emit('workflow-templates:scan:result', { requestId: data.requestId, ...result });
   });
 
   // Reconnection reconciliation

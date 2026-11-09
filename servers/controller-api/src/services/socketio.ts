@@ -19,6 +19,7 @@ import { acpSessionSyncService } from './acp-session-sync.js';
 import { worktreeService } from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
 import { fsReadFileService } from './fs-read-file-service.js';
+import { workflowTemplatesService } from './workflow-templates-service.js';
 import { gatewayRelayService } from './gateway-relay.js';
 import { permissionManager } from './permission-manager.js';
 import { elicitationManager } from './elicitation-manager.js';
@@ -691,6 +692,12 @@ export function createSocketIOServer(
     onEvent(socket, 'fs:read-file:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await fsReadFileService.handleReadFileResult(payload.requestId, payload);
+    });
+
+    // workflow-templates:scan 结果（契约 §3.28）：写 Redis workflow-templates:scan:{requestId}（TTL 60s）
+    onEvent(socket, 'workflow-templates:scan:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await workflowTemplatesService.handleScanResult(payload.requestId, payload);
     });
 
     onEvent(socket, 'git:worktree:add:result', async (payload: { requestId: string } & Record<string, unknown>) => {

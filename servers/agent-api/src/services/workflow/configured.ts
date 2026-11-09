@@ -1,6 +1,8 @@
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { actorFilter, actorOrBuiltinFilter, getWorkspaceContext } from '../workspace-context.js';
 import { WorkflowTemplate } from '../../models/workflow-template.js';
+import { Controller } from '../../models/controller.js';
+import { controllerWorkspaceService } from '../controller-workspace.js';
 import { validateTemplateGraph, assertAiOwned, type WorkflowCreatedBy } from './template.js';
 import { getAvailableServerTypes } from './capability.js';
 
@@ -31,6 +33,14 @@ export interface ConfiguredWorkflowNodeInput {
 export interface ConfigureWorkflowInput {
   name: string;
   controllerId: string;
+  nodes: ConfiguredWorkflowNodeInput[];
+}
+
+/** 从项目（仓库）模板配置工作流入参 */
+export interface ConfigureRepoWorkflowInput {
+  workspaceId: string;
+  fileName: string;
+  name: string;
   nodes: ConfiguredWorkflowNodeInput[];
 }
 
@@ -116,6 +126,37 @@ export function validateAgentConfigs(
       );
     }
   }
+}
+
+const REPO_TEMPLATE_SOURCE_PREFIX = '.zag/workflow/templates/';
+const WORKFLOW_NAME_MAX_LENGTH = 64;
+
+/**
+ * 项目模板文件名归一校验（纯文件名，防路径穿越）：
+ * trim 后非空、以 `.json` 结尾、不含分隔符 / `..` / NUL。
+ */
+export function normalizeRepoFileName(raw: string): string {
+  const fileName = typeof raw === 'string' ? raw.trim() : '';
+  if (
+    !fileName ||
+    !fileName.endsWith('.json') ||
+    fileName.includes('/') ||
+    fileName.includes('\\') ||
+    fileName.includes('..') ||
+    fileName.includes('\0')
+  ) {
+    throw new Error('invalid template file name');
+  }
+  return fileName;
+}
+
+/** 工作流名称归一（与实例改名同口径：trim 后 1~64） */
+function normalizeWorkflowName(raw: string): string {
+  const name = typeof raw === 'string' ? raw.trim() : '';
+  if (!name || name.length > WORKFLOW_NAME_MAX_LENGTH) {
+    throw new Error('invalid workflow name');
+  }
+  return name;
 }
 
 class ConfiguredWorkflowService {
@@ -243,6 +284,57 @@ class ConfiguredWorkflowService {
       createdBy: meta?.createdBy ?? 'HUMAN',
       createdBySessionId: meta?.createdBySessionId ?? undefined,
     });
+  }
+
+  /**
+   * 从项目（仓库）模板配置工作流（快照语义）：
+   * 工作区可见性 → controllerId 推导 → 仅云电脑 → 文件名/名称归一 →
+   * 全量图校验 + agentConfig 校验（与 configureFromContent 完全一致）→ 落库 sourceKind=REPO。
+   * 服务端不回读仓库文件二次校验（模板后续变更不影响本副本）。
+   */
+  async configureFromRepo(userId: string, input: ConfigureRepoWorkflowInput) {
+    const workspace = await controllerWorkspaceService.findById(input.workspaceId, userId);
+    if (!workspace) {
+      throw new Error('Workspace not found');
+    }
+
+    const controllerId = String(workspace.controllerId);
+    const controller = await Controller.findOne({
+      _id: controllerId,
+      ...actorFilter(userId),
+    }).lean();
+    if (!controller || controller.type !== 'cloud') {
+      throw new Error('repo workflow only supports cloud host');
+    }
+
+    const fileName = normalizeRepoFileName(input.fileName);
+    const name = normalizeWorkflowName(input.name);
+
+    const availableServerTypes = await getAvailableServerTypes(controllerId, userId);
+    const fullNodes = this.normalizeConfiguredNodes(input.nodes);
+    validateTemplateGraph(fullNodes as never);
+    validateAgentConfigs(fullNodes as unknown as SourceNodeLike[], availableServerTypes);
+
+    const workspaceFields = this.currentWorkspaceFields();
+    return ConfiguredWorkflow.create({
+      userId,
+      ...workspaceFields,
+      controllerId,
+      name,
+      sourceTemplateId: undefined,
+      sourceTemplateVersion: undefined,
+      sourceKind: 'REPO',
+      sourceRepoPath: `${REPO_TEMPLATE_SOURCE_PREFIX}${fileName}`,
+      sourceWorkspaceId: input.workspaceId,
+      nodes: fullNodes,
+      createdBy: 'HUMAN',
+    });
+  }
+
+  /** 级联删除某控制器下项目来源（REPO）的已配置工作流；PLATFORM 来源零影响。返回删除数。 */
+  async deleteRepoScopedByController(controllerId: string): Promise<number> {
+    const result = await ConfiguredWorkflow.deleteMany({ controllerId, sourceKind: 'REPO' });
+    return Number((result as { deletedCount?: number }).deletedCount ?? 0);
   }
 }
 

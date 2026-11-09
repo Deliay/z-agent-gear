@@ -110,6 +110,9 @@ vi.mock('./cloud-workload-catalog.js', () => ({ cloudWorkloadCatalog: catalogMoc
 vi.mock('./cloud-host-issues-linkage.js', () => ({
   cloudHostIssuesLinkageService: { deleteByController: vi.fn().mockResolvedValue(0) },
 }));
+vi.mock('./workflow/configured.js', () => ({
+  configuredWorkflowService: { deleteRepoScopedByController: vi.fn().mockResolvedValue(0) },
+}));
 
 vi.mock('./cloud-storage-service.js', () => ({
   cloudStorageService: {
@@ -142,6 +145,7 @@ import { controllerService } from './controller.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
 import { GitHubAccount } from '../models/github-account.js';
 import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
+import { configuredWorkflowService } from './workflow/configured.js';
 import { cloudStorageService } from './cloud-storage-service.js';
 
 const HOST_ID = '507f1f77bcf86cd799439011';
@@ -1083,6 +1087,17 @@ describe('CloudHostService', () => {
       );
       expect(Controller.deleteOne).not.toHaveBeenCalled();
       expect(cloudHostIssuesLinkageService.deleteByController).toHaveBeenCalledWith(CONTROLLER_ID);
+      expect(configuredWorkflowService.deleteRepoScopedByController).toHaveBeenCalledWith(CONTROLLER_ID);
+    });
+
+    it('T-DEL2 级联删除 REPO 失败仅告警不阻断云电脑删除', async () => {
+      vi.mocked(CloudHost.findOne).mockReturnValue(chain(hostDoc({ status: 'STOPPED' })) as never);
+      vi.mocked(configuredWorkflowService.deleteRepoScopedByController).mockRejectedValueOnce(
+        new Error('mongo down'),
+      );
+
+      await expect(service.delete(HOST_ID, 'user-1')).resolves.toBe(true);
+      expect(CloudHost.updateOne).toHaveBeenCalled();
     });
 
     it('is idempotent for already soft-deleted hosts', async () => {

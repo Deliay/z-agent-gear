@@ -77,6 +77,13 @@ vi.mock('./fs-read-file-service.js', () => ({
   },
 }));
 
+vi.mock('./workflow-templates-service.js', () => ({
+  workflowTemplatesService: {
+    handleScan: vi.fn(),
+    handleScanResult: vi.fn(),
+  },
+}));
+
 import { SessionCommandService } from './session-command.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { acpSessionManager } from './acp-session-manager.js';
@@ -86,6 +93,7 @@ import { Controller } from '../models/controller.js';
 import { worktreeService} from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
 import { fsReadFileService } from './fs-read-file-service.js';
+import { workflowTemplatesService } from './workflow-templates-service.js';
 import { createTestLogger } from '../observability/testing.js';
 
 function createMockRedis() {
@@ -991,6 +999,48 @@ describe('fs:read-file 与 parts 透传（#461）', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(fsReadFileService.handleReadFile).not.toHaveBeenCalled();
+  });
+
+  it('T-WTS1 白名单分发：字段齐备才分发 workflow-templates:scan', async () => {
+    const mockRedis = createMockRedis();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+    const service = new SessionCommandService();
+    service.start(createMockIO() as never);
+
+    mockRedis._emitMessage('session:command', JSON.stringify({
+      type: 'workflow-templates:scan',
+      requestId: 'req-scan-1',
+      controllerId: 'ctrl-1',
+      path: '/home/worker/workspace/project',
+    }));
+
+    await vi.waitFor(() => {
+      expect(workflowTemplatesService.handleScan).toHaveBeenCalledWith(
+        'req-scan-1',
+        'ctrl-1',
+        '/home/worker/workspace/project',
+      );
+    });
+  });
+
+  it('T-WTS1b 白名单字段缺失（缺 requestId/controllerId/path）忽略不分发', async () => {
+    const mockRedis = createMockRedis();
+    vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+
+    const service = new SessionCommandService();
+    service.start(createMockIO() as never);
+
+    for (const payload of [
+      { type: 'workflow-templates:scan', controllerId: 'ctrl-1', path: '/a' },
+      { type: 'workflow-templates:scan', requestId: 'r', path: '/a' },
+      { type: 'workflow-templates:scan', requestId: 'r', controllerId: 'ctrl-1' },
+    ]) {
+      mockRedis._emitMessage('session:command', JSON.stringify(payload));
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(workflowTemplatesService.handleScan).not.toHaveBeenCalled();
   });
 
   it('T-SCMD1 input 消息带 parts：acp:message 透传 parts 原文', async () => {

@@ -475,3 +475,24 @@ pnpm run start   # Start production server
 - **重试/对账（D6/D7）**：`retryArchive` 以 `currentArchive.containerId` 判别来源（null=存储级 → `archiveStorageOperation` 新单；非空=容器级保持 `triggerArchive`），**不得用 lastContainerId**；`reconcileARCHIVING` 存储级按 `currentArchive.operationId` 查 `getStorageOperation`，容器级保持 `getArchive`；新增 `reconcileRESTORING`（`RESTORING/CREATING` 超 10 分钟按 operationId 补齐），`scheduleCloudStorageReconcile` 同 tick 串行调用。
 - **销毁**：`RESTORING + currentRestore=FAILED` 允许销毁（`storage is restoring` 仅用于进行中）；错误白名单新增 `storage is not archivable/has no archive/is not restorable/is restoring/is not forkable/not allowed to restore storage`。
 - **迁移**：`022-cloud-storage-fork` 幂等建 `{resourceWorkspaceId:1,forkedFromStorageId:1}` 部分索引（`forkedFromStorageId:{$type:'objectId'}`），不回填。
+
+## 项目工作流模板持久化（#469）
+
+- **扫描编排（`services/workflow/repo-templates.ts`）**：`repoTemplateService.scan(userId, workspaceId)` 先
+  `controllerWorkspaceService.findById` 属主口径（不可见抛 `Workspace not found`），再 `Controller.findOne({_id, ...actorFilter})`；
+  控制器离线 / `isRepoTemplateScanSupported(version)=false`（`compareVersions(version,'2.18.0') >= 0`，缺失/非法不支持）直接返回 `[]`。
+  在线且版本支持时 `publish('session:command', {type:'workflow-templates:scan', requestId, controllerId, path})`，
+  轮询 Redis `workflow-templates:scan:{requestId}`（500ms × 30），成功读后即删；超时/`success:false`/非法 JSON 均降级 `[]`。
+- **逐文件解析（`parseRepoTemplate` 纯函数）**：JSON 语法 → 顶层形状（`name` 非空 string / `description` 可选 string /
+  `nodes` 非空数组）→ 节点字段类型归一（`prompts/artifactTitles/dependsOn` 字符串数组等）→ `validateTemplateGraph`
+  （错误文案原样透传）；逐文件隔离，输出按 `fileName` 排序。`RepoWorkflowTemplate` 追加 `nodes` 节点图（valid=true 时非空）。
+- **`configureFromRepo`**：工作区可见性 → `controllerId` 推导 → **仅 `type='cloud'`**（否则 `repo workflow only supports cloud host`）
+  → `fileName` 归一（trim 非空、`.json` 结尾、不含 `/`/`\`/`..`/NUL，否则 `invalid template file name`）→ `name` 1~64
+  （否则 `invalid workflow name`）→ `normalizeConfiguredNodes` + `validateTemplateGraph` + `validateAgentConfigs`
+  （与 `configureFromContent` 完全一致）→ 落库 `sourceKind:'REPO'`、`sourceRepoPath:'.zag/workflow/templates/<fileName>'`、
+  `sourceWorkspaceId`；服务端**不回读仓库文件**（快照语义）。
+- **来源字段（`ConfiguredWorkflow`）**：`sourceKind`（`PLATFORM` 默认 / `REPO`）、`sourceRepoPath`、`sourceWorkspaceId`
+  全部可空/有默认，存量零迁移；`mapConfigured` 读取侧 `doc.sourceKind ?? 'PLATFORM'` 归一。
+- **级联**：`cloudHostService.delete` 在同位追加 `configuredWorkflowService.deleteRepoScopedByController(controllerId)`
+  （`deleteMany({controllerId, sourceKind:'REPO'})`，best-effort 失败仅 `logger.warn`）；PLATFORM 来源与实例历史不受影响。
+- **版本工具**：`services/version.ts#compareVersions` 为单一来源（自 `cloud-host-service.ts` 逐字搬移）。
