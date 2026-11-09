@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import { workflowTemplateService } from '../../services/workflow/template.js';
 import { configuredWorkflowService } from '../../services/workflow/configured.js';
+import { repoTemplateService } from '../../services/workflow/repo-templates.js';
 import { workflowInstanceService } from '../../services/workflow/instance.js';
 import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
@@ -55,6 +56,10 @@ function mapConfigured(doc: Doc) {
     controllerId: toId(doc.controllerId),
     sourceTemplateId: toId(doc.sourceTemplateId),
     sourceTemplateVersion: doc.sourceTemplateVersion ?? null,
+    // 来源字段归一：存量行无字段视为 PLATFORM
+    sourceKind: doc.sourceKind ?? 'PLATFORM',
+    sourceRepoPath: doc.sourceRepoPath ?? null,
+    sourceWorkspaceId: toId(doc.sourceWorkspaceId),
     nodes: ((doc.nodes as Doc[]) ?? []).map((node) => ({
       ...mapTemplateNode(node),
       // 归一化：空对象物化为 null（HUMAN/FLAG 节点无 agentConfig）
@@ -207,6 +212,14 @@ export const workflowResolvers = {
       const doc = await configuredWorkflowService.findById(args.id, userId);
       return doc ? mapConfigured(doc as unknown as Doc) : null;
     },
+    repoWorkflowTemplates: async (
+      _parent: unknown,
+      args: { workspaceId: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      return wrap(() => repoTemplateService.scan(userId, args.workspaceId));
+    },
     workflowInstances: async (
       _parent: unknown,
       args: { workspaceId?: string; controllerId?: string; archived?: boolean },
@@ -272,6 +285,18 @@ export const workflowResolvers = {
     deleteConfiguredWorkflow: async (_parent: unknown, args: { id: string }, context: AuthContext) => {
       const userId = requireUser(context);
       return wrap(() => configuredWorkflowService.delete(userId, args.id));
+    },
+    configureRepoWorkflow: async (
+      _parent: unknown,
+      args: { input: never },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      return wrap(async () =>
+        mapConfigured(
+          (await configuredWorkflowService.configureFromRepo(userId, args.input as never)) as unknown as Doc,
+        ),
+      );
     },
     instantiateWorkflow: async (
       _parent: unknown,

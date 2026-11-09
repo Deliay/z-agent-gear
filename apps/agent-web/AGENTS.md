@@ -297,3 +297,21 @@ pnpm run preview  # Preview production build
 - **ForkCloudStorageDialog**：名称输入（trim 1~64，服务端权威重名）、容量只读「与源一致：x Gi」、`cloudStorageBillingQuote(source.sizeGi)` 全价报价、「创建成功即开始计费」；成功 toast 并刷新列表。
 - **文案映射**：`storage is not archivable / has no archive / is not restorable / is restoring / is not forkable / not allowed to restore storage` 等映射中文。
 - **测试入口**：`components/cloud-host/__tests__/StopCloudHostDialog.test.tsx`（T-WEB1）、`lib/__tests__/cloud-storage.test.ts`（T-WEB2/T-WEB4）。
+
+## 云电脑「工作流」区块（#469 项目模板持久化）
+
+- **入口与区块**：`ControllerConfigPage` 仅 `controller.type==='cloud'` 时渲染 `config-tab-workflow`（移动端 + 桌面端双份）；
+  `RepoWorkflowSection` 工作区下拉默认匹配 `cloudHost.defaultWorkspace`，经 `REPO_WORKFLOW_TEMPLATES` 扫描
+  `.zag/workflow/templates/*.json`（`cache-and-network` + 「重新检测」refetch）。合法项展示名称/文件名/节点数 + 「配置」；
+  不合法项灰色并展示 `errors[0]`；空态「未检测到项目工作流模板」。
+- **状态提示**：云电脑非 RUNNING/已删除 →「云电脑运行中才可检测与配置」；控制器版本 `<2.18.0`（`lib/repo-workflow.ts`
+  `isRepoTemplateScanSupported`，仅展示用）→「升级云电脑工作组件后可检测项目模板」。
+- **配置弹窗**：`ConfigureRepoWorkflowDialog` 复用 `WorkflowGraphEditor` + `template-validation`，以扫描模板 `nodes` 预填
+  （`templateNodeToEditable`，agentConfig 待选），名称默认模板名/文件名；提交 `CONFIGURE_REPO_WORKFLOW`
+  `{workspaceId, fileName, name, nodes}`，`controllerId` 由云电脑上下文固定。
+- **已配置列表**：`RepoWorkflowSection` 以 `GET_CONFIGURED_WORKFLOWS` 过滤 `sourceKind==='REPO'`，展示 `sourceRepoPath`，
+  删除复用 `DELETE_CONFIGURED_WORKFLOW`；设置页 `WorkflowSection` 与 `InstantiateWorkflowDialog` 对 REPO 条目追加「项目模板」徽标。
+- **检测提示接线**：`WorkspaceSection` 新增可选 `onWorkspaceCreated`（仅云电脑配置页传入，普通主机/设置页零行为变化）；
+  `GithubProjectSetupDialog` 透传 `onFinished`，成功终态后 refetch `GET_CONTROLLER_WORKSPACES` 并按
+  `path === cloudHost.defaultWorkspace` 定位工作区。两处均仅在「存在合法模板」时弹 `RepoWorkflowPromptDialog`；
+  `stores/repo-workflow-prompt.ts` 模块级 `Set<workspaceId>` 保证同页面会话不再自动弹（取消/去配置均记入）。

@@ -8,6 +8,9 @@ export type ResourceCreatedBy = 'HUMAN' | 'AI'
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK'
 
+/** 已配置工作流来源：PLATFORM（平台模板/空白创建，默认）/ REPO（项目仓库模板） */
+export type ConfiguredWorkflowSourceKind = 'PLATFORM' | 'REPO'
+
 export type WorkflowNodeStatus =
   | 'INITIALIZING'
   | 'READY'
@@ -65,12 +68,29 @@ export interface ConfiguredWorkflowData {
   controllerId: string
   sourceTemplateId: string | null
   sourceTemplateVersion: number | null
+  /** 来源（存量行归一为 PLATFORM） */
+  sourceKind: ConfiguredWorkflowSourceKind
+  /** REPO 来源：模板文件相对仓库根的路径 */
+  sourceRepoPath: string | null
+  /** REPO 来源：模板所在项目工作区 id */
+  sourceWorkspaceId: string | null
   nodes: ConfiguredWorkflowNodeData[]
   createdBy: ResourceCreatedBy
   /** 所属租户工作区（跟随控制器，多租户二期） */
   resourceWorkspaceId?: string
   createdAt: string
   updatedAt: string
+}
+
+/** 项目（仓库）内工作流模板：.zag/workflow/templates/ 下的 JSON 文件 */
+export interface RepoWorkflowTemplateData {
+  fileName: string
+  name: string | null
+  description: string | null
+  nodeCount: number | null
+  valid: boolean
+  errors: string[]
+  nodes: WorkflowTemplateNodeData[]
 }
 
 export interface WorkflowNodeRejectInfoData {
@@ -222,6 +242,14 @@ export interface ConfigureWorkflowInput {
   nodes: ConfiguredWorkflowNodeInput[]
 }
 
+/** 从项目（仓库）模板配置工作流入参 */
+export interface ConfigureRepoWorkflowInput {
+  workspaceId: string
+  fileName: string
+  name: string
+  nodes: ConfiguredWorkflowNodeInput[]
+}
+
 export interface InstantiateWorkflowInput {
   source: InstantiateSource
   // source=CONFIGURED 必填
@@ -311,6 +339,9 @@ export const GET_CONFIGURED_WORKFLOWS = gql`
       controllerId
       sourceTemplateId
       sourceTemplateVersion
+      sourceKind
+      sourceRepoPath
+      sourceWorkspaceId
       nodes {
         ...ConfiguredNodeFields
         agentConfig {
@@ -327,6 +358,27 @@ export const GET_CONFIGURED_WORKFLOWS = gql`
     }
   }
   ${CONFIGURED_NODE_FIELDS}
+`
+
+/**
+ * 项目（仓库）工作流模板扫描：控制器离线/版本不足/目录不存在时返回空数组（降级不抛错）。
+ * 节点图用于配置弹窗预填。
+ */
+export const REPO_WORKFLOW_TEMPLATES = gql`
+  query RepoWorkflowTemplates($workspaceId: ID!) {
+    repoWorkflowTemplates(workspaceId: $workspaceId) {
+      fileName
+      name
+      description
+      nodeCount
+      valid
+      errors
+      nodes {
+        ...TemplateNodeFields
+      }
+    }
+  }
+  ${TEMPLATE_NODE_FIELDS}
 `
 
 export const GET_WORKFLOW_INSTANCES = gql`
@@ -473,6 +525,20 @@ export const CONFIGURE_WORKFLOW = gql`
       controllerId
       sourceTemplateId
       sourceTemplateVersion
+    }
+  }
+`
+
+/** 从项目（仓库）模板配置工作流（sourceKind=REPO，快照落库） */
+export const CONFIGURE_REPO_WORKFLOW = gql`
+  mutation ConfigureRepoWorkflow($input: ConfigureRepoWorkflowInput!) {
+    configureRepoWorkflow(input: $input) {
+      id
+      name
+      controllerId
+      sourceKind
+      sourceRepoPath
+      sourceWorkspaceId
     }
   }
 `

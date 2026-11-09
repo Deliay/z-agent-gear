@@ -1084,6 +1084,8 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 | Controller → Server | `git:commit:result` | 返回提交结果 |
 | Server → Controller | `fs:read-file` | 请求读取文件内容（文本，限量截断） |
 | Controller → Server | `fs:read-file:result` | 返回文件内容 |
+| Server → Controller | `workflow-templates:scan` | 请求扫描项目工作流模板目录（`.zag/workflow/templates/`） |
+| Controller → Server | `workflow-templates:scan:result` | 返回模板文件列表与内容 |
 
 ### 3.2 `fs:browse`（Server → Controller）
 
@@ -1761,6 +1763,65 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
 1. 查找 controller socket，发送 `fs:read-file` Socket.IO 事件（含 `requestId`, `path`, `maxBytes`）
 2. 等待 `fs:read-file:result`（约 15s 超时）
 3. 结果写入 Redis `fs:read-file:{requestId}`（TTL 60s），agent-api 轮询消费（与 `fs:browse` 同型）
+
+### 3.27 `workflow-templates:scan`（Server → Controller）
+
+请求扫描项目工作区内固定子目录 `.zag/workflow/templates/` 下的工作流模板文件。用于「工作流模板项目持久化」：仓库为模板唯一事实源，平台侧不做持久化。
+
+**Payload:**
+
+```json
+{
+  "requestId": "string",
+  "path": "string"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `path` | `string` | 是 | 项目工作区绝对路径；扫描固定子目录 `<path>/.zag/workflow/templates/` |
+
+**约束：**
+
+- 仅直读约定子目录，**不递归**，仅收集文件名以 `.json` 结尾的常规文件（符号链接按 `stat` 为常规文件才读取；指向目录/设备的条目跳过）。
+- 目录不存在视为空列表（`success: true`）；目录读取权限失败返回 `success: false, error: 'permission denied'`。
+- 数量与体积上限：最多 20 个文件（按文件名 `localeCompare` 排序后取前 20，超出 `truncated: true`）；单文件 >128 KiB 该文件标记 `error: 'file too large'`（不读内容）；累计读取 >1 MiB 停止读取并 `truncated: true`。
+- 错误文案白名单：`file too large` / `not found` / `permission denied`。
+- 扫描事件**不**使用 `fs:browse`/`fs:read-file` 的会话路径白名单（检测发生在会话启动前），路径由服务端按已登记工作区下发；仅读不写、不执行。
+
+### 3.28 `workflow-templates:scan:result`（Controller → Server）
+
+返回模板文件列表与内容。
+
+**Payload:**
+
+```json
+{
+  "requestId": "string",
+  "success": true,
+  "templates": [
+    { "fileName": "dev-flow.json", "content": "{}" },
+    { "fileName": "broken.json", "error": "file too large" }
+  ],
+  "truncated": false,
+  "error": "string"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 目录读取整体是否成功 |
+| `templates` | `Array<{ fileName: string; content?: string; error?: string }>` | 成功时必填 | 逐文件结果；`error` 白名单见 §3.27 |
+| `truncated` | `boolean` | 成功时必填 | 是否因数量/总量上限截断 |
+| `error` | `string` | 失败时必填 | 整体失败原因（白名单见 §3.27） |
+
+**服务端行为：**
+
+1. 查找 controller socket，发送 `workflow-templates:scan` Socket.IO 事件（含 `requestId`, `path`）
+2. 等待 `workflow-templates:scan:result`（约 15s 超时）
+3. 结果写入 Redis `workflow-templates:scan:{requestId}`（TTL 60s），agent-api 轮询消费（500ms × 30 ≈ 15s 上限）；`templates` 非数组时按 `{ success: false }` 兜底落键
 
 ---
 

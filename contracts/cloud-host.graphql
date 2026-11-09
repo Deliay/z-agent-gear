@@ -264,6 +264,8 @@ extend type Mutation {
   # 非主动销毁（失败/欠费强拆）不经过该入口，始终归档。
   stopCloudHost(id: ID!, force: Boolean, archiveStorage: Boolean): CloudHost!
   # 仅 STOPPED/FAILED 可删除；软删除并撤销 Key，Controller/会话保留
+  # 级联删除该控制器项目来源（REPO）的已配置工作流（best-effort，失败仅告警不阻断删除）；
+  # PLATFORM 来源配置与实例历史不受影响。
   deleteCloudHost(id: ID!): Boolean!
   installCloudHostWorkload(input: InstallCloudHostWorkloadInput!): CloudHostSetupOperation!
   # Git 项目设置幂等口径：目标目录已是同一仓库（remote 归一后精确匹配）时直接复用该目录，

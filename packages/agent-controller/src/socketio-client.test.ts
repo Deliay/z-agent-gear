@@ -597,3 +597,36 @@ describe('fs:read-file 事件（T-RF8）', () => {
     }
   });
 });
+
+describe('workflow-templates:scan 事件注册（契约 §3.27/§3.28）', () => {
+  beforeEach(() => {
+    fake.handlers.clear();
+    fake.socket.emit.mockClear();
+  });
+
+  it('T-WT9 收到 workflow-templates:scan → 回 workflow-templates:scan:result（requestId + 扫描结果）', async () => {
+    setup(true);
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('fs');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+
+    const dir = mkdtempSync(join(tmpdir(), 'sio-wt-'));
+    mkdirSync(join(dir, '.zag', 'workflow', 'templates'), { recursive: true });
+    writeFileSync(join(dir, '.zag', 'workflow', 'templates', 'a.json'), '{"name":"a"}');
+    try {
+      const handler = fake.handlers.get('workflow-templates:scan') as (payload: unknown) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      await handler({ requestId: 'r-wt', path: dir });
+
+      expect(fake.socket.emit).toHaveBeenCalledWith('workflow-templates:scan:result', {
+        requestId: 'r-wt',
+        success: true,
+        templates: [{ fileName: 'a.json', content: '{"name":"a"}' }],
+        truncated: false,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
