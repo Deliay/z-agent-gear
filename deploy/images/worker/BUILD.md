@@ -185,7 +185,7 @@ docker run --rm -it --entrypoint bash \
 
 逐项核对：
 
-- [ ] `agent-gear --version` ≥ `2.11.0`（普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`；harness 容器门禁基线 `2.10.0`，含 `deepseek_harness` 的运行 `2.11.0`（header-masq 配置注入），仅 opencode / 含 `kimi_code` 组合仍 `2.10.0`；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`）
+- [ ] `agent-gear --version` ≥ `2.17.1`（普通容器注册门禁仍为 `>=2.2.0` 且 major 为 `2`；harness 容器门禁基线 `2.17.1`（`fs:read-file` / 有序 parts / MCP 按名超时），含 `deepseek_harness` 的运行同基线；参数注入 ≥ `2.3.0`、必须项短路 ≥ `2.4.0`）
 - [ ] `agent-gear harness --help` 输出包含 `prepare`
 - [ ] `bash -c <script>` 可执行且 stdout/stderr 均被捕获（执行器合并捕获）
 - [ ] 非零退出码被如实回报（`failed` + exitCode）；超时脚本会被强制终止（杀进程组）
@@ -474,7 +474,7 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 
 受监督运行的行为（版本门禁与自恢复，见 `docs/engineering/plan/20261017-feat-controller-version-requirement.md`）：
 
-- `cloud-controller` 要求普通 worker 版本 `>=2.2.0` 且 major 为 `2`、harness（云电脑）worker 版本 `>=2.10.0`（含 `deepseek_harness` 的运行 `>=2.11.0`，header-masq 会话标识配置注入）；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
+- `cloud-controller` 要求普通 worker 版本 `>=2.2.0` 且 major 为 `2`、harness（云电脑）worker 版本 `>=2.17.1`（`fs:read-file` 会话文件预览 / 有序 `parts` / MCP 按名超时；含 `deepseek_harness` 的运行同基线）；不兼容时返回 `error { code: "VERSION_MISMATCH", currentVersion, minimumVersion, supportedMajor }` 并断开，**不**将容器置为 online / initializing。
 - 入口对 agent-gear 的 stderr 做流式扫描（实时透传、不落盘完整日志），仅在「非零退出 + 出现 `VERSION_MISMATCH` + 本轮未升级 + 未设置 `ZAG_SKIP_AGENT_GEAR_UPDATE=1`」时执行**一次** `pnpm add -g agent-gear`，升级成功后重启并重连。
 - 安装失败、升级后仍不匹配、第二次不匹配、普通非零退出、正常退出均不会形成升级/重连循环；失败时容器非零退出，管理员可用既有强制销毁回收。
 - 入口作为 PID 1 向 agent-gear / pnpm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
@@ -492,7 +492,7 @@ bash entrypoint.test.sh
 
 自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）、单行 JSON 日志（T-EP12）、pnpm 预装幂等与失败容忍（T-EP13/T-EP14）、主目录自举（T-EP15 完整主目录 no-op / T-EP16 缺 nvm 时用自定义 git 仓库安装 / T-EP17 仅缺 node / T-EP18 下载失败与 fail-fast）、Dockerfile 不再构建期安装主目录工具链（T-EP19）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`pnpm`/`curl`/`agent-gear` 与假 `nvm.sh`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），`curl`/`nvm` stub 只在临时目录内落地夹具产物，因此不会启动真实 dockerd、不访问网络、不触碰真实 `/home/worker`。
 
-> **镜像升级要求**：云电脑双连接 / `harness prepare` 依赖 `agent-gear` ≥ `2.10.0`（harness 容器门禁），含 `deepseek_harness` 的运行需 ≥ `2.11.0`（`header-masq` 配置注入）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有重建为 ≥ `2.10.0`（DeepSeek Harness 云电脑 ≥ `2.11.0`）的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
+> **镜像升级要求**：云电脑（harness）容器门禁为 `agent-gear` ≥ `2.17.1`（`fs:read-file` 会话文件预览 / 有序 `parts` / MCP 按名超时；云电脑双连接 / `harness prepare` 自 `2.10.0` 起，`header-masq` 配置注入自 `2.11.0` 起）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有内置 ≥ `2.17.1` 的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
 内网 K8s 受控验收（发布顺序见技术提案 §9.1）：
 

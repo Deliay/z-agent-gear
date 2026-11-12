@@ -6,14 +6,22 @@ const submitReview = vi.fn().mockResolvedValue({ data: {} });
 let reviewRow: Record<string, unknown> | null = null;
 let commentSeq = 0;
 
+const fileQuery = vi.hoisted(() => ({
+  data: {
+    sessionFileContent: { path: 'src/a.ts', content: 'line1\nline2\n', truncated: false, sizeBytes: 11 },
+  } as
+    | { sessionFileContent?: { path: string; content: string; truncated: boolean; sizeBytes: number } }
+    | undefined,
+  loading: false,
+  error: undefined as Error | undefined,
+  refetch: vi.fn(),
+}));
+
 vi.mock('@apollo/client/react', () => ({
   useQuery: (query: unknown) => {
     const label = String((query as { loc?: { source?: { body?: string } } })?.loc?.source?.body ?? '');
     if (label.includes('SessionFileContent')) {
-      return {
-        data: { sessionFileContent: { path: 'src/a.ts', content: 'line1\nline2\n', truncated: false, sizeBytes: 11 } },
-        loading: false,
-      };
+      return { data: fileQuery.data, loading: fileQuery.loading, error: fileQuery.error, refetch: fileQuery.refetch };
     }
     return { data: { sessionReview: reviewRow }, loading: false };
   },
@@ -70,6 +78,12 @@ describe('ReviewPanel（B4 提交三态/只读化；A2 跨文件批注隔离）'
     cleanup();
     submitReview.mockClear();
     reviewRow = pendingReview();
+    fileQuery.data = {
+      sessionFileContent: { path: 'src/a.ts', content: 'line1\nline2\n', truncated: false, sizeBytes: 11 },
+    };
+    fileQuery.loading = false;
+    fileQuery.error = undefined;
+    fileQuery.refetch.mockClear();
   });
 
   it('B4 提交三态：approve/reject/comment 携带 fileReviews/comment/status', async () => {
@@ -160,5 +174,28 @@ describe('ReviewPanel（B4 提交三态/只读化；A2 跨文件批注隔离）'
     fireEvent.click(screen.getByTestId('review-approve'));
     await waitFor(() => expect(submitReview).toHaveBeenCalledTimes(1));
     expect(onAnnotation).not.toHaveBeenCalled();
+  });
+
+  it('文件内容加载失败展示错误态与重试（不再无限骨架）', () => {
+    fileQuery.data = undefined;
+    fileQuery.loading = false;
+    fileQuery.error = new Error('Controller offline or file read timeout');
+    render(<ReviewPanel reviewId="rev-1" sessionId="sess-1" />);
+
+    expect(screen.queryByTestId('review-file-skeleton')).toBeNull();
+    const error = screen.getByTestId('review-file-error');
+    expect(error.textContent).toContain('加载失败');
+    fireEvent.click(screen.getByTestId('review-file-retry'));
+    expect(fileQuery.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('文件内容空响应也按失败处理，不无限骨架', () => {
+    fileQuery.data = undefined;
+    fileQuery.loading = false;
+    fileQuery.error = undefined;
+    render(<ReviewPanel reviewId="rev-1" sessionId="sess-1" />);
+
+    expect(screen.queryByTestId('review-file-skeleton')).toBeNull();
+    expect(screen.getByTestId('review-file-error')).toBeTruthy();
   });
 });

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useQuery } from '@apollo/client/react';
 import { usePreviewStore } from '../../../stores/preview';
 import { PreviewTabBar } from './PreviewTabBar';
 import { CodePreview } from './CodePreview';
 import { HtmlPreview } from './HtmlPreview';
 import { MarkdownPreview } from './MarkdownPreview';
-import { GET_SESSION_FILE_CONTENT, type SessionFileContentData, type SessionReviewData } from '../../../graphql/preview';
+import { useSessionFileContent } from './useSessionFileContent';
+import { type SessionReviewData } from '../../../graphql/preview';
 import type { AnnotationBatch } from '../../../lib/preview/types';
 
 /**
@@ -82,34 +82,49 @@ function FileTabContent({
   focusLine?: number;
   onAnnotation: (batch: AnnotationBatch) => void;
 }) {
-  // 文件内容懒加载（切文件时拉取；Apollo 缓存去重）
-  const { data, loading } = useQuery<{ sessionFileContent: SessionFileContentData }>(GET_SESSION_FILE_CONTENT, {
-    variables: { sessionId, path: filePath },
-    fetchPolicy: 'cache-and-network',
-    skip: Boolean(diff),
-  });
+  // 文件内容懒加载（切文件时拉取；Apollo 缓存去重）。diff 场景直接用上游文本，不发请求。
+  const { status, content, truncated, error, retry } = useSessionFileContent(sessionId, filePath, Boolean(diff));
 
-  if (!diff && (loading || !data?.sessionFileContent)) {
+  if (!diff && status === 'loading') {
     return <div className="animate-pulse p-4 text-sm text-muted-foreground" data-testid="preview-skeleton">加载中…</div>;
   }
 
+  if (!diff && status === 'error') {
+    return (
+      <div className="flex flex-col gap-2 p-4 text-sm" data-testid="preview-error">
+        <div className="text-destructive">加载失败：{error?.message ?? '文件内容读取失败'}</div>
+        <div className="text-xs text-muted-foreground">
+          控制器可能离线、文件不可读，或 agent-gear 版本过低；若持续失败，请确认控制器上的 agent-gear 已升级到最新版本。
+        </div>
+        <button
+          type="button"
+          className="self-start rounded-sm border border-input px-2 py-1 text-xs hover:bg-muted"
+          data-testid="preview-retry"
+          onClick={retry}
+        >
+          重试
+        </button>
+      </div>
+    );
+  }
+
   const kind = componentForPath(filePath);
-  const content = diff?.newText ?? data!.sessionFileContent.content;
-  const truncated = diff ? false : data!.sessionFileContent.truncated;
+  const renderedContent = diff?.newText ?? content;
+  const renderedTruncated = diff ? false : truncated;
 
   if (kind === 'markdown') {
-    return <MarkdownPreview source={content} filePath={filePath} truncated={truncated} onConfirm={onAnnotation} />;
+    return <MarkdownPreview source={renderedContent} filePath={filePath} truncated={renderedTruncated} onConfirm={onAnnotation} />;
   }
   if (kind === 'html') {
-    return <HtmlPreview html={content} filePath={filePath} truncated={truncated} onConfirm={onAnnotation} />;
+    return <HtmlPreview html={renderedContent} filePath={filePath} truncated={renderedTruncated} onConfirm={onAnnotation} />;
   }
   return (
     <CodePreview
       filePath={filePath}
-      content={content}
+      content={renderedContent}
       oldText={diff ? diff.oldText : undefined}
       focusLine={focusLine}
-      truncated={truncated}
+      truncated={renderedTruncated}
       onConfirm={onAnnotation}
     />
   );
