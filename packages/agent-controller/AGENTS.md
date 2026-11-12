@@ -57,17 +57,17 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.17.0`（major 保持 2；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.17.1`（major 保持 2；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
-  注册门禁自 2.11.0 起提升，当前基线 `2.12.0`；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
+  注册门禁自 2.17.1 起为当前基线；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
   OpenCode v2 配置形态 `providers.zag`（`package`/`settings`，替代废弃的 `provider`/`npm`/`options`）；Github 凭据管理器 /
-  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 当前为 `2.12.0`
-  （2.11.0 及更早版本为 `2.10.0`）——上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
+  `workload:run.githubAuth`，cloud-controller 对 `purpose=harness` 的 `MIN_HARNESS_WORKER_VERSION` 当前为 `2.17.1`
+  （2.12.0 此前为 worktree committer 基线）——上下文长度缺失仅优雅降级，不提升门禁）。云电脑双连接 / `harness prepare` 自
   `2.5.0` 起；参数注入需 `>=2.3.0`、`items[].required` 短路需 `>=2.4.0`；普通容器 `MIN_WORKER_VERSION`
   仍为 `2.2.0`（服务端为唯一裁决，旧 worker 忽略 `required`/`githubAuth` 仍正确）。
 
-## fs:read-file / 有序 parts / MCP 按名超时（2.17.0）
+## fs:read-file / 有序 parts / MCP 按名超时（2.17.0 起，发布修复 2.17.1）
 
 - **`fs:read-file`（契约 §3.25/§3.26）**：`fs-handler.readFile(path, maxBytes?)` 复用 `registerAllowedPath` 白名单
   （`resolve` 前缀校验 + `realpath` 防符号链接逃逸，不扩张白名单）；`maxBytes` 缺省 512KiB、硬上限 2MiB 钳制；

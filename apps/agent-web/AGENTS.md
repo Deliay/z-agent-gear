@@ -220,7 +220,8 @@ pnpm run preview  # Preview production build
   临时分屏、手动关闭后再选），切回 chat 关闭；Review 深链临时分屏本身不开实况（临时分屏回退 chat
   时同步关闭）。
 - **Review**：`ReviewPanel`（左目录树+批注计数徽标 / 右扩展名分流组件只读+批注、`sessionFileContent`
-  懒加载骨架、通过/驳回/仅评论提交、成功只读化结论徽标、失败 toast 可重试）；标签四态色
+  懒加载三态——加载中骨架 / **失败态 `review-file-error` + 重试 `review-file-retry`**（`useSessionFileContent`
+  统一收敛，空响应也按失败处理，禁止无限骨架）/ 通过/驳回/仅评论提交、成功只读化结论徽标、失败 toast 可重试）；标签四态色
   （PENDING 黄/APPROVED 绿/REJECTED 红/COMMENTED·CANCELLED 灰）；侧边栏 `components/sidebar/ReviewSection.tsx`
   （待 Review 默认展开 / 已 Review 默认折叠、空分区不渲染、点击深链 `?review=`）；
   用户级 SSE `session_review_*` 经 `useUserEventStream.onSessionReview` 触发 HOME_OVERVIEW refetch。
