@@ -4,13 +4,12 @@ import { toast } from 'sonner';
 import { CodePreview } from './CodePreview';
 import { HtmlPreview } from './HtmlPreview';
 import { MarkdownPreview } from './MarkdownPreview';
+import { useSessionFileContent } from './useSessionFileContent';
 import {
   GET_SESSION_REVIEW,
-  GET_SESSION_FILE_CONTENT,
   SUBMIT_SESSION_REVIEW,
   type SessionReviewData,
   type SessionReviewCommentData,
-  type SessionFileContentData,
 } from '../../../graphql/preview';
 import type { AnnotationBatch } from '../../../lib/preview/types';
 
@@ -68,14 +67,13 @@ export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
   const review = data?.sessionReview ?? null;
 
   const activeFile = currentFile ?? review?.files[0] ?? null;
-  const { data: fileData, loading: fileLoading } = useQuery<{ sessionFileContent: SessionFileContentData }>(
-    GET_SESSION_FILE_CONTENT,
-    {
-      variables: { sessionId, path: activeFile ?? '' },
-      skip: !activeFile,
-      fetchPolicy: 'cache-and-network',
-    },
-  );
+  const {
+    status: fileStatus,
+    content: fileContent,
+    truncated: fileTruncated,
+    error: fileError,
+    retry: retryFile,
+  } = useSessionFileContent(sessionId, activeFile ?? '', !activeFile);
 
   const [submitReview, { loading: submitting }] = useMutation<{ submitSessionReview: SessionReviewData }>(
     SUBMIT_SESSION_REVIEW,
@@ -171,15 +169,32 @@ export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
         {/* 右侧内容组件 */}
         <div className="min-w-0 flex-1">
           {!activeFile && <div className="p-4 text-sm text-muted-foreground">无评审文件</div>}
-          {activeFile && (fileLoading || !fileData?.sessionFileContent) && (
+          {activeFile && fileStatus === 'loading' && (
             <div className="animate-pulse p-4 text-sm text-muted-foreground" data-testid="review-file-skeleton">加载中…</div>
           )}
+          {activeFile && fileStatus === 'error' && (
+            <div className="flex flex-col gap-2 p-4 text-sm" data-testid="review-file-error">
+              <div className="text-destructive">加载失败：{fileError?.message ?? '文件内容读取失败'}</div>
+              <div className="text-xs text-muted-foreground">
+                控制器可能离线、文件不可读，或 agent-gear 版本过低；若持续失败，请确认控制器上的 agent-gear 已升级到最新版本。
+              </div>
+              <button
+                type="button"
+                className="self-start rounded-sm border border-input px-2 py-1 text-xs hover:bg-muted"
+                data-testid="review-file-retry"
+                onClick={retryFile}
+              >
+                重试
+              </button>
+            </div>
+          )}
           {/* B2：内容恒只读（含 PENDING），批注恒可用 */}
-          {activeFile && fileData?.sessionFileContent && (
+          {activeFile && fileStatus === 'ready' && (
             <ReviewFileContent
               key={activeFile}
               filePath={activeFile}
-              data={fileData.sessionFileContent}
+              content={fileContent}
+              truncated={fileTruncated}
               readOnly
               onConfirm={handleFileAnnotation(activeFile)}
             />
@@ -238,23 +253,23 @@ export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
 
 function ReviewFileContent({
   filePath,
-  data,
+  content,
+  truncated,
   readOnly,
   onConfirm,
 }: {
   filePath: string;
-  data: SessionFileContentData;
+  content: string;
+  truncated: boolean;
   readOnly: boolean;
   onConfirm: (batch: AnnotationBatch) => void;
 }) {
   const kind = componentKind(filePath);
   if (kind === 'markdown') {
-    return <MarkdownPreview source={data.content} filePath={filePath} readOnly={readOnly} onConfirm={onConfirm} />;
+    return <MarkdownPreview source={content} filePath={filePath} readOnly={readOnly} onConfirm={onConfirm} />;
   }
   if (kind === 'html') {
-    return <HtmlPreview html={data.content} filePath={filePath} readOnly={readOnly} onConfirm={onConfirm} />;
+    return <HtmlPreview html={content} filePath={filePath} readOnly={readOnly} onConfirm={onConfirm} />;
   }
-  return (
-    <CodePreview filePath={filePath} content={data.content} truncated={data.truncated} readOnly={readOnly} onConfirm={onConfirm} />
-  );
+  return <CodePreview filePath={filePath} content={content} truncated={truncated} readOnly={readOnly} onConfirm={onConfirm} />;
 }
