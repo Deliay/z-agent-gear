@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { Socket } from 'socket.io-client';
-import { registerUser, createControllerKey, registerController, loginViaUI, createSession, createWorkspace } from './helpers';
+import { registerUser, createControllerKey, registerController, loginViaUI, createSession, createWorkspace, respondFileReads } from './helpers';
 
 /**
  * E2E-SPLIT1~3 / E2E-LIVE1~2 / E2E-ANN1~2 / E2E-RV1~2 / E2E-IB1~2：
@@ -110,6 +110,11 @@ test.describe('实况跟随（E2E-LIVE1~2）', () => {
 
   test('E2E-LIVE2 fake 读→共享预览 tab 替换', async ({ page }) => {
     const ctx = await setupSession(page, `/tmp/e2e-live2-${Date.now()}`);
+    // 预览内容经 fs:read-file relay 拉取；缺应答时前端会永久骨架（#487 回归）
+    respondFileReads(ctx.socket, {
+      'src/one.ts': 'export const one = 1;\n',
+      'src/two.ts': 'export const two = 2;\n',
+    });
     await page.goto(`/sessions/${ctx.sessionId}`);
     await page.getByTestId('split-mode-horizontal').click();
     await page.getByTestId('live-toggle').click();
@@ -134,6 +139,10 @@ test.describe('实况跟随（E2E-LIVE1~2）', () => {
     // 共享预览 tab：至多一个非 pinned file tab，最终展示 two.ts
     await expect(page.getByTestId('preview-tab')).toHaveCount(1, { timeout: 10000 });
     await expect(page.getByTestId('preview-tab')).toContainText('two.ts');
+    // 内容真的经 relay 返回：骨架消失、无错误态、编辑器挂载（无限骨架会卡在这里）
+    await expect(page.getByTestId('preview-skeleton')).toHaveCount(0, { timeout: 15000 });
+    await expect(page.getByTestId('preview-error')).toHaveCount(0);
+    await expect(page.getByTestId('code-preview')).toBeVisible({ timeout: 15000 });
     ctx.disconnect();
   });
 });
