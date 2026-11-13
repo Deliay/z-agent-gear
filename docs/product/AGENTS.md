@@ -169,12 +169,12 @@ flowchart LR
 - [[draft/20261105-session-interaction-content-preview.md]] — 新版会话交互与内容预览（内容组件：代码组件行定位/差异/批注模式 + HTML/Markdown 预览与批注回传；会话代码分屏三模式与宽度门控、实况跟随工具调用读写（写=常开 Tab 差异聚焦、读=共享预览 Tab）；会话内建 Review 工具：逐文件批注 + 通过/驳回/仅评论结构化回传、Review 侧边栏待办；输入框重构为附件式提示词片段（本期文本/图片））
 - [[draft/20261107-workflow-template-project-persistence.md]] — 工作流模板项目持久化（工作流模板放置在仓库 .zag/workflow/templates/、一个 JSON 文件一个模板；新增工作目录/设置 GitHub 项目后自动检测并提示配置；云电脑设置中可随时查看与配置；项目来源已配置工作流生命周期跟随云电脑、销毁时一并销毁）
 - [[draft/20261112-session-interaction-cards.md]] — 会话中的提问表单与权限审批作为会话内容出现（Elicitation/权限审批持久化为会话时间线卡片：完整状态迁移与提交内容回显、过期倒计时；弹窗降级为通知与跳转会话链接；工作流列表/图形视图节点待审批感叹号点击展开会话）
-- [[draft/20261113-cloud-agent-gear-auto-upgrade.md]] — 云环境 agent-gear 自动升级（云端工作容器运行期间每 10 分钟检查更新，发现新版即安装最新 agent-gear 并重启服务，失败收敛可观测，无需销毁重建）
 
 ### 实现中文档（`shipping/`）
 
 - [[shipping/20261025-cloud-container-unlimited-lifetime.md]] — 云电脑取消最长运行时间限制（云端工作容器不再因到达时间上限被平台强制销毁）
 - [[shipping/20261029-commit-author-settings-optimization.md]] — Commit 作者设置优化（提交人由团队共享改为成员独立并迁入新增「Git」区块、提交人模式下线；「自定义」增加「导入Github帐号信息」弹窗并移除「Github帐号」类型（存量自动转换）；提交身份按上下文下发：云电脑自身=平台 bot、勾选 Worktree 的会话/工作流=创建者、Issue 拉起的工作流=触发人）
+- [[shipping/20261113-cloud-agent-gear-auto-upgrade.md]] — 云环境 agent-gear 自动升级（云端工作容器运行期间每 10 分钟检查更新，发现新版即安装最新 agent-gear 并重启服务，失败收敛可观测，无需销毁重建）
 
 ### 已发布文档（`released/`）
 
