@@ -940,6 +940,36 @@ Agent 侧问询在到达用户之前已结束（模式不支持 / 超时 / 被 A
 3. `reason` 映射：`unsupported_mode → failed`、`timeout → expired`、`cancelled → cancelled`；契约外取值收敛为 `failed` 并告警。
 4. `requestId` 缺省且 `sessionId` 存在时，按 `sessionId + userId + resolution:null` 兜底收敛。
 
+### 2.34.1 `permission:resolved`（Controller → Redis）
+
+权限请求在到达用户前已结束（60s 超时 / 控制器断连清理）时发布，供 agent-api 收敛会话交互卡片。
+仅用于状态收敛；用户已响应的情况走 `acp:permission:response`（由服务端 CAS 直接写终态）。
+
+**Payload（Redis 频道 `permission:resolved`，与 `elicitation:resolved` 同构）：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 否 | 平台侧请求 ID。缺省时 agent-api 按 `sessionId` 会话级兜底收敛 |
+| `sessionId` | `string` | 是 | 会话 ID |
+| `reason` | `"timeout" \| "cancelled"` | 是 | 结束原因（reason 子集：超时 / 断连清理） |
+| `detail` | `string` | 否 | 可读原因（`controller-api timeout (60s)` / `socket disconnected`） |
+| `controllerId` | `string` | 是 | 控制器 ID |
+| `userId` | `string` | 是 | 会话归属用户（租户隔离维度；缺失时 agent-api 拒绝写入并告警） |
+| `_meta` | `object` | 否 | 链路传播保留位（见 §7） |
+
+**触发点：**
+
+1. `PermissionManager.handleTimeout`：60s 未响应 → 回 Agent `cancelled` + 发布 `permission:resolved{reason:'timeout'}`。
+2. `PermissionManager.clearForSocket`：控制器断连 → 清理该 socket 全部 pending + 逐条发布
+   `permission:resolved{reason:'cancelled', detail:'socket disconnected'}`（Agent 侧 Promise 不再可能收到回答）。
+
+**agent-api 行为：** `reason: timeout → EXPIRED`、`cancelled → CANCELLED`；契约外 reason 收敛为 `FAILED` 并告警；
+单调收敛（仅 `PENDING → 终态`），同时将对应 TodoItem 标记已读，并推送用户级 SSE `session_interaction` 终态事件。
+
+**作答时限统一口径：** Elicitation / Permission 的用户可作答时限统一为 **60s（controller-api `TIMEOUT_MS`）**；
+`sessioninteractions.expiresAt` 按事件到达 agent-api 时刻 + 60s 写入，卡片倒计时以该字段为唯一依据；
+TodoItem 的 5 分钟 `expiresAt` 仅为通知保留窗口（TTL 清理），不再作为作答有效性依据。
+
 ### 2.35 `harness:login:required`（Controller → Server）
 
 Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登录态；未登录时拉起 `kimi login` 设备码流程，
@@ -1922,6 +1952,32 @@ LLM 模型切换成功后推送。
 |------|------|------|------|
 | `sessionId` | `string` | 是 | Session ID |
 | `modelId` | `string` | 是 | 切换后的新模型 ID |
+
+#### `session_interaction` 事件
+
+会话交互（Elicitation / Permission）创建或收敛为终态时推送（用户级 SSE，`GET /api/user/stream`）。
+前端按 `sessionId` 命中当前打开会话则 refetch `sessionInteractions`；工作流实例页收到任意事件触发实例查询 refetch。
+
+**Payload:**
+
+```json
+{
+  "type": "session_interaction",
+  "data": {
+    "sessionId": "string",
+    "interactionId": "string",
+    "kind": "ELICITATION | PERMISSION",
+    "status": "PENDING | ACCEPTED | DECLINED | CANCELLED | EXPIRED | FAILED"
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | 会话 ID |
+| `interactionId` | `string` | 是 | 平台交互 ID（= requestId；会话级兜底收敛时可能为空串） |
+| `kind` | `string` | 是 | `ELICITATION` / `PERMISSION` |
+| `status` | `string` | 是 | 变更后的状态；事件为提示，权威状态以 `sessionInteractions` 查询为准 |
 
 ---
 

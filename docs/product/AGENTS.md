@@ -168,6 +168,7 @@ flowchart LR
 - [[draft/20261104-question-tool-multi-select.md]] — question 工具多选题呈现修复（ACP 问询多选题由文本输入框改为勾选组呈现，可多选作答，所选答案按逗号拼接回传 Agent；单选等其他题型零回归）
 - [[draft/20261105-session-interaction-content-preview.md]] — 新版会话交互与内容预览（内容组件：代码组件行定位/差异/批注模式 + HTML/Markdown 预览与批注回传；会话代码分屏三模式与宽度门控、实况跟随工具调用读写（写=常开 Tab 差异聚焦、读=共享预览 Tab）；会话内建 Review 工具：逐文件批注 + 通过/驳回/仅评论结构化回传、Review 侧边栏待办；输入框重构为附件式提示词片段（本期文本/图片））
 - [[draft/20261107-workflow-template-project-persistence.md]] — 工作流模板项目持久化（工作流模板放置在仓库 .zag/workflow/templates/、一个 JSON 文件一个模板；新增工作目录/设置 GitHub 项目后自动检测并提示配置；云电脑设置中可随时查看与配置；项目来源已配置工作流生命周期跟随云电脑、销毁时一并销毁）
+- [[draft/20261112-session-interaction-cards.md]] — 会话中的提问表单与权限审批作为会话内容出现（Elicitation/权限审批持久化为会话时间线卡片：完整状态迁移与提交内容回显、过期倒计时；弹窗降级为通知与跳转会话链接；工作流列表/图形视图节点待审批感叹号点击展开会话）
 
 ### 实现中文档（`shipping/`）
 

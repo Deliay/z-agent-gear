@@ -29,7 +29,7 @@ describe('migration 013 tenantId backfill (real db)', () => {
   const db = () => mongoose.connection.db!;
 
   it('backfills every real collection including issue_workflow_triggers', async () => {
-    expect(names).toHaveLength(20);
+    expect(names).toHaveLength(21);
     expect(names).toContain('issue_workflow_triggers');
     expect(names).not.toContain('issueworkflowtriggers');
 

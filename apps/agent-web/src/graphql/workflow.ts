@@ -185,6 +185,8 @@ export interface WorkflowInstanceSummaryData {
 
 export interface WorkflowInstanceData extends WorkflowInstanceSummaryData {
   workflowWorktreePath: string | null
+  /** 存在「待处理且未过期」交互（提问/审批）的节点会话 id 集合 */
+  pendingInteractionSessionIds?: string[]
   workflowWorktreeBranch: string | null
   nodes: WorkflowNodeData[]
   blackboard: BlackboardEntryData[]
@@ -471,6 +473,7 @@ export const GET_WORKFLOW_INSTANCE = gql`
         key
         value
       }
+      pendingInteractionSessionIds
       pullRequestLinks {
         pullRequestId
         prUrl

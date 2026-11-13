@@ -42,6 +42,12 @@ src/
 - `acp:start:result.capabilities` 落库前有 64 KiB 体积防护：超限时保留 20 项 `features`，仅把 `raw` 替换为
   `{ truncated: true, originalBytes, preview }`（Agent 可控 `_meta` 不得放大 Mongo 文档）。
 - Elicitation 超时：controller-api `TIMEOUT_MS=60s` 是唯一用户可见超时，到点同时“回 Agent cancel + 发布 resolved(timeout) + 回前端 cancel”。
+- **`permission:resolved`（Redis 频道，需求 #490）**：`PermissionManager.handleTimeout` 在 60s 超时回 Agent
+  `cancelled` 的同时发布 `{requestId,sessionId,userId,controllerId,reason:'timeout',detail:'controller-api timeout (60s)'}`；
+  新建 `PermissionManager.clearForSocket(socketId)`（`socketio.ts` disconnect 注册）：清该 socket 全部 pending +
+  逐条发布 `{reason:'cancelled',detail:'socket disconnected'}`（socket 已断，不重复回 Agent）。
+  agent-api 订阅后 `timeout→EXPIRED`、`cancelled→CANCELLED`，收敛会话交互卡片；pending 记录额外保存
+  `controllerId` 供载荷使用。契约见 `contracts/agent-session-websocket.md` §2.34.1。
 
 ## Dev Commands
 

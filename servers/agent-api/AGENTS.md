@@ -38,6 +38,36 @@ src/
   `markTodoAsResponded` / `markElicitationCompleted` 缺 `userId` 直接返回 false（Mongoose 会剥离 undefined 条件，必须显式拒绝）。
 - 新增或修改 `Session` 字段级 resolver 时，必须在 `graphql/resolvers/index.ts` 的 `Session` 键登记，否则线上字段不生效（backend-rules 陷阱）。
 
+## 会话交互卡片（sessioninteractions）
+
+> 需求 #490；契约 `contracts/agent-session.graphql` / `workflow.graphql`；计划
+> `docs/engineering/plan/20261112-feat-session-interaction-cards.md`。
+
+- **集合**：`models/session-interaction.ts`（`sessioninteractions`，agent-api 唯一写方）——`tenantId` 声明 +
+  `applyTenantScope`（与「新增带 userId 集合」双注册要求一致：`models/tenant-isolation.test.ts` 与
+  迁移 013 的 `TENANT_ID_COLLECTIONS`，集合数 21）。索引由迁移 `025-session-interactions` 幂等创建：
+  `interactionId` 唯一（幂等键）、`{sessionId,createdAt}`、`{sessionId,status,expiresAt}`、
+  `{elicitationId}` sparse。**不设 TTL**（过期交互随会话留存回看）。
+- **状态机**：`PENDING → {ACCEPTED, DECLINED, CANCELLED, EXPIRED, FAILED}`，仅允许从 PENDING 迁移；
+  所有终态写入统一走 `SessionInteractionService`（CAS `{interactionId,userId,status:'PENDING'}`），禁止第二写入点。
+  作答有效性以 `expiresAt`（= 事件到达 agent-api 时刻 + 60s，对齐 controller-api `TIMEOUT_MS`）为唯一口径；
+  TodoItem 的 5 分钟 `expiresAt` 仅为通知 TTL，不再参与判定。
+- **幂等**：`interactionId` 唯一索引；创建捕获 E11000 → 回读既有记录（`created=false`），subscriber 对
+  重复触发不重复建待办/推 SSE。
+- **respond\* 权威切换**：`respondElicitation` / `respondPermission` **先 CAS（未命中/已过期抛
+  `Todo item not found or already handled`）→ publish response → TodoItem 标记已读**；签名与文案不变。
+  `isRespondableTodo` 仅 harness login 链路继续使用。
+- **resolved 订阅**：elicitation `timeout→EXPIRED / cancelled→CANCELLED / unsupported_mode→FAILED`（契约外收敛
+  FAILED + warn）；permission `permission:resolved` 同口径（timeout/cancelled）。缺 `userId` 拒绝写入；
+  `requestId` 缺失按 `sessionId` 会话级兜底。`elicitation:complete` 仅追加 history（不改 status）。
+- **查询**：`sessionInteractions(sessionId)` 归属校验同 `sessionMessages`（只读会话允许），按 createdAt 升序；
+  `WorkflowInstance.pendingInteractionSessionIds` 为实例级一次 `distinct`（空集合短路，避免 N+1）。
+- **实时**：用户级 SSE `session_interaction` 事件（`{sessionId,interactionId,kind,status}`）驱动前端 refetch；
+  创建时由订阅器推送 `PENDING`，用户作答成功由 `respond*` 在 CAS 命中后推送终态（`ACCEPTED/DECLINED/CANCELLED`），
+  超时/断连由 resolved 订阅推送 `EXPIRED/CANCELLED`——同页 refetch 与跨标签页/工作流实例页双通道一致。
+- **连带清理**：会话删除（`services/session.ts`）与导入覆盖（`services/session-import.ts`）在同点追加
+  `SessionInteraction.deleteMany({sessionId})`。
+
 ## 默认 MCP 与 ACP 选项缓存
 
 - **默认 MCP 口径**：`Controller.defaultMcp`（`{useAllEnabled, serverIds}`）为字段级 resolver，历史行归一为 `{useAllEnabled:true, serverIds:[]}`，并剔除已删除 MCP id。`setControllerDefaultMcp` 校验 `MCP_SERVER_NOT_FOUND` 后落库。

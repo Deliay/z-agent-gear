@@ -6,6 +6,7 @@ import { workflowInstanceService } from '../../services/workflow/instance.js';
 import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { prHandlerRegistry } from '../../services/workflow/pr-handler-registry.js';
+import { sessionInteractionService } from '../../services/session-interaction-service.js';
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
@@ -445,6 +446,14 @@ export const workflowResolvers = {
       const userId = context.currentUser?.id;
       if (!userId || !parent.controllerId) return null;
       return controllerService.findById(String(parent.controllerId), userId);
+    },
+    // 待处理交互的节点会话集合：实例级一次 distinct 查询（空集合短路，避免 N+1）
+    pendingInteractionSessionIds: async (parent: Doc) => {
+      const sessionIds = ((parent.nodes as Doc[]) ?? [])
+        .map((node) => node.sessionId)
+        .filter((id): id is NonNullable<typeof id> => Boolean(id))
+        .map((id) => String(id));
+      return sessionInteractionService.findPendingBySessionIds(sessionIds);
     },
   },
 };

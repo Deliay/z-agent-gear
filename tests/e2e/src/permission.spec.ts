@@ -183,16 +183,13 @@ test.describe('ACP Permission Reminder E2E', () => {
     disconnect();
   });
 
-  test('should open permission dialog on todo click', async ({ page }) => {
+  test('E2E-SI3: 通知弹窗无审批按钮，跳转会话卡片后可审批', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, socket, disconnect } = await registerController(rawKey);
     const workspaceId = await createWorkspace(page, controllerId, `/tmp/e2e-perm-${Date.now()}`, token);
 
-    // Create session
     const sessionId = await createSession(page, controllerId, token, workspaceId);
-
-    // Wait for acp:start and respond
     const startData = await new Promise<{ requestId: string }>((resolve) => {
       socket.once('acp:start', resolve);
     });
@@ -205,7 +202,6 @@ test.describe('ACP Permission Reminder E2E', () => {
 
     await loginViaUI(page, username);
 
-    // Send permission request
     const permissionRequestId = `perm_dialog_${Date.now()}`;
     socket.emit('acp:permission', {
       requestId: permissionRequestId,
@@ -217,29 +213,33 @@ test.describe('ACP Permission Reminder E2E', () => {
       ],
     });
 
-    // Wait for auto-popup dialog (immediate priority)
     await page.waitForTimeout(3000);
 
-    // Permission dialog should auto-popup for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 25000 });
-    await expect(page.getByRole('dialog').getByText(/Agent请求权限/)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Allow once' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Reject' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '取消' })).toBeVisible();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 25000 });
+    await expect(dialog.getByText(/Agent请求权限/)).toBeVisible();
+    // 弹窗只通知：不承载审批按钮
+    await expect(dialog.getByRole('button', { name: 'Allow once' })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Reject' })).toHaveCount(0);
+
+    await dialog.getByRole('button', { name: '前往会话处理' }).click();
+    const card = page.locator(`[data-interaction-id="${permissionRequestId}"]`);
+    await expect(card).toBeVisible({ timeout: 25000 });
+    await expect(card.getByTestId('interaction-countdown')).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Allow once' })).toBeVisible();
+    await expect(card.getByRole('button', { name: 'Reject' })).toBeVisible();
+    await expect(card.getByRole('button', { name: '取消' })).toBeVisible();
 
     disconnect();
   });
 
-  test('should respond to permission request on approval', async ({ page }) => {
+  test('E2E-SI3b: 卡片内「Allow once」回传 controller 并收敛为已批准', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, socket, disconnect } = await registerController(rawKey);
     const workspaceId = await createWorkspace(page, controllerId, `/tmp/e2e-perm-${Date.now()}`, token);
 
-    // Create session
     const sessionId = await createSession(page, controllerId, token, workspaceId);
-
-    // Wait for acp:start and respond
     const startData = await new Promise<{ requestId: string }>((resolve) => {
       socket.once('acp:start', resolve);
     });
@@ -252,7 +252,6 @@ test.describe('ACP Permission Reminder E2E', () => {
 
     await loginViaUI(page, username);
 
-    // Send permission request
     const permissionRequestId = `perm_approve_${Date.now()}`;
     const responsePromise = new Promise<{ requestId: string; outcome: any }>((resolve) => {
       socket.once('acp:permission:response', resolve);
@@ -268,23 +267,22 @@ test.describe('ACP Permission Reminder E2E', () => {
       ],
     });
 
-    // Wait for auto-popup dialog (immediate priority)
     await page.waitForTimeout(3000);
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 25000 });
+    await dialog.getByRole('button', { name: '前往会话处理' }).click();
 
-    // Permission dialog should auto-popup for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 25000 });
+    const card = page.locator(`[data-interaction-id="${permissionRequestId}"]`);
+    await expect(card).toBeVisible({ timeout: 25000 });
+    await card.getByRole('button', { name: 'Allow once' }).click();
 
-    // Click Allow once
-    await page.getByRole('button', { name: 'Allow once' }).click();
-
-    // Controller should receive response
     const response = await responsePromise;
     expect(response.requestId).toBe(permissionRequestId);
     expect(response.outcome.outcome).toBe('selected');
     expect(response.outcome.optionId).toBe('allow-once');
 
-    // Dialog should close
-    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 });
+    await expect(card.getByTestId('interaction-status')).toHaveText('已批准');
+    await expect(card.getByTestId('interaction-selected-option')).toContainText('Allow once');
 
     disconnect();
   });
@@ -295,10 +293,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     const { controllerId, socket, disconnect } = await registerController(rawKey);
     const workspaceId = await createWorkspace(page, controllerId, `/tmp/e2e-perm-${Date.now()}`, token);
 
-    // Create session
     const sessionId = await createSession(page, controllerId, token, workspaceId);
-
-    // Wait for acp:start and respond
     const startData = await new Promise<{ requestId: string }>((resolve) => {
       socket.once('acp:start', resolve);
     });
@@ -310,40 +305,32 @@ test.describe('ACP Permission Reminder E2E', () => {
     });
 
     await loginViaUI(page, username);
-
-    // Navigate to sessions page
     await page.goto('/sessions');
 
-    // Send permission request
     socket.emit('acp:permission', {
       requestId: `perm_notify_${Date.now()}`,
       sessionId,
       toolCall: { toolCallId: 'call_notify_001' },
-      options: [
-        { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
-      ],
+      options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
     });
 
-    // Wait for SSE notification and auto-popup dialog
     await page.waitForTimeout(3000);
 
-    // Global notification should auto-popup PermissionDialog for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 25000 });
-    await expect(page.getByRole('dialog').getByText(/Agent请求权限/)).toBeVisible();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 25000 });
+    await expect(dialog.getByText(/Agent请求权限/)).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '前往会话处理' })).toBeVisible();
 
     disconnect();
   });
 
-  test('should show tool call details in permission dialog', async ({ page }) => {
+  test('E2E-SI3c: 卡片展示工具调用详情（标题/kind/命令/位置）', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, socket, disconnect } = await registerController(rawKey);
     const workspaceId = await createWorkspace(page, controllerId, `/tmp/e2e-perm-${Date.now()}`, token);
 
-    // Create session
     const sessionId = await createSession(page, controllerId, token, workspaceId);
-
-    // Wait for acp:start and respond
     const startData = await new Promise<{ requestId: string }>((resolve) => {
       socket.once('acp:start', resolve);
     });
@@ -356,9 +343,9 @@ test.describe('ACP Permission Reminder E2E', () => {
 
     await loginViaUI(page, username);
 
-    // Send permission request with full tool call details
+    const permissionRequestId = `perm_detail_${Date.now()}`;
     socket.emit('acp:permission', {
-      requestId: `perm_detail_${Date.now()}`,
+      requestId: permissionRequestId,
       sessionId,
       toolCall: {
         toolCallId: 'call_detail_e2e',
@@ -373,16 +360,17 @@ test.describe('ACP Permission Reminder E2E', () => {
       ],
     });
 
-    // Wait for auto-popup dialog (immediate priority)
     await page.waitForTimeout(3000);
-
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: 25000 });
-    // Tool call details should be rendered directly: title, kind badge, command, location
-    await expect(dialog.getByText('Bash: npm run danger', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('execute')).toBeVisible();
-    await expect(dialog.getByText('npm run danger', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('src/index.ts:42')).toBeVisible();
+    await dialog.getByRole('button', { name: '前往会话处理' }).click();
+
+    const card = page.locator(`[data-interaction-id="${permissionRequestId}"]`);
+    await expect(card).toBeVisible({ timeout: 25000 });
+    await expect(card.getByText('Bash: npm run danger', { exact: true })).toBeVisible();
+    await expect(card.getByText('execute')).toBeVisible();
+    await expect(card.getByText('npm run danger', { exact: true })).toBeVisible();
+    await expect(card.getByText('src/index.ts:42')).toBeVisible();
 
     disconnect();
   });
@@ -393,10 +381,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     const { controllerId, socket, disconnect } = await registerController(rawKey);
     const workspaceId = await createWorkspace(page, controllerId, `/tmp/e2e-perm-${Date.now()}`, token);
 
-    // Create session
     const sessionId = await createSession(page, controllerId, token, workspaceId);
-
-    // Wait for acp:start and respond
     const startData = await new Promise<{ requestId: string }>((resolve) => {
       socket.once('acp:start', resolve);
     });
@@ -409,30 +394,27 @@ test.describe('ACP Permission Reminder E2E', () => {
 
     await loginViaUI(page, username);
 
-    // Send permission request
+    const permissionRequestId = `perm_read_${Date.now()}`;
     socket.emit('acp:permission', {
-      requestId: `perm_read_${Date.now()}`,
+      requestId: permissionRequestId,
       sessionId,
       toolCall: { toolCallId: 'call_read_001' },
-      options: [
-        { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
-      ],
+      options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
     });
 
-    // Wait for todo to be created and auto-popup dialog (immediate priority)
     await page.waitForTimeout(3000);
 
-    // Global notification should auto-popup PermissionDialog for immediate priority
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 25000 });
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 25000 });
+    await dialog.getByRole('button', { name: '前往会话处理' }).click();
 
-    // Respond to permission request
-    await page.getByRole('button', { name: 'Allow once' }).click();
+    const card = page.locator(`[data-interaction-id="${permissionRequestId}"]`);
+    await expect(card).toBeVisible({ timeout: 25000 });
+    await card.getByRole('button', { name: 'Allow once' }).click();
 
-    // Wait for dialog to close
-    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 5000 });
+    // 处理后卡片终态（通知侧已读收敛由 agent-api 同步完成）
+    await expect(card.getByTestId('interaction-status')).toHaveText('已批准');
 
-    // Verify the todo was processed (dialog closed successfully)
-    // The todo may still be visible but marked as read
     disconnect();
   });
 });

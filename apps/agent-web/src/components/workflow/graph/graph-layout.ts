@@ -58,6 +58,8 @@ export interface NodeCardViewModel {
   moreResources: number
   /** 人类节点可就地操作（READY / RUNNING / REWORK） */
   actionable: boolean
+  /** 会话存在待处理交互（提问/审批）：卡片渲染感叹号入口 */
+  hasPendingInteraction?: boolean
 }
 
 export interface WorkflowGraphNodeData extends NodeCardViewModel {
@@ -189,6 +191,9 @@ export function toNodeCardViewModel(
     actionable:
       node.type === 'HUMAN' &&
       (node.status === 'READY' || node.status === 'RUNNING' || node.status === 'REWORK'),
+    hasPendingInteraction: Boolean(
+      node.sessionId && (instance.pendingInteractionSessionIds ?? []).includes(node.sessionId),
+    ),
   }
 }
 

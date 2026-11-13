@@ -8,6 +8,7 @@ import { featuresFromSnapshot } from '../../services/agent-capabilities.js';
 import { inferModelSource } from '../../services/model-source.js';
 import { cloudHostService } from '../../services/cloud-host-service.js';
 import { sessionReviewService } from '../../services/session-review-service.js';
+import { sessionInteractionService } from '../../services/session-interaction-service.js';
 import { Controller } from '../../models/controller.js';
 import { CloudHost } from '../../models/cloud-host.js';
 import { Session } from '../../models/session.js';
@@ -187,6 +188,21 @@ export const sessionResolvers = {
         context.currentUser.id,
         { before: args.before, limit: args.limit },
       );
+    },
+    sessionInteractions: async (
+      _parent: unknown,
+      args: { sessionId: string },
+      context: AuthContext,
+    ) => {
+      if (!context.currentUser) {
+        throw new GraphQLError('Not authenticated');
+      }
+      // 归属校验与 sessionMessages 同口径（sessionService 内 actorFilter）；只读会话允许查看
+      const session = await sessionService.findById(args.sessionId, context.currentUser.id);
+      if (!session) {
+        throw new GraphQLError('Session not found');
+      }
+      return sessionInteractionService.listBySession(args.sessionId);
     },
     acpCapabilities: async (
       _parent: unknown,

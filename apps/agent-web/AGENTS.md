@@ -44,9 +44,13 @@ pnpm run preview  # Preview production build
 - 能力清单由会话级快照（`session.features`）驱动，`SessionHeader` 右侧「能力清单」按钮打开 `AgentCapabilityPanel`（20 项固定顺序 + status/detail + Agent 版本）；无快照时显示「该会话创建于能力快照上线前，继续会话后可获取能力清单」。
 - 门控语义集中在 `hooks/useAgentCapabilities.ts`：**只有「有快照且明确 unsupported」才拦截**，旧会话/旧 Agent（无快照）与 `partial` 一律放行（零退化）。
 - 生效入口：模型切换（`config.model`）、模式切换（`config.mode`）、布尔配置项（`config.boolean`）、会话「继续」（`session.resume` 与 `session.load` 同时 unsupported 才禁用）；命令列表、历史导入/删除不门控。
-- 会话内挂载 `PendingElicitationBanner`：消费首页聚合的 `todos`，筛选本会话未 resolved 的问询，保证移动端（Sidebar 未挂载）也能打开 `ElicitationDialog`。
-- `ElicitationDialog` 按 `resolution` / 已过期的 `expiresAt` 展示「已过期/已取消/已失效/已提交/已拒绝」并隐藏操作；到期用定时器就地重渲染（`now = Date.now()`，不得用 `useState` 快照冻结）。
-- `ElicitationDialog` 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**仅** `type: 'array'` + `items.anyOf`（ACP question 工具多选题）在提交前经 `lib/elicitation-multi-select.ts#joinMultiSelectValues` 以逗号拼接为字符串回传（顺序 = 勾选顺序，空数组保持 `[]`），`items.enum` / `items.oneOf` 数组字段仍提交数组；`anyOf` 与 `enum`/`oneOf` 并存的字段（真实 question 报文不会产生）不参与拼接、提交保持数组；勾选状态始终以数组存于 edits（必答校验/草稿不变），`q*_custom` 仍为文本框。
+- 会话内挂载 `PendingElicitationBanner`：消费首页聚合的 `todos`，筛选本会话未 resolved 的问询；点击**滚动定位**到会话时间线中的对应卡片（`data-interaction-id` 锚点），不再打开弹窗。
+- **会话交互卡片（需求 #490）**：`InteractionCard`（`components/session/InteractionCard.tsx`）按 `createdAt` 合入 `MessageList` 时间线（同刻消息组在前、交互在后固定 tie-break）；`data-interaction-id={interactionId}` 作为滚动定位锚点。PENDING 可作答 + 倒计时（`expiresAt` 唯一依据，归零本地立即禁用展示「已过期」）；ACCEPTED 禁用并按 schema 字段标签回显 `response.values` / 所选审批项徽标（`option.kind` 为 `reject_*` 时徽标与回显显示「已拒绝」）；其余终态禁用 + 状态徽标。elicitation 表单渲染自 `ElicitationDialog` 提取为共享组件 `components/session/elicitation-form.tsx`（纯函数在 `lib/elicitation-form.ts`），口径不变。
+- `ElicitationDialog` / `PermissionDialog` 已降级为**通知视图**（类型摘要 + 剩余时限提示 + 「前往会话处理」→ `/sessions/{sessionId}#interaction-{interactionId}`），不再承载表单/审批按钮；打开入口（`TodoListPanel`）与 `stores/elicitationDialog` 互斥机制保持不变（状态展示保留）。
+- `ElicitationDialog` 按 `resolution` / `stale` 展示「已过期/已取消/已失效/已提交/已拒绝」文案（`data-testid="elicitation-status"`），不再有定时器驱动的表单禁用。
+- 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**仅** `type: 'array'` + `items.anyOf`（ACP question 工具多选题）在提交前经 `lib/elicitation-multi-select.ts#joinMultiSelectValues` 以逗号拼接为字符串回传（顺序 = 勾选顺序，空数组保持 `[]`），`items.enum` / `items.oneOf` 数组字段仍提交数组；`anyOf` 与 `enum`/`oneOf` 并存的字段（真实 question 报文不会产生）不参与拼接、提交保持数组。
+- 用户级 SSE `session_interaction` 事件经 `useUserEventStream.onSessionInteraction` 分发：会话页命中当前 `sessionId` 则 refetch `GET_SESSION_INTERACTIONS`；工作流实例页收到任意事件触发 `GET_WORKFLOW_INSTANCE` refetch（5s 轮询兜底）。
+- 工作流实例页列表/图形两视图：节点 `sessionId ∈ pendingInteractionSessionIds` 时渲染琥珀色感叹号（`AlertCircle`，`aria-label="有待处理的提问或审批"`），点击打开该节点会话（复用既有 `onOpenSession` / `SessionSidePanel` 链路）；列表视图 prop 由实例页下发，图形视图由 `graph-layout` 的 `hasPendingInteraction` 派生。
 - 问询弹窗打开权由 `stores/elicitationDialog.ts` 共享（`todoId + owner + 打开时快照`）：`PendingElicitationBanner`（owner=banner）与 `TodoListPanel`（owner=todo）互斥，同一时刻只渲染一个弹窗；弹窗数据按 todo id 从全量 todos 派生（不过滤 resolution），pending 清空后仍保留到终态展示，避免填表中被卸载；todo 被 TTL/limit 从列表移除时用快照渲染「已从待办移除」终态
   （stale 判定与 owner 无关，banner/todo 任一持有 stale 都不阻塞后续 immediate）；`close(owner)` 只允许持有方关闭；
   **真实卸载**时 cleanup 经微任务确认（排除 StrictMode 的 mount→cleanup→mount 模拟卸载）后关闭 `owner='todo'` 弹窗，

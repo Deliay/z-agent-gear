@@ -957,6 +957,63 @@ export interface RespondHarnessLoginMutation {
   respondHarnessLogin: boolean
 }
 
+/** 会话交互卡片（contracts/agent-session.graphql —— SessionInteraction） */
+export type SessionInteractionKind = 'ELICITATION' | 'PERMISSION'
+export type SessionInteractionStatus =
+  | 'PENDING'
+  | 'ACCEPTED'
+  | 'DECLINED'
+  | 'CANCELLED'
+  | 'EXPIRED'
+  | 'FAILED'
+
+export interface SessionInteractionEventData {
+  state: SessionInteractionStatus
+  at: string
+  actor: string
+  detail: string | null
+}
+
+export interface SessionInteractionResponseData {
+  action?: string | null
+  outcome?: string | null
+  optionId?: string | null
+  values?: Record<string, unknown> | null
+}
+
+export interface SessionInteractionData {
+  id: string
+  sessionId: string
+  interactionId: string
+  kind: SessionInteractionKind
+  status: SessionInteractionStatus
+  mode: 'form' | 'url' | null
+  message: string | null
+  requestedSchema: ElicitationRequestedSchema | null
+  url: string | null
+  elicitationId: string | null
+  toolCallId: string | null
+  toolCall: PermissionToolCallData | null
+  options: PermissionOptionData[] | null
+  response: SessionInteractionResponseData | null
+  expiresAt: string | null
+  createdAt: string
+  respondedAt: string | null
+  resolvedAt: string | null
+  history: SessionInteractionEventData[]
+}
+
+export interface GetSessionInteractionsQuery {
+  sessionInteractions: SessionInteractionData[]
+}
+
+export interface SessionInteractionEventPayload {
+  sessionId: string
+  interactionId: string
+  kind: SessionInteractionKind
+  status: SessionInteractionStatus
+}
+
 export interface TodoItemData {
   id: string
   type: string

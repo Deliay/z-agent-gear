@@ -46,6 +46,12 @@ vi.mock('../../services/workflow/pr-handler-registry.js', () => ({
   prHandlerRegistry: { listByInstance: vi.fn() },
 }));
 
+vi.mock('../../services/session-interaction-service.js', () => ({
+  sessionInteractionService: {
+    findPendingBySessionIds: vi.fn(),
+  },
+}));
+
 vi.mock('../../services/controller.js', () => ({
   controllerService: {
     findById: vi.fn(),
@@ -59,6 +65,7 @@ vi.mock('../../services/controller-workspace.js', () => ({
 }));
 
 import { workflowResolvers } from './workflow.js';
+import { sessionInteractionService } from '../../services/session-interaction-service.js';
 import { workflowTemplateService } from '../../services/workflow/template.js';
 import { configuredWorkflowService } from '../../services/workflow/configured.js';
 import { repoTemplateService } from '../../services/workflow/repo-templates.js';
@@ -595,5 +602,30 @@ describe('workflow PR 联动字段与 mutation', () => {
     expect(workflowInstanceService.removeAdditionalPrompt).toHaveBeenCalledWith(
       'user-1', 'inst-1', 'my-note',
     );
+  });
+});
+
+describe('WorkflowInstance.pendingInteractionSessionIds', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('收集节点 sessionId（去空）并做实例级一次查询', async () => {
+    vi.mocked(sessionInteractionService.findPendingBySessionIds).mockResolvedValue(['sess-2']);
+
+    const result = await workflowResolvers.WorkflowInstance.pendingInteractionSessionIds({
+      nodes: [{ sessionId: 'sess-1' }, { sessionId: null }, { sessionId: 'sess-2' }],
+    });
+
+    expect(result).toEqual(['sess-2']);
+    expect(sessionInteractionService.findPendingBySessionIds).toHaveBeenCalledWith(['sess-1', 'sess-2']);
+  });
+
+  it('无节点会话时空集合短路（服务层返回 []）', async () => {
+    vi.mocked(sessionInteractionService.findPendingBySessionIds).mockResolvedValue([]);
+    await expect(
+      workflowResolvers.WorkflowInstance.pendingInteractionSessionIds({ nodes: [] }),
+    ).resolves.toEqual([]);
+    expect(sessionInteractionService.findPendingBySessionIds).toHaveBeenCalledWith([]);
   });
 });
