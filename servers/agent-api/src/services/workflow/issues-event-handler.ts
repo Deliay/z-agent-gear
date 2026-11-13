@@ -306,7 +306,7 @@ export class IssuesTriggerRunner {
       }
       const prefix = await cloudHostService.defaultWorkspace(host);
       const clonePath = resolveClonePath(normalizeWorkspacePrefix(prefix), repoFullName);
-      const existing = await ControllerWorkspace.findOne({ userId, controllerId, path: clonePath }).lean();
+      const existing = await ControllerWorkspace.findOne({ controllerId, path: clonePath }).lean();
       if (existing) {
         await this.markWorkspaceReady(trigger._id, String(existing._id));
         return;
@@ -327,7 +327,6 @@ export class IssuesTriggerRunner {
     ctx: { userId: string; controllerId: string; repoFullName: string; prefix: string; clonePath: string },
   ): Promise<string | null> {
     const existing = await ControllerWorkspace.findOne({
-      userId: ctx.userId,
       controllerId: ctx.controllerId,
       path: ctx.clonePath,
     }).lean();

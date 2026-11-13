@@ -6,6 +6,7 @@ import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
 import { sessionService } from './session.js';
+import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
 
 export interface WorkspaceWorktree {
@@ -33,11 +34,19 @@ class WorktreeService {
    * with sessions that have worktreePath set.
    */
   async list(controllerId: string, workspaceId: string, userId: string): Promise<WorkspaceWorktree[]> {
-    const workspace = await ControllerWorkspace.findOne({
-      _id: workspaceId,
-      userId,
-      controllerId,
-    }).lean();
+    // 请求上下文内项目工作区跟随控制器可见性（团队工作区成员可查看他人创建目录下的 worktree）；
+    // 无上下文（引擎/内部/测试）沿用一期 userId 归属口径。
+    const context = getWorkspaceContext();
+    const controller = context
+      ? await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean()
+      : await Controller.findById(controllerId).lean();
+    const workspace = controller
+      ? await ControllerWorkspace.findOne(
+          context
+            ? { _id: workspaceId, controllerId }
+            : { _id: workspaceId, userId, controllerId },
+        ).lean()
+      : null;
     if (!workspace) {
       throw new Error('Workspace not found');
     }
@@ -46,7 +55,6 @@ class WorktreeService {
     const workspaceRoot = path.normalize(workspace.path);
 
     // Check if controller is online before querying git worktrees
-    const controller = await Controller.findById(controllerId).lean();
     const isOnline = controller?.status === 'online';
 
     // Query git worktrees from controller via Redis (only if online)
@@ -146,11 +154,17 @@ class WorktreeService {
     worktreePath: string,
     userId: string,
   ): Promise<DeleteWorktreeResult> {
-    const workspace = await ControllerWorkspace.findOne({
-      _id: workspaceId,
-      userId,
-      controllerId,
-    }).lean();
+    const context = getWorkspaceContext();
+    const controller = context
+      ? await Controller.findOne({ _id: controllerId, ...actorFilter(userId) }).lean()
+      : await Controller.findById(controllerId).lean();
+    const workspace = controller
+      ? await ControllerWorkspace.findOne(
+          context
+            ? { _id: workspaceId, controllerId }
+            : { _id: workspaceId, userId, controllerId },
+        ).lean()
+      : null;
     if (!workspace) {
       throw new Error('Workspace not found');
     }

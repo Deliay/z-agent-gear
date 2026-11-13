@@ -2,7 +2,7 @@ import mongoose from 'mongoose';
 import { createHash } from 'crypto';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { Controller } from '../models/controller.js';
-import { actorFilter } from './workspace-context.js';
+import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
 import { sessionService } from './session.js';
@@ -10,22 +10,71 @@ import { sessionService } from './session.js';
 const MAX_WORKSPACES = 10;
 
 export class ControllerWorkspaceService {
+  /** 当前用户可见的控制器（工作区上下文内=本工作区全部控制器）。 */
+  private async visibleControllerIds(userId: string): Promise<mongoose.Types.ObjectId[]> {
+    const controllers = await Controller.find({ ...actorFilter(userId) }).lean();
+    return controllers.map((controller) => controller._id as mongoose.Types.ObjectId);
+  }
+
+  private async isControllerVisible(controllerId: string, userId: string): Promise<boolean> {
+    if (!mongoose.isValidObjectId(controllerId)) return false;
+    const controller = await Controller.findOne({
+      _id: controllerId,
+      ...actorFilter(userId),
+    }).lean();
+    return Boolean(controller);
+  }
+
+  /**
+   * 项目工作区（ControllerWorkspace）是控制器的从属资源：请求工作区上下文存在时，
+   * 可见性跟随控制器（同工作区成员共享），而不是创建者 userId；无上下文（引擎/内部/
+   * 测试）沿用一期 userId 归属口径。
+   */
+  private async findVisibleWorkspace(
+    id: string,
+    userId: string,
+  ): Promise<Record<string, unknown> | null> {
+    if (!getWorkspaceContext()) {
+      return (await ControllerWorkspace.findOne({ _id: id, userId }).lean()) as Record<
+        string,
+        unknown
+      > | null;
+    }
+    if (!mongoose.isValidObjectId(id)) return null;
+    const workspace = await ControllerWorkspace.findById(id).lean();
+    if (!workspace) return null;
+    const visible = await this.isControllerVisible(String(workspace.controllerId), userId);
+    return visible ? (workspace as Record<string, unknown>) : null;
+  }
+
   async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
-    const workspaces = await ControllerWorkspace.find({ userId })
+    if (!getWorkspaceContext()) {
+      const workspaces = await ControllerWorkspace.find({ userId })
+        .sort({ name: 1 })
+        .lean();
+      return workspaces.map(this.mapWorkspace.bind(this));
+    }
+    const controllerIds = await this.visibleControllerIds(userId);
+    if (controllerIds.length === 0) return [];
+    const workspaces = await ControllerWorkspace.find({ controllerId: { $in: controllerIds } })
       .sort({ name: 1 })
       .lean();
     return workspaces.map(this.mapWorkspace.bind(this));
   }
 
   async findAllByController(controllerId: string, userId: string): Promise<Record<string, unknown>[]> {
-    const workspaces = await ControllerWorkspace.find({ controllerId, userId })
+    if (getWorkspaceContext() && !(await this.isControllerVisible(controllerId, userId))) {
+      return [];
+    }
+    const filter = getWorkspaceContext() ? { controllerId } : { controllerId, userId };
+    const workspaces = await ControllerWorkspace.find(filter)
       .sort({ name: 1 })
       .lean();
     return workspaces.map(this.mapWorkspace.bind(this));
   }
 
   async findById(id: string, userId: string): Promise<Record<string, unknown> | null> {
-    const workspace = await ControllerWorkspace.findOne({ _id: id, userId }).lean();
+    const workspace = await this.findVisibleWorkspace(id, userId);
     if (!workspace) return null;
     return this.mapWorkspace(workspace);
   }
@@ -36,12 +85,13 @@ export class ControllerWorkspaceService {
       throw new Error('Controller not found');
     }
 
-    const count = await ControllerWorkspace.countDocuments({ controllerId, userId });
+    const ownership = getWorkspaceContext() ? { controllerId } : { controllerId, userId };
+    const count = await ControllerWorkspace.countDocuments(ownership);
     if (count >= MAX_WORKSPACES) {
       throw new Error('Maximum workspaces reached');
     }
 
-    const existing = await ControllerWorkspace.findOne({ controllerId, userId, path }).lean();
+    const existing = await ControllerWorkspace.findOne({ ...ownership, path }).lean();
     if (existing) {
       throw new Error('Workspace already exists');
     }
@@ -83,7 +133,8 @@ export class ControllerWorkspaceService {
     const path = workspacePath.trim() || '/home/worker/workspace';
     const name = path.split('/').filter(Boolean).pop() || 'workspace';
     const workspace = await ControllerWorkspace.findOneAndUpdate(
-      { controllerId, userId, path },
+      // 同一控制器按路径幂等（项目目录属于控制器，团队成员/后台回调共用一行）。
+      { controllerId, path },
       {
         $setOnInsert: {
           userId,
@@ -103,10 +154,13 @@ export class ControllerWorkspaceService {
    * **归档失败抛错中止删除**（工作区行保留），避免「工作区没了、会话未归档」的中间态。
    */
   async delete(id: string, userId: string): Promise<boolean> {
-    const workspace = await ControllerWorkspace.findOne({ _id: id, userId }).lean();
+    const workspace = await this.findVisibleWorkspace(id, userId);
     if (!workspace) return false;
-    await sessionService.archiveByWorkspace(userId, workspace);
-    const result = await ControllerWorkspace.findOneAndDelete({ _id: id, userId });
+    await sessionService.archiveByWorkspace(userId, workspace as never);
+    const result = await ControllerWorkspace.findOneAndDelete({
+      _id: id,
+      ...(getWorkspaceContext() ? {} : { userId }),
+    });
     return !!result;
   }
 
@@ -115,16 +169,18 @@ export class ControllerWorkspaceService {
    * 全部成功后才 `deleteMany`。
    */
   async clear(controllerId: string, userId: string): Promise<boolean> {
-    const workspaces = await ControllerWorkspace.find({ controllerId, userId }).lean();
+    if (getWorkspaceContext() && !(await this.isControllerVisible(controllerId, userId))) return false;
+    const filter = getWorkspaceContext() ? { controllerId } : { controllerId, userId };
+    const workspaces = await ControllerWorkspace.find(filter).lean();
     for (const workspace of workspaces) {
       await sessionService.archiveByWorkspace(userId, workspace);
     }
-    await ControllerWorkspace.deleteMany({ controllerId, userId });
+    await ControllerWorkspace.deleteMany(filter);
     return true;
   }
 
   async toggle(id: string, userId: string): Promise<Record<string, unknown> | null> {
-    const workspace = await ControllerWorkspace.findOne({ _id: id, userId });
+    const workspace = await this.findVisibleWorkspaceDoc(id, userId);
     if (!workspace) return null;
 
     workspace.isEnabled = !workspace.isEnabled;
@@ -134,7 +190,7 @@ export class ControllerWorkspaceService {
   }
 
   async setDefaultBranch(id: string, userId: string, defaultBranch: string): Promise<Record<string, unknown>> {
-    const workspace = await ControllerWorkspace.findOne({ _id: id, userId });
+    const workspace = await this.findVisibleWorkspaceDoc(id, userId);
     if (!workspace) {
       throw new Error('Workspace not found');
     }
@@ -143,6 +199,16 @@ export class ControllerWorkspaceService {
     await workspace.save();
 
     return this.mapWorkspace(workspace.toObject());
+  }
+
+  /** 需要 save() 的路径：无上下文沿用一期直接文档查询（含既有 mock 口径）。 */
+  private async findVisibleWorkspaceDoc(id: string, userId: string) {
+    if (!getWorkspaceContext()) {
+      return ControllerWorkspace.findOne({ _id: id, userId });
+    }
+    const visible = await this.findVisibleWorkspace(id, userId);
+    if (!visible) return null;
+    return ControllerWorkspace.findById(id);
   }
 
   async detectGitRepo(controllerId: string, workspaceId: string, userId: string): Promise<Record<string, unknown>> {
@@ -155,7 +221,9 @@ export class ControllerWorkspaceService {
       throw new Error('Controller is offline');
     }
 
-    const workspace = await ControllerWorkspace.findOne({ _id: workspaceId, userId }).lean();
+    const workspace = await ControllerWorkspace.findOne(
+      getWorkspaceContext() ? { _id: workspaceId, controllerId } : { _id: workspaceId, userId },
+    ).lean();
     if (!workspace) {
       throw new Error('Workspace not found');
     }
@@ -241,7 +309,9 @@ export class ControllerWorkspaceService {
       throw new Error('Controller is offline');
     }
 
-    const workspace = await ControllerWorkspace.findOne({ _id: workspaceId, userId }).lean();
+    const workspace = await ControllerWorkspace.findOne(
+      getWorkspaceContext() ? { _id: workspaceId, controllerId } : { _id: workspaceId, userId },
+    ).lean();
     if (!workspace) {
       throw new Error('Workspace not found');
     }

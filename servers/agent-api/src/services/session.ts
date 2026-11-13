@@ -416,7 +416,11 @@ export class SessionService {
       mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), previewToolsId]));
     }
 
-    const workspace = await ControllerWorkspace.findOne({ _id: input.workspaceId, userId, controllerId: input.controllerId }).lean();
+    const workspace = await ControllerWorkspace.findOne(
+      getWorkspaceContext()
+        ? { _id: input.workspaceId, controllerId: input.controllerId }
+        : { _id: input.workspaceId, userId, controllerId: input.controllerId },
+    ).lean();
     if (!workspace) {
       throw new Error('Workspace not found');
     }
@@ -1021,10 +1025,16 @@ export class SessionService {
 
     // Worktree cleanup if applicable
     if ((session as any).worktreePath && (session as any).worktreeBranch) {
-      const workspace = await ControllerWorkspace.findOne({
-        controllerId: session.controllerId,
-        userId,
-      }).lean();
+      const sessionWorkspaceId = (session as any).controllerWorkspaceId;
+      const workspace = sessionWorkspaceId
+        ? await ControllerWorkspace.findOne({
+            _id: sessionWorkspaceId,
+            controllerId: session.controllerId,
+          }).lean()
+        : await ControllerWorkspace.findOne({
+            controllerId: session.controllerId,
+            ...actorFilter(userId),
+          }).lean();
       const repoPath = workspace?.path || session.cwd || '';
 
       // 1. git:status — detect if clean

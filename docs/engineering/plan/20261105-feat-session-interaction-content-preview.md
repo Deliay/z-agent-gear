@@ -527,3 +527,14 @@ contracts → agent-api / controller-api → agent-web → agent-gear（npm `2.1
 - 契约：`contracts/agent-session.graphql`、`contracts/agent-session-websocket.md`、`contracts/agent-session.openapi.yaml`、`contracts/home.graphql`
 - 开发规范：`docs/engineering/common-rules.md`、`docs/engineering/frontend-rules.md`、`docs/engineering/backend-rules.md`、`apps/agent-web/AGENTS.md`、`servers/agent-api/AGENTS.md`、`servers/controller-api/AGENTS.md`、`packages/agent-controller/AGENTS.md`、`tests/api/AGENTS.md`、`tests/e2e/AGENTS.md`
 - 需求来源：GitHub Issue [Deliay/z-agent-gear#461](https://github.com/Deliay/z-agent-gear/issues/461)
+
+## 修订记录
+
+### 2026-11-12：2.17.0 发布产物缺陷与门禁上移（#487）
+
+- **现象**：npm 上 `agent-gear@2.17.0` 的 tarball 缺失 `fs:read-file`（handler、`socketio-client` 订阅）、`acp:message` 有序 `parts` 与 `agent-session-preview-tools`——即本方案 Phase 2/5 依赖的运行时能力。原因是同日两次提交都把版本写成 `2.17.0`，而 `.github/workflows/publish-agent-gear.yml` 在「该版本已存在」时静默跳过，第二次发布未真正产出新 tarball。云电脑内安装到 `2.17.0` 后 `sessionFileContent` 永远等不到 relay 结果，前端停在「加载中…」。
+- **修复**：`agent-gear` 版本提升为 `2.17.1` 并重新发布；`cloud-controller` 的 `MIN_HARNESS_WORKER_VERSION` 与 `agent-api` 的 `CLOUD_HOST_AGENT_GEAR_MIN_VERSION` 同步提升到 `2.17.1`（普通容器 `MIN_WORKER_VERSION` 仍为 `2.2.0`，不破坏本地 CLI）。
+- **前端行为**：`useSessionFileContent` 统一收敛为 `loading | error | ready` 三态；`PreviewPane` 失败展示 `preview-error` + `preview-retry`，`ReviewPanel` 失败展示 `review-file-error` + `review-file-retry`；「无数据且无错误」的空响应同样按失败处理，杜绝无限骨架。
+- **发布顺序（硬要求）**：先确认 npm `agent-gear@2.17.1` 可安装，再让带新门禁的 `cloud-controller` / `agent-api` 上线；顺序颠倒会让容器在 `VERSION_MISMATCH` 与 `2.17.0` 重装之间循环。门禁仅在注册时校验，已在运行的云电脑需停止重建（或重启容器）才会自愈。
+- **回归**：`E2E-LIVE2` 现在应答 `fs:read-file` 并断言骨架消失、无错误态、`code-preview` 可见。
+- **未覆盖**：发布工作流「版本已存在即跳过」的系统性风险仍在（后续可加版本唯一性守卫，避免再次撞版本静默跳过）。

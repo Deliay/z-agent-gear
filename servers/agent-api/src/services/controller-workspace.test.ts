@@ -9,6 +9,7 @@ vi.mock('../models/controller-workspace.js', () => ({
     find: vi.fn(),
     findOne: vi.fn(),
     findOneAndUpdate: vi.fn(),
+    findById: vi.fn(),
     findByIdAndUpdate: vi.fn(),
     findOneAndDelete: vi.fn(),
     countDocuments: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock('../models/controller-workspace.js', () => ({
 
 vi.mock('../models/controller.js', () => ({
   Controller: {
+    find: vi.fn(),
     findOne: vi.fn(),
   },
 }));
@@ -29,6 +31,7 @@ vi.mock('./session.js', () => ({
   },
 }));
 
+import { runWithWorkspace } from './workspace-context.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
 import { sessionService } from './session.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
@@ -494,6 +497,109 @@ describe('ControllerWorkspaceService', () => {
       );
       expect(sessionService.archiveByWorkspace).toHaveBeenCalledTimes(2);
       expect(ControllerWorkspace.deleteMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('工作区成员共享项目工作区（T-CW-TEAM）', () => {
+    const teamContext = {
+      id: 'ws-team',
+      tenantId: 'tenant-team',
+      type: 'normal' as const,
+      role: 'developer' as const,
+      readOnly: false,
+      globalWorkspaceId: 'ws-global',
+    };
+
+    it('findAllByUser：返回本工作区控制器下的全部项目工作区（不按创建者过滤）', async () => {
+      vi.mocked(Controller.find).mockReturnValue({
+        lean: vi.fn().mockResolvedValue([{ _id: '507f1f77bcf86cd799439021' }]),
+      } as never);
+      vi.mocked(ControllerWorkspace.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue([{ _id: 'ws-a', userId: 'user-a', controllerId: '507f1f77bcf86cd799439021', name: 'A 的目录', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') }]),
+        }),
+      } as never);
+
+      const rows = await runWithWorkspace(teamContext, () =>
+        controllerWorkspaceService.findAllByUser('user-b'),
+      );
+
+      expect(Controller.find).toHaveBeenCalledWith({});
+      expect(ControllerWorkspace.find).toHaveBeenCalledWith({ controllerId: { $in: ['507f1f77bcf86cd799439021'] } });
+      expect(rows.map((row) => row.name)).toEqual(['A 的目录']);
+    });
+
+    it('findAllByController：控制器可见时不按 userId 过滤', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439021' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue([{ _id: 'ws-a', userId: 'user-a', controllerId: '507f1f77bcf86cd799439021', name: 'A 的目录', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') }]),
+        }),
+      } as never);
+
+      const rows = await runWithWorkspace(teamContext, () =>
+        controllerWorkspaceService.findAllByController('507f1f77bcf86cd799439021', 'user-b'),
+      );
+
+      expect(Controller.findOne).toHaveBeenCalledWith({ _id: '507f1f77bcf86cd799439021' });
+      expect(ControllerWorkspace.find).toHaveBeenCalledWith({ controllerId: '507f1f77bcf86cd799439021' });
+      expect(rows).toHaveLength(1);
+    });
+
+    it('findById：成员可读取他人创建的项目工作区', async () => {
+      vi.mocked(ControllerWorkspace.findById).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: '507f1f77bcf86cd799439011',
+          userId: 'user-a',
+          controllerId: '507f1f77bcf86cd799439021',
+          name: 'A 的目录',
+          createdAt: new Date('2026-01-01'),
+          updatedAt: new Date('2026-01-01'),
+        }),
+      } as never);
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439021' }),
+      } as never);
+
+      const row = await runWithWorkspace(teamContext, () =>
+        controllerWorkspaceService.findById('507f1f77bcf86cd799439011', 'user-b'),
+      );
+
+      expect(row).toMatchObject({ name: 'A 的目录', userId: 'user-a' });
+    });
+
+    it('create：同一控制器下的数量/路径去重按控制器维度（团队成员共享）', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439021' }),
+      } as never);
+      vi.mocked(ControllerWorkspace.countDocuments).mockResolvedValue(0 as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      } as never);
+      vi.mocked(ControllerWorkspace.create).mockImplementation((async () => ({
+        toObject: () => ({
+          _id: 'ws-new',
+          userId: 'user-b',
+          controllerId: '507f1f77bcf86cd799439021',
+          name: 'shared',
+          path: '/home/user/shared',
+          isEnabled: true,
+          createdAt: new Date('2026-01-01'),
+          updatedAt: new Date('2026-01-01'),
+        }),
+      })) as never);
+
+      await runWithWorkspace(teamContext, () =>
+        controllerWorkspaceService.create('507f1f77bcf86cd799439021', 'user-b', '/home/user/shared'),
+      );
+
+      expect(ControllerWorkspace.countDocuments).toHaveBeenCalledWith({ controllerId: '507f1f77bcf86cd799439021' });
+      expect(ControllerWorkspace.findOne).toHaveBeenCalledWith({
+        controllerId: '507f1f77bcf86cd799439021',
+        path: '/home/user/shared',
+      });
     });
   });
 });

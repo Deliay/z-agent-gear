@@ -2,21 +2,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 
+const fileQuery = vi.hoisted(() => ({
+  data: {
+    sessionFileContent: { path: 'src/a.ts', content: 'line1\nline2\n', truncated: false, sizeBytes: 11 },
+  } as
+    | { sessionFileContent?: { path: string; content: string; truncated: boolean; sizeBytes: number } }
+    | undefined,
+  loading: false,
+  error: undefined as Error | undefined,
+  refetch: vi.fn(),
+}));
+
 vi.mock('@apollo/client/react', () => ({
-  useQuery: (query: unknown, options: { onCompleted?: (data: unknown) => void; skip?: boolean } = {}) => {
-    // FileTabContent 的 sessionFileContent 查询：返回固定内容
-    void query;
-    if (!options.skip) {
-      queueMicrotask(() => {
-        options.onCompleted?.({
-          sessionFileContent: { path: 'src/a.ts', content: 'line1\nline2\n', truncated: false, sizeBytes: 11 },
-        });
-      });
-    }
-    return {
-      data: { sessionFileContent: { path: 'src/a.ts', content: 'line1\nline2\n', truncated: false, sizeBytes: 11 } },
-      loading: false,
-    };
+  useQuery: (_query: unknown, options: { skip?: boolean } = {}) => {
+    // FileTabContent 的 sessionFileContent 查询：状态由 fileQuery 控制（成功/加载中/失败）
+    if (options.skip) return { data: undefined, loading: false, error: undefined, refetch: fileQuery.refetch };
+    return { data: fileQuery.data, loading: fileQuery.loading, error: fileQuery.error, refetch: fileQuery.refetch };
   },
   useLazyQuery: () => [vi.fn(), { loading: false }],
 }));
@@ -38,6 +39,12 @@ describe('PreviewPane（T-PANE / 返工 A1）', () => {
   beforeEach(() => {
     cleanup();
     destroyPreviewStore('pane-sess');
+    fileQuery.data = {
+      sessionFileContent: { path: 'src/a.ts', content: 'line1\nline2\n', truncated: false, sizeBytes: 11 },
+    };
+    fileQuery.loading = false;
+    fileQuery.error = undefined;
+    fileQuery.refetch.mockClear();
   });
 
   it('A1 高度链：根容器 h-full/flex-1（Monaco 可见前提）', () => {
@@ -95,5 +102,44 @@ describe('PreviewPane（T-PANE / 返工 A1）', () => {
     const wrapper = screen.getByTestId('preview-review-tab');
     expect(wrapper.className).toContain('h-full');
     expect(wrapper.className).toContain('min-h-0');
+  });
+
+  it('查询失败展示错误态与重试（不再无限骨架）', () => {
+    fileQuery.data = undefined;
+    fileQuery.loading = false;
+    fileQuery.error = new Error('Controller offline or file read timeout');
+    getPreviewStore('pane-sess').openFile({ filePath: 'src/a.ts', pinned: false });
+
+    render(<PreviewPane sessionId="pane-sess" onAnnotation={vi.fn()} />);
+
+    expect(screen.queryByTestId('preview-skeleton')).toBeNull();
+    const error = screen.getByTestId('preview-error');
+    expect(error.textContent).toContain('加载失败');
+    expect(error.textContent).toContain('Controller offline or file read timeout');
+    fireEvent.click(screen.getByTestId('preview-retry'));
+    expect(fileQuery.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('查询无数据且无错误（空响应）也按失败处理，不无限骨架', () => {
+    fileQuery.data = undefined;
+    fileQuery.loading = false;
+    fileQuery.error = undefined;
+    getPreviewStore('pane-sess').openFile({ filePath: 'src/a.ts', pinned: false });
+
+    render(<PreviewPane sessionId="pane-sess" onAnnotation={vi.fn()} />);
+
+    expect(screen.queryByTestId('preview-skeleton')).toBeNull();
+    expect(screen.getByTestId('preview-error')).toBeTruthy();
+  });
+
+  it('查询中展示骨架屏', () => {
+    fileQuery.data = undefined;
+    fileQuery.loading = true;
+    getPreviewStore('pane-sess').openFile({ filePath: 'src/a.ts', pinned: false });
+
+    render(<PreviewPane sessionId="pane-sess" onAnnotation={vi.fn()} />);
+
+    expect(screen.getByTestId('preview-skeleton')).toBeTruthy();
+    expect(screen.queryByTestId('preview-error')).toBeNull();
   });
 });
