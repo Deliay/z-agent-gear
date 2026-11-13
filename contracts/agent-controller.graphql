@@ -8,6 +8,7 @@ enum ControllerStatus {
   online
   offline
   registering
+  unbound
 }
 
 enum ControllerKeyStatus {
@@ -22,6 +23,8 @@ type ControllerKey {
   type: ControllerType!
   keyPrefix: String!
   status: ControllerKeyStatus!
+  # 仅创建/重新生成时返回一次明文；列表/查询为 null。
+  rawKey: String
   lastUsedAt: String
   createdAt: String!
   updatedAt: String!
@@ -58,6 +61,22 @@ extend type Controller {
 # - 云电脑停止后 Controller 行保留（连接态 offline）；删除云电脑仅软删除 cloudhosts，Controller 与会话留档
 # - 标准连接凭据为 ControllerKey(type=cloud)（容器 env ZAG_HOST_KEY/ZAG_HOST_ENDPOINT）
 # - 容器销毁由 agent-api 编排，worker 不发送 unregister
+#
+# 云控制器（type=cloud）操作限制：
+# 目标控制器 `type=cloud`（云电脑）时，下列三个 mutation 拒绝执行且零副作用
+# （凭据不失效、档案不删除、实例不收指令）；`local` / `github` 行为不变：
+# - renameController：拒绝，名称不变，无副作用
+# - unbindController：拒绝，档案与凭据不变，不下发任何指令
+# - regenerateControllerKey：拒绝，旧凭据保持有效，连接状态不变
+# 云电脑生命周期操作不由本契约承载（见 contracts/cloud-host.graphql 的 stopCloudHost / deleteCloudHost）。
+#
+# 错误文案（逐字，resolver 以 GraphQLError 原样透传）：
+# | Mutation                | 云控制器错误文案                              | 目标不存在（现状不变）      |
+# |-------------------------|-----------------------------------------------|-----------------------------|
+# | renameController        | cloud controller cannot be renamed            | Controller not found        |
+# | unbindController        | cloud controller cannot be unbound            | false                       |
+# | regenerateControllerKey | cloud controller key cannot be regenerated    | Controller not found        |
+#
 # 无新增字段；`cloudHost` 字段由 contracts/cloud-host.graphql 扩展。
 
 input CreateKeyInput {
@@ -68,6 +87,10 @@ input CreateKeyInput {
 input RenameInput {
   id: ID!
   name: String!
+}
+
+input RegenerateControllerKeyInput {
+  controllerId: ID!
 }
 
 type CreateKeyPayload {
@@ -84,10 +107,14 @@ type Query {
 type Mutation {
   createControllerKey(input: CreateKeyInput!): CreateKeyPayload!
   renameControllerKey(input: RenameInput!): ControllerKey!
+  # 云控制器（type=cloud）拒绝：cloud controller cannot be renamed（名称不变、无副作用）。
   renameController(input: RenameInput!): Controller!
+  # 云控制器（type=cloud）拒绝：cloud controller cannot be unbound（档案/凭据不变、不下发指令）。
   unbindController(id: ID!): Boolean!
   setControllerWorktreeDir(controllerId: ID!, worktreeDir: String!): Controller!
   # useAllEnabled=true 时忽略并归一 serverIds=[]；false 时 serverIds 需全部属于当前用户且已启用。
   # 平台云工具服务（cloud-host-tools）不可选：查询侧不返回，保存时显式提交返回 MCP_SERVER_NOT_SELECTABLE。
   setControllerDefaultMcp(controllerId: ID!, useAllEnabled: Boolean!, serverIds: [ID!] = []): Controller!
+  # 云控制器（type=cloud）拒绝：cloud controller key cannot be regenerated（旧凭据仍有效、连接状态不变）。
+  regenerateControllerKey(input: RegenerateControllerKeyInput!): CreateKeyPayload!
 }

@@ -441,6 +441,28 @@ pnpm run start   # Start production server
   T-CF6 编辑即时生效/改名不影响）、`services/session.test.ts`（T-CF1 不可见 id 拒绝且不建会话）、
   `graphql/schemas/session.test.ts`（契约 `customMcpServerIds: [ID!]` 对齐）。
 
+## 云控制器操作限制（设置-控制器管理）
+
+> 需求 #489；契约 `contracts/agent-controller.graphql`；计划
+> `docs/engineering/plan/20261113-feat-cloud-controller-operations-restriction.md`。
+
+- **服务层拒绝**：`controllerService.rename` / `controllerService.unbind` / `controllerKeyService.regenerate`
+  在 `type === 'cloud'` 时抛错且**零副作用**——`rename` 先 `findOne(...).lean()` 判型后再更新（不写库）；
+  `unbind` 的判定位于 `sendShutdown` / `evictKeyById` / `ControllerKey.deleteOne` / `Controller.deleteOne` 之前；
+  `regenerate` 复用既有 controller 查询判型，位于换 hash / 置 `unbound` / `evictKeyById` / `cacheKey` / `sendShutdown` 之前。
+- **文案单一来源**：`services/controller.ts` 导出 `CLOUD_CONTROLLER_RENAME_REJECTED` /
+  `CLOUD_CONTROLLER_UNBIND_REJECTED`，`services/controller-key.ts` 导出
+  `CLOUD_CONTROLLER_KEY_REGENERATE_REJECTED`；三条文案逐字 `cloud controller cannot be renamed` /
+  `cloud controller cannot be unbound` / `cloud controller key cannot be regenerated`，已列入契约错误表。
+- **resolver 白名单透传**（`graphql/resolvers/controller.ts`）：`CLOUD_REJECT_MESSAGES` Set +
+  `rethrowCloudReject`——`GraphQLError` 原样 rethrow；命中白名单文案转 `GraphQLError` 逐字透传；
+  **非白名单错误保持现状冒泡**（生产由 maskedErrors 收敛），不扩大透传面。`unbindController` 正常路径仍返回 `boolean`。
+- **不存在口径不变**：`renameController` / `regenerateControllerKey` 仍 `Controller not found`，
+  `unbindController` 仍 `false`（先查存在性再判类型，顺序不可颠倒）。
+- **测试**：`services/controller.test.ts`（T-CCOP1/T-CCOP2）、`services/controller-key.test.ts`（T-CCOP3）、
+  `graphql/resolvers/controller.test.ts`（T-CCOP4~6）、`tests/api/src/agent-api/controller.test.ts`
+  （T-CCOP-API1~3，需 `MONGODB_URI`）。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import mongoose from 'mongoose';
 import { io as SocketIOClient, type Socket as ClientSocket } from 'socket.io-client';
 import { createFrontUser } from '../support/front-users.js';
+import { personalGlobalWorkspaceId } from '../support/workspace-fixtures.js';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:35273';
@@ -838,5 +840,137 @@ describe('Controller default MCP API (Phase 9)', () => {
       token,
     );
     expect((await missing.json()).errors?.[0]?.message).toBe('Controller not found');
+  });
+});
+
+// 云控制器（ControllerType.cloud）操作限制（T-CCOP-API1~3）
+// 直插 controllers + controllerkeys 两行夹具（不插 cloudhosts，`findAllByUser` 无软删除主机即不过滤）。
+const HAS_MONGO = Boolean(process.env.MONGODB_URI);
+const CLOUD_RENAME_REJECTED = 'cloud controller cannot be renamed';
+const CLOUD_UNBIND_REJECTED = 'cloud controller cannot be unbound';
+const CLOUD_REGENERATE_REJECTED = 'cloud controller key cannot be regenerated';
+
+async function mongoDb(): Promise<mongoose.mongo.Db | null> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return null;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+  return mongoose.connection.db ?? null;
+}
+
+interface CloudControllerFixture {
+  controllerId: mongoose.Types.ObjectId;
+  keyId: mongoose.Types.ObjectId;
+}
+
+async function seedCloudController(
+  db: mongoose.mongo.Db,
+  userId: string,
+  suffix: string,
+): Promise<CloudControllerFixture> {
+  const now = new Date();
+  const controllerId = new mongoose.Types.ObjectId();
+  const keyId = new mongoose.Types.ObjectId();
+  const workspaceId = await personalGlobalWorkspaceId(db, userId);
+  const name = `cloud-${suffix}`;
+  await db.collection('controllers').insertOne({
+    _id: controllerId,
+    userId: new mongoose.Types.ObjectId(userId),
+    tenantId: new mongoose.Types.ObjectId(userId),
+    workspaceId,
+    name,
+    hostname: name,
+    type: 'cloud',
+    status: 'online',
+    keyId,
+    version: '2.5.0',
+    lastHeartbeatAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await db.collection('controllerkeys').insertOne({
+    _id: keyId,
+    userId: new mongoose.Types.ObjectId(userId),
+    tenantId: new mongoose.Types.ObjectId(userId),
+    workspaceId,
+    name: `${name}-key`,
+    type: 'cloud',
+    keyHash: `fixture-hash-${suffix}`,
+    keyPrefix: 'zag_k_1',
+    status: 'active',
+    boundControllerId: controllerId,
+    lastUsedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { controllerId, keyId };
+}
+
+async function cleanupCloudController(
+  db: mongoose.mongo.Db,
+  fixture: CloudControllerFixture,
+): Promise<void> {
+  await db.collection('controllerkeys').deleteOne({ _id: fixture.keyId });
+  await db.collection('controllers').deleteOne({ _id: fixture.controllerId });
+}
+
+describe.skipIf(!HAS_MONGO)('Cloud controller operation restriction (T-CCOP-API1~3)', () => {
+  let token = '';
+  let userId = '';
+  let db: mongoose.mongo.Db;
+  let fixture: CloudControllerFixture;
+
+  beforeAll(async () => {
+    const frontUser = await createFrontUser();
+    token = frontUser.token;
+    userId = frontUser.userId;
+    db = (await mongoDb())!;
+    fixture = await seedCloudController(db, userId, `${Date.now()}`);
+  });
+
+  afterAll(async () => {
+    if (db && fixture) await cleanupCloudController(db, fixture);
+  });
+
+  it('T-CCOP-API1: rejects renameController and keeps the name unchanged', async () => {
+    const res = await gqlRequest(
+      RENAME_CONTROLLER,
+      { input: { id: fixture.controllerId.toString(), name: 'renamed-by-cloud' } },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors?.[0]?.message).toBe(CLOUD_RENAME_REJECTED);
+
+    const row = await db.collection('controllers').findOne({ _id: fixture.controllerId });
+    expect(row).not.toBeNull();
+    expect(row!.name).toMatch(/^cloud-/);
+  });
+
+  it('T-CCOP-API2: rejects unbindController and keeps controller + key rows', async () => {
+    const res = await gqlRequest(UNBIND_CONTROLLER, { id: fixture.controllerId.toString() }, token);
+    const body = await res.json();
+    expect(body.errors?.[0]?.message).toBe(CLOUD_UNBIND_REJECTED);
+
+    const controllerRow = await db.collection('controllers').findOne({ _id: fixture.controllerId });
+    const keyRow = await db.collection('controllerkeys').findOne({ _id: fixture.keyId });
+    expect(controllerRow).not.toBeNull();
+    expect(keyRow).not.toBeNull();
+    expect(keyRow!.status).toBe('active');
+  });
+
+  it('T-CCOP-API3: rejects regenerateControllerKey without changing key hash or controller status', async () => {
+    const before = await db.collection('controllerkeys').findOne({ _id: fixture.keyId });
+
+    const res = await gqlRequest(
+      REGENERATE_CONTROLLER_KEY,
+      { input: { controllerId: fixture.controllerId.toString() } },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors?.[0]?.message).toBe(CLOUD_REGENERATE_REJECTED);
+
+    const controllerRow = await db.collection('controllers').findOne({ _id: fixture.controllerId });
+    const keyRow = await db.collection('controllerkeys').findOne({ _id: fixture.keyId });
+    expect(controllerRow!.status).toBe('online');
+    expect(keyRow!.keyHash).toBe(before!.keyHash);
   });
 });

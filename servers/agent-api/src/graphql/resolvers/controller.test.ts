@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { GraphQLError } from 'graphql';
 import { controllerResolvers } from './controller.js';
 
 vi.mock('../../services/controller-key.js', () => ({
@@ -8,6 +9,7 @@ vi.mock('../../services/controller-key.js', () => ({
     rename: vi.fn(),
     regenerate: vi.fn(),
   },
+  CLOUD_CONTROLLER_KEY_REGENERATE_REJECTED: 'cloud controller key cannot be regenerated',
 }));
 
 vi.mock('../../services/controller.js', () => ({
@@ -19,6 +21,8 @@ vi.mock('../../services/controller.js', () => ({
     setWorktreeDir: vi.fn(),
     setDefaultMcp: vi.fn(),
   },
+  CLOUD_CONTROLLER_RENAME_REJECTED: 'cloud controller cannot be renamed',
+  CLOUD_CONTROLLER_UNBIND_REJECTED: 'cloud controller cannot be unbound',
 }));
 
 vi.mock('../../models/mcp-server.js', () => ({
@@ -45,6 +49,16 @@ const emptyContext = {
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+/** 捕获 Promise 拒绝值（失败时明确报错）。 */
+async function captureRejection(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => {
+      throw new Error('expected promise to reject');
+    },
+    (err: unknown) => err,
+  );
+}
 
 describe('Controller Resolvers', () => {
   describe('Query.controllerKeys', () => {
@@ -372,6 +386,102 @@ describe('Controller Resolvers', () => {
           emptyContext,
         ),
       ).rejects.toThrow('Not authenticated');
+    });
+  });
+
+  describe('T-CCOP4: renameController cloud rejection whitelist', () => {
+    it('passes the whitelisted message through as a GraphQLError', async () => {
+      vi.mocked(controllerService.rename).mockRejectedValue(
+        new Error('cloud controller cannot be renamed'),
+      );
+
+      const err = await captureRejection(
+        controllerResolvers.Mutation.renameController(
+          {},
+          { input: { id: 'ctrl-cloud', name: 'New Name' } },
+          mockContext,
+        ),
+      );
+
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect((err as GraphQLError).message).toBe('cloud controller cannot be renamed');
+    });
+
+    it('lets non-whitelisted errors bubble unchanged', async () => {
+      vi.mocked(controllerService.rename).mockRejectedValue(new Error('unexpected db failure'));
+
+      const err = await captureRejection(
+        controllerResolvers.Mutation.renameController(
+          {},
+          { input: { id: 'ctrl1', name: 'New Name' } },
+          mockContext,
+        ),
+      );
+
+      expect(err).not.toBeInstanceOf(GraphQLError);
+      expect((err as Error).message).toBe('unexpected db failure');
+    });
+  });
+
+  describe('T-CCOP5: unbindController cloud rejection whitelist', () => {
+    it('passes the whitelisted message through as a GraphQLError', async () => {
+      vi.mocked(controllerService.unbind).mockRejectedValue(
+        new Error('cloud controller cannot be unbound'),
+      );
+
+      const err = await captureRejection(
+        controllerResolvers.Mutation.unbindController({}, { id: 'ctrl-cloud' }, mockContext),
+      );
+
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect((err as GraphQLError).message).toBe('cloud controller cannot be unbound');
+    });
+
+    it('lets non-whitelisted errors bubble unchanged', async () => {
+      vi.mocked(controllerService.unbind).mockRejectedValue(new Error('unexpected db failure'));
+
+      const err = await captureRejection(
+        controllerResolvers.Mutation.unbindController({}, { id: 'ctrl1' }, mockContext),
+      );
+
+      expect(err).not.toBeInstanceOf(GraphQLError);
+      expect((err as Error).message).toBe('unexpected db failure');
+    });
+  });
+
+  describe('T-CCOP6: regenerateControllerKey cloud rejection whitelist', () => {
+    it('passes the whitelisted message through as a GraphQLError', async () => {
+      vi.mocked(controllerKeyService.regenerate).mockRejectedValue(
+        new Error('cloud controller key cannot be regenerated'),
+      );
+
+      const err = await captureRejection(
+        controllerResolvers.Mutation.regenerateControllerKey(
+          {},
+          { input: { controllerId: 'ctrl-cloud' } },
+          mockContext,
+        ),
+      );
+
+      expect(err).toBeInstanceOf(GraphQLError);
+      expect((err as GraphQLError).message).toBe('cloud controller key cannot be regenerated');
+    });
+
+    it('lets non-whitelisted errors bubble unchanged', async () => {
+      vi.mocked(controllerKeyService.regenerate).mockRejectedValue(
+        new Error('Failed to revoke old key from cache.'),
+      );
+
+      const err = await captureRejection(
+        controllerResolvers.Mutation.regenerateControllerKey(
+          {},
+          { input: { controllerId: 'ctrl1' } },
+          mockContext,
+        ),
+      );
+
+      expect(err).not.toBeInstanceOf(GraphQLError);
+      expect((err as Error).message).toBe('Failed to revoke old key from cache.');
     });
   });
 });

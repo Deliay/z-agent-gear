@@ -14,6 +14,10 @@ export interface ControllerDefaultMcpInput {
   serverIds?: string[] | null;
 }
 
+/** 云控制器（type=cloud）拒绝文案（契约错误表逐字；resolver 白名单透传的单一来源）。 */
+export const CLOUD_CONTROLLER_RENAME_REJECTED = 'cloud controller cannot be renamed';
+export const CLOUD_CONTROLLER_UNBIND_REJECTED = 'cloud controller cannot be unbound';
+
 export class ControllerService {
   async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
     const controllers = await Controller.find({ ...actorFilter(userId) }).sort({ createdAt: -1 }).lean();
@@ -72,6 +76,12 @@ export class ControllerService {
   }
 
   async rename(id: string, userId: string, name: string): Promise<Record<string, unknown> | null> {
+    // 先查存在性与类型：云电脑名称由 createCloudHost 编排，拒绝改名且零副作用。
+    const existing = await Controller.findOne({ _id: id, ...actorFilter(userId) }).lean();
+    if (!existing) return null;
+    if (existing.type === 'cloud') {
+      throw new Error(CLOUD_CONTROLLER_RENAME_REJECTED);
+    }
     const controller = await Controller.findOneAndUpdate(
       { _id: id, ...actorFilter(userId) },
       { name },
@@ -84,6 +94,10 @@ export class ControllerService {
   async unbind(id: string, userId: string): Promise<boolean> {
     const controller = await Controller.findOne({ _id: id, ...actorFilter(userId) });
     if (!controller) return false;
+    // 拒绝必须先于任何副作用（sendShutdown / evict / 删除）：云电脑凭据与档案由生命周期流程管理。
+    if (controller.type === 'cloud') {
+      throw new Error(CLOUD_CONTROLLER_UNBIND_REJECTED);
+    }
 
     const keyId = controller.keyId.toString();
 
