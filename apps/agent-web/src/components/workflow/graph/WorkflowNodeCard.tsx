@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import { Loader2, RotateCcw } from 'lucide-react'
+import { Loader2, RotateCcw, AlertCircle } from 'lucide-react'
 import HumanNodeActions from '../HumanNodeActions'
 import { NODE_STATUS_LABELS, NODE_STATUS_VISUAL } from '../WorkflowNodeTreeConstants'
 import { useNodeSessionActivity, type NodeLiveActivity } from '@/hooks/useNodeSessionActivity'
@@ -85,6 +85,23 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
           {NODE_STATUS_LABELS[data.status]}
         </span>
       </button>
+
+      {data.hasPendingInteraction && data.sessionId && data.onOpenSession && (
+        <button
+          type="button"
+          data-testid={`node-pending-interaction-${data.nodeId}`}
+          aria-label="有待处理的提问或审批"
+          title="有待处理的提问或审批"
+          className="nodrag flex w-fit items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-500 hover:bg-amber-500/20"
+          onClick={(event) => {
+            event.stopPropagation();
+            data.onOpenSession?.(data.sessionId!);
+          }}
+        >
+          <AlertCircle className="size-3" />
+          待处理
+        </button>
+      )}
 
       {data.type === 'AI' && (data.harness || data.model) && (
         <div className="flex min-w-0 flex-wrap items-center gap-1">

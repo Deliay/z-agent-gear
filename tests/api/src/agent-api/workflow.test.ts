@@ -181,6 +181,7 @@ const WORKFLOW_INSTANCE_QUERY = `
       nodes { id nodeKey type name status stage sortOrder sessionId startedAt reworkedAt reworkCount retryCount nextRetryAt agentConfig { acpServerType modeId modelId initNewWorktree } rejectInfo { reason fromNodeId at } failInfo { reason source at } }
       blackboard { key value updatedAt }
       blackboardTrash { key value updatedAt }
+      pendingInteractionSessionIds
     }
   }
 `;
@@ -848,6 +849,14 @@ describe('Workflow Instance & MCP Tools (A9-A18)', () => {
 
     inputNodeId = inputNode.id;
     execNodeId = execNode.id;
+  });
+
+  it('API-SI9: 实例级 pendingInteractionSessionIds 已登记且无待处理交互时为空数组', async () => {
+    expect(instanceId).toBeTruthy();
+    const res = await gqlRequest(WORKFLOW_INSTANCE_QUERY, { id: instanceId }, token);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    expect(body.data.workflowInstance.pendingInteractionSessionIds).toEqual([]);
   });
 
   it('A11: requiresWorktree 但工作区非 git 时实例化拒绝', async () => {

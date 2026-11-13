@@ -51,6 +51,9 @@ export const TENANT_ID_COLLECTIONS: readonly TenantIdCollection[] = [
   // 会话内建 Review（#461）：集合矩阵注册（tenant-isolation.test.ts 互校）；
   // 迁移 013 的存量回填对新集合为 no-op（创建路径由 applyTenantScope 直接写入 tenantId）
   { collection: 'sessionreviews', model: 'SessionReview' },
+  // 会话交互卡片（Elicitation / Permission 持久化）：集合矩阵注册；
+  // 迁移 013 的存量回填对新集合为 no-op（创建路径由 applyTenantScope 直接写入 tenantId）
+  { collection: 'sessioninteractions', model: 'SessionInteraction' },
   {
     collection: 'user_commit_settings',
     model: 'UserCommitSetting',

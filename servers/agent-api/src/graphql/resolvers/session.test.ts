@@ -31,6 +31,12 @@ vi.mock('../../services/controller-workspace.js', () => ({
   },
 }));
 
+vi.mock('../../services/session-interaction-service.js', () => ({
+  sessionInteractionService: {
+    listBySession: vi.fn(),
+  },
+}));
+
 vi.mock('../../services/session-import.js', () => ({
   sessionImportService: {
     listHistorySessions: vi.fn(),
@@ -65,6 +71,7 @@ vi.mock('../../models/cloud-host.js', () => ({
 
 import { sessionResolvers } from './session.js';
 import { sessionService } from '../../services/session.js';
+import { sessionInteractionService } from '../../services/session-interaction-service.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { modelService } from '../../services/model.js';
 import { Controller } from '../../models/controller.js';
@@ -480,5 +487,40 @@ describe('sessionResolvers 会话归档与只读（T-RES1~3）', () => {
       sessionResolvers.Session.readOnlyReason(parent, {}, { currentUser: null } as never),
     ).resolves.toBeNull();
     expect(sessionService.resolveSessionReadOnlyReason).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('Query.sessionInteractions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('未认证抛 Not authenticated', async () => {
+    await expect(
+      sessionResolvers.Query.sessionInteractions({}, { sessionId: 'sess-1' }, { currentUser: null } as never),
+    ).rejects.toThrow('Not authenticated');
+  });
+
+  it('非归属会话抛 Session not found（不查交互）', async () => {
+    vi.mocked(sessionService.findById).mockResolvedValue(null);
+    await expect(
+      sessionResolvers.Query.sessionInteractions({}, { sessionId: 'sess-1' }, context),
+    ).rejects.toThrow('Session not found');
+    expect(sessionInteractionService.listBySession).not.toHaveBeenCalled();
+  });
+
+  it('归属校验用 sessionService.findById(userId)；只读会话放行并按 createdAt 升序返回', async () => {
+    vi.mocked(sessionService.findById).mockResolvedValue({ id: 'sess-1' } as never);
+    const rows = [
+      { id: 'i-1', interactionId: 'req-1', status: 'ACCEPTED' },
+      { id: 'i-2', interactionId: 'req-2', status: 'PENDING' },
+    ];
+    vi.mocked(sessionInteractionService.listBySession).mockResolvedValue(rows as never);
+
+    await expect(
+      sessionResolvers.Query.sessionInteractions({}, { sessionId: 'sess-1' }, context),
+    ).resolves.toEqual(rows);
+    expect(sessionService.findById).toHaveBeenCalledWith('sess-1', 'user-1');
+    expect(sessionInteractionService.listBySession).toHaveBeenCalledWith('sess-1');
   });
 });

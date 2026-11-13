@@ -684,3 +684,171 @@ describe('ACP Permission Reminder API', () => {
     });
   });
 });
+
+// ---------- 会话交互卡片（Issue #490 / API-SI5~SI8） ----------
+
+const GET_SESSION_INTERACTIONS = `
+  query GetSessionInteractions($sessionId: ID!) {
+    sessionInteractions(sessionId: $sessionId) {
+      interactionId
+      kind
+      status
+      toolCallId
+      toolCall
+      options
+      expiresAt
+      history { state actor }
+      response { outcome optionId }
+    }
+  }
+`;
+
+async function listInteractions(sessionId: string): Promise<any[]> {
+  const res = await gqlRequest(GET_SESSION_INTERACTIONS, { sessionId }, authToken);
+  const body = await res.json();
+  return body.data?.sessionInteractions ?? [];
+}
+
+async function waitForInteraction(sessionId: string, interactionId: string, status?: string): Promise<any> {
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const found = (await listInteractions(sessionId)).find((row) => row.interactionId === interactionId);
+    if (found && (!status || found.status === status)) return found;
+  }
+  return null;
+}
+
+describe('Session interaction cards - permission (API-SI5~SI8)', () => {
+  beforeAll(async () => {
+    if (!authToken) {
+      const frontUser = await createFrontUser();
+      authToken = frontUser.token;
+    }
+  });
+
+  it('API-SI5/SI6/SI8: 触发落库 PENDING（重复同 requestId 仅一张）→ respondPermission 回传并收敛 ACCEPTED', async () => {
+    const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
+    const workspaceId = await createWorkspace(ctrlId);
+
+    const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
+    const sessionRes = await gqlRequest(
+      CREATE_SESSION,
+      { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
+      authToken,
+    );
+    const sessionBody = await sessionRes.json();
+    const sessionId = sessionBody.data.createSession.session.id;
+
+    const startData = await startEvent;
+    ctrlClient.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId,
+      success: true,
+      externalSessionId: `ext_${Date.now()}`,
+    });
+    await new Promise((r) => setTimeout(r, 500));
+
+    const requestId = `perm_card_${Date.now()}`;
+    const payload = {
+      requestId,
+      sessionId,
+      toolCall: { toolCallId: 'call_card_1', title: 'Bash: npm test', kind: 'execute' },
+      options: [
+        { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+      ],
+    };
+    ctrlClient.emit('acp:permission', payload);
+    // 重复触发（控制器重发）：interactionId 幂等，会话中只应有一张卡片
+    ctrlClient.emit('acp:permission', payload);
+
+    const created = await waitForInteraction(sessionId, requestId, 'PENDING');
+    expect(created).toBeDefined();
+    expect(created.kind).toBe('PERMISSION');
+    expect(created.toolCallId).toBe('call_card_1');
+    expect(created.options).toHaveLength(2);
+    expect(created.history[0]).toMatchObject({ state: 'PENDING', actor: 'agent' });
+
+    const rows = await listInteractions(sessionId);
+    expect(rows.filter((row) => row.interactionId === requestId)).toHaveLength(1);
+
+    const responseEvent = waitForEvent<{ requestId: string; outcome: { outcome: string; optionId?: string } }>(
+      ctrlClient,
+      'acp:permission:response',
+      10000,
+    );
+    const respondRes = await gqlRequest(
+      RESPOND_PERMISSION,
+      { requestId, outcome: 'selected', optionId: 'allow-once' },
+      authToken,
+    );
+    expect((await respondRes.json()).data.respondPermission).toBe(true);
+    const relayed = await responseEvent;
+    expect(relayed.outcome).toEqual({ outcome: 'selected', optionId: 'allow-once' });
+
+    const accepted = await waitForInteraction(sessionId, requestId, 'ACCEPTED');
+    expect(accepted.response).toMatchObject({ outcome: 'selected', optionId: 'allow-once' });
+    expect(accepted.history.map((event: any) => `${event.state}:${event.actor}`)).toContain('ACCEPTED:user');
+
+    ctrlClient.disconnect();
+  });
+
+  it(
+    'API-SI7: permission 60s 超时经 permission:resolved 收敛 EXPIRED，后续作答被拒绝',
+    async () => {
+      const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
+      const workspaceId = await createWorkspace(ctrlId);
+
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
+        authToken,
+      );
+      const sessionId = (await sessionRes.json()).data.createSession.session.id;
+
+      const startData = await startEvent;
+      ctrlClient.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
+      await new Promise((r) => setTimeout(r, 500));
+
+      const requestId = `perm_timeout_${Date.now()}`;
+      ctrlClient.emit('acp:permission', {
+        requestId,
+        sessionId,
+        toolCall: { toolCallId: 'call_timeout_1', title: 'Bash: sleep 60', kind: 'execute' },
+        options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
+      });
+
+      const created = await waitForInteraction(sessionId, requestId, 'PENDING');
+      expect(created).toBeDefined();
+
+      // 真实 60s 超时：controller-api 到点发布 permission:resolved{reason:timeout}，
+      // agent-api 订阅后把会话卡片收敛为 EXPIRED（不依赖客户端轮询兜底）。
+      let expired: any = null;
+      for (let i = 0; i < 150; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        expired = (await listInteractions(sessionId)).find((row) => row.interactionId === requestId);
+        if (expired?.status === 'EXPIRED') break;
+      }
+      expect(expired?.status).toBe('EXPIRED');
+      expect(expired.history.map((event: any) => `${event.state}:${event.actor}`)).toContain('EXPIRED:system');
+
+      const respondRes = await gqlRequest(
+        RESPOND_PERMISSION,
+        { requestId, outcome: 'selected', optionId: 'allow-once' },
+        authToken,
+      );
+      expect((await respondRes.json()).errors?.[0]?.message).toBe(
+        'Todo item not found or already handled',
+      );
+
+      ctrlClient.disconnect();
+    },
+    90_000,
+  );
+});

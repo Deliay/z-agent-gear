@@ -222,6 +222,8 @@ export const workflowTypeDefs = `#graphql
     additionalPrompts: [WorkflowAdditionalPrompt!]!
     # 当前实例关联的 Pull Request
     pullRequestLinks: [WorkflowPullRequestLink!]!
+    # 存在「待处理且未过期」交互的节点会话 id 集合（实例级一次查询，避免 N+1）
+    pendingInteractionSessionIds: [ID!]!
     # 归属对象（供集中列表展示所属工作区/控制器）；可能已被删除，消费方须判空
     workspace: ControllerWorkspace
     controller: Controller
