@@ -312,6 +312,33 @@ export interface FakeControllerOptions {
   workflowTemplates?: Array<{ fileName: string; content?: string; error?: string }>;
 }
 
+/**
+ * fake controller 应答 `fs:read-file`（会话文件预览 relay）。
+ * `files` 未命中的路径返回失败结果（等价 worker 读不到文件）。
+ * 必须在触发 read tool call 之前调用，否则前端 15s 轮询会超时并落到错误态。
+ */
+export function respondFileReads(
+  socket: Socket,
+  files: Record<string, string | { content: string; truncated?: boolean }> = {},
+): void {
+  socket.on('fs:read-file', (data: { requestId: string; path: string }) => {
+    const entry = files[data.path];
+    if (entry === undefined) {
+      socket.emit('fs:read-file:result', { requestId: data.requestId, success: false, error: 'not found' });
+      return;
+    }
+    const content = typeof entry === 'string' ? entry : entry.content;
+    const truncated = typeof entry === 'string' ? false : (entry.truncated ?? false);
+    socket.emit('fs:read-file:result', {
+      requestId: data.requestId,
+      success: true,
+      content,
+      truncated,
+      sizeBytes: Buffer.byteLength(content, 'utf8'),
+    });
+  });
+}
+
 export function registerController(
   rawKey: string,
   options: FakeControllerOptions = {},

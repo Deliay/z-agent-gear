@@ -11,6 +11,7 @@ import { controllerService } from './controller.js';
 import { cloudHostService } from './cloud-host-service.js';
 import { workflowTemplateService } from './workflow/template.js';
 import { configuredWorkflowService } from './workflow/configured.js';
+import { controllerWorkspaceService } from './controller-workspace.js';
 import { workflowInstanceService } from './workflow/instance.js';
 import { runWithWorkspace, type WorkspaceContext } from './workspace-context.js';
 
@@ -98,6 +99,44 @@ describe('工作区资源共享（T-WS 跨成员可见性，真库）', () => {
 
       const hosts = await cloudHostService.list(String(USER_B));
       expect(hosts.map((h) => h.name)).toContain('host-a');
+    });
+  });
+
+  it('项目工作区（ControllerWorkspace）跟随控制器共享：同工作区成员可见他人创建目录', async () => {
+    const controllerId = new mongoose.Types.ObjectId();
+    await mongoose.connection.collection('controllers').insertOne({
+      _id: controllerId,
+      userId: USER_A,
+      tenantId: TENANT,
+      workspaceId: WS,
+      keyId: new mongoose.Types.ObjectId(),
+      hostname: 'host-a',
+      type: 'local',
+      version: '1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await mongoose.connection.collection('controllerworkspaces').insertOne({
+      _id: new mongoose.Types.ObjectId(),
+      userId: USER_A,
+      tenantId: TENANT,
+      controllerId,
+      name: 'A 的项目目录',
+      path: '/home/user/a-project',
+      isEnabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    await runWithWorkspace(context('developer'), async () => {
+      const all = await controllerWorkspaceService.findAllByUser(String(USER_B));
+      expect(all.map((row) => row.name)).toContain('A 的项目目录');
+
+      const byController = await controllerWorkspaceService.findAllByController(
+        String(controllerId),
+        String(USER_B),
+      );
+      expect(byController.map((row) => row.name)).toContain('A 的项目目录');
     });
   });
 

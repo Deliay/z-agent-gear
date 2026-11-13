@@ -52,7 +52,11 @@ export class SessionImportService {
       throw new Error('Controller not found');
     }
 
-    const workspace = await ControllerWorkspace.findOne({ _id: workspaceId, userId, controllerId }).lean();
+    const workspace = await ControllerWorkspace.findOne(
+      getWorkspaceContext()
+        ? { _id: workspaceId, controllerId }
+        : { _id: workspaceId, userId, controllerId },
+    ).lean();
     if (!workspace) {
       throw new Error('Workspace not found');
     }
@@ -165,7 +169,11 @@ export class SessionImportService {
       throw new Error('Controller not found');
     }
 
-    const workspace = await ControllerWorkspace.findOne({ _id: workspaceId, userId, controllerId }).lean();
+    const workspace = await ControllerWorkspace.findOne(
+      getWorkspaceContext()
+        ? { _id: workspaceId, controllerId }
+        : { _id: workspaceId, userId, controllerId },
+    ).lean();
     if (!workspace) {
       throw new Error('Workspace not found');
     }
