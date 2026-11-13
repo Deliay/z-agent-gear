@@ -170,6 +170,7 @@ flowchart LR
 - [[draft/20261107-workflow-template-project-persistence.md]] — 工作流模板项目持久化（工作流模板放置在仓库 .zag/workflow/templates/、一个 JSON 文件一个模板；新增工作目录/设置 GitHub 项目后自动检测并提示配置；云电脑设置中可随时查看与配置；项目来源已配置工作流生命周期跟随云电脑、销毁时一并销毁）
 - [[draft/20261112-session-interaction-cards.md]] — 会话中的提问表单与权限审批作为会话内容出现（Elicitation/权限审批持久化为会话时间线卡片：完整状态迁移与提交内容回显、过期倒计时；弹窗降级为通知与跳转会话链接；工作流列表/图形视图节点待审批感叹号点击展开会话）
 - [[draft/20261113-cloud-controller-operations-restriction.md]] — 设置中控制器的操作按钮优化（云电脑/云控制器在「设置-控制器管理」不展示「重命名/删除/重新生成Key」三个操作入口，服务端同步拒绝三操作且零副作用；本地控制器零变化）
+- [[draft/20261113-oidc-github-oauth-login.md]] — 支持自定义 OIDC 登录和 GitHub OAuth 登录（后台统一配置全局 OIDC Provider（可多条）与 GitHub OAuth（单条），按前台/后台分别启用；前后台登录页展示跳转登录按钮，前台首次登录自动开户，后台管理员先绑定后登录）
 
 ### 实现中文档（`shipping/`）
 

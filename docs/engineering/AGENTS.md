@@ -237,6 +237,7 @@ flowchart LR
 - [[proposals/20261112-feat-session-interaction-cards.md]] — 会话中的提问表单与权限审批作为会话内容出现（sessioninteractions 新集合状态机+history、respond* 权威切换、permission:resolved 新频道与 60s 时限口径统一、WorkflowInstance.pendingInteractionSessionIds、会话时间线 InteractionCard 与倒计时、弹窗降级通知、工作流列表/图形感叹号）
 - [[proposals/20261113-feat-cloud-controller-operations-restriction.md]] — 设置中控制器的操作按钮优化（前端 ControllerListSection 对 type=cloud 隐藏「重命名/重新生成Key/解绑(删除)」按钮；agent-api 服务层 rename/unbind/regenerate 三处 cloud 拒绝且零副作用、resolver 白名单文案逐字透传；契约补齐 regenerateControllerKey 与拒绝说明）
 - [[proposals/20261113-feat-cloud-agent-gear-auto-upgrade.md]] — 云环境 agent-gear 自动升级（worker 镜像 entrypoint 新增 auto_update_loop 周期自升级：10 分钟 pnpm view 检查、mkdir 互斥安装、agent.pid 标记 + SIGTERM 复用保活非 42 路径优雅重启、latest 回滚自动愈合；契约零变更，T-EP20~T-EP27 stub 用例）
+- [[proposals/20261113-feat-oidc-github-oauth-login.md]] — 支持自定义 OIDC 登录和 GitHub OAuth 登录（admin-api 唯一写方 authproviders（OIDC 多条 + GitHub 单条，secret AES-256-GCM 不回显）；agent-api 统一 OAuth 回调唯一入口（openid-client + PKCE/nonce，GitHub state），前台 externallogins 自动开户复用 provisioning 抽取，后台 adminexternallogins 先绑定后登录经 admin-api 内部端点换票；前后台一次性 ticket 兑换登录；契约 auth/admin-auth/admin-auth-provider/auth-oauth.md）
 
 ### 实现计划（`plan/`）
 
