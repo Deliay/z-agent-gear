@@ -1,10 +1,32 @@
 import { GraphQLError } from 'graphql';
-import { controllerKeyService } from '../../services/controller-key.js';
-import { controllerService } from '../../services/controller.js';
+import {
+  controllerKeyService,
+  CLOUD_CONTROLLER_KEY_REGENERATE_REJECTED,
+} from '../../services/controller-key.js';
+import {
+  controllerService,
+  CLOUD_CONTROLLER_RENAME_REJECTED,
+  CLOUD_CONTROLLER_UNBIND_REJECTED,
+} from '../../services/controller.js';
 import { McpServer } from '../../models/mcp-server.js';
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
+
+/** 云控制器拒绝文案白名单：仅这些文案逐字透传为 GraphQLError，其余错误按现状冒泡。 */
+const CLOUD_REJECT_MESSAGES = new Set<string>([
+  CLOUD_CONTROLLER_RENAME_REJECTED,
+  CLOUD_CONTROLLER_UNBIND_REJECTED,
+  CLOUD_CONTROLLER_KEY_REGENERATE_REJECTED,
+]);
+
+function rethrowCloudReject(err: unknown): never {
+  if (err instanceof GraphQLError) throw err;
+  if (err instanceof Error && CLOUD_REJECT_MESSAGES.has(err.message)) {
+    throw new GraphQLError(err.message);
+  }
+  throw err;
+}
 
 export const controllerResolvers = {
   Controller: {
@@ -86,15 +108,19 @@ export const controllerResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      const result = await controllerService.rename(
-        args.input.id,
-        context.currentUser.id,
-        args.input.name,
-      );
-      if (!result) {
-        throw new GraphQLError('Controller not found');
+      try {
+        const result = await controllerService.rename(
+          args.input.id,
+          context.currentUser.id,
+          args.input.name,
+        );
+        if (!result) {
+          throw new GraphQLError('Controller not found');
+        }
+        return result;
+      } catch (err) {
+        rethrowCloudReject(err);
       }
-      return result;
     },
     unbindController: async (
       _parent: unknown,
@@ -104,7 +130,11 @@ export const controllerResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      return controllerService.unbind(args.id, context.currentUser.id);
+      try {
+        return await controllerService.unbind(args.id, context.currentUser.id);
+      } catch (err) {
+        rethrowCloudReject(err);
+      }
     },
     setControllerWorktreeDir: async (
       _parent: unknown,
@@ -161,14 +191,18 @@ export const controllerResolvers = {
       if (!context.currentUser) {
         throw new GraphQLError('Not authenticated');
       }
-      const result = await controllerKeyService.regenerate(
-        args.input.controllerId,
-        context.currentUser.id,
-      );
-      if (!result) {
-        throw new GraphQLError('Controller not found');
+      try {
+        const result = await controllerKeyService.regenerate(
+          args.input.controllerId,
+          context.currentUser.id,
+        );
+        if (!result) {
+          throw new GraphQLError('Controller not found');
+        }
+        return result;
+      } catch (err) {
+        rethrowCloudReject(err);
       }
-      return result;
     },
   },
 };
