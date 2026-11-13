@@ -23,8 +23,19 @@
 #   ZAG_HOST_ENDPOINT / ZAG_HOST_KEY（controller-api 标准连接，仅云电脑模式）
 # 可选开关：
 #   ZAG_SKIP_AGENT_GEAR_UPDATE=1  跳过全部自更新（启动与每轮），但仍保活重启
+#   ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS  周期自升级检查间隔（毫秒；默认 600000，0 禁用，非法值回退默认）
 #   ZAG_KEEPALIVE_BACKOFF_MS      退避整体缩放（毫秒；仅测试用）
 #   ZAG_STORAGE_HOME=1            当前容器挂载了云存储（/home/worker 为 PVC）：仅用于失败日志/回滚语义
+#
+# 周期自升级口径（docs/engineering/plan/20261113-feat-cloud-agent-gear-auto-upgrade.md）：
+# - main 在保活前启动 auto_update_loop 后台循环：默认每 10 分钟 `pnpm view agent-gear version`
+#   比对本地 `agent-gear --version`，不一致则 `pnpm add -g agent-gear` 安装；
+# - 安装经 $RUN_DIR/update.lock.d 的 mkdir 原子互斥，与启动/每轮自更新共享同一把锁；
+# - 运行态经 $RUN_DIR/agent.pid 传递：运行中 → SIGTERM，由保活非 42 路径带出新版本；
+#   退避/更新窗口（无 pid）→ 不打断退避，下次启动自然生效；
+# - 销毁优先：shutdown 先置 $RUN_DIR/shutdown 并终止循环，销毁后绝不升级/重启/重连；
+# - 检查/安装失败仅 WARN 并按固定周期重试（不缩短间隔）；最新版恒取 registry latest，
+#   发布侧回滚 latest 指针后下一周期自动回落（缺陷版本自愈合）。
 #
 # 云存储自举口径（docs/engineering/plan/20261102-feat-cloud-storage.md Phase 2 / 提案实现点 4）：
 # 镜像不再预装任何主目录工具链，PVC 挂载 /home/worker 后由入口统一重建：
@@ -66,6 +77,10 @@ WORKER_PATH="$WORKER_NVM_DIR/current/bin:$PNPM_BIN_DIR:$PNPM_HOME:/usr/local/sbi
 
 CHILD_PID=""
 SCAN_PID=""
+AUTO_UPDATE_PID=""
+# 运行目录：main 最先创建，承载 mismatch / agent.pid / update.lock.d / shutdown 等运行时标记。
+RUN_DIR=""
+MISMATCH_MARKER=""
 shutting_down=0
 
 # 单行 JSON 日志（契约 contracts/observability.md / 裁决 D6）：纯 printf + sed 转义，
@@ -223,6 +238,11 @@ update_agent_gear() {
     log "skipping agent-gear update (ZAG_SKIP_AGENT_GEAR_UPDATE=1)"
     return 0
   fi
+  # 与周期自升级共享同一把安装锁：另一路径正在安装最新版时跳过本次安装（等价既有失败容忍）。
+  if ! acquire_update_lock; then
+    log "agent-gear update skipped: another install in progress"
+    return 0
+  fi
   local registry
   registry=$(run_as_worker "$PNPM_CMD" config get registry 2>/dev/null || echo unknown)
   log "updating agent-gear via pnpm (registry=$registry)"
@@ -236,7 +256,120 @@ update_agent_gear() {
   else
     log "WARN: agent-gear update failed; continuing with the pre-installed version ($(run_as_worker agent-gear --version 2>/dev/null || echo 'version unknown'))"
   fi
+  release_update_lock
   return 0
+}
+
+# 安装互斥（mkdir 原子锁）：两条安装路径（启动/每轮、周期自升级）同一时刻至多一个在装。
+# 锁内 pid 供死锁回收：后台子壳中 $$ 恒等于父壳，必须用 $BASHPID 才能定位真实持有者。
+# 持有者已不存在（pid 文件缺失/进程已退出）→ 视为残留锁，强制清理后重试一次。
+acquire_update_lock() {
+  local lock_dir="$RUN_DIR/update.lock.d" holder=""
+  if mkdir "$lock_dir" 2>/dev/null; then
+    printf '%s\n' "$BASHPID" > "$lock_dir/pid" 2>/dev/null || true
+    return 0
+  fi
+  if [ -f "$lock_dir/pid" ]; then
+    holder=$(cat "$lock_dir/pid" 2>/dev/null || true)
+  fi
+  if [ -n "$holder" ] && kill -0 "$holder" 2>/dev/null; then
+    return 1
+  fi
+  rm -rf "$lock_dir" 2>/dev/null || true
+  if mkdir "$lock_dir" 2>/dev/null; then
+    printf '%s\n' "$BASHPID" > "$lock_dir/pid" 2>/dev/null || true
+    return 0
+  fi
+  return 1
+}
+
+release_update_lock() {
+  rm -rf "$RUN_DIR/update.lock.d" 2>/dev/null || true
+}
+
+# 版本串归一：空白折叠为单空格并去首尾空白；空串或仍含空白 → 视为检查失败（返回非零）。
+normalize_version() {
+  local value
+  value=$(printf '%s' "$1" | tr -s '[:space:]' ' ')
+  value=$(printf '%s' "$value" | sed -e 's/^ //' -e 's/ $//')
+  case "$value" in
+    ''|*' '*) return 1 ;;
+  esac
+  printf '%s' "$value"
+}
+
+# 周期自升级循环（后台子壳）：每轮先睡间隔，再检查 registry latest 与本地版本。
+# 子壳读不到父壳变量：销毁经 $RUN_DIR/shutdown 探测，运行态经 $RUN_DIR/agent.pid 读取。
+# 失败仅 WARN，节奏恒受间隔约束（不重试风暴）；skip/interval=0 时启动即退。
+auto_update_loop() {
+  local interval_ms="${ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS:-600000}"
+  local interval_label latest current rc="0" install_pid installed agent_pid
+  case "$interval_ms" in
+    ''|*[!0-9]*)
+      log "WARN: invalid ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS ($interval_ms); falling back to 600000ms"
+      interval_ms=600000
+      ;;
+  esac
+  if [ "${ZAG_SKIP_AGENT_GEAR_UPDATE:-0}" = "1" ]; then
+    log "agent-gear auto-update disabled (ZAG_SKIP_AGENT_GEAR_UPDATE=1)"
+    return 0
+  fi
+  if [ "$interval_ms" -eq 0 ]; then
+    log "agent-gear auto-update disabled (interval=0)"
+    return 0
+  fi
+  interval_label="$((interval_ms / 1000))s"
+  [ "$interval_ms" -lt 1000 ] && interval_label="${interval_ms}ms"
+  log "agent-gear auto-update loop started (interval=$interval_label)"
+
+  while true; do
+    sleep_ms "$interval_ms"
+    [ -f "$RUN_DIR/shutdown" ] && return 0
+
+    rc=0
+    latest=$(run_as_worker "$PNPM_CMD" view agent-gear version 2>/dev/null) || rc=$?
+    if [ "$rc" -ne 0 ] || ! latest=$(normalize_version "$latest"); then
+      log "WARN: agent-gear update check failed (pnpm view agent-gear version exit=$rc)"
+      continue
+    fi
+    rc=0
+    current=$(run_as_worker agent-gear --version 2>/dev/null) || rc=$?
+    if [ "$rc" -ne 0 ] || ! current=$(normalize_version "$current"); then
+      log "WARN: agent-gear update check failed (agent-gear --version exit=$rc)"
+      continue
+    fi
+    if [ "$latest" = "$current" ]; then
+      log "agent-gear is up to date ($current)"
+      continue
+    fi
+
+    log "new agent-gear version available: $current -> $latest; installing"
+    if ! acquire_update_lock; then
+      log "agent-gear update skipped: another install in progress"
+      continue
+    fi
+    rc=0
+    run_as_worker_exec "$PNPM_CMD" add -g agent-gear &
+    install_pid=$!
+    wait "$install_pid" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      release_update_lock
+      log "WARN: agent-gear auto-update install failed; will retry next round"
+      continue
+    fi
+    release_update_lock
+    installed=$(run_as_worker agent-gear --version 2>/dev/null || echo unknown)
+    agent_pid=""
+    if [ -f "$RUN_DIR/agent.pid" ]; then
+      agent_pid=$(cat "$RUN_DIR/agent.pid" 2>/dev/null || true)
+    fi
+    if [ -n "$agent_pid" ] && kill -0 "$agent_pid" 2>/dev/null; then
+      log "agent-gear updated: $installed; restarting service to apply"
+      kill -TERM "$agent_pid" 2>/dev/null || true
+    else
+      log "agent-gear updated: $installed; will apply on next (re)start"
+    fi
+  done
 }
 
 # stderr 流式扫描：逐行回写 fd 2，仅 VERSION_MISMATCH 落 0 字节标记（不落盘完整日志）。
@@ -263,9 +396,12 @@ run_agent_gear() {
   SCAN_PID=$scan_pid
   run_as_worker_exec agent-gear 2> "$fifo" &
   CHILD_PID=$!
+  # 运行态标记：周期自升级据此区分「运行中（TERM 立即重启）」与「退避/更新窗口（下次启动生效）」。
+  printf '%s\n' "$CHILD_PID" > "$RUN_DIR/agent.pid" 2>/dev/null || true
   local rc=0
   wait "$CHILD_PID" || rc=$?
   CHILD_PID=""
+  rm -f "$RUN_DIR/agent.pid"
   wait "$scan_pid" || true
   SCAN_PID=""
   rm -f "$fifo"
@@ -321,6 +457,15 @@ shutdown() {
   local signal="${1:-SIGTERM}"
   shutting_down=1
   log "shutdown requested ($signal), forwarding to child"
+  # 销毁优先：先落销毁标记并终止周期自升级循环，之后绝不再安装/TERM agent-gear。
+  if [ -n "${RUN_DIR:-}" ]; then
+    : > "$RUN_DIR/shutdown" 2>/dev/null || true
+  fi
+  if [ -n "${AUTO_UPDATE_PID:-}" ] && kill -0 "$AUTO_UPDATE_PID" 2>/dev/null; then
+    kill -TERM "$AUTO_UPDATE_PID" 2>/dev/null || true
+    wait "$AUTO_UPDATE_PID" 2>/dev/null || true
+    AUTO_UPDATE_PID=""
+  fi
   if [ -n "$CHILD_PID" ] && kill -0 "$CHILD_PID" 2>/dev/null; then
     kill -TERM "$CHILD_PID" 2>/dev/null || true
     for _ in $(seq 1 20); do
@@ -340,6 +485,10 @@ shutdown() {
 }
 
 main() {
+  # 运行目录前移：启动更新、周期自升级、shutdown 全程共用同一 $RUN_DIR（互斥锁/agent.pid/销毁标记）。
+  RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/zag-worker.XXXXXX")
+  MISMATCH_MARKER="$RUN_DIR/mismatch"
+
   trap 'shutdown SIGTERM' SIGTERM
   trap 'shutdown SIGINT' SIGINT
 
@@ -358,8 +507,9 @@ main() {
     exit 1
   fi
 
-  RUN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/zag-worker.XXXXXX")
-  MISMATCH_MARKER="$RUN_DIR/mismatch"
+  # 周期自升级后台循环：首轮先睡间隔（启动更新已完成一次安装/更新）。
+  auto_update_loop &
+  AUTO_UPDATE_PID=$!
 
   log "connecting to cloud-controller: ${ZAG_SERVER_ENDPOINT%%\?*}"
   local rc=0
@@ -367,6 +517,11 @@ main() {
     rc=0
   else
     rc=$?
+  fi
+  # 保活收敛（含退出码 42）后不留下空转的后台循环；销毁路径已在 shutdown 中先终止过。
+  if [ -n "$AUTO_UPDATE_PID" ] && kill -0 "$AUTO_UPDATE_PID" 2>/dev/null; then
+    kill -TERM "$AUTO_UPDATE_PID" 2>/dev/null || true
+    wait "$AUTO_UPDATE_PID" 2>/dev/null || true
   fi
   exit "$rc"
 }

@@ -6,7 +6,7 @@ type: Permanent
 # 云环境 agent-gear 自动升级 - 技术提案
 
 **功能名称**: 云环境 agent-gear 自动升级
-**关联 PRD**: `docs/product/draft/20261113-cloud-agent-gear-auto-upgrade.md`
+**关联 PRD**: `docs/product/shipping/20261113-cloud-agent-gear-auto-upgrade.md`
 **技术提案版本**: v1.0
 **创建日期**: 2026-11-13
 **作者**: ZeroAsh
@@ -281,7 +281,7 @@ deploy/images/worker/
 
 ## 11. 相关文档
 
-- 关联 PRD：[[../../product/draft/20261113-cloud-agent-gear-auto-upgrade.md]]
+- 关联 PRD：[[../../product/shipping/20261113-cloud-agent-gear-auto-upgrade.md]]
 - 需求来源：[GitHub Issue Deliay/z-agent-gear#496](https://github.com/Deliay/z-agent-gear/issues/496)
 - [[20261025-feat-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（保活/退避/自更新既有语义）
 - [[20261017-feat-controller-version-requirement.md]] — 版本门禁与一次性自升级（VERSION_MISMATCH 链路）

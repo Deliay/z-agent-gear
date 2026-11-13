@@ -6,7 +6,7 @@ type: Permanent
 # 云环境 agent-gear 自动升级 - 实现计划
 
 **关联 Proposal**: `docs/engineering/proposals/20261113-feat-cloud-agent-gear-auto-upgrade.md`（v1.0）
-**关联 PRD**: `docs/product/draft/20261113-cloud-agent-gear-auto-upgrade.md`（v1.0）
+**关联 PRD**: `docs/product/shipping/20261113-cloud-agent-gear-auto-upgrade.md`（v1.0）
 **需求总分支（feat-branch）**: `feat/cloud-agent-gear-auto-upgrade`（基于 `origin/main`，需求总 PR [#499](https://github.com/Deliay/z-agent-gear/pull/499)）
 **计划提交分支**: `feat/cloud-agent-gear-auto-upgrade`（本文件随需求总分支提交）
 **创建日期**: 2026-11-13
@@ -247,7 +247,7 @@ auto_update_loop() {
 
 ## 9. 相关文档
 
-- 关联 PRD：[[../../product/draft/20261113-cloud-agent-gear-auto-upgrade.md]]
+- 关联 PRD：[[../../product/shipping/20261113-cloud-agent-gear-auto-upgrade.md]]
 - 关联 Proposal：[[../proposals/20261113-feat-cloud-agent-gear-auto-upgrade.md]]（v1.0）
 - 需求来源：[GitHub Issue Deliay/z-agent-gear#496](https://github.com/Deliay/z-agent-gear/issues/496)；需求总 PR：[Deliay/z-agent-gear#499](https://github.com/Deliay/z-agent-gear/pull/499)
 - [[20261025-feat-cloud-host-keepalive.md]] — 云电脑保活与 worker 用户（保活/退避/自更新既有语义，本计划复用其非 42 重启链路）
