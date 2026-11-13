@@ -170,6 +170,7 @@ flowchart LR
 - [[draft/20261107-workflow-template-project-persistence.md]] — 工作流模板项目持久化（工作流模板放置在仓库 .zag/workflow/templates/、一个 JSON 文件一个模板；新增工作目录/设置 GitHub 项目后自动检测并提示配置；云电脑设置中可随时查看与配置；项目来源已配置工作流生命周期跟随云电脑、销毁时一并销毁）
 - [[draft/20261112-session-interaction-cards.md]] — 会话中的提问表单与权限审批作为会话内容出现（Elicitation/权限审批持久化为会话时间线卡片：完整状态迁移与提交内容回显、过期倒计时；弹窗降级为通知与跳转会话链接；工作流列表/图形视图节点待审批感叹号点击展开会话）
 - [[draft/20261113-cloud-controller-operations-restriction.md]] — 设置中控制器的操作按钮优化（云电脑/云控制器在「设置-控制器管理」不展示「重命名/删除/重新生成Key」三个操作入口，服务端同步拒绝三操作且零副作用；本地控制器零变化）
+- [[draft/20261113-fragment-template-custom-tools.md]] — 自定义渲染模板+自定义工具MCP（标准 Fragment 渲染 Plain/Valut/Parameter × Generic/Json/Uri 仅服务端求值、可复用 Fragment 编辑器 $/# 补全与引用名高亮不求值、Valut MCP 名单可见不可取信、工作区级自定义工具 prompt/http 经内置 MCP 动态目录提供、参数缺失拒绝调用）
 
 ### 实现中文档（`shipping/`）
 
