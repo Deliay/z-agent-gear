@@ -64,7 +64,7 @@ afterEach(() => {
 });
 
 describe('21 collections tenantId isolation (T-ISO)', () => {
-  it('has exactly the 20 planned collections', () => {
+  it('has exactly the 21 planned collections', () => {
     expect(CASES).toHaveLength(21);
     expect(CASES.map(([, , collection]) => collection)).toEqual([
       'sessions',
@@ -99,7 +99,7 @@ describe('21 collections tenantId isolation (T-ISO)', () => {
     }
     // 反向覆盖：21 个模型逐一被常量覆盖，且无重复 model / 无遗漏
     const constantModels = TENANT_ID_COLLECTIONS.map((target) => target.model);
-    expect(new Set(constantModels).size).toBe(20);
+    expect(new Set(constantModels).size).toBe(21);
     expect(new Set(constantModels)).toEqual(new Set(CASES.map(([, model]) => model.modelName)));
   });
 

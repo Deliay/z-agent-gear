@@ -247,6 +247,20 @@ describe('InteractionCard', () => {
     expect(screen.queryByText('Allow once')).toBeNull();
   });
 
+  it('T-IC11: permission 选择拒绝类选项时徽标与回显显示「已拒绝」', () => {
+    render(
+      <InteractionCard
+        interaction={permissionInteraction({
+          status: 'ACCEPTED',
+          response: { outcome: 'selected', optionId: 'reject_once' },
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId('interaction-status').textContent).toBe('已拒绝');
+    expect(screen.getByTestId('interaction-selected-option').textContent).toBe('已拒绝：Reject once');
+  });
+
   it('T-IC10: permission 取消回传 outcome=cancelled', async () => {
     render(<InteractionCard interaction={permissionInteraction()} />);
     fireEvent.click(screen.getByText('取消'));

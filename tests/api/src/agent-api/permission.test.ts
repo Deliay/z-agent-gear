@@ -792,4 +792,63 @@ describe('Session interaction cards - permission (API-SI5~SI8)', () => {
 
     ctrlClient.disconnect();
   });
+
+  it(
+    'API-SI7: permission 60s 超时经 permission:resolved 收敛 EXPIRED，后续作答被拒绝',
+    async () => {
+      const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
+      const workspaceId = await createWorkspace(ctrlId);
+
+      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
+      const sessionRes = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
+        authToken,
+      );
+      const sessionId = (await sessionRes.json()).data.createSession.session.id;
+
+      const startData = await startEvent;
+      ctrlClient.emit('acp:start:result', {
+        requestId: startData.requestId,
+        sessionId,
+        success: true,
+        externalSessionId: `ext_${Date.now()}`,
+      });
+      await new Promise((r) => setTimeout(r, 500));
+
+      const requestId = `perm_timeout_${Date.now()}`;
+      ctrlClient.emit('acp:permission', {
+        requestId,
+        sessionId,
+        toolCall: { toolCallId: 'call_timeout_1', title: 'Bash: sleep 60', kind: 'execute' },
+        options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
+      });
+
+      const created = await waitForInteraction(sessionId, requestId, 'PENDING');
+      expect(created).toBeDefined();
+
+      // 真实 60s 超时：controller-api 到点发布 permission:resolved{reason:timeout}，
+      // agent-api 订阅后把会话卡片收敛为 EXPIRED（不依赖客户端轮询兜底）。
+      let expired: any = null;
+      for (let i = 0; i < 150; i++) {
+        await new Promise((r) => setTimeout(r, 500));
+        expired = (await listInteractions(sessionId)).find((row) => row.interactionId === requestId);
+        if (expired?.status === 'EXPIRED') break;
+      }
+      expect(expired?.status).toBe('EXPIRED');
+      expect(expired.history.map((event: any) => `${event.state}:${event.actor}`)).toContain('EXPIRED:system');
+
+      const respondRes = await gqlRequest(
+        RESPOND_PERMISSION,
+        { requestId, outcome: 'selected', optionId: 'allow-once' },
+        authToken,
+      );
+      expect((await respondRes.json()).errors?.[0]?.message).toBe(
+        'Todo item not found or already handled',
+      );
+
+      ctrlClient.disconnect();
+    },
+    90_000,
+  );
 });

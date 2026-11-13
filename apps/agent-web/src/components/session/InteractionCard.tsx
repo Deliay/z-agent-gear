@@ -50,12 +50,17 @@ function summarizeToolCall(toolCall: PermissionToolCallData | null): string | nu
 function interactionStatusLabel(
   status: SessionInteractionStatus,
   kind: SessionInteractionData['kind'],
+  selectedOptionKind?: string | null,
 ): string {
   switch (status) {
     case 'PENDING':
       return '待处理';
     case 'ACCEPTED':
-      return kind === 'PERMISSION' ? '已批准' : '已提交';
+      if (kind === 'PERMISSION') {
+        // outcome=selected 统一落 ACCEPTED；徽标按所选 option.kind 区分批准/拒绝（PRD 功能点 2）
+        return selectedOptionKind?.startsWith('reject') ? '已拒绝' : '已批准';
+      }
+      return '已提交';
     case 'DECLINED':
       return '已拒绝';
     case 'CANCELLED':
@@ -68,8 +73,9 @@ function interactionStatusLabel(
   }
 }
 
-function statusBadgeClass(status: SessionInteractionStatus): string {
+function statusBadgeClass(status: SessionInteractionStatus, rejectedSelection = false): string {
   if (status === 'PENDING') return 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400';
+  if (rejectedSelection) return 'border-destructive/40 bg-destructive/10 text-destructive';
   if (status === 'ACCEPTED') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400';
   if (status === 'DECLINED') return 'border-destructive/40 bg-destructive/10 text-destructive';
   return 'border-border bg-muted text-muted-foreground';
@@ -140,6 +146,10 @@ export default function InteractionCard({ interaction, onResponded }: Interactio
   const acceptedOption = interaction.response?.optionId
     ? (interaction.options ?? []).find((option) => option.optionId === interaction.response?.optionId)
     : null;
+  const rejectedSelection =
+    interaction.kind === 'PERMISSION' &&
+    effectiveStatus === 'ACCEPTED' &&
+    Boolean(acceptedOption?.kind?.startsWith('reject'));
 
   const setValue = (name: string, value: unknown) => {
     setEdits((prev) => ({ ...prev, [name]: value }));
@@ -225,9 +235,9 @@ export default function InteractionCard({ interaction, onResponded }: Interactio
         </span>
         <span
           data-testid="interaction-status"
-          className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${statusBadgeClass(effectiveStatus)}`}
+          className={`shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${statusBadgeClass(effectiveStatus, rejectedSelection)}`}
         >
-          {interactionStatusLabel(effectiveStatus, interaction.kind)}
+          {interactionStatusLabel(effectiveStatus, interaction.kind, acceptedOption?.kind)}
         </span>
         {pending && remainingMs != null && (
           <span
@@ -308,7 +318,7 @@ export default function InteractionCard({ interaction, onResponded }: Interactio
           )}
           {!pending && effectiveStatus === 'ACCEPTED' && (
             <p data-testid="interaction-selected-option" className="text-sm">
-              已批准：{acceptedOption?.name ?? interaction.response?.optionId ?? '—'}
+              {rejectedSelection ? '已拒绝' : '已批准'}：{acceptedOption?.name ?? interaction.response?.optionId ?? '—'}
             </p>
           )}
         </div>

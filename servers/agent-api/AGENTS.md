@@ -62,7 +62,9 @@ src/
   `requestId` 缺失按 `sessionId` 会话级兜底。`elicitation:complete` 仅追加 history（不改 status）。
 - **查询**：`sessionInteractions(sessionId)` 归属校验同 `sessionMessages`（只读会话允许），按 createdAt 升序；
   `WorkflowInstance.pendingInteractionSessionIds` 为实例级一次 `distinct`（空集合短路，避免 N+1）。
-- **实时**：用户级 SSE `session_interaction` 事件（`{sessionId,interactionId,kind,status}`）驱动前端 refetch。
+- **实时**：用户级 SSE `session_interaction` 事件（`{sessionId,interactionId,kind,status}`）驱动前端 refetch；
+  创建时由订阅器推送 `PENDING`，用户作答成功由 `respond*` 在 CAS 命中后推送终态（`ACCEPTED/DECLINED/CANCELLED`），
+  超时/断连由 resolved 订阅推送 `EXPIRED/CANCELLED`——同页 refetch 与跨标签页/工作流实例页双通道一致。
 - **连带清理**：会话删除（`services/session.ts`）与导入覆盖（`services/session-import.ts`）在同点追加
   `SessionInteraction.deleteMany({sessionId})`。
 

@@ -50,8 +50,6 @@ function mockOverview(todos: unknown[], unreadTodoCount = 3) {
 
 vi.mock('@apollo/client/react', () => ({
   useMutation: vi.fn(() => [mockMarkAllTodoRead]),
-  // PermissionDialog 内部仍使用 useQuery；给出空实现即可
-  useQuery: vi.fn(() => ({ data: undefined, loading: false, refetch: vi.fn() })),
 }));
 
 vi.mock('react-router-dom', async () => {
