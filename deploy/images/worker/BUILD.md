@@ -36,6 +36,16 @@ docker build \
 | `NODE_VERSION` | `24` | 由 nvm 安装的 Node.js 主版本 |
 | `NVM_NODEJS_ORG_MIRROR` | 内网 `node-proxy` | nvm 安装 Node.js 的发行包源 |
 
+### 运行时自升级参数（entrypoint 读取）
+
+| 环境变量 | 默认 | 说明 |
+|---------|------|------|
+| `ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS` | `600000`（10 分钟） | 运行期周期自升级检查间隔（毫秒）；`0` = 禁用周期自升级；非法值（非非负整数）回退默认并 WARN |
+| `ZAG_SKIP_AGENT_GEAR_UPDATE` | 未设置 | 总开关：置 `1` 时跳过全部安装/更新动作（启动、每轮重启前、周期自升级），保活重启不受影响 |
+
+> 周期自升级默认值收敛在 `entrypoint.sh`，cloud-controller 无需注入任何新 env；内网地址/节奏变化时用
+> 运行时同名环境变量覆盖即可（见下文「agent-gear 周期自升级自验」）。
+
 ### .NET（apt）相关构建参数
 
 `.NET` 预制工作负载改由**系统包管理器 apt** 安装（不再下载 `dotnet-install.sh`）：
@@ -462,7 +472,9 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 2. `bootstrap_home` 以 worker 用户安装 nvm（内网 git 仓库）与 Node.js；`ensure_pnpm` 用 npm 自举
    `pnpm@12.16.1`；
 3. 执行 `pnpm add -g agent-gear` 安装 / 更新到最新版（失败仅告警；设 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 可跳过）；
-4. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
+4. 启动周期自升级后台循环 `auto_update_loop`：首轮先睡间隔（默认 10 分钟，`ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS`
+   可调、`0` 禁用），此后每轮 `pnpm view agent-gear version` 比对本地版本，发现新版即安装并在运行中优雅重启；
+5. 以受监督方式运行 `agent-gear`（参数取自 `ZAG_SERVER_ENDPOINT` / `ZAG_CONTROLLER_KEY`）回连 cloud-controller。
 
 > 云电脑（harness）容器额外注入标准连接凭据：`ZAG_HOST_ENDPOINT` + `ZAG_HOST_KEY`（controller-api），
 > agent-gear 检测到后进入**双连接**模式（详见 `packages/agent-controller/AGENTS.md`）。`ZAG_CONTROLLER_KEY`
@@ -479,6 +491,16 @@ ls -l /etc/apt/keyrings/mongodb-server-8.0.asc     # GPG keyring 存在且 world
 - 安装失败、升级后仍不匹配、第二次不匹配、普通非零退出、正常退出均不会形成升级/重连循环；失败时容器非零退出，管理员可用既有强制销毁回收。
 - 入口作为 PID 1 向 agent-gear / pnpm 子进程转发 `SIGTERM` / `SIGINT` 并等待退出；收到销毁信号后不再拉起控制器。
 - 启动更新与版本不匹配恢复都受 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 控制（离线/排障出口）。
+- 周期自升级（`auto_update_loop`，见 `docs/engineering/plan/20261113-feat-cloud-agent-gear-auto-upgrade.md`）：
+  - 默认每 10 分钟比对 registry `latest` 与本地 `agent-gear --version`；不一致即 `pnpm add -g agent-gear`；
+  - 安装与「启动 / 每轮重启前」更新共用 `$RUN_DIR/update.lock.d` 的 `mkdir` 原子锁，同一时刻至多一次安装
+    （另一路径持锁时跳过，等价既有「更新失败容忍」）；
+  - 安装成功且 agent-gear 运行中（`$RUN_DIR/agent.pid` 存在且存活）→ `SIGTERM`，由保活非 42 路径带出新版本；
+    处于退避/更新窗口（无 pid）→ 不打断退避，日志 `will apply on next (re)start`，下次启动自然生效；
+  - 检查/安装失败仅 `WARN` 并按固定周期重试（不缩短间隔、不产生重启风暴）；最新版恒取 registry `latest`，
+    发布侧把 `latest` 回滚到旧版后，容器下一周期自动回落到该版本（缺陷版本自愈合）；
+  - 销毁优先：`shutdown()` 先落 `$RUN_DIR/shutdown` 标记并终止循环，销毁后绝不再安装/`TERM`/重启；
+  - `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 与 `ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=0` 分别以总开关 / 间隔语义禁用。
 
 ## 版本门禁与自升级自验
 
@@ -490,7 +512,7 @@ bash -n entrypoint.sh
 bash entrypoint.test.sh
 ```
 
-自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）、单行 JSON 日志（T-EP12）、pnpm 预装幂等与失败容忍（T-EP13/T-EP14）、主目录自举（T-EP15 完整主目录 no-op / T-EP16 缺 nvm 时用自定义 git 仓库安装 / T-EP17 仅缺 node / T-EP18 下载失败与 fail-fast）、Dockerfile 不再构建期安装主目录工具链（T-EP19）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`pnpm`/`curl`/`agent-gear` 与假 `nvm.sh`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），`curl`/`nvm` stub 只在临时目录内落地夹具产物，因此不会启动真实 dockerd、不访问网络、不触碰真实 `/home/worker`。
+自动化用例覆盖：入口不装配 docker shim、不调用 docker/dockerd（T-EP0）、入口源码不含 `install_docker_shim`/`DOCKER_SHIM_PATH`/`HARBOR_PROXY` 残留（T-EP0a）、首轮旧版被拒 → 一次升级 → 重连成功（T-EP1）、安装失败（T-EP2）、升级后仍不兼容（T-EP3）、`ZAG_SKIP_AGENT_GEAR_UPDATE=1`（T-EP4）、普通错误/正常退出不升级（T-EP5/T-EP6）、`SIGTERM`/`SIGINT` 转发且不重启（T-EP7）、日志有界与透传（T-EP8）、单行 JSON 日志（T-EP12）、pnpm 预装幂等与失败容忍（T-EP13/T-EP14）、主目录自举（T-EP15 完整主目录 no-op / T-EP16 缺 nvm 时用自定义 git 仓库安装 / T-EP17 仅缺 node / T-EP18 下载失败与 fail-fast）、Dockerfile 不再构建期安装主目录工具链（T-EP19）、周期自升级（T-EP21 有新版 → 安装 → TERM 重启应用 / T-EP22 无新版零安装零重启 / T-EP23 检查失败按周期重试 / T-EP24 安装失败不 TERM 不重启 / T-EP25 `ZAG_SKIP_AGENT_GEAR_UPDATE=1` 零检查 / T-EP26 间隔 `0` 与非法值回退 / T-EP27 销毁后不再安装、不重启且销毁标记落盘 / T-EP28 退避窗口安装但不 TERM、下次启动生效）。测试使用临时 PATH stub（假 `docker`/`dockerd`/`npm`/`pnpm`/`curl`/`agent-gear` 与假 `nvm.sh`），其中 `docker`/`dockerd` stub 仅作哨兵（入口一旦调用即落标记，T-EP0 断言标记为空），`curl`/`nvm` stub 只在临时目录内落地夹具产物，`pnpm` stub 的 `view agent-gear version` / `add -g agent-gear` 经 `$STUB_DIR/registry_latest` 与 `$STUB_DIR/version` 模拟「运行期发布新版 → 安装切换版本」，因此不会启动真实 dockerd、不访问网络、不触碰真实 `/home/worker`。
 
 > **镜像升级要求**：云电脑（harness）容器门禁为 `agent-gear` ≥ `2.17.1`（`fs:read-file` 会话文件预览 / 有序 `parts` / MCP 按名超时；云电脑双连接 / `harness prepare` 自 `2.10.0` 起，`header-masq` 配置注入自 `2.11.0` 起）；工作负载「必须」短路依赖 ≥ `2.4.0`，参数注入依赖 ≥ `2.3.0`。普通容器门禁常量 `MIN_WORKER_VERSION` 仍为 `2.2.0`（2.2.0 worker 仍能执行不带参数的脚本，且必须失败由服务端裁决、旧 worker 忽略 `required` 仍正确），但只有内置 ≥ `2.17.1` 的 worker 镜像才能承载 harness 云电脑。变更 `entrypoint.sh`/`Dockerfile` 后必须**重新构建并推送 worker 镜像**，并让新容器指向新 tag；已在运行的旧入口容器需强制销毁重建。
 
@@ -503,6 +525,54 @@ bash entrypoint.test.sh
 5. 核对日志不含 `ZAG_CONTROLLER_KEY`、token 或带凭据 URL。
 
 > 已运行中的旧入口容器无法远程获得新恢复逻辑，需在门禁上线后**强制销毁重建一次**。
+
+## agent-gear 周期自升级自验（`auto_update_loop`）
+
+容器运行期间按固定周期检查 registry `latest`，发现新版即安装并优雅重启（实现见
+`docs/engineering/plan/20261113-feat-cloud-agent-gear-auto-upgrade.md`；需求 Issue
+[Deliay#496](https://github.com/Deliay/z-agent-gear/issues/496)）。
+
+### 1) 周期锚点观察（缩间隔起容器）
+
+```bash
+IMG=core.harbor.internal.fffdan.com/zero-tools/worker:dev
+docker run -d --name worker-auto-update \
+  -e ZAG_SERVER_ENDPOINT=wss://example.invalid/worker \
+  -e ZAG_CONTROLLER_KEY=dummy \
+  -e ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=60000 \
+  "$IMG"
+docker logs --tail 40 worker-auto-update
+```
+
+逐项核对：
+
+- [ ] 启动日志出现 `agent-gear auto-update loop started (interval=60s)`（默认不设变量时为 `interval=600s`）
+- [ ] 每 60s 出现 `agent-gear is up to date (<version>)`（无新版场景）
+- [ ] 注入受控新版（测试 registry 或把 `latest` 指向更高版本）后出现
+      `new agent-gear version available: <current> -> <latest>; installing` →
+      `agent-gear updated: <latest>; restarting service to apply`，容器**不退出**且 agent-gear 重新拉起
+- [ ] 回滚场景：把 registry `latest` 指回旧版后，下一周期自动「升级」到该回滚目标（缺陷版本自愈合）
+- [ ] 日志锚点无 `ZAG_CONTROLLER_KEY` / `ZAG_HOST_KEY` / token / 带凭据 URL
+
+### 2) 销毁核对（销毁优先）
+
+```bash
+docker stop -t 5 worker-auto-update
+docker logs --tail 20 worker-auto-update
+docker rm -f worker-auto-update
+```
+
+逐项核对：
+
+- [ ] 出现 `shutdown requested (SIGTERM), forwarding to child` 后入口 0 退出
+- [ ] 销毁后**不再**出现 `new agent-gear version available` / `pnpm add -g` / agent-gear 重新拉起
+- [ ] 升级进行中下发销毁同样按既有流程退出（无残留重启；pnpm 孤儿随容器/Pod 回收）
+
+### 3) 禁用开关核对
+
+- [ ] `-e ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=0` → 日志 `agent-gear auto-update disabled (interval=0)`，无任何检查
+- [ ] `-e ZAG_SKIP_AGENT_GEAR_UPDATE=1` → 日志 `agent-gear auto-update disabled (ZAG_SKIP_AGENT_GEAR_UPDATE=1)`，
+      启动/每轮/周期更新全部跳过，保活重启不受影响（沿用 `T-EP4` 口径）
 
 
 ## 已知限制

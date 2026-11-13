@@ -19,6 +19,14 @@ count_agent_gear_updates() {
     echo 0
   fi
 }
+# 周期自升级的 registry 检查次数（pnpm stub 记录的 `view agent-gear version`）
+count_agent_gear_checks() {
+  if [ -f "$STUB_DIR/pnpm_invocations" ]; then
+    grep -c 'view agent-gear version' "$STUB_DIR/pnpm_invocations" 2>/dev/null || true
+  else
+    echo 0
+  fi
+}
 
 write_stubs() {
   mkdir -p "$STUB_DIR"
@@ -68,14 +76,30 @@ STUB
 #!/usr/bin/env bash
 set -u
 echo "$*" >> "$STUB_DIR/pnpm_invocations"
+# registry latest：优先读动态文件（模拟「容器运行期间 registry 发布新版」），否则取环境变量默认。
+# 两者都未设置时与初始安装版本一致（2.13.0），保证既有用例「已是最新」不被污染。
+latest_version() {
+  if [ -f "$STUB_DIR/registry_latest" ]; then
+    cat "$STUB_DIR/registry_latest"
+  else
+    echo "${STUB_PNPM_LATEST_VERSION:-2.13.0}"
+  fi
+}
 if [ "${1:-}" = "--version" ]; then echo "12.16.1"; exit 0; fi
 if [ "${1:-}" = "config" ] && [ "${2:-}" = "get" ]; then
   echo "https://npm.internal.fffdan.com/repository/npm-proxy/"
   exit 0
 fi
+if [ "${1:-}" = "view" ] && [ "${2:-}" = "agent-gear" ] && [ "${3:-}" = "version" ]; then
+  case "${STUB_PNPM_VIEW_MODE:-ok}" in fail) exit 1 ;; esac
+  latest_version
+  exit 0
+fi
 case "${STUB_PNPM_MODE:-ok}" in
   fail) case "$*" in *"add -g agent-gear"*) exit 1 ;; esac ;;
 esac
+# 安装成功即切换本地版本到 registry latest（模拟 pnpm add -g 覆盖全局安装）
+case "$*" in *"add -g agent-gear"*) latest_version > "$STUB_DIR/version" ;; esac
 exit 0
 STUB
   cat > "$STUB_DIR/agent-gear" <<'STUB'
@@ -85,10 +109,15 @@ if [ "${1:-}" = "--version" ]; then cat "$STUB_DIR/version"; exit 0; fi
 echo "start $(date +%s%N)" >> "$STUB_DIR/agent_starts"
 n=$(wc -l < "$STUB_DIR/agent_starts" | tr -d ' ')
 if [ "${STUB_RUN_FOREVER:-0}" = "1" ]; then
-  trap 'echo TERM >> "$STUB_DIR/signals"; exit 0' TERM
-  trap 'echo INT >> "$STUB_DIR/signals"; exit 0' INT
+  sleep_pid=""
+  # 收到 TERM/INT 时记录并回收内部 sleep，模拟 agent-gear 优雅退出（不残留 stderr 句柄，
+  # 否则 FIFO 扫描端等不到 EOF，运行态不会结束）。
+  trap 'echo TERM >> "$STUB_DIR/signals"; [ -n "${sleep_pid:-}" ] && kill "$sleep_pid" 2>/dev/null; exit 0' TERM
+  trap 'echo INT >> "$STUB_DIR/signals"; [ -n "${sleep_pid:-}" ] && kill "$sleep_pid" 2>/dev/null; exit 0' INT
   echo ready > "$STUB_DIR/agent_ready"
-  sleep 30 & wait $!
+  sleep 30 &
+  sleep_pid=$!
+  wait "$sleep_pid" || true
 fi
 set -- ${STUB_AGENT_EXITS:-0}
 i=1
@@ -186,9 +215,13 @@ setup_env() {
   export STUB_NPM_MODE=ok
   export STUB_NPM_FAIL_PNPM=0
   export STUB_PNPM_MODE=ok
+  # 周期自升级（T-EP21~T-EP28）：默认 registry latest 与初始版本一致 → 既有用例「已是最新」
+  export STUB_PNPM_LATEST_VERSION=2.13.0
+  export STUB_PNPM_VIEW_MODE=ok
   export STUB_CURL_MODE=ok
   export STUB_AGENT_EXITS="42"
   unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS STUB_PNPM_MODE ZAG_PNPM_CMD ZAG_STORAGE_HOME
+  unset ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS
 }
 
 teardown_env() {
@@ -198,12 +231,54 @@ teardown_env() {
   unset ZAG_NVM_PROFILE_FILE NVM_PROFILE_PATH NVM_NODEJS_ORG_MIRROR
   unset ZAG_STORAGE_HOME STUB_CURL_MODE ZAG_WORKER_NVM_DIR NODE_VERSION NPM_REGISTRY
   unset NVM_INSTALL_URL NVM_SOURCE NVM_INSTALL_VERSION
+  unset STUB_PNPM_MODE STUB_PNPM_LATEST_VERSION STUB_PNPM_VIEW_MODE ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS
+  EP_PID=""
   export PATH="$ORIGINAL_PATH"
 }
 
 run_entrypoint() {
   bash "$ENTRYPOINT" > "$TEST_DIR/stdout.log" 2> "$TEST_DIR/stderr.log"
   echo $?
+}
+
+# 后台启动入口（周期自升级用例：轮询锚点 + 外部信号收敛，沿用 T-EP7 模式）。
+start_entrypoint_bg() {
+  set -m
+  bash "$ENTRYPOINT" > "$TEST_DIR/stdout.log" 2> "$TEST_DIR/stderr.log" &
+  EP_PID=$!
+  set +m
+}
+
+# 轮询 shell 条件直到成立或超时（tick=50ms）。
+wait_until() {
+  local cond="$1" max="${2:-200}" i
+  for i in $(seq 1 "$max"); do
+    if eval "$cond" >/dev/null 2>&1; then return 0; fi
+    sleep 0.05
+  done
+  return 1
+}
+
+# 结束后台入口并返回其退出码（BG_RC）。
+stop_entrypoint_bg() {
+  BG_RC=0
+  if [ -n "${EP_PID:-}" ] && kill -0 "$EP_PID" 2>/dev/null; then
+    kill -TERM "$EP_PID" 2>/dev/null || true
+  fi
+  [ -n "${EP_PID:-}" ] && { wait "$EP_PID" || BG_RC=$?; }
+  EP_PID=""
+}
+
+# 等待后台入口自行退出（不主动发信号）并返回其退出码（BG_RC）。
+wait_entrypoint_bg_exit() {
+  local max="${1:-400}" i
+  for i in $(seq 1 "$max"); do
+    kill -0 "$EP_PID" 2>/dev/null || break
+    sleep 0.05
+  done
+  BG_RC=0
+  [ -n "${EP_PID:-}" ] && { wait "$EP_PID" || BG_RC=$?; }
+  EP_PID=""
 }
 
 echo "== bash -n =="
@@ -580,6 +655,213 @@ assert_eq 1 "$(grep -c '^nvm install --default 24$' "$STUB_DIR/nvm_invocations" 
 assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP20 非存储容器正常拉起 agent-gear"
 assert_contains "$TEST_DIR/stdout.log" "bootstrap_home: node installed" "T-EP20 非存储容器自举成功"
 assert_contains "$TEST_DIR/stdout.log" "updating agent-gear via pnpm" "T-EP20 非存储容器继续安装 agent-gear"
+teardown_env
+
+echo "== T-EP21: registry 有新版本 → 安装 → TERM 重启应用新版本 =="
+setup_env
+export STUB_RUN_FOREVER=1
+export STUB_PNPM_LATEST_VERSION=2.13.0
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=100
+export ZAG_KEEPALIVE_BACKOFF_MS=10
+start_entrypoint_bg
+if wait_until '[ -f "$STUB_DIR/agent_ready" ]' 200; then
+  # 模拟「容器运行期间 registry 发布新版」（首轮启动更新已完成，版本仍为 2.13.0）
+  echo "9.9.9" > "$STUB_DIR/registry_latest"
+  if wait_until '[ "$(count_lines "$STUB_DIR/signals")" -ge 1 ] && [ "$(cat "$STUB_DIR/version" 2>/dev/null)" = "9.9.9" ] && [ "$(count_lines "$STUB_DIR/agent_starts")" -ge 2 ]' 400; then
+    pass "T-EP21 检测到新版 → 安装 → 重启"
+  else
+    fail "T-EP21 超时未完成升级重启"
+  fi
+  sleep 0.2
+  upgrade_terms=$(count_lines "$STUB_DIR/signals")
+  assert_eq 1 "$upgrade_terms" "T-EP21 升级 TERM 恰好 1 次（版本相等后不再触发）"
+  assert_eq "9.9.9" "$(cat "$STUB_DIR/version" 2>/dev/null)" "T-EP21 已安装到 registry latest"
+  assert_contains "$TEST_DIR/stdout.log" "new agent-gear version available" "T-EP21 日志含新版可用锚点"
+  assert_contains "$TEST_DIR/stdout.log" "restarting service to apply" "T-EP21 日志含重启应用锚点"
+else
+  fail "T-EP21 agent-gear 未进入运行状态"
+fi
+stop_entrypoint_bg
+assert_eq 0 "$BG_RC" "T-EP21 外部 TERM 后入口 0 退出"
+assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP21 重启后版本一致不再重启"
+teardown_env
+
+echo "== T-EP22: 无新版（latest==current）→ 零安装零 TERM =="
+setup_env
+export STUB_RUN_FOREVER=1
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=100
+start_entrypoint_bg
+if wait_until '[ -f "$STUB_DIR/agent_ready" ]' 200; then
+  if wait_until 'grep -qF "agent-gear is up to date" "$TEST_DIR/stdout.log"' 300; then
+    pass "T-EP22 日志记录已是最新"
+  else
+    fail "T-EP22 未观察到 up to date 锚点"
+  fi
+  sleep 0.2
+  assert_eq 1 "$(count_agent_gear_updates)" "T-EP22 仅启动自更新，周期零安装"
+  assert_eq 0 "$(count_lines "$STUB_DIR/signals")" "T-EP22 周期零 TERM"
+  assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP22 agent-gear 持续运行不重启"
+else
+  fail "T-EP22 agent-gear 未进入运行状态"
+fi
+stop_entrypoint_bg
+assert_eq 0 "$BG_RC" "T-EP22 外部 TERM 后入口 0 退出"
+teardown_env
+
+echo "== T-EP23: registry 检查失败 → WARN、零安装零 TERM、下周期重试 =="
+setup_env
+export STUB_RUN_FOREVER=1
+export STUB_PNPM_VIEW_MODE=fail
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=100
+start_entrypoint_bg
+if wait_until '[ -f "$STUB_DIR/agent_ready" ]' 200; then
+  if wait_until '[ "$(grep -cF "WARN: agent-gear update check failed" "$TEST_DIR/stdout.log" 2>/dev/null || true)" -ge 2 ]' 400; then
+    pass "T-EP23 检查失败按周期持续重试（WARN ≥ 2）"
+  else
+    fail "T-EP23 未观察到周期重试的 WARN"
+  fi
+  if [ "$(count_agent_gear_checks)" -ge 2 ]; then
+    pass "T-EP23 registry 检查按周期重试（≥ 2 次）"
+  else
+    fail "T-EP23 registry 检查次数不足（$(count_agent_gear_checks)）"
+  fi
+  assert_eq 1 "$(count_agent_gear_updates)" "T-EP23 检查失败不触发安装"
+  assert_eq 0 "$(count_lines "$STUB_DIR/signals")" "T-EP23 检查失败不 TERM"
+  assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP23 agent-gear 持续运行"
+else
+  fail "T-EP23 agent-gear 未进入运行状态"
+fi
+stop_entrypoint_bg
+assert_eq 0 "$BG_RC" "T-EP23 外部 TERM 后入口 0 退出"
+teardown_env
+
+echo "== T-EP24: 周期安装失败 → WARN、不 TERM、版本不变、服务继续 =="
+setup_env
+export STUB_RUN_FOREVER=1
+export STUB_PNPM_MODE=fail
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=100
+start_entrypoint_bg
+if wait_until '[ -f "$STUB_DIR/agent_ready" ]' 200; then
+  echo "9.9.9" > "$STUB_DIR/registry_latest"
+  if wait_until 'grep -qF "WARN: agent-gear auto-update install failed" "$TEST_DIR/stdout.log"' 400; then
+    pass "T-EP24 周期安装失败记录 WARN"
+  else
+    fail "T-EP24 未观察到周期安装失败 WARN"
+  fi
+  sleep 0.2
+  assert_eq "2.13.0" "$(cat "$STUB_DIR/version" 2>/dev/null)" "T-EP24 安装失败版本不变"
+  assert_eq 0 "$(count_lines "$STUB_DIR/signals")" "T-EP24 安装失败不 TERM"
+  assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP24 服务继续运行不重启"
+else
+  fail "T-EP24 agent-gear 未进入运行状态"
+fi
+stop_entrypoint_bg
+assert_eq 0 "$BG_RC" "T-EP24 外部 TERM 后入口 0 退出"
+teardown_env
+
+echo "== T-EP25: ZAG_SKIP_AGENT_GEAR_UPDATE=1 → 周期循环零检查 =="
+setup_env
+export STUB_RUN_FOREVER=1
+export ZAG_SKIP_AGENT_GEAR_UPDATE=1
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=100
+start_entrypoint_bg
+if wait_until '[ -f "$STUB_DIR/agent_ready" ]' 200; then
+  sleep 0.3
+  assert_eq 0 "$(count_agent_gear_checks)" "T-EP25 周期循环零 registry 检查"
+  assert_eq 0 "$(count_agent_gear_updates)" "T-EP25 总开关跳过全部安装"
+  assert_contains "$TEST_DIR/stdout.log" "auto-update disabled (ZAG_SKIP_AGENT_GEAR_UPDATE=1)" "T-EP25 日志说明周期自升级禁用"
+  assert_contains "$TEST_DIR/stdout.log" "skipping agent-gear update" "T-EP25 既有自更新跳过日志不变"
+  assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP25 保活行为不变（agent-gear 运行中）"
+else
+  fail "T-EP25 agent-gear 未进入运行状态"
+fi
+stop_entrypoint_bg
+assert_eq 0 "$BG_RC" "T-EP25 外部 TERM 后入口 0 退出"
+teardown_env
+
+echo "== T-EP26: 间隔 0 禁用 / 非法值回退默认 =="
+setup_env
+export STUB_RUN_FOREVER=1
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=0
+start_entrypoint_bg
+if wait_until '[ -f "$STUB_DIR/agent_ready" ]' 200; then
+  sleep 0.3
+  assert_eq 0 "$(count_agent_gear_checks)" "T-EP26 间隔 0 时零 registry 检查"
+  assert_contains "$TEST_DIR/stdout.log" "auto-update disabled (interval=0)" "T-EP26 日志含 interval=0 禁用锚点"
+  assert_eq 1 "$(count_agent_gear_updates)" "T-EP26 启动自更新不受影响"
+  assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP26 保活启动不受影响"
+else
+  fail "T-EP26 agent-gear 未进入运行状态"
+fi
+stop_entrypoint_bg
+assert_eq 0 "$BG_RC" "T-EP26 外部 TERM 后入口 0 退出"
+teardown_env
+
+# 非法值回退默认（600000ms）：WARN 一条后按默认间隔运行（入口随 42 收敛退出）
+setup_env
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=abc
+rc=$(run_entrypoint)
+assert_eq 0 "$rc" "T-EP26 非法间隔入口正常退出"
+assert_contains "$TEST_DIR/stdout.log" "invalid ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS" "T-EP26 非法间隔 WARN 回退默认"
+assert_eq 0 "$(count_agent_gear_checks)" "T-EP26 默认间隔首轮先睡眠，不立即检查"
+teardown_env
+
+echo "== T-EP27: 销毁信号 → 循环终止、标记落盘、销毁后不再安装/TERM/重启 =="
+setup_env
+export STUB_RUN_FOREVER=1
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=100
+start_entrypoint_bg
+if wait_until '[ -f "$STUB_DIR/agent_ready" ]' 200; then
+  if wait_until '[ "$(count_agent_gear_checks)" -ge 1 ]' 200; then
+    pass "T-EP27 销毁前周期循环已开始检查"
+  else
+    fail "T-EP27 周期循环未开始检查"
+  fi
+  stop_entrypoint_bg
+  assert_eq 0 "$BG_RC" "T-EP27 入口 0 退出"
+  checks_at_exit=$(count_agent_gear_checks)
+  installs_at_exit=$(count_agent_gear_updates)
+  starts_at_exit=$(count_lines "$STUB_DIR/agent_starts")
+  sleep 0.4
+  assert_eq "$checks_at_exit" "$(count_agent_gear_checks)" "T-EP27 销毁后 registry 检查计数不再增长"
+  assert_eq "$installs_at_exit" "$(count_agent_gear_updates)" "T-EP27 销毁后安装计数不再增长"
+  assert_eq "$starts_at_exit" "$(count_lines "$STUB_DIR/agent_starts")" "T-EP27 销毁后不重启 agent-gear"
+  assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP27 全程仅启动 1 次"
+  assert_contains "$STUB_DIR/signals" "TERM" "T-EP27 销毁信号按既有链路转发（1 次）"
+  assert_eq 1 "$(count_lines "$STUB_DIR/signals")" "T-EP27 仅销毁转发，无升级 TERM"
+  if compgen -G "$RUN_TMP/zag-worker.*/shutdown" > /dev/null 2>&1; then
+    pass "T-EP27 销毁标记落盘"
+  else
+    fail "T-EP27 销毁标记未落盘"
+  fi
+else
+  fail "T-EP27 agent-gear 未进入运行状态"
+fi
+teardown_env
+
+echo "== T-EP28: 检查命中时处于退避窗口（无 agent.pid）→ 安装但不 TERM =="
+setup_env
+export STUB_AGENT_EXITS="1 42"
+export ZAG_KEEPALIVE_BACKOFF_MS=1000
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=100
+start_entrypoint_bg
+if wait_until '[ "$(count_lines "$STUB_DIR/agent_starts")" -ge 1 ]' 200; then
+  # 首轮启动安装完成后发布新版：命中点落在「agent-gear 已退出、退避中」的窗口
+  echo "9.9.9" > "$STUB_DIR/registry_latest"
+  if wait_until 'grep -qF "will apply on next (re)start" "$TEST_DIR/stdout.log"' 300; then
+    pass "T-EP28 退避窗口安装后不强制重启"
+  else
+    fail "T-EP28 未观察到下次启动生效锚点"
+  fi
+else
+  fail "T-EP28 agent-gear 未启动"
+fi
+wait_entrypoint_bg_exit 400
+assert_eq 0 "$BG_RC" "T-EP28 42 收敛后入口 0 退出"
+assert_eq 0 "$(count_lines "$STUB_DIR/signals")" "T-EP28 退避窗口不发送 TERM"
+assert_contains "$TEST_DIR/stdout.log" "new agent-gear version available" "T-EP28 命中新版并安装"
+assert_eq "9.9.9" "$(cat "$STUB_DIR/version" 2>/dev/null)" "T-EP28 安装到新版"
+assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP28 下一轮启动带出新版本"
 teardown_env
 
 echo
