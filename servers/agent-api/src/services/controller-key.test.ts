@@ -57,7 +57,7 @@ vi.mock('../services/command.js', () => ({
 import { controllerKeyService } from '../services/controller-key.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
-import { evictKeyById, getRawKeyById } from '../services/key-cache.js';
+import { cacheKey, evictKeyById, getRawKeyById } from '../services/key-cache.js';
 import { commandService } from '../services/command.js';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
@@ -269,6 +269,26 @@ describe('ControllerKeyService', () => {
       const result = await controllerKeyService.regenerate('ctrl1', 'user1');
 
       expect(result).toBeNull();
+    });
+
+    it('T-CCOP3: rejects regenerating the key of a cloud controller without any side effect', async () => {
+      vi.mocked(Controller.findOne).mockResolvedValue({
+        _id: { toString: () => 'ctrl-cloud' },
+        keyId: { toString: () => 'key-cloud' },
+        userId: 'user1',
+        type: 'cloud',
+      } as never);
+
+      await expect(
+        controllerKeyService.regenerate('ctrl-cloud', 'user1'),
+      ).rejects.toThrow('cloud controller key cannot be regenerated');
+
+      expect(ControllerKey.findOne).not.toHaveBeenCalled();
+      expect(ControllerKey.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(Controller.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(evictKeyById).not.toHaveBeenCalled();
+      expect(cacheKey).not.toHaveBeenCalled();
+      expect(commandService.sendShutdown).not.toHaveBeenCalled();
     });
   });
 });

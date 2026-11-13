@@ -75,6 +75,12 @@ describe('ControllerService', () => {
 
   describe('rename', () => {
     it('should rename a controller', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: { toString: () => 'ctrl1' },
+          type: 'local',
+        }),
+      } as never);
       vi.mocked(Controller.findOneAndUpdate).mockReturnValue({
         lean: vi.fn().mockResolvedValue({
           _id: { toString: () => 'ctrl1' },
@@ -97,13 +103,28 @@ describe('ControllerService', () => {
     });
 
     it('should return null when controller not found', async () => {
-      vi.mocked(Controller.findOneAndUpdate).mockReturnValue({
+      vi.mocked(Controller.findOne).mockReturnValue({
         lean: vi.fn().mockResolvedValue(null),
       } as never);
 
       const result = await controllerService.rename('ctrl1', 'user1', 'New Name');
 
       expect(result).toBeNull();
+      expect(Controller.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('T-CCOP1: rejects renaming a cloud controller without any write', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: { toString: () => 'ctrl-cloud' },
+          type: 'cloud',
+        }),
+      } as never);
+
+      await expect(
+        controllerService.rename('ctrl-cloud', 'user1', 'New Name'),
+      ).rejects.toThrow('cloud controller cannot be renamed');
+      expect(Controller.findOneAndUpdate).not.toHaveBeenCalled();
     });
   });
 
@@ -132,6 +153,22 @@ describe('ControllerService', () => {
       const result = await controllerService.unbind('ctrl1', 'user1');
 
       expect(result).toBe(false);
+    });
+
+    it('T-CCOP2: rejects unbinding a cloud controller before any side effect', async () => {
+      vi.mocked(Controller.findOne).mockResolvedValue({
+        keyId: { toString: () => 'key-cloud' },
+        type: 'cloud',
+      } as never);
+
+      await expect(
+        controllerService.unbind('ctrl-cloud', 'user1'),
+      ).rejects.toThrow('cloud controller cannot be unbound');
+
+      expect(commandService.sendShutdown).not.toHaveBeenCalled();
+      expect(evictKeyById).not.toHaveBeenCalled();
+      expect(ControllerKey.deleteOne).not.toHaveBeenCalled();
+      expect(Controller.deleteOne).not.toHaveBeenCalled();
     });
   });
 
