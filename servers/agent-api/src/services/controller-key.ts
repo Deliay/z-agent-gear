@@ -10,6 +10,10 @@ import { commandService } from './command.js';
 const KEY_FORMAT_VERSION = 1;
 const BCRYPT_ROUNDS = 10;
 
+/** 云控制器（type=cloud）拒绝文案（契约错误表逐字；resolver 白名单透传的单一来源）。 */
+export const CLOUD_CONTROLLER_KEY_REGENERATE_REJECTED =
+  'cloud controller key cannot be regenerated';
+
 export class ControllerKeyService {
   async create(userId: string, input: { name: string; type: string }): Promise<{ key: Record<string, unknown>; rawKey: string }> {
     if (!input.name || input.name.trim().length === 0) {
@@ -122,6 +126,10 @@ export class ControllerKeyService {
     // Find the controller and verify ownership
     const controller = await Controller.findOne({ _id: controllerId, ...actorFilter(userId) });
     if (!controller) return null;
+    // 云电脑连接凭据在创建期经 env 固化，无法获取新 key：拒绝且先于任何写操作（零副作用）。
+    if (controller.type === 'cloud') {
+      throw new Error(CLOUD_CONTROLLER_KEY_REGENERATE_REJECTED);
+    }
 
     const keyId = controller.keyId.toString();
 

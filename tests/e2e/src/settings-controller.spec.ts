@@ -1,9 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient } from 'socket.io-client';
+import mongoose from 'mongoose';
 import { registerUser } from './helpers';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
+const HAS_MONGO = Boolean(process.env.MONGODB_URI);
 
 const sidebar = () => 'nav[aria-label="Sidebar"]';
 
@@ -63,8 +65,65 @@ function registerFakeController(rawKey: string): Promise<{ controllerId: string;
   });
 }
 
-test.describe('Settings Controller E2E', () => {
+async function mongoDb(): Promise<mongoose.mongo.Db | null> {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return null;
+  if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+  return mongoose.connection.db ?? null;
+}
 
+/** 直插云控制器 + 绑定 key（不插 cloudhosts：无软删除主机时列表不过滤）。 */
+async function seedCloudController(userId: string, suffix: string) {
+  const db = (await mongoDb())!;
+  const tenantId = new mongoose.Types.ObjectId(userId);
+  const globalWorkspace = await db.collection('workspaces').findOne({ tenantId, type: 'global' });
+  if (!globalWorkspace) throw new Error(`personal global workspace not found for ${userId}`);
+
+  const now = new Date();
+  const controllerId = new mongoose.Types.ObjectId();
+  const keyId = new mongoose.Types.ObjectId();
+  const name = `e2e-cloud-${suffix}`;
+  await db.collection('controllers').insertOne({
+    _id: controllerId,
+    userId: tenantId,
+    tenantId,
+    workspaceId: globalWorkspace._id,
+    name,
+    hostname: name,
+    type: 'cloud',
+    status: 'online',
+    keyId,
+    version: '2.5.0',
+    lastHeartbeatAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await db.collection('controllerkeys').insertOne({
+    _id: keyId,
+    userId: tenantId,
+    tenantId,
+    workspaceId: globalWorkspace._id,
+    name: `${name}-key`,
+    type: 'cloud',
+    keyHash: `e2e-fixture-hash-${suffix}`,
+    keyPrefix: 'zag_k_1',
+    status: 'active',
+    boundControllerId: controllerId,
+    lastUsedAt: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return {
+    name,
+    cleanup: async () => {
+      await db.collection('controllerkeys').deleteOne({ _id: keyId });
+      await db.collection('controllers').deleteOne({ _id: controllerId });
+    },
+  };
+}
+
+test.describe('Settings Controller E2E', () => {
   test('should register user and show controller section', async ({ page }) => {
     const { username } = await registerUser(page);
     await loginViaUI(page, username);
@@ -248,5 +307,43 @@ test.describe('Settings Controller E2E', () => {
 
     controller1.disconnect();
     controller2.disconnect();
+  });
+
+  test('E2E-CCOP1: cloud controller row only exposes the config button', async ({ page }) => {
+    test.skip(!HAS_MONGO, 'E2E-CCOP1 requires MONGODB_URI to seed a cloud controller fixture');
+
+    const { token, username, userId } = await registerUser(page);
+    const cloud = await seedCloudController(userId, `${Date.now()}`);
+    let fake: { controllerId: string; disconnect: () => void } | null = null;
+
+    try {
+      // 本地控制器作为回归基线（四按钮齐全）
+      const { rawKey } = await createControllerKey(page, token);
+      fake = await registerFakeController(rawKey);
+
+      await loginViaUI(page, username);
+      await page.click('a[href="/settings"]');
+      await expect(page.locator('#controller-section')).toBeVisible({ timeout: 5000 });
+      const section = page.locator('#controller-section');
+
+      const cloudRow = section.locator('div.rounded-lg.border', { hasText: cloud.name }).first();
+      await expect(cloudRow).toBeVisible({ timeout: 20000 });
+      await expect(cloudRow.getByRole('button', { name: '配置' })).toBeVisible();
+      await expect(cloudRow.getByRole('button', { name: '重命名' })).toHaveCount(0);
+      await expect(cloudRow.getByRole('button', { name: '重新生成Key' })).toHaveCount(0);
+      await expect(cloudRow.getByRole('button', { name: '解绑' })).toHaveCount(0);
+
+      const localRow = section
+        .locator('div.rounded-lg.border', { hasText: 'e2e-host' })
+        .first();
+      await expect(localRow).toBeVisible({ timeout: 20000 });
+      await expect(localRow.getByRole('button', { name: '配置' })).toBeVisible();
+      await expect(localRow.getByRole('button', { name: '重命名' })).toBeVisible();
+      await expect(localRow.getByRole('button', { name: '重新生成Key' })).toBeVisible();
+      await expect(localRow.getByRole('button', { name: '解绑' })).toBeVisible();
+    } finally {
+      fake?.disconnect();
+      await cloud.cleanup();
+    }
   });
 });
