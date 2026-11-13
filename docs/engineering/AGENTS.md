@@ -237,6 +237,7 @@ flowchart LR
 - [[proposals/20261112-feat-session-interaction-cards.md]] — 会话中的提问表单与权限审批作为会话内容出现（sessioninteractions 新集合状态机+history、respond* 权威切换、permission:resolved 新频道与 60s 时限口径统一、WorkflowInstance.pendingInteractionSessionIds、会话时间线 InteractionCard 与倒计时、弹窗降级通知、工作流列表/图形感叹号）
 - [[proposals/20261113-feat-cloud-controller-operations-restriction.md]] — 设置中控制器的操作按钮优化（前端 ControllerListSection 对 type=cloud 隐藏「重命名/重新生成Key/解绑(删除)」按钮；agent-api 服务层 rename/unbind/regenerate 三处 cloud 拒绝且零副作用、resolver 白名单文案逐字透传；契约补齐 regenerateControllerKey 与拒绝说明）
 - [[proposals/20261113-feat-cloud-agent-gear-auto-upgrade.md]] — 云环境 agent-gear 自动升级（worker 镜像 entrypoint 新增 auto_update_loop 周期自升级：10 分钟 pnpm view 检查、mkdir 互斥安装、agent.pid 标记 + SIGTERM 复用保活非 42 路径优雅重启、latest 回滚自动愈合；契约零变更，T-EP20~T-EP27 stub 用例）
+- [[proposals/20261113-feat-fragment-template-custom-tools.md]] — 自定义渲染模板+自定义工具MCP（agent-api fragment-render 唯一渲染口径 + valut-service 增补 resolveManualValueByKey 限 manual；平台 MCP agent-valut-tools 名单工具与 agent-custom-tools 动态 tools/list、tools/call（prompt 渲染返回 / http undici 执行器 insecure dispatcher 级）；customtools 新集合与迁移 026；契约新增 custom-tool.graphql/fragment-template.md；agent-web contentEditable FragmentEditor 原子引用块 + ArgsListEditor 双类型复用 + 设置页区块）
 
 ### 实现计划（`plan/`）
 
