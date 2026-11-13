@@ -16,11 +16,19 @@ vi.mock('../../services/todo-service.js', () => ({
   },
 }));
 
+vi.mock('../../services/session-interaction-service.js', () => ({
+  sessionInteractionService: {
+    respondElicitation: vi.fn(),
+    respondPermission: vi.fn(),
+  },
+}));
+
 vi.mock('../../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
 
 import { todoService } from '../../services/todo-service.js';
+import { sessionInteractionService } from '../../services/session-interaction-service.js';
 import { getRedisClient } from '../../middleware/redis.js';
 
 const mockRedis = {
@@ -38,14 +46,16 @@ const emptyContext = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
-  // 默认：待办属于当前用户且可响应
+  // 默认：交互待处理且属于当前用户（CAS 命中）
   vi.mocked(todoService.isRespondableTodo).mockResolvedValue(true);
+  vi.mocked(sessionInteractionService.respondElicitation).mockResolvedValue({ id: 'i-1' });
+  vi.mocked(sessionInteractionService.respondPermission).mockResolvedValue({ id: 'i-2' });
 });
 
 describe('Todo Resolvers', () => {
   describe('Mutation.respondPermission', () => {
     it('T-TR0b: 他人 requestId 拒绝代答（不 publish、不标已读）', async () => {
-      vi.mocked(todoService.isRespondableTodo).mockResolvedValue(false);
+      vi.mocked(sessionInteractionService.respondPermission).mockResolvedValue(null);
 
       await expect(
         todoResolvers.Mutation.respondPermission(
@@ -55,7 +65,12 @@ describe('Todo Resolvers', () => {
         ),
       ).rejects.toThrow('Todo item not found or already handled');
 
-      expect(todoService.isRespondableTodo).toHaveBeenCalledWith('user1', 'perm-of-other-user', 'permission_request');
+      expect(sessionInteractionService.respondPermission).toHaveBeenCalledWith({
+        userId: 'user1',
+        interactionId: 'perm-of-other-user',
+        outcome: 'selected',
+        optionId: 'opt-1',
+      });
       expect(mockRedis.publish).not.toHaveBeenCalled();
       expect(todoService.markTodoAsResponded).not.toHaveBeenCalled();
     });
@@ -63,7 +78,7 @@ describe('Todo Resolvers', () => {
 
   describe('Mutation.respondElicitation', () => {
     it('T-TR0a: 他人/已终结的 requestId 拒绝回传 Agent（不 publish、不写终态）', async () => {
-      vi.mocked(todoService.isRespondableTodo).mockResolvedValue(false);
+      vi.mocked(sessionInteractionService.respondElicitation).mockResolvedValue(null);
 
       await expect(
         todoResolvers.Mutation.respondElicitation(
@@ -73,7 +88,12 @@ describe('Todo Resolvers', () => {
         ),
       ).rejects.toThrow('Todo item not found or already handled');
 
-      expect(todoService.isRespondableTodo).toHaveBeenCalledWith('user1', 'elic-of-other-user', 'elicitation_request');
+      expect(sessionInteractionService.respondElicitation).toHaveBeenCalledWith({
+        userId: 'user1',
+        interactionId: 'elic-of-other-user',
+        action: 'accept',
+        values: { a: 1 },
+      });
       expect(mockRedis.publish).not.toHaveBeenCalled();
       expect(todoService.markTodoAsResponded).not.toHaveBeenCalled();
       expect(todoService.markElicitationResolved).not.toHaveBeenCalled();
@@ -169,6 +189,49 @@ describe('Todo Resolvers - elicitation resolution', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
+    vi.mocked(todoService.isRespondableTodo).mockResolvedValue(true);
+    vi.mocked(sessionInteractionService.respondElicitation).mockResolvedValue({ id: 'i-1' });
+    vi.mocked(sessionInteractionService.respondPermission).mockResolvedValue({ id: 'i-2' });
+  });
+
+  it('T-SIR1: CAS 先行于 publish（并发下只有 CAS 命中才回传 Agent）', async () => {
+    const order: string[] = [];
+    vi.mocked(sessionInteractionService.respondElicitation).mockImplementation(async () => {
+      order.push('cas');
+      return { id: 'i-1' };
+    });
+    mockRedis.publish.mockImplementation(async (channel: string) => {
+      order.push(`publish:${channel}`);
+      return 1;
+    });
+
+    await todoResolvers.Mutation.respondElicitation(
+      {},
+      { requestId: 'elic-order', action: 'accept', values: { a: 1 } },
+      mockContext,
+    );
+
+    expect(order).toEqual(['cas', 'publish:elicitation:response']);
+  });
+
+  it('T-SIR2: permission 同样 CAS 先行于 publish', async () => {
+    const order: string[] = [];
+    vi.mocked(sessionInteractionService.respondPermission).mockImplementation(async () => {
+      order.push('cas');
+      return { id: 'i-2' };
+    });
+    mockRedis.publish.mockImplementation(async (channel: string) => {
+      order.push(`publish:${channel}`);
+      return 1;
+    });
+
+    await todoResolvers.Mutation.respondPermission(
+      {},
+      { requestId: 'perm-order', outcome: 'selected', optionId: 'allow_once' },
+      mockContext,
+    );
+
+    expect(order).toEqual(['cas', 'publish:permission:response']);
   });
 
   it('T-TR1: respondElicitation(accept) 写 accepted', async () => {

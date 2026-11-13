@@ -331,6 +331,58 @@ export const sessionTypeDefs = `#graphql
     error: String
   }
 
+  # ---------- 会话交互卡片（Elicitation / Ask Permission 持久化） ----------
+
+  enum SessionInteractionKind {
+    ELICITATION
+    PERMISSION
+  }
+
+  enum SessionInteractionStatus {
+    PENDING
+    ACCEPTED
+    DECLINED
+    CANCELLED
+    EXPIRED
+    FAILED
+  }
+
+  type SessionInteractionEvent {
+    state: SessionInteractionStatus!
+    at: String!
+    actor: String!
+    detail: String
+  }
+
+  type SessionInteractionResponse {
+    action: String
+    outcome: String
+    optionId: String
+    values: JSON
+  }
+
+  type SessionInteraction {
+    id: ID!
+    sessionId: ID!
+    interactionId: String!
+    kind: SessionInteractionKind!
+    status: SessionInteractionStatus!
+    mode: String
+    message: String
+    requestedSchema: JSON
+    url: String
+    elicitationId: String
+    toolCallId: String
+    toolCall: JSON
+    options: JSON
+    response: SessionInteractionResponse
+    expiresAt: String
+    createdAt: String!
+    respondedAt: String
+    resolvedAt: String
+    history: [SessionInteractionEvent!]!
+  }
+
   input CreateSessionInput {
     controllerId: ID!
     acpServerType: AcpServerType! = opencode
@@ -363,6 +415,8 @@ export const sessionTypeDefs = `#graphql
     sessionReviews(status: SessionReviewStatus, sessionId: ID): [SessionReview!]!
     # 读取会话工作区内文件内容（fs:read-file relay；只读会话同样允许）
     sessionFileContent(sessionId: ID!, path: String!): SessionFileContent!
+    # 会话交互记录（elicitation / permission）：归属校验同 sessionMessages（只读会话允许），按 createdAt 升序
+    sessionInteractions(sessionId: ID!): [SessionInteraction!]!
   }
 
   extend type Mutation {

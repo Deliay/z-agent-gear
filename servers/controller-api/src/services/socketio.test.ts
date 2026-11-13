@@ -61,6 +61,7 @@ import { ControllerKey } from '../models/controller-key.js';
 import { Controller } from '../models/controller.js';
 import { sessionService } from './session.js';
 import { lookupKey } from './key-cache.js';
+import { permissionManager } from './permission-manager.js';
 import { getRedisClient } from '../middleware/redis.js';
 import bcrypt from 'bcryptjs';
 import { createTestLogger } from '../observability/testing.js';
@@ -636,6 +637,23 @@ describe('SocketIO Service', () => {
   });
 
   describe('disconnect', () => {
+    it('T-PM4: disconnect 接线 permissionManager.clearForSocket', async () => {
+      const clearSpy = vi.spyOn(permissionManager, 'clearForSocket').mockImplementation(() => {});
+      const mockSocket = createMockSocket();
+      const mockIO = createMockIO();
+
+      createSocketIOServer(mockIO as never);
+      const connectionHandler = mockIO._connectionHandler.mock.calls[0][0];
+      connectionHandler(mockSocket);
+
+      mockSocket._trigger('disconnect', 'transport close');
+
+      await vi.waitFor(() => {
+        expect(clearSpy).toHaveBeenCalledWith('socket-123');
+      });
+      clearSpy.mockRestore();
+    });
+
     it('logs connection handshake so anonymous sources can be traced', async () => {
       const testLog = createTestLogger('socketio');
       const mockSocket = createMockSocket();

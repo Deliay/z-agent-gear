@@ -1,5 +1,6 @@
 import { GraphQLError } from 'graphql';
 import { todoService } from '../../services/todo-service.js';
+import { sessionInteractionService } from '../../services/session-interaction-service.js';
 import { publish } from '../../middleware/publish.js';
 import type { AuthContext } from './auth.js';
 
@@ -48,14 +49,15 @@ export const todoResolvers = {
         throw new GraphQLError('Not authenticated');
       }
 
-      // 归属前置校验：必须先确认待办属于当前用户，再向 Agent 下发响应动作，
-      // 否则持有他人 requestId 即可代答（例如代接受权限 → Agent 执行命令）。
-      const owned = await todoService.isRespondableTodo(
-        context.currentUser.id,
-        args.requestId,
-        'permission_request',
-      );
-      if (!owned) {
+      // CAS 先行：以 SessionInteraction（PENDING + 未过期 + 本人）为唯一权威判定与互斥点。
+      // 未命中（已终结/已过期/非本人）不向 Agent publish，文案保持不变。
+      const responded = await sessionInteractionService.respondPermission({
+        userId: context.currentUser.id,
+        interactionId: args.requestId,
+        outcome: args.outcome,
+        optionId: args.optionId,
+      });
+      if (!responded) {
         throw new GraphQLError('Todo item not found or already handled');
       }
 
@@ -77,13 +79,14 @@ export const todoResolvers = {
         throw new GraphQLError('Not authenticated');
       }
 
-      // 归属 + 终态前置校验：只有本人且仍待处理的问询才允许回传 Agent
-      const owned = await todoService.isRespondableTodo(
-        context.currentUser.id,
-        args.requestId,
-        'elicitation_request',
-      );
-      if (!owned) {
+      // CAS 先行：以 SessionInteraction 为唯一权威判定与互斥点（并发双击只有一次回传 Agent）
+      const responded = await sessionInteractionService.respondElicitation({
+        userId: context.currentUser.id,
+        interactionId: args.requestId,
+        action: args.action,
+        values: args.values,
+      });
+      if (!responded) {
         throw new GraphQLError('Todo item not found or already handled');
       }
 

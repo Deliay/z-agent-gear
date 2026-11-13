@@ -198,3 +198,22 @@ describe('WorkflowNodeCard', () => {
     expect(onOpenResource).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('待处理交互感叹号（T-WFP 图形视图）', () => {
+  it('T-WFP5: hasPendingInteraction 渲染感叹号并点击打开会话', () => {
+    const onOpenSession = vi.fn()
+    render(card({ data: data({ hasPendingInteraction: true, onOpenSession }) }))
+
+    const badge = screen.getByTestId('node-pending-interaction-n1')
+    expect(badge).toBeDefined()
+    expect(badge.getAttribute('aria-label')).toBe('有待处理的提问或审批')
+
+    fireEvent.click(badge)
+    expect(onOpenSession).toHaveBeenCalledWith('s1')
+  })
+
+  it('T-WFP6: 无 pending 或忽略节点不渲染感叹号', () => {
+    render(card({ data: data({ hasPendingInteraction: false }) }))
+    expect(screen.queryByTestId('node-pending-interaction-n1')).toBeNull()
+  })
+})

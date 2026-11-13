@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { getApiBase } from '../lib/api-base';
-import type { HarnessLoginRequestDataFields } from '../graphql/types';
+import type { HarnessLoginRequestDataFields, SessionInteractionEventPayload } from '../graphql/types';
 import type { HarnessLoginResolution } from '../stores/harnessLoginDialog';
 
 export interface HarnessLoginResolvedEvent {
@@ -21,6 +21,8 @@ interface UseUserEventStreamOptions {
   onHarnessLoginResolved?: (data: HarnessLoginResolvedEvent) => void;
   /** Review 创建/终态（session_review_requested / session_review_updated） */
   onSessionReview?: (data: { review?: { id: string; status: string } }) => void;
+  /** 会话交互创建/终态（session_interaction）：按 sessionId 命中则 refetch 卡片 */
+  onSessionInteraction?: (data: SessionInteractionEventPayload) => void;
   onReady?: () => void;
   /** 建连/解析异常（非致命，仍会按退避重连） */
   onError?: (error: unknown) => void;
@@ -94,6 +96,11 @@ export function useUserEventStream(options: UseUserEventStreamOptions): void {
           case 'session_review_updated':
             optionsRef.current.onSessionReview?.(
               message.data as { review?: { id: string; status: string } },
+            );
+            break;
+          case 'session_interaction':
+            optionsRef.current.onSessionInteraction?.(
+              message.data as SessionInteractionEventPayload,
             );
             break;
           case 'heartbeat':

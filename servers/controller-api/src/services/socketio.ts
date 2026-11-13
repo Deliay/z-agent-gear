@@ -798,6 +798,8 @@ export function createSocketIOServer(
         acpSessionSyncService.cleanupSocket(socket);
         // 失联 controller 的 pending 问询无法再收到响应：清 timer，避免 60s 后误发 timeout
         elicitationManager.clearForSocket(socket.id);
+        // 权限请求同理：清 timer + 逐条发布 permission:resolved(cancelled)，收敛会话卡片
+        permissionManager.clearForSocket(socket.id);
         // 登录中的请求随 socket 断开收敛：发布 resolved(failed) + 清注册表
         harnessLoginManager.clearForSocket(socket.id);
         if (socket.data.keyId) {

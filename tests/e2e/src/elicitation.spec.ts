@@ -118,11 +118,21 @@ async function setupSession(page: import('@playwright/test').Page): Promise<{ so
   return { socket, sessionId, disconnect };
 }
 
+/** 通知弹窗 → 跳转会话 → 返回卡片 locator（PRD 功能点 5：表单只在卡片） */
+async function openInteractionCard(page: import('@playwright/test').Page, requestId: string) {
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible({ timeout: 25000 });
+  await dialog.getByRole('button', { name: '前往会话处理' }).click();
+  const card = page.locator(`[data-interaction-id="${requestId}"]`);
+  await expect(card).toBeVisible({ timeout: 25000 });
+  return card;
+}
+
 test.describe('ACP Elicitation E2E', () => {
   // 待办并入 homeOverview 后统一 15s 轮询，放宽单测超时
   test.setTimeout(60000);
 
-  test('should auto-popup form elicitation dialog and submit values', async ({ page }) => {
+  test('E2E-SI1: 通知弹窗跳转会话卡片，填写提交后卡片禁用并回显提交内容', async ({ page }) => {
     const { socket, sessionId, disconnect } = await setupSession(page);
 
     const requestId = `elic_form_e2e_${Date.now()}`;
@@ -130,7 +140,6 @@ test.describe('ACP Elicitation E2E', () => {
       socket.once('acp:elicitation:response', resolve);
     });
 
-    // Agent asks a question via elicitation (form mode)
     socket.emit('acp:elicitation', {
       requestId,
       sessionId,
@@ -139,32 +148,36 @@ test.describe('ACP Elicitation E2E', () => {
       requestedSchema: FORM_SCHEMA,
     });
 
-    // Wait for auto-popup dialog (immediate priority todo)
+    // 弹窗降级为通知：无表单字段，只提供跳转
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible({ timeout: 25000 });
     await expect(dialog.getByText('Agent请求输入：重构策略')).toBeVisible();
-    await expect(dialog.getByText('How should I approach this refactoring?')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '提交' })).toHaveCount(0);
 
-    // Required field blocks submission until filled
-    await expect(dialog.getByRole('button', { name: '提交' })).toBeDisabled();
+    await dialog.getByRole('button', { name: '前往会话处理' }).click();
+    const card = page.locator(`[data-interaction-id="${requestId}"]`);
+    await expect(card).toBeVisible({ timeout: 25000 });
+    await expect(card.getByTestId('interaction-countdown')).toBeVisible();
 
-    // Select a strategy and submit
-    await dialog.getByText('balanced').click();
-    await dialog.getByRole('button', { name: '提交' }).click();
+    // 必答项未填时不可提交
+    await expect(card.getByRole('button', { name: '提交' })).toBeDisabled();
+    await card.getByText('balanced').click();
+    await card.getByRole('button', { name: '提交' }).click();
 
-    // Controller should receive the accept response with form content
     const response = await responsePromise;
     expect(response.requestId).toBe(requestId);
     expect(response.action).toBe('accept');
     expect(response.content).toEqual({ strategy: 'balanced', dryRun: true });
 
-    // Dialog should close
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+    // 终态：禁用并回显提交内容
+    await expect(card.getByTestId('interaction-status')).toHaveText('已提交');
+    await expect(card.getByRole('button', { name: '提交' })).toHaveCount(0);
+    await expect(card.getByTestId('interaction-submitted')).toContainText('balanced');
 
     disconnect();
   });
 
-  test('should relay decline action to controller', async ({ page }) => {
+  test('E2E-SI1b: 卡片内拒绝动作回传 controller', async ({ page }) => {
     const { socket, sessionId, disconnect } = await setupSession(page);
 
     const requestId = `elic_decline_e2e_${Date.now()}`;
@@ -180,22 +193,19 @@ test.describe('ACP Elicitation E2E', () => {
       requestedSchema: FORM_SCHEMA,
     });
 
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 25000 });
-
-    await dialog.getByRole('button', { name: '拒绝' }).click();
+    const card = await openInteractionCard(page, requestId);
+    await card.getByRole('button', { name: '拒绝' }).click();
 
     const response = await responsePromise;
     expect(response.requestId).toBe(requestId);
     expect(response.action).toBe('decline');
     expect(response.content).toBeUndefined();
-
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+    await expect(card.getByTestId('interaction-status')).toHaveText('已拒绝');
 
     disconnect();
   });
 
-  test('should relay cancel action to controller', async ({ page }) => {
+  test('E2E-SI1c: 卡片内取消动作回传 controller', async ({ page }) => {
     const { socket, sessionId, disconnect } = await setupSession(page);
 
     const requestId = `elic_cancel_e2e_${Date.now()}`;
@@ -211,10 +221,8 @@ test.describe('ACP Elicitation E2E', () => {
       requestedSchema: FORM_SCHEMA,
     });
 
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 25000 });
-
-    await dialog.getByRole('button', { name: '取消' }).click();
+    const card = await openInteractionCard(page, requestId);
+    await card.getByRole('button', { name: '取消' }).click();
 
     const response = await responsePromise;
     expect(response.requestId).toBe(requestId);
@@ -223,10 +231,35 @@ test.describe('ACP Elicitation E2E', () => {
     disconnect();
   });
 
-  test('E2E-QM1: question 工具多选题呈现为勾选组并以逗号拼接回传', async ({ page }) => {
+  test('E2E-SI2: resolved(timeout) 后卡片收敛为已过期且禁用', async ({ page }) => {
     const { socket, sessionId, disconnect } = await setupSession(page);
 
-    // 真实 ACP question 工具表单：单选 oneOf + 多选 items.anyOf + 自由文本补充项
+    const requestId = `elic_timeout_e2e_${Date.now()}`;
+    socket.emit('acp:elicitation', {
+      requestId,
+      sessionId,
+      mode: 'form',
+      message: 'Timeout card',
+      requestedSchema: FORM_SCHEMA,
+    });
+
+    const card = await openInteractionCard(page, requestId);
+    socket.emit('acp:elicitation:resolved', {
+      requestId,
+      sessionId,
+      reason: 'timeout',
+      detail: 'controller-api timeout (60s)',
+    });
+
+    await expect(card.getByTestId('interaction-status')).toHaveText('已过期', { timeout: 25000 });
+    await expect(card.getByRole('button', { name: '提交' })).toHaveCount(0);
+
+    disconnect();
+  });
+
+  test('E2E-QM1: question 工具多选题在卡片中呈现为勾选组并以逗号拼接回传', async ({ page }) => {
+    const { socket, sessionId, disconnect } = await setupSession(page);
+
     const QUESTION_SCHEMA = {
       type: 'object',
       title: '实施选项',
@@ -269,38 +302,29 @@ test.describe('ACP Elicitation E2E', () => {
       requestedSchema: QUESTION_SCHEMA,
     });
 
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 25000 });
-    await expect(dialog.getByText('Agent请求输入：实施选项')).toBeVisible();
-
-    // 多选字段渲染为勾选组（三个复选框），不是文本框
-    const group = dialog.getByRole('group', { name: '要做的事' });
+    const card = await openInteractionCard(page, requestId);
+    const group = card.getByRole('group', { name: '要做的事' });
     await expect(group).toBeVisible();
     await expect(group.getByRole('checkbox')).toHaveCount(3);
 
-    // 必答项未填时不可提交
-    await expect(dialog.getByRole('button', { name: '提交' })).toBeDisabled();
+    await expect(card.getByRole('button', { name: '提交' })).toBeDisabled();
 
-    // 定位器一律精确匹配：'自动' 与 '自动跑测试' 存在子串包含关系，
-    // 非 exact 的 getByText 会同时命中两者（strict mode violation）
-    await dialog.getByRole('radiogroup', { name: '实施方式' }).getByText('自动', { exact: true }).click();
+    await card.getByRole('radiogroup', { name: '实施方式' }).getByText('自动', { exact: true }).click();
     await group.getByText('自动跑测试', { exact: true }).click();
     await group.getByText('生成文档', { exact: true }).click();
-    await dialog.getByRole('button', { name: '提交', exact: true }).click();
+    await card.getByRole('button', { name: '提交', exact: true }).click();
 
     const response = await responsePromise;
     expect(response.requestId).toBe(requestId);
     expect(response.action).toBe('accept');
-    // q1 以逗号拼接字符串回传（顺序 = 勾选顺序），未填的 *_custom 不出现
     expect(response.content).toEqual({ q0: '自动', q1: '自动跑测试,生成文档' });
 
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
+    await expect(card.getByTestId('interaction-status')).toHaveText('已提交');
 
     disconnect();
   });
 
   test('should show url elicitation with highlighted host and open link on consent', async ({ page }) => {
-    // Stub window.open to capture the URL instead of opening a real tab
     await page.addInitScript(() => {
       (window as unknown as { __openedUrls: string[] }).__openedUrls = [];
       window.open = (url?: string | URL) => {
@@ -327,25 +351,18 @@ test.describe('ACP Elicitation E2E', () => {
       url: targetUrl,
     });
 
-    const dialog = page.getByRole('dialog');
-    await expect(dialog).toBeVisible({ timeout: 25000 });
-    await expect(dialog.getByText('Agent请求输入：打开链接授权')).toBeVisible();
-    await expect(dialog.getByText('Please authorize access to your repositories.')).toBeVisible();
-    // Full URL is displayed (host highlighted) before asking for consent
-    await expect(dialog.getByText('agent.example.com')).toBeVisible();
+    const card = await openInteractionCard(page, requestId);
+    await expect(card.getByText('Please authorize access to your repositories.')).toBeVisible();
+    await expect(card.getByText('agent.example.com')).toBeVisible();
 
-    await dialog.getByRole('button', { name: '打开链接' }).click();
+    await card.getByRole('button', { name: '打开链接' }).click();
 
-    // URL opened in a new tab only after explicit consent
     const openedUrls = await page.evaluate(() => (window as unknown as { __openedUrls: string[] }).__openedUrls);
     expect(openedUrls).toEqual([targetUrl]);
 
-    // Consent (accept) is relayed to the controller
     const response = await responsePromise;
     expect(response.requestId).toBe(requestId);
     expect(response.action).toBe('accept');
-
-    await expect(dialog).not.toBeVisible({ timeout: 5000 });
 
     disconnect();
   });

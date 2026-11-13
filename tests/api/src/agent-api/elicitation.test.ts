@@ -393,3 +393,138 @@ describe('ACP Elicitation API', () => {
     });
   });
 });
+
+// ---------- 会话交互卡片（Issue #490 / API-SI1~SI4） ----------
+
+const GET_SESSION_INTERACTIONS = `
+  query GetSessionInteractions($sessionId: ID!) {
+    sessionInteractions(sessionId: $sessionId) {
+      interactionId
+      kind
+      status
+      mode
+      message
+      expiresAt
+      respondedAt
+      history { state actor }
+      response { action values }
+    }
+  }
+`;
+
+async function getInteractions(sessionId: string): Promise<any[]> {
+  const res = await gqlRequest(GET_SESSION_INTERACTIONS, { sessionId }, authToken);
+  const body = await res.json();
+  return body.data?.sessionInteractions ?? [];
+}
+
+async function findInteraction(sessionId: string, interactionId: string): Promise<any> {
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const rows = await getInteractions(sessionId);
+    const found = rows.find((row) => row.interactionId === interactionId);
+    if (found) return found;
+  }
+  return null;
+}
+
+describe('Session interaction cards (API-SI)', () => {
+  beforeAll(async () => {
+    if (!authToken) {
+      const frontUser = await createFrontUser();
+      authToken = frontUser.token;
+    }
+  });
+
+  it('API-SI1/SI2: elicitation 触发落库 PENDING（+60s/首条 history）→ accept 后 ACCEPTED 回显提交内容', async () => {
+    const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
+    const sessionId = await createRunningSession(ctrlClient, ctrlId);
+
+    const requestId = `elic_card_${Date.now()}`;
+    ctrlClient.emit('acp:elicitation', {
+      requestId,
+      sessionId,
+      mode: 'form',
+      message: 'Card lifecycle',
+      requestedSchema: FORM_SCHEMA,
+    });
+
+    const created = await findInteraction(sessionId, requestId);
+    expect(created).toBeDefined();
+    expect(created.kind).toBe('ELICITATION');
+    expect(created.status).toBe('PENDING');
+    expect(created.mode).toBe('form');
+    expect(created.history[0]).toMatchObject({ state: 'PENDING', actor: 'agent' });
+    const remaining = new Date(created.expiresAt).getTime() - Date.now();
+    expect(remaining).toBeGreaterThan(0);
+    expect(remaining).toBeLessThanOrEqual(65_000);
+
+    const responseEvent = waitForEvent<{ requestId: string }>(ctrlClient, 'acp:elicitation:response', 10000);
+    const respondRes = await gqlRequest(
+      RESPOND_ELICITATION,
+      { requestId, action: 'accept', values: { strategy: 'balanced' } },
+      authToken,
+    );
+    expect((await respondRes.json()).data.respondElicitation).toBe(true);
+    await responseEvent;
+
+    const accepted = await findInteraction(sessionId, requestId);
+    expect(accepted.status).toBe('ACCEPTED');
+    expect(accepted.response).toMatchObject({ action: 'accept', values: { strategy: 'balanced' } });
+    expect(accepted.history.map((event: any) => `${event.state}:${event.actor}`)).toContain('ACCEPTED:user');
+    expect(accepted.respondedAt).toBeTruthy();
+
+    ctrlClient.disconnect();
+  });
+
+  it('API-SI3: resolved(timeout) → EXPIRED 且后续作答被拒绝（文案不变）', async () => {
+    const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
+    const sessionId = await createRunningSession(ctrlClient, ctrlId);
+
+    const requestId = `elic_timeout_${Date.now()}`;
+    ctrlClient.emit('acp:elicitation', {
+      requestId,
+      sessionId,
+      mode: 'form',
+      message: 'Timeout card',
+      requestedSchema: FORM_SCHEMA,
+    });
+    await findInteraction(sessionId, requestId);
+
+    ctrlClient.emit('acp:elicitation:resolved', {
+      requestId,
+      sessionId,
+      reason: 'timeout',
+      detail: 'controller-api timeout (60s)',
+    });
+
+    let expired: any = null;
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      expired = await findInteraction(sessionId, requestId);
+      if (expired?.status === 'EXPIRED') break;
+    }
+    expect(expired?.status).toBe('EXPIRED');
+
+    const respondRes = await gqlRequest(
+      RESPOND_ELICITATION,
+      { requestId, action: 'accept', values: { strategy: 'balanced' } },
+      authToken,
+    );
+    const respondBody = await respondRes.json();
+    expect(respondBody.errors?.[0]?.message).toBe('Todo item not found or already handled');
+
+    ctrlClient.disconnect();
+  });
+
+  it('API-SI4: 归属隔离——他人会话的 sessionInteractions 返回 Session not found', async () => {
+    const otherUser = await createFrontUser();
+    const res = await gqlRequest(
+      GET_SESSION_INTERACTIONS,
+      { sessionId: '66a00000000000000000dead' },
+      otherUser.token,
+    );
+    const body = await res.json();
+    expect(body.errors?.[0]?.message).toBe('Session not found');
+  });
+});

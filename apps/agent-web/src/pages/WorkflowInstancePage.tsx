@@ -21,6 +21,7 @@ import WorkflowContextPanel from '@/components/workflow/WorkflowContextPanel'
 import SessionSidePanel from '@/components/workflow/SessionSidePanel'
 import NodeDetailDrawer, { type NodeDetailTarget } from '@/components/workflow/NodeDetailDrawer'
 import MobileBackButton from '@/components/MobileBackButton'
+import { useUserEventStream } from '@/hooks/useUserEventStream'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -74,13 +75,21 @@ export default function WorkflowInstancePage() {
     localStorage.setItem('workflow-view-mode', mode)
   }
 
-  const { data, loading } = useQuery<GetWorkflowInstanceQuery>(GET_WORKFLOW_INSTANCE, {
+  const { data, loading, refetch } = useQuery<GetWorkflowInstanceQuery>(GET_WORKFLOW_INSTANCE, {
     variables: { id: id ?? '' },
     skip: !id,
     pollInterval: 5000,
     // Apollo v4 默认 notifyOnNetworkStatusChange=true：轮询会反复置 loading，
     // 导致整页卸载成 spinner、打断用户输入；轮询期间保持渲染现有内容。
     notifyOnNetworkStatusChange: false,
+  })
+
+  // 待审批感叹号近实时刷新：任意 session_interaction 事件触发实例查询 refetch（5s 轮询兜底）
+  useUserEventStream({
+    enabled: true,
+    onSessionInteraction: () => {
+      void refetch();
+    },
   })
 
   const instance = data?.workflowInstance
@@ -317,6 +326,7 @@ export default function WorkflowInstancePage() {
             onOpenSession={setSideSessionId}
             pullRequestLinks={instance.pullRequestLinks}
             onOpenDetail={(nodeId) => setDetailTarget({ type: 'node', nodeId })}
+            pendingInteractionSessionIds={instance.pendingInteractionSessionIds ?? []}
           />
           <div className="min-w-0 space-y-4">
             <BlackboardPanel

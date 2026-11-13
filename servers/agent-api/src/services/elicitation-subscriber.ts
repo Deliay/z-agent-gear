@@ -4,6 +4,7 @@ import { logger as rootLogger } from '../observability/logger.js';
 import { extractTraceparent, withSpan } from '../observability/trace.js';
 import { todoService } from './todo-service.js';
 import { sessionSSEService } from './session-sse.js';
+import { sessionInteractionService } from './session-interaction-service.js';
 
 const ELICITATION_REQUEST_CHANNEL = 'elicitation:request';
 const ELICITATION_COMPLETE_CHANNEL = 'elicitation:complete';
@@ -115,11 +116,18 @@ export class ElicitationSubscriberService {
   private async handleElicitationRequest(data: ElicitationRequestData): Promise<void> {
     logger.debug({ event: 'received', requestId: data.requestId }, 'received elicitation request');
 
+    // 交互卡片持久化（interactionId 幂等：重复触发只一张卡片/一条 SSE）
+    const { interaction, created } = await sessionInteractionService.createFromElicitationRequest(data);
+    if (!created) {
+      logger.info({ event: 'duplicate', requestId: data.requestId }, 'duplicate elicitation request ignored');
+      return;
+    }
+
     // Create todo item
     const todo = await todoService.createElicitationTodo(data);
     logger.debug({ event: 'todo-created', requestId: data.requestId, todoId: String(todo._id) }, 'created elicitation todo');
 
-    // Push SSE notification to user
+    // Push SSE notification to user（通知 + 会话交互卡片事件）
     sessionSSEService.pushToUser(data.userId, {
       type: 'elicitation_request',
       data: {
@@ -135,6 +143,15 @@ export class ElicitationSubscriberService {
         createdAt: todo.createdAt,
       },
     });
+    sessionSSEService.pushToUser(data.userId, {
+      type: 'session_interaction',
+      data: {
+        sessionId: data.sessionId,
+        interactionId: interaction.interactionId,
+        kind: 'ELICITATION',
+        status: 'PENDING',
+      },
+    });
   }
 
   private async handleElicitationComplete(data: ElicitationCompleteData): Promise<void> {
@@ -142,6 +159,8 @@ export class ElicitationSubscriberService {
 
     // Mark the matching elicitation todo as read（按 userId 限定归属）
     await todoService.markElicitationCompleted(data.elicitationId, data.userId);
+    // 交互记录：仅追加 history 记录（不改 status，URL 模式接受由用户「打开链接」触发）
+    await sessionInteractionService.markAgentCompleted(data.elicitationId, data.userId);
 
     // Push SSE notification to user
     sessionSSEService.pushToUser(data.userId, {
@@ -196,6 +215,32 @@ export class ElicitationSubscriberService {
         { event: 'resolved-skipped', reason: data.reason, requestId: data.requestId ?? null },
         'resolved write skipped (already terminal or tenant mismatch)',
       );
+    }
+
+    // 会话交互卡片收敛（PENDING → EXPIRED/CANCELLED/FAILED，单调）
+    const resolutionByReason: Record<string, 'EXPIRED' | 'CANCELLED' | 'FAILED'> = {
+      timeout: 'EXPIRED',
+      cancelled: 'CANCELLED',
+      unsupported_mode: 'FAILED',
+    };
+    const interactionResolution = resolutionByReason[data.reason] ?? 'FAILED';
+    const converged = await sessionInteractionService.resolve({
+      userId: data.userId,
+      interactionId: data.requestId,
+      sessionId: data.sessionId,
+      resolution: interactionResolution,
+      detail: data.detail,
+    });
+    if (converged > 0) {
+      sessionSSEService.pushToUser(data.userId, {
+        type: 'session_interaction',
+        data: {
+          sessionId: data.sessionId,
+          interactionId: data.requestId ?? '',
+          kind: 'ELICITATION',
+          status: interactionResolution,
+        },
+      });
     }
   }
 

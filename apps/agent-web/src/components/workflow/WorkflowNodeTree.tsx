@@ -16,7 +16,7 @@ import EditInstanceNodeDialog from './EditInstanceNodeDialog'
 import HumanNodeActions from './HumanNodeActions'
 import { artifactsOf } from '@/lib/artifact-owners'
 import { NODE_TYPE_LABELS, NODE_STATUS_LABELS, NODE_STATUS_BADGE, retryProgressText } from './WorkflowNodeTreeConstants'
-import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil, RefreshCw, PanelRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil, RefreshCw, PanelRight, AlertCircle } from 'lucide-react'
 
 interface WorkflowNodeTreeProps {
   instance: WorkflowInstanceData
@@ -25,6 +25,8 @@ interface WorkflowNodeTreeProps {
   pullRequestLinks?: WorkflowPullRequestLinkData[]
   /** 打开节点详情抽屉（PRD 功能点 6：列表视图同样可打开） */
   onOpenDetail?: (nodeId: string) => void
+  /** 存在待处理交互（提问/审批）的节点会话 id 集合 */
+  pendingInteractionSessionIds?: string[]
 }
 
 /** 默认折叠的状态：已完成/等待中（其余状态默认展开，需关注或可操作） */
@@ -39,6 +41,7 @@ function NodeCard({
   onEdit,
   pullRequestLinks = [],
   onOpenDetail,
+  hasPendingInteraction = false,
 }: {
   instanceId: string
   node: WorkflowNodeData
@@ -47,6 +50,7 @@ function NodeCard({
   onEdit: (node: WorkflowNodeData, restartMode?: boolean) => void
   pullRequestLinks?: WorkflowPullRequestLinkData[]
   onOpenDetail?: (nodeId: string) => void
+  hasPendingInteraction?: boolean
 }) {
   // 用户手动切换后以其为准，否则按状态取默认值（状态流转后默认值自动跟随）
   const [toggled, setToggled] = useState<boolean | null>(null)
@@ -172,6 +176,20 @@ function NodeCard({
             详情
           </Button>
         )}
+        {hasPendingInteraction && node.sessionId && (
+          <Button
+            size="xs"
+            variant="outline"
+            data-testid={`node-pending-interaction-${node.id}`}
+            aria-label="有待处理的提问或审批"
+            title="有待处理的提问或审批"
+            className="text-amber-500 hover:text-amber-600"
+            onClick={() => onOpenSession(node.sessionId!)}
+          >
+            <AlertCircle className="size-3" />
+            待处理
+          </Button>
+        )}
         {node.sessionId && (
           <Button
             size="xs"
@@ -247,6 +265,7 @@ export default function WorkflowNodeTree({
   onOpenSession,
   pullRequestLinks = [],
   onOpenDetail,
+  pendingInteractionSessionIds = [],
 }: WorkflowNodeTreeProps) {
   const stages: string[] = []
   for (const node of instance.nodes) {
@@ -262,6 +281,7 @@ export default function WorkflowNodeTree({
   const availableServerTypes = (capabilitiesData?.acpCapabilities ?? [])
     .filter((c) => c.available && c.type)
     .map((c) => c.type)
+  const pendingSet = new Set(pendingInteractionSessionIds)
 
   // 编辑按钮点击
   const handleEdit = (node: WorkflowNodeData, restartMode = false) => {
@@ -287,6 +307,7 @@ export default function WorkflowNodeTree({
                   onEdit={handleEdit}
                   pullRequestLinks={pullRequestLinks}
                   onOpenDetail={onOpenDetail}
+                  hasPendingInteraction={Boolean(node.sessionId && pendingSet.has(node.sessionId))}
                 />
               ))}
           </div>

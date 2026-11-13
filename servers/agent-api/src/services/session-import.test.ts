@@ -16,6 +16,12 @@ vi.mock('../models/acp-message.js', () => ({
   },
 }));
 
+vi.mock('../models/session-interaction.js', () => ({
+  SessionInteraction: {
+    deleteMany: vi.fn(),
+  },
+}));
+
 vi.mock('../models/controller.js', () => ({
   Controller: {
     findOne: vi.fn(),

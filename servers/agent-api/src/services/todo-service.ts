@@ -73,7 +73,7 @@ export class TodoService {
    * 订阅/引擎链路没有 ALS 上下文，缺省时 tenant-scope 会把 `tenantId` 写成
    * `userId`（个人租户），导致团队工作区查询不到待办、切到个人工作区反而可见。
    */
-  private async resolveSessionTenantId(sessionId?: string | null): Promise<string | null> {
+  async resolveSessionTenantId(sessionId?: string | null): Promise<string | null> {
     if (!sessionId || !mongoose.isValidObjectId(sessionId)) return null;
     const session = (await Session.findById(sessionId).select('workspaceId').lean()) as
       | { workspaceId?: unknown }

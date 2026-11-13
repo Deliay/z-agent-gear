@@ -242,6 +242,68 @@ input SubmitSessionReviewInput {
   status: SessionReviewAction!
 }
 
+# ---------- 会话交互卡片（Elicitation / Ask Permission 持久化） ----------
+
+# 交互类型：ELICITATION 文本/表单提问；PERMISSION 权限审批
+enum SessionInteractionKind {
+  ELICITATION
+  PERMISSION
+}
+
+# 交互状态机：仅允许 PENDING → 各终态（单调，CAS 唯一写口）
+enum SessionInteractionStatus {
+  PENDING      # 待处理（等待用户输入）
+  ACCEPTED     # 已提交/已批准
+  DECLINED     # 已拒绝（elicitation decline）
+  CANCELLED    # 已取消（用户 cancel / 控制器断连）
+  EXPIRED      # 已过期（60s 内未响应）
+  FAILED       # 已失效（链路不支持等）
+}
+
+# 状态迁移记录（完整历史，按 at 升序）
+type SessionInteractionEvent {
+  state: SessionInteractionStatus!
+  at: String!
+  actor: String!
+  detail: String
+}
+
+type SessionInteractionResponse {
+  action: String
+  outcome: String
+  optionId: String
+  values: JSON
+}
+
+type SessionInteraction {
+  id: ID!
+  sessionId: ID!
+  # = requestId（幂等键）
+  interactionId: String!
+  kind: SessionInteractionKind!
+  status: SessionInteractionStatus!
+  # form | url（仅 elicitation）
+  mode: String
+  message: String
+  # elicitation 表单 schema
+  requestedSchema: JSON
+  # url 模式链接（仅 http/https）
+  url: String
+  elicitationId: String
+  toolCallId: String
+  # permission 工具调用详情 {toolCallId,title,kind,rawInput,locations}
+  toolCall: JSON
+  # permission 审批选项 [{optionId,name,kind}]
+  options: JSON
+  response: SessionInteractionResponse
+  # 作答截止（创建 + 60s，与 controller-api TIMEOUT_MS 一致）
+  expiresAt: String
+  createdAt: String!
+  respondedAt: String
+  resolvedAt: String
+  history: [SessionInteractionEvent!]!
+}
+
 type PermissionOption {
   optionId: String!
   name: String!
@@ -520,6 +582,8 @@ type Query {
   sessionReviews(status: SessionReviewStatus, sessionId: ID): [SessionReview!]!
   # 读取会话工作区内文件内容（fs:read-file relay；只读会话同样允许）
   sessionFileContent(sessionId: ID!, path: String!): SessionFileContent!
+  # 会话交互记录（elicitation / permission）：归属校验同 sessionMessages（只读会话允许），按 createdAt 升序
+  sessionInteractions(sessionId: ID!): [SessionInteraction!]!
 }
 
 type Mutation {

@@ -30,11 +30,13 @@ interface PendingRequest {
   socketId: string;
   sessionId: string;
   userId: string;
+  controllerId: string;
   timeout: NodeJS.Timeout;
 }
 
 const PERMISSION_REQUEST_CHANNEL = 'permission:request';
 const PERMISSION_RESPONSE_CHANNEL = 'permission:response';
+const PERMISSION_RESOLVED_CHANNEL = 'permission:resolved';
 const TIMEOUT_MS = 60_000;
 
 export class PermissionManager {
@@ -96,6 +98,7 @@ export class PermissionManager {
       socketId: socket.id,
       sessionId,
       userId: socket.data.userId,
+      controllerId: socket.data.controllerId,
       timeout,
     });
 
@@ -135,6 +138,21 @@ export class PermissionManager {
 
     this.pendingRequests.delete(requestId);
 
+    // 60s 是唯一用户可见超时口径：回 Agent cancelled 的同时发布 permission:resolved，
+    // 供 agent-api 把会话交互卡片收敛为 EXPIRED（对齐 elicitation:resolved 语义）。
+    void Promise.resolve()
+      .then(() => publish(PERMISSION_RESOLVED_CHANNEL, {
+        requestId,
+        sessionId: pending.sessionId,
+        userId: pending.userId,
+        controllerId: pending.controllerId,
+        reason: 'timeout',
+        detail: 'controller-api timeout (60s)',
+      }))
+      .catch((err: unknown) => {
+        this.logger.error({ err, requestId }, 'failed to publish permission resolved (timeout)');
+      });
+
     if (this.io) {
       const socket = this.io.sockets.sockets.get(pending.socketId);
       if (socket) {
@@ -143,6 +161,32 @@ export class PermissionManager {
           outcome: { outcome: 'cancelled' },
         }));
       }
+    }
+  }
+
+  /**
+   * controller 断线：清理该 socket 的 pending 与 timer，并逐条发布 permission:resolved(cancelled)。
+   *
+   * 此时 Agent 侧 Promise 悬挂至进程退出、不可能再收到回答，语义与「已取消」一致；
+   * socket 已断开故不重复回 Agent。
+   */
+  clearForSocket(socketId: string): void {
+    for (const [requestId, pending] of this.pendingRequests) {
+      if (pending.socketId !== socketId) continue;
+      clearTimeout(pending.timeout);
+      this.pendingRequests.delete(requestId);
+      void Promise.resolve()
+        .then(() => publish(PERMISSION_RESOLVED_CHANNEL, {
+          requestId,
+          sessionId: pending.sessionId,
+          userId: pending.userId,
+          controllerId: pending.controllerId,
+          reason: 'cancelled',
+          detail: 'socket disconnected',
+        }))
+        .catch((err: unknown) => {
+          this.logger.error({ err, requestId }, 'failed to publish permission resolved (disconnect)');
+        });
     }
   }
 
