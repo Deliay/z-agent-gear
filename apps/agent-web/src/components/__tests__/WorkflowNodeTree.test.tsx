@@ -492,3 +492,56 @@ describe('节点详情抽屉入口（UI 四期功能点 6）', () => {
     expect(screen.queryByRole('button', { name: '评审 详情' })).not.toBeInTheDocument();
   });
 });
+
+describe('待处理交互感叹号（T-WFP）', () => {
+  it('T-WFP1: node.sessionId ∈ pendingInteractionSessionIds 时渲染感叹号', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([makeNode({ id: 'n1', sessionId: 'sess-1' })])}
+        onOpenSession={vi.fn()}
+        pendingInteractionSessionIds={['sess-1']}
+      />,
+    );
+
+    expect(screen.getByTestId('node-pending-interaction-n1')).toBeDefined();
+    expect(screen.getByLabelText('有待处理的提问或审批')).toBeDefined();
+  });
+
+  it('T-WFP2: 无 pending 会话时不渲染感叹号', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([makeNode({ id: 'n1', sessionId: 'sess-1' })])}
+        onOpenSession={vi.fn()}
+        pendingInteractionSessionIds={[]}
+      />,
+    );
+
+    expect(screen.queryByTestId('node-pending-interaction-n1')).toBeNull();
+  });
+
+  it('T-WFP3: 点击感叹号打开对应节点会话', () => {
+    const onOpenSession = vi.fn();
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([makeNode({ id: 'n1', sessionId: 'sess-1' })])}
+        onOpenSession={onOpenSession}
+        pendingInteractionSessionIds={['sess-1']}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('node-pending-interaction-n1'));
+    expect(onOpenSession).toHaveBeenCalledWith('sess-1');
+  });
+
+  it('T-WFP4: 无 sessionId 的节点即使集合包含空值也不渲染', () => {
+    render(
+      <WorkflowNodeTree
+        instance={makeInstance([makeNode({ id: 'n1', sessionId: null })])}
+        onOpenSession={vi.fn()}
+        pendingInteractionSessionIds={['']}
+      />,
+    );
+
+    expect(screen.queryByTestId('node-pending-interaction-n1')).toBeNull();
+  });
+});

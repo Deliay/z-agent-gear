@@ -14,6 +14,7 @@ export interface WorkflowTemplateNodeInput {
   dependsOn: string[];
   requiresWorktree: boolean;
   linkUpstreamPullRequest?: boolean;
+  sortOrder?: number | null;
 }
 
 export interface WorkflowTemplateCreationMeta {

@@ -215,3 +215,115 @@ describe('PermissionManager', () => {
     });
   });
 });
+
+describe('PermissionManager - permission:resolved', () => {
+  let manager: PermissionManager;
+  let testLog: TestLogger;
+
+  beforeEach(() => {
+    testLog = createTestLogger();
+    manager = new PermissionManager(testLog.logger);
+    manager.start(mockIo as never);
+  });
+
+  async function flush(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+
+  function resolvedCalls() {
+    return mockRedis.publish.mock.calls
+      .filter(([channel]) => channel === 'permission:resolved')
+      .map(([, payload]) => JSON.parse(payload as string));
+  }
+
+  it('T-PM1: 60s 超时同时发布 permission:resolved{reason:timeout}（含 controllerId/userId）', async () => {
+    await manager.handlePermissionRequest(mockSocket as never, {
+      requestId: 'req-1',
+      sessionId: 'session-1',
+      toolCall: { toolCallId: 'tc-1' },
+      options: [],
+    });
+
+    vi.advanceTimersByTime(60_000);
+    await flush();
+
+    expect(mockSocket.emit).toHaveBeenCalledWith('acp:permission:response', {
+      requestId: 'req-1',
+      outcome: { outcome: 'cancelled' },
+      _meta: {},
+    });
+    const calls = resolvedCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      requestId: 'req-1',
+      sessionId: 'session-1',
+      userId: 'user-1',
+      controllerId: 'ctrl-1',
+      reason: 'timeout',
+      detail: 'controller-api timeout (60s)',
+    });
+    expect(manager.getPendingRequestCount()).toBe(0);
+  });
+
+  it('T-PM2: clearForSocket 清理该 socket 全部 pending 并逐条发布 cancelled', async () => {
+    await manager.handlePermissionRequest(mockSocket as never, {
+      requestId: 'req-1', sessionId: 'session-1', toolCall: { toolCallId: 'tc-1' }, options: [],
+    });
+    await manager.handlePermissionRequest(mockSocket as never, {
+      requestId: 'req-2', sessionId: 'session-2', toolCall: { toolCallId: 'tc-2' }, options: [],
+    });
+
+    manager.clearForSocket('socket-123');
+    await flush();
+
+    expect(manager.getPendingRequestCount()).toBe(0);
+    const calls = resolvedCalls();
+    expect(calls.map((call) => call.requestId).sort()).toEqual(['req-1', 'req-2']);
+    for (const call of calls) {
+      expect(call).toMatchObject({
+        userId: 'user-1',
+        controllerId: 'ctrl-1',
+        reason: 'cancelled',
+        detail: 'socket disconnected',
+      });
+    }
+    // 已断连不回 Agent
+    expect(mockSocket.emit).not.toHaveBeenCalled();
+
+    // 清理后 60s 不再触发 timeout 发布
+    vi.advanceTimersByTime(60_000);
+    await flush();
+    expect(resolvedCalls()).toHaveLength(2);
+  });
+
+  it('T-PM3: clearForSocket 不影响其他 socket 的 pending', async () => {
+    const mockSocket2 = {
+      id: 'socket-456',
+      data: { userId: 'user-2', controllerId: 'ctrl-2' },
+      emit: vi.fn(),
+    };
+    mockIo.sockets.sockets.set('socket-456', mockSocket2 as never);
+
+    await manager.handlePermissionRequest(mockSocket as never, {
+      requestId: 'req-1', sessionId: 'session-1', toolCall: { toolCallId: 'tc-1' }, options: [],
+    });
+    await manager.handlePermissionRequest(mockSocket2 as never, {
+      requestId: 'req-2', sessionId: 'session-2', toolCall: { toolCallId: 'tc-2' }, options: [],
+    });
+
+    manager.clearForSocket('socket-123');
+    await flush();
+
+    expect(manager.getPendingRequestCount()).toBe(1);
+    expect(resolvedCalls().map((call) => call.requestId)).toEqual(['req-1']);
+
+    vi.advanceTimersByTime(60_000);
+    await flush();
+    expect(mockSocket2.emit).toHaveBeenCalledWith('acp:permission:response', {
+      requestId: 'req-2',
+      outcome: { outcome: 'cancelled' },
+      _meta: {},
+    });
+  });
+});

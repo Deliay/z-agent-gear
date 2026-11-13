@@ -940,6 +940,36 @@ Agent 侧问询在到达用户之前已结束（模式不支持 / 超时 / 被 A
 3. `reason` 映射：`unsupported_mode → failed`、`timeout → expired`、`cancelled → cancelled`；契约外取值收敛为 `failed` 并告警。
 4. `requestId` 缺省且 `sessionId` 存在时，按 `sessionId + userId + resolution:null` 兜底收敛。
 
+### 2.34.1 `permission:resolved`（Controller → Redis）
+
+权限请求在到达用户前已结束（60s 超时 / 控制器断连清理）时发布，供 agent-api 收敛会话交互卡片。
+仅用于状态收敛；用户已响应的情况走 `acp:permission:response`（由服务端 CAS 直接写终态）。
+
+**Payload（Redis 频道 `permission:resolved`，与 `elicitation:resolved` 同构）：**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 否 | 平台侧请求 ID。缺省时 agent-api 按 `sessionId` 会话级兜底收敛 |
+| `sessionId` | `string` | 是 | 会话 ID |
+| `reason` | `"timeout" \| "cancelled"` | 是 | 结束原因（reason 子集：超时 / 断连清理） |
+| `detail` | `string` | 否 | 可读原因（`controller-api timeout (60s)` / `socket disconnected`） |
+| `controllerId` | `string` | 是 | 控制器 ID |
+| `userId` | `string` | 是 | 会话归属用户（租户隔离维度；缺失时 agent-api 拒绝写入并告警） |
+| `_meta` | `object` | 否 | 链路传播保留位（见 §7） |
+
+**触发点：**
+
+1. `PermissionManager.handleTimeout`：60s 未响应 → 回 Agent `cancelled` + 发布 `permission:resolved{reason:'timeout'}`。
+2. `PermissionManager.clearForSocket`：控制器断连 → 清理该 socket 全部 pending + 逐条发布
+   `permission:resolved{reason:'cancelled', detail:'socket disconnected'}`（Agent 侧 Promise 不再可能收到回答）。
+
+**agent-api 行为：** `reason: timeout → EXPIRED`、`cancelled → CANCELLED`；契约外 reason 收敛为 `FAILED` 并告警；
+单调收敛（仅 `PENDING → 终态`），同时将对应 TodoItem 标记已读，并推送用户级 SSE `session_interaction` 终态事件。
+
+**作答时限统一口径：** Elicitation / Permission 的用户可作答时限统一为 **60s（controller-api `TIMEOUT_MS`）**；
+`sessioninteractions.expiresAt` 按事件到达 agent-api 时刻 + 60s 写入，卡片倒计时以该字段为唯一依据；
+TodoItem 的 5 分钟 `expiresAt` 仅为通知保留窗口（TTL 清理），不再作为作答有效性依据。
+
 ### 2.35 `harness:login:required`（Controller → Server）
 
 Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登录态；未登录时拉起 `kimi login` 设备码流程，
@@ -1084,6 +1114,8 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 | Controller → Server | `git:commit:result` | 返回提交结果 |
 | Server → Controller | `fs:read-file` | 请求读取文件内容（文本，限量截断） |
 | Controller → Server | `fs:read-file:result` | 返回文件内容 |
+| Server → Controller | `workflow-templates:scan` | 请求扫描项目工作流模板目录（`.zag/workflow/templates/`） |
+| Controller → Server | `workflow-templates:scan:result` | 返回模板文件列表与内容 |
 
 ### 3.2 `fs:browse`（Server → Controller）
 
@@ -1762,6 +1794,65 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
 2. 等待 `fs:read-file:result`（约 15s 超时）
 3. 结果写入 Redis `fs:read-file:{requestId}`（TTL 60s），agent-api 轮询消费（与 `fs:browse` 同型）
 
+### 3.27 `workflow-templates:scan`（Server → Controller）
+
+请求扫描项目工作区内固定子目录 `.zag/workflow/templates/` 下的工作流模板文件。用于「工作流模板项目持久化」：仓库为模板唯一事实源，平台侧不做持久化。
+
+**Payload:**
+
+```json
+{
+  "requestId": "string",
+  "path": "string"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `path` | `string` | 是 | 项目工作区绝对路径；扫描固定子目录 `<path>/.zag/workflow/templates/` |
+
+**约束：**
+
+- 仅直读约定子目录，**不递归**，仅收集文件名以 `.json` 结尾的常规文件（符号链接按 `stat` 为常规文件才读取；指向目录/设备的条目跳过）。
+- 目录不存在视为空列表（`success: true`）；目录读取权限失败返回 `success: false, error: 'permission denied'`。
+- 数量与体积上限：最多 20 个文件（按文件名 `localeCompare` 排序后取前 20，超出 `truncated: true`）；单文件 >128 KiB 该文件标记 `error: 'file too large'`（不读内容）；累计读取 >1 MiB 停止读取并 `truncated: true`。
+- 错误文案白名单：`file too large` / `not found` / `permission denied`。
+- 扫描事件**不**使用 `fs:browse`/`fs:read-file` 的会话路径白名单（检测发生在会话启动前），路径由服务端按已登记工作区下发；仅读不写、不执行。
+
+### 3.28 `workflow-templates:scan:result`（Controller → Server）
+
+返回模板文件列表与内容。
+
+**Payload:**
+
+```json
+{
+  "requestId": "string",
+  "success": true,
+  "templates": [
+    { "fileName": "dev-flow.json", "content": "{}" },
+    { "fileName": "broken.json", "error": "file too large" }
+  ],
+  "truncated": false,
+  "error": "string"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 目录读取整体是否成功 |
+| `templates` | `Array<{ fileName: string; content?: string; error?: string }>` | 成功时必填 | 逐文件结果；`error` 白名单见 §3.27 |
+| `truncated` | `boolean` | 成功时必填 | 是否因数量/总量上限截断 |
+| `error` | `string` | 失败时必填 | 整体失败原因（白名单见 §3.27） |
+
+**服务端行为：**
+
+1. 查找 controller socket，发送 `workflow-templates:scan` Socket.IO 事件（含 `requestId`, `path`）
+2. 等待 `workflow-templates:scan:result`（约 15s 超时）
+3. 结果写入 Redis `workflow-templates:scan:{requestId}`（TTL 60s），agent-api 轮询消费（500ms × 30 ≈ 15s 上限）；`templates` 非数组时按 `{ success: false }` 兜底落键
+
 ---
 
 ## 4. SSE 协议（agent-api → 前端）
@@ -1861,6 +1952,32 @@ LLM 模型切换成功后推送。
 |------|------|------|------|
 | `sessionId` | `string` | 是 | Session ID |
 | `modelId` | `string` | 是 | 切换后的新模型 ID |
+
+#### `session_interaction` 事件
+
+会话交互（Elicitation / Permission）创建或收敛为终态时推送（用户级 SSE，`GET /api/user/stream`）。
+前端按 `sessionId` 命中当前打开会话则 refetch `sessionInteractions`；工作流实例页收到任意事件触发实例查询 refetch。
+
+**Payload:**
+
+```json
+{
+  "type": "session_interaction",
+  "data": {
+    "sessionId": "string",
+    "interactionId": "string",
+    "kind": "ELICITATION | PERMISSION",
+    "status": "PENDING | ACCEPTED | DECLINED | CANCELLED | EXPIRED | FAILED"
+  }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `sessionId` | `string` | 是 | 会话 ID |
+| `interactionId` | `string` | 是 | 平台交互 ID（= requestId；会话级兜底收敛时可能为空串） |
+| `kind` | `string` | 是 | `ELICITATION` / `PERMISSION` |
+| `status` | `string` | 是 | 变更后的状态；事件为提示，权威状态以 `sessionInteractions` 查询为准 |
 
 ---
 

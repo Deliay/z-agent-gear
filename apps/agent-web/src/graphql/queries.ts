@@ -202,6 +202,42 @@ export const GET_SESSION_MESSAGES = gql`
   }
 `
 
+export const GET_SESSION_INTERACTIONS = gql`
+  query GetSessionInteractions($sessionId: ID!) {
+    sessionInteractions(sessionId: $sessionId) {
+      id
+      sessionId
+      interactionId
+      kind
+      status
+      mode
+      message
+      requestedSchema
+      url
+      elicitationId
+      toolCallId
+      toolCall
+      options
+      response {
+        action
+        outcome
+        optionId
+        values
+      }
+      expiresAt
+      createdAt
+      respondedAt
+      resolvedAt
+      history {
+        state
+        at
+        actor
+        detail
+      }
+    }
+  }
+`
+
 export const GET_ACP_CAPABILITIES = gql`
   query GetAcpCapabilities($controllerId: ID!) {
     acpCapabilities(controllerId: $controllerId) {

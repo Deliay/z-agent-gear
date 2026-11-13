@@ -53,6 +53,16 @@ const configuredWorkflowSchema = new mongoose.Schema(
     // 复制来源（仅展示用，无强关联；模板后续更新不影响本副本）
     sourceTemplateId: { type: mongoose.Schema.Types.ObjectId, ref: 'WorkflowTemplate' },
     sourceTemplateVersion: { type: Number },
+    // 来源：PLATFORM（默认，平台模板/空白创建）/ REPO（项目仓库模板）；存量行缺省读取侧归一为 PLATFORM
+    sourceKind: { type: String, enum: ['PLATFORM', 'REPO'], default: 'PLATFORM' },
+    // REPO 来源：模板文件相对仓库根的路径（.zag/workflow/templates/<fileName>）；PLATFORM 恒 null
+    sourceRepoPath: { type: String, default: null },
+    // REPO 来源：模板所在项目工作区（ControllerWorkspace）
+    sourceWorkspaceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ControllerWorkspace',
+      default: null,
+    },
     nodes: { type: [configuredNodeSchema], default: [] },
     // 资源归属：HUMAN（默认，界面创建）/ AI（工作流管理工具集创建）
     createdBy: { type: String, enum: WORKFLOW_CREATED_BY, default: 'HUMAN' },

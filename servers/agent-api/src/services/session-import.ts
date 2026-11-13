@@ -1,5 +1,6 @@
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
+import { SessionInteraction } from '../models/session-interaction.js';
 import { Controller } from '../models/controller.js';
 import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
@@ -123,6 +124,7 @@ export class SessionImportService {
     } else {
       await Session.deleteOne({ _id: sessionId, ...actorFilter(userId) });
       await AcpMessage.deleteMany({ sessionId });
+      await SessionInteraction.deleteMany({ sessionId });
     }
 
     let syncedToAgent = false;

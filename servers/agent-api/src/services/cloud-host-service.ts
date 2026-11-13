@@ -25,12 +25,14 @@ import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
 import { cloudWorkloadCatalog } from './cloud-workload-catalog.js';
 import { cloudHostIssuesLinkageService } from './cloud-host-issues-linkage.js';
+import { configuredWorkflowService } from './workflow/configured.js';
 import {
   MAX_CREATE_WORKLOADS,
   resolveCreateWorkloadPlan,
   type CreateWorkloadPlanEntry,
 } from './cloud-host-workload-plan.js';
 import { cloudStorageService, type CloudStorageService } from './cloud-storage-service.js';
+import { compareVersions } from './version.js';
 
 export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.17.1';
 
@@ -57,17 +59,6 @@ export const HARNESS_MIN_AGENT_GEAR_VERSION: Record<HarnessType, string> = {
 export function resolveAgentGearMinVersion(types: HarnessType[]): string {
   const versions = [CLOUD_HOST_AGENT_GEAR_MIN_VERSION, ...types.map((type) => HARNESS_MIN_AGENT_GEAR_VERSION[type] ?? CLOUD_HOST_AGENT_GEAR_MIN_VERSION)];
   return versions.reduce((max, current) => (compareVersions(current, max) > 0 ? current : max), CLOUD_HOST_AGENT_GEAR_MIN_VERSION);
-}
-
-function compareVersions(a: string, b: string): number {
-  const pa = a.split('.').map((part) => Number.parseInt(part, 10) || 0);
-  const pb = b.split('.').map((part) => Number.parseInt(part, 10) || 0);
-  const length = Math.max(pa.length, pb.length);
-  for (let i = 0; i < length; i += 1) {
-    const diff = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
 }
 
 export interface CreateCloudHostInput {
@@ -765,6 +756,10 @@ export class CloudHostService {
       // Issues 联动配置随云电脑销毁失效（标签是否清理由前端销毁确认流程调用 cleanup）
       await cloudHostIssuesLinkageService.deleteByController(String(host.controllerId)).catch((err) => {
         logger.warn({ event: 'cascade-delete-linkages-failed', err }, 'cascade delete issues linkages failed');
+      });
+      // 项目来源（REPO）已配置工作流随云电脑销毁失效（best-effort；PLATFORM 来源零影响）
+      await configuredWorkflowService.deleteRepoScopedByController(String(host.controllerId)).catch((err) => {
+        logger.warn({ event: 'cascade-delete-repo-workflows-failed', err }, 'cascade delete repo workflows failed');
       });
       return true;
       }),

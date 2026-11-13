@@ -15,6 +15,8 @@ import FetchCard from './FetchCard';
 import PlanFloatingCard from './PlanFloatingCard';
 import ScrollToBottomButton from './ScrollToBottomButton';
 import { mergeToolCallMessages, type MergedToolCall } from './tool-call-state';
+import InteractionCard from './InteractionCard';
+import type { SessionInteractionData } from '../../graphql/types';
 
 
 function mergeMessageChunks(messages: AcpMessage[]): string {
@@ -59,6 +61,9 @@ interface MessageListProps {
   loadingMore?: boolean;
   sseLoading?: boolean;
   sseError?: boolean;
+  /** 会话交互记录（elicitation / permission），按 createdAt 合入时间线 */
+  interactions?: SessionInteractionData[];
+  onInteractionResponded?: () => void;
 }
 
 const BOTTOM_THRESHOLD = 24;
@@ -67,7 +72,7 @@ function distanceToBottom(element: HTMLElement): number {
   return element.scrollHeight - element.scrollTop - element.clientHeight;
 }
 
-export default function MessageList({ messages, hasMore, onLoadMore, loadingMore, sseLoading, sseError }: MessageListProps) {
+export default function MessageList({ messages, hasMore, onLoadMore, loadingMore, sseLoading, sseError, interactions = [], onInteractionResponded }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollStateRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
@@ -237,6 +242,30 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
 
   const groups = useMemo(() => groupMessages(messages), [messages]);
 
+  // 时间线合并（裁决 3）：消息组按首条消息 createdAt 与交互项稳定归并；
+  // 同刻「消息组在前、交互在后」固定 tie-break，避免轮询刷新时跳动。
+  const timelineItems = useMemo(() => {
+    type TimelineItem =
+      | { type: 'group'; group: ReturnType<typeof groupMessages>[number]; createdAt: string }
+      | { type: 'interaction'; interaction: SessionInteractionData; createdAt: string };
+    const items: TimelineItem[] = groups.map((group) => ({
+      type: 'group' as const,
+      group,
+      createdAt: group.messages[0]?.createdAt ?? '',
+    }));
+    for (const interaction of interactions) {
+      items.push({ type: 'interaction', interaction, createdAt: interaction.createdAt });
+    }
+    items.sort((a, b) => {
+      const left = Date.parse(a.createdAt);
+      const right = Date.parse(b.createdAt);
+      if (Number.isFinite(left) && Number.isFinite(right) && left !== right) return left - right;
+      if (a.type === b.type) return 0;
+      return a.type === 'group' ? -1 : 1;
+    });
+    return items;
+  }, [groups, interactions]);
+
   // 工具调用视图模型合并：同一 toolCallId 的全部消息合并后统一传给四个卡片
   const mergedToolCalls = useMemo(() => {
     const map = new Map<string, MergedToolCall>();
@@ -289,62 +318,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
     return groupKey === lastExpandableKey;
   };
 
-  return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
-      <div
-        ref={listRef}
-        onScroll={handleScroll}
-        onWheel={handleUserScrollIntent}
-        onTouchMove={handleUserScrollIntent}
-        onKeyDown={handleUserScrollIntent}
-        data-testid="message-scroll-container"
-        className="flex-1 overflow-y-auto bg-background p-4"
-      >
-      {messages.length === 0 ? (
-        sseLoading ? (
-          <div className="flex h-full items-center justify-center">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
-              Loading messages...
-            </div>
-          </div>
-        ) : sseError ? (
-          <div className="flex h-full items-center justify-center text-sm text-red-500">
-            Failed to load messages. Connection error.
-          </div>
-        ) : (
-          <div className="flex h-full items-center justify-center text-muted-foreground">
-            No messages yet. Start a conversation!
-          </div>
-        )
-      ) : (
-        <div className="space-y-4">
-          {lastPlanMessages && (
-            <PlanFloatingCard messages={lastPlanMessages.map(m => ({ content: m.content, createdAt: m.createdAt }))} />
-          )}
-          {hasMore ? (
-            <div className="py-2 text-center">
-              {loadingMore ? (
-                <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" />
-                  Loading earlier messages...
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={loadEarlier}
-                  className="text-sm text-primary hover:text-primary/80"
-                >
-                  Load earlier messages
-                </button>
-              )}
-            </div>
-          ) : messages.length > 0 ? (
-            <div className="py-2 text-center text-sm text-muted-foreground">
-              已加载全部历史
-            </div>
-          ) : null}
-          {groups.map((group) => {
+  const renderGroup = (group: ReturnType<typeof groupMessages>[number]) => {
             const groupKey = group.messages[0]?.id || 'unknown';
             const expanded = isExpanded(groupKey);
             const handleExpandedChange = (next: boolean) => {
@@ -449,7 +423,74 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
                   <MessageItem key={message.id} message={message} />
                 ));
             }
-          })}
+  };
+
+  return (
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={listRef}
+        onScroll={handleScroll}
+        onWheel={handleUserScrollIntent}
+        onTouchMove={handleUserScrollIntent}
+        onKeyDown={handleUserScrollIntent}
+        data-testid="message-scroll-container"
+        className="flex-1 overflow-y-auto bg-background p-4"
+      >
+      {messages.length === 0 && interactions.length === 0 ? (
+        sseLoading ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600" />
+              Loading messages...
+            </div>
+          </div>
+        ) : sseError ? (
+          <div className="flex h-full items-center justify-center text-sm text-red-500">
+            Failed to load messages. Connection error.
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center text-muted-foreground">
+            No messages yet. Start a conversation!
+          </div>
+        )
+      ) : (
+        <div className="space-y-4">
+          {lastPlanMessages && (
+            <PlanFloatingCard messages={lastPlanMessages.map(m => ({ content: m.content, createdAt: m.createdAt }))} />
+          )}
+          {hasMore ? (
+            <div className="py-2 text-center">
+              {loadingMore ? (
+                <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-primary" />
+                  Loading earlier messages...
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={loadEarlier}
+                  className="text-sm text-primary hover:text-primary/80"
+                >
+                  Load earlier messages
+                </button>
+              )}
+            </div>
+          ) : messages.length > 0 ? (
+            <div className="py-2 text-center text-sm text-muted-foreground">
+              已加载全部历史
+            </div>
+          ) : null}
+          {timelineItems.map((item) =>
+            item.type === 'interaction' ? (
+              <InteractionCard
+                key={`interaction-${item.interaction.interactionId}`}
+                interaction={item.interaction}
+                onResponded={onInteractionResponded}
+              />
+            ) : (
+              renderGroup(item.group)
+            ),
+          )}
           <div ref={messagesEndRef} />
         </div>
       )}

@@ -38,6 +38,36 @@ src/
   `markTodoAsResponded` / `markElicitationCompleted` 缺 `userId` 直接返回 false（Mongoose 会剥离 undefined 条件，必须显式拒绝）。
 - 新增或修改 `Session` 字段级 resolver 时，必须在 `graphql/resolvers/index.ts` 的 `Session` 键登记，否则线上字段不生效（backend-rules 陷阱）。
 
+## 会话交互卡片（sessioninteractions）
+
+> 需求 #490；契约 `contracts/agent-session.graphql` / `workflow.graphql`；计划
+> `docs/engineering/plan/20261112-feat-session-interaction-cards.md`。
+
+- **集合**：`models/session-interaction.ts`（`sessioninteractions`，agent-api 唯一写方）——`tenantId` 声明 +
+  `applyTenantScope`（与「新增带 userId 集合」双注册要求一致：`models/tenant-isolation.test.ts` 与
+  迁移 013 的 `TENANT_ID_COLLECTIONS`，集合数 21）。索引由迁移 `025-session-interactions` 幂等创建：
+  `interactionId` 唯一（幂等键）、`{sessionId,createdAt}`、`{sessionId,status,expiresAt}`、
+  `{elicitationId}` sparse。**不设 TTL**（过期交互随会话留存回看）。
+- **状态机**：`PENDING → {ACCEPTED, DECLINED, CANCELLED, EXPIRED, FAILED}`，仅允许从 PENDING 迁移；
+  所有终态写入统一走 `SessionInteractionService`（CAS `{interactionId,userId,status:'PENDING'}`），禁止第二写入点。
+  作答有效性以 `expiresAt`（= 事件到达 agent-api 时刻 + 60s，对齐 controller-api `TIMEOUT_MS`）为唯一口径；
+  TodoItem 的 5 分钟 `expiresAt` 仅为通知 TTL，不再参与判定。
+- **幂等**：`interactionId` 唯一索引；创建捕获 E11000 → 回读既有记录（`created=false`），subscriber 对
+  重复触发不重复建待办/推 SSE。
+- **respond\* 权威切换**：`respondElicitation` / `respondPermission` **先 CAS（未命中/已过期抛
+  `Todo item not found or already handled`）→ publish response → TodoItem 标记已读**；签名与文案不变。
+  `isRespondableTodo` 仅 harness login 链路继续使用。
+- **resolved 订阅**：elicitation `timeout→EXPIRED / cancelled→CANCELLED / unsupported_mode→FAILED`（契约外收敛
+  FAILED + warn）；permission `permission:resolved` 同口径（timeout/cancelled）。缺 `userId` 拒绝写入；
+  `requestId` 缺失按 `sessionId` 会话级兜底。`elicitation:complete` 仅追加 history（不改 status）。
+- **查询**：`sessionInteractions(sessionId)` 归属校验同 `sessionMessages`（只读会话允许），按 createdAt 升序；
+  `WorkflowInstance.pendingInteractionSessionIds` 为实例级一次 `distinct`（空集合短路，避免 N+1）。
+- **实时**：用户级 SSE `session_interaction` 事件（`{sessionId,interactionId,kind,status}`）驱动前端 refetch；
+  创建时由订阅器推送 `PENDING`，用户作答成功由 `respond*` 在 CAS 命中后推送终态（`ACCEPTED/DECLINED/CANCELLED`），
+  超时/断连由 resolved 订阅推送 `EXPIRED/CANCELLED`——同页 refetch 与跨标签页/工作流实例页双通道一致。
+- **连带清理**：会话删除（`services/session.ts`）与导入覆盖（`services/session-import.ts`）在同点追加
+  `SessionInteraction.deleteMany({sessionId})`。
+
 ## 默认 MCP 与 ACP 选项缓存
 
 - **默认 MCP 口径**：`Controller.defaultMcp`（`{useAllEnabled, serverIds}`）为字段级 resolver，历史行归一为 `{useAllEnabled:true, serverIds:[]}`，并剔除已删除 MCP id。`setControllerDefaultMcp` 校验 `MCP_SERVER_NOT_FOUND` 后落库。
@@ -476,3 +506,24 @@ pnpm run start   # Start production server
 - **重试/对账（D6/D7）**：`retryArchive` 以 `currentArchive.containerId` 判别来源（null=存储级 → `archiveStorageOperation` 新单；非空=容器级保持 `triggerArchive`），**不得用 lastContainerId**；`reconcileARCHIVING` 存储级按 `currentArchive.operationId` 查 `getStorageOperation`，容器级保持 `getArchive`；新增 `reconcileRESTORING`（`RESTORING/CREATING` 超 10 分钟按 operationId 补齐），`scheduleCloudStorageReconcile` 同 tick 串行调用。
 - **销毁**：`RESTORING + currentRestore=FAILED` 允许销毁（`storage is restoring` 仅用于进行中）；错误白名单新增 `storage is not archivable/has no archive/is not restorable/is restoring/is not forkable/not allowed to restore storage`。
 - **迁移**：`022-cloud-storage-fork` 幂等建 `{resourceWorkspaceId:1,forkedFromStorageId:1}` 部分索引（`forkedFromStorageId:{$type:'objectId'}`），不回填。
+
+## 项目工作流模板持久化（#469）
+
+- **扫描编排（`services/workflow/repo-templates.ts`）**：`repoTemplateService.scan(userId, workspaceId)` 先
+  `controllerWorkspaceService.findById` 属主口径（不可见抛 `Workspace not found`），再 `Controller.findOne({_id, ...actorFilter})`；
+  控制器离线 / `isRepoTemplateScanSupported(version)=false`（`compareVersions(version,'2.18.0') >= 0`，缺失/非法不支持）直接返回 `[]`。
+  在线且版本支持时 `publish('session:command', {type:'workflow-templates:scan', requestId, controllerId, path})`，
+  轮询 Redis `workflow-templates:scan:{requestId}`（500ms × 30），成功读后即删；超时/`success:false`/非法 JSON 均降级 `[]`。
+- **逐文件解析（`parseRepoTemplate` 纯函数）**：JSON 语法 → 顶层形状（`name` 非空 string / `description` 可选 string /
+  `nodes` 非空数组）→ 节点字段类型归一（`prompts/artifactTitles/dependsOn` 字符串数组等）→ `validateTemplateGraph`
+  （错误文案原样透传）；逐文件隔离，输出按 `fileName` 排序。`RepoWorkflowTemplate` 追加 `nodes` 节点图（valid=true 时非空）。
+- **`configureFromRepo`**：工作区可见性 → `controllerId` 推导 → **仅 `type='cloud'`**（否则 `repo workflow only supports cloud host`）
+  → `fileName` 归一（trim 非空、`.json` 结尾、不含 `/`/`\`/`..`/NUL，否则 `invalid template file name`）→ `name` 1~64
+  （否则 `invalid workflow name`）→ `normalizeConfiguredNodes` + `validateTemplateGraph` + `validateAgentConfigs`
+  （与 `configureFromContent` 完全一致）→ 落库 `sourceKind:'REPO'`、`sourceRepoPath:'.zag/workflow/templates/<fileName>'`、
+  `sourceWorkspaceId`；服务端**不回读仓库文件**（快照语义）。
+- **来源字段（`ConfiguredWorkflow`）**：`sourceKind`（`PLATFORM` 默认 / `REPO`）、`sourceRepoPath`、`sourceWorkspaceId`
+  全部可空/有默认，存量零迁移；`mapConfigured` 读取侧 `doc.sourceKind ?? 'PLATFORM'` 归一。
+- **级联**：`cloudHostService.delete` 在同位追加 `configuredWorkflowService.deleteRepoScopedByController(controllerId)`
+  （`deleteMany({controllerId, sourceKind:'REPO'})`，best-effort 失败仅 `logger.warn`）；PLATFORM 来源与实例历史不受影响。
+- **版本工具**：`services/version.ts#compareVersions` 为单一来源（自 `cloud-host-service.ts` 逐字搬移）。

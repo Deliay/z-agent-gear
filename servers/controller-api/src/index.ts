@@ -17,6 +17,7 @@ import { gitBrowserService } from './services/git-browser.js';
 import { worktreeService } from './services/worktree-service.js';
 import { fsMkdirService } from './services/fs-mkdir-service.js';
 import { fsReadFileService } from './services/fs-read-file-service.js';
+import { workflowTemplatesService } from './services/workflow-templates-service.js';
 import { gatewayRelayService } from './services/gateway-relay.js';
 import { permissionManager } from './services/permission-manager.js';
 import { elicitationManager } from './services/elicitation-manager.js';
@@ -85,6 +86,7 @@ async function start() {
   worktreeService.start(io);
   fsMkdirService.start(io);
   fsReadFileService.start(io);
+  workflowTemplatesService.start(io);
   gatewayRelayService.start(io);
   permissionManager.start(io);
   elicitationManager.start(io);

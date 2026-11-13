@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useQuery } from '@apollo/client/react';
-import { GET_CONTROLLERS } from '@/graphql/queries';
-import type { CloudHostData, GetControllersQuery } from '@/graphql/types';
+import { useApolloClient, useQuery } from '@apollo/client/react';
+import { GET_CONTROLLERS, GET_CONTROLLER_WORKSPACES } from '@/graphql/queries';
+import type { CloudHostData, CloudHostSetupOperationData, GetControllerWorkspacesQuery, GetControllersQuery } from '@/graphql/types';
 import WorkspaceSection from '@/components/settings/WorkspaceSection';
 import HarnessToolsSection from '@/components/settings/HarnessToolsSection';
 import StopCloudHostDialog from '@/components/cloud-host/StopCloudHostDialog';
@@ -10,6 +10,15 @@ import CloudHostWorkloadsSection from '@/components/cloud-host/CloudHostWorkload
 import CloudHostIssuesLinkageSection from '@/components/cloud-host/CloudHostIssuesLinkageSection';
 import GithubProjectSetupDialog from '@/components/cloud-host/GithubProjectSetupDialog';
 import McpDefaultSection from '@/components/settings/McpDefaultSection';
+import RepoWorkflowSection from '@/components/cloud-host/RepoWorkflowSection';
+import RepoWorkflowPromptDialog from '@/components/cloud-host/RepoWorkflowPromptDialog';
+import ConfigureRepoWorkflowDialog from '@/components/workflow/ConfigureRepoWorkflowDialog';
+import { REPO_WORKFLOW_TEMPLATES, type RepoWorkflowTemplateData } from '@/graphql/workflow';
+import { isRepoTemplateScanSupported } from '@/lib/repo-workflow';
+import {
+  hasPromptedRepoWorkflow,
+  markRepoWorkflowPrompted,
+} from '@/stores/repo-workflow-prompt';
 import {
   canDeleteCloudHost,
   canStopCloudHost,
@@ -128,14 +137,64 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
   const cloudHost = controller?.type === 'cloud' ? controller.cloudHost : null;
   const isMobile = useIsMobile();
 
-  const [activeSection, setActiveSection] = useState<'workspace' | 'harness' | 'mcp' | 'workloads' | 'github'>('workspace');
+  const [activeSection, setActiveSection] = useState<'workspace' | 'harness' | 'mcp' | 'workloads' | 'github' | 'workflow'>('workspace');
   const [stopDialogOpen, setStopDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [githubSetupOpen, setGithubSetupOpen] = useState(false);
+  const client = useApolloClient();
+  const [repoPrompt, setRepoPrompt] = useState<{
+    workspaceId: string;
+    templates: RepoWorkflowTemplateData[];
+  } | null>(null);
+  const [repoConfigure, setRepoConfigure] = useState<{
+    workspaceId: string;
+    template: RepoWorkflowTemplateData;
+  } | null>(null);
 
   const refreshHostData = () => {
     void refetch();
     refetchHome();
+  };
+
+  /**
+   * 检测项目工作流模板（D4/D5）：仅云电脑 RUNNING 且控制器版本支持、同会话未提示过时发起一次；
+   * 存在合法模板才弹提示（空结果/失败/版本不足均不打扰）。
+   */
+  const detectRepoWorkflow = async (workspaceId: string) => {
+    if (!cloudHost || cloudHost.status !== 'RUNNING' || cloudHost.deletedAt) return;
+    if (!isRepoTemplateScanSupported(controller?.version)) return;
+    if (hasPromptedRepoWorkflow(workspaceId)) return;
+    try {
+      const result = await client.query<{ repoWorkflowTemplates: RepoWorkflowTemplateData[] }>({
+        query: REPO_WORKFLOW_TEMPLATES,
+        variables: { workspaceId },
+        fetchPolicy: 'network-only',
+      });
+      const valid = (result.data?.repoWorkflowTemplates ?? []).filter((item) => item.valid);
+      if (valid.length === 0) return;
+      markRepoWorkflowPrompted(workspaceId);
+      setRepoPrompt({ workspaceId, templates: valid });
+    } catch {
+      // 扫描失败降级不打扰（可手动在「工作流」区块重新检测）
+    }
+  };
+
+  /** GitHub 项目设置成功：refetch 工作区列表，按 path === defaultWorkspace 定位后检测（D4）。 */
+  const handleGithubFinished = async (operation: CloudHostSetupOperationData) => {
+    if (operation.status !== 'SUCCEEDED' || !cloudHost?.defaultWorkspace) return;
+    try {
+      const result = await client.query<GetControllerWorkspacesQuery>({
+        query: GET_CONTROLLER_WORKSPACES,
+        variables: { controllerId },
+        fetchPolicy: 'network-only',
+      });
+      const workspace = (result.data?.controllerWorkspaces ?? []).find(
+        (item) => item.path === cloudHost.defaultWorkspace,
+      );
+      if (workspace) void detectRepoWorkflow(workspace.id);
+    } catch {
+      // 工作区列表取数失败不打扰
+    }
   };
 
   const workloadsSection = cloudHost ? (
@@ -171,6 +230,15 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
       </div>
       <CloudHostIssuesLinkageSection controllerId={controllerId} onConfigureWorkflow={onBack} />
     </div>
+  ) : null;
+
+  const workflowSection = cloudHost ? (
+    <RepoWorkflowSection
+      controllerId={controllerId}
+      controllerVersion={controller?.version}
+      cloudHost={cloudHost}
+      onChanged={refreshHostData}
+    />
   ) : null;
 
   const panel = cloudHost ? (
@@ -212,6 +280,29 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
           setGithubSetupOpen(false);
           refreshHostData();
         }}
+        onFinished={handleGithubFinished}
+      />
+      <RepoWorkflowPromptDialog
+        open={Boolean(repoPrompt)}
+        onOpenChange={(open) => {
+          if (!open) setRepoPrompt(null);
+        }}
+        workspaceId={repoPrompt?.workspaceId ?? ''}
+        templates={repoPrompt?.templates ?? []}
+        onConfigure={(template) => {
+          if (!repoPrompt) return;
+          setRepoConfigure({ workspaceId: repoPrompt.workspaceId, template });
+          setRepoPrompt(null);
+        }}
+      />
+      <ConfigureRepoWorkflowDialog
+        open={Boolean(repoConfigure)}
+        onOpenChange={(open) => {
+          if (!open) setRepoConfigure(null);
+        }}
+        workspaceId={repoConfigure?.workspaceId ?? ''}
+        controllerId={controllerId}
+        template={repoConfigure?.template ?? null}
       />
     </>
   ) : null;
@@ -235,12 +326,19 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
           {cloudHost && (
             <button type="button" data-testid="config-tab-github" onClick={() => setActiveSection('github')} className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'github' ? 'bg-accent' : 'hover:bg-accent'}`}>Github</button>
           )}
+          {cloudHost && (
+            <button type="button" data-testid="config-tab-workflow" onClick={() => setActiveSection('workflow')} className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workflow' ? 'bg-accent' : 'hover:bg-accent'}`}>工作流</button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto" data-testid="mobile-section-scroll">
           {panel && <div className="px-4 pt-4">{panel}</div>}
           <div className="p-4">
             {activeSection === 'workspace' && (
-              <WorkspaceSection controllerId={controllerId} controllerOnline={controller?.status === 'online'} />
+              <WorkspaceSection
+                controllerId={controllerId}
+                controllerOnline={controller?.status === 'online'}
+                onWorkspaceCreated={(workspace) => void detectRepoWorkflow(workspace.id)}
+              />
             )}
             {activeSection === 'harness' && (
               <HarnessToolsSection controllerId={controllerId} />
@@ -250,6 +348,7 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
             )}
             {activeSection === 'workloads' && workloadsSection}
             {activeSection === 'github' && githubSection}
+            {activeSection === 'workflow' && workflowSection}
           </div>
         </div>
         {dialogs}
@@ -317,19 +416,35 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
                 Github
               </button>
             )}
+            {cloudHost && (
+              <button
+                type="button"
+                data-testid="config-tab-workflow"
+                onClick={() => setActiveSection('workflow')}
+                className={`w-full rounded-md px-3 py-2 text-sm text-left ${activeSection === 'workflow' ? 'bg-accent' : 'hover:bg-accent'}`}
+              >
+                工作流
+              </button>
+            )}
           </div>
         </div>
       </nav>
       <div className="overflow-y-auto p-8">
         {panel}
         {activeSection === 'workspace' ? (
-          <WorkspaceSection controllerId={controllerId} controllerOnline={controller?.status === 'online'} />
+          <WorkspaceSection
+            controllerId={controllerId}
+            controllerOnline={controller?.status === 'online'}
+            onWorkspaceCreated={(workspace) => void detectRepoWorkflow(workspace.id)}
+          />
         ) : activeSection === 'harness' ? (
           <HarnessToolsSection controllerId={controllerId} />
         ) : activeSection === 'mcp' ? (
           controller ? <McpDefaultSection controller={controller} /> : null
         ) : activeSection === 'github' ? (
           githubSection
+        ) : activeSection === 'workflow' ? (
+          workflowSection
         ) : (
           workloadsSection
         )}

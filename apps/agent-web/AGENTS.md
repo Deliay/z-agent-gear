@@ -44,9 +44,13 @@ pnpm run preview  # Preview production build
 - 能力清单由会话级快照（`session.features`）驱动，`SessionHeader` 右侧「能力清单」按钮打开 `AgentCapabilityPanel`（20 项固定顺序 + status/detail + Agent 版本）；无快照时显示「该会话创建于能力快照上线前，继续会话后可获取能力清单」。
 - 门控语义集中在 `hooks/useAgentCapabilities.ts`：**只有「有快照且明确 unsupported」才拦截**，旧会话/旧 Agent（无快照）与 `partial` 一律放行（零退化）。
 - 生效入口：模型切换（`config.model`）、模式切换（`config.mode`）、布尔配置项（`config.boolean`）、会话「继续」（`session.resume` 与 `session.load` 同时 unsupported 才禁用）；命令列表、历史导入/删除不门控。
-- 会话内挂载 `PendingElicitationBanner`：消费首页聚合的 `todos`，筛选本会话未 resolved 的问询，保证移动端（Sidebar 未挂载）也能打开 `ElicitationDialog`。
-- `ElicitationDialog` 按 `resolution` / 已过期的 `expiresAt` 展示「已过期/已取消/已失效/已提交/已拒绝」并隐藏操作；到期用定时器就地重渲染（`now = Date.now()`，不得用 `useState` 快照冻结）。
-- `ElicitationDialog` 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**仅** `type: 'array'` + `items.anyOf`（ACP question 工具多选题）在提交前经 `lib/elicitation-multi-select.ts#joinMultiSelectValues` 以逗号拼接为字符串回传（顺序 = 勾选顺序，空数组保持 `[]`），`items.enum` / `items.oneOf` 数组字段仍提交数组；`anyOf` 与 `enum`/`oneOf` 并存的字段（真实 question 报文不会产生）不参与拼接、提交保持数组；勾选状态始终以数组存于 edits（必答校验/草稿不变），`q*_custom` 仍为文本框。
+- 会话内挂载 `PendingElicitationBanner`：消费首页聚合的 `todos`，筛选本会话未 resolved 的问询；点击**滚动定位**到会话时间线中的对应卡片（`data-interaction-id` 锚点），不再打开弹窗。
+- **会话交互卡片（需求 #490）**：`InteractionCard`（`components/session/InteractionCard.tsx`）按 `createdAt` 合入 `MessageList` 时间线（同刻消息组在前、交互在后固定 tie-break）；`data-interaction-id={interactionId}` 作为滚动定位锚点。PENDING 可作答 + 倒计时（`expiresAt` 唯一依据，归零本地立即禁用展示「已过期」）；ACCEPTED 禁用并按 schema 字段标签回显 `response.values` / 所选审批项徽标（`option.kind` 为 `reject_*` 时徽标与回显显示「已拒绝」）；其余终态禁用 + 状态徽标。elicitation 表单渲染自 `ElicitationDialog` 提取为共享组件 `components/session/elicitation-form.tsx`（纯函数在 `lib/elicitation-form.ts`），口径不变。
+- `ElicitationDialog` / `PermissionDialog` 已降级为**通知视图**（类型摘要 + 剩余时限提示 + 「前往会话处理」→ `/sessions/{sessionId}#interaction-{interactionId}`），不再承载表单/审批按钮；打开入口（`TodoListPanel`）与 `stores/elicitationDialog` 互斥机制保持不变（状态展示保留）。
+- `ElicitationDialog` 按 `resolution` / `stale` 展示「已过期/已取消/已失效/已提交/已拒绝」文案（`data-testid="elicitation-status"`），不再有定时器驱动的表单禁用。
+- 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**仅** `type: 'array'` + `items.anyOf`（ACP question 工具多选题）在提交前经 `lib/elicitation-multi-select.ts#joinMultiSelectValues` 以逗号拼接为字符串回传（顺序 = 勾选顺序，空数组保持 `[]`），`items.enum` / `items.oneOf` 数组字段仍提交数组；`anyOf` 与 `enum`/`oneOf` 并存的字段（真实 question 报文不会产生）不参与拼接、提交保持数组。
+- 用户级 SSE `session_interaction` 事件经 `useUserEventStream.onSessionInteraction` 分发：会话页命中当前 `sessionId` 则 refetch `GET_SESSION_INTERACTIONS`；工作流实例页收到任意事件触发 `GET_WORKFLOW_INSTANCE` refetch（5s 轮询兜底）。
+- 工作流实例页列表/图形两视图：节点 `sessionId ∈ pendingInteractionSessionIds` 时渲染琥珀色感叹号（`AlertCircle`，`aria-label="有待处理的提问或审批"`），点击打开该节点会话（复用既有 `onOpenSession` / `SessionSidePanel` 链路）；列表视图 prop 由实例页下发，图形视图由 `graph-layout` 的 `hasPendingInteraction` 派生。
 - 问询弹窗打开权由 `stores/elicitationDialog.ts` 共享（`todoId + owner + 打开时快照`）：`PendingElicitationBanner`（owner=banner）与 `TodoListPanel`（owner=todo）互斥，同一时刻只渲染一个弹窗；弹窗数据按 todo id 从全量 todos 派生（不过滤 resolution），pending 清空后仍保留到终态展示，避免填表中被卸载；todo 被 TTL/limit 从列表移除时用快照渲染「已从待办移除」终态
   （stale 判定与 owner 无关，banner/todo 任一持有 stale 都不阻塞后续 immediate）；`close(owner)` 只允许持有方关闭；
   **真实卸载**时 cleanup 经微任务确认（排除 StrictMode 的 mount→cleanup→mount 模拟卸载）后关闭 `owner='todo'` 弹窗，
@@ -179,6 +183,7 @@ pnpm run preview  # Preview production build
 - **空态收敛**：`TreeSection` 不再渲染 `emptyMessage` 占位文字（入参保留兼容），无内容时仅保留可展开空容器；层级缩进按 `level * 0.5rem`（≈2 空格）。
 - **拖拽调宽**：`SidebarResizer` 4px 热区（pointer capture），clamp 15–28rem、默认 20rem，`pointerup` 写入 `localStorage['sidebar-width']`，双击恢复默认；`MainLayout` 桌面 grid 列使用 `var(--sidebar-width,20rem)`，移动端不渲染 Resizer（`lib/sidebar-width.ts` 为宽度口径单一来源）。
 - **工作流卡片**：侧边栏条目不显示控制器名，第一行「名称 + 状态徽标」、第二行工作区；控制器名与执行中节点名走 tooltip（`WorkflowInstanceCard`）。
+- **分区 badge 口径**：工作流分区标题行 badge 仅统计活动实例数量（不含已归档），已归档数量由分区内「已归档（N）」自折叠分组承载；活动为 0 时 badge 照常显示 `0`，不引入隐藏形态（T-BDG1/T-BDG2）。其余分区 badge 口径不变（主机/会话/网关/工作区）。
 - **图表视图**：`graph-layout.ts` 以 dagre `rankdir:'TB'`（nodesep 40 / ranksep 70）布局，节点宽 280px、高度分档估算（120–220px）；连线 `strokeWidth:2` + `MarkerType.ArrowClosed`；画布 `h-full min-h-[480px]`，由 `WorkflowInstancePage` 视图区行填充；图表模式隐藏右栏 `BlackboardPanel`/`WorkflowContextPanel`（列表视图零变化）。
 - **节点卡片**：`graph/WorkflowNodeCard.tsx` 自定义节点（状态色左脊 + 名称 + 类型/返工徽标 + Harness/模型 + 进行中动态行 + 完成态 token + PR/检查项徽标 + 资源小卡片 + 人类节点就地操作）；交互元素统一 `nodrag` + `stopPropagation`。
 - **实时动态**：`hooks/useNodeSessionActivity.ts` 复用 `useSessionStream`（不自行创建 EventSource），复用 `group-messages.parseSessionUpdate` 与 `tool-call-state` 的 `mergeToolCallMessages`/`toolCallHeaderTitle` 口径；思考/文本结尾截断常量 `LIVE_ACTIVITY_TAIL_CHARS = 40`；进行中节点建立实时连接，转为 DONE 后关闭连接并保留已捕获的最后动态与用量；**首屏即为 DONE 的 AI 节点**以快照模式短连一次，收到 SSE history（含最后一条 `usage_update`）后立即断开，用于补全刷新后的 token 展示（不长期占用连接）。
@@ -298,3 +303,21 @@ pnpm run preview  # Preview production build
 - **ForkCloudStorageDialog**：名称输入（trim 1~64，服务端权威重名）、容量只读「与源一致：x Gi」、`cloudStorageBillingQuote(source.sizeGi)` 全价报价、「创建成功即开始计费」；成功 toast 并刷新列表。
 - **文案映射**：`storage is not archivable / has no archive / is not restorable / is restoring / is not forkable / not allowed to restore storage` 等映射中文。
 - **测试入口**：`components/cloud-host/__tests__/StopCloudHostDialog.test.tsx`（T-WEB1）、`lib/__tests__/cloud-storage.test.ts`（T-WEB2/T-WEB4）。
+
+## 云电脑「工作流」区块（#469 项目模板持久化）
+
+- **入口与区块**：`ControllerConfigPage` 仅 `controller.type==='cloud'` 时渲染 `config-tab-workflow`（移动端 + 桌面端双份）；
+  `RepoWorkflowSection` 工作区下拉默认匹配 `cloudHost.defaultWorkspace`，经 `REPO_WORKFLOW_TEMPLATES` 扫描
+  `.zag/workflow/templates/*.json`（`cache-and-network` + 「重新检测」refetch）。合法项展示名称/文件名/节点数 + 「配置」；
+  不合法项灰色并展示 `errors[0]`；空态「未检测到项目工作流模板」。
+- **状态提示**：云电脑非 RUNNING/已删除 →「云电脑运行中才可检测与配置」；控制器版本 `<2.18.0`（`lib/repo-workflow.ts`
+  `isRepoTemplateScanSupported`，仅展示用）→「升级云电脑工作组件后可检测项目模板」。
+- **配置弹窗**：`ConfigureRepoWorkflowDialog` 复用 `WorkflowGraphEditor` + `template-validation`，以扫描模板 `nodes` 预填
+  （`templateNodeToEditable`，agentConfig 待选），名称默认模板名/文件名；提交 `CONFIGURE_REPO_WORKFLOW`
+  `{workspaceId, fileName, name, nodes}`，`controllerId` 由云电脑上下文固定。
+- **已配置列表**：`RepoWorkflowSection` 以 `GET_CONFIGURED_WORKFLOWS` 过滤 `sourceKind==='REPO'`，展示 `sourceRepoPath`，
+  删除复用 `DELETE_CONFIGURED_WORKFLOW`；设置页 `WorkflowSection` 与 `InstantiateWorkflowDialog` 对 REPO 条目追加「项目模板」徽标。
+- **检测提示接线**：`WorkspaceSection` 新增可选 `onWorkspaceCreated`（仅云电脑配置页传入，普通主机/设置页零行为变化）；
+  `GithubProjectSetupDialog` 透传 `onFinished`，成功终态后 refetch `GET_CONTROLLER_WORKSPACES` 并按
+  `path === cloudHost.defaultWorkspace` 定位工作区。两处均仅在「存在合法模板」时弹 `RepoWorkflowPromptDialog`；
+  `stores/repo-workflow-prompt.ts` 模块级 `Set<workspaceId>` 保证同页面会话不再自动弹（取消/去配置均记入）。

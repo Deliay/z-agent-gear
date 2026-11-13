@@ -6,6 +6,7 @@ import {
   GET_SESSIONS,
   GET_CONTROLLERS,
   GET_SESSION_MESSAGES,
+  GET_SESSION_INTERACTIONS,
 } from '../../graphql/queries';
 import {
   CLOSE_SESSION,
@@ -31,6 +32,8 @@ import type {
   AgentModelInfoData,
   SessionConfigOptionData,
   SessionReadOnlyReason,
+  GetSessionInteractionsQuery,
+  SessionInteractionEventPayload,
 } from '../../graphql/types';
 import { getApiBase } from '../../lib/api-base';
 import { logger } from '../../lib/logger';
@@ -132,6 +135,28 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   const { commands: availableCommands, updateCommands } = useCommandState();
   const client = useApolloClient();
 
+  // 会话交互卡片（elicitation / permission）：SSE refetch 即时 + 刷新后回看
+  const { data: interactionsData, refetch: refetchInteractions } = useQuery<GetSessionInteractionsQuery>(
+    GET_SESSION_INTERACTIONS,
+    { variables: { sessionId: id }, fetchPolicy: 'cache-and-network' },
+  );
+  const interactions = interactionsData?.sessionInteractions ?? [];
+
+  // 通知跳转定位（裁决 8）：读取 #interaction-<id>，数据到达后滚动到对应卡片
+  const handledHashRef = useRef<string | null>(null);
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.startsWith('#interaction-')) return;
+    const interactionId = decodeURIComponent(hash.slice('#interaction-'.length));
+    if (!interactionId || handledHashRef.current === interactionId) return;
+    const escaped = interactionId.replace(/"/g, '\\"');
+    const element = document.querySelector(`[data-interaction-id="${escaped}"]`);
+    if (element) {
+      handledHashRef.current = interactionId;
+      element.scrollIntoView?.({ block: 'center' });
+    }
+  }, [interactions]);
+
   // ---- 分屏 / 预览区（#461，Phase 6） ----
   // Review 深链：响应式消费（A1 返工）——同会话 SPA 导航（不重挂载）也能打开新 Review 标签
   const urlSearch = useUrlSearch();
@@ -178,6 +203,9 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   );
   useUserEventStream({
     enabled: true,
+    onSessionInteraction: (event: SessionInteractionEventPayload) => {
+      if (event?.sessionId === id) void refetchInteractions();
+    },
     onSessionReview: (event) => {
       const review = (event as { review?: ReviewStatusRow }).review;
       if (review?.id) {
@@ -796,6 +824,8 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
         <div className="flex min-h-0 min-w-0 flex-col">
           <MessageList
             messages={messages}
+            interactions={interactions}
+            onInteractionResponded={() => void refetchInteractions()}
             sseLoading={sseLoading}
             sseError={sseError}
             hasMore={hasMore}

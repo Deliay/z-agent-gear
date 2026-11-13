@@ -451,6 +451,39 @@ describe('Sidebar 集成测试', () => {
       expect(screen.getByText('已归档实例')).toBeInTheDocument();
       expect(archiveButton).toHaveAttribute('aria-expanded', 'true');
     });
+
+    it('T-BDG1 活动与已归档并存时工作流分区 badge 仅显示活动数量', () => {
+      mockHome({
+        workflowInstances: [makeInstance({ id: 'inst-active', name: '活跃实例' })],
+        archivedWorkflowInstances: [makeInstance({ id: 'inst-archived', name: '已归档实例', archived: true })],
+      });
+
+      renderSidebar();
+
+      const section = screen.getByTestId('sidebar-section-workflows');
+      const titleButton = within(section).getByRole('button', { name: '工作流' });
+      expect(within(titleButton).getByText('1')).toBeInTheDocument();
+      // 已归档数量仍由分区内分组承载
+      expect(within(screen.getByTestId('sidebar-workflow-list')).getByText(/已归档（1）/)).toBeInTheDocument();
+    });
+
+    it('T-BDG2 仅已归档无活动时工作流分区 badge 显示 0', () => {
+      mockHome({
+        archivedWorkflowInstances: [
+          makeInstance({ id: 'inst-archived-1', name: '归档实例一', archived: true }),
+          makeInstance({ id: 'inst-archived-2', name: '归档实例二', archived: true }),
+        ],
+      });
+
+      renderSidebar();
+
+      const section = screen.getByTestId('sidebar-section-workflows');
+      const titleButton = within(section).getByRole('button', { name: '工作流' });
+      expect(within(titleButton).getByText('0')).toBeInTheDocument();
+      const archiveGroup = within(screen.getByTestId('sidebar-workflow-list')).getByText(/已归档（2）/);
+      expect(archiveGroup).toBeInTheDocument();
+      expect(archiveGroup).toHaveAttribute('aria-expanded', 'false');
+    });
   });
 
 

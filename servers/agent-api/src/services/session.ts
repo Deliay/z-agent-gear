@@ -3,6 +3,7 @@ import path from 'path';
 import { GraphQLError } from 'graphql';
 import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
+import { SessionInteraction } from '../models/session-interaction.js';
 import { Controller } from '../models/controller.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
@@ -1108,6 +1109,7 @@ export class SessionService {
     const result = await Session.findOneAndDelete({ _id: id, ...actorFilter(userId) });
     if (result) {
       await AcpMessage.deleteMany({ sessionId: id });
+      await SessionInteraction.deleteMany({ sessionId: id });
       await redis.del(`session:${id}:status`);
       return true;
     }

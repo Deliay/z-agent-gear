@@ -17,6 +17,13 @@ vi.mock('../../services/workflow/configured.js', () => ({
     configure: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
+    configureFromRepo: vi.fn(),
+  },
+}));
+
+vi.mock('../../services/workflow/repo-templates.js', () => ({
+  repoTemplateService: {
+    scan: vi.fn(),
   },
 }));
 
@@ -39,6 +46,12 @@ vi.mock('../../services/workflow/pr-handler-registry.js', () => ({
   prHandlerRegistry: { listByInstance: vi.fn() },
 }));
 
+vi.mock('../../services/session-interaction-service.js', () => ({
+  sessionInteractionService: {
+    findPendingBySessionIds: vi.fn(),
+  },
+}));
+
 vi.mock('../../services/controller.js', () => ({
   controllerService: {
     findById: vi.fn(),
@@ -52,8 +65,10 @@ vi.mock('../../services/controller-workspace.js', () => ({
 }));
 
 import { workflowResolvers } from './workflow.js';
+import { sessionInteractionService } from '../../services/session-interaction-service.js';
 import { workflowTemplateService } from '../../services/workflow/template.js';
 import { configuredWorkflowService } from '../../services/workflow/configured.js';
+import { repoTemplateService } from '../../services/workflow/repo-templates.js';
 import { workflowInstanceService } from '../../services/workflow/instance.js';
 import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
@@ -198,9 +213,41 @@ describe('workflow resolvers', () => {
 
       expect(configuredWorkflowService.listForUser).toHaveBeenCalledWith('user-1', 'ctrl-1');
       expect(result[0]).toMatchObject({ id: 'cfg-1', controllerId: 'ctrl-1', sourceTemplateId: 'tpl-1' });
+      // 存量行无来源字段 → 归一为 PLATFORM/null
+      expect(result[0]).toMatchObject({
+        sourceKind: 'PLATFORM',
+        sourceRepoPath: null,
+        sourceWorkspaceId: null,
+      });
       // HUMAN 节点 agentConfig 归一化为 null；AI 节点保留
       expect(result[0].nodes[0].agentConfig).toBeNull();
       expect(result[0].nodes[1].agentConfig).toMatchObject({ acpServerType: 'opencode', initNewWorktree: true });
+    });
+
+    it('repoWorkflowTemplates 委托扫描服务并逐字返回', async () => {
+      const scanned = [
+        {
+          fileName: 'dev.json',
+          name: '开发流程',
+          description: null,
+          nodeCount: 2,
+          valid: true,
+          errors: [],
+          nodes: [{ nodeKey: 'a', type: 'HUMAN', name: 'A', stage: 's', dependsOn: [], requiresWorktree: false }],
+        },
+      ];
+      vi.mocked(repoTemplateService.scan).mockResolvedValue(scanned as never);
+
+      const result = await workflowResolvers.Query.repoWorkflowTemplates({}, { workspaceId: 'ws-1' }, ctx);
+
+      expect(repoTemplateService.scan).toHaveBeenCalledWith('user-1', 'ws-1');
+      expect(result).toBe(scanned);
+    });
+
+    it('repoWorkflowTemplates 未认证拒绝', async () => {
+      await expect(
+        workflowResolvers.Query.repoWorkflowTemplates({}, { workspaceId: 'ws-1' }, emptyCtx),
+      ).rejects.toThrow('Not authenticated');
     });
 
     it('workflowInstances 按 workspaceId 列出，黑板映射为 entry 数组', async () => {
@@ -330,6 +377,45 @@ describe('workflow resolvers', () => {
         workflowResolvers.Mutation.deleteConfiguredWorkflow({}, { id: 'cfg-1' }, ctx),
       ).resolves.toBe(true);
       expect(configuredWorkflowService.delete).toHaveBeenCalledWith('user-1', 'cfg-1');
+    });
+
+    it('configureRepoWorkflow 委托服务并透出来源字段', async () => {
+      vi.mocked(configuredWorkflowService.configureFromRepo).mockResolvedValue({
+        ...configuredDoc,
+        sourceKind: 'REPO',
+        sourceRepoPath: '.zag/workflow/templates/dev.json',
+        sourceWorkspaceId: oid('ws-1'),
+      } as never);
+      const repoInput = {
+        workspaceId: 'ws-1',
+        fileName: 'dev.json',
+        name: '开发流程',
+        nodes: [],
+      };
+
+      const result = await workflowResolvers.Mutation.configureRepoWorkflow(
+        {},
+        { input: repoInput as never },
+        ctx,
+      );
+
+      expect(configuredWorkflowService.configureFromRepo).toHaveBeenCalledWith('user-1', repoInput);
+      expect(result).toMatchObject({
+        id: 'cfg-1',
+        sourceKind: 'REPO',
+        sourceRepoPath: '.zag/workflow/templates/dev.json',
+        sourceWorkspaceId: 'ws-1',
+      });
+    });
+
+    it('configureRepoWorkflow 服务错误包装为 GraphQLError（白名单文案逐字）', async () => {
+      vi.mocked(configuredWorkflowService.configureFromRepo).mockRejectedValue(
+        new Error('repo workflow only supports cloud host'),
+      );
+
+      await expect(
+        workflowResolvers.Mutation.configureRepoWorkflow({}, { input: {} as never }, ctx),
+      ).rejects.toThrow('repo workflow only supports cloud host');
     });
 
     it('instantiateWorkflow 委托服务并映射实例', async () => {
@@ -516,5 +602,30 @@ describe('workflow PR 联动字段与 mutation', () => {
     expect(workflowInstanceService.removeAdditionalPrompt).toHaveBeenCalledWith(
       'user-1', 'inst-1', 'my-note',
     );
+  });
+});
+
+describe('WorkflowInstance.pendingInteractionSessionIds', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('收集节点 sessionId（去空）并做实例级一次查询', async () => {
+    vi.mocked(sessionInteractionService.findPendingBySessionIds).mockResolvedValue(['sess-2']);
+
+    const result = await workflowResolvers.WorkflowInstance.pendingInteractionSessionIds({
+      nodes: [{ sessionId: 'sess-1' }, { sessionId: null }, { sessionId: 'sess-2' }],
+    });
+
+    expect(result).toEqual(['sess-2']);
+    expect(sessionInteractionService.findPendingBySessionIds).toHaveBeenCalledWith(['sess-1', 'sess-2']);
+  });
+
+  it('无节点会话时空集合短路（服务层返回 []）', async () => {
+    vi.mocked(sessionInteractionService.findPendingBySessionIds).mockResolvedValue([]);
+    await expect(
+      workflowResolvers.WorkflowInstance.pendingInteractionSessionIds({ nodes: [] }),
+    ).resolves.toEqual([]);
+    expect(sessionInteractionService.findPendingBySessionIds).toHaveBeenCalledWith([]);
   });
 });

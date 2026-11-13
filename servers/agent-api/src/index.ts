@@ -49,6 +49,7 @@ import * as migration022CloudStorageFork from './migrations/022-cloud-storage-fo
 import * as migration023ValutFoundations from './migrations/023-valut-foundations.js';
 import * as migration023SessionReviews from './migrations/023-session-reviews.js';
 import * as migration024ResourceWorkspaceBackfill from './migrations/024-resource-workspace-backfill.js';
+import * as migration025SessionInteractions from './migrations/025-session-interactions.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -215,6 +216,7 @@ async function start() {
       migration023ValutFoundations,
       migration023SessionReviews,
       migration024ResourceWorkspaceBackfill,
+      migration025SessionInteractions,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');

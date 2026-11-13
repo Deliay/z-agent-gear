@@ -42,6 +42,12 @@ src/
 - `acp:start:result.capabilities` 落库前有 64 KiB 体积防护：超限时保留 20 项 `features`，仅把 `raw` 替换为
   `{ truncated: true, originalBytes, preview }`（Agent 可控 `_meta` 不得放大 Mongo 文档）。
 - Elicitation 超时：controller-api `TIMEOUT_MS=60s` 是唯一用户可见超时，到点同时“回 Agent cancel + 发布 resolved(timeout) + 回前端 cancel”。
+- **`permission:resolved`（Redis 频道，需求 #490）**：`PermissionManager.handleTimeout` 在 60s 超时回 Agent
+  `cancelled` 的同时发布 `{requestId,sessionId,userId,controllerId,reason:'timeout',detail:'controller-api timeout (60s)'}`；
+  新建 `PermissionManager.clearForSocket(socketId)`（`socketio.ts` disconnect 注册）：清该 socket 全部 pending +
+  逐条发布 `{reason:'cancelled',detail:'socket disconnected'}`（socket 已断，不重复回 Agent）。
+  agent-api 订阅后 `timeout→EXPIRED`、`cancelled→CANCELLED`，收敛会话交互卡片；pending 记录额外保存
+  `controllerId` 供载荷使用。契约见 `contracts/agent-session-websocket.md` §2.34.1。
 
 ## Dev Commands
 
@@ -117,6 +123,17 @@ pnpm run test    # Run tests
 - **MCP 按 serverName 超时（契约 §2.12.1，裁决 9）**：`mcp-relay.ts` `SERVER_TIMEOUT_OVERRIDES` 仅
   `agent-session-preview-tools` 放宽至 `MCP_REVIEW_TIMEOUT_MS`（默认 1_800_000，env 可调，与 agent-gear
   同常量同默认），其余 server 保持 60s 504 零回归。
+
+## 项目工作流模板扫描中继（2.18.0）
+
+- **`workflow-templates:scan` 中继（契约 §3.27/§3.28）**：`session:command` 白名单新增
+  `workflow-templates:scan`（`requestId && controllerId && path` 齐备才分发，缺任一忽略）→
+  `workflow-templates-service.handleScan`（Controller → socketId → `socket.emit('workflow-templates:scan', withTraceMeta({requestId, path}))`；
+  离线/查不到仅记 error，不写 Redis）。
+- **结果回写**：`socketio.ts` 监听 `workflow-templates:scan:result` → `handleScanResult` 写
+  Redis `workflow-templates:scan:{requestId}`（`EX 60`）；`templates` 非数组时按
+  `{success:false, templates:[], truncated:false, error:'not found'}` 兜底落键，防异常报文撑爆轮询端解析。
+- 下游 agent-api 以 500ms × 30 轮询消费，超时/失败降级为空列表。
 
 ## 日志与可观测性
 

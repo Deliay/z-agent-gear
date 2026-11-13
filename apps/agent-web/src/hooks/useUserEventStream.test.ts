@@ -119,3 +119,35 @@ describe('useUserEventStream（用户级 SSE）', () => {
     expect(MockEventSource.instances).toHaveLength(0);
   });
 });
+
+describe('useUserEventStream - session_interaction（T-SSE）', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    MockEventSource.instances = [];
+    vi.stubGlobal('EventSource', MockEventSource);
+    localStorage.setItem('auth_token', 'token-1');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  it('T-SSE1: 分发 session_interaction 到 onSessionInteraction', () => {
+    const onSessionInteraction = vi.fn();
+    renderHook(() => useUserEventStream({ onSessionInteraction }));
+
+    MockEventSource.instances[0].emit({
+      type: 'session_interaction',
+      data: { sessionId: 'sess-1', interactionId: 'req-1', kind: 'PERMISSION', status: 'PENDING' },
+    });
+
+    expect(onSessionInteraction).toHaveBeenCalledWith({
+      sessionId: 'sess-1',
+      interactionId: 'req-1',
+      kind: 'PERMISSION',
+      status: 'PENDING',
+    });
+  });
+});

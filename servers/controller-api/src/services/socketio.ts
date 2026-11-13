@@ -19,6 +19,7 @@ import { acpSessionSyncService } from './acp-session-sync.js';
 import { worktreeService } from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
 import { fsReadFileService } from './fs-read-file-service.js';
+import { workflowTemplatesService } from './workflow-templates-service.js';
 import { gatewayRelayService } from './gateway-relay.js';
 import { permissionManager } from './permission-manager.js';
 import { elicitationManager } from './elicitation-manager.js';
@@ -693,6 +694,12 @@ export function createSocketIOServer(
       await fsReadFileService.handleReadFileResult(payload.requestId, payload);
     });
 
+    // workflow-templates:scan 结果（契约 §3.28）：写 Redis workflow-templates:scan:{requestId}（TTL 60s）
+    onEvent(socket, 'workflow-templates:scan:result', async (payload: { requestId: string } & Record<string, unknown>) => {
+      if (!authenticated) return;
+      await workflowTemplatesService.handleScanResult(payload.requestId, payload);
+    });
+
     onEvent(socket, 'git:worktree:add:result', async (payload: { requestId: string } & Record<string, unknown>) => {
       if (!authenticated) return;
       await worktreeService.handleAddResult(payload.requestId, payload);
@@ -791,6 +798,8 @@ export function createSocketIOServer(
         acpSessionSyncService.cleanupSocket(socket);
         // 失联 controller 的 pending 问询无法再收到响应：清 timer，避免 60s 后误发 timeout
         elicitationManager.clearForSocket(socket.id);
+        // 权限请求同理：清 timer + 逐条发布 permission:resolved(cancelled)，收敛会话卡片
+        permissionManager.clearForSocket(socket.id);
         // 登录中的请求随 socket 断开收敛：发布 resolved(failed) + 清注册表
         harnessLoginManager.clearForSocket(socket.id);
         if (socket.data.keyId) {

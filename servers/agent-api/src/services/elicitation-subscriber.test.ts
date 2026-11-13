@@ -12,6 +12,14 @@ vi.mock('./todo-service.js', () => ({
   },
 }));
 
+vi.mock('./session-interaction-service.js', () => ({
+  sessionInteractionService: {
+    createFromElicitationRequest: vi.fn(),
+    markAgentCompleted: vi.fn(),
+    resolve: vi.fn(),
+  },
+}));
+
 vi.mock('./session-sse.js', () => ({
   sessionSSEService: {
     pushToUser: vi.fn(),
@@ -21,6 +29,7 @@ vi.mock('./session-sse.js', () => ({
 import { getRedisClient } from '../middleware/redis.js';
 import { todoService } from './todo-service.js';
 import { sessionSSEService } from './session-sse.js';
+import { sessionInteractionService } from './session-interaction-service.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { createTestLogger } from '../observability/testing.js';
 
@@ -58,6 +67,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   testLog.reset();
   mockRedis.duplicate.mockReturnValue(mockSubscriber);
+  vi.mocked(sessionInteractionService.createFromElicitationRequest).mockResolvedValue({
+    interaction: { interactionId: 'elic-1' },
+    created: true,
+  });
+  vi.mocked(sessionInteractionService.resolve).mockResolvedValue(1);
+  vi.mocked(sessionInteractionService.markAgentCompleted).mockResolvedValue(1);
   mockSubscriber.subscribe.mockImplementation((...args: unknown[]) => {
     const cb = args[args.length - 1] as (err: Error | null) => void;
     cb(null);
@@ -98,6 +113,15 @@ describe('ElicitationSubscriberService', () => {
         message: 'Which strategy?',
         todoId: 'todo-1',
       }),
+    });
+    expect(sessionSSEService.pushToUser).toHaveBeenCalledWith('user-1', {
+      type: 'session_interaction',
+      data: {
+        sessionId: 'sess-1',
+        interactionId: 'elic-1',
+        kind: 'ELICITATION',
+        status: 'PENDING',
+      },
     });
 
     service.stop();

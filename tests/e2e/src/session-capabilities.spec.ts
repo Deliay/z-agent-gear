@@ -321,12 +321,13 @@ test.describe('ACP 能力透明化 E2E', () => {
     }
   });
 
-  test('T-E37: 会话内问询提示条可打开弹窗', async ({ page }) => {
+  test('T-E37: 会话内问询提示条滚动定位到卡片（不再打开弹窗）', async ({ page }) => {
     const { socket, sessionId, disconnect } = await setupSession(page, { capabilities: makeCapabilities() });
     await openSessionPage(page, sessionId);
 
+    const requestId = `e2e_cap_${Date.now()}`;
     socket.emit('acp:elicitation', {
-      requestId: `e2e_cap_${Date.now()}`,
+      requestId,
       sessionId,
       mode: 'form',
       message: 'Need your input',
@@ -342,13 +343,19 @@ test.describe('ACP 能力透明化 E2E', () => {
       await page.keyboard.press('Escape');
       await expect(dialog).toBeHidden();
     }
+
+    const card = page.locator(`[data-interaction-id="${requestId}"]`);
+    await expect(card).toBeVisible({ timeout: 25000 });
     await banner.getByRole('button', { name: '查看' }).click();
-    await expect(dialog.getByText('Need your input')).toBeVisible();
+    await expect(card).toBeInViewport();
+    // 表单只在卡片中；Banner 不再打开弹窗
+    await expect(card.getByRole('button', { name: '提交' })).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
     disconnect();
   });
 
-  test('T-E38: 问询超时后弹窗显示已过期且不可操作', async ({ page }) => {
+  test('T-E38: 问询超时后卡片显示已过期且不可操作', async ({ page }) => {
     const { socket, sessionId, disconnect } = await setupSession(page, { capabilities: makeCapabilities() });
     await openSessionPage(page, sessionId);
 
@@ -361,25 +368,25 @@ test.describe('ACP 能力透明化 E2E', () => {
       requestedSchema: { type: 'object', properties: { answer: { type: 'string', title: 'Answer' } } },
     });
 
-    const dialog = page.getByRole('dialog');
-    await expect(dialog.getByText('Need your input')).toBeVisible({ timeout: 25000 });
+    const card = page.locator(`[data-interaction-id="${requestId}"]`);
+    await expect(card).toBeVisible({ timeout: 25000 });
 
     socket.emit('acp:elicitation:resolved', { requestId, sessionId, reason: 'timeout' });
 
-    // homeOverview 15s 轮询后弹窗收敛为「已过期」，操作按钮隐藏
-    await expect(dialog.getByTestId('elicitation-status')).toContainText('该问询已过期', { timeout: 30000 });
-    await expect(dialog.getByRole('button', { name: '提交' })).toHaveCount(0);
+    await expect(card.getByTestId('interaction-status')).toHaveText('已过期', { timeout: 30000 });
+    await expect(card.getByRole('button', { name: '提交' })).toHaveCount(0);
 
     disconnect();
   });
 
-  test('T-E39: 移动端会话详情可打开问询弹窗', async ({ page }) => {
+  test('T-E39: 移动端会话详情提示条同样定位到卡片', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const { socket, sessionId, disconnect } = await setupSession(page, { capabilities: makeCapabilities() });
     await openSessionPage(page, sessionId);
 
+    const requestId = `e2e_mobile_${Date.now()}`;
     socket.emit('acp:elicitation', {
-      requestId: `e2e_mobile_${Date.now()}`,
+      requestId,
       sessionId,
       mode: 'form',
       message: 'Mobile input needed',
@@ -388,8 +395,10 @@ test.describe('ACP 能力透明化 E2E', () => {
 
     const banner = page.getByTestId('pending-elicitation-banner');
     await expect(banner).toBeVisible({ timeout: 25000 });
+    const card = page.locator(`[data-interaction-id="${requestId}"]`);
+    await expect(card).toBeVisible({ timeout: 25000 });
     await banner.getByRole('button', { name: '查看' }).click();
-    await expect(page.getByRole('dialog').getByText('Mobile input needed')).toBeVisible();
+    await expect(card.getByText('Mobile input needed')).toBeVisible();
 
     disconnect();
   });

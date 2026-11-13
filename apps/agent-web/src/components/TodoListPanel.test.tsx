@@ -50,9 +50,12 @@ function mockOverview(todos: unknown[], unreadTodoCount = 3) {
 
 vi.mock('@apollo/client/react', () => ({
   useMutation: vi.fn(() => [mockMarkAllTodoRead]),
-  // PermissionDialog 内部仍使用 useQuery；给出空实现即可
-  useQuery: vi.fn(() => ({ data: undefined, loading: false, refetch: vi.fn() })),
 }));
+
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom');
+  return { ...actual, useNavigate: () => vi.fn() };
+});
 
 vi.mock('../stores/homeOverview', () => ({
   useHomeOverview: () => mockUseHomeOverview(),
@@ -101,14 +104,14 @@ describe('TodoListPanel', () => {
     render(<TodoListPanel />);
     fireEvent.click(screen.getByLabelText('待办事项'));
     fireEvent.click(screen.getByText('Agent请求权限审批'));
-    expect(screen.getByText('工具调用 ID')).toBeDefined();
+    expect(screen.getByTestId('permission-notice')).toBeDefined();
   });
 
   it('should not open dialog for non-permission todos', () => {
     render(<TodoListPanel />);
     fireEvent.click(screen.getByLabelText('待办事项'));
     fireEvent.click(screen.getByText('普通待办'));
-    expect(screen.queryByText('工具调用 ID')).toBeNull();
+    expect(screen.queryByTestId('permission-notice')).toBeNull();
   });
 
   it('should call markAllTodoRead when clicking mark all read button', async () => {
@@ -152,7 +155,7 @@ describe('TodoListPanel', () => {
       await waitFor(() => {
         expect(screen.getByText('请确认发布配置')).toBeDefined();
       });
-      expect(screen.getByText('提交')).toBeDefined();
+      expect(screen.getByText('前往会话处理')).toBeDefined();
     });
 
     it('should show type badge for elicitation_request todo in popover', () => {
