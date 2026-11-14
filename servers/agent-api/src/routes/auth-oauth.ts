@@ -17,20 +17,27 @@ import {
   githubRedirectUri,
 } from '../services/github-oauth.js';
 import {
+  consumeFrontBindTicket,
   consumeState,
   issueLoginTicket,
+  issuePendingIdentity,
   issueState,
   randomToken,
   type OAuthSurface,
   type OAuthStatePayload,
 } from '../services/oauth-flow.js';
-import { resolveExternalLogin } from '../services/external-login.js';
+import {
+  bindExternalLoginToUser,
+  ExternalLoginError,
+  findExternalLogin,
+} from '../services/external-login.js';
 import { ProvisioningError } from '../services/provisioning.js';
 import { signToken } from '../services/auth.js';
+import { User } from '../models/user.js';
 
 const logger = rootLogger.child({ component: 'auth-oauth' });
 
-const SURFACES: readonly OAuthSurface[] = ['front', 'admin', 'admin-bind'];
+const SURFACES: readonly OAuthSurface[] = ['front', 'admin', 'admin-bind', 'front-bind'];
 
 interface ProviderDoc {
   _id: { toString(): string };
@@ -55,6 +62,9 @@ function loginUrl(surface: OAuthSurface, error: string): string {
       ? `${config.adminFrontendUrl}/login?error=${encodeURIComponent(error)}`
       : `${config.adminFrontendUrl}/settings/security?bind=error&error=${encodeURIComponent(error)}`;
   }
+  if (surface === 'front-bind') {
+    return `${config.frontendUrl}/settings?bind=error&error=${encodeURIComponent(error)}`;
+  }
   return `${config.frontendUrl}/login?error=${encodeURIComponent(error)}`;
 }
 
@@ -74,7 +84,7 @@ async function loadProvider(providerId: string): Promise<ProviderDoc | null> {
 
 function providerAllowsSurface(provider: ProviderDoc, surface: OAuthSurface | null): boolean {
   if (!provider.enabled) return false;
-  if (surface === 'front') return provider.enableFrontLogin;
+  if (surface === 'front' || surface === 'front-bind') return provider.enableFrontLogin;
   if (surface === 'admin' || surface === 'admin-bind') return provider.enableAdminLogin;
   return false;
 }
@@ -130,7 +140,7 @@ authOauthRouter.get('/auth/oauth/:providerId/authorize', async (req: Request, re
   }
 
   const bindTicket = typeof req.query.ticket === 'string' ? req.query.ticket : '';
-  if (surface === 'admin-bind' && !bindTicket) {
+  if ((surface === 'admin-bind' || surface === 'front-bind') && !bindTicket) {
     redirectError(res, surface, 'invalid_request');
     return;
   }
@@ -146,7 +156,7 @@ authOauthRouter.get('/auth/oauth/:providerId/authorize', async (req: Request, re
     const statePayload: OAuthStatePayload = {
       providerId: provider._id.toString(),
       surface,
-      ...(surface === 'admin-bind' ? { bindTicket } : {}),
+      ...(surface === 'admin-bind' || surface === 'front-bind' ? { bindTicket } : {}),
     };
 
     if (provider.type === 'oidc') {
@@ -235,7 +245,16 @@ authOauthRouter.get('/auth/oauth/callback', async (req: Request, res: Response) 
     };
 
     if (surface === 'front') {
-      const result = await resolveExternalLogin(externalIdentity);
+      const result = await findExternalLogin(externalIdentity);
+      if (!result) {
+        // 未绑定：不再静默开户，签发一次性 pending 凭证后进入身份选择页。
+        const pendingToken = await issuePendingIdentity(externalIdentity);
+        res.redirect(
+          302,
+          `${config.frontendUrl}/login/identity-choice?pending=${encodeURIComponent(pendingToken)}`,
+        );
+        return;
+      }
       const token = signToken(result.user.id);
       const ticket = await issueLoginTicket({ token, user: result.user });
       res.redirect(302, `${config.frontendUrl}/login/callback?ticket=${encodeURIComponent(ticket)}`);
@@ -268,34 +287,74 @@ authOauthRouter.get('/auth/oauth/callback', async (req: Request, res: Response) 
     }
 
     // admin-bind
+    if (surface === 'admin-bind') {
+      if (!statePayload.bindTicket) {
+        redirectError(res, surface, 'invalid_request');
+        return;
+      }
+      const bindResponse = await callAdminApi('/internal/auth/admin-bind', {
+        bindTicket: statePayload.bindTicket,
+        providerId: externalIdentity.providerId,
+        issuer: externalIdentity.issuer,
+        subject: externalIdentity.subject,
+        profile: {
+          externalUsername: externalIdentity.externalUsername,
+          displayName: externalIdentity.displayName,
+        },
+      });
+      if (bindResponse.status === 200) {
+        res.redirect(302, `${config.adminFrontendUrl}/settings/security?bind=success`);
+        return;
+      }
+      if (bindResponse.status === 400 && bindResponse.json.error === 'INVALID_BIND_TICKET') {
+        redirectError(res, surface, 'invalid_bind_ticket');
+        return;
+      }
+      if (bindResponse.status === 409) {
+        redirectError(res, surface, 'already_bound');
+        return;
+      }
+      redirectError(res, surface, 'provider_error');
+      return;
+    }
+
+    // front-bind：GETDEL state 已在上面完成，此处消费前台绑定票据并落行。
     if (!statePayload.bindTicket) {
       redirectError(res, surface, 'invalid_request');
       return;
     }
-    const bindResponse = await callAdminApi('/internal/auth/admin-bind', {
-      bindTicket: statePayload.bindTicket,
-      providerId: externalIdentity.providerId,
-      issuer: externalIdentity.issuer,
-      subject: externalIdentity.subject,
-      profile: {
-        externalUsername: externalIdentity.externalUsername,
-        displayName: externalIdentity.displayName,
-      },
-    });
-    if (bindResponse.status === 200) {
-      res.redirect(302, `${config.adminFrontendUrl}/settings/security?bind=success`);
-      return;
-    }
-    if (bindResponse.status === 400 && bindResponse.json.error === 'INVALID_BIND_TICKET') {
+    const frontBind = await consumeFrontBindTicket(statePayload.bindTicket);
+    if (!frontBind || frontBind.providerId !== externalIdentity.providerId) {
       redirectError(res, surface, 'invalid_bind_ticket');
       return;
     }
-    if (bindResponse.status === 409) {
-      redirectError(res, surface, 'already_bound');
+    const targetUser = await User.findById(frontBind.userId).lean();
+    if (!targetUser || !targetUser.accountId) {
+      redirectError(res, surface, 'invalid_bind_ticket');
       return;
     }
-    redirectError(res, surface, 'provider_error');
+    await bindExternalLoginToUser(
+      {
+        id: String(targetUser._id),
+        accountId: String(targetUser.accountId),
+        tenantId: String(targetUser.tenantId ?? targetUser._id),
+      },
+      externalIdentity,
+    );
+    res.redirect(302, `${config.frontendUrl}/settings?bind=success`);
   } catch (err) {
+    if (err instanceof ExternalLoginError) {
+      if (err.code === 'IDENTITY_ALREADY_BOUND') {
+        redirectError(res, surface, 'already_bound');
+        return;
+      }
+      if (err.code === 'PROVIDER_ALREADY_BOUND') {
+        redirectError(res, surface, 'provider_already_bound');
+        return;
+      }
+      redirectError(res, surface, 'provider_error');
+      return;
+    }
     if (err instanceof ProvisioningError) {
       redirectError(res, surface, 'provision_failed');
       return;

@@ -12,7 +12,11 @@ const h = vi.hoisted(() => ({
   issueState: vi.fn(async () => 'state-1'),
   consumeState: vi.fn(),
   issueTicket: vi.fn(async () => 'ticket-1'),
-  resolveExternalLogin: vi.fn(),
+  issuePending: vi.fn(async () => 'pending-1'),
+  consumeFrontBind: vi.fn(),
+  findExternalLogin: vi.fn(),
+  bindExternalLogin: vi.fn(),
+  userFindById: vi.fn(),
   signToken: vi.fn(() => 'jwt-1'),
   config: {
     frontendUrl: 'http://front',
@@ -44,9 +48,24 @@ vi.mock('../services/oauth-flow.js', () => ({
   issueState: h.issueState,
   consumeState: h.consumeState,
   issueLoginTicket: h.issueTicket,
+  issuePendingIdentity: h.issuePending,
+  consumeFrontBindTicket: h.consumeFrontBind,
   randomToken: () => 'state-raw',
 }));
-vi.mock('../services/external-login.js', () => ({ resolveExternalLogin: h.resolveExternalLogin }));
+vi.mock('../services/external-login.js', () => ({
+  findExternalLogin: h.findExternalLogin,
+  bindExternalLoginToUser: h.bindExternalLogin,
+  ExternalLoginError: class ExternalLoginError extends Error {
+    code: string;
+    constructor(code: string) {
+      super(code);
+      this.code = code;
+    }
+  },
+}));
+vi.mock('../models/user.js', () => ({
+  User: { findById: h.userFindById },
+}));
 vi.mock('../services/provisioning.js', () => ({
   ProvisioningError: class ProvisioningError extends Error {
     code: string;
@@ -88,6 +107,7 @@ describe('routes/auth-oauth（T-OA-RT）', () => {
     h.provider.findById.mockReturnValue({ lean: async () => provider() });
     h.issueState.mockResolvedValue('state-1');
     h.issueTicket.mockResolvedValue('ticket-1');
+    h.issuePending.mockResolvedValue('pending-1');
     h.buildGithub.mockReturnValue(new URL('http://github/authorize?state=state-1'));
 
     const app = express();
@@ -181,7 +201,7 @@ describe('routes/auth-oauth（T-OA-RT）', () => {
     expect(res.headers.get('location')).toBe('http://front/login?error=invalid_state');
   });
 
-  it('T-OA-RT8: 前台首登成功 → 302 /login/callback?ticket=', async () => {
+  it('T-OA-RT8: 已绑定前台登录 → 302 /login/callback?ticket=', async () => {
     h.consumeState.mockResolvedValue({ providerId: PROVIDER_ID, surface: 'front' });
     h.exchangeGithub.mockResolvedValue({
       subject: '1001',
@@ -189,15 +209,35 @@ describe('routes/auth-oauth（T-OA-RT）', () => {
       displayName: 'Octo',
       avatarUrl: null,
     });
-    h.resolveExternalLogin.mockResolvedValue({
+    h.findExternalLogin.mockResolvedValue({
       user: { id: 'u1', name: 'octo', tenantId: 'u1', createdAt: '2026-01-01' },
       account: { id: 'a1', username: 'octo' },
-      created: true,
+      created: false,
     });
 
     const res = await get('/api/auth/oauth/callback?code=c&state=s1');
     expect(res.headers.get('location')).toBe('http://front/login/callback?ticket=ticket-1');
     expect(h.signToken).toHaveBeenCalledWith('u1');
+  });
+
+  it('T-OA-RT-FB1: 前台未绑定 → 302 身份选择页并写 pending', async () => {
+    h.consumeState.mockResolvedValue({ providerId: PROVIDER_ID, surface: 'front' });
+    h.exchangeGithub.mockResolvedValue({
+      subject: '1001',
+      externalUsername: 'octo',
+      displayName: 'Octo',
+      avatarUrl: null,
+    });
+    h.findExternalLogin.mockResolvedValue(null);
+
+    const res = await get('/api/auth/oauth/callback?code=c&state=s1');
+    expect(res.headers.get('location')).toBe(
+      'http://front/login/identity-choice?pending=pending-1',
+    );
+    expect(h.issuePending).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: PROVIDER_ID, subject: '1001' }),
+    );
+    expect(h.signToken).not.toHaveBeenCalled();
   });
 
   it('T-OA-RT9: 后台未绑定 → not_bound', async () => {
@@ -257,6 +297,130 @@ describe('routes/auth-oauth（T-OA-RT）', () => {
     res = await get('/api/auth/oauth/callback?code=c&state=s1');
     expect(res.headers.get('location')).toBe(
       'http://admin/settings/security?bind=error&error=already_bound',
+    );
+  });
+
+  it('T-OA-RT-FB2: front-bind authorize 缺 ticket → 设置页 invalid_request', async () => {
+    const res = await get(`/api/auth/oauth/${PROVIDER_ID}/authorize?surface=front-bind`);
+    expect(res.headers.get('location')).toBe(
+      'http://front/settings?bind=error&error=invalid_request',
+    );
+  });
+
+  it('T-OA-RT-FB3: front-bind authorize 写 state（含票据）并跳授权页', async () => {
+    const res = await get(
+      `/api/auth/oauth/${PROVIDER_ID}/authorize?surface=front-bind&ticket=fb-1`,
+    );
+    expect(res.headers.get('location')).toBe('http://github/authorize?state=state-1');
+    expect(h.issueState).toHaveBeenCalledWith({
+      providerId: PROVIDER_ID,
+      surface: 'front-bind',
+      bindTicket: 'fb-1',
+    });
+  });
+
+  it('T-OA-RT-FB4: front-bind 回调成功落绑定并 302 设置页 bind=success', async () => {
+    h.consumeState.mockResolvedValue({
+      providerId: PROVIDER_ID,
+      surface: 'front-bind',
+      bindTicket: 'fb-1',
+    });
+    h.exchangeGithub.mockResolvedValue({
+      subject: '1001',
+      externalUsername: 'octo',
+      displayName: 'Octo',
+      avatarUrl: null,
+    });
+    h.consumeFrontBind.mockResolvedValue({ userId: 'u1', providerId: PROVIDER_ID });
+    h.userFindById.mockReturnValue({
+      lean: async () => ({ _id: 'u1', accountId: 'a1', tenantId: 'u1' }),
+    });
+    h.bindExternalLogin.mockResolvedValue({ id: 'el1' });
+
+    const res = await get('/api/auth/oauth/callback?code=c&state=s1');
+    expect(res.headers.get('location')).toBe('http://front/settings?bind=success');
+    expect(h.bindExternalLogin).toHaveBeenCalledWith(
+      { id: 'u1', accountId: 'a1', tenantId: 'u1' },
+      expect.objectContaining({ subject: '1001' }),
+    );
+  });
+
+  it('T-OA-RT-FB5: 绑定票据过期/与 provider 不匹配 → invalid_bind_ticket', async () => {
+    h.consumeState.mockResolvedValue({
+      providerId: PROVIDER_ID,
+      surface: 'front-bind',
+      bindTicket: 'fb-1',
+    });
+    h.exchangeGithub.mockResolvedValue({
+      subject: '1001',
+      externalUsername: 'octo',
+      displayName: 'Octo',
+      avatarUrl: null,
+    });
+    h.consumeFrontBind.mockResolvedValue(null);
+    let res = await get('/api/auth/oauth/callback?code=c&state=s1');
+    expect(res.headers.get('location')).toBe(
+      'http://front/settings?bind=error&error=invalid_bind_ticket',
+    );
+
+    h.consumeFrontBind.mockResolvedValue({ userId: 'u1', providerId: 'other' });
+    res = await get('/api/auth/oauth/callback?code=c&state=s1');
+    expect(res.headers.get('location')).toBe(
+      'http://front/settings?bind=error&error=invalid_bind_ticket',
+    );
+  });
+
+  it('T-OA-RT-FB6: front-bind 身份占用 / 同账户重复绑定 → 稳定错误码', async () => {
+    h.consumeState.mockResolvedValue({
+      providerId: PROVIDER_ID,
+      surface: 'front-bind',
+      bindTicket: 'fb-1',
+    });
+    h.exchangeGithub.mockResolvedValue({
+      subject: '1001',
+      externalUsername: 'octo',
+      displayName: 'Octo',
+      avatarUrl: null,
+    });
+    h.consumeFrontBind.mockResolvedValue({ userId: 'u1', providerId: PROVIDER_ID });
+    h.userFindById.mockReturnValue({
+      lean: async () => ({ _id: 'u1', accountId: 'a1', tenantId: 'u1' }),
+    });
+    const ExternalLoginError = await import('../services/external-login.js').then(
+      (m) => m.ExternalLoginError,
+    );
+
+    h.bindExternalLogin.mockRejectedValueOnce(new ExternalLoginError('IDENTITY_ALREADY_BOUND'));
+    let res = await get('/api/auth/oauth/callback?code=c&state=s1');
+    expect(res.headers.get('location')).toBe(
+      'http://front/settings?bind=error&error=already_bound',
+    );
+
+    h.bindExternalLogin.mockRejectedValueOnce(new ExternalLoginError('PROVIDER_ALREADY_BOUND'));
+    res = await get('/api/auth/oauth/callback?code=c&state=s1');
+    expect(res.headers.get('location')).toBe(
+      'http://front/settings?bind=error&error=provider_already_bound',
+    );
+  });
+
+  it('T-OA-RT-FB7: front-bind 目标用户缺失 → invalid_bind_ticket', async () => {
+    h.consumeState.mockResolvedValue({
+      providerId: PROVIDER_ID,
+      surface: 'front-bind',
+      bindTicket: 'fb-1',
+    });
+    h.exchangeGithub.mockResolvedValue({
+      subject: '1001',
+      externalUsername: 'octo',
+      displayName: 'Octo',
+      avatarUrl: null,
+    });
+    h.consumeFrontBind.mockResolvedValue({ userId: 'u1', providerId: PROVIDER_ID });
+    h.userFindById.mockReturnValue({ lean: async () => null });
+
+    const res = await get('/api/auth/oauth/callback?code=c&state=s1');
+    expect(res.headers.get('location')).toBe(
+      'http://front/settings?bind=error&error=invalid_bind_ticket',
     );
   });
 });

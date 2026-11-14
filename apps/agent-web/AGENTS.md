@@ -323,8 +323,12 @@ pnpm run preview  # Preview production build
   `path === cloudHost.defaultWorkspace` 定位工作区。两处均仅在「存在合法模板」时弹 `RepoWorkflowPromptDialog`；
   `stores/repo-workflow-prompt.ts` 模块级 `Set<workspaceId>` 保证同页面会话不再自动弹（取消/去配置均记入）。
 
-## 第三方登录入口与回调（#503）
+## 第三方登录入口与回调（#503 / #510）
 
 - **登录页**：查询 `authProviders`（`fetchPolicy: cache-and-network`，失败静默降级为仅密码登录），按返回渲染「使用 {displayName} 登录」（GitHub 恒「使用 GitHub 登录」）；点击跳 `oauthAuthorizeUrl(id,'front')`。`?error=<code>` 经 `lib/auth-oauth.ts#mapOauthError` 映射友好文案，未识别 code 原样兜底。
 - **回调页**：公开路由 `/login/callback`（`LoginCallbackPage`）。读 `ticket` → `exchangeLoginTicket` → `useAuth.login` → 首页；挂载后立即 `replaceState` 清除 URL。ticket 一次性，失败只提示「登录票据无效或已过期」，不循环重试；`error` 参数直接映射文案。
-- **测试**：`pages/LoginPage.test.tsx`（按钮联动/查询失败降级/error 映射）与 `pages/__tests__/LoginCallbackPage.test.tsx`（兑换成功/失败/缺 ticket/error）；E2E 见 `tests/e2e/src/auth-oauth.spec.ts`。
+- **身份选择页（#510）**：公开路由 `/login/identity-choice`（`IdentityChoicePage`）。读 `pending` 并立即清除 URL；`pendingExternalLoginInfo`（免登录、不消费票据）展示登录方式与外部帐号名；「绑定已有帐号」提交 `bindExternalLoginWithPassword`（失败可重试，文案经 `mapIdentityChoiceError`：`Invalid username or password` 原样，「过期」引导回登录页），「创建新帐号」提交 `provisionExternalLogin`；成功 `useAuth.login` 进首页。查询返回 null → 显示「登录状态已过期，请重新登录」。
+- **设置页「第三方登录绑定」**：`#account-section` 内挂载 `ExternalLoginBindingSection`（`GET_MY_EXTERNAL_LOGINS` + `GET_AUTH_PROVIDERS`）：列表展示登录方式/外部帐号名/绑定时间/最近登录时间，停用 provider 展示「已停用」；未绑定 provider 提供「绑定」→ `createFrontBindTicket(providerId)` → `oauthAuthorizeUrl(id,'front-bind',ticket)`；解绑复用 `UnbindConfirmDialog`（可传 title/description）→ `unbindExternalLogin`。无任何 provider 且无绑定时区块不渲染。
+- **回跳结果**：`SettingsPage` 识别 `/settings?bind=success`（提示「第三方登录绑定成功」）与 `?bind=error&error=<code>`（`mapOauthError` 映射），处理后 `replaceState` 仅删除 `bind`/`error`，保留其它参数（如 `section=valut`）。
+- **错误映射单一来源**：`lib/auth-oauth.ts` 的 `mapOauthError`（302 错误码；`already_bound` 前台文案「该身份已被其他账户绑定」+ `provider_already_bound`）与 `mapIdentityChoiceError`（GraphQL mutation message）。admin-web 有独立映射文件，不受影响。
+- **测试**：`pages/LoginPage.test.tsx`、`pages/__tests__/LoginCallbackPage.test.tsx`、`pages/__tests__/IdentityChoicePage.test.tsx`（T-OBO-WEB）、`components/settings/__tests__/ExternalLoginBindingSection.test.tsx`、`pages/__tests__/SettingsPage.test.tsx`（`?bind` 处理）、`lib/__tests__/auth-oauth.test.ts`；E2E 见 `tests/e2e/src/auth-oidc-binding.spec.ts`。`App.tsx` 新增公开路由 `/login/identity-choice`。

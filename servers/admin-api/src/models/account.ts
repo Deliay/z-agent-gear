@@ -11,6 +11,8 @@ const accountSchema = new mongoose.Schema(
   {
     username: { type: String, required: true, unique: true },
     passwordHash: { type: String, required: true },
+    /** 只读镜像：OAuth 开户账户为 true（随机密码、不可知）。 */
+    passwordless: { type: Boolean, default: false },
   },
   { collection: 'accounts', timestamps: true },
 );

@@ -1544,3 +1544,68 @@ export interface UpdateCustomMcpServerMutation {
 export interface DeleteCustomMcpServerMutation {
   deleteCustomMcpServer: boolean
 }
+
+// ---------- 外部身份绑定（#510，contracts/auth.graphql） ----------
+
+export interface ExternalLoginInfoData {
+  id: string
+  providerId: string
+  providerType: 'oidc' | 'github_oauth'
+  providerDisplayName: string
+  providerEnabled: boolean
+  externalUsername: string
+  displayName?: string | null
+  createdAt: string
+  lastLoginAt?: string | null
+}
+
+export interface PendingExternalLoginInfoData {
+  providerDisplayName: string
+  externalUsername: string
+}
+
+export interface AuthProviderOptionData {
+  id: string
+  type: 'oidc' | 'github_oauth'
+  displayName: string
+}
+
+export interface GetMyExternalLoginsQuery {
+  myExternalLogins: ExternalLoginInfoData[]
+}
+
+export interface GetPendingExternalLoginInfoQuery {
+  pendingExternalLoginInfo: PendingExternalLoginInfoData | null
+}
+
+export interface GetAuthProvidersQuery {
+  authProviders: AuthProviderOptionData[]
+}
+
+export interface BindExternalLoginWithPasswordMutation {
+  bindExternalLoginWithPassword: {
+    token: string
+    user: {
+      id: string
+      name: string
+      tenant?: {
+        id: string
+        name: string
+        type: 'personal' | 'team'
+        memberCount: number
+      } | null
+    }
+  }
+}
+
+export interface ProvisionExternalLoginMutation {
+  provisionExternalLogin: BindExternalLoginWithPasswordMutation['bindExternalLoginWithPassword']
+}
+
+export interface CreateFrontBindTicketMutation {
+  createFrontBindTicket: string
+}
+
+export interface UnbindExternalLoginMutation {
+  unbindExternalLogin: boolean
+}

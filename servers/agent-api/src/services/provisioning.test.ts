@@ -59,6 +59,32 @@ describe('provisionUser（T-PROV）', () => {
     expect(h.billing.getAccount).not.toHaveBeenCalled();
   });
 
+  it('T-ACC1: source=oauth 新建账户写入 passwordless=true', async () => {
+    h.account.findOne.mockResolvedValue(null);
+    h.account.create.mockResolvedValue({ _id: 'acc1', username: 'oauth1', passwordHash: 'h' });
+    h.user.findOne.mockResolvedValue(null);
+    h.user.create.mockImplementation(async (doc: Record<string, unknown>) => doc);
+    h.tenant.findById.mockResolvedValue(null);
+    h.tenant.create.mockImplementation(async (doc: Record<string, unknown>) => doc);
+
+    await provisionUser({ username: 'oauth1', passwordHash: 'h', source: 'oauth' });
+    expect(h.account.create).toHaveBeenCalledWith(
+      expect.objectContaining({ username: 'oauth1', passwordless: true }),
+    );
+  });
+
+  it('T-ACC2: source=internal 不写 passwordless（默认 false）', async () => {
+    h.account.findOne.mockResolvedValue(null);
+    h.account.create.mockResolvedValue({ _id: 'acc2', username: 'bob', passwordHash: 'h' });
+    h.user.findOne.mockResolvedValue(null);
+    h.user.create.mockImplementation(async (doc: Record<string, unknown>) => doc);
+    h.tenant.findById.mockResolvedValue(null);
+    h.tenant.create.mockImplementation(async (doc: Record<string, unknown>) => doc);
+
+    await provisionUser({ username: 'bob', passwordHash: 'h', source: 'internal' });
+    expect(h.account.create).toHaveBeenCalledWith({ username: 'bob', passwordHash: 'h' });
+  });
+
   it('计费不可达 → 回滚并抛 BILLING_UNAVAILABLE', async () => {
     h.account.findOne.mockResolvedValue(null);
     h.account.create.mockResolvedValue({ _id: 'acc1', username: 'alice', passwordHash: 'h' });

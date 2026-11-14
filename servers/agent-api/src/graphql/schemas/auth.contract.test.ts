@@ -47,10 +47,46 @@ describe('agent auth.graphql 契约双写一致性', () => {
     }
   });
 
+  it('ExternalLoginInfo / PendingExternalLoginInfo 与契约逐字段一致', () => {
+    for (const name of ['ExternalLoginInfo', 'PendingExternalLoginInfo']) {
+      expect(printType(authTypeDefs, name)).toBe(printType(CONTRACT, name));
+    }
+  });
+
   it('authProviders / exchangeLoginTicket 已暴露（免登录口径）', () => {
     expect(fieldNames(authTypeDefs, 'Query')).toContain('authProviders');
     expect(fieldNames(authTypeDefs, 'Mutation')).toContain('exchangeLoginTicket');
     const type = schema.getType('AuthProviderInfo') as GraphQLObjectType;
     expect(Object.keys(type.getFields())).toEqual(['id', 'type', 'displayName']);
+  });
+
+  it('绑定优化六操作与契约逐字对齐（Query 2 / Mutation 4）', () => {
+    const queries = fieldNames(authTypeDefs, 'Query');
+    for (const name of ['myExternalLogins', 'pendingExternalLoginInfo']) {
+      expect(queries).toContain(name);
+      expect(fieldNames(CONTRACT, 'Query')).toContain(name);
+    }
+    const mutations = fieldNames(authTypeDefs, 'Mutation');
+    for (const name of [
+      'bindExternalLoginWithPassword',
+      'provisionExternalLogin',
+      'createFrontBindTicket',
+      'unbindExternalLogin',
+    ]) {
+      expect(mutations).toContain(name);
+      expect(fieldNames(CONTRACT, 'Mutation')).toContain(name);
+    }
+    const info = schema.getType('ExternalLoginInfo') as GraphQLObjectType;
+    expect(Object.keys(info.getFields())).toEqual([
+      'id',
+      'providerId',
+      'providerType',
+      'providerDisplayName',
+      'providerEnabled',
+      'externalUsername',
+      'displayName',
+      'createdAt',
+      'lastLoginAt',
+    ]);
   });
 });

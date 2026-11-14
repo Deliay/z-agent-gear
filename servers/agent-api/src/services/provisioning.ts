@@ -87,7 +87,11 @@ export async function provisionUser(input: ProvisionUserInput): Promise<Provisio
 
     if (!account) {
       try {
-        account = (await Account.create({ username, passwordHash })) as unknown as { _id: mongoose.Types.ObjectId; username: string; passwordHash?: string };
+        account = (await Account.create({
+          username,
+          passwordHash,
+          ...(source === 'oauth' ? { passwordless: true } : {}),
+        })) as unknown as { _id: mongoose.Types.ObjectId; username: string; passwordHash?: string };
         createdAccountIds.push(account._id);
         created = true;
       } catch (err) {

@@ -28,7 +28,7 @@ src/
 ```
 
 - **域划分**：admin-tenant（前台租户只读管理、开户/团队开通转发 agent-api `/internal/users|/internal/tenants`）/ llm（全局供应商、模型、基础镜像、模型来源）/ cloud-host（云端容器、工作负载、预制脚本，经 cloud-controller 内部 REST 操作）/ billing（费用中心：账户、账单、收据、API Key、对账、计费事件）/ auth（管理员登录、强制改密、守卫）。
-- **只读镜像纪律**：`cloudcontainers`/`cloudworkloads`/`cloudhosts`/`tenants` 等为只读镜像，写方各自单一（cloud-controller / agent-api）；billing 集合写方仅本服务。
+- **只读镜像纪律**：`cloudcontainers`/`cloudworkloads`/`cloudhosts`/`tenants` 等为只读镜像，写方各自单一（cloud-controller / agent-api）；billing 集合写方仅本服务。`accounts` 同为 agent-api 只读镜像，字段变更双服务同 PR（#510 已同步 `passwordless`，仅展示/查询，不参与写入）。
 
 ## 日志与可观测性
 
