@@ -52,6 +52,7 @@ import * as migration023SessionReviews from './migrations/023-session-reviews.js
 import * as migration024ResourceWorkspaceBackfill from './migrations/024-resource-workspace-backfill.js';
 import * as migration025SessionInteractions from './migrations/025-session-interactions.js';
 import * as migration026ExternalLogins from './migrations/026-external-logins.js';
+import * as migration027OidcBindingOptimization from './migrations/027-oidc-binding-optimization.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -221,6 +222,7 @@ async function start() {
       migration024ResourceWorkspaceBackfill,
       migration025SessionInteractions,
       migration026ExternalLogins,
+      migration027OidcBindingOptimization,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');

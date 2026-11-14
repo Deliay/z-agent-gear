@@ -5,6 +5,9 @@ const h = vi.hoisted(() => ({
     findOne: vi.fn(),
     create: vi.fn(),
     updateOne: vi.fn(),
+    countDocuments: vi.fn(),
+    deleteOne: vi.fn(),
+    find: vi.fn(),
   },
   user: { findById: vi.fn() },
   account: { findById: vi.fn() },
@@ -33,7 +36,15 @@ vi.mock('./provisioning.js', () => ({
 vi.mock('./auth.js', () => ({ hashPassword: h.hashPassword }));
 vi.mock('../middleware/redis.js', () => ({ getRedisClient: () => h.redis }));
 
-import { deriveUsername, resolveExternalLogin } from './external-login.js';
+import {
+  bindExternalLoginToUser,
+  deriveUsername,
+  ExternalLoginError,
+  findExternalLogin,
+  listExternalLogins,
+  provisionExternalLogin,
+  unbindExternalLogin,
+} from './external-login.js';
 
 const IDENTITY = {
   providerId: '507f1f77bcf86cd799439011',
@@ -42,9 +53,18 @@ const IDENTITY = {
   externalUsername: 'octo.test',
   displayName: 'Octo',
 };
+const USER = {
+  id: '507f1f77bcf86cd799439012',
+  accountId: '507f1f77bcf86cd799439013',
+  tenantId: '507f1f77bcf86cd799439014',
+};
 
 function q(value: unknown) {
   return { lean: async () => value };
+}
+
+function sortedQ(value: unknown) {
+  return { sort: () => ({ lean: async () => value }) };
 }
 
 function provisioned(username = 'octotest') {
@@ -53,6 +73,24 @@ function provisioned(username = 'octotest') {
     account: { id: 'a1', username },
     created: true,
     rollback: h.rollback,
+  };
+}
+
+function bindingDoc(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: 'el1',
+    userId: USER.id,
+    tenantId: USER.tenantId,
+    accountId: USER.accountId,
+    providerId: IDENTITY.providerId,
+    issuer: IDENTITY.issuer,
+    subject: IDENTITY.subject,
+    externalUsername: IDENTITY.externalUsername,
+    displayName: IDENTITY.displayName,
+    avatarUrl: null,
+    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    lastLoginAt: new Date('2026-02-01T00:00:00.000Z'),
+    ...overrides,
   };
 }
 
@@ -72,120 +110,155 @@ describe('deriveUsername', () => {
   });
 });
 
-describe('resolveExternalLogin（T-EXT）', () => {
+describe('external-login 四入口（T-EXT-B）', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.redis.set.mockResolvedValue('OK');
-    h.user.findById.mockReturnValue(q({
-      _id: 'u1',
-      name: 'Octo',
-      tenantId: 'u1',
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-    }));
+    h.user.findById.mockReturnValue(
+      q({
+        _id: 'u1',
+        name: 'Octo',
+        tenantId: 'u1',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      }),
+    );
     h.account.findById.mockReturnValue(q({ _id: 'a1', username: 'octotest' }));
     h.externalLogin.updateOne.mockResolvedValue({});
-    h.externalLogin.create.mockResolvedValue({});
+    h.externalLogin.create.mockResolvedValue({ toObject: () => bindingDoc() });
+    h.externalLogin.deleteOne.mockResolvedValue({ deletedCount: 1 });
+    h.externalLogin.countDocuments.mockResolvedValue(2);
     h.provision.mockResolvedValue(provisioned());
   });
 
-  it('T-EXT1: 已有绑定 → 更新 lastLoginAt 并返回同一账户（不开户）', async () => {
+  it('T-EXT-B1: find 命中更新 lastLoginAt 快照并返回同一账户', async () => {
     h.externalLogin.findOne.mockReturnValue(q({ _id: 'el1', userId: 'u1', accountId: 'a1' }));
-    const result = await resolveExternalLogin(IDENTITY);
+    const result = await findExternalLogin(IDENTITY);
     expect(h.externalLogin.updateOne).toHaveBeenCalledWith(
       { _id: 'el1' },
-      expect.objectContaining({ $set: expect.objectContaining({ lastLoginAt: expect.any(Date) }) }),
+      expect.objectContaining({
+        $set: expect.objectContaining({ lastLoginAt: expect.any(Date) }),
+      }),
     );
     expect(h.provision).not.toHaveBeenCalled();
-    expect(result.user.id).toBe('u1');
-    expect(result.created).toBe(false);
+    expect(result?.user.id).toBe('u1');
+    expect(result?.created).toBe(false);
   });
 
-  it('T-EXT2: 首次登录 → 派生用户名开户并落 externallogins', async () => {
+  it('T-EXT-B2: find 未命中返回 null（不再自动开户）', async () => {
     h.externalLogin.findOne.mockReturnValue(q(null));
-    const result = await resolveExternalLogin(IDENTITY);
+    await expect(findExternalLogin(IDENTITY)).resolves.toBeNull();
+    expect(h.provision).not.toHaveBeenCalled();
+  });
+
+  it('T-EXT-B3: bind 成功以目标用户三元组落行', async () => {
+    h.externalLogin.findOne.mockReturnValue(q(null));
+    const result = await bindExternalLoginToUser(USER, IDENTITY);
+    expect(h.externalLogin.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER.id,
+        accountId: USER.accountId,
+        tenantId: USER.tenantId,
+        subject: IDENTITY.subject,
+      }),
+    );
+    expect(result.id).toBe('el1');
+    expect(result.userId).toBe(USER.id);
+  });
+
+  it('T-EXT-B4: 身份已被他人绑定 → IDENTITY_ALREADY_BOUND', async () => {
+    h.externalLogin.findOne.mockReturnValueOnce(q({ _id: 'el-other' }));
+    await expect(bindExternalLoginToUser(USER, IDENTITY)).rejects.toMatchObject({
+      code: 'IDENTITY_ALREADY_BOUND',
+    });
+    expect(h.externalLogin.create).not.toHaveBeenCalled();
+  });
+
+  it('T-EXT-B5: 同账户同 provider 已绑定 → PROVIDER_ALREADY_BOUND', async () => {
+    h.externalLogin.findOne
+      .mockReturnValueOnce(q(null))
+      .mockReturnValueOnce(q({ _id: 'el-provider' }));
+    await expect(bindExternalLoginToUser(USER, IDENTITY)).rejects.toMatchObject({
+      code: 'PROVIDER_ALREADY_BOUND',
+    });
+    expect(h.externalLogin.create).not.toHaveBeenCalled();
+  });
+
+  it('T-EXT-B6: bind 并发 E11000 → 回读判定身份占用', async () => {
+    h.externalLogin.findOne
+      .mockReturnValueOnce(q(null))
+      .mockReturnValueOnce(q(null))
+      .mockReturnValueOnce(q({ _id: 'el-raced' }));
+    h.externalLogin.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }));
+    await expect(bindExternalLoginToUser(USER, IDENTITY)).rejects.toBeInstanceOf(
+      ExternalLoginError,
+    );
+  });
+
+  it('T-EXT-B7: provision 成功开户并落 externallogins', async () => {
+    const result = await provisionExternalLogin(IDENTITY);
     expect(h.provision).toHaveBeenCalledWith(
       expect.objectContaining({ username: 'octotest', source: 'oauth' }),
     );
     expect(h.externalLogin.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'u1',
-        tenantId: 'u1',
-        accountId: 'a1',
-        subject: 'sub-1',
-      }),
+      expect.objectContaining({ userId: 'u1', accountId: 'a1', subject: 'sub-1' }),
     );
     expect(result.created).toBe(true);
   });
 
-  it('T-EXT3: 用户名冲突 → 追加随机后缀重试至多 5 次', async () => {
-    h.externalLogin.findOne.mockReturnValue(q(null));
-    const ProvisioningError = await import('./provisioning.js').then((m) => m.ProvisioningError);
-    h.provision
-      .mockRejectedValueOnce(new ProvisioningError('USERNAME_TAKEN'))
-      .mockResolvedValueOnce(provisioned('octotest-ab12'));
-
-    await resolveExternalLogin(IDENTITY);
-    expect(h.provision).toHaveBeenCalledTimes(2);
-    expect((h.provision.mock.calls[1][0] as { username: string }).username).toMatch(/^octotest-[0-9a-f]{4}$/);
-  });
-
-  it('T-EXT4: 并发唯一冲突 → 回滚本次开户并回读胜方（无孤儿账户）', async () => {
-    h.externalLogin.findOne
-      .mockReturnValueOnce(q(null))
-      .mockReturnValueOnce(q({ _id: 'el2', userId: 'u-win', accountId: 'a-win' }));
+  it('T-EXT-B8: provision E11000 拒绝并回滚（不再幂等吞并）', async () => {
     h.externalLogin.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }));
-    h.user.findById.mockReturnValue(q({
-      _id: 'u-win',
-      name: 'Winner',
-      tenantId: 'u-win',
-      createdAt: new Date('2026-01-02T00:00:00.000Z'),
-    }));
+    h.externalLogin.findOne.mockReturnValue(q({ _id: 'el2', userId: 'u-win' }));
 
-    const result = await resolveExternalLogin(IDENTITY);
-    expect(h.rollback).toHaveBeenCalledTimes(1);
-    expect(result.user.id).toBe('u-win');
-    expect(result.created).toBe(false);
-  });
-
-  it('T-EXT5: 绑定写入非唯一异常 → 回滚本次开户并抛错', async () => {
-    h.externalLogin.findOne.mockReturnValue(q(null));
-    h.externalLogin.create.mockRejectedValue(new Error('write failed'));
-
-    await expect(resolveExternalLogin(IDENTITY)).rejects.toThrow('write failed');
+    await expect(provisionExternalLogin(IDENTITY)).rejects.toMatchObject({
+      code: 'IDENTITY_ALREADY_BOUND',
+    });
     expect(h.rollback).toHaveBeenCalledTimes(1);
   });
 
-  it('T-EXT6: 计费失败 → 向调用方抛出（路由映射 provision_failed）', async () => {
-    h.externalLogin.findOne.mockReturnValue(q(null));
-    const ProvisioningError = await import('./provisioning.js').then((m) => m.ProvisioningError);
-    h.provision.mockRejectedValue(new ProvisioningError('BILLING_UNAVAILABLE'));
-
-    await expect(resolveExternalLogin(IDENTITY)).rejects.toMatchObject({
-      code: 'BILLING_UNAVAILABLE',
-    });
+  it('T-EXT-B9: unbind 正常删除（非最后一条不受限）', async () => {
+    h.externalLogin.findOne.mockReturnValue(q({ _id: 'el1', accountId: USER.accountId }));
+    h.externalLogin.countDocuments.mockResolvedValue(2);
+    await expect(unbindExternalLogin(USER.id, '507f1f77bcf86cd799439021')).resolves.toBe(true);
+    expect(h.externalLogin.deleteOne).toHaveBeenCalledWith({ _id: 'el1', userId: USER.id });
   });
 
-  it('T-EXT7: 身份锁使用 SET NX PX 并在结束后释放', async () => {
-    h.externalLogin.findOne.mockReturnValue(q({ _id: 'el1', userId: 'u1', accountId: 'a1' }));
-    await resolveExternalLogin(IDENTITY);
-    expect(h.redis.set).toHaveBeenCalledWith(
-      expect.stringContaining('oauth:identity-lock:'),
-      expect.any(String),
-      'PX',
-      10000,
-      'NX',
-    );
-    expect(h.redis.eval).toHaveBeenCalled();
+  it('T-EXT-B10: 无密码账户最后一条拒绝解绑', async () => {
+    h.externalLogin.findOne.mockReturnValue(q({ _id: 'el1', accountId: USER.accountId }));
+    h.externalLogin.countDocuments.mockResolvedValue(1);
+    h.account.findById.mockReturnValue(q({ passwordless: true }));
+    await expect(unbindExternalLogin(USER.id, '507f1f77bcf86cd799439021')).rejects.toMatchObject({
+      code: 'CANNOT_UNBIND_LAST_LOGIN_METHOD',
+    });
+    expect(h.externalLogin.deleteOne).not.toHaveBeenCalled();
   });
 
-  it('T-EXT8: 用户名冲突超过 5 次 → USERNAME_TAKEN', async () => {
-    h.externalLogin.findOne.mockReturnValue(q(null));
-    const ProvisioningError = await import('./provisioning.js').then((m) => m.ProvisioningError);
-    h.provision.mockRejectedValue(new ProvisioningError('USERNAME_TAKEN'));
+  it('T-EXT-B11: 有密码账户最后一条允许解绑', async () => {
+    h.externalLogin.findOne.mockReturnValue(q({ _id: 'el1', accountId: USER.accountId }));
+    h.externalLogin.countDocuments.mockResolvedValue(1);
+    h.account.findById.mockReturnValue(q({ passwordless: false }));
+    await expect(unbindExternalLogin(USER.id, '507f1f77bcf86cd799439021')).resolves.toBe(true);
+  });
 
-    await expect(resolveExternalLogin(IDENTITY)).rejects.toMatchObject({
-      code: 'USERNAME_TAKEN',
+  it('T-EXT-B12: 非本人/不存在/非法 id → EXTERNAL_LOGIN_NOT_FOUND', async () => {
+    h.externalLogin.findOne.mockReturnValue(q(null));
+    await expect(unbindExternalLogin(USER.id, '507f1f77bcf86cd799439099')).rejects.toMatchObject({
+      code: 'EXTERNAL_LOGIN_NOT_FOUND',
     });
-    expect(h.provision).toHaveBeenCalledTimes(5);
+    await expect(unbindExternalLogin(USER.id, 'bad-id')).rejects.toMatchObject({
+      code: 'EXTERNAL_LOGIN_NOT_FOUND',
+    });
+    expect(h.externalLogin.deleteOne).not.toHaveBeenCalled();
+  });
+
+  it('T-EXT-B13: list 按绑定时间映射白名单字段', async () => {
+    h.externalLogin.find.mockReturnValue(sortedQ([bindingDoc()]));
+    const rows = await listExternalLogins(USER.id);
+    expect(h.externalLogin.find).toHaveBeenCalledWith({ userId: USER.id });
+    expect(rows[0]).toMatchObject({
+      id: 'el1',
+      providerId: IDENTITY.providerId,
+      externalUsername: IDENTITY.externalUsername,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    });
   });
 });
