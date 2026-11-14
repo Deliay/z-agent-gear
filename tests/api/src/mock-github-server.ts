@@ -43,6 +43,12 @@ export interface MockGitHubServer {
   setHead(sha: string): void;
   setPullRequestState(state: string, merged?: boolean): void;
   failNext(status: number, times?: number): void;
+  /** GitHub OAuth 登录：设置 `GET /user` 返回的外部身份。 */
+  setOAuthUser(user: { id: number; login: string; name?: string | null; avatar_url?: string | null }): void;
+  /** 下一次 OAuth authorize 返回 `error=access_denied`（仅一次）。 */
+  denyNextOAuth(): void;
+  /** 下一次 OAuth token 请求返回 400。 */
+  failNextOAuthToken(): void;
   reset(): void;
   close(): Promise<void>;
 }
@@ -74,6 +80,15 @@ export async function startMockGitHubServer(options?: {
   let state = 'open';
   let merged = false;
   const failures: number[] = [];
+  const oauthCodes = new Set<string>();
+  let oauthUser: { id: number; login: string; name: string | null; avatar_url: string | null } = {
+    id: 1001,
+    login: 'octo-test',
+    name: 'Octo Test',
+    avatar_url: null,
+  };
+  let denyOAuth = false;
+  let failOAuthToken = false;
 
   const server = createServer(async (req, res) => {
     const url = req.url ?? '';
@@ -91,6 +106,63 @@ export async function startMockGitHubServer(options?: {
 
     if (failures.length > 0) {
       json(res, failures.shift() as number, { message: 'injected failure' });
+      return;
+    }
+
+    // GitHub OAuth 登录（tests/api/agent-api/auth-oauth.test.ts）
+    if (method === 'GET' && url.startsWith('/login/oauth/authorize')) {
+      const authUrl = new URL(url, 'http://127.0.0.1');
+      const redirectUri = authUrl.searchParams.get('redirect_uri') ?? '';
+      const state = authUrl.searchParams.get('state') ?? '';
+      if (!redirectUri) {
+        json(res, 400, { error: 'invalid_request' });
+        return;
+      }
+      const target = new URL(redirectUri);
+      if (state) target.searchParams.set('state', state);
+      if (denyOAuth) {
+        denyOAuth = false;
+        target.searchParams.set('error', 'access_denied');
+        res.writeHead(302, { Location: target.toString() });
+        res.end();
+        return;
+      }
+      const code = `mock-github-code-${oauthCodes.size + 1}-${Math.random().toString(36).slice(2, 8)}`;
+      oauthCodes.add(code);
+      target.searchParams.set('code', code);
+      res.writeHead(302, { Location: target.toString() });
+      res.end();
+      return;
+    }
+
+    if (method === 'POST' && url === '/login/oauth/access_token') {
+      if (failOAuthToken) {
+        failOAuthToken = false;
+        json(res, 400, { error: 'invalid_grant' });
+        return;
+      }
+      const form = new URLSearchParams(raw);
+      const code = form.get('code') ?? '';
+      if (!oauthCodes.has(code)) {
+        json(res, 400, { error: 'invalid_grant', error_description: 'unknown code' });
+        return;
+      }
+      oauthCodes.delete(code);
+      json(res, 200, {
+        access_token: `mock-github-access-${code}`,
+        token_type: 'bearer',
+        scope: 'read:user user:email',
+      });
+      return;
+    }
+
+    if (method === 'GET' && url === '/user') {
+      const auth = req.headers.authorization ?? '';
+      if (!String(auth).startsWith('Bearer mock-github-access-')) {
+        json(res, 401, { message: 'Bad credentials' });
+        return;
+      }
+      json(res, 200, oauthUser);
       return;
     }
 
@@ -232,12 +304,24 @@ export async function startMockGitHubServer(options?: {
     failNext(status: number, times = 1) {
       for (let i = 0; i < times; i += 1) failures.push(status);
     },
+    setOAuthUser(user) {
+      oauthUser = { ...oauthUser, ...user };
+    },
+    denyNextOAuth() {
+      denyOAuth = true;
+    },
+    failNextOAuthToken() {
+      failOAuthToken = true;
+    },
     reset() {
       calls.length = 0;
       checkRuns.length = 0;
       failures.length = 0;
       state = 'open';
       merged = false;
+      oauthCodes.clear();
+      denyOAuth = false;
+      failOAuthToken = false;
     },
     close() {
       return new Promise((resolve, reject) => {

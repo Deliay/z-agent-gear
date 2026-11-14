@@ -3,6 +3,7 @@ import { AuthProvider } from './stores/AuthProvider'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { Toaster } from 'sonner'
 import LoginPage from './pages/LoginPage'
+import LoginCallbackPage from './pages/LoginCallbackPage'
 import MainLayout from './pages/MainLayout'
 import SettingsPage from './pages/SettingsPage'
 import SessionPage from './pages/SessionPage'
@@ -31,6 +32,7 @@ function App() {
           <Toaster position="top-right" />
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/login/callback" element={<LoginCallbackPage />} />
             <Route element={<ProtectedRoute />}>
               <Route element={<MainLayout />}>
                 <Route index element={<HomePage />} />

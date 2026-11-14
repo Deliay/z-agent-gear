@@ -926,3 +926,16 @@ pnpm test
 - T-REPO-API6：存量 `configureWorkflow` 落库 `sourceKind` 归一为 `PLATFORM`（回归基线）。
 - T-REPO-API4 / 5b / 7（需 `MONGODB_URI`）：cloud 控制器配置成功与列表透出；错误白名单逐字；`deleteCloudHost` 级联删除 REPO、PLATFORM 保留。
 - 前提：`INTERNAL_API_TOKEN`；fake controller 应答 `workflow-templates:scan`（fixture 与 agent-gear 真实回包同形态）。
+
+## 第三方登录 OAuth/OIDC（#503）
+
+| 文件 | 说明 |
+|------|------|
+| `src/fake-oidc-server.ts` | 进程内 fake OIDC IdP（默认端口 `MOCK_OIDC_PORT=19419`）：discovery/JWKS、authorize（`denyNext()` 注入 `access_denied`）、token（校验 PKCE，签发含 iss/sub/aud/exp/nonce 的 RS256 id_token）。`jose` 为显式 devDependency。 |
+| `src/mock-github-server.ts` | 扩展 OAuth：`GET /login/oauth/authorize`（`denyNextOAuth()`）、`POST /login/oauth/access_token`、`GET /user`（`setOAuthUser()`）。既有 Check Runs mock 路由零改动，`mock-github-server.test.ts` 守卫。 |
+| `src/agent-api/auth-oauth.test.ts` | T-OA-API1~10：前台首登自动开户/再登同账户/ticket 一次性/state 重放/取消授权/停用 provider/非法 surface/后台 not_bound/绑定→换票→解绑/GitHub 登录。 |
+| `src/admin-api/auth-provider.test.ts` | T-AP-API1~7：鉴权/secret 不回显/callbackUrl/校验矩阵/更新留空/github 单条幂等/免登录过滤。 |
+
+前置 env：agent-api 需 `PUBLIC_BASE_URL` 指向测试可达地址、`ADMIN_FRONTEND_URL`；GitHub 用例需 agent-api 以
+`GITHUB_OAUTH_AUTHORIZE_URL=http://127.0.0.1:19418/login/oauth/authorize`、`GITHUB_OAUTH_TOKEN_URL=http://127.0.0.1:19418/login/oauth/access_token`、
+`GITHUB_OAUTH_API_BASE=http://127.0.0.1:19418` 启动（未指向时 GitHub 用例显式 skip）。OIDC 用例需要 `MONGODB_URI` 用于清理与落库断言。

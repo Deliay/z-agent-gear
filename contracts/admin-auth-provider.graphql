@@ -1,0 +1,79 @@
+# 登录认证配置契约（自定义 OIDC Provider 与 GitHub OAuth）
+#
+# 数据归属：`authproviders` 集合由 admin-api **唯一写方**维护；agent-api 只读镜像
+# （OAuth 授权/回调链路消费）。索引由 admin-api 迁移 `022-auth-providers` 幂等创建。
+#
+# 通用口径：
+# - **secret 仅写入不回显**：所有出参恒不含 clientSecret / encryptedClientSecret，
+#   以 `hasSecret: Boolean!` 表示「已设置」；更新时省略 clientSecret = 保持不变。
+# - `github_oauth` 全平台仅一条（`{type:1}` 部分唯一索引，partialFilterExpression `{type:'github_oauth'}`）。
+# - `enabled=false` 或前后台 scope 均 false ⇒ 不出现在任何登录页。
+# - 鉴权：全部 Query/Mutation 需管理员 JWT（`UNAUTHORIZED`/`MUST_CHANGE_PASSWORD` 口径同
+#   contracts/admin-auth.graphql）。
+# - `callbackUrl` 为展示用（agent-api 对外统一回调地址，唯一回调地址规避 GitHub OAuth App 单回调限制）。
+
+# 第三方登录类型（与 contracts/auth.graphql、contracts/admin-auth.graphql 值域逐字一致）
+enum AuthProviderType {
+  oidc
+  github_oauth
+}
+
+type OidcProvider {
+  id: ID!
+  type: AuthProviderType! # 恒 oidc
+  displayName: String!
+  issuer: String!
+  clientId: String!
+  scopes: String! # 缺省 "openid profile email"
+  enabled: Boolean!
+  enableFrontLogin: Boolean!
+  enableAdminLogin: Boolean!
+  hasSecret: Boolean! # 恒 true（创建必填）；便于前端展示「已设置」
+  callbackUrl: String! # 展示用：agent-api 对外统一回调地址（OIDC/GitHub 共用）
+  createdAt: String!
+  updatedAt: String!
+}
+
+type GithubOauthConfig {
+  id: ID!
+  type: AuthProviderType! # 恒 github_oauth
+  clientId: String!
+  enabled: Boolean!
+  enableFrontLogin: Boolean!
+  enableAdminLogin: Boolean!
+  hasSecret: Boolean!
+  callbackUrl: String! # 展示用：agent-api 对外回调地址
+  createdAt: String!
+  updatedAt: String!
+}
+
+input OidcProviderInput {
+  displayName: String # 更新可省略
+  issuer: String
+  clientId: String
+  clientSecret: String # 仅写入；省略 = 不变
+  scopes: String
+  enabled: Boolean
+  enableFrontLogin: Boolean
+  enableAdminLogin: Boolean
+}
+
+input GithubOauthInput {
+  clientId: String
+  clientSecret: String # 仅写入；省略 = 不变
+  enabled: Boolean
+  enableFrontLogin: Boolean
+  enableAdminLogin: Boolean
+}
+
+type Query {
+  oidcProviders: [OidcProvider!]!
+  githubOauthConfig: GithubOauthConfig # 未配置返回 null
+}
+
+type Mutation {
+  createOidcProvider(input: OidcProviderInput!): OidcProvider!
+  updateOidcProvider(id: ID!, input: OidcProviderInput!): OidcProvider!
+  deleteOidcProvider(id: ID!): Boolean!
+  upsertGithubOauthConfig(input: GithubOauthInput!): GithubOauthConfig!
+}

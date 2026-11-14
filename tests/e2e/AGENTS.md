@@ -590,3 +590,14 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 - E2E-RW5：非 cloud 控制器无「工作流」页签（零回归）。
 - 依赖：`MONGODB_URI`（云电脑/控制器夹具）、`INTERNAL_API_TOKEN`；fake controller 注册 version `2.18.0` 并应答 `workflow-templates:scan`。
 - 检测提示（GitHub 设置成功 / 手工新增工作目录）由 `ControllerConfigPage` 组件单测覆盖触发接线。
+
+## 第三方登录 E2E（#503）
+
+| 文件 | 说明 |
+|------|------|
+| `src/auth-oauth-helpers.ts` | 进程内 fake OIDC/GitHub 启动 + admin-api Provider 配置/清理 + 按钮文案工具（fake 实现复用 `tests/api/src/{fake-oidc-server,mock-github-server}`）。 |
+| `src/auth-oauth.spec.ts` | E2E-OIDC1 登录页按钮随启停即时增减；E2E-OIDC2 完整重定向登录并自动开户；E2E-OIDC3 取消授权提示；E2E-GH1 GitHub 登录（需 agent-api 指向 fake GitHub，否则 skip）。 |
+| `src/admin-auth-oauth.spec.ts` | E2E-AD-OA1「登录认证」CRUD 且 secret 不可见；E2E-AD-OA2 绑定→后台第三方登录；E2E-AD-OA3 未绑定被拒文案；E2E-AD-OA4 解绑后立即无法登录。 |
+
+依赖：Aspire 全量（agent-web/admin-web/agent-api/admin-api/Redis/Mongo）；`INTERNAL_API_TOKEN`、`MONGODB_URI`；
+fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`（workers=1 串行）。
