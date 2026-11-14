@@ -29,10 +29,13 @@
 #
 # 周期自升级口径（docs/engineering/plan/20261113-feat-cloud-agent-gear-auto-upgrade.md）：
 # - main 在保活前启动 auto_update_loop 后台循环：默认每 10 分钟 `pnpm view agent-gear version`
-#   比对本地 `agent-gear --version`，不一致则 `pnpm add -g agent-gear` 安装；
+#   比对本地 `agent-gear --version`，不一致则 `pnpm add -g agent-gear@latest` 安装；
 # - 安装经 $RUN_DIR/update.lock.d 的 mkdir 原子互斥，与启动/每轮自更新共享同一把锁；
 # - 运行态经 $RUN_DIR/agent.pid 传递：运行中 → SIGTERM，由保活非 42 路径带出新版本；
 #   退避/更新窗口（无 pid）→ 不打断退避，下次启动自然生效；
+# - 仅当安装后版本 == registry latest 且 != 当前运行版本才 TERM：pnpm 默认 minimumReleaseAge
+#   （pnpm 12 默认 24h 供应链隔离）会把刚发布的 latest 排除在解析外，`pnpm add` 退出 0 但版本
+#   不变；此时不重启，只 WARN 并按周期重试，避免「每个检查周期全体会话断连一次」；
 # - 销毁优先：shutdown 先置 $RUN_DIR/shutdown 并终止循环，销毁后绝不升级/重启/重连；
 # - 检查/安装失败仅 WARN 并按固定周期重试（不缩短间隔）；最新版恒取 registry latest，
 #   发布侧回滚 latest 指针后下一周期自动回落（缺陷版本自愈合）。
@@ -231,7 +234,7 @@ ensure_pnpm() {
   run_as_worker "$PNPM_CMD" setup >/dev/null 2>&1 || true
 }
 
-# 启动 / 每轮自更新：pnpm add -g agent-gear（写入 PNPM_HOME 全局 bin）。
+# 启动 / 每轮自更新：pnpm add -g agent-gear@latest（写入 PNPM_HOME 全局 bin）。
 # 失败不阻断保活；skip 开关跳过全部自更新。
 update_agent_gear() {
   if [ "${ZAG_SKIP_AGENT_GEAR_UPDATE:-0}" = "1" ]; then
@@ -247,7 +250,7 @@ update_agent_gear() {
   registry=$(run_as_worker "$PNPM_CMD" config get registry 2>/dev/null || echo unknown)
   log "updating agent-gear via pnpm (registry=$registry)"
   local rc=0
-  run_as_worker_exec "$PNPM_CMD" add -g agent-gear &
+  run_as_worker_exec "$PNPM_CMD" add -g agent-gear@latest &
   CHILD_PID=$!
   wait "$CHILD_PID" || rc=$?
   CHILD_PID=""
@@ -349,7 +352,7 @@ auto_update_loop() {
       continue
     fi
     rc=0
-    run_as_worker_exec "$PNPM_CMD" add -g agent-gear &
+    run_as_worker_exec "$PNPM_CMD" add -g agent-gear@latest &
     install_pid=$!
     wait "$install_pid" || rc=$?
     if [ "$rc" -ne 0 ]; then
@@ -358,7 +361,24 @@ auto_update_loop() {
       continue
     fi
     release_update_lock
-    installed=$(run_as_worker agent-gear --version 2>/dev/null || echo unknown)
+    rc=0
+    installed=$(run_as_worker agent-gear --version 2>/dev/null) || rc=$?
+    if [ "$rc" -ne 0 ] || ! installed=$(normalize_version "$installed"); then
+      log "WARN: agent-gear auto-update installed version unreadable (agent-gear --version exit=$rc); restart skipped, will retry next round"
+      continue
+    fi
+    # 只有「真正装到 registry latest 且与当前运行版本不同」才重启：
+    # pnpm 默认 minimumReleaseAge（供应链隔离，pnpm 12 默认 24h）会把刚发布的 latest 排除在
+    # 解析之外，`pnpm add -g` 仍以 0 退出但不改变版本；若此时无条件 TERM，会话会按检查周期
+    # （默认 10 分钟）反复断连。版本未变/未到 latest 时只 WARN，下一周期重试。
+    if [ "$installed" = "$current" ]; then
+      log "WARN: agent-gear install did not change version ($installed; registry latest=$latest); restart skipped, will retry next round"
+      continue
+    fi
+    if [ "$installed" != "$latest" ]; then
+      log "WARN: agent-gear installed $installed (registry latest=$latest); restart skipped, will retry next round"
+      continue
+    fi
     agent_pid=""
     if [ -f "$RUN_DIR/agent.pid" ]; then
       agent_pid=$(cat "$RUN_DIR/agent.pid" 2>/dev/null || true)
