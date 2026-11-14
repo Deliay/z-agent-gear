@@ -6,6 +6,7 @@ import { AcpMessage } from '../models/acp-message.js';
 import { SessionInteraction } from '../models/session-interaction.js';
 import { Controller } from '../models/controller.js';
 import { CloudHost } from '../models/cloud-host.js';
+import { CloudContainer } from '../models/cloud-container.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
@@ -371,11 +372,25 @@ export class SessionService {
         throw new Error('cloud host is not running');
       }
       // A-11：会话 ACP 工具必须落在云电脑已启用的 harnessTypes 映射内。
+      // 「已启用」= 创建时选定（cloudhosts 快照）∪ 运行期成功安装（cloudcontainers 读模型，
+      // 写方 cloud-controller 在 appendInstalledWorkload 时 $addToSet）。只看创建期快照会在
+      // 补装 harness 后误拒该类型会话（#498）。
       const harnessAcpTypes: Record<string, string> = { OPENCODE: 'opencode', KIMI_CODE: 'kimi_code', DEEPSEEK_HARNESS: 'deepseek_harness' };
-      const allowed = ((host.harnessTypes ?? []) as string[])
-        .map((type) => harnessAcpTypes[type])
-        .filter((type): type is string => Boolean(type));
-      if (allowed.length > 0 && !allowed.includes(input.acpServerType)) {
+      const allowedAcpTypes = new Set(Object.values(harnessAcpTypes));
+      const container = await CloudContainer.findOne({ hostId: String(host._id) })
+        .sort({ createdAt: -1 })
+        .select('harnessTypes')
+        .lean();
+      const allowed = new Set<string>([
+        ...((host.harnessTypes ?? []) as string[])
+          .map((type) => harnessAcpTypes[type])
+          .filter((type): type is string => Boolean(type)),
+        // 容器读模型本身已是「创建时 ∪ 运行期安装」，仍按已知映射白名单过滤，避免脏值放行。
+        ...((container?.harnessTypes ?? []) as string[]).filter((type) =>
+          allowedAcpTypes.has(type),
+        ),
+      ]);
+      if (allowed.size > 0 && !allowed.has(input.acpServerType)) {
         throw new Error(`unsupported harness type: ${input.acpServerType}`);
       }
     }

@@ -1,5 +1,6 @@
 import { actorFilter } from './workspace-context.js';
 import { getRedisClient } from '../middleware/redis.js';
+import { publish } from '../middleware/publish.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { Controller } from '../models/controller.js';
 
@@ -57,6 +58,19 @@ export async function invalidateAcpHarnessInstall(
     );
   } catch (err) {
     logger.warn({ controllerId, acpServerType, err }, 'invalidate acp caches after harness install failed');
+  }
+  // controller-api 的 ACPCapabilityDetector 还有 1h 进程内缓存，仅删 Redis 不会让新装 harness
+  // 出现在 acpCapabilities / 工作流配置校验列表。与 refreshAcpCapabilities 同口径下发失效指令
+  // （#498：补装 harness 后需立即可见、可建会话）。失败只告警，TTL 兜底。
+  try {
+    if (controllerId) {
+      await publish('session:command', { type: 'acp:cache:invalidate', controllerId });
+    }
+  } catch (err) {
+    logger.warn(
+      { controllerId, acpServerType, err },
+      'invalidate controller acp capability memory cache after harness install failed',
+    );
   }
 }
 
