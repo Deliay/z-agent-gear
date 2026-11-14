@@ -1,6 +1,11 @@
 import { GraphQLError } from 'graphql';
 import { AdminUser } from '../../models/admin-user.js';
+import { AuthProvider } from '../../models/auth-provider.js';
 import { login, changePassword, signToken } from '../../services/auth.js';
+import { authProviderService } from '../../services/auth-provider.js';
+import { adminExternalLoginService } from '../../services/admin-external-login.js';
+import { consumeLoginTicket, issueBindTicket } from '../../services/auth-ticket.js';
+import { assertAdmin } from './guard.js';
 import {
   loginRateLimiter,
   usernameLoginRateLimiter,
@@ -45,6 +50,13 @@ export const authResolvers = {
       const admin = await AdminUser.findById(context.currentAdmin.id).lean() as AdminRecord | null;
       if (!admin) return null;
       return mapAdmin(admin);
+    },
+    // 免登录：登录页第三方按钮前置查询（仅 enabled 且 enableAdminLogin）
+    adminAuthProviders: async () => authProviderService.listForSurface('admin'),
+    // 需管理员登录：本人已绑定的外部身份
+    adminExternalLogins: async (_parent: unknown, _args: unknown, context: AdminAuthContext) => {
+      assertAdmin(context);
+      return adminExternalLoginService.listByAdmin(context.currentAdmin!.id);
     },
   },
   Mutation: {
@@ -98,6 +110,43 @@ export const authResolvers = {
       } catch (err) {
         throw new GraphQLError((err as Error).message);
       }
+    },
+    // 免登录：一次性登录票据兑换（GETDEL 60s）
+    adminExchangeLoginTicket: async (_parent: unknown, args: { ticket: string }) => {
+      const payload = await consumeLoginTicket(args.ticket);
+      if (!payload || !payload.token || !payload.admin) {
+        throw new GraphQLError('invalid or expired ticket', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
+      return { token: payload.token, admin: payload.admin };
+    },
+    createAdminBindTicket: async (
+      _parent: unknown,
+      args: { providerId: string },
+      context: AdminAuthContext,
+    ) => {
+      assertAdmin(context);
+      const provider = await AuthProvider.findById(args.providerId)
+        .select('type enabled enableAdminLogin')
+        .lean() as { enabled?: boolean; enableAdminLogin?: boolean } | null;
+      if (!provider || !provider.enabled || !provider.enableAdminLogin) {
+        throw new GraphQLError('该登录方式未启用后台登录', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
+      return issueBindTicket({
+        adminUserId: context.currentAdmin!.id,
+        providerId: args.providerId,
+      });
+    },
+    unbindAdminExternalLogin: async (
+      _parent: unknown,
+      args: { id: string },
+      context: AdminAuthContext,
+    ) => {
+      assertAdmin(context);
+      return adminExternalLoginService.unbind(context.currentAdmin!.id, args.id);
     },
   },
 };

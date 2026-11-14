@@ -64,6 +64,8 @@ export const TENANT_ID_COLLECTIONS: readonly TenantIdCollection[] = [
     model: 'GitHubAccount',
     uniqueIndex: { tenantId: 1, userId: 1, githubUserId: 1 },
   },
+  // 前台外部身份（第三方登录）：集合矩阵注册；迁移 013 的存量回填对新集合为 no-op
+  { collection: 'externallogins', model: 'ExternalLogin' },
 ];
 
 /**

@@ -18,6 +18,7 @@ import * as migration002DotnetApt from './migrations/002-preset-dotnet-apt.js';
 import * as migration002RefreshDocker from './migrations/002-refresh-docker-preset-script.js';
 import { createInternalBillingRouter } from './routes/internal-billing.js';
 import { createBillingOpenAiRouter } from './routes/billing-openai.js';
+import { internalAuthRouter } from './routes/internal-auth.js';
 import { AdminOutboxPublisher } from './services/billing/mq/publisher.js';
 import { SettlementTickService } from './services/billing/settlement-tick.js';
 import { BillingScheduler } from './services/billing/scheduler.js';
@@ -66,6 +67,8 @@ import * as migration019WorkloadIdempotentAnchors from './migrations/019-workloa
 import * as migration020DockerShimValueOptions from './migrations/020-docker-shim-value-options.js';
 // 021：Docker 预制脚本 v6——取消镜像引用规范化 shim，改用原生 registry-mirrors（daemon.json）
 import * as migration021DockerRegistryMirrors from './migrations/021-docker-registry-mirrors.js';
+// 022：第三方登录配置（authproviders）与后台外部身份绑定（adminexternallogins）索引
+import * as migration022AuthProviders from './migrations/022-auth-providers.js';
 import { CloudHost } from './models/cloud-host.js';
 import { StorageBillingCursor } from './models/storage-billing-cursor.js';
 import { storageTickService } from './services/billing/storage-tick.js';
@@ -110,6 +113,7 @@ app.use(
   }),
 );
 app.use('/internal/billing', createInternalBillingRouter());
+app.use('/internal/auth', internalAuthRouter);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -190,6 +194,7 @@ async function start() {
       migration019WorkloadIdempotentAnchors,
       migration020DockerShimValueOptions,
       migration021DockerRegistryMirrors,
+      migration022AuthProviders,
     ]);
   } catch (err) {
     logger.error({ err }, 'runMigrations failed (non-fatal)');

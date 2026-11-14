@@ -55,8 +55,8 @@ describe('tenant self check', () => {
     expect(result.sampled).toBe(1);
     expect(h.user.countDocuments).toHaveBeenCalledTimes(2);
     expect(h.user.find).toHaveBeenCalledWith({});
-    // 21 collections counted, each with a tenantId-missing filter
-    expect(h.collections.size).toBe(21);
+    // 22 collections counted, each with a tenantId-missing filter
+    expect(h.collections.size).toBe(22);
     for (const fake of h.collections.values()) {
       expect(fake.countDocuments).toHaveBeenCalledWith({ tenantId: { $exists: false } });
     }

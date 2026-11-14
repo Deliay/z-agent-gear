@@ -33,10 +33,34 @@ type AuthPayload {
   user: User!
 }
 
+# ===== 第三方登录（自定义 OIDC / GitHub OAuth）=====
+#
+# 配置唯一写方在 admin-api（contracts/admin-auth-provider.graphql）；本契约仅暴露
+# 前台登录页所需的免登录入口信息与一次性票据兑换，值域与 admin 侧逐字一致。
+
+# 第三方登录类型（三个契约文件各自自足，值域由 schema 契约测试断言）
+enum AuthProviderType {
+  oidc
+  github_oauth
+}
+
+# 第三方登录入口信息（免登录查询，仅返回 enabled 且 enableFrontLogin=true 的配置）
+type AuthProviderInfo {
+  id: ID!
+  type: AuthProviderType!
+  displayName: String! # 按钮文案「使用 {displayName} 登录」；github_oauth 恒为 GitHub
+}
+
 type Query {
   me: User
+  # 免登录；无配置时返回 []
+  authProviders: [AuthProviderInfo!]!
 }
 
 type Mutation {
   login(username: String!, password: String!): AuthPayload!
+  # 一次性登录票据兑换（OAuth 回调后前端凭 ticket 换 AuthPayload）；
+  # ticket 由 agent-api 回写 Redis（TTL 60s，GETDEL 一次性消费）。
+  # 失败：BAD_USER_INPUT('invalid or expired ticket')
+  exchangeLoginTicket(ticket: String!): AuthPayload!
 }

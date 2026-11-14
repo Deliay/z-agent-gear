@@ -41,6 +41,7 @@
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.6.2",
     "openai": "^6.38.0",
+    "openid-client": "^6.8.9",
     "pino": "^10.4.0"
   },
   "devDependencies": {

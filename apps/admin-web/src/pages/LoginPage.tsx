@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useMutation } from '@apollo/client/react'
-import { useNavigate } from 'react-router-dom'
+import { useMutation, useQuery } from '@apollo/client/react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { gql } from '@apollo/client'
 import { ADMIN_LOGIN } from '@/graphql/mutations'
 import type { AdminLoginMutation } from '@/graphql/types'
 import { useAuth } from '@/stores/auth'
@@ -12,6 +13,23 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { adminOauthAuthorizeUrl, mapOauthError } from '@/lib/auth-oauth'
+
+const ADMIN_AUTH_PROVIDERS = gql`
+  query AdminAuthProviders {
+    adminAuthProviders {
+      id
+      type
+      displayName
+    }
+  }
+`
+
+interface AdminProviderInfo {
+  id: string
+  type: 'oidc' | 'github_oauth'
+  displayName: string
+}
 
 export default function LoginPage() {
   const [username, setUsername] = useState('')
@@ -22,6 +40,13 @@ export default function LoginPage() {
   const [savingEndpoint, setSavingEndpoint] = useState(false)
   const navigate = useNavigate()
   const { login } = useAuth()
+  const [searchParams] = useSearchParams()
+  const oauthError = mapOauthError(searchParams.get('error'))
+  const { data: providerData } = useQuery<{ adminAuthProviders: AdminProviderInfo[] }>(
+    ADMIN_AUTH_PROVIDERS,
+    { fetchPolicy: 'cache-and-network' },
+  )
+  const providers = providerData?.adminAuthProviders ?? []
 
   const [doLogin, { loading }] = useMutation<AdminLoginMutation>(ADMIN_LOGIN, {
     onCompleted: (data) => {
@@ -108,13 +133,32 @@ export default function LoginPage() {
                 required
               />
             </div>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">{error}</p>
+            {(error || oauthError) && (
+              <p role="alert" className="text-sm text-destructive">{error || oauthError}</p>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? '登录中…' : '登录'}
             </Button>
           </form>
+
+          {providers.length > 0 && (
+            <div className="mt-4 space-y-2 border-t pt-4">
+              <p className="text-center text-xs text-muted-foreground">或使用第三方帐号登录</p>
+              {providers.map((provider) => (
+                <Button
+                  key={provider.id}
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    window.location.href = adminOauthAuthorizeUrl(provider.id)
+                  }}
+                >
+                  使用 {provider.type === 'github_oauth' ? 'GitHub' : provider.displayName} 登录
+                </Button>
+              ))}
+            </div>
+          )}
 
           <div className="mt-4 border-t pt-3">
             <button
