@@ -257,7 +257,7 @@ test.describe('ACP Elicitation E2E', () => {
     disconnect();
   });
 
-  test('E2E-QM1: question 工具多选题在卡片中呈现为勾选组并以逗号拼接回传', async ({ page }) => {
+  test('E2E-QM1: question 工具多选题在卡片中呈现为勾选组并以数组回传', async ({ page }) => {
     const { socket, sessionId, disconnect } = await setupSession(page);
 
     const QUESTION_SCHEMA = {
@@ -317,7 +317,7 @@ test.describe('ACP Elicitation E2E', () => {
     const response = await responsePromise;
     expect(response.requestId).toBe(requestId);
     expect(response.action).toBe('accept');
-    expect(response.content).toEqual({ q0: '自动', q1: '自动跑测试,生成文档' });
+    expect(response.content).toEqual({ q0: '自动', q1: ['自动跑测试', '生成文档'] });
 
     await expect(card.getByTestId('interaction-status')).toHaveText('已提交');
 
