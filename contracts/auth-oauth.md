@@ -104,6 +104,7 @@ sequenceDiagram
 
 - `200 { "ok": true }`
 - `400 { "error": "INVALID_BIND_TICKET" }`（票据不存在/过期/已消费/与 provider 不匹配）
+- `409 { "error": "ALREADY_BOUND" }`（该外部身份已绑定到其他管理员；每管理员每 provider 仅一条）
 - `400 { "error": "INVALID_BODY" }`
 
 ## 3. Redis 键与 TTL
@@ -132,6 +133,8 @@ sequenceDiagram
 | `not_bound` | 外部身份未绑定任何管理员账户 | 该身份未绑定任何管理员账户 |
 | `provision_failed` | 前台自动开户失败（如计费不可达） | 账户开通失败，请联系管理员 |
 | `invalid_request` | 非法请求（如 admin-bind 缺 ticket） | 非法的登录请求 |
+| `invalid_bind_ticket` | 绑定票据无效/过期/已消费或与 provider 不匹配 | 绑定已过期，请重新发起 |
+| `already_bound` | 该外部身份已绑定到其他管理员 | 该身份已绑定其他管理员账户 |
 
 未识别 code 原样兜底展示。
 

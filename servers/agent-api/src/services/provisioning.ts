@@ -36,6 +36,8 @@ export interface ProvisionedUser {
   tenant: { id: string; name: string; type: string };
   globalWorkspace: { id: string; name: string; type: string };
   created: boolean;
+  /** 回滚本次新建文档（外部身份落库失败时避免孤儿账户）。 */
+  rollback: () => Promise<void>;
 }
 
 /**
@@ -150,6 +152,7 @@ export async function provisionUser(input: ProvisionUserInput): Promise<Provisio
       tenant: { id: String(tenant._id), name: tenant.name, type: tenant.type },
       globalWorkspace: { id: globalWorkspace.id, name: globalWorkspace.name, type: globalWorkspace.type },
       created,
+      rollback,
     };
   } catch (err) {
     // ProvisioningError 在内部已回滚（BILLING_UNAVAILABLE）或未产生写入（USERNAME_TAKEN）；

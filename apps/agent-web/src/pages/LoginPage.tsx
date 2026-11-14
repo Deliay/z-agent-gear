@@ -63,7 +63,7 @@ export default function LoginPage() {
 
   const { data: providerData } = useQuery<{ authProviders: AuthProviderInfo[] }>(
     AUTH_PROVIDERS_QUERY,
-    { fetchPolicy: 'cache-first' },
+    { fetchPolicy: 'cache-and-network' },
   );
   const providers = providerData?.authProviders ?? [];
 

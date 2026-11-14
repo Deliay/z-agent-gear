@@ -29,6 +29,7 @@ type OidcProvider {
   enableFrontLogin: Boolean!
   enableAdminLogin: Boolean!
   hasSecret: Boolean! # 恒 true（创建必填）；便于前端展示「已设置」
+  callbackUrl: String! # 展示用：agent-api 对外统一回调地址（OIDC/GitHub 共用）
   createdAt: String!
   updatedAt: String!
 }

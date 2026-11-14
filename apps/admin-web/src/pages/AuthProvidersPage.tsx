@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -9,71 +8,14 @@ import { Label } from '@/components/ui/label'
 import { QueryError } from '@/components/ui/query-error'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
-export const OIDC_PROVIDERS_QUERY = gql`
-  query OidcProviders {
-    oidcProviders {
-      id
-      type
-      displayName
-      issuer
-      clientId
-      scopes
-      enabled
-      enableFrontLogin
-      enableAdminLogin
-      hasSecret
-      createdAt
-      updatedAt
-    }
-  }
-`
-
-export const GITHUB_OAUTH_CONFIG_QUERY = gql`
-  query GithubOauthConfig {
-    githubOauthConfig {
-      id
-      type
-      clientId
-      enabled
-      enableFrontLogin
-      enableAdminLogin
-      hasSecret
-      callbackUrl
-      createdAt
-      updatedAt
-    }
-  }
-`
-
-const CREATE_OIDC_PROVIDER = gql`
-  mutation CreateOidcProvider($input: OidcProviderInput!) {
-    createOidcProvider(input: $input) {
-      id
-    }
-  }
-`
-
-const UPDATE_OIDC_PROVIDER = gql`
-  mutation UpdateOidcProvider($id: ID!, $input: OidcProviderInput!) {
-    updateOidcProvider(id: $id, input: $input) {
-      id
-    }
-  }
-`
-
-const DELETE_OIDC_PROVIDER = gql`
-  mutation DeleteOidcProvider($id: ID!) {
-    deleteOidcProvider(id: $id)
-  }
-`
-
-const UPSERT_GITHUB_CONFIG = gql`
-  mutation UpsertGithubOauthConfig($input: GithubOauthInput!) {
-    upsertGithubOauthConfig(input: $input) {
-      id
-    }
-  }
-`
+import {
+  OIDC_PROVIDERS_QUERY,
+  GITHUB_OAUTH_CONFIG_QUERY,
+  CREATE_OIDC_PROVIDER,
+  UPDATE_OIDC_PROVIDER,
+  DELETE_OIDC_PROVIDER,
+  UPSERT_GITHUB_CONFIG,
+} from '@/graphql/auth-providers'
 
 interface OidcProviderData {
   id: string
@@ -81,6 +23,7 @@ interface OidcProviderData {
   issuer: string
   clientId: string
   scopes: string
+  callbackUrl: string
   enabled: boolean
   enableFrontLogin: boolean
   enableAdminLogin: boolean
@@ -315,6 +258,7 @@ export default function AuthProvidersPage() {
                     <SurfaceBadges front={provider.enableFrontLogin} admin={provider.enableAdminLogin} />
                   </div>
                   <p className="truncate text-xs text-muted-foreground">{provider.issuer}</p>
+                  <CopyableCallback value={provider.callbackUrl} />
                   <p className="text-xs text-muted-foreground">
                     Client ID: {provider.clientId} · Secret: {provider.hasSecret ? '已设置' : '未设置'}
                   </p>

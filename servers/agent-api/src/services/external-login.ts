@@ -3,6 +3,7 @@ import { Account } from '../models/account.js';
 import { ExternalLogin } from '../models/external-login.js';
 import { User } from '../models/user.js';
 import { hashPassword } from './auth.js';
+import { getRedisClient } from '../middleware/redis.js';
 import { provisionUser, ProvisioningError } from './provisioning.js';
 
 export interface ExternalIdentityInput {
@@ -52,88 +53,108 @@ function toUserView(user: UserDoc): ExternalLoginResult['user'] {
   };
 }
 
+const RELEASE_LOCK_SCRIPT = `if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end`;
+
 /**
- * 前台外部身份匹配与自动开户（agent-api 唯一写方）。
+ * 同一外部身份的并发首登串行化（单实例部署前提）。
  *
- * - 命中 `{providerId, issuer, subject}` → 更新 lastLoginAt，返回同一账户；
- * - 未命中 → 派生唯一用户名（冲突 `-{4位随机}` 重试 ≤5）→ provisioning 开户 →
- *   落 `externallogins`（唯一索引 E11000 → 回读既有行幂等）；
- * - 开户失败（计费不可达等）→ 抛 `ProvisioningError`，路由映射 `provision_failed`。
+ * 在 Redis 不可用时退化为无锁执行：`externallogins` 唯一索引 + 回滚仍是最终防线。
  */
-export async function resolveExternalLogin(
+async function withIdentityLock<T>(
+  providerId: string,
+  issuer: string | null,
+  subject: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const key = `oauth:identity-lock:${providerId}:${issuer ?? ''}:${subject}`;
+  const token = crypto.randomBytes(16).toString('hex');
+  let locked = false;
+  try {
+    const redis = getRedisClient();
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const ok = await redis.set(key, token, 'PX', 10000, 'NX');
+      if (ok === 'OK') {
+        locked = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  } catch {
+    locked = false;
+  }
+
+  try {
+    return await fn();
+  } finally {
+    if (locked) {
+      try {
+        await getRedisClient().eval(RELEASE_LOCK_SCRIPT, 1, key, token);
+      } catch {
+        // 释放失败仅等 TTL 自动过期
+      }
+    }
+  }
+}
+
+async function resultFromExisting(userId: { toString(): string }, accountId: { toString(): string }) {
+  const user = (await User.findById(userId).lean()) as UserDoc | null;
+  if (!user) {
+    throw new ProvisioningError('INTERNAL_ERROR', 'bound user missing');
+  }
+  const account = (await Account.findById(accountId).lean()) as {
+    _id: { toString(): string };
+    username: string;
+  } | null;
+  return {
+    user: toUserView(user),
+    account: { id: String(account?._id ?? accountId), username: account?.username ?? '' },
+    created: false,
+  } satisfies ExternalLoginResult;
+}
+
+async function resolveExternalLoginCore(
   identity: ExternalIdentityInput,
 ): Promise<ExternalLoginResult> {
   const issuer = identity.issuer ?? null;
-  const existing = await ExternalLogin.findOne({
+  const existing = (await ExternalLogin.findOne({
     providerId: identity.providerId,
     issuer,
     subject: identity.subject,
-  }).lean() as {
+  }).lean()) as {
+    _id: unknown;
     userId: { toString(): string };
     accountId: { toString(): string };
   } | null;
 
   if (existing) {
     await ExternalLogin.updateOne(
-      { _id: (existing as unknown as { _id: unknown })._id },
+      { _id: existing._id },
       { $set: { lastLoginAt: new Date(), externalUsername: identity.externalUsername } },
     );
-    const user = (await User.findById(existing.userId).lean()) as UserDoc | null;
-    if (!user) {
-      throw new ProvisioningError('INTERNAL_ERROR', 'bound user missing');
-    }
-    const account = await Account.findById(existing.accountId).lean() as {
-      _id: { toString(): string };
-      username: string;
-    } | null;
-    return {
-      user: toUserView(user),
-      account: { id: String(account?._id ?? existing.accountId), username: account?.username ?? '' },
-      created: false,
-    };
+    return resultFromExisting(existing.userId, existing.accountId);
   }
 
   const base = deriveUsername(identity.externalUsername);
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const username = attempt === 0 ? base : withSuffix(base);
+    let provisioned: Awaited<ReturnType<typeof provisionUser>> | null = null;
     try {
       const passwordHash = await hashPassword(crypto.randomBytes(32).toString('hex'));
-      const provisioned = await provisionUser({ username, passwordHash, source: 'oauth' });
-      try {
-        await ExternalLogin.create({
-          userId: provisioned.user.id,
-          tenantId: provisioned.user.id,
-          accountId: provisioned.account.id,
-          providerId: identity.providerId,
-          issuer,
-          subject: identity.subject,
-          externalUsername: identity.externalUsername,
-          displayName: identity.displayName ?? null,
-          avatarUrl: identity.avatarUrl ?? null,
-          lastLoginAt: new Date(),
-        });
-      } catch (err) {
-        if ((err as { code?: number }).code === 11000) {
-          // 并发首登：另一请求已落库，回读既有行（幂等，不重复开户）。
-          const raced = await ExternalLogin.findOne({
-            providerId: identity.providerId,
-            issuer,
-            subject: identity.subject,
-          }).lean() as { userId: { toString(): string } } | null;
-          if (raced) {
-            const racedUser = (await User.findById(raced.userId).lean()) as UserDoc | null;
-            if (racedUser) {
-              return {
-                user: toUserView(racedUser),
-                account: provisioned.account,
-                created: false,
-              };
-            }
-          }
-        }
-        throw err;
-      }
+      provisioned = await provisionUser({ username, passwordHash, source: 'oauth' });
+      await ExternalLogin.create({
+        userId: provisioned.user.id,
+        tenantId: provisioned.user.id,
+        accountId: provisioned.account.id,
+        providerId: identity.providerId,
+        issuer,
+        subject: identity.subject,
+        externalUsername: identity.externalUsername,
+        displayName: identity.displayName ?? null,
+        avatarUrl: identity.avatarUrl ?? null,
+        lastLoginAt: new Date(),
+      });
       return {
         user: {
           id: provisioned.user.id,
@@ -145,6 +166,24 @@ export async function resolveExternalLogin(
         created: provisioned.created,
       };
     } catch (err) {
+      // 落库失败（含并发唯一冲突）：回滚本次开户产物，避免孤儿账户/租户/计费账户。
+      if (provisioned) {
+        await Promise.resolve(provisioned.rollback()).catch(() => undefined);
+      }
+      if ((err as { code?: number }).code === 11000) {
+        const raced = (await ExternalLogin.findOne({
+          providerId: identity.providerId,
+          issuer,
+          subject: identity.subject,
+        }).lean()) as {
+          userId: { toString(): string };
+          accountId: { toString(): string };
+        } | null;
+        if (raced) {
+          return resultFromExisting(raced.userId, raced.accountId);
+        }
+        throw err;
+      }
       if (err instanceof ProvisioningError && err.code === 'USERNAME_TAKEN') {
         lastError = err;
         continue;
@@ -153,4 +192,20 @@ export async function resolveExternalLogin(
     }
   }
   throw lastError instanceof Error ? lastError : new ProvisioningError('USERNAME_TAKEN');
+}
+
+/**
+ * 前台外部身份匹配与自动开户（agent-api 唯一写方）。
+ *
+ * - 命中 `{providerId, issuer, subject}` → 更新 lastLoginAt，返回同一账户；
+ * - 未命中 → 身份级 Redis 锁串行化（并发首登不重复开户）→ 派生唯一用户名
+ *   （冲突 `-{4位随机}` 重试 ≤5）→ provisioning 开户 → 落 `externallogins`；
+ * - 落库失败（唯一冲突/异常）→ 回滚本次开户产物，E11000 回读胜方幂等返回。
+ */
+export async function resolveExternalLogin(
+  identity: ExternalIdentityInput,
+): Promise<ExternalLoginResult> {
+  return withIdentityLock(identity.providerId, identity.issuer ?? null, identity.subject, () =>
+    resolveExternalLoginCore(identity),
+  );
 }

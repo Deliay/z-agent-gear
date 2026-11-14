@@ -129,6 +129,7 @@ export class AuthProviderService {
       enableFrontLogin: doc.enableFrontLogin,
       enableAdminLogin: doc.enableAdminLogin,
       hasSecret: true,
+      callbackUrl: oauthCallbackUrl(),
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };

@@ -321,6 +321,7 @@ else
     // publish 时镜像名参数化为 ${ADMIN_WEB_IMAGE}，与 AGENT_API_IMAGE/CONTROLLER_API_IMAGE 一致
     builder.AddDockerfile("admin-web", "../../apps/admin-web")
         .WithEnvironment("ADMIN_API_URL", adminApiUrl)
+        .WithEnvironment("AGENT_API_URL", agentApiPublicUrl)
         .WithBuildArg("VITE_AGENT_API_URL", agentApiPublicUrl)
         .WithHttpEndpoint(port: 80, targetPort: 80)
         .WithExternalHttpEndpoints()

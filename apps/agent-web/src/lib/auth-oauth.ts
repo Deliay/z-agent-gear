@@ -9,6 +9,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   not_bound: '该身份未绑定任何管理员账户',
   provision_failed: '账户开通失败，请联系管理员',
   invalid_request: '非法的登录请求',
+  invalid_bind_ticket: '绑定已过期，请重新发起',
+  already_bound: '该身份已绑定其他管理员账户',
 };
 
 export function mapOauthError(code: string | null | undefined): string {

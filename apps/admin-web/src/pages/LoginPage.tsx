@@ -44,7 +44,7 @@ export default function LoginPage() {
   const oauthError = mapOauthError(searchParams.get('error'))
   const { data: providerData } = useQuery<{ adminAuthProviders: AdminProviderInfo[] }>(
     ADMIN_AUTH_PROVIDERS,
-    { fetchPolicy: 'cache-first' },
+    { fetchPolicy: 'cache-and-network' },
   )
   const providers = providerData?.adminAuthProviders ?? []
 

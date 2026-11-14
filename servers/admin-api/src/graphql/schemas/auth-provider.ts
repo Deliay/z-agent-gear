@@ -20,6 +20,7 @@ export const authProviderTypeDefs = `#graphql
     enableFrontLogin: Boolean!
     enableAdminLogin: Boolean!
     hasSecret: Boolean!
+    callbackUrl: String!
     createdAt: String!
     updatedAt: String!
   }

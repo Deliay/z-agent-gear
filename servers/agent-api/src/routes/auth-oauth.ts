@@ -286,6 +286,14 @@ authOauthRouter.get('/auth/oauth/callback', async (req: Request, res: Response) 
       res.redirect(302, `${config.adminFrontendUrl}/settings/security?bind=success`);
       return;
     }
+    if (bindResponse.status === 400 && bindResponse.json.error === 'INVALID_BIND_TICKET') {
+      redirectError(res, surface, 'invalid_bind_ticket');
+      return;
+    }
+    if (bindResponse.status === 409) {
+      redirectError(res, surface, 'already_bound');
+      return;
+    }
     redirectError(res, surface, 'provider_error');
   } catch (err) {
     if (err instanceof ProvisioningError) {

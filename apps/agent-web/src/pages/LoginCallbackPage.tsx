@@ -39,7 +39,7 @@ export default function LoginCallbackPage() {
   const { login } = useAuth();
   const ticketRef = useRef(searchParams.get('ticket'));
   const errorRef = useRef(searchParams.get('error'));
-  const [message, setMessage] = useState(() => mapOauthError(errorRef.current));
+  const [message, setMessage] = useState(() => mapOauthError(searchParams.get('error')));
 
   const [exchange] = useMutation(EXCHANGE_LOGIN_TICKET, {
     onCompleted: (data: unknown) => {
