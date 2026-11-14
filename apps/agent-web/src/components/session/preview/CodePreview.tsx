@@ -137,15 +137,23 @@ export function CodePreview({
         const modified = monaco.editor.createModel(content, language);
         diffEditor.setModel({ original, modified });
         editor = diffEditor.getModifiedEditor() as unknown as typeof editor;
-        // 首个差异块聚焦
-        const changes = diffEditor.getLineChanges?.() ?? [];
-        if (changes.length > 0) {
-          diffEditor.getModifiedEditor().revealLineInCenter(changes[0].modifiedStartLineNumber);
-        }
+        // 首个差异块聚焦（#481）：Monaco 的 diff 由 worker 异步计算，
+        // `setModel` 之后立刻 `getLineChanges()` 返回 null（实测 ~200ms 后才有值），
+        // 因此必须在 `onDidUpdateDiff` 之后再 reveal，否则视口停在文件首行。
+        // 调用方给定 focusLine 时以其为准（即时可定位，差异块计算完成后不回退到首块）。
+        const revealDiffFocus = (): void => {
+          const changes = diffEditor.getLineChanges?.() ?? [];
+          const target = focusLine ?? changes[0]?.modifiedStartLineNumber;
+          if (typeof target !== 'number' || target < 1) return;
+          diffEditor.getModifiedEditor().revealLineInCenter(target);
+        };
+        revealDiffFocus();
+        const diffUpdateSubscription = diffEditor.onDidUpdateDiff?.(revealDiffFocus);
         // A5：diff 模式批注——行选绑定到 modified 编辑器（PRD 主场景：行内审查改动）
         bindLineSelection(diffEditor.getModifiedEditor() as unknown as MouseDownHost);
         editorRef.current = {
           dispose: () => {
+            diffUpdateSubscription?.dispose();
             original.dispose();
             modified.dispose();
             diffEditor.dispose();
