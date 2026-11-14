@@ -6,7 +6,7 @@ type: Permanent
 # OIDC 绑定优化 - 技术提案
 
 **功能名称**: OIDC 绑定优化（外部身份首次登录身份选择与前台自助绑定管理）
-**关联 PRD**: [[../../../product/draft/20261114-oidc-binding-optimization.md]]
+**关联 PRD**: [[../../../product/shipping/20261114-oidc-binding-optimization.md]]
 **技术提案版本**: v1.0
 **创建日期**: 2026-11-14
 **作者**: z-agent-bot
@@ -411,7 +411,7 @@ TDD：红-绿-重构循环，先写迁移与服务测试，再实现。
 
 ## 11. 相关文档
 
-- [[../../../product/draft/20261114-oidc-binding-optimization.md]] — 关联 PRD
+- [[../../../product/shipping/20261114-oidc-binding-optimization.md]] — 关联 PRD
 - [[20261113-feat-oidc-github-oauth-login.md]] — 前置提案：自定义 OIDC 登录与 GitHub OAuth 登录
 - [GitHub Issue #510](https://github.com/Deliay/z-agent-gear/issues/510)
 - [[20261027-feat-multi-tenant-phase1.md]] — 三层帐号模型背景

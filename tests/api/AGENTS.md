@@ -933,9 +933,10 @@ pnpm test
 |------|------|
 | `src/fake-oidc-server.ts` | 进程内 fake OIDC IdP（默认端口 `MOCK_OIDC_PORT=19419`）：discovery/JWKS、authorize（`denyNext()` 注入 `access_denied`）、token（校验 PKCE，签发含 iss/sub/aud/exp/nonce 的 RS256 id_token）。`jose` 为显式 devDependency。 |
 | `src/mock-github-server.ts` | 扩展 OAuth：`GET /login/oauth/authorize`（`denyNextOAuth()`）、`POST /login/oauth/access_token`、`GET /user`（`setOAuthUser()`）。既有 Check Runs mock 路由零改动，`mock-github-server.test.ts` 守卫。 |
-| `src/agent-api/auth-oauth.test.ts` | T-OA-API1~10：前台首登自动开户/再登同账户/ticket 一次性/state 重放/取消授权/停用 provider/非法 surface/后台 not_bound/绑定→换票→解绑/GitHub 登录。 |
+| `src/agent-api/auth-oauth.test.ts` | T-OA-API1~10（#503 基础链路，已按 #510 身份选择页适配：首登未绑定走 provision）与 T-OA-API11~20（#510）：首登未命中 302 身份选择页且不开户、pending 验密绑定既有账户、错密计次/5 次作废、创建新帐号 `passwordless:true`、pending 期间抢绑两条 mutation 均拒绝、front-bind 全链路、票据缺失/过期、同账户同 provider 重复绑定、解绑/解绑后重新首登/无密码最后一条拒绝、完成绑定后直登。 |
 | `src/admin-api/auth-provider.test.ts` | T-AP-API1~7：鉴权/secret 不回显/callbackUrl/校验矩阵/更新留空/github 单条幂等/免登录过滤。 |
 
 前置 env：agent-api 需 `PUBLIC_BASE_URL` 指向测试可达地址、`ADMIN_FRONTEND_URL`；GitHub 用例需 agent-api 以
 `GITHUB_OAUTH_AUTHORIZE_URL=http://127.0.0.1:19418/login/oauth/authorize`、`GITHUB_OAUTH_TOKEN_URL=http://127.0.0.1:19418/login/oauth/access_token`、
 `GITHUB_OAUTH_API_BASE=http://127.0.0.1:19418` 启动（未指向时 GitHub 用例显式 skip）。OIDC 用例需要 `MONGODB_URI` 用于清理与落库断言。
+#510 新增 Redis 键断言口径：`oauth:pending:{token}`（600s，验密失败仅 `failCount+1` 保留 TTL）与 `oauth:front-bind-ticket:{ticket}`（600s，GETDEL 一次性）；无需新增 env。

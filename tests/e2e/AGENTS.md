@@ -591,12 +591,13 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 - 依赖：`MONGODB_URI`（云电脑/控制器夹具）、`INTERNAL_API_TOKEN`；fake controller 注册 version `2.18.0` 并应答 `workflow-templates:scan`。
 - 检测提示（GitHub 设置成功 / 手工新增工作目录）由 `ControllerConfigPage` 组件单测覆盖触发接线。
 
-## 第三方登录 E2E（#503）
+## 第三方登录 E2E（#503 / #510）
 
 | 文件 | 说明 |
 |------|------|
 | `src/auth-oauth-helpers.ts` | 进程内 fake OIDC/GitHub 启动 + admin-api Provider 配置/清理 + 按钮文案工具（fake 实现复用 `tests/api/src/{fake-oidc-server,mock-github-server}`）。 |
-| `src/auth-oauth.spec.ts` | E2E-OIDC1 登录页按钮随启停即时增减；E2E-OIDC2 完整重定向登录并自动开户；E2E-OIDC3 取消授权提示；E2E-GH1 GitHub 登录（需 agent-api 指向 fake GitHub，否则 skip）。 |
+| `src/auth-oauth.spec.ts` | E2E-OIDC1 登录页按钮随启停即时增减；E2E-OIDC2 完整重定向登录（#510 首登经身份选择页选择「创建新帐号」完成开户）；E2E-OIDC3 取消授权提示；E2E-GH1 GitHub 登录（需 agent-api 指向 fake GitHub，否则 skip）。 |
+| `src/auth-oidc-binding.spec.ts` | #510 绑定优化（E2E-OBO1~7）：已有密码账户首登身份选择摘要 + 绑定已有帐号进入原账户、创建新帐号、验密失败可重试、设置页绑定列表与第二 provider 绑定（需 fake GitHub）、解绑二次确认、无密码最后一条解绑被拒、完成绑定后再次登录直登。 |
 | `src/admin-auth-oauth.spec.ts` | E2E-AD-OA1「登录认证」CRUD 且 secret 不可见；E2E-AD-OA2 绑定→后台第三方登录；E2E-AD-OA3 未绑定被拒文案；E2E-AD-OA4 解绑后立即无法登录。 |
 
 依赖：Aspire 全量（agent-web/admin-web/agent-api/admin-api/Redis/Mongo）；`INTERNAL_API_TOKEN`、`MONGODB_URI`；

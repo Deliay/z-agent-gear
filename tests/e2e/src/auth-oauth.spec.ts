@@ -52,6 +52,16 @@ test.describe.serial('前台第三方登录', () => {
       name: providerButtonName('oidc', fixture.providerName),
     }).click();
 
+    // 首次外部身份未绑定：进入身份选择页（#510），选择「创建新帐号」完成开户
+    await page.waitForURL(
+      (url) => url.pathname === '/login/identity-choice' || !url.pathname.startsWith('/login'),
+      { timeout: 30000 },
+    );
+    if (new URL(page.url()).pathname === '/login/identity-choice') {
+      await expect(page.getByRole('heading', { name: '选择登录方式' })).toBeVisible();
+      await page.getByRole('button', { name: '创建新帐号' }).click();
+    }
+
     await page.waitForURL((url) => !url.pathname.startsWith('/login'), { timeout: 30000 });
     const token = await page.evaluate(() => localStorage.getItem('auth_token'));
     expect(token).toBeTruthy();

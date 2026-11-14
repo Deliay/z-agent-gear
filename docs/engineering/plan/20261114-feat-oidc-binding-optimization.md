@@ -6,7 +6,7 @@ type: Permanent
 # OIDC 绑定优化 - 实现计划
 
 **关联 Proposal**: `docs/engineering/proposals/20261114-feat-oidc-binding-optimization.md`（v1.0）
-**关联 PRD**: `docs/product/draft/20261114-oidc-binding-optimization.md`（v1.0）
+**关联 PRD**: `docs/product/shipping/20261114-oidc-binding-optimization.md`（v1.0）
 **需求总分支（feat-branch）**: `feat/oidc-binding-optimization`（基于含 #503 的 `origin/main`，需求总 PR [#514](https://github.com/Deliay/z-agent-gear/pull/514)）
 **计划提交分支**: `feat/oidc-binding-optimization`（本文件随需求总分支提交）
 **创建日期**: 2026-11-14
@@ -230,7 +230,7 @@ cd tests/e2e && pnpm exec playwright test --workers=1
 
 ### Phase 7：收口（0.5d）
 
-1. PRD `docs/product/draft/20261114-oidc-binding-optimization.md` → `docs/product/shipping/`（文件名不变），`docs/product/AGENTS.md` 索引同步（draft 移除、shipping 追加）（D12）。
+1. PRD 已由 `docs/product/draft/` 移入 `docs/product/shipping/`（文件名不变），`docs/product/AGENTS.md` 索引同步（draft 移除、shipping 追加）（D12）。
 2. `servers/agent-api/AGENTS.md`（OAuth 链路节更新：front 未命中改道 pending + front-bind surface + external-login 四入口 + passwordless/迁移 027 + 新 Redis 键）、`servers/admin-api/AGENTS.md`（accounts 镜像 passwordless）、`apps/agent-web/AGENTS.md`（身份选择页 + 设置页绑定区块 + 错误映射口径）、`docs/engineering/AGENTS.md`（本计划索引已在 Phase 0 追加，收口核对口径）、`tests/api/AGENTS.md`/`tests/e2e/AGENTS.md`（Phase 5/6 已同步，收口复核）。
 3. 全量回归：三包单测 + tests/api + tests/e2e 关键套件；契约双写一致性测试全绿。
 
@@ -293,7 +293,7 @@ E2E-OBO1~7——见 Phase 6。
 
 ## 9. 相关文档
 
-- 关联 PRD：[[../../product/draft/20261114-oidc-binding-optimization.md]]（实现开始移入 shipping/）
+- 关联 PRD：[[../../product/shipping/20261114-oidc-binding-optimization.md]]（实现开始移入 shipping/）
 - 关联 Proposal：[[../proposals/20261114-feat-oidc-binding-optimization.md]]（v1.0）
 - 需求来源：[GitHub Issue Deliay/z-agent-gear#510](https://github.com/Deliay/z-agent-gear/issues/510)；需求总 PR：[Deliay/z-agent-gear#514](https://github.com/Deliay/z-agent-gear/pull/514)
 - [[20261113-feat-oidc-github-oauth-login.md]] — 前置实现计划：OIDC/GitHub 登录基础设施（本计划复用其 oauth-flow/external-login/provisioning 与 fake 测试基建）
