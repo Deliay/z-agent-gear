@@ -1084,3 +1084,41 @@ export const GET_CUSTOM_MCP_SERVERS = gql`
     }
   }
 `
+
+/** 当前用户全部第三方登录绑定（需登录）。 */
+export const GET_MY_EXTERNAL_LOGINS = gql`
+  query GetMyExternalLogins {
+    myExternalLogins {
+      id
+      providerId
+      providerType
+      providerDisplayName
+      providerEnabled
+      externalUsername
+      displayName
+      createdAt
+      lastLoginAt
+    }
+  }
+`
+
+/** 身份选择页摘要（免登录；不消费 pending ticket，过期返回 null）。 */
+export const GET_PENDING_EXTERNAL_LOGIN_INFO = gql`
+  query PendingExternalLoginInfo($pendingToken: String!) {
+    pendingExternalLoginInfo(pendingToken: $pendingToken) {
+      providerDisplayName
+      externalUsername
+    }
+  }
+`
+
+/** 可绑定的第三方登录方式（enabled + enableFrontLogin）。 */
+export const GET_AUTH_PROVIDERS = gql`
+  query AuthProviders {
+    authProviders {
+      id
+      type
+      displayName
+    }
+  }
+`

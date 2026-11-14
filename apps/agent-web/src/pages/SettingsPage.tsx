@@ -1,10 +1,12 @@
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '@/stores/auth';
 import MobileBackButton from '../components/MobileBackButton';
 import { Button } from '@/components/ui/button';
 import { CLOUD_STORAGE_CAPABILITIES } from '@/graphql/queries';
 import type { CloudStorageCapabilitiesQuery } from '@/graphql/types';
+import { mapOauthError } from '@/lib/auth-oauth';
 import {
   Card,
   CardContent,
@@ -27,6 +29,7 @@ import McpRegistrySection from '@/components/settings/McpRegistrySection';
 import ValutSection from '@/components/settings/ValutSection';
 import CustomMcpSection from '@/components/settings/CustomMcpSection';
 import GithubBindingSection from '@/components/settings/GithubBindingSection';
+import ExternalLoginBindingSection from '@/components/settings/ExternalLoginBindingSection';
 import GitSettingsSection from '@/components/settings/GitSettingsSection';
 import WorkflowSection from '@/components/settings/WorkflowSection';
 import WorkspaceContextBanner from '@/components/settings/WorkspaceContextBanner';
@@ -76,6 +79,28 @@ export default function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const controllerId = searchParams.get('controllerId');
+
+  const [bindNotice, setBindNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const bind = searchParams.get('bind');
+    if (!bind) return;
+    if (bind === 'success') {
+      setBindNotice({ type: 'success', message: '第三方登录绑定成功' });
+    } else if (bind === 'error') {
+      const mapped = mapOauthError(searchParams.get('error')) || '绑定失败';
+      setBindNotice({ type: 'error', message: `绑定失败：${mapped}` });
+    }
+    // 清理回跳参数（保留 controllerId 等其它参数）
+    const next = new URLSearchParams(searchParams);
+    next.delete('bind');
+    next.delete('error');
+    setSearchParams(next, { replace: true });
+    // 仅在挂载时处理一次，避免清理参数触发循环
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const { data: storageCapabilitiesData } = useQuery<CloudStorageCapabilitiesQuery>(
     CLOUD_STORAGE_CAPABILITIES,
@@ -166,6 +191,18 @@ export default function SettingsPage() {
 
         <div className="flex-1 overflow-y-auto p-4 md:p-8">
           <WorkspaceContextBanner />
+          {bindNotice && (
+            <div
+              role={bindNotice.type === 'error' ? 'alert' : 'status'}
+              className={`mb-4 rounded-md px-4 py-3 text-sm ${
+                bindNotice.type === 'success'
+                  ? 'bg-success/10 text-success'
+                  : 'bg-destructive/10 text-destructive'
+              }`}
+            >
+              {bindNotice.message}
+            </div>
+          )}
           <section id="account-section" className="mb-8 md:mb-10">
             <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">帐号</h2>
             <Card>
@@ -194,6 +231,9 @@ export default function SettingsPage() {
                 </Dialog>
               </CardContent>
             </Card>
+            <div className="mt-4">
+              <ExternalLoginBindingSection />
+            </div>
           </section>
 
           <section id="github-section" className="mb-8 md:mb-10">
