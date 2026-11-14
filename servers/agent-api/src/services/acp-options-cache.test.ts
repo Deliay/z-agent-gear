@@ -9,6 +9,10 @@ vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(() => redisMock),
 }));
 
+vi.mock('../middleware/publish.js', () => ({
+  publish: vi.fn(),
+}));
+
 vi.mock('../models/controller.js', () => ({
   Controller: {
     find: vi.fn(),
@@ -16,6 +20,7 @@ vi.mock('../models/controller.js', () => ({
 }));
 
 import { Controller } from '../models/controller.js';
+import { publish } from '../middleware/publish.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { createTestLogger } from '../observability/testing.js';
 
@@ -27,7 +32,7 @@ const testLog = createTestLogger();
 const childSpy = vi
   .spyOn(rootLogger, 'child')
   .mockImplementation((bindings) => testLog.logger.child(bindings));
-const { invalidateAcpOptionsForController, invalidateAcpOptionsForUser } = await import(
+const { invalidateAcpHarnessInstall, invalidateAcpOptionsForController, invalidateAcpOptionsForUser } = await import(
   './acp-options-cache.js'
 );
 childSpy.mockRestore();
@@ -43,6 +48,39 @@ beforeEach(() => {
   vi.clearAllMocks();
   testLog.reset();
   redisMock.del.mockResolvedValue(1 as never);
+});
+
+describe('invalidateAcpHarnessInstall (#498)', () => {
+  it('deletes redis caches and invalidates controller-api in-process capability cache', async () => {
+    await invalidateAcpHarnessInstall('ctrl-1', 'kimi_code');
+
+    expect(redisMock.del).toHaveBeenCalledWith(
+      'acp:capability:ctrl-1',
+      'acp:options:ctrl-1:kimi_code',
+    );
+    // controller-api ACPCapabilityDetector 有 1h 进程内缓存：仅删 Redis 不足以让新装 harness 立即可见
+    expect(publish).toHaveBeenCalledWith('session:command', {
+      type: 'acp:cache:invalidate',
+      controllerId: 'ctrl-1',
+    });
+  });
+
+  it('still publishes the invalidate command when redis DEL fails (best effort)', async () => {
+    redisMock.del.mockRejectedValue(new Error('redis down'));
+
+    await expect(invalidateAcpHarnessInstall('ctrl-1', 'kimi_code')).resolves.toBeUndefined();
+    expect(publish).toHaveBeenCalledWith('session:command', {
+      type: 'acp:cache:invalidate',
+      controllerId: 'ctrl-1',
+    });
+  });
+
+  it('skips publishing when controllerId is empty', async () => {
+    await invalidateAcpHarnessInstall('', 'kimi_code');
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(testLog.records.some((r) => r.level === 'warn')).toBe(false);
+  });
 });
 
 describe('invalidateAcpOptionsForController', () => {

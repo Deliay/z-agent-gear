@@ -4,6 +4,10 @@
 
 ### 修复
 
+- 修复云电脑运行期补装 harness 后仍无法创建该类型会话（Issue #498）：会话 A-11 门改按
+  「创建时选定 ∪ 运行期成功安装」判定（`cloudhosts.harnessTypes` 快照 ∪ `cloudcontainers.harnessTypes`
+  读模型），并在 harness 安装成功后同步失效 controller-api 的 ACP 能力进程内缓存，新装 harness 立即出现在
+  会话/工作流选项并可创建会话
 - 修复云电脑运行后无法再安装工作负载（Issue #446）：harness secret 改为随容器创建持久化到
   `cloudcontainersecrets`、cloud-controller 启动时加载、终态删除；运行期安装仅对 harness 负载强制要求
   harness env，standard 负载（如 MongoDB）在 secret 缺失时仍可正常安装
