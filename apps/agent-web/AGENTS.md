@@ -322,3 +322,9 @@ pnpm run preview  # Preview production build
   `GithubProjectSetupDialog` 透传 `onFinished`，成功终态后 refetch `GET_CONTROLLER_WORKSPACES` 并按
   `path === cloudHost.defaultWorkspace` 定位工作区。两处均仅在「存在合法模板」时弹 `RepoWorkflowPromptDialog`；
   `stores/repo-workflow-prompt.ts` 模块级 `Set<workspaceId>` 保证同页面会话不再自动弹（取消/去配置均记入）。
+
+## 第三方登录入口与回调（#503）
+
+- **登录页**：查询 `authProviders`（`fetchPolicy: cache-and-network`，失败静默降级为仅密码登录），按返回渲染「使用 {displayName} 登录」（GitHub 恒「使用 GitHub 登录」）；点击跳 `oauthAuthorizeUrl(id,'front')`。`?error=<code>` 经 `lib/auth-oauth.ts#mapOauthError` 映射友好文案，未识别 code 原样兜底。
+- **回调页**：公开路由 `/login/callback`（`LoginCallbackPage`）。读 `ticket` → `exchangeLoginTicket` → `useAuth.login` → 首页；挂载后立即 `replaceState` 清除 URL。ticket 一次性，失败只提示「登录票据无效或已过期」，不循环重试；`error` 参数直接映射文案。
+- **测试**：`pages/LoginPage.test.tsx`（按钮联动/查询失败降级/error 映射）与 `pages/__tests__/LoginCallbackPage.test.tsx`（兑换成功/失败/缺 ticket/error）；E2E 见 `tests/e2e/src/auth-oauth.spec.ts`。

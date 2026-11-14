@@ -75,3 +75,11 @@ pnpm run preview
 - 模型条目展示「最长上下文：N tokens / 未设置」并提供铅笔编辑入口（`aria-label=编辑模型`）。
 - `CustomModelDialog` 支持新增与编辑：编辑模式供应商/名称只读，仅可修改/清空「最长上下文大小（token）」；留空提交 `null` 表示未设置，非正整数前端提示「请输入正整数」，服务端为唯一事实源。
 - 新增 `UPDATE_MODEL_CONTEXT_LENGTH` mutation；`ADMIN_MODELS` 查询选择集包含 `contextLength`。
+
+## 第三方登录与登录认证配置页（#503）
+
+- **登录页**：查询 `adminAuthProviders`（`cache-and-network`，失败仅密码登录），按钮跳 `adminOauthAuthorizeUrl(id)`（surface=admin）；`?error=` 经 `lib/auth-oauth.ts#mapOauthError` 映射（含 `not_bound`/`invalid_bind_ticket`/`already_bound`）。
+- **回调页**：公开路由 `/login/callback`，`adminExchangeLoginTicket` → `useAuth.login` → `mustChangePassword ? /change-password : /models`；URL 立即清理，ticket 一次性。
+- **「登录认证」页**（`/auth-providers`）：OIDC 列表新增/编辑/删除 + GitHub 单条 upsert；secret 输入恒空占位（`hasSecret` 展示「已设置」，留空 = 不变），页面不出现明文 secret；OIDC 与 GitHub 均展示可复制的 `callbackUrl`（agent-api 对外统一回调地址）。
+- **「账号安全」页**（`/settings/security`）：`adminExternalLogins` 列表 + `createAdminBindTicket` 绑定跳转（surface=admin-bind）与二次确认解绑；读 `?bind=success|error` toast。agent-api 地址由 `lib/auth-oauth.ts` 四级来源解析（localStorage / `window.__ADMIN_CONFIG__.agentApiUrl` / `VITE_AGENT_API_URL` / 同源）。
+- **测试**：`pages/__tests__/{LoginPage,LoginCallbackPage,AuthProvidersPage,SecurityPage}.test.tsx`；E2E 见 `tests/e2e/src/admin-auth-oauth.spec.ts`。

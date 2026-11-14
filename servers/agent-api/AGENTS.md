@@ -549,3 +549,14 @@ pnpm run start   # Start production server
 - **级联**：`cloudHostService.delete` 在同位追加 `configuredWorkflowService.deleteRepoScopedByController(controllerId)`
   （`deleteMany({controllerId, sourceKind:'REPO'})`，best-effort 失败仅 `logger.warn`）；PLATFORM 来源与实例历史不受影响。
 - **版本工具**：`services/version.ts#compareVersions` 为单一来源（自 `cloud-host-service.ts` 逐字搬移）。
+
+## 第三方登录 OAuth/OIDC（#503）
+
+- **唯一 REST 入口**：`routes/auth-oauth.ts`（`GET /api/auth/oauth/:providerId/authorize` + `GET /api/auth/oauth/callback`）。`surface` 仅 `front|admin|admin-bind`；错误一律 302 带 `?error=<code>`，不返回 JSON。契约见 `contracts/auth-oauth.md`。
+- **Provider 只读镜像**：`models/auth-provider.ts` 对应 admin-api 唯一写方集合 `authproviders`（`autoIndex=false`，索引由 admin-api 迁移 022 创建）；secret 解密用 `services/crypto.ts`，AppHost/compose 已向 agent-api 注入 `CREDENTIAL_ENCRYPTION_KEY`。
+- **一次性凭证**：state 600s / login ticket 60s 均 Redis GETDEL（`services/oauth-flow.ts`）；OIDC discovery/JWKS 缓存 1h（`services/oidc-client.ts`）；GitHub 三端点 env 可覆盖（`GITHUB_OAUTH_AUTHORIZE_URL`/`GITHUB_OAUTH_TOKEN_URL`/`GITHUB_OAUTH_API_BASE`），token 仅内存、不入库不入日志。
+- **OIDC**：openid-client v6，PKCE S256 + nonce；IdP 未宣告 S256 时降级 state+nonce（info 日志）。验签失败强刷 JWKS 重试一次；claims 归一 `preferred_username ?? email 本地段 ?? sub 前 8`，身份锚点 `{providerId, issuer, sub}`。
+- **自动开户**：`services/external-login.ts` + `services/provisioning.ts`（自 `internal-users` 抽取，端点语义零变化）。同一外部身份先查 `externallogins`，未命中经 Redis 身份锁串行化；落库失败回滚 provisioning 产物（E11000 回读胜方，无孤儿账户）。用户名 `deriveUsername` + `-{4位随机}` 重试 ≤5。
+- **租户隔离**：`externallogins` 带 `userId`/`tenantId`，必须双注册（`models/tenant-isolation.test.ts` + 迁移 013 `TENANT_ID_COLLECTIONS`，集合数 22）。
+- **GraphQL**：`authProviders` 免登录（仅 enabled + enableFrontLogin）；`exchangeLoginTicket` GETDEL 兑换，失败 `BAD_USER_INPUT('invalid or expired ticket')`。
+- **测试**：单测 `services/{oauth-flow,oidc-client,github-oauth,external-login,provisioning}.test.ts`、`routes/auth-oauth.test.ts`、`migrations/026-external-logins.test.ts`；API 全链路 `tests/api/src/agent-api/auth-oauth.test.ts`（fake IdP/GitHub）。

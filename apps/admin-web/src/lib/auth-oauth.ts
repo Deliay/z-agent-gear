@@ -9,10 +9,9 @@
  */
 const AGENT_API_BASE_STORAGE_KEY = 'zag:agent-api-base'
 
-declare global {
-  interface Window {
-    __ADMIN_CONFIG__?: { apiUrl?: string; agentApiUrl?: string }
-  }
+interface AdminRuntimeConfig {
+  apiUrl?: string
+  agentApiUrl?: string
 }
 
 const ERROR_MESSAGES: Record<string, string> = {
@@ -39,7 +38,9 @@ export function getAgentApiBase(): string {
   } catch {
     // localStorage 受限时继续后续来源
   }
-  const fromWindow = normalize(window.__ADMIN_CONFIG__?.agentApiUrl)
+  const fromWindow = normalize(
+    (window as Window & { __ADMIN_CONFIG__?: AdminRuntimeConfig }).__ADMIN_CONFIG__?.agentApiUrl,
+  )
   if (fromWindow) return fromWindow
   return normalize(import.meta.env.VITE_AGENT_API_URL as string | undefined)
 }
