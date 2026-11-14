@@ -120,4 +120,32 @@ describe('SettingsPage（D5 代理入口移除 / 新增 Valut 与自定义 MCP�
     expect((valut as HTMLElement).compareDocumentPosition(custom as Node) & FOLLOWING).toBeTruthy();
     expect((mcp as HTMLElement).compareDocumentPosition(custom as Node) & FOLLOWING).toBeTruthy();
   });
+
+  it('T-OBO-WEB1：?bind=success → 提示绑定成功并清理 URL 参数', () => {
+    mocks.searchParams = new URLSearchParams('bind=success&section=valut');
+    render(<SettingsPage />);
+
+    expect(screen.getByRole('status').textContent).toContain('第三方登录绑定成功');
+    expect(mocks.setSearchParams).toHaveBeenCalled();
+    const next = mocks.setSearchParams.mock.calls[0][0] as URLSearchParams;
+    expect(next.get('bind')).toBeNull();
+    expect(next.get('section')).toBe('valut');
+  });
+
+  it('T-OBO-WEB1：?bind=error&error=... → 映射错误码并清理参数', () => {
+    mocks.searchParams = new URLSearchParams('bind=error&error=invalid_bind_ticket');
+    render(<SettingsPage />);
+
+    expect(screen.getByRole('alert').textContent).toContain('绑定已过期，请重新发起');
+    const next = mocks.setSearchParams.mock.calls[0][0] as URLSearchParams;
+    expect(next.get('bind')).toBeNull();
+    expect(next.get('error')).toBeNull();
+  });
+
+  it('T-OBO-WEB1：帐号区块挂载第三方登录绑定区块（无配置时区块自隐藏）', () => {
+    render(<SettingsPage />);
+    expect(document.getElementById('account-section')).toBeTruthy();
+    // 无 provider/绑定数据时区块不渲染（PRD：未配置第三方登录时设置页与升级前一致）
+    expect(screen.queryByTestId('external-login-binding-section')).toBeNull();
+  });
 });

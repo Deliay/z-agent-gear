@@ -48,7 +48,7 @@ pnpm run preview  # Preview production build
 - **会话交互卡片（需求 #490）**：`InteractionCard`（`components/session/InteractionCard.tsx`）按 `createdAt` 合入 `MessageList` 时间线（同刻消息组在前、交互在后固定 tie-break）；`data-interaction-id={interactionId}` 作为滚动定位锚点。PENDING 可作答 + 倒计时（`expiresAt` 唯一依据，归零本地立即禁用展示「已过期」）；ACCEPTED 禁用并按 schema 字段标签回显 `response.values` / 所选审批项徽标（`option.kind` 为 `reject_*` 时徽标与回显显示「已拒绝」）；其余终态禁用 + 状态徽标。elicitation 表单渲染自 `ElicitationDialog` 提取为共享组件 `components/session/elicitation-form.tsx`（纯函数在 `lib/elicitation-form.ts`），口径不变。
 - `ElicitationDialog` / `PermissionDialog` 已降级为**通知视图**（类型摘要 + 剩余时限提示 + 「前往会话处理」→ `/sessions/{sessionId}#interaction-{interactionId}`），不再承载表单/审批按钮；打开入口（`TodoListPanel`）与 `stores/elicitationDialog` 互斥机制保持不变（状态展示保留）。
 - `ElicitationDialog` 按 `resolution` / `stale` 展示「已过期/已取消/已失效/已提交/已拒绝」文案（`data-testid="elicitation-status"`），不再有定时器驱动的表单禁用。
-- 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**仅** `type: 'array'` + `items.anyOf`（ACP question 工具多选题）在提交前经 `lib/elicitation-multi-select.ts#joinMultiSelectValues` 以逗号拼接为字符串回传（顺序 = 勾选顺序，空数组保持 `[]`），`items.enum` / `items.oneOf` 数组字段仍提交数组；`anyOf` 与 `enum`/`oneOf` 并存的字段（真实 question 报文不会产生）不参与拼接、提交保持数组。
+- 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**所有** `type: 'array'` 字段（含 ACP question 工具多选题的 `items.anyOf`）提交时保持字符串数组（顺序 = 勾选顺序，空数组保持 `[]`），**不得**转成逗号拼接字符串——OpenCode 会按 schema 校验表单回填，字符串会导致 `form.reply` 失败并被取消，最终表现为「The user dismissed this question」导致会话中断（Issue #511）。
 - 用户级 SSE `session_interaction` 事件经 `useUserEventStream.onSessionInteraction` 分发：会话页命中当前 `sessionId` 则 refetch `GET_SESSION_INTERACTIONS`；工作流实例页收到任意事件触发 `GET_WORKFLOW_INSTANCE` refetch（5s 轮询兜底）。
 - 工作流实例页列表/图形两视图：节点 `sessionId ∈ pendingInteractionSessionIds` 时渲染琥珀色感叹号（`AlertCircle`，`aria-label="有待处理的提问或审批"`），点击打开该节点会话（复用既有 `onOpenSession` / `SessionSidePanel` 链路）；列表视图 prop 由实例页下发，图形视图由 `graph-layout` 的 `hasPendingInteraction` 派生。
 - 问询弹窗打开权由 `stores/elicitationDialog.ts` 共享（`todoId + owner + 打开时快照`）：`PendingElicitationBanner`（owner=banner）与 `TodoListPanel`（owner=todo）互斥，同一时刻只渲染一个弹窗；弹窗数据按 todo id 从全量 todos 派生（不过滤 resolution），pending 清空后仍保留到终态展示，避免填表中被卸载；todo 被 TTL/limit 从列表移除时用快照渲染「已从待办移除」终态
@@ -323,8 +323,12 @@ pnpm run preview  # Preview production build
   `path === cloudHost.defaultWorkspace` 定位工作区。两处均仅在「存在合法模板」时弹 `RepoWorkflowPromptDialog`；
   `stores/repo-workflow-prompt.ts` 模块级 `Set<workspaceId>` 保证同页面会话不再自动弹（取消/去配置均记入）。
 
-## 第三方登录入口与回调（#503）
+## 第三方登录入口与回调（#503 / #510）
 
 - **登录页**：查询 `authProviders`（`fetchPolicy: cache-and-network`，失败静默降级为仅密码登录），按返回渲染「使用 {displayName} 登录」（GitHub 恒「使用 GitHub 登录」）；点击跳 `oauthAuthorizeUrl(id,'front')`。`?error=<code>` 经 `lib/auth-oauth.ts#mapOauthError` 映射友好文案，未识别 code 原样兜底。
 - **回调页**：公开路由 `/login/callback`（`LoginCallbackPage`）。读 `ticket` → `exchangeLoginTicket` → `useAuth.login` → 首页；挂载后立即 `replaceState` 清除 URL。ticket 一次性，失败只提示「登录票据无效或已过期」，不循环重试；`error` 参数直接映射文案。
-- **测试**：`pages/LoginPage.test.tsx`（按钮联动/查询失败降级/error 映射）与 `pages/__tests__/LoginCallbackPage.test.tsx`（兑换成功/失败/缺 ticket/error）；E2E 见 `tests/e2e/src/auth-oauth.spec.ts`。
+- **身份选择页（#510）**：公开路由 `/login/identity-choice`（`IdentityChoicePage`）。读 `pending` 并立即清除 URL；`pendingExternalLoginInfo`（免登录、不消费票据）展示登录方式与外部帐号名；「绑定已有帐号」提交 `bindExternalLoginWithPassword`（失败可重试，文案经 `mapIdentityChoiceError`：`Invalid username or password` 原样，「过期」引导回登录页），「创建新帐号」提交 `provisionExternalLogin`；成功 `useAuth.login` 进首页。查询返回 null → 显示「登录状态已过期，请重新登录」。
+- **设置页「第三方登录绑定」**：`#account-section` 内挂载 `ExternalLoginBindingSection`（`GET_MY_EXTERNAL_LOGINS` + `GET_AUTH_PROVIDERS`）：列表展示登录方式/外部帐号名/绑定时间/最近登录时间，停用 provider 展示「已停用」；未绑定 provider 提供「绑定」→ `createFrontBindTicket(providerId)` → `oauthAuthorizeUrl(id,'front-bind',ticket)`；解绑复用 `UnbindConfirmDialog`（可传 title/description）→ `unbindExternalLogin`。无任何 provider 且无绑定时区块不渲染。
+- **回跳结果**：`SettingsPage` 识别 `/settings?bind=success`（提示「第三方登录绑定成功」）与 `?bind=error&error=<code>`（`mapOauthError` 映射），处理后 `replaceState` 仅删除 `bind`/`error`，保留其它参数（如 `section=valut`）。
+- **错误映射单一来源**：`lib/auth-oauth.ts` 的 `mapOauthError`（302 错误码；`already_bound` 前台文案「该身份已被其他账户绑定」+ `provider_already_bound`）与 `mapIdentityChoiceError`（GraphQL mutation message）。admin-web 有独立映射文件，不受影响。
+- **测试**：`pages/LoginPage.test.tsx`、`pages/__tests__/LoginCallbackPage.test.tsx`、`pages/__tests__/IdentityChoicePage.test.tsx`（T-OBO-WEB）、`components/settings/__tests__/ExternalLoginBindingSection.test.tsx`、`pages/__tests__/SettingsPage.test.tsx`（`?bind` 处理）、`lib/__tests__/auth-oauth.test.ts`；E2E 见 `tests/e2e/src/auth-oidc-binding.spec.ts`。`App.tsx` 新增公开路由 `/login/identity-choice`。

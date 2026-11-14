@@ -163,7 +163,7 @@ export default function InteractionCard({ interaction, onResponded }: Interactio
     if (!pending) return;
     setResponding(true);
     try {
-      const payload = interaction.mode === 'form' ? collectElicitationValues(values, properties) : null;
+      const payload = interaction.mode === 'form' ? collectElicitationValues(values) : null;
       await respondElicitation({
         variables: {
           requestId: interaction.interactionId,

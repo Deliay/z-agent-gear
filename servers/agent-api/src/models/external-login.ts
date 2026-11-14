@@ -33,6 +33,11 @@ externalLoginSchema.index(
   { unique: true, name: 'uniq_external_login_subject' },
 );
 externalLoginSchema.index({ userId: 1 }, { name: 'external_login_user' });
+// 每账户每 Provider 仅一条（唯一索引是绑定路径的最终裁决面；迁移 027 幂等创建同名索引）
+externalLoginSchema.index(
+  { userId: 1, providerId: 1 },
+  { unique: true, name: 'uniq_external_login_user_provider' },
+);
 
 // 带 userId 集合：查询/写入自动注入 tenantId（personal 期 tenantId == userId）
 applyTenantScope(externalLoginSchema);
