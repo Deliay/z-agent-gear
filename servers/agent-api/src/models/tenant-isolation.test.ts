@@ -20,12 +20,13 @@ import { UserCommitSetting } from './user-commit-setting.js';
 import { GitHubAccount } from './github-account.js';
 import { SessionReview } from './session-review.js';
 import { SessionInteraction } from './session-interaction.js';
+import { ExternalLogin } from './external-login.js';
 import { TENANT_ID_COLLECTIONS } from '../migrations/013-tenant-id-backfill.js';
 
 const USER_ID = '507f1f77bcf86cd799439011';
 
 /**
- * T-ISO 等价层级：21 个带 userId 的集合逐一验证
+ * T-ISO 等价层级：22 个带 userId 的集合逐一验证
  * ① schema 同时声明 userId + tenantId；② 实际查询（countDocuments）经插件注入 tenantId=userId。
  * 这覆盖了 mock 掉 model 的 service 单测无法验证的「Mongoose 编译期注入」路径。
  *
@@ -55,6 +56,7 @@ const CASES = [
   ['GitHubAccount', GitHubAccount, 'githubaccounts'],
   ['SessionReview', SessionReview, 'sessionreviews'],
   ['SessionInteraction', SessionInteraction, 'sessioninteractions'],
+  ['ExternalLogin', ExternalLogin, 'externallogins'],
 ] as const;
 
 const TENANT_SCOPED_CASES = CASES.filter(([, model]) => model.modelName !== 'UserCommitSetting');
@@ -63,9 +65,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('21 collections tenantId isolation (T-ISO)', () => {
-  it('has exactly the 21 planned collections', () => {
-    expect(CASES).toHaveLength(21);
+describe('22 collections tenantId isolation (T-ISO)', () => {
+  it('has exactly the 22 planned collections', () => {
+    expect(CASES).toHaveLength(22);
     expect(CASES.map(([, , collection]) => collection)).toEqual([
       'sessions',
       'controllers',
@@ -88,18 +90,19 @@ describe('21 collections tenantId isolation (T-ISO)', () => {
       'githubaccounts',
       'sessionreviews',
       'sessioninteractions',
+      'externallogins',
     ]);
   });
 
-  it('TENANT_ID_COLLECTIONS 的集合名与 21 个模型 model.collection.name 逐一相等', () => {
+  it('TENANT_ID_COLLECTIONS 的集合名与 22 个模型 model.collection.name 逐一相等', () => {
     const actualByModel = new Map(CASES.map(([, model]) => [model.modelName, model.collection.name]));
-    expect(TENANT_ID_COLLECTIONS).toHaveLength(21);
+    expect(TENANT_ID_COLLECTIONS).toHaveLength(22);
     for (const target of TENANT_ID_COLLECTIONS) {
       expect(actualByModel.get(target.model)).toBe(target.collection);
     }
-    // 反向覆盖：21 个模型逐一被常量覆盖，且无重复 model / 无遗漏
+    // 反向覆盖：22 个模型逐一被常量覆盖，且无重复 model / 无遗漏
     const constantModels = TENANT_ID_COLLECTIONS.map((target) => target.model);
-    expect(new Set(constantModels).size).toBe(21);
+    expect(new Set(constantModels).size).toBe(22);
     expect(new Set(constantModels)).toEqual(new Set(CASES.map(([, model]) => model.modelName)));
   });
 
