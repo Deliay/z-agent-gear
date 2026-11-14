@@ -1,7 +1,7 @@
 # 第三方登录（OAuth/OIDC）REST 流程契约
 
-**版本**：v1.0
-**关联提案**：`docs/engineering/proposals/20261113-feat-oidc-github-oauth-login.md`
+**版本**：v1.1
+**关联提案**：`docs/engineering/proposals/20261113-feat-oidc-github-oauth-login.md`（v1.0 基础链路）、`docs/engineering/proposals/20261114-feat-oidc-binding-optimization.md`（v1.0 绑定优化）
 **关联 GraphQL 契约**：`contracts/auth.graphql`、`contracts/admin-auth.graphql`、`contracts/admin-auth-provider.graphql`
 
 本契约定义 agent-api 承载的 **OAuth/OIDC 授权与回调唯一入口**，以及 admin-api 内部票据/绑定端点。
@@ -14,18 +14,25 @@
 | `GET /api/auth/oauth/:providerId/authorize?surface=front` | 前台登录：校验 provider 存在/启用/允许前台 → 生成 state（OIDC 含 PKCE + nonce）→ 302 到 IdP/GitHub 授权页 |
 | `GET /api/auth/oauth/:providerId/authorize?surface=admin` | 后台登录：同上，校验允许后台登录 |
 | `GET /api/auth/oauth/:providerId/authorize?surface=admin-bind&ticket=<bindTicket>` | 后台绑定：`bindTicket` 由 admin-api `createAdminBindTicket` 签发（600s），必须携带 |
+| `GET /api/auth/oauth/:providerId/authorize?surface=front-bind&ticket=<frontBindTicket>` | 前台绑定：`frontBindTicket` 由 agent-api `createFrontBindTicket` 签发（600s），必须携带 |
 | `GET /api/auth/oauth/callback?code=&state=` | 唯一回调：验 state → code 换 token → 归一身份 → 按 surface 分流并 302 回前端 |
 
 ### 1.1 `surface` 语义
 
-- `front`：前台登录。首次外部身份自动开户（account + user + personal tenant + 计费账户 + 全局工作区），
-  签前台 JWT 后经一次性 ticket 302 `{FRONTEND_URL}/login/callback?ticket=...`。
+- `front`：前台登录。外部身份已绑定 → 签前台 JWT 后经一次性 ticket 302 `{FRONTEND_URL}/login/callback?ticket=...`；
+  **未绑定不再自动开户**，写 `oauth:pending:{token}`（600s）后 302
+  `{FRONTEND_URL}/login/identity-choice?pending=<token>`，由身份选择页经 GraphQL 提交
+  `bindExternalLoginWithPassword`（绑定已有帐号）或 `provisionExternalLogin`（创建新帐号）。
 - `admin`：后台登录。调 admin-api `POST /internal/auth/admin-tickets` 校验绑定并换取一次性 ticket，
   302 `{ADMIN_FRONTEND_URL}/login/callback?ticket=...`；未绑定 302 `{ADMIN_FRONTEND_URL}/login?error=not_bound`。
 - `admin-bind`：后台绑定。调 admin-api `POST /internal/auth/admin-bind` 落绑定，
   302 `{ADMIN_FRONTEND_URL}/settings/security?bind=success`；失败 `?bind=error&error=<code>`。
+- `front-bind`：前台绑定（已登录）。authorize 必须携带 `ticket=<frontBindTicket>`（缺失 → `invalid_request`）；
+  provider 校验同 `front`（`enabled && enableFrontLogin`）。回调 GETDEL state → 归一身份 →
+  GETDEL `oauth:front-bind-ticket:{ticket}` 取 `{userId, providerId}` → 校验并落 `externallogins` →
+  302 `{FRONTEND_URL}/settings?bind=success`；失败 `{FRONTEND_URL}/settings?bind=error&error=<code>`。
 
-`surface` 仅允许以上三值；`admin-bind` 缺 `ticket` → `invalid_request`。provider 不存在/未启用/未开对应 surface
+`surface` 仅允许以上四值；`admin-bind` / `front-bind` 缺 `ticket` → `invalid_request`。provider 不存在/未启用/未开对应 surface
 → `provider_unavailable`。
 
 ### 1.2 回调分流
@@ -44,9 +51,14 @@ sequenceDiagram
     A->>A: GETDEL oauth:state (一次性)
     A->>P: code 换 token / 验签
     alt surface=front
-        A->>A: 匹配/开户 externallogins → 签前台 JWT
-        A->>A: 写 oauth:ticket:{ticket} (60s)
-        A-->>U: 302 {FRONTEND_URL}/login/callback?ticket=
+        A->>A: 匹配 externallogins
+        alt 已绑定
+            A->>A: 签前台 JWT → 写 oauth:ticket:{ticket} (60s)
+            A-->>U: 302 {FRONTEND_URL}/login/callback?ticket=
+        else 未绑定
+            A->>A: 写 oauth:pending:{pending} (600s)
+            A-->>U: 302 {FRONTEND_URL}/login/identity-choice?pending=
+        end
     else surface=admin
         A->>AD: POST /internal/auth/admin-tickets
         AD-->>A: {ticket} 或 403 NOT_BOUND
@@ -55,6 +67,10 @@ sequenceDiagram
         A->>AD: POST /internal/auth/admin-bind
         AD-->>A: 200
         A-->>U: 302 {ADMIN_FRONTEND_URL}/settings/security?bind=success
+    else surface=front-bind
+        A->>A: GETDEL oauth:front-bind-ticket:{ticket}
+        A->>A: 校验 userId/providerId 并落 externallogins
+        A-->>U: 302 {FRONTEND_URL}/settings?bind=success
     end
 ```
 
@@ -111,9 +127,11 @@ sequenceDiagram
 
 | Key | TTL | 说明 |
 |-----|-----|------|
-| `oauth:state:{state}` | 600s | `{providerId, surface, codeVerifier?, nonce?, bindTicket?}`；GETDEL 一次性 |
+| `oauth:state:{state}` | 600s | `{providerId, surface, codeVerifier?, nonce?, bindTicket?}`；GETDEL 一次性（`front-bind` 复用 `bindTicket` 字段承载前台绑定票据） |
 | `oauth:ticket:{ticket}` | 60s | `{token, user?\\|admin?}`；GETDEL 一次性（前后台共用前缀，载荷互斥） |
 | `oauth:bind-ticket:{ticket}` | 600s | `{adminUserId, providerId}`；admin-api 签发、admin-bind 消费（GETDEL） |
+| `oauth:pending:{token}` | 600s | `{providerId, issuer, subject, externalUsername, displayName?, avatarUrl?, failCount}`；GETDEL 一次性（验密失败不消费、仅累加 `failCount`，≥5 次作废） |
+| `oauth:front-bind-ticket:{ticket}` | 600s | `{userId, providerId}`；agent-api 签发、front-bind 消费（GETDEL 一次性） |
 | `oidc:discovery:{issuer}` | 3600s | OIDC discovery 文档缓存 |
 | `oidc:jwks:{issuer}` | 3600s | JWKS 缓存（验签失败强刷一次） |
 
@@ -122,9 +140,10 @@ sequenceDiagram
 ## 4. 错误码
 
 回调一律 302：前台 → `{FRONTEND_URL}/login?error=<code>`；后台 → `{ADMIN_FRONTEND_URL}/login?error=<code>`；
-绑定 → `{ADMIN_FRONTEND_URL}/settings/security?bind=error&error=<code>`。
+绑定 → `{ADMIN_FRONTEND_URL}/settings/security?bind=error&error=<code>`；
+前台绑定 → `{FRONTEND_URL}/settings?bind=error&error=<code>`。
 
-| code | 含义 | 前端文案 |
+| code | 含义 | 前端文案（agent-web） |
 |------|------|---------|
 | `access_denied` | 用户在授权页取消 | 已取消授权 |
 | `invalid_state` | state 无效/过期/重放 | 登录状态已过期，请重试 |
@@ -132,9 +151,15 @@ sequenceDiagram
 | `provider_unavailable` | provider 停用/删除/不允许该 surface | 该登录方式已停用 |
 | `not_bound` | 外部身份未绑定任何管理员账户 | 该身份未绑定任何管理员账户 |
 | `provision_failed` | 前台自动开户失败（如计费不可达） | 账户开通失败，请联系管理员 |
-| `invalid_request` | 非法请求（如 admin-bind 缺 ticket） | 非法的登录请求 |
+| `invalid_request` | 非法请求（如 admin-bind / front-bind 缺 ticket） | 非法的登录请求 |
 | `invalid_bind_ticket` | 绑定票据无效/过期/已消费或与 provider 不匹配 | 绑定已过期，请重新发起 |
-| `already_bound` | 该外部身份已绑定到其他管理员 | 该身份已绑定其他管理员账户 |
+| `already_bound` | 该外部身份已被其他账户绑定（复用既有 code，前台文案独立） | 该身份已被其他账户绑定 |
+| `provider_already_bound` | 当前账户已绑定该登录方式 | 当前账户已绑定该登录方式 |
+
+身份选择页提交一律走 GraphQL（非 302），错误由 mutation 抛出：
+`invalid or expired pending token` → 登录状态已过期，请重新登录；`Invalid username or password` 原样展示；
+`identity already bound` → 该身份已被其他账户绑定；`provider already bound` → 当前账户已绑定该登录方式；
+`provider unavailable` → 该登录方式已停用；`provision failed` → 账户开通失败，请联系管理员。
 
 未识别 code 原样兜底展示。
 

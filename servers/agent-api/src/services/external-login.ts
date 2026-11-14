@@ -1,10 +1,27 @@
 import crypto from 'node:crypto';
+import mongoose from 'mongoose';
 import { Account } from '../models/account.js';
 import { ExternalLogin } from '../models/external-login.js';
 import { User } from '../models/user.js';
 import { hashPassword } from './auth.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { provisionUser, ProvisioningError } from './provisioning.js';
+
+export type ExternalLoginErrorCode =
+  | 'IDENTITY_ALREADY_BOUND'
+  | 'PROVIDER_ALREADY_BOUND'
+  | 'EXTERNAL_LOGIN_NOT_FOUND'
+  | 'CANNOT_UNBIND_LAST_LOGIN_METHOD';
+
+export class ExternalLoginError extends Error {
+  readonly code: ExternalLoginErrorCode;
+
+  constructor(code: ExternalLoginErrorCode, message?: string) {
+    super(message ?? code);
+    this.code = code;
+    this.name = 'ExternalLoginError';
+  }
+}
 
 export interface ExternalIdentityInput {
   providerId: string;
@@ -19,6 +36,28 @@ export interface ExternalLoginResult {
   user: { id: string; name: string; tenantId: string; createdAt: string };
   account: { id: string; username: string };
   created: boolean;
+}
+
+/** 绑定目标用户（GraphQL 会话已解析出 userId/accountId/tenantId）。 */
+export interface BindTargetUser {
+  id: string;
+  accountId: string;
+  tenantId: string;
+}
+
+export interface ExternalLoginBindingView {
+  id: string;
+  userId: string;
+  tenantId: string;
+  accountId: string;
+  providerId: string;
+  issuer: string | null;
+  subject: string;
+  externalUsername: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  createdAt: string | null;
+  lastLoginAt: string | null;
 }
 
 /**
@@ -58,6 +97,7 @@ const RELEASE_LOCK_SCRIPT = `if redis.call('get', KEYS[1]) == ARGV[1] then retur
 /**
  * 同一外部身份的并发首登串行化（单实例部署前提）。
  *
+ * 仅开户路径保留身份锁；绑定路径由两个唯一索引作为唯一裁决（D8）。
  * 在 Redis 不可用时退化为无锁执行：`externallogins` 唯一索引 + 回滚仍是最终防线。
  */
 async function withIdentityLock<T>(
@@ -113,9 +153,33 @@ async function resultFromExisting(userId: { toString(): string }, accountId: { t
   } satisfies ExternalLoginResult;
 }
 
-async function resolveExternalLoginCore(
+function toBindingView(doc: Record<string, unknown>): ExternalLoginBindingView {
+  const date = (value: unknown) => (value instanceof Date ? value.toISOString() : null);
+  return {
+    id: String(doc._id),
+    userId: String(doc.userId),
+    tenantId: String(doc.tenantId),
+    accountId: String(doc.accountId),
+    providerId: String(doc.providerId),
+    issuer: (doc.issuer as string | null) ?? null,
+    subject: String(doc.subject),
+    externalUsername: String(doc.externalUsername),
+    displayName: (doc.displayName as string | null) ?? null,
+    avatarUrl: (doc.avatarUrl as string | null) ?? null,
+    createdAt: date(doc.createdAt),
+    lastLoginAt: date(doc.lastLoginAt),
+  };
+}
+
+/**
+ * 查询已绑定的外部身份（纯查询）。
+ *
+ * - 命中 → 更新 `lastLoginAt`/`externalUsername` 快照并返回绑定视图；
+ * - 未命中 → 返回 null（由调用方签发 pending 凭证 / 走开户）。
+ */
+export async function findExternalLogin(
   identity: ExternalIdentityInput,
-): Promise<ExternalLoginResult> {
+): Promise<ExternalLoginResult | null> {
   const issuer = identity.issuer ?? null;
   const existing = (await ExternalLogin.findOne({
     providerId: identity.providerId,
@@ -127,14 +191,19 @@ async function resolveExternalLoginCore(
     accountId: { toString(): string };
   } | null;
 
-  if (existing) {
-    await ExternalLogin.updateOne(
-      { _id: existing._id },
-      { $set: { lastLoginAt: new Date(), externalUsername: identity.externalUsername } },
-    );
-    return resultFromExisting(existing.userId, existing.accountId);
-  }
+  if (!existing) return null;
 
+  await ExternalLogin.updateOne(
+    { _id: existing._id },
+    { $set: { lastLoginAt: new Date(), externalUsername: identity.externalUsername } },
+  );
+  return resultFromExisting(existing.userId, existing.accountId);
+}
+
+async function provisionExternalLoginCore(
+  identity: ExternalIdentityInput,
+): Promise<ExternalLoginResult> {
+  const issuer = identity.issuer ?? null;
   const base = deriveUsername(identity.externalUsername);
   let lastError: unknown = null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -175,12 +244,10 @@ async function resolveExternalLoginCore(
           providerId: identity.providerId,
           issuer,
           subject: identity.subject,
-        }).lean()) as {
-          userId: { toString(): string };
-          accountId: { toString(): string };
-        } | null;
+        }).lean()) as { userId: { toString(): string } } | null;
         if (raced) {
-          return resultFromExisting(raced.userId, raced.accountId);
+          // D4：provision 不再幂等吞并为登录，身份已被占用需明确拒绝。
+          throw new ExternalLoginError('IDENTITY_ALREADY_BOUND');
         }
         throw err;
       }
@@ -195,17 +262,117 @@ async function resolveExternalLoginCore(
 }
 
 /**
- * 前台外部身份匹配与自动开户（agent-api 唯一写方）。
+ * 新账户开户并建立外部身份绑定（原自动开户语义，仅「创建新帐号」提交 / 兼容入口调用）。
  *
- * - 命中 `{providerId, issuer, subject}` → 更新 lastLoginAt，返回同一账户；
- * - 未命中 → 身份级 Redis 锁串行化（并发首登不重复开户）→ 派生唯一用户名
- *   （冲突 `-{4位随机}` 重试 ≤5）→ provisioning 开户 → 落 `externallogins`；
- * - 落库失败（唯一冲突/异常）→ 回滚本次开户产物，E11000 回读胜方幂等返回。
+ * 保留身份级 Redis 锁串行化并发开户；E11000 回读到既存身份时抛
+ * `IDENTITY_ALREADY_BOUND`（不再幂等返回他人账户，D4）。
  */
-export async function resolveExternalLogin(
+export async function provisionExternalLogin(
   identity: ExternalIdentityInput,
 ): Promise<ExternalLoginResult> {
   return withIdentityLock(identity.providerId, identity.issuer ?? null, identity.subject, () =>
-    resolveExternalLoginCore(identity),
+    provisionExternalLoginCore(identity),
   );
+}
+
+/**
+ * 把外部身份绑定到指定用户（绑定已有帐号 / front-bind 回调）。
+ *
+ * 两个唯一索引（身份全平台唯一 + 每账户每 Provider 唯一）是唯一裁决面：
+ * 预检只用于输出稳定错误，最终以 E11000 回读判定；
+ * 绑定路径**不引入身份锁**（提案实现点 1 / D8）。
+ */
+export async function bindExternalLoginToUser(
+  user: BindTargetUser,
+  identity: ExternalIdentityInput,
+): Promise<ExternalLoginBindingView> {
+  const issuer = identity.issuer ?? null;
+
+  const identityTaken = await ExternalLogin.findOne({
+    providerId: identity.providerId,
+    issuer,
+    subject: identity.subject,
+  }).lean();
+  if (identityTaken) {
+    throw new ExternalLoginError('IDENTITY_ALREADY_BOUND');
+  }
+
+  const providerTaken = await ExternalLogin.findOne({
+    userId: user.id,
+    providerId: identity.providerId,
+  }).lean();
+  if (providerTaken) {
+    throw new ExternalLoginError('PROVIDER_ALREADY_BOUND');
+  }
+
+  try {
+    const created = await ExternalLogin.create({
+      userId: user.id,
+      tenantId: user.tenantId,
+      accountId: user.accountId,
+      providerId: identity.providerId,
+      issuer,
+      subject: identity.subject,
+      externalUsername: identity.externalUsername,
+      displayName: identity.displayName ?? null,
+      avatarUrl: identity.avatarUrl ?? null,
+      lastLoginAt: new Date(),
+    });
+    return toBindingView(created.toObject() as Record<string, unknown>);
+  } catch (err) {
+    if ((err as { code?: number }).code === 11000) {
+      const byIdentity = await ExternalLogin.findOne({
+        providerId: identity.providerId,
+        issuer,
+        subject: identity.subject,
+      }).lean();
+      if (byIdentity) throw new ExternalLoginError('IDENTITY_ALREADY_BOUND');
+      const byProvider = await ExternalLogin.findOne({
+        userId: user.id,
+        providerId: identity.providerId,
+      }).lean();
+      if (byProvider) throw new ExternalLoginError('PROVIDER_ALREADY_BOUND');
+    }
+    throw err;
+  }
+}
+
+/** 当前用户全部外部身份绑定（按绑定时间升序）。 */
+export async function listExternalLogins(userId: string): Promise<ExternalLoginBindingView[]> {
+  const docs = (await ExternalLogin.find({ userId }).sort({ createdAt: 1 }).lean()) as Array<
+    Record<string, unknown>
+  >;
+  return docs.map(toBindingView);
+}
+
+/**
+ * 解绑本人一条外部身份。
+ *
+ * 防呆（服务端强制）：当前账户无可用密码（`accounts.passwordless === true`）
+ * 且这是最后一条绑定时拒绝，避免账户永久失去登录能力。
+ */
+export async function unbindExternalLogin(userId: string, id: string): Promise<boolean> {
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw new ExternalLoginError('EXTERNAL_LOGIN_NOT_FOUND');
+  }
+  const binding = (await ExternalLogin.findOne({
+    _id: id,
+    userId,
+  }).lean()) as { _id: unknown; accountId: { toString(): string } } | null;
+  if (!binding) {
+    throw new ExternalLoginError('EXTERNAL_LOGIN_NOT_FOUND');
+  }
+
+  const bindingCount = await ExternalLogin.countDocuments({ userId });
+  if (bindingCount <= 1) {
+    const account = (await Account.findById(binding.accountId).lean()) as {
+      passwordless?: boolean;
+    } | null;
+    if (account?.passwordless === true) {
+      throw new ExternalLoginError('CANNOT_UNBIND_LAST_LOGIN_METHOD');
+    }
+  }
+
+  const result = await ExternalLogin.deleteOne({ _id: binding._id, userId });
+  return result.deletedCount === 1;
 }
