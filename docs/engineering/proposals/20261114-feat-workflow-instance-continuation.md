@@ -7,10 +7,12 @@ type: Permanent
 
 **功能名称**: 已实例化的工作流接续
 **关联 PRD**: [[../../product/draft/20261114-workflow-instance-continuation.md]]
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-11-14
 **作者**: Agent
 **feat-branch**: `feat/workflow-instance-continuation`
+
+> 变更记录：v1.1（2026-11-14）按 PR #520 评审意见，Harness 改写由「统一一个 Harness」改为逐节点映射（`harnessMappings`），契约、实现点与决策表同步修订。
 
 ## 1. 概述
 
@@ -31,12 +33,11 @@ type: Permanent
 
 做：
 - 实例不可用判定（控制器离线 / 控制器已删除）与透出；
-- 接续 mutation 与服务端编排（含新 Worktree 创建、Harness 改写、接续历史）；
-- 前端不可用标识、「接续」按钮与接续对话框。
+- 接续 mutation 与服务端编排（含新 Worktree 创建、逐节点 Harness 映射改写、接续历史）；
+- 前端不可用标识、「接续」按钮与接续对话框（逐节点 Harness 选择）。
 
 不做：
 - 原控制器残留 Worktree / 文件的远程清理与跨控制器文件拷贝（原控制器不可达，物理上无法保证；界面文案提示用户自行处理）；
-- 逐节点差异化 Harness 映射（本期统一一个 Harness；接续后可用既有 `updateWorkflowNode` / `restartNode` 逐节点调整）；
 - 已完成（`finishedAt` 非空）或已删除实例的接续（无意义，拒绝）。
 
 ## 2. 技术架构
@@ -120,6 +121,14 @@ type WorkflowContinuation {
 #### Mutation: continueWorkflowInstance
 
 ```graphql
+# 逐节点 Harness 映射：覆盖实例中全部未完成 AI 节点
+input NodeHarnessMappingInput {
+  # 实例节点 id（仅允许 AI 类型且未完成的节点）
+  nodeId: ID!
+  # 该节点接续后使用的 Harness（必须在目标控制器可用能力内）
+  acpServerType: String!
+}
+
 input ContinueWorkflowInstanceInput {
   # 目标控制器（必须归属当前用户且在线）
   controllerId: ID!
@@ -128,8 +137,9 @@ input ContinueWorkflowInstanceInput {
   workspaceId: ID!
   # 是否在新工作区创建全新工作流 Worktree（默认 true；工作区非 Git 仓库时拒绝）
   createWorkflowWorktree: Boolean
-  # 未完成 AI 节点统一改写的 Harness（必须在目标控制器可用能力内）
-  acpServerType: String!
+  # 逐节点 Harness 映射：必须恰好覆盖全部未完成 AI 节点（不多不少）；
+  # 每个 acpServerType 逐一校验在目标控制器可用能力内
+  harnessMappings: [NodeHarnessMappingInput!]!
 }
 
 type Mutation {
@@ -139,13 +149,13 @@ type Mutation {
 }
 ```
 
-- **请求**: `mutation { continueWorkflowInstance(id: "...", input: { controllerId, workspaceId, createWorkflowWorktree: true, acpServerType: "kimi_code" }) { id unavailableReason } }`
-- **响应**: 200 返回更新后的 WorkflowInstance；错误以 GraphQL errors 返回（控制器不可用/归属错误/Harness 不支持/非 Git 工作区勾选 Worktree/实例已完成或已删除）。
+- **请求**: `mutation { continueWorkflowInstance(id: "...", input: { controllerId, workspaceId, createWorkflowWorktree: true, harnessMappings: [{ nodeId: "n1", acpServerType: "kimi_code" }, { nodeId: "n2", acpServerType: "opencode" }] }) { id unavailableReason } }`
+- **响应**: 200 返回更新后的 WorkflowInstance；错误以 GraphQL errors 返回（控制器不可用/归属错误/映射未覆盖全部未完成 AI 节点/含非 AI 或已完成节点/某 Harness 不支持/非 Git 工作区勾选 Worktree/实例已完成或已删除）。
 
 ### 3.2 内部接口
 
 - `services/workflow/continuation.ts` 导出 `continueWorkflowInstance(userId, instanceId, input)`，供 resolver 调用；
-- 复用 `getAvailableServerTypes(controllerId, userId)`（capability.ts）做目标 Harness 校验；
+- 复用 `getAvailableServerTypes(controllerId, userId)`（capability.ts）逐一校验映射中的目标 Harness；
 - 复用实例服务内既有 Worktree 创建路径（`git:worktree:add` Redis 命令，含 worktreeDir 解析与随机后缀去重），抽取为可复用函数供两处调用；
 - `unavailableReason` 判定函数 `resolveUnavailableReason(instance)`：controller 文档缺失 → `CONTROLLER_DELETED`；`status !== 'online'` → `CONTROLLER_OFFLINE`；否则 `null`。供 `workflowInstances`/`workflowInstance` 字段解析复用。
 
@@ -210,7 +220,7 @@ sequenceDiagram
 - **技术细节**:
   - 前置校验任一失败即整体拒绝，实例零改动；
   - Worktree 创建成功但 CAS 更新失败时，对新创建的 Worktree 执行 `git:worktree:remove` 回滚（复用既有清理路径），回滚失败记录告警日志；
-  - 未完成 AI 节点 `agentConfig.acpServerType` 统一改写为入参 Harness；`initNewWorktree`/modeId/modelId 保持原快照不变；
+  - 未完成 AI 节点 `agentConfig.acpServerType` 按 `harnessMappings` 逐节点改写（nodeId 精确匹配，映射未覆盖或含多余/非 AI/已完成节点即整体拒绝）；`initNewWorktree`/modeId/modelId 保持原快照不变；
   - 更新条件携带 `controllerId: <旧值>` 做 CAS，防并发重复接续。
 - **风险点**: 目标控制器在 Worktree 创建后离线——CAS 已提交则实例可用性仍由 `unavailableReason` 动态判定兜底，可再次接续。
 
@@ -222,7 +232,7 @@ sequenceDiagram
 
 #### 实现点 4: 前端接续对话框
 
-- **描述**: 新增 `ContinueWorkflowDialog`：控制器选择（在线且归属当前用户）→ 工作路径选择（目标控制器下既有工作区，或 browseFolder/createFolder 新建后经 `createWorkspace` 落库）→ Worktree 勾选（默认勾选，`detectGitRepo` 非 Git 时置灰并提示）→ Harness 单选（`GET_ACP_CAPABILITIES`，默认沿用原 Harness 若在可用清单内）。
+- **描述**: 新增 `ContinueWorkflowDialog`：控制器选择（在线且归属当前用户）→ 工作路径选择（目标控制器下既有工作区，或 browseFolder/createFolder 新建后经 `createWorkspace` 落库）→ Worktree 勾选（默认勾选，`detectGitRepo` 非 Git 时置灰并提示）→ 逐节点 Harness 映射列表（列出实例全部未完成 AI 节点，每个节点一个下拉选择器，选项来自 `GET_ACP_CAPABILITIES`，默认沿用该节点原 Harness 若在可用清单内，否则留空待选）。
 - **技术细节**: 选择器与查询模式复用 `InstantiateWorkflowDialog`；`WorkflowInstanceCard` 与 `WorkflowInstancePage` 依据 `unavailableReason` 渲染徽标与「接续」按钮，并禁用流转类操作（归档/删除/查看保持可用）。
 - **风险点**: 提交后需 `refetch` 实例详情与列表保证标识即时刷新。
 
@@ -235,7 +245,7 @@ sequenceDiagram
 | 不可用判定位置 | 前端自行判 controller 为空/离线 | 服务端透出 unavailableReason | B | 与 Session readOnlyReason 同构，规则集中后端，前端零规则重复 |
 | 新工作路径建工作区 | continueWorkflowInstance 内联建 workspace | 前端先调 createWorkspace 再传 workspaceId | B | 复用既有 mutation 与校验，接续契约保持最小 |
 | 进行中节点处理 | 保持 RUNNING 等待超时 | 接续时标记 FAILED(CONTROLLER_UNAVAILABLE) | B | 状态明确，用户经既有「重启」恢复，无幽灵 RUNNING |
-| Harness 改写粒度 | 逐节点映射 | 统一一个 Harness | B（本期） | Issue 描述为单选语义；差异化留给既有节点编辑 |
+| Harness 改写粒度 | 逐节点映射 | 统一一个 Harness | A | 按评审裁决：按当前实例逐节点配置 AI 节点 Harness，保留各节点差异化执行工具 |
 | 旧 Worktree 处理 | 尝试远程清理 | 不清理，文案提示 | B | 原控制器不可达，清理无法保证，避免半吊子副作用 |
 
 ### 6.2 依赖与约束

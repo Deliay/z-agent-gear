@@ -239,7 +239,7 @@ flowchart LR
 - [[proposals/20261113-feat-cloud-agent-gear-auto-upgrade.md]] — 云环境 agent-gear 自动升级（worker 镜像 entrypoint 新增 auto_update_loop 周期自升级：10 分钟 pnpm view 检查、mkdir 互斥安装、agent.pid 标记 + SIGTERM 复用保活非 42 路径优雅重启、latest 回滚自动愈合；契约零变更，T-EP20~T-EP27 stub 用例）
 - [[proposals/20261114-feat-oidc-binding-optimization.md]] — OIDC 绑定优化（front 回调未命中改道 pending ticket + 身份选择页「绑定已有帐号验密/创建新帐号」、front-bind surface 与前台绑定票据、externallogins 每账户每 Provider 唯一索引、accounts.passwordless 标记与解绑防呆、迁移 027）
 - [[proposals/20261113-feat-oidc-github-oauth-login.md]] — 支持自定义 OIDC 登录和 GitHub OAuth 登录（admin-api 唯一写方 authproviders（OIDC 多条 + GitHub 单条，secret AES-256-GCM 不回显）；agent-api 统一 OAuth 回调唯一入口（openid-client + PKCE/nonce，GitHub state），前台 externallogins 自动开户复用 provisioning 抽取，后台 adminexternallogins 先绑定后登录经 admin-api 内部端点换票；前后台一次性 ticket 兑换登录；契约 auth/admin-auth/admin-auth-provider/auth-oauth.md）
-- [[proposals/20261114-feat-workflow-instance-continuation.md]] — 已实例化的工作流接续（契约新增 WorkflowInstanceUnavailableReason/continuationHistory/continueWorkflowInstance；agent-api 接续服务换绑控制器与工作区、可选新 Worktree、未完成 AI 节点 Harness 统一改写、RUNNING/REWORK 节点标记 FAILED(CONTROLLER_UNAVAILABLE)；agent-web 不可用徽标与接续对话框）
+- [[proposals/20261114-feat-workflow-instance-continuation.md]] — 已实例化的工作流接续（契约新增 WorkflowInstanceUnavailableReason/continuationHistory/continueWorkflowInstance（harnessMappings 逐节点映射）；agent-api 接续服务换绑控制器与工作区、可选新 Worktree、未完成 AI 节点 Harness 逐节点改写、RUNNING/REWORK 节点标记 FAILED(CONTROLLER_UNAVAILABLE)；agent-web 不可用徽标与接续对话框）
 
 ### 实现计划（`plan/`）
 
