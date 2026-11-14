@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -7,40 +6,12 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { adminBindAuthorizeUrl } from '@/lib/auth-oauth'
-
-const ADMIN_EXTERNAL_LOGINS = gql`
-  query AdminExternalLogins {
-    adminExternalLogins {
-      id
-      providerId
-      providerDisplayName
-      externalUsername
-      createdAt
-    }
-  }
-`
-
-const ADMIN_AUTH_PROVIDERS = gql`
-  query AdminAuthProviders {
-    adminAuthProviders {
-      id
-      type
-      displayName
-    }
-  }
-`
-
-const CREATE_ADMIN_BIND_TICKET = gql`
-  mutation CreateAdminBindTicket($providerId: ID!) {
-    createAdminBindTicket(providerId: $providerId)
-  }
-`
-
-const UNBIND_ADMIN_EXTERNAL_LOGIN = gql`
-  mutation UnbindAdminExternalLogin($id: ID!) {
-    unbindAdminExternalLogin(id: $id)
-  }
-`
+import {
+  ADMIN_EXTERNAL_LOGINS,
+  ADMIN_AUTH_PROVIDERS,
+  CREATE_ADMIN_BIND_TICKET,
+  UNBIND_ADMIN_EXTERNAL_LOGIN,
+} from '@/graphql/auth-providers'
 
 interface Binding {
   id: string

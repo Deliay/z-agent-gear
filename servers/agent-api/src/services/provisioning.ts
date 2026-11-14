@@ -3,12 +3,15 @@ import { Account } from '../models/account.js';
 import { Tenant } from '../models/tenant.js';
 import { User } from '../models/user.js';
 import { billingClient } from './billing-client.js';
+import { verifyPassword } from './auth.js';
 import { workspaceService } from './workspace-service.js';
 
 export interface ProvisionUserInput {
   username: string;
   /** 预哈希密码（bcrypt）：内部开户传用户明文哈希，OAuth 自动开户传随机密码哈希。 */
   passwordHash: string;
+  /** 明文密码：仅 `source=internal` 用于 E11000 竞态下验密（区分幂等重放与同名异密码）；OAuth 不传。 */
+  password?: string;
   /** `internal`：后台开户（允许幂等重放，由端点层验密）；`oauth`：第三方首登（用户名冲突必须拒绝）。 */
   source: 'internal' | 'oauth';
   /** 端点层已查询的账户：`undefined` = 未查询（自行查询）；`null` = 已知不存在；对象 = 已存在账户。 */
@@ -46,6 +49,8 @@ export interface ProvisionedUser {
  * 由 `routes/internal-users.ts` 抽取（后台开户薄封装）与 OAuth 自动开户共用：
  * - 失败（含计费不可达）向前回滚本次新建文档（不删除既有文档）；
  * - `source=internal`：账户已存在时复用（端点层已完成 409 幂等/重名判定）；
+ *   `Account.create` 撞 E11000 的并发竞态下用明文 `password` 验密，仅同名同密码幂等继续，
+ *   同名异密码/无哈希抛 `USERNAME_TAKEN`（端点映射 409）；
  * - `source=oauth`：账户已存在一律 `USERNAME_TAKEN`（绝不把外部身份挂到既有账户）。
  */
 export async function provisionUser(input: ProvisionUserInput): Promise<ProvisionedUser> {
@@ -89,6 +94,22 @@ export async function provisionUser(input: ProvisionUserInput): Promise<Provisio
         if ((err as { code?: number }).code === 11000) {
           account = (await Account.findOne({ username })) as unknown as { _id: mongoose.Types.ObjectId; username: string; passwordHash?: string } | null;
           if (!account || source === 'oauth') {
+            throw new ProvisioningError('USERNAME_TAKEN');
+          }
+          // 并发竞态：预检为 null 后另一请求刚创建同名账户。
+          // 后台开户必须验密，只有「同名同密码」才视为幂等重放；同名异密码/无哈希一律 409，
+          // 绝不能静默返回对方账户（调用方会误以为自己的密码已生效）。
+          let matches = false;
+          try {
+            matches = Boolean(
+              input.password && account.passwordHash
+                ? await verifyPassword(input.password, account.passwordHash)
+                : false,
+            );
+          } catch {
+            matches = false;
+          }
+          if (!matches) {
             throw new ProvisioningError('USERNAME_TAKEN');
           }
         } else {

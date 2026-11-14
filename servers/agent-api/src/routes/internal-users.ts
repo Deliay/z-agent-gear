@@ -71,6 +71,7 @@ internalUsersRouter.post('/', async (req: Request, res: Response) => {
     const provisioned = await provisionUser({
       username,
       passwordHash,
+      password,
       source: 'internal',
       existingAccount: existing ?? null,
     });
