@@ -1,9 +1,11 @@
 import { GraphQLError } from 'graphql';
 import { Account } from '../../models/account.js';
+import { AuthProvider } from '../../models/auth-provider.js';
 import { Tenant } from '../../models/tenant.js';
 import { TenantMember } from '../../models/tenant-member.js';
 import { User } from '../../models/user.js';
 import { verifyPassword, signToken } from '../../services/auth.js';
+import { consumeLoginTicket } from '../../services/oauth-flow.js';
 
 export interface WorkspaceAccess {
   id: string;
@@ -83,6 +85,17 @@ export const authResolvers = {
       const user = await User.findById(context.currentUser.id);
       return user ? toUserView(user) : null;
     },
+    // 免登录：前台登录页第三方按钮前置查询
+    authProviders: async () => {
+      const docs = await AuthProvider.find({ enabled: true, enableFrontLogin: true })
+        .sort({ createdAt: 1 })
+        .lean() as Array<{ _id: unknown; type: string; displayName: string }>;
+      return docs.map((doc) => ({
+        id: String(doc._id),
+        type: doc.type,
+        displayName: doc.type === 'github_oauth' ? 'GitHub' : doc.displayName,
+      }));
+    },
   },
   Mutation: {
     login: async (_parent: unknown, args: { username: string; password: string }) => {
@@ -104,6 +117,15 @@ export const authResolvers = {
 
       const token = signToken(user._id.toString());
       return { token, user: toUserView(user) };
+    },
+    exchangeLoginTicket: async (_parent: unknown, args: { ticket: string }) => {
+      const payload = await consumeLoginTicket(args.ticket);
+      if (!payload || !payload.token || !payload.user) {
+        throw new GraphQLError('invalid or expired ticket', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
+      return { token: payload.token, user: payload.user };
     },
   },
   User: {

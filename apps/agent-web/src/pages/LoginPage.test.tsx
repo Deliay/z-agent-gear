@@ -13,6 +13,7 @@ vi.mock('@apollo/client/react', () => ({
     vi.fn(),
     { loading: false, error: undefined, data: undefined },
   ]),
+  useQuery: vi.fn(() => ({ data: { authProviders: [] }, loading: false, error: undefined })),
 }));
 
 describe('LoginPage', () => {

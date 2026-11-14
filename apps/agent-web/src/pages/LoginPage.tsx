@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { gql } from '@apollo/client';
-import { useMutation } from '@apollo/client/react';
-import { useNavigate } from 'react-router-dom';
+import { useMutation, useQuery } from '@apollo/client/react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth, type User } from '@/stores/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { mapOauthError, oauthAuthorizeUrl } from '@/lib/auth-oauth';
 
 const LOGIN_MUTATION = gql`
   mutation Login($username: String!, $password: String!) {
@@ -31,8 +32,24 @@ const LOGIN_MUTATION = gql`
   }
 `;
 
+const AUTH_PROVIDERS_QUERY = gql`
+  query AuthProviders {
+    authProviders {
+      id
+      type
+      displayName
+    }
+  }
+`;
+
 interface LoginResult {
   login: { token: string; user: User };
+}
+
+interface AuthProviderInfo {
+  id: string;
+  type: 'oidc' | 'github_oauth';
+  displayName: string;
 }
 
 export default function LoginPage() {
@@ -41,10 +58,17 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const navigate = useNavigate();
   const { login } = useAuth();
+  const [searchParams] = useSearchParams();
+  const oauthError = mapOauthError(searchParams.get('error'));
+
+  const { data: providerData } = useQuery<{ authProviders: AuthProviderInfo[] }>(
+    AUTH_PROVIDERS_QUERY,
+    { fetchPolicy: 'cache-first' },
+  );
+  const providers = providerData?.authProviders ?? [];
 
   const [doLogin, { loading }] = useMutation(LOGIN_MUTATION, {
     onCompleted: (data: unknown) => {
-      // 三层帐号体系：登录响应只暴露展示名 name 与归属租户 tenant
       const result = data as LoginResult;
       login(result.login.token, result.login.user);
       navigate('/', { replace: true });
@@ -58,6 +82,10 @@ export default function LoginPage() {
     e.preventDefault();
     setError('');
     doLogin({ variables: { username, password } });
+  };
+
+  const handleOauthLogin = (providerId: string) => {
+    window.location.href = oauthAuthorizeUrl(providerId, 'front');
   };
 
   return (
@@ -95,13 +123,30 @@ export default function LoginPage() {
                 required
               />
             </div>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">{error}</p>
+            {(error || oauthError) && (
+              <p role="alert" className="text-sm text-destructive">{error || oauthError}</p>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? '登录中…' : '登录'}
             </Button>
           </form>
+
+          {providers.length > 0 && (
+            <div className="mt-4 space-y-2 border-t pt-4">
+              <p className="text-center text-xs text-muted-foreground">或使用第三方帐号登录</p>
+              {providers.map((provider) => (
+                <Button
+                  key={provider.id}
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => handleOauthLogin(provider.id)}
+                >
+                  使用 {provider.type === 'github_oauth' ? 'GitHub' : provider.displayName} 登录
+                </Button>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

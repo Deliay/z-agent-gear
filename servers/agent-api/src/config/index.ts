@@ -31,6 +31,17 @@ export const config = {
   // GitHub API base（测试指向本地 mock；默认官方 API）
   githubApiBaseUrl: process.env.GITHUB_API_BASE || 'https://api.github.com',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
+  // agent-api 对外基地址：拼 OAuth redirect_uri 的唯一事实源（`{PUBLIC_BASE_URL}/api/auth/oauth/callback`）。
+  // 缺省 dev 回退 `http://localhost:10001`（与 AppHost dev 端口一致）。
+  publicBaseUrl: (process.env.PUBLIC_BASE_URL || 'http://localhost:10001').replace(/\/+$/, ''),
+  // 后台前端地址（后台 OAuth 登录/绑定 302 目标）
+  adminFrontendUrl: (process.env.ADMIN_FRONTEND_URL || 'http://localhost:5174').replace(/\/+$/, ''),
+  // GitHub OAuth 三端点（测试可覆盖指向 fake；缺省官方地址）
+  githubOauthAuthorizeUrl:
+    process.env.GITHUB_OAUTH_AUTHORIZE_URL || 'https://github.com/login/oauth/authorize',
+  githubOauthTokenUrl:
+    process.env.GITHUB_OAUTH_TOKEN_URL || 'https://github.com/login/oauth/access_token',
+  githubOauthApiBase: (process.env.GITHUB_OAUTH_API_BASE || 'https://api.github.com').replace(/\/+$/, ''),
   // 费用中心：agent-api 不直写计费库，经 admin-api `/internal/billing/*` 转发（缺失时不 fail-fast）
   adminApiUrl: process.env.ADMIN_API_URL || '',
   internalApiToken: process.env.INTERNAL_API_TOKEN || '',

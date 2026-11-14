@@ -21,6 +21,7 @@ import { internalCloudHostRouter } from './routes/internal-cloud-host.js';
 import { internalCloudStorageRouter } from './routes/internal-cloud-storage.js';
 import { eventCallbackRouter } from './routes/event-callback.js';
 import { githubWebhookRouter } from './routes/github-webhook.js';
+import { authOauthRouter } from './routes/auth-oauth.js';
 import { runMigrations } from './migrations/runner.js';
 import * as migration001 from './migrations/001-unify-content-format.js';
 import * as migration002 from './migrations/002-rename-portforward-to-gateway.js';
@@ -50,6 +51,7 @@ import * as migration023ValutFoundations from './migrations/023-valut-foundation
 import * as migration023SessionReviews from './migrations/023-session-reviews.js';
 import * as migration024ResourceWorkspaceBackfill from './migrations/024-resource-workspace-backfill.js';
 import * as migration025SessionInteractions from './migrations/025-session-interactions.js';
+import * as migration026ExternalLogins from './migrations/026-external-logins.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -158,6 +160,7 @@ app.use('/graphql', yoga);
 app.use('/api', sessionStreamRouter);
 app.use('/api', gatewayProxyRouter);
 app.use('/api', githubRouter);
+app.use('/api', authOauthRouter);
 app.use('/internal/cloud-hosts', internalCloudHostRouter);
 app.use('/internal/cloud-storages', internalCloudStorageRouter);
 app.use('/internal/users', internalUsersRouter);
@@ -217,9 +220,33 @@ async function start() {
       migration023SessionReviews,
       migration024ResourceWorkspaceBackfill,
       migration025SessionInteractions,
+      migration026ExternalLogins,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');
+  }
+
+  // 第三方登录配置自检（D1/D14）：存在启用中的 provider 且加密键/对外地址为缺省值时仅告警，不阻塞启动。
+  try {
+    const { AuthProvider } = await import('./models/auth-provider.js');
+    const enabledProviders = await AuthProvider.countDocuments({ enabled: true });
+    if (enabledProviders > 0) {
+      const DEFAULT_KEY = '0'.repeat(64);
+      if (config.credentialEncryptionKey === DEFAULT_KEY) {
+        logger.warn(
+          { enabledProviders },
+          'OAuth providers are enabled but CREDENTIAL_ENCRYPTION_KEY is the default placeholder; client secret decryption will fail',
+        );
+      }
+      if (config.nodeEnv === 'production' && !process.env.PUBLIC_BASE_URL) {
+        logger.warn(
+          { enabledProviders },
+          'OAuth providers are enabled but PUBLIC_BASE_URL is not configured; redirect_uri will fall back to localhost',
+        );
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'auth provider self-check failed');
   }
 
   // Valut namespace 启动自检（D13）：迁移完成后、就绪之前注册 service-mcp-bearer-tokens；

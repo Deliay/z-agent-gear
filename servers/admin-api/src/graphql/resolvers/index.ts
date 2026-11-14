@@ -7,6 +7,7 @@ import { cloudContainerResolvers } from './cloud-container.js';
 import { cloudWorkloadResolvers } from './cloud-workload.js';
 import { billingResolvers } from './billing.js';
 import { tenantResolvers } from './tenant.js';
+import { authProviderResolvers } from './auth-provider.js';
 
 // 类型级 resolver（Provider.models / Model.provider / CloudContainer.workloads）必须显式登记，否则线上不生效
 export const resolvers = {
@@ -21,6 +22,7 @@ export const resolvers = {
     ...cloudWorkloadResolvers.Query,
     ...billingResolvers.Query,
     ...tenantResolvers.Query,
+    ...authProviderResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -31,6 +33,7 @@ export const resolvers = {
     ...cloudWorkloadResolvers.Mutation,
     ...billingResolvers.Mutation,
     ...tenantResolvers.Mutation,
+    ...authProviderResolvers.Mutation,
   },
   Provider: {
     ...providerResolvers.Provider,

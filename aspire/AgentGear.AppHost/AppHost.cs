@@ -139,6 +139,10 @@ var controllerApi = builder.AddNodeApp("controller-api", "../../servers/controll
         service.Restart = "unless-stopped";
     });
 
+// 后台前端地址（OAuth 登录/绑定 302 目标）与 agent-api 对外基地址（redirect_uri 唯一事实源）
+var adminFrontendUrl = builder.AddParameter("admin-frontend-url", value: "http://localhost:5174");
+var agentApiPublicUrl = builder.AddParameter("agent-api-public-url", value: "http://localhost:10001");
+
 var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/index.ts")
     .WithPnpm()
     .WithEnvironment("NODE_OPTIONS", "--import tsx")
@@ -154,6 +158,9 @@ var agentApi = builder.AddNodeApp("agent-api", "../../servers/agent-api", "src/i
     .WithEnvironment("GITHUB_API_BASE", githubApiBase)
     .WithEnvironment("EVENT_CALLBACK_TOKEN", eventCallbackToken)
     .WithEnvironment("GITHUB_WEBHOOK_SECRET", githubWebhookSecret)
+    // 第三方登录：OIDC client secret 解密密钥（与 admin-api 同一来源）与后台 302 目标
+    .WithEnvironment("CREDENTIAL_ENCRYPTION_KEY", credentialEncryptionKey)
+    .WithEnvironment("ADMIN_FRONTEND_URL", adminFrontendUrl)
     .WithReference(mongodb)
     .WithReference(redis)
     .WithExternalHttpEndpoints()
@@ -227,6 +234,9 @@ var adminApi = builder.AddNodeApp("admin-api", "../../servers/admin-api", "src/i
     .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
     // 后台开户转发目标（agent-api `POST /internal/users`）；缺失时开户返回 AGENT_API_UNAVAILABLE
     .WithEnvironment("AGENT_API_URL", agentApi.GetEndpoint("http"))
+    // 第三方登录：回调地址展示与后台 OAuth 302 目标
+    .WithEnvironment("AGENT_API_PUBLIC_URL", agentApiPublicUrl)
+    .WithEnvironment("ADMIN_FRONTEND_URL", adminFrontendUrl)
     // 销毁容器超时（工作负载清理脚本批次需 > post 预算 90s + 宽限 10s + 删 Job 重试）
     .WithEnvironment("CLOUD_CONTROLLER_DESTROY_TIMEOUT_MS", "180000")
     .WithReference(mongodb)
@@ -269,6 +279,7 @@ if (!builder.ExecutionContext.IsPublishMode)
             service.Name = "agent-web";
         });
     agentApi.WithEnvironment("FRONTEND_URL", agentWeb.GetEndpoint("http"))
+        .WithEnvironment("PUBLIC_BASE_URL", agentApi.GetEndpoint("http"))
         .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"))
         .WithEnvironment("INTERNAL_API_TOKEN", internalApiToken)
         .WithEnvironment("HARNESS_ENABLED", "true")
@@ -278,11 +289,13 @@ if (!builder.ExecutionContext.IsPublishMode)
     cloudController.WithHttpEndpoint(port: 10004, env: "PORT");
     var adminWeb = builder.AddViteApp("admin-web", "../../apps/admin-web")
         .WithPnpm()
-        .WithEnvironment("VITE_ADMIN_API_URL", adminApi.GetEndpoint("http"));
+        .WithEnvironment("VITE_ADMIN_API_URL", adminApi.GetEndpoint("http"))
+        .WithEnvironment("VITE_AGENT_API_URL", agentApi.GetEndpoint("http"));
 }
 else
 {
     agentApi.WithEnvironment("FRONTEND_URL", builder.AddParameter("frontend-url"))
+        .WithEnvironment("PUBLIC_BASE_URL", agentApiPublicUrl)
         // D9：server-side 调用必须指向 admin-api 容器 DNS，而不是浏览器可达的 localhost:8002
         // （`admin-api-url` 仅供 admin-web 注入 config.js）。
         .WithEnvironment("ADMIN_API_URL", adminApi.GetEndpoint("http"))
@@ -308,6 +321,7 @@ else
     // publish 时镜像名参数化为 ${ADMIN_WEB_IMAGE}，与 AGENT_API_IMAGE/CONTROLLER_API_IMAGE 一致
     builder.AddDockerfile("admin-web", "../../apps/admin-web")
         .WithEnvironment("ADMIN_API_URL", adminApiUrl)
+        .WithBuildArg("VITE_AGENT_API_URL", agentApiPublicUrl)
         .WithHttpEndpoint(port: 80, targetPort: 80)
         .WithExternalHttpEndpoints()
         .PublishAsDockerComposeService((resource, service) =>
