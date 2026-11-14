@@ -41,6 +41,11 @@ function formInteraction(overrides: Partial<SessionInteractionData> = {}): Sessi
           title: '标签',
           items: { anyOf: [{ const: 'a', title: 'A' }, { const: 'b', title: 'B' }] },
         },
+        tags_custom: {
+          type: 'string',
+          title: '标签 (other)',
+          description: 'Add your own answer',
+        },
       },
       required: ['environment'],
     },
@@ -136,7 +141,7 @@ describe('InteractionCard', () => {
     });
   });
 
-  it('T-IC4: 多选 anyOf 提交前以逗号拼接（顺序 = 勾选顺序）', async () => {
+  it('T-IC4: 多选 anyOf 以数组提交（ACP 要求数组，逗号字符串会被判定 dismissed）', async () => {
     render(<InteractionCard interaction={formInteraction()} />);
     fireEvent.click(screen.getByLabelText('staging'));
     fireEvent.click(screen.getByText('B'));
@@ -148,7 +153,7 @@ describe('InteractionCard', () => {
         variables: {
           requestId: 'el-req-1',
           action: 'accept',
-          values: { environment: 'staging', tags: 'b,a' },
+          values: { environment: 'staging', tags: ['b', 'a'] },
         },
       });
     });
