@@ -98,6 +98,11 @@ fi
 case "${STUB_PNPM_MODE:-ok}" in
   fail) case "$*" in *"add -g agent-gear"*) exit 1 ;; esac ;;
 esac
+# STUB_PNPM_ADD_NOOP=1：模拟 pnpm 成功退出但版本未变（pnpm 默认 minimumReleaseAge
+# 会把刚发布的 registry latest 排除在解析之外，`pnpm add -g` 实际仍装旧版）。
+case "${STUB_PNPM_ADD_NOOP:-0}" in
+  1) case "$*" in *"add -g agent-gear"*) exit 0 ;; esac ;;
+esac
 # 安装成功即切换本地版本到 registry latest（模拟 pnpm add -g 覆盖全局安装）
 case "$*" in *"add -g agent-gear"*) latest_version > "$STUB_DIR/version" ;; esac
 exit 0
@@ -218,6 +223,7 @@ setup_env() {
   # 周期自升级（T-EP21~T-EP28）：默认 registry latest 与初始版本一致 → 既有用例「已是最新」
   export STUB_PNPM_LATEST_VERSION=2.13.0
   export STUB_PNPM_VIEW_MODE=ok
+  export STUB_PNPM_ADD_NOOP=0
   export STUB_CURL_MODE=ok
   export STUB_AGENT_EXITS="42"
   unset ZAG_SKIP_AGENT_GEAR_UPDATE ZAG_KEEPALIVE_BACKOFF_MS STUB_PNPM_MODE ZAG_PNPM_CMD ZAG_STORAGE_HOME
@@ -231,7 +237,8 @@ teardown_env() {
   unset ZAG_NVM_PROFILE_FILE NVM_PROFILE_PATH NVM_NODEJS_ORG_MIRROR
   unset ZAG_STORAGE_HOME STUB_CURL_MODE ZAG_WORKER_NVM_DIR NODE_VERSION NPM_REGISTRY
   unset NVM_INSTALL_URL NVM_SOURCE NVM_INSTALL_VERSION
-  unset STUB_PNPM_MODE STUB_PNPM_LATEST_VERSION STUB_PNPM_VIEW_MODE ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS
+  unset STUB_PNPM_MODE STUB_PNPM_LATEST_VERSION STUB_PNPM_VIEW_MODE STUB_PNPM_ADD_NOOP
+  unset ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS
   EP_PID=""
   export PATH="$ORIGINAL_PATH"
 }
@@ -862,6 +869,36 @@ assert_eq 0 "$(count_lines "$STUB_DIR/signals")" "T-EP28 退避窗口不发送 T
 assert_contains "$TEST_DIR/stdout.log" "new agent-gear version available" "T-EP28 命中新版并安装"
 assert_eq "9.9.9" "$(cat "$STUB_DIR/version" 2>/dev/null)" "T-EP28 安装到新版"
 assert_eq 2 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP28 下一轮启动带出新版本"
+teardown_env
+
+echo "== T-EP29: 安装成功但版本未变（pnpm minimumReleaseAge 隔离最新版）→ 不 TERM、按周期重试 =="
+setup_env
+export STUB_RUN_FOREVER=1
+export STUB_PNPM_LATEST_VERSION=9.9.9
+export STUB_PNPM_ADD_NOOP=1
+export ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS=100
+export ZAG_KEEPALIVE_BACKOFF_MS=10
+start_entrypoint_bg
+if wait_until '[ -f "$STUB_DIR/agent_ready" ]' 200; then
+  if wait_until '[ "$(grep -cF "install did not change version" "$TEST_DIR/stdout.log" 2>/dev/null || true)" -ge 2 ]' 400; then
+    pass "T-EP29 版本未变按周期重试（WARN ≥ 2）"
+  else
+    fail "T-EP29 未观察到周期重试的「版本未变」WARN"
+  fi
+  sleep 0.2
+  assert_eq 0 "$(count_lines "$STUB_DIR/signals")" "T-EP29 版本未变零 TERM（会话不掉线）"
+  assert_eq 1 "$(count_lines "$STUB_DIR/agent_starts")" "T-EP29 agent-gear 持续运行不重启"
+  assert_eq "2.13.0" "$(cat "$STUB_DIR/version" 2>/dev/null)" "T-EP29 本地版本保持旧版"
+  if [ "$(count_agent_gear_checks)" -ge 2 ]; then
+    pass "T-EP29 registry 检查按周期持续重试"
+  else
+    fail "T-EP29 registry 检查次数不足（$(count_agent_gear_checks)）"
+  fi
+else
+  fail "T-EP29 agent-gear 未进入运行状态"
+fi
+stop_entrypoint_bg
+assert_eq 0 "$BG_RC" "T-EP29 外部 TERM 后入口 0 退出"
 teardown_env
 
 echo
