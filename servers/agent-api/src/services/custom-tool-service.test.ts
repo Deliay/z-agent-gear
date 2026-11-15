@@ -122,6 +122,13 @@ describe('custom-tool-service（T-CTS / T-CTS4，真库）', () => {
     expect(updated.name).toBe('查询天气 v2');
     expect(updated.args).toHaveLength(1);
 
+    // 显式 name:null 视作未提供：不得把名称改成字面量 "null"
+    const unchanged = await runWithWorkspace(ctxA, () =>
+      customToolService.update(created.id, { name: null }),
+    );
+    expect(unchanged.name).toBe('查询天气 v2');
+    expect(unchanged.id).toBe(created.id);
+
     await expect(runWithWorkspace(ctxA, () => customToolService.delete(created.id))).resolves.toBe(
       true,
     );
