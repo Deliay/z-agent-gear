@@ -29,6 +29,10 @@ vi.mock('../../../../lib/preview/monaco-loader', () => ({
         return editor;
       },
       createDiffEditor: (_el: unknown, options: Record<string, unknown>) => {
+        // 真实 monaco（0.57）行为：diff 由 worker 异步计算，`setModel` 之后
+        // 立刻调用 `getLineChanges()` 返回 null，计算完成后才触发 `onDidUpdateDiff`。
+        const diffListeners: Array<() => void> = [];
+        let lineChanges: Array<{ modifiedStartLineNumber: number }> | null = null;
         const modified = {
           onMouseDown: vi.fn(),
           revealLineInCenter: vi.fn(),
@@ -39,8 +43,22 @@ vi.mock('../../../../lib/preview/monaco-loader', () => ({
         const diff = {
           options,
           getModifiedEditor: () => modified,
-          setModel: vi.fn(),
-          getLineChanges: () => [{ modifiedStartLineNumber: 5 }],
+          setModel: vi.fn(() => {
+            setTimeout(() => {
+              lineChanges = [{ modifiedStartLineNumber: 5 }];
+              for (const listener of [...diffListeners]) listener();
+            }, 0);
+          }),
+          getLineChanges: () => lineChanges,
+          onDidUpdateDiff: (listener: () => void) => {
+            diffListeners.push(listener);
+            return {
+              dispose: () => {
+                const index = diffListeners.indexOf(listener);
+                if (index >= 0) diffListeners.splice(index, 1);
+              },
+            };
+          },
           dispose: vi.fn(),
         };
         diffEditors.push({ diff, modified, original });
@@ -124,6 +142,24 @@ describe('CodePreview（T-CP / 返工 A1/A5/B1/B2）', () => {
     expect(createdEditors[0].deltaDecorations).toHaveBeenCalledWith([], [
       expect.objectContaining({ options: expect.objectContaining({ className: 'zag-focus-highlight' }) }),
     ]);
+  });
+
+  it('#481：diff 异步计算完成后聚焦首个差异块', async () => {
+    render(<CodePreview filePath="src/a.ts" content="new" oldText="old" onConfirm={vi.fn()} />);
+    await waitFor(() => expect(diffEditors.length).toBe(1));
+    const { modified } = diffEditors[0];
+    // 复现：setModel 后同步取 lineChanges 得到 null，修复前永不聚焦（scrollTop 停在 0）
+    await waitFor(() => expect(modified.revealLineInCenter).toHaveBeenCalledWith(5));
+  });
+
+  it('#481：diff 模式下调用方给定的 focusLine 优先于首个差异块', async () => {
+    render(<CodePreview filePath="src/a.ts" content="new" oldText="old" focusLine={120} onConfirm={vi.fn()} />);
+    await waitFor(() => expect(diffEditors.length).toBe(1));
+    const { modified } = diffEditors[0];
+    await waitFor(() => expect(modified.revealLineInCenter).toHaveBeenCalledWith(120));
+    // 差异块异步计算完成后不得把视口从 focusLine 拉回首行
+    await waitFor(() => expect(diffEditors[0].diff.getLineChanges()).not.toBeNull());
+    expect(modified.revealLineInCenter).not.toHaveBeenCalledWith(5);
   });
 
   it('Shift 连选：范围扩展为 startLine-endLine', async () => {

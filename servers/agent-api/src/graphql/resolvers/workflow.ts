@@ -7,6 +7,8 @@ import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { prHandlerRegistry } from '../../services/workflow/pr-handler-registry.js';
 import { sessionInteractionService } from '../../services/session-interaction-service.js';
+import { continueWorkflowInstance } from '../../services/workflow/continuation.js';
+import { loadControllerStatus, resolveInstanceUnavailableReason } from '../../services/workflow/unavailable.js';
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
@@ -165,6 +167,14 @@ export function mapInstance(doc: Doc) {
     blackboard: mapBlackboardEntries(doc.blackboard, doc.blackboardUpdatedAt),
     blackboardTrash: mapBlackboardEntries(doc.blackboardTrash, doc.blackboardUpdatedAt),
     additionalPrompts: mapAdditionalPrompts(doc.additionalPrompts),
+    // 接续历史（时间升序；存量行缺字段归一为空数组）
+    continuationHistory: ((doc.continuationHistory as Doc[]) ?? []).map((entry) => ({
+      fromControllerId: toId(entry.fromControllerId),
+      fromWorkspaceId: toId(entry.fromWorkspaceId),
+      toControllerId: toId(entry.toControllerId),
+      toWorkspaceId: toId(entry.toWorkspaceId),
+      at: toIso(entry.at),
+    })),
     createdAt: toIso(doc.createdAt),
     updatedAt: toIso(doc.updatedAt),
   };
@@ -414,6 +424,18 @@ export const workflowResolvers = {
         ),
       );
     },
+    continueWorkflowInstance: async (
+      _parent: unknown,
+      args: { id: string; input: never },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      return wrap(async () =>
+        mapInstance(
+          (await continueWorkflowInstance(userId, args.id, args.input as never)) as unknown as Doc,
+        ),
+      );
+    },
   },
   WorkflowInstance: {
     // 关联 Pull Request：节点名从父对象节点快照映射（不额外查库）
@@ -446,6 +468,18 @@ export const workflowResolvers = {
       const userId = context.currentUser?.id;
       if (!userId || !parent.controllerId) return null;
       return controllerService.findById(String(parent.controllerId), userId);
+    },
+    // 实例不可用原因：字段级实时判定（控制器状态不落库）；同请求内按 controllerId 去重复用 Promise
+    unavailableReason: async (parent: Doc, _args: unknown, context: AuthContext) => {
+      if (!parent.controllerId) return 'CONTROLLER_DELETED';
+      const controllerId = String(parent.controllerId);
+      context.controllerStatusPromiseMap ??= new Map();
+      let pending = context.controllerStatusPromiseMap.get(controllerId);
+      if (!pending) {
+        pending = loadControllerStatus(controllerId);
+        context.controllerStatusPromiseMap.set(controllerId, pending);
+      }
+      return resolveInstanceUnavailableReason(parent, () => pending!);
     },
     // 待处理交互的节点会话集合：实例级一次 distinct 查询（空集合短路，避免 N+1）
     pendingInteractionSessionIds: async (parent: Doc) => {

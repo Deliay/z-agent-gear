@@ -2515,4 +2515,101 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
       client.disconnect();
     }
   });
+
+  // #498：创建时只选 OPENCODE，运行期补装 Kimi Code（cloud-controller 已把类型追加到
+  // cloudcontainers 读模型）后，会话 A-11 门必须按「创建时选定 ∪ 运行期成功安装」放行。
+  it.skipIf(!HAS_MONGO)('T-A11-API5: 运行期补装 harness 后可创建该类型会话（创建期快照不含）', async () => {
+    const db = (await mongoDb())!;
+    const { token, userId } = await newFrontUser();
+    const { client, controllerId } = await registerFreshController(token, 'runtime-harness-cloud-host');
+    const workspaceId = await createWorkspaceFor(token, controllerId);
+
+    const hostId = new mongoose.Types.ObjectId();
+    const containerId = new mongoose.Types.ObjectId();
+    const now = new Date();
+    const kimiHarness = await db.collection('cloudworkloads').findOne({ presetKey: 'harness-kimi-code' });
+    try {
+      await db.collection('controllers').updateOne(
+        { _id: new mongoose.Types.ObjectId(controllerId) },
+        { $set: { type: 'cloud' } },
+      );
+      // 创建云电脑时只勾选 OPENCODE → cloudhosts.harnessTypes 只记录创建期快照
+      await db.collection('cloudhosts').insertOne({
+        _id: hostId,
+        userId: new mongoose.Types.ObjectId(userId),
+        tenantId: new mongoose.Types.ObjectId(userId),
+        name: `runtime-harness-${hostId.toString()}`,
+        harnessTypes: ['OPENCODE'],
+        status: 'RUNNING',
+        controllerId: new mongoose.Types.ObjectId(controllerId),
+        keyId: new mongoose.Types.ObjectId(),
+        workspaceId: new mongoose.Types.ObjectId(workspaceId),
+        resourceWorkspaceId: await personalGlobalWorkspaceId(db, userId),
+        containerId: containerId.toString(),
+        defaultSessionId: null,
+        createDefaultSession: false,
+        startedAt: now,
+        readyAt: now,
+        stoppedAt: null,
+        failureReason: null,
+        deletedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      });
+      // 运行期补装 Kimi Code 成功：cloud-controller 对容器读模型 $addToSet harnessTypes
+      await db.collection('cloudcontainers').insertOne({
+        _id: containerId,
+        name: `container-${containerId.toString()}`,
+        namespace: 'zag-workers',
+        status: 'online',
+        purpose: 'harness',
+        hostId: hostId.toString(),
+        harnessTypes: ['opencode', 'kimi_code'],
+        image: 'zero-tools/zag-worker:latest',
+        installedWorkloads: kimiHarness
+          ? [
+              {
+                workloadId: kimiHarness._id.toString(),
+                name: kimiHarness.name,
+                installedAt: now,
+                source: 'user',
+              },
+            ]
+          : [],
+        createdAt: now,
+        updatedAt: now,
+      });
+
+      // 修复前：创建期快照只有 OPENCODE → `unsupported harness type: kimi_code`
+      const { sessionId } = await createSessionCapture(token, client, {
+        controllerId,
+        acpServerType: 'kimi_code',
+        workspaceId,
+        mcpServerIds: [],
+      });
+      await gqlRequest(DELETE_SESSION, { id: sessionId }, token);
+
+      // A-11 门仍生效：既未创建期选定、也未运行期安装的类型被拒
+      const rejected = await gqlRequest(
+        CREATE_SESSION,
+        { input: { controllerId, acpServerType: 'deepseek_harness', workspaceId, mcpServerIds: [] } },
+        token,
+      );
+      const rejectedBody = await rejected.json();
+      expect(rejectedBody.errors?.[0].message).toBe('unsupported harness type: deepseek_harness');
+    } finally {
+      await db.collection('sessions').deleteMany({
+        controllerId: new mongoose.Types.ObjectId(controllerId),
+      });
+      await db.collection('cloudcontainers').deleteOne({ _id: containerId });
+      await db.collection('cloudhosts').deleteOne({ _id: hostId });
+      await db.collection('controllerworkspaces').deleteMany({
+        controllerId: new mongoose.Types.ObjectId(controllerId),
+      });
+      await db.collection('controllers').deleteOne({
+        _id: new mongoose.Types.ObjectId(controllerId),
+      });
+      client.disconnect();
+    }
+  });
 });

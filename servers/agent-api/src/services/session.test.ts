@@ -43,6 +43,12 @@ vi.mock('../models/cloud-host.js', () => ({
   },
 }));
 
+vi.mock('../models/cloud-container.js', () => ({
+  CloudContainer: {
+    findOne: vi.fn(),
+  },
+}));
+
 vi.mock('../models/controller-workspace.js', () => ({
   ControllerWorkspace: {
     findOne: vi.fn(),
@@ -114,6 +120,7 @@ import { Session } from '../models/session.js';
 import { AcpMessage } from '../models/acp-message.js';
 import { Controller } from '../models/controller.js';
 import { CloudHost } from '../models/cloud-host.js';
+import { CloudContainer } from '../models/cloud-container.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { McpServer } from '../models/mcp-server.js';
 import { CustomMcpServer } from '../models/custom-mcp-server.js';
@@ -2373,6 +2380,14 @@ describe('SessionService', () => {
       vi.mocked(ControllerWorkspace.find).mockReturnValue({
         lean: vi.fn().mockResolvedValue([{ path: '/home/user/project' }]),
       } as never);
+      // A-11 门按「创建期快照 ∪ 容器读模型」判定；缺省无容器记录时退化为创建期快照。
+      vi.mocked(CloudContainer.findOne).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            lean: vi.fn().mockResolvedValue(null),
+          }),
+        }),
+      } as never);
     });
 
     it('rejects createSession on a non-RUNNING cloud host', async () => {
@@ -2471,6 +2486,51 @@ describe('SessionService', () => {
           workspaceId: 'ws-1',
         }),
       ).rejects.toThrow('unsupported harness type: kimi_code');
+    });
+
+    it('T-MAP2b (#498): A-11 会话工具 ∈ 创建期快照 ∪ 运行期安装的容器读模型', async () => {
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl-1', type: 'cloud', name: 'cloud' }),
+      } as never);
+      vi.mocked(CloudHost.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: 'host-1',
+          status: 'RUNNING',
+          // 创建云电脑时只勾选 OPENCODE
+          harnessTypes: ['OPENCODE'],
+        }),
+      } as never);
+      // 运行期补装 Kimi Code：cloud-controller 追加到 cloudcontainers 读模型
+      vi.mocked(CloudContainer.findOne).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            lean: vi.fn().mockResolvedValue({ harnessTypes: ['opencode', 'kimi_code'] }),
+          }),
+        }),
+      } as never);
+      vi.mocked(ControllerWorkspace.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ path: '/home/user/project' }),
+      } as never);
+      vi.mocked(McpServer.countDocuments).mockResolvedValue(1 as never);
+      vi.mocked(Session.create).mockResolvedValue(mockSessionDoc() as never);
+
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'kimi_code',
+          workspaceId: 'ws-1',
+        }),
+      ).resolves.toBeDefined();
+      expect(CloudContainer.findOne).toHaveBeenCalledWith({ hostId: 'host-1' });
+
+      // 两个来源都不包含的类型仍被拒（A-11 门未被放宽）
+      await expect(
+        sessionService.create('user-1', {
+          controllerId: 'ctrl-1',
+          acpServerType: 'deepseek_harness',
+          workspaceId: 'ws-1',
+        }),
+      ).rejects.toThrow('unsupported harness type: deepseek_harness');
     });
 
     it('A-2 rejects send/cancel writes to a stopped cloud host session', async () => {
