@@ -1,5 +1,5 @@
 ---
-description: 工作流支持打断技术提案：会话详情「立即失败」按钮——受控关闭节点会话（suppressFallback 绕过中断自动重试排期）+ 引擎 fail 转移（source=MANUAL_INTERRUPT）+ 人工介入待办；新增 failInfo.source、契约注释、前端会话详情入口与二次确认
+description: 工作流支持打断技术提案：工作流节点详情「立即失败」按钮——受控关闭节点会话（suppressFallback 绕过中断自动重试排期）+ 引擎 fail 转移（source=MANUAL_INTERRUPT）+ 人工介入待办；新增 failInfo.source、契约注释、前端节点详情入口与二次确认
 ---
 
 # 工作流支持打断 - 技术提案
@@ -19,11 +19,12 @@ description: 工作流支持打断技术提案：会话详情「立即失败」�
 
 该机制保证瞬时故障自愈，但**人类无法主动、即时叫停**：手动关闭会话仍经 `sessionService.close`（非 `suppressFallback`）触发 `sessionEndedCallback` → `handleSessionEnded` → 排期下一次重试，无法真正打断；唯一「立即失败」入口是 AI 侧 `failCurrentNode`（`source='LLM_REPORTED'`），人类侧缺失。
 
-Issue #512 要求：在**会话详情**中增加「立即失败」按钮，中断会话，并让工作流**立即进入失败状态**（绕过 10 次自动重试）。
+Issue #512 要求：在**工作流节点详情**中增加「立即失败」按钮，中断会话，并让工作流**立即进入失败状态**（绕过 10 次自动重试）。
+（需求澄清：issue 原文「会话详情」为笔误，经打回确认入口落在**工作流节点详情**——`NodeDetailDrawer`，与既有「重启节点」入口同处。）
 
 ### 1.2 目标
 
-1. 会话详情提供「立即失败」入口（仅工作流节点会话 + RUNNING/REWORK/RETRY_FAILED 状态可见）。
+1. 工作流节点详情提供「立即失败」入口（仅 AI 节点 + RUNNING/REWORK/RETRY_FAILED 状态可见）。
 2. 确认后**受控关闭**节点会话（`suppressFallback:true`）——不触发 `sessionEndedCallback`、不排期重试、不消耗 `retryCount` 预算。
 3. 引擎 `fail` 转移（`RUNNING/REWORK→FAILED`），`failInfo.source` 新增 `MANUAL_INTERRUPT`（人类主动打断），保留 `retryCount` 与调度字段清理口径与既有 `fail` 一致。
 4. `clearRetrySchedule`（清 `nextRetryAt/retryPhase/retryDeadlineAt/retryTrigger`，保留 `retryCount`）——不新增重试排期。
@@ -39,7 +40,7 @@ Issue #512 要求：在**会话详情**中增加「立即失败」按钮，中�
 - `services/workflow/pr-check-run-sync.ts`：`mapNodeStatusToCheckRun` 无需新增（FAILED 既有映射 `failure`，与 `LLM_REPORTED` 同族，语义一致）。
 - 契约 `contracts/workflow.graphql`：`WorkflowNodeFailInfo.source` 注释补 `MANUAL_INTERRUPT`；新增 `interruptNode` mutation；`restartNode` 注释口径已含 RETRY_FAILED（不变）。
 - `graphql/schemas/workflow.ts`（手写 schema）+ `graphql/resolvers/workflow.ts`：新增 `interruptNode` mutation 与 resolver。
-- `apps/agent-web`：`SessionView` 标题栏「立即失败」按钮（仅工作流节点会话 + RUNNING/REWORK/RETRY_FAILED 可见）+ 二次确认对话框 + `failInfo.source` 文案展示；`NodeDetailDrawer` 失败来源文案（MANUAL_INTERRUPT）。
+- `apps/agent-web`：`NodeDetailDrawer` 新增「立即失败」按钮（仅 AI 节点 + RUNNING/REWORK/RETRY_FAILED 可见）+ 二次确认对话框 + `failInfo.source` 文案展示（MANUAL_INTERRUPT）。
 - 迁移 `028-workflow-interrupt`：无数据模型变更（`failInfo.source` 为自由文本 String，无需回填）；如需索引则幂等建 `failInfo.source` 部分索引（可选，本期不做）。
 - 测试：agent-api 单测（引擎 / instance / tool-handlers）、agent-web 单测、`tests/api`、`tests/e2e`。
 
@@ -59,9 +60,8 @@ Issue #512 要求：在**会话详情**中增加「立即失败」按钮，中�
 ```mermaid
 flowchart LR
     subgraph 前端
-        SV[SessionView 标题栏<br/>「立即失败」按钮]
+        ND[NodeDetailDrawer<br/>「立即失败」按钮 + 失败来源文案]
         CD[二次确认对话框]
-        ND[NodeDetailDrawer<br/>失败来源文案]
     end
     subgraph agent-api
         RES[GraphQL resolver<br/>interruptNode]
@@ -74,7 +74,7 @@ flowchart LR
     subgraph 存储
         DB[(MongoDB<br/>workflowinstances)]
     end
-    SV -->|点击| CD
+    ND -->|点击| CD
     CD -->|确认| RES
     RES --> INST
     INST -->|归属/不可用/状态门| DB
@@ -101,7 +101,7 @@ flowchart LR
 | `services/workflow/pr-check-run-sync.ts` | 无新增（FAILED 既有 `failure` 映射） | 零改动 |
 | `graphql/schemas/workflow.ts` + `resolvers/workflow.ts` | 新增 `interruptNode` mutation + resolver | 手写 schema 与契约双写 |
 | `contracts/workflow.graphql` | `failInfo.source` 注释补 MANUAL_INTERRUPT + `interruptNode` mutation | 契约与手写 schema 双写 |
-| `apps/agent-web` | SessionView 按钮 + 二次确认 + 失败来源文案 | 仅工作流节点会话 + 可打断状态可见 |
+| `apps/agent-web` | NodeDetailDrawer 按钮 + 二次确认 + 失败来源文案 | 仅 AI 节点 + 可打断状态可见 |
 
 ## 3. API 设计
 
@@ -113,12 +113,12 @@ type WorkflowNodeFailInfo {
   # 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED /
   # RETRY_EXHAUSTED（中断自动重试 10 次用尽）/
   # CONTROLLER_UNAVAILABLE（实例接续时收敛）/
-  # MANUAL_INTERRUPT（人类在会话详情「立即失败」主动打断，绕过自动重试）
+  # MANUAL_INTERRUPT（人类在工作流节点详情「立即失败」主动打断，绕过自动重试）
   source: String!
   at: String!
 }
 
-# 立即打断节点：人类在会话详情主动中断节点会话并让节点立即进入失败状态，
+# 立即打断节点：人类在工作流节点详情主动中断节点会话并让节点立即进入失败状态，
 # 绕过中断自动重试机制（不消耗 retryCount 预算、不排期重试）。
 # 仅允许 RUNNING/REWORK/RETRY_FAILED 的 AI 节点；实例不可用拒绝。
 # 错误文案表：工作流实例不存在或无权限 / 工作流实例已删除 /
@@ -185,20 +185,20 @@ async interruptNode(userId: string, instanceId: string, nodeId: string): Promise
 ```mermaid
 sequenceDiagram
     participant U as 用户
-    participant SV as SessionView
+    participant ND as NodeDetailDrawer
     participant RES as GraphQL interruptNode
     participant INST as instance.interruptNode
     participant SES as sessionService.close
     participant ENG as workflowEngine
     participant TODO as TodoService
 
-    U->>SV: 打开工作流节点会话详情
-    SV->>SV: 判定 workflowInstanceId 非空 + 节点 RUNNING/REWORK/RETRY_FAILED
-    SV->>U: 展示「立即失败」按钮
-    U->>SV: 点击「立即失败」
-    SV->>U: 二次确认对话框
-    U->>SV: 确认
-    SV->>RES: interruptNode(instanceId, nodeId)
+    U->>ND: 打开工作流节点详情
+    ND->>ND: 判定节点为 AI + RUNNING/REWORK/RETRY_FAILED
+    ND->>U: 展示「立即失败」按钮
+    U->>ND: 点击「立即失败」
+    ND->>U: 二次确认对话框
+    U->>ND: 确认
+    ND->>RES: interruptNode(instanceId, nodeId)
     RES->>INST: interruptNode(userId, instanceId, nodeId)
     INST->>INST: 归属/不可用/类型/状态门
     INST->>SES: close(sessionId, {suppressFallback:true, reason:'workflow_manual_interrupt'})
@@ -206,8 +206,8 @@ sequenceDiagram
     INST->>ENG: transition(instanceId, nodeId, 'fail', {source:'MANUAL_INTERRUPT'})
     ENG->>ENG: fail 分支：status=FAILED + clearRetrySchedule + failInfo
     INST->>TODO: createWorkflowInterventionTodo(...)
-    RES-->>SV: 返回转移后节点
-    SV->>U: 节点失败 + 工作流阻断 + 待办提示
+    RES-->>ND: 返回转移后节点
+    ND->>U: 节点失败 + 工作流阻断 + 待办提示
 ```
 
 #### 5.1.2 AI 指示下打断（MCP 工具 `interruptCurrentNode`）
@@ -245,14 +245,14 @@ const TRANSITIONS: Record<WorkflowEvent, { from: string[]; to: string }> = {
 
 #### 实现点 3：前端入口可见性门控
 
-- **描述**: 「立即失败」按钮仅对工作流节点会话 + 可打断状态可见，避免非工作流会话 / 不可打断状态误展示。
-- **技术细节**: `SessionView` 读取 `GET_SESSION` 的 `workflowInstanceId`（非空 = 工作流节点会话）+ `workflowNodeId` → 经 `GET_WORKFLOW_INSTANCE` 查节点 `status ∈ { RUNNING, REWORK, RETRY_FAILED }` → 渲染按钮。实例不可用（`unavailableReason` 非空）时置灰并提示「实例不可用，请先接续」。
-- **风险点**: `SessionView` 既有 `workflowInstanceId` / `workflowNodeId` 字段（节点会话打标）已存在，无需新增查询字段；节点状态来自 `GET_WORKFLOW_INSTANCE`（5s 轮询）或首页聚合。二次确认对话框复用既有 `ConfirmDialog`。
+- **描述**: 「立即失败」按钮仅对 AI 节点 + 可打断状态可见，避免非 AI 节点 / 不可打断状态误展示。
+- **技术细节**: `NodeDetailDrawer` 已接收 `instance` + `node`（图表与列表视图共用），直接判定 `node.type === 'AI'` + `node.status ∈ { RUNNING, REWORK, RETRY_FAILED }` →渲染按钮。无需额外查询（节点状态来自 `GET_WORKFLOW_INSTANCE` 5s 轮询）。实例不可用（`unavailable` 非空）时置灰并提示「实例不可用，请先接续」。
+- **风险点**: 节点详情抽屉已有 `canRestart`（AI + RUNNING/REWORK/FAILED/RETRY_FAILED）门控，「立即失败」门控与之对称但状态集不含 FAILED（FAILED 节点已有「重启节点」入口，无需再打断——FAILED 已处于失败状态）。二次确认对话框复用既有 `ConfirmDialog`。
 
 #### 实现点 4：失败来源可辨识
 
 - **描述**: 人类需辨识「主动打断」区别于「自动重试用尽」与「Agent 报告失败」。
-- **技术细节**: `failInfo.source='MANUAL_INTERRUPT'`（独立来源值）。`NodeDetailDrawer` / `SessionView` 失败提示按 `source` 展示文案：`MANUAL_INTERRUPT` →「已被人工立即打断」；`RETRY_EXHAUSTED` →「重试失败」；`LLM_REPORTED` →「失败」；`SESSION_STUCK` / `SESSION_START_FAILED` / `CONTROLLER_UNAVAILABLE` → 既有文案。
+- **技术细节**: `failInfo.source='MANUAL_INTERRUPT'`（独立来源值）。`NodeDetailDrawer` 失败提示按 `source` 展示文案：`MANUAL_INTERRUPT` →「已被人工立即打断」；`RETRY_EXHAUSTED` →「重试失败」；`LLM_REPORTED` →「失败」；`SESSION_STUCK` / `SESSION_START_FAILED` / `CONTROLLER_UNAVAILABLE` → 既有文案。
 - **风险点**: `failInfo.source` 为自由文本 String，前端按值匹配；新增值须同步契约注释与前端文案映射（单一来源）。
 
 #### 实现点 5：与既有兜底机制的关系
@@ -271,7 +271,7 @@ const TRANSITIONS: Record<WorkflowEvent, { from: string[]; to: string }> = {
 | D2 重试预算 | 打断消耗 1 次重试预算 | 打断不消耗重试预算 | B | PRD 要求「绕过自动重试」；`suppressFallback` + `clearRetrySchedule` 保证不排期、不递增 `retryCount` |
 | D3 关闭方式 | 普通 close（触发重试） | 受控 close（`suppressFallback:true`） | B | 受控关闭从源头杜绝 `sessionEndedCallback`，不依赖 CAS 兜底 |
 | D4 `fail` from | 仅 RUNNING/REWORK | + RETRY_FAILED | B | 允许自动重试用尽节点经人工打断直接转 FAILED，与 `resumeFailed`/`restart` 的 from 对称 |
-| D5 入口位置 | 节点详情抽屉 | 会话详情标题栏 | B | Issue #512 明确「在会话详情中增加立即失败按钮」；节点详情已有「重启节点」入口 |
+| D5 入口位置 | 节点详情抽屉 | 会话详情标题栏 | A | Issue #512 原文「会话详情」为笔误，打回确认入口落在**工作流节点详情**（`NodeDetailDrawer`），与既有「重启节点」入口同处 |
 | D6 二次确认 | 无确认 | 有确认 | B | 误触导致工作流立即失败不可逆，必须二次确认 |
 | D7 AI 入口 | 不提供 MCP 工具 | 提供 `interruptCurrentNode` | B | 与 `failCurrentNode` / `resumeFailedNode` 对称，AI 在人类指示下可触发打断；工具总数 14→15 |
 | D8 check-run 映射 | 新增 `INTERRUPTED` conclusion | 沿用 `FAILED` failure | B | 沿用 FAILED 语义（执行失败），不新增 check-run 状态 |
@@ -310,11 +310,8 @@ servers/agent-api/
 contracts/
 └── workflow.graphql                         # failInfo.source 注释 + interruptNode mutation
 apps/agent-web/src/
-├── components/session/
-│   ├── SessionView.tsx                      # 标题栏「立即失败」按钮 + 二次确认 + 失败来源文案
-│   └── SessionHeader.tsx（或标题栏组件）    # 按钮门控（workflowInstanceId + 状态）
 ├── components/workflow/
-│   └── NodeDetailDrawer.tsx                 # failInfo.source 文案展示（MANUAL_INTERRUPT）
+│   └── NodeDetailDrawer.tsx                 # 新增「立即失败」按钮 + 二次确认 + 失败来源文案（MANUAL_INTERRUPT）
 └── graphql/workflow.ts                      # INTERRUPT_NODE mutation + 类型
 ```
 
@@ -324,7 +321,7 @@ apps/agent-web/src/
 
 - 新增/变更逻辑行覆盖 ≥ 80%（backend-rules 口径）；状态机与状态门分支全覆盖。
 - API 测试覆盖：`interruptNode` mutation（归属/不可用/类型/状态门 + 成功转移 + 待办）；`restartNode` 接受 `RETRY_FAILED` 来源不变回归。
-- E2E：工作流节点会话 →「立即失败」→ 二次确认 → 节点 FAILED + `failInfo.source=MANUAL_INTERRUPT` + 工作流阻断 + `retryCount` 未递增 + `nextRetryAt` null。
+- E2E：工作流节点详情 →「立即失败」→ 二次确认 → 节点 FAILED + `failInfo.source=MANUAL_INTERRUPT` + 工作流阻断 + `retryCount` 未递增 + `nextRetryAt` null。
 
 ### 8.2 测试类型
 
@@ -334,9 +331,9 @@ apps/agent-web/src/
 | 单元（instance 服务） | Vitest | T-INT1~8：归属/不可用/类型/状态门各拒绝文案；受控关闭 `suppressFallback`（不触发 `sessionEndedCallback`）；`fail` 转移 `source=MANUAL_INTERRUPT`；待办创建；会话已 ended 幂等；并发 CAS |
 | 单元（tool-handlers） | Vitest | T-TH1~3：`interruptCurrentNode` 节点作用域 + 状态门 + 转移；工具总数 14→15 守卫；未知工具拒绝 |
 | 单元（迁移） | Vitest | T-MIG1：028 幂等 no-op（无数据模型变更） |
-| 前端 | Vitest + RTL | T-WEB1~4：SessionView 按钮门控（工作流会话 + 状态 + 不可用置灰）；二次确认对话框；`failInfo.source` 文案映射（MANUAL_INTERRUPT / RETRY_EXHAUSTED / LLM_REPORTED）；NodeDetailDrawer 失败来源文案 |
+| 前端 | Vitest + RTL | T-WEB1~4：NodeDetailDrawer 按钮门控（AI 节点 + 状态 + 不可用置灰）；二次确认对话框；`failInfo.source` 文案映射（MANUAL_INTERRUPT / RETRY_EXHAUSTED / LLM_REPORTED） |
 | API | tests/api | `interruptNode` mutation 门控与成功转移；`restartNode` RETRY_FAILED 回归 |
-| E2E | tests/e2e | 工作流节点会话「立即失败」全链路 → FAILED + 待办 + retryCount 未递增 + 不排期重试 |
+| E2E | tests/e2e | 工作流节点详情「立即失败」全链路 → FAILED + 待办 + retryCount 未递增 + 不排期重试 |
 
 ## 9. 验收标准
 
