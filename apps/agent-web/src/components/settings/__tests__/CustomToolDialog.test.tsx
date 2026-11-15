@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: vi.fn(() => ({ data: undefined, loading: false })),
@@ -52,6 +52,25 @@ describe('CustomToolDialog（T-CTW2）', () => {
     const fileOption = Array.from(select.options).find((option) => option.value === 'file')
     expect(fileOption?.disabled).toBe(true)
     expect(fileOption?.textContent).toContain('本期不支持')
+  })
+
+  it('form 切回 json 后 stale form 行不阻塞提交（校验与提交内容一致）', async () => {
+    const onSubmit = renderDialog()
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'stale-form-tool' } })
+    fireEvent.change(screen.getByLabelText('类型'), { target: { value: 'http' } })
+    fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'POST' } })
+
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'form' } })
+    fireEvent.click(screen.getByRole('button', { name: '添加 Form 字段' }))
+    expect(screen.getByLabelText('Form 字段 1')).toHaveValue('')
+
+    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'json' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled())
+    const input = onSubmit.mock.calls[0][0]
+    expect(input.http.bodyType).toBe('json')
+    expect(input.http.form).toBeUndefined()
   })
 
   it('headers/queries 勾选展开；Cookie 重复被拦截；endpoint 必须 http(s)', async () => {

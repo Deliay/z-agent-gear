@@ -320,7 +320,7 @@ cd tests/e2e && BASE_URL=... API_URL=... INTERNAL_API_TOKEN=... pnpm exec playwr
 | 迁移编号与主干冲突 | 026 撞号（main 已占用 026/027） | D1：需求总分支内用 026，合回主干前 merge 协调顺延并同步本文/提案/AGENTS |
 | undici 新依赖引入面 | 依赖面扩大、版本漂移 | D2：锁 minor 版本、仅 custom-tool-http 单点 import；lockfile 随 PR 评审 |
 | contentEditable 跨浏览器差异 | 编辑器行为不一致 | 原子 chip 不可编辑 + 整体删除规避；IME 门控；组件测试覆盖关键交互 |
-| http 执行器 SSRF 面 | 服务端直连任意目标 | 与 custom-mcp-forwarder 同口径（不限制内外网，PRD 约束）；30s 超时 + 256KB 截断 + 日志红线兜底 |
+| http 执行器 SSRF 面 | 服务端直连任意目标 | 与 custom-mcp-forwarder 同口径（不限制内外网，PRD 约束）；30s 超时 + 256KB 截断 + 日志红线兜底；**已知取舍**：响应先全量缓冲再截断（受 30s 兜底），流式读取列为后续优化（评审确认本期可接受） |
 | Json 格式双引号误用 | 用户模板自写引号导致双写 | 契约/编辑器提示「Json 模式自动加引号转义」；T-FR1 锚定语义 |
 | 老会话无新平台服务 | 装配前创建的会话看不到新工具 | 接受（提案口径）：继续会话/新会话获得，不回填 |
 | 发布倒挂（新前端 + 旧 agent-api） | 新区块查询报错 | 发布顺序 agent-api → agent-web；回滚先回前端 |

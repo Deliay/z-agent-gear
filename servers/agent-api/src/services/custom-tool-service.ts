@@ -539,15 +539,16 @@ export class CustomToolService {
     const current = mapTool(tool);
 
     const type = params.type ?? current.type;
+    // 显式 null/undefined 视作「未提供」（不清空名称）；description 的 null 仍表示清空描述。
     const merged: CustomToolInput = {
-      name: params.name !== undefined ? params.name : current.name,
+      name: params.name == null ? current.name : params.name,
       description: params.description !== undefined ? params.description : current.description,
       type,
       args: params.args !== undefined ? params.args : current.args,
       prompt: params.prompt !== undefined ? params.prompt : current.prompt,
       http: params.http !== undefined ? params.http : current.http,
     };
-    const validated = validateCustomToolInput(type, merged, String(merged.name));
+    const validated = validateCustomToolInput(type, merged);
 
     if (validated.name !== current.name) {
       const dup = await CustomTool.findOne({ name: validated.name }).lean();

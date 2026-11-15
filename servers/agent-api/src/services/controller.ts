@@ -169,13 +169,13 @@ export class ControllerService {
             _id: { $in: serverIds },
             userId,
             name: {
-            $in: [
-              CLOUD_HOST_TOOLS_SERVER_NAME,
-              SESSION_PREVIEW_TOOLS_SERVER_NAME,
-              VALUT_TOOLS_SERVER_NAME,
-              CUSTOM_TOOLS_SERVER_NAME,
-            ],
-          },
+              $in: [
+                CLOUD_HOST_TOOLS_SERVER_NAME,
+                SESSION_PREVIEW_TOOLS_SERVER_NAME,
+                VALUT_TOOLS_SERVER_NAME,
+                CUSTOM_TOOLS_SERVER_NAME,
+              ],
+            },
           });
           throw new Error(platformSelected ? 'MCP_SERVER_NOT_SELECTABLE' : 'MCP_SERVER_NOT_FOUND');
         }

@@ -499,6 +499,8 @@ pnpm run start   # Start production server
     `insecureAgent`）；30s 超时；响应 256KB 截断；json body 渲染后必须合法 JSON；错误归类
     `request failed` / `request timeout` / `tls verification failed`；**日志红线**：正文/headers/
     endpoint 全串/渲染中间值不入日志。
+    **已知取舍**：响应体先 `arrayBuffer()` 全量缓冲再按 256KB 截断（受 30s 硬超时兜底），
+    超大响应体会整段进内存；流式读取 + 超限提前 abort 列为后续优化（本期不改，评审确认可接受）。
   - 装配：`sessionService.create` 公共路径（普通/云/工作流节点会话）恒装配并去重；
     `mcp-dispatch` platform 三元链尾部直发；默认 MCP 候选与 `setControllerDefaultMcp` 的
     `$nin` 排除两个新名字（前端可见性沿用 preview 先例，零改动）。

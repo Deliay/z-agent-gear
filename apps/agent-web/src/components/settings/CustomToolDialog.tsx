@@ -212,12 +212,16 @@ export default function CustomToolDialog({
       if (keyError) return setError(`Query ${index + 1}：${keyError}`)
       queryKeys.push(row.key.trim())
     }
-    for (const field of form.form) {
-      if (!field.key.trim()) return setError('Form 字段名称不能为空')
-      if (field.type === 'file') return setError('本期不支持文件类型')
-    }
 
     const effectiveBodyType = bodyVisible && bodyType !== 'none' ? bodyType : null
+    // 仅校验实际提交的 body 形态：切离 form 后残留行不参与校验（对应编辑区已隐藏）。
+    if (effectiveBodyType === 'form') {
+      for (const field of form.form) {
+        if (!field.key.trim()) return setError('Form 字段名称不能为空')
+        if (field.type === 'file') return setError('本期不支持文件类型')
+      }
+    }
+
     await onSubmit({
       name: form.name.trim(),
       description: form.description.trim() || null,
