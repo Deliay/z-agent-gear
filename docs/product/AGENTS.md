@@ -171,6 +171,7 @@ flowchart LR
 - [[draft/20261112-session-interaction-cards.md]] — 会话中的提问表单与权限审批作为会话内容出现（Elicitation/权限审批持久化为会话时间线卡片：完整状态迁移与提交内容回显、过期倒计时；弹窗降级为通知与跳转会话链接；工作流列表/图形视图节点待审批感叹号点击展开会话）
 - [[draft/20261113-cloud-controller-operations-restriction.md]] — 设置中控制器的操作按钮优化（云电脑/云控制器在「设置-控制器管理」不展示「重命名/删除/重新生成Key」三个操作入口，服务端同步拒绝三操作且零副作用；本地控制器零变化）
 - [[draft/20261114-workflow-instance-continuation.md]] — 已实例化的工作流接续（控制器离线/被删除后实例展示不可用标识与「接续」入口，对话框选择新控制器/新工作路径/是否创建新 Worktree（默认勾选）/逐节点 AI 节点 Harness 映射，接续后保留进度恢复流转）
+- [[draft/20261115-workflow-reject-rework-session-behavior.md]] — 工作流打回/返工会话行为优化（AI 节点级「返工时」「打回后」会话策略：新会话/原始会话；选择原始会话可勾选「压缩原始上下文」——恢复后先发送压缩指令再发送继续提示词；后台按 Harness 配置压缩指令，默认 /compact）
 
 ### 实现中文档（`shipping/`）
 

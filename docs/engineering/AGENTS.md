@@ -240,6 +240,7 @@ flowchart LR
 - [[proposals/20261114-feat-oidc-binding-optimization.md]] — OIDC 绑定优化（front 回调未命中改道 pending ticket + 身份选择页「绑定已有帐号验密/创建新帐号」、front-bind surface 与前台绑定票据、externallogins 每账户每 Provider 唯一索引、accounts.passwordless 标记与解绑防呆、迁移 027）
 - [[proposals/20261113-feat-oidc-github-oauth-login.md]] — 支持自定义 OIDC 登录和 GitHub OAuth 登录（admin-api 唯一写方 authproviders（OIDC 多条 + GitHub 单条，secret AES-256-GCM 不回显）；agent-api 统一 OAuth 回调唯一入口（openid-client + PKCE/nonce，GitHub state），前台 externallogins 自动开户复用 provisioning 抽取，后台 adminexternallogins 先绑定后登录经 admin-api 内部端点换票；前后台一次性 ticket 兑换登录；契约 auth/admin-auth/admin-auth-provider/auth-oauth.md）
 - [[proposals/20261114-feat-workflow-instance-continuation.md]] — 已实例化的工作流接续（契约新增 WorkflowInstanceUnavailableReason/continuationHistory/continueWorkflowInstance（harnessMappings 逐节点映射）；agent-api 接续服务换绑控制器与工作区、可选新 Worktree、未完成 AI 节点 Harness 逐节点改写、RUNNING/REWORK 节点标记 FAILED(CONTROLLER_UNAVAILABLE)；agent-web 不可用徽标与接续对话框）
+- [[proposals/20261115-feat-workflow-reject-rework-session-behavior.md]] — 工作流打回/返工会话行为优化（契约新增 WorkflowNodeSessionBehavior 与节点 4 字段六处双写、admin-harness.graphql 新增；agent-api Orchestrator 返工/复工四象限分流、compact.ts 压缩管线复用空闲等待器 + compactInFlight 抑制停滞检测、新会话返工 assemblePrompt+返工说明段单条发送含 completeCurrentRework 指引、harnessconfigs 只读镜像 resolveCompactCommand 默认 /compact；admin-api harnessconfigs 唯一写方与种子迁移；agent-web 节点编辑器会话行为区、admin-web Harness 配置页；存量零迁移默认值即现状）
 
 ### 实现计划（`plan/`）
 
