@@ -4,7 +4,26 @@ import { gql } from '@apollo/client'
 
 export type WorkflowNodeType = 'HUMAN' | 'AI' | 'FLAG'
 
+/**
+ * AI 节点打回/返工会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null）
+ * - NEW_SESSION：拉起全新会话
+ * - ORIGINAL_SESSION：继续使用原始会话（resume 原会话）
+ */
+export type WorkflowNodeSessionBehavior = 'NEW_SESSION' | 'ORIGINAL_SESSION'
+
 export type ResourceCreatedBy = 'HUMAN' | 'AI'
+
+/** 节点会话行为 4 字段（读取侧 `??` 归一，HUMAN/FLAG 恒 null） */
+export interface WorkflowNodeSessionBehaviorFields {
+  /** 返工时行为：缺省 ORIGINAL_SESSION（=现状） */
+  reworkSessionBehavior?: WorkflowNodeSessionBehavior | null
+  /** 返工时=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法） */
+  reworkCompactOriginalContext?: boolean | null
+  /** 打回后（上游返工完成再次流转到本节点）行为：缺省 NEW_SESSION（=现状） */
+  resumeSessionBehavior?: WorkflowNodeSessionBehavior | null
+  /** 打回后=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法） */
+  resumeCompactOriginalContext?: boolean | null
+}
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK'
 
@@ -22,7 +41,7 @@ export type WorkflowNodeStatus =
   /** 中断自动重试 10 次用尽（阻断流程，可重启节点或会话内指示后恢复） */
   | 'RETRY_FAILED'
 
-export interface WorkflowTemplateNodeData {
+export interface WorkflowTemplateNodeData extends WorkflowNodeSessionBehaviorFields {
   nodeKey: string
   type: WorkflowNodeType
   name: string
@@ -109,7 +128,7 @@ export interface WorkflowNodeFailInfoData {
   at: string
 }
 
-export interface WorkflowNodeData {
+export interface WorkflowNodeData extends WorkflowNodeSessionBehaviorFields {
   id: string
   nodeKey: string
   type: WorkflowNodeType
@@ -212,7 +231,7 @@ export interface WorkflowInstanceData extends WorkflowInstanceSummaryData {
   continuationHistory?: WorkflowContinuationData[]
 }
 
-export interface WorkflowTemplateNodeInput {
+export interface WorkflowTemplateNodeInput extends WorkflowNodeSessionBehaviorFields {
   nodeKey: string
   type: WorkflowNodeType
   name: string
@@ -239,7 +258,7 @@ export interface AgentNodeConfigInput {
   initNewWorktree: boolean
 }
 
-export interface ConfiguredWorkflowNodeInput {
+export interface ConfiguredWorkflowNodeInput extends WorkflowNodeSessionBehaviorFields {
   nodeKey: string
   type: WorkflowNodeType
   name: string
@@ -297,7 +316,7 @@ export interface ContinueWorkflowInstanceInput {
   harnessMappings: NodeHarnessMappingInput[]
 }
 
-export interface WorkflowNodeUpdateInput {
+export interface WorkflowNodeUpdateInput extends WorkflowNodeSessionBehaviorFields {
   name?: string | null
   description?: string | null
   stage?: string | null
@@ -323,6 +342,10 @@ const TEMPLATE_NODE_FIELDS = gql`
     dependsOn
     requiresWorktree
     linkUpstreamPullRequest
+    reworkSessionBehavior
+    reworkCompactOriginalContext
+    resumeSessionBehavior
+    resumeCompactOriginalContext
     sortOrder
   }
 `
@@ -359,6 +382,10 @@ const CONFIGURED_NODE_FIELDS = gql`
     dependsOn
     requiresWorktree
     linkUpstreamPullRequest
+    reworkSessionBehavior
+    reworkCompactOriginalContext
+    resumeSessionBehavior
+    resumeCompactOriginalContext
     sortOrder
   }
 `
@@ -474,6 +501,10 @@ export const GET_WORKFLOW_INSTANCE = gql`
         sortOrder
         dependsOn
         linkUpstreamPullRequest
+        reworkSessionBehavior
+        reworkCompactOriginalContext
+        resumeSessionBehavior
+        resumeCompactOriginalContext
         createdAt
         startedAt
         reworkedAt
