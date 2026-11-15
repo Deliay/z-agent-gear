@@ -162,6 +162,19 @@ export interface WorkflowPullRequestLinkData {
   lastSyncError: string | null
 }
 
+export type WorkflowInstanceUnavailableReason =
+  | 'CONTROLLER_OFFLINE'
+  | 'CONTROLLER_DELETED'
+  | null
+
+export interface WorkflowContinuationData {
+  fromControllerId: string
+  fromWorkspaceId: string
+  toControllerId: string
+  toWorkspaceId: string
+  at: string
+}
+
 export interface WorkflowInstanceSummaryData {
   id: string
   // 统一实例化三来源中仅 CONFIGURED 来源保证存在，故可空
@@ -176,6 +189,8 @@ export interface WorkflowInstanceSummaryData {
   lastNodeName: string | null
   lastNodeStatus: WorkflowNodeStatus | null
   archived: boolean
+  /** 实例不可用原因；null = 可用（字段级实时判定） */
+  unavailableReason?: WorkflowInstanceUnavailableReason
   // 归属对象（集中列表展示所属工作区/控制器）；可能已被删除，消费方须判空
   workspace: { id: string; name: string } | null
   controller: { id: string; name: string } | null
@@ -193,6 +208,8 @@ export interface WorkflowInstanceData extends WorkflowInstanceSummaryData {
   blackboardTrash: BlackboardEntryData[]
   additionalPrompts: WorkflowAdditionalPromptData[]
   pullRequestLinks: WorkflowPullRequestLinkData[]
+  /** 接续历史（时间升序） */
+  continuationHistory?: WorkflowContinuationData[]
 }
 
 export interface WorkflowTemplateNodeInput {
@@ -265,6 +282,19 @@ export interface InstantiateWorkflowInput {
   nodes: ConfiguredWorkflowNodeInput[]
   // 是否为工作流创建独立 Worktree（默认 false）
   createWorkflowWorktree?: boolean | null
+}
+
+export interface NodeHarnessMappingInput {
+  nodeId: string
+  acpServerType: string
+}
+
+export interface ContinueWorkflowInstanceInput {
+  controllerId: string
+  workspaceId: string
+  /** 缺省 true */
+  createWorkflowWorktree?: boolean | null
+  harnessMappings: NodeHarnessMappingInput[]
 }
 
 export interface WorkflowNodeUpdateInput {
@@ -396,6 +426,7 @@ export const GET_WORKFLOW_INSTANCES = gql`
       lastNodeName
       lastNodeStatus
       archived
+      unavailableReason
       workspace { id name }
       controller { id name }
       createdAt
@@ -417,6 +448,7 @@ export const GET_WORKFLOW_INSTANCE = gql`
       lastNodeName
       lastNodeStatus
       archived
+      unavailableReason
       workspace { id name }
       controller { id name }
       workflowWorktreePath
@@ -474,6 +506,13 @@ export const GET_WORKFLOW_INSTANCE = gql`
         value
       }
       pendingInteractionSessionIds
+      continuationHistory {
+        fromControllerId
+        fromWorkspaceId
+        toControllerId
+        toWorkspaceId
+        at
+      }
       pullRequestLinks {
         pullRequestId
         prUrl
@@ -579,6 +618,15 @@ export const RENAME_WORKFLOW_INSTANCE = gql`
     renameWorkflowInstance(id: $id, name: $name) {
       id
       name
+    }
+  }
+`
+
+export const CONTINUE_WORKFLOW_INSTANCE = gql`
+  mutation ContinueWorkflowInstance($id: ID!, $input: ContinueWorkflowInstanceInput!) {
+    continueWorkflowInstance(id: $id, input: $input) {
+      id
+      unavailableReason
     }
   }
 `

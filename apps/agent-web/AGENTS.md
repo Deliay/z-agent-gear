@@ -283,6 +283,18 @@ pnpm run preview  # Preview production build
 - **图表自动定位**：`graph/graph-layout.ts` 的纯函数 `pickFocusWindow(nodes, activeIds, before=2, after=2)` 按 `position.y` 升序（同 y 按 x）定位**第一个**执行中节点，返回「前 2 + 自身 + 后 2」id 窗口（越界收敛，无执行中返回 `[]`）。`WorkflowGraphView` 用 `onInit` 保存 React Flow 实例并置 `rfReady`，effect **仅依赖 `[rfReady, activeKey]`**（执行中 id 集合拼接；节点列表经 ref 读取），首次 `duration:0`、切换 `duration:300`；无执行中节点不主动 `fitView`（保留整图首屏）。**禁止把 `nodes`/`instance` 加入该 effect 依赖**：5s 轮询每轮重建节点对象，会导致反复 fitView 抖动。
 - **测试入口**：`pages/__tests__/WorkflowInstancePage.test.tsx`（T-RNWEB1~4）、`components/workflow/graph/__tests__/WorkflowNodeCard.test.tsx`（T-WFI-NC1~3）、`components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-WFI-TC1）、`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-WFI-SH1）、`components/workflow/graph/__tests__/graph-layout.test.ts`（T-WFI1~5）、`components/workflow/__tests__/WorkflowGraphView.test.tsx`（T-WFI-V1~4，mock React Flow 断言窗口 fitView 与防抖动）、`tests/e2e/src/workflow-graph.spec.ts`（E2E-WFI1~3）。
 
+## 已实例化工作流接续（#513）
+
+> 契约 `contracts/workflow.graphql`；计划 `docs/engineering/plan/20261114-feat-workflow-instance-continuation.md`。
+
+- **数据**：`WorkflowInstanceSummaryData/WorkflowInstanceData` 新增 `unavailableReason: 'CONTROLLER_OFFLINE' | 'CONTROLLER_DELETED' | null`（`GET_WORKFLOW_INSTANCES`、`GET_WORKFLOW_INSTANCE`、`HOME_WORKFLOW_INSTANCE_FIELDS` 均选择）；详情追加 `continuationHistory`（`from/toControllerId`、`from/toWorkspaceId`、`at`）。新增 `CONTINUE_WORKFLOW_INSTANCE` mutation 与 `ContinueWorkflowInstanceInput`/`NodeHarnessMappingInput` 类型。
+- **列表入口（NavLink 嵌套禁令）**：`WorkflowInstanceCard` 仍是纯 `NavLink`；`unavailableReason` 非空时追加 destructive 徽标（`data-testid="workflow-instance-unavailable"`，离线/已删除两态文案）与**行内兄弟节点**「接续」图标按钮（`aria-label="接续工作流"`，`preventDefault()+stopPropagation()` → `navigate('/workflows/:id?continue=1')`），不得把按钮嵌进 NavLink。
+- **详情页**：顶部 `data-testid="workflow-unavailable-notice"` 提示条（`role="alert"`，两态文案 + 「已完成节点与产物保留；接续后可选择新控制器与工作路径继续流转」+「原控制器上的残留 Worktree 平台不做远程清理，请自行处理」）与「接续」按钮；`?continue=1` 深链自动打开 `ContinueWorkflowDialog`，关闭时 `setSearchParams(..., {replace:true})` 清参。不可用时向 `WorkflowNodeTree`/`WorkflowGraphView`/`NodeDetailDrawer` 下发 `unavailable`：人类节点完成/打回（`HumanNodeActions disabled`）与「重启节点」置灰并提示「实例不可用，请先接续」；归档/删除/改名/查看保持可用。
+- **接续对话框 `ContinueWorkflowDialog`**（四段）：新控制器（`GET_CONTROLLERS` 客户端过滤 `status==='online'`）→ 工作路径（`GET_WORKSPACES` 过滤 `controllerId+isEnabled`；「浏览目录新建…」复用 `AddWorkspaceDialog` + `CREATE_WORKSPACE` 后选中）→ 创建新 Worktree（默认勾选；`DETECT_GIT_REPO` 非 Git 时置灰并展示未勾选 + 提示「目标路径不是 Git 仓库，将不创建 Worktree 继续接续」）→ 逐节点 Harness 映射（列出全部未完成 AI 节点 `type==='AI' && status!=='DONE'`，原 Harness 在 `GET_ACP_CAPABILITIES` 可用清单内默认选中，否则留空并提示「原 Harness 不可用，请改选」）。
+- **提交门控**：未选控制器/工作区、任一未完成 AI 节点未选 Harness → 禁用「确认接续」；非 Git 工作区**不阻断接续**：勾选框置灰且展示未勾选，提交时强制 `createWorkflowWorktree:false`（与实例化先例同口径）；提交中 spinner；成功 `toast.success('工作流已接续到新控制器')` + `refetchQueries:[GET_WORKFLOW_INSTANCE, HOME_OVERVIEW]`；服务层错误文案原样展示且对话框保持打开。切换控制器时重置工作路径与 Harness 覆盖值。
+- **轮询口径**：不可用标识随详情 5s 轮询与首页聚合 15s 轮询自然出现/消失（控制器恢复在线即消失），不新增订阅。
+- **测试入口**：`components/workflow/__tests__/WorkflowInstanceCard.test.tsx`（T-WEB1）、`components/workflow/__tests__/ContinueWorkflowDialog.test.tsx`（T-WEB2~4）、`pages/__tests__/WorkflowInstancePage.test.tsx`（T-WEB5）。
+
 ## 会话归档与只读（会话管理优化）
 
 > 契约：`contracts/agent-session.graphql`（`Session.archived` / `SessionReadOnlyReason` / `archiveSession` / `workspaceArchiveImpact`）、`contracts/home.graphql`（`HomeOverview.archivedSessions`）。实现计划见 `docs/engineering/plan/20261104-feat-session-management-optimization.md` Phase 6~8。

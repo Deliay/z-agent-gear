@@ -23,6 +23,8 @@ interface NodeDetailDrawerProps {
   onOpenChange: (open: boolean) => void
   instance: WorkflowInstanceData
   target: NodeDetailTarget | null
+  /** 实例不可用（控制器离线/已删除）：禁用流转类操作 */
+  unavailable?: boolean
   onOpenSession?: (sessionId: string) => void
   /** 重启节点（与列表视图同源：交给页面级 EditInstanceNodeDialog restartMode） */
   onRestartNode?: (node: WorkflowNodeData) => void
@@ -37,11 +39,12 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-function NodeDetail({ instance, node, onOpenSession, onRestartNode }: {
+function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable = false }: {
   instance: WorkflowInstanceData
   node: WorkflowNodeData
   onOpenSession?: (sessionId: string) => void
   onRestartNode?: (node: WorkflowNodeData) => void
+  unavailable?: boolean
 }) {
   const nodeArtifacts = artifactsOf(node, instance.blackboard)
   const nodeLinks = instance.pullRequestLinks.filter((link) => link.nodeId === node.id)
@@ -81,7 +84,13 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode }: {
           </Button>
         )}
         {canRestart && onRestartNode && (
-          <Button size="xs" variant="outline" onClick={() => onRestartNode(node)}>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => onRestartNode(node)}
+            disabled={unavailable}
+            title={unavailable ? '实例不可用，请先接续' : undefined}
+          >
             <RefreshCw className="size-3" />
             重启节点
           </Button>
@@ -170,7 +179,7 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode }: {
         </div>
       )}
 
-      {actionable && <HumanNodeActions instanceId={instance.id} node={node} />}
+      {actionable && <HumanNodeActions instanceId={instance.id} node={node} disabled={unavailable} />}
     </div>
   )
 }
@@ -236,6 +245,7 @@ export default function NodeDetailDrawer({
   onOpenChange,
   instance,
   target,
+  unavailable = false,
   onOpenSession,
   onRestartNode,
 }: NodeDetailDrawerProps) {
@@ -272,6 +282,7 @@ export default function NodeDetailDrawer({
             <NodeDetail
               instance={instance}
               node={node}
+              unavailable={unavailable}
               onOpenSession={onOpenSession}
               onRestartNode={onRestartNode}
             />

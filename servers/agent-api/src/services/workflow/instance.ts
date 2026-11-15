@@ -2,17 +2,19 @@ import mongoose from 'mongoose';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { ControllerWorkspace } from '../../models/controller-workspace.js';
-import { Controller } from '../../models/controller.js';
 import { Session } from '../../models/session.js';
 import { sessionService } from '../session.js';
 import { workflowEngine } from './engine.js';
 import { validateTemplateGraph } from './template.js';
 import { validateAgentConfigs } from './configured.js';
 import { getRedisClient } from '../../middleware/redis.js';
-import { publish } from '../../middleware/publish.js';
 import { logger as rootLogger } from '../../observability/logger.js';
 import { getAvailableServerTypes } from './capability.js';
-import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir } from './worktree-utils.js';
+import {
+  createWorkflowWorktree as createWorkflowWorktreeHelper,
+  removeWorkflowWorktree as removeWorkflowWorktreeHelper,
+} from './workflow-worktree.js';
+import { resolveInstanceUnavailableReason, loadControllerStatus } from './unavailable.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { GITHUB_PR_PROMPT, GITHUB_PR_PROMPT_KEY, SYSTEM_PROMPT_KEYS } from './pr-prompts.js';
 import { actorFilter } from '../workspace-context.js';
@@ -24,6 +26,16 @@ import {
 } from '../commit-settings-service.js';
 
 const logger = rootLogger.child({ component: 'workflow-instance' });
+
+/** 失效工作流实例 Redis 缓存（供接续服务等复用；失败不阻断主流程） */
+export async function invalidateWorkflowInstanceCache(instanceId: string): Promise<void> {
+  try {
+    const redis = getRedisClient();
+    await redis.del(`workflow:instance:${instanceId}`);
+  } catch {
+    // 缓存失效失败不阻断主流程
+  }
+}
 
 export type InstantiateSource = 'CONFIGURED' | 'TEMPLATE' | 'BLANK';
 
@@ -295,66 +307,14 @@ class WorkflowInstanceService {
     }
   }
 
-  /** 创建工作流 Worktree：通过 Redis 发送 git:worktree:add 命令到控制器，使用随机后缀天然去重 */
+  /** 创建工作流 Worktree（零行为抽取到 workflow-worktree.ts，实例化与接续共用） */
   private async createWorkflowWorktree(
     controllerId: string,
     workspace: { _id: string; name: string; path: string; defaultBranch?: string },
     workflowName: string,
     committer?: ResolvedWorktreeCommitter | null,
   ): Promise<{ path: string; branch: string }> {
-    const redis = getRedisClient();
-    
-    // 查询控制器获取 worktreeDir 配置（生效目录解析：已配置用配置值，未配置回退默认值，与校验端同源）
-    const controller = await Controller.findOne({ _id: controllerId }).lean();
-    const worktreeDir = resolveEffectiveWorktreeDir(controller as { worktreeDir?: string | null } | null);
-    
-    // slug 化处理：纯中文名会产生空串，使用兜底值
-    const slug = workflowName
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 50)
-      || `wf-${Date.now().toString(36)}`;
-    
-    // 使用共享 sanitize 函数，确保与 session.ts 校验前缀一致
-    const safeWorkspaceName = sanitizeWorkspaceName(workspace.name);
-    
-    // 使用随机后缀天然去重，避免多实例并发碰撞
-    const uniqueSuffix = generateWorktreeSuffix();
-    const branch = `workflow/${slug}-${uniqueSuffix}`;
-    const wtPath = `${worktreeDir}/${safeWorkspaceName}/workflow-${slug}-${uniqueSuffix}`;
-
-    const requestId = `wt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await publish('session:command', {
-      type: 'git:worktree:add',
-      requestId,
-      controllerId,
-      repoPath: workspace.path,
-      worktreePath: wtPath,
-      branch,
-      // 可选：缺省 = 不写 worktree 身份（沿用容器级 bot；旧 worker 忽略未知字段）
-      ...(committer ? { committer } : {}),
-    });
-
-    // 等待控制器响应（最多 30 秒）
-    for (let i = 0; i < 30; i++) {
-      const result = await redis.get(`git:worktree:add:${requestId}`);
-      if (result) {
-        const parsed = JSON.parse(result);
-        await redis.del(`git:worktree:add:${requestId}`);
-        
-        if (!parsed.success) {
-          throw new Error(`创建工作流 Worktree 失败: ${parsed.error}`);
-        }
-        
-        return {
-          path: parsed.worktreePath || wtPath,
-          branch,
-        };
-      }
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-    throw new Error('创建工作流 Worktree 超时');
+    return createWorkflowWorktreeHelper(controllerId, workspace, workflowName, committer);
   }
 
   /**
@@ -569,12 +529,7 @@ class WorkflowInstanceService {
   }
 
   private async invalidateInstanceCache(instanceId: string): Promise<void> {
-    try {
-      const redis = getRedisClient();
-      await redis.del(`workflow:instance:${instanceId}`);
-    } catch {
-      // 缓存失效失败不阻断主流程
-    }
+    await invalidateWorkflowInstanceCache(instanceId);
   }
 
   /** 注销实例的 PR 联动登记：失败只告警，不回滚归档/删除主流程 */
@@ -651,6 +606,12 @@ class WorkflowInstanceService {
     const node = instance.nodes.find((n) => n.nodeId === nodeId);
     if (!node) {
       throw new Error(`工作流实例中不存在节点：${nodeId}`);
+    }
+
+    // 不可用实例（控制器离线/已删除）拒绝流转类操作：必须先接续到新控制器
+    const unavailableReason = await resolveInstanceUnavailableReason(instance, loadControllerStatus);
+    if (unavailableReason) {
+      throw new Error('工作流实例不可用（控制器离线或已删除），请先接续后再操作');
     }
 
     // HUMAN/FLAG 节点无会话，不接受 agentConfig（忽略传入值，避免写入无意义的快照）
@@ -770,37 +731,14 @@ class WorkflowInstanceService {
     return true;
   }
 
-  /** 清理工作流 Worktree：通过 Redis 发送 git:worktree:remove 命令到控制器，失败/超时抛错 */
+  /** 清理工作流 Worktree（零行为抽取到 workflow-worktree.ts） */
   private async removeWorkflowWorktree(
     controllerId: string,
     repoPath: string,
     worktreePath: string,
     worktreeBranch?: string,
   ): Promise<void> {
-    const redis = getRedisClient();
-    const requestId = `wtr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    await publish('session:command', {
-      type: 'git:worktree:remove',
-      requestId,
-      controllerId,
-      repoPath,
-      worktreePath,
-      branch: worktreeBranch,
-    });
-    // 等待控制器响应（最多 10 秒）
-    for (let i = 0; i < 10; i++) {
-      const result = await redis.get(`git:worktree:remove:${requestId}`);
-      if (result) {
-        const parsed = JSON.parse(result);
-        await redis.del(`git:worktree:remove:${requestId}`);
-        if (!parsed.success) {
-          throw new Error(`清理 Worktree 失败: ${parsed.error}`);
-        }
-        return;
-      }
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-    throw new Error('清理 Worktree 超时');
+    return removeWorkflowWorktreeHelper(controllerId, repoPath, worktreePath, worktreeBranch);
   }
 }
 

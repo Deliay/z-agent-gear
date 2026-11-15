@@ -15,13 +15,15 @@ interface HumanNodeActionsProps {
   node: { id: string; name: string }
   /** 图表卡片内使用：更紧凑的排版 + 手势隔离 */
   compact?: boolean
+  /** 实例不可用（控制器离线/已删除）：禁用完成/打回 */
+  disabled?: boolean
 }
 
 /**
  * 人类节点操作区（完成 / 打回）：列表视图、图表卡片、详情抽屉三处共用同一份 hook 与交互，
  * 保证草稿、校验、错误提示三处一致。
  */
-export default function HumanNodeActions({ instanceId, node, compact }: HumanNodeActionsProps) {
+export default function HumanNodeActions({ instanceId, node, compact, disabled = false }: HumanNodeActionsProps) {
   const {
     input,
     setInput,
@@ -43,6 +45,7 @@ export default function HumanNodeActions({ instanceId, node, compact }: HumanNod
           compact ? 'min-h-10 text-xs' : 'min-h-16'
         }`}
         value={input}
+        disabled={disabled}
         onChange={(e) => setInput(e.target.value)}
         onClick={(e) => e.stopPropagation()}
         placeholder="输入内容（将作为节点产物写入黑板，可为空）"
@@ -54,7 +57,8 @@ export default function HumanNodeActions({ instanceId, node, compact }: HumanNod
             e.stopPropagation()
             void handleComplete()
           }}
-          disabled={submitting}
+          disabled={submitting || disabled}
+          title={disabled ? '实例不可用，请先接续' : undefined}
         >
           完成
         </Button>
@@ -65,7 +69,8 @@ export default function HumanNodeActions({ instanceId, node, compact }: HumanNod
             e.stopPropagation()
             setRejectOpen(true)
           }}
-          disabled={submitting}
+          disabled={submitting || disabled}
+          title={disabled ? '实例不可用，请先接续' : undefined}
         >
           打回
         </Button>
