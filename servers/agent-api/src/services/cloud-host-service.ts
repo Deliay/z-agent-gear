@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import { config } from '../config/index.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { withSpan } from '../observability/trace.js';
-import { CloudHost, HARNESS_TYPES, type HarnessType } from '../models/cloud-host.js';
+import { CloudHost, HARNESS_TYPES, HARNESS_ACP_TYPES, type HarnessType } from '../models/cloud-host.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
@@ -39,12 +39,6 @@ export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.17.1';
 const logger = rootLogger.child({ component: 'cloud-host' });
 
 const ACTIVE_STATUSES = ['STARTING', 'RUNNING', 'STOPPING'] as const;
-
-const HARNESS_ACP_TYPES: Record<HarnessType, string> = {
-  OPENCODE: 'opencode',
-  KIMI_CODE: 'kimi_code',
-  DEEPSEEK_HARNESS: 'deepseek_harness',
-};
 
 /** 逐 harness 的 agent-gear 最低版本（按 harnessTypes 取最大值，缺省 2.17.1 基线） */
 export const HARNESS_MIN_AGENT_GEAR_VERSION: Record<HarnessType, string> = {

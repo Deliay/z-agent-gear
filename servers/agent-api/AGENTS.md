@@ -521,6 +521,46 @@ pnpm run start   # Start production server
 - **零行为抽取**：`services/workflow/workflow-worktree.ts` 承载 `createWorkflowWorktree`/`removeWorkflowWorktree`（自 `instance.ts` 逐字搬出，`instance.ts` 私有方法委托），实例化与接续共用；`instance.test.ts` 既有断言全绿即锁定零回归。
 - **数据**：`WorkflowInstance.continuationHistory` 子文档数组（`{from/toControllerId, from/toWorkspaceId, at}`，`_id:false`，`default: []`）零迁移；`GET_WORKFLOW_INSTANCE` 返回 `continuationHistory`，`mapInstance` 归一 `?? []`。
 
+## 工作流打回/返工会话行为（#525）
+
+> 契约 `contracts/workflow.graphql`（`WorkflowNodeSessionBehavior` + 节点 4 字段六处）；
+> 计划 `docs/engineering/plan/20261115-feat-workflow-reject-rework-session-behavior.md`。
+
+- **契约与模型**：`WorkflowNodeSessionBehavior { NEW_SESSION ORIGINAL_SESSION }`；节点 4 字段
+  `reworkSessionBehavior`（缺省 `ORIGINAL_SESSION`=现状）/`reworkCompactOriginalContext`（缺省 false）/
+  `resumeSessionBehavior`（缺省 `NEW_SESSION`=现状）/`resumeCompactOriginalContext`（缺省 false），
+  **契约六处 + 手写 schema 六处双写**（`WorkflowTemplateNode`/`ConfiguredWorkflowNode`/`WorkflowNode` +
+  三个 Input）。三处节点子 Schema（`models/workflow-template.ts` / `configured-workflow.ts` /
+  `workflow-instance.ts`）均为 `default: undefined`（零迁移；HUMAN/FLAG 恒 null，纪律同 `agentConfig`）。
+- **归一唯一事实源**：`services/workflow/node-config.ts` 的纯函数 `normalizeNodeSessionBehavior`
+  （AI：行为 `??` 默认值、`compact=true` 仅在对应行为为 ORIGINAL_SESSION 时保留，新会话强制 false；
+  HUMAN/FLAG 四字段 null）。`configured.normalizeConfiguredNodes` / `instance.normalizeNodes` /
+  `updateNode` patch / `copyFromTemplate` / `loadNodeConfig` 两路 / `mapTemplateNode`/`mapInstanceNode`
+  全部共用；`loadNodeConfig` 返回归一后的 4 字段（旧实例回查 configured 同口径）。
+- **四象限分流（`orchestrator.ts`）**：
+  - 返工 `reworkNodeSession`：`NEW_SESSION` → `close(suppressFallback, reason:'workflow_node_rework')`
+    + `startNodeSession(extraPromptSections:[buildReworkSection(reason)])`（返工说明段拼入**首条消息**，
+    一次 `addMessage`，唯一推进指引 `completeCurrentRework`）；`ORIGINAL_SESSION`（默认）→ 现状 resume
+    + 返工指引逐字不变；`sessionId` 缺失 / resume 失败 → warn 降级新会话路径；`compact=true` →
+    resume 成功后 `runCompactPipeline`（失败仅 warn 照发）。
+  - 复工 `resumeNodeSession`：`NEW_SESSION`（默认）→ 现状 close + 新会话；`ORIGINAL_SESSION` →
+    resume 原会话 + `RESUME_CONTINUE_PROMPT`；resume 失败 → 降级新会话链；可选先压缩。
+- **压缩管线（`services/workflow/compact.ts`）**：`runCompactPipeline(sessionId, acpServerType,
+  timeout=INTERRUPT_RETRY_IDLE_TIMEOUT_MS)` 顺序硬约束「登记 `compactInFlight` → `armSessionIdleWaiter`
+  → `addMessage(压缩指令)` → 等 idling → 取消登记」；失败/超时 warn + 返回 false。`orchestrator.handleSessionIdled`
+  在排期前 `isCompactInFlight(sessionId)` 直接返回（抑制压缩回合结束的停滞检测误判）；`compact.ts`
+  不 import orchestrator（循环依赖约束同 `node-config.ts`）。
+- **发送前双校验（D7）**：压缩等待结算后 Orchestrator 重读实例——未删除 + 节点状态仍为预期
+  （返工 `REWORK` / 复工 `RUNNING`）+ `sessionId` 未变，否则放弃发送过期提示词。
+- **压缩指令解析（`services/harness-config.ts`）**：`DEFAULT_COMPACT_COMMAND='/compact'`；
+  `ACP_SERVER_TO_HARNESS` 由 `HARNESS_ACP_TYPES`（已上移至 `models/cloud-host.ts`，cloud-host-service 改为 import）
+  反转派生；`resolveCompactCommand` 未映射 → 默认值；命中 → 进程内 Map 缓存（TTL 60s）→ 读只读镜像
+  `models/harness-config.ts`（`harnessconfigs`，`autoIndex=false`，索引由 admin-api 迁移 023 创建）；
+  无配置行落默认值并缓存，查询失败**不缓存**。
+- **测试**：`node-config.test.ts`（T-NSB1~4）、`compact.test.ts`（T-CPCT1~2）、`harness-config.test.ts`
+  （T-HCR1~4）、`orchestrator.test.ts`（T-ORC1~8 + T-CPCT3）、`instance.test.ts`（T-SNAP1/2）、
+  `graphql/resolvers/workflow.test.ts`（T-MAP1）、`graphql/schemas/workflow.test.ts`（T-SCHEMA1 双写守卫）。
+
 ## 多租户二期（工作区资源查询口径）
 
 - **请求链路**：已归属工作区的资源（`sessions` / `controllers` / `controllerkeys` / `cloudhosts` / `cloudstorages` / `configuredworkflows` / `workflowinstances` / `workflowtemplates` / `githubaccounts` / `providers` / `models`）一律用 `actorFilter(userId)` 组合查询，**禁止显式写 `userId`**：工作区上下文存在时返回 `{}`，由 `applyWorkspaceScope` 注入可见集；无上下文（引擎/内部/迁移）才回退 `{userId}` 归属校验。典型回归：`Controller.cloudHost`、`sessionService.create` 的云电脑状态校验、云电脑创建时选择共享 GitHub 绑定、Issue 联动实例化时读取已配置工作流、会话级权限超时设置。

@@ -52,6 +52,12 @@ vi.mock('./interrupt-retry.js', () => ({
   scheduleInterruptionRetry: vi.fn().mockResolvedValue('scheduled'),
 }));
 
+// 压缩管线：编排层只编排顺序与降级，管线内部由 compact.test.ts 覆盖
+vi.mock('./compact.js', () => ({
+  isCompactInFlight: vi.fn().mockReturnValue(false),
+  runCompactPipeline: vi.fn().mockResolvedValue(true),
+}));
+
 import { logger as rootLogger } from '../../observability/logger.js';
 import { createTestLogger } from '../../observability/testing.js';
 
@@ -73,6 +79,8 @@ import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { McpServer } from '../../models/mcp-server.js';
 import { scheduleInterruptionRetry } from './interrupt-retry.js';
+import { isCompactInFlight, runCompactPipeline } from './compact.js';
+import { RESUME_CONTINUE_PROMPT } from './prompts.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -1078,5 +1086,305 @@ describe('WorkflowOrchestrator 通用状态通道 ended', () => {
 
     // 编排器不做状态记忆，幂等由 interrupt-retry 的 retryCount 快照 + retryPhase CAS 保证（见 T-RETRY4）
     expect(scheduleInterruptionRetry).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---- 工作流打回/返工会话行为优化（#525）：四象限分流 ----
+
+describe('WorkflowOrchestrator 会话行为分流（T-ORC）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(makeConfigured()));
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-new' } as never);
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+    vi.mocked(sessionService.resume).mockResolvedValue({ success: true, status: 'connecting' } as never);
+    vi.mocked(McpServer.findOneAndUpdate).mockResolvedValue({ _id: oid('mcp-platform-1') } as never);
+    vi.mocked(WorkflowInstance.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
+  });
+
+  function configuredWith(overrides: Record<string, unknown>, nodeKey = 'design') {
+    const configured = makeConfigured();
+    const target = configured.nodes.find((node) => node.nodeKey === nodeKey);
+    if (!target) throw new Error(`test fixture missing nodeKey: ${nodeKey}`);
+    Object.assign(target as Record<string, unknown>, overrides);
+    vi.mocked(ConfiguredWorkflow.findById).mockReturnValue(leanQuery(configured));
+    return configured;
+  }
+
+  function reworkNode(sessionId?: string) {
+    return makeNode({
+      nodeId: 'n2',
+      nodeKey: 'design',
+      type: 'AI',
+      name: '技术方案',
+      stage: 'design',
+      status: 'REWORK',
+      dependsOn: [],
+      ...(sessionId ? { sessionId } : {}),
+    });
+  }
+
+  function runningAiNode(sessionId?: string) {
+    return makeNode({
+      nodeId: 'n3',
+      nodeKey: 'impl',
+      type: 'AI',
+      name: '代码实现',
+      stage: 'impl',
+      status: 'RUNNING',
+      dependsOn: [],
+      ...(sessionId ? { sessionId } : {}),
+    });
+  }
+
+  it('T-ORC0: HUMAN/FLAG 节点进入 REWORK 不拉起会话（不 resume/create/close）', async () => {
+    for (const type of ['HUMAN', 'FLAG'] as const) {
+      vi.clearAllMocks();
+      const instance = makeInstance([
+        makeNode({ nodeId: 'n1', nodeKey: 'input', type, name: '需求', stage: '需求', status: 'REWORK', dependsOn: [] }),
+      ]);
+      await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], { reason: 'x', fromNodeId: 'n2' });
+      expect(sessionService.resume).not.toHaveBeenCalled();
+      expect(sessionService.create).not.toHaveBeenCalled();
+      expect(sessionService.close).not.toHaveBeenCalled();
+      expect(sessionService.addMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it('T-ORC1: 返工-原始会话-不压缩（默认）：resume + 返工指引逐字不变（零回归锚点）', async () => {
+    const instance = makeInstance([reworkNode('sess-2')]);
+
+    await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], {
+      reason: '方案不完整',
+      fromNodeId: 'n3',
+    });
+
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(sessionService.create).not.toHaveBeenCalled();
+    expect(sessionService.resume).toHaveBeenCalledWith('sess-2', 'user-1', undefined);
+    expect(runCompactPipeline).not.toHaveBeenCalled();
+    expect(sessionService.addMessage).toHaveBeenCalledTimes(1);
+    expect(lastInputMessage()).toBe(
+      '你的工作流节点产出被下游节点打回，需要返工。打回原因：方案不完整。\n' +
+        '请根据打回原因修订产出，通过工作流工具重新写入产物后调用 completeCurrentRework 完成返工。\n' +
+        '若返工中发现问题根源在更上游（本节点无法独立修正），可调用 rejectCurrentNode 将本节点打回并触发上游返工。',
+    );
+  });
+
+  it('T-ORC2: 返工-新会话：close + 新会话，首条消息单条发送且含返工说明段与 completeCurrentRework', async () => {
+    configuredWith({ reworkSessionBehavior: 'NEW_SESSION' });
+    const instance = makeInstance([reworkNode('sess-2')]);
+
+    await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], {
+      reason: '产物缺失',
+      fromNodeId: 'n3',
+    });
+
+    expect(sessionService.close).toHaveBeenCalledWith('sess-2', 'user-1', {
+      suppressFallback: true,
+      reason: 'workflow_node_rework',
+    });
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+    expect(sessionService.addMessage).toHaveBeenCalledTimes(1);
+    const content = lastInputMessage();
+    expect(content).toContain(WORKFLOW_SYSTEM_PROMPT);
+    expect(content).toContain('产出技术方案');
+    expect(content).toContain('## 返工说明');
+    expect(content).toContain('产物缺失');
+    expect(content).toContain('completeCurrentRework');
+    expect(content).not.toContain('completeCurrentNode');
+    expect(instance.nodes[0].sessionId).toBe('sess-new');
+  });
+
+  it('T-ORC3: 返工-原始会话+压缩：resume → 压缩 → 空闲 → 返工指引', async () => {
+    configuredWith({ reworkCompactOriginalContext: true });
+    const instance = makeInstance([reworkNode('sess-2')]);
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance) as never);
+
+    await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], {
+      reason: '返工',
+      fromNodeId: 'n3',
+    });
+
+    expect(runCompactPipeline).toHaveBeenCalledWith('sess-2', 'opencode');
+    const resumeOrder = vi.mocked(sessionService.resume).mock.invocationCallOrder[0];
+    const compactOrder = vi.mocked(runCompactPipeline).mock.invocationCallOrder[0];
+    const sendOrder = vi.mocked(sessionService.addMessage).mock.invocationCallOrder[0];
+    expect(resumeOrder).toBeLessThan(compactOrder);
+    expect(compactOrder).toBeLessThan(sendOrder);
+    expect(sessionService.addMessage).toHaveBeenCalledTimes(1);
+    expect(lastInputMessage()).toContain('completeCurrentRework');
+  });
+
+  it('T-ORC3b: 压缩失败仍发送返工指引（降级不阻断）', async () => {
+    configuredWith({ reworkCompactOriginalContext: true });
+    const instance = makeInstance([reworkNode('sess-2')]);
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance) as never);
+    vi.mocked(runCompactPipeline).mockResolvedValueOnce(false);
+
+    await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], {
+      reason: '返工',
+      fromNodeId: 'n3',
+    });
+
+    expect(sessionService.addMessage).toHaveBeenCalledTimes(1);
+    expect(lastInputMessage()).toContain('completeCurrentRework');
+  });
+
+  it('T-ORC4: 返工-原始会话但 sessionId 缺失 → 降级新会话路径（含返工说明段）', async () => {
+    const instance = makeInstance([reworkNode()]);
+
+    await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], {
+      reason: '上游未完成',
+      fromNodeId: 'n3',
+    });
+
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+    expect(lastInputMessage()).toContain('## 返工说明');
+    expect(lastInputMessage()).toContain('completeCurrentRework');
+  });
+
+  it('T-ORC4b: 返工-原始会话 resume 失败 → warn 降级新会话路径', async () => {
+    const instance = makeInstance([reworkNode('sess-2')]);
+    vi.mocked(sessionService.resume).mockRejectedValueOnce(new Error('session gone'));
+
+    await workflowOrchestrator.reworkNodeSession(instance, instance.nodes[0], {
+      reason: '返工',
+      fromNodeId: 'n3',
+    });
+
+    expect(sessionService.close).toHaveBeenCalledWith('sess-2', 'user-1', {
+      suppressFallback: true,
+      reason: 'workflow_node_rework',
+    });
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+    expect(lastInputMessage()).toContain('## 返工说明');
+    expect(vi.mocked(sessionService.create).mock.calls[0][1]).toEqual(
+      expect.objectContaining({ workflowNodeId: 'n2' }),
+    );
+  });
+
+  it('T-ORC5: 复工-新会话（默认）：close + 新会话（零回归锚点）；HUMAN/FLAG 直接返回', async () => {
+    const instance = makeInstance([runningAiNode('sess-3')]);
+    await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1', {
+      suppressFallback: true,
+      reason: 'workflow_node_resume',
+    });
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+    expect(sessionService.resume).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    const human = makeInstance([
+      makeNode({ nodeId: 'h1', nodeKey: 'review', type: 'HUMAN', name: '评审', stage: '验收', status: 'RUNNING', dependsOn: [] }),
+    ]);
+    await workflowOrchestrator.resumeNodeSession(human, human.nodes[0]);
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(sessionService.create).not.toHaveBeenCalled();
+  });
+
+  it('T-ORC6: 复工-原始会话：不 close、不新建；resume + 继续提示词', async () => {
+    configuredWith({ resumeSessionBehavior: 'ORIGINAL_SESSION' }, 'impl');
+    const instance = makeInstance([runningAiNode('sess-3')]);
+
+    await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
+
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(sessionService.create).not.toHaveBeenCalled();
+    expect(sessionService.resume).toHaveBeenCalledWith('sess-3', 'user-1', undefined);
+    expect(sessionService.addMessage).toHaveBeenCalledTimes(1);
+    expect(lastInputMessage()).toBe(RESUME_CONTINUE_PROMPT);
+    expect(lastInputMessage()).toContain('重新获取上游产物');
+    expect(lastInputMessage()).toContain('completeCurrentNode');
+  });
+
+  it('T-ORC6b: 复工-原始会话但会话仍存活（resume 返回 Session is not ended）→ 不 close、直接发继续提示词', async () => {
+    configuredWith({ resumeSessionBehavior: 'ORIGINAL_SESSION' }, 'impl');
+    const instance = makeInstance([runningAiNode('sess-3')]);
+    vi.mocked(sessionService.resume).mockResolvedValueOnce({
+      success: false,
+      status: 'idling',
+      error: 'Session is not ended',
+    } as never);
+
+    await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
+
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(sessionService.create).not.toHaveBeenCalled();
+    expect(lastInputMessage()).toBe(RESUME_CONTINUE_PROMPT);
+  });
+
+  it('T-ORC6c: 复工-原始会话但会话不可恢复（resume 返回会话不存在）→ 降级新会话链', async () => {
+    configuredWith({ resumeSessionBehavior: 'ORIGINAL_SESSION' }, 'impl');
+    const instance = makeInstance([runningAiNode('sess-3')]);
+    vi.mocked(sessionService.resume).mockResolvedValueOnce({
+      success: false,
+      status: 'ended',
+      error: 'Session not found',
+    } as never);
+
+    await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
+
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1', {
+      suppressFallback: true,
+      reason: 'workflow_node_resume',
+    });
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-ORC7: 复工-原始会话+压缩：resume → 压缩 → 继续提示词；resume 失败降级新会话链', async () => {
+    configuredWith({ resumeSessionBehavior: 'ORIGINAL_SESSION', resumeCompactOriginalContext: true }, 'impl');
+    const instance = makeInstance([runningAiNode('sess-3')]);
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance) as never);
+
+    await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
+
+    expect(runCompactPipeline).toHaveBeenCalledWith('sess-3', 'opencode');
+    expect(vi.mocked(sessionService.resume).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runCompactPipeline).mock.invocationCallOrder[0],
+    );
+    expect(lastInputMessage()).toBe(RESUME_CONTINUE_PROMPT);
+
+    vi.clearAllMocks();
+    configuredWith({ resumeSessionBehavior: 'ORIGINAL_SESSION' }, 'impl');
+    vi.mocked(sessionService.resume).mockRejectedValueOnce(new Error('gone'));
+    vi.mocked(sessionService.create).mockResolvedValue({ id: 'sess-new' } as never);
+    const fallbackInstance = makeInstance([runningAiNode('sess-3')]);
+    await workflowOrchestrator.resumeNodeSession(fallbackInstance, fallbackInstance.nodes[0]);
+    expect(sessionService.close).toHaveBeenCalledWith('sess-3', 'user-1', {
+      suppressFallback: true,
+      reason: 'workflow_node_resume',
+    });
+    expect(sessionService.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-ORC8: 发送前双校验：等待器结算后节点状态/sessionId 变化 → 放弃发送继续提示词', async () => {
+    configuredWith({ resumeSessionBehavior: 'ORIGINAL_SESSION', resumeCompactOriginalContext: true }, 'impl');
+    const instance = makeInstance([runningAiNode('sess-3')]);
+    const changed = makeInstance([
+      makeNode({ nodeId: 'n3', nodeKey: 'impl', type: 'AI', name: '代码实现', stage: 'impl', status: 'DONE', dependsOn: [], sessionId: 'sess-3' }),
+    ]);
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(changed) as never);
+
+    await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
+
+    expect(runCompactPipeline).toHaveBeenCalled();
+    expect(sessionService.addMessage).not.toHaveBeenCalled();
+  });
+
+  it('T-CPCT3: 压缩在途时空闲停滞检测被抑制；登记取消后恢复既有行为', async () => {
+    const instance = makeInstance([runningAiNode('sess-3')]);
+    vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
+
+    vi.mocked(isCompactInFlight).mockReturnValueOnce(true);
+    await workflowOrchestrator.handleSessionIdled('sess-3');
+    expect(scheduleInterruptionRetry).not.toHaveBeenCalled();
+
+    vi.mocked(isCompactInFlight).mockReturnValueOnce(false);
+    await workflowOrchestrator.handleSessionIdled('sess-3');
+    expect(scheduleInterruptionRetry).toHaveBeenCalledTimes(1);
   });
 });
