@@ -26,6 +26,7 @@ import ControllerListSection from '@/components/settings/ControllerListSection';
 import McpRegistrySection from '@/components/settings/McpRegistrySection';
 import ValutSection from '@/components/settings/ValutSection';
 import CustomMcpSection from '@/components/settings/CustomMcpSection';
+import CustomToolSection from '@/components/settings/CustomToolSection';
 import GithubBindingSection from '@/components/settings/GithubBindingSection';
 import GitSettingsSection from '@/components/settings/GitSettingsSection';
 import WorkflowSection from '@/components/settings/WorkflowSection';
@@ -43,6 +44,7 @@ import {
   HardDrive,
   KeyRound,
   Plug,
+  Wrench,
 } from 'lucide-react';
 
 const NAV_ITEMS = [
@@ -55,6 +57,7 @@ const NAV_ITEMS = [
   { id: 'mcp-section', label: 'MCP 管理', icon: Puzzle },
   { id: 'valut-section', label: 'Valut', icon: KeyRound },
   { id: 'custom-mcp-section', label: '自定义 MCP', icon: Plug },
+  { id: 'custom-tool-section', label: '自定义工具', icon: Wrench },
   { id: 'workflow-section', label: '工作流', icon: Workflow },
 ];
 
@@ -66,8 +69,8 @@ const NAV_GROUPS = [
   { label: '模型设置', items: [NAV_ITEMS[3], NAV_ITEMS[4]] },
   { label: '本地控制器', items: [NAV_ITEMS[5]] },
   // D5：「MCP 代理」入口移除后组名收敛为「MCP」（组内保留「MCP 管理」项）
-  { label: 'MCP', items: [NAV_ITEMS[6], NAV_ITEMS[7], NAV_ITEMS[8]] },
-  { label: '工作流', items: [NAV_ITEMS[9]] },
+  { label: 'MCP', items: [NAV_ITEMS[6], NAV_ITEMS[7], NAV_ITEMS[8], NAV_ITEMS[9]] },
+  { label: '工作流', items: [NAV_ITEMS[10]] },
 ];
 
 export default function SettingsPage() {
@@ -227,6 +230,8 @@ export default function SettingsPage() {
           <ValutSection />
 
           <CustomMcpSection />
+
+          <CustomToolSection />
 
           <section id="workflow-section" className="mb-8 md:mb-10">
             <h2 className="mb-4 text-lg font-semibold md:mb-6 md:text-xl text-foreground">工作流</h2>

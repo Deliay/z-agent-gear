@@ -18,6 +18,8 @@ import {
   ensureSessionPreviewToolsServer,
   SESSION_PREVIEW_TOOLS_SERVER_NAME,
 } from './session-preview-tools.js';
+import { ensureValutToolsServer, VALUT_TOOLS_SERVER_NAME } from './valut-tools.js';
+import { ensureCustomToolsServer, CUSTOM_TOOLS_SERVER_NAME } from './custom-tools-mcp.js';
 import { sessionReviewService } from './session-review-service.js';
 import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
@@ -383,12 +385,20 @@ export class SessionService {
     // 未显式指定（含 undefined）时按控制器 defaultMcp 解析；显式空数组表示不注入。
     let mcpServerIds = input.mcpServerIds;
     if (mcpServerIds === undefined) {
-      // 平台内置服务（agent-cloud-host-tools / agent-session-preview-tools）仅由会话创建时自动并入
+      // 平台内置服务（agent-cloud-host-tools / agent-session-preview-tools / agent-valut-tools /
+      // agent-custom-tools）仅由会话创建时自动并入
       // （与前端可选列表口径一致），不作为「默认 MCP」候选（裁决 5：排除口径 $ne → $nin）。
       const enabledServers = await McpServer.find({
         userId,
         enabled: true,
-        name: { $nin: [CLOUD_HOST_TOOLS_SERVER_NAME, SESSION_PREVIEW_TOOLS_SERVER_NAME] },
+        name: {
+          $nin: [
+            CLOUD_HOST_TOOLS_SERVER_NAME,
+            SESSION_PREVIEW_TOOLS_SERVER_NAME,
+            VALUT_TOOLS_SERVER_NAME,
+            CUSTOM_TOOLS_SERVER_NAME,
+          ],
+        },
       })
         .select('_id')
         .lean();
@@ -399,7 +409,7 @@ export class SessionService {
       );
     }
 
-    // 平台内置服务（agent-cloud-host-tools / agent-session-preview-tools）在下方自动并入，
+    // 平台内置服务（上述四个）在下方自动并入，
     // 不参与「用户所选 MCP 有效性」前置校验（平台 id 由装配点保证存在且启用）。
     const userSelectedMcpIds = mcpServerIds ?? [];
 
@@ -414,6 +424,18 @@ export class SessionService {
     {
       const previewToolsId = await ensureSessionPreviewToolsServer(userId);
       mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), previewToolsId]));
+    }
+
+    // Valut 名单工具（agent-valut-tools）：全部类型会话公共路径装配并去重（D5）。
+    {
+      const valutToolsId = await ensureValutToolsServer(userId);
+      mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), valutToolsId]));
+    }
+
+    // 自定义工具动态目录（agent-custom-tools）：全部类型会话公共路径装配并去重（D5）。
+    {
+      const customToolsId = await ensureCustomToolsServer(userId);
+      mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), customToolsId]));
     }
 
     const workspace = await ControllerWorkspace.findOne(

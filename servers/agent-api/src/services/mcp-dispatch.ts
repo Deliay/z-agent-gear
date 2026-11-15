@@ -23,6 +23,14 @@ import {
   handleSessionPreviewToolRequest,
   SESSION_PREVIEW_TOOLS_SERVER_NAME,
 } from './session-preview-tools.js';
+import {
+  handleValutToolsMcpRequest,
+  VALUT_TOOLS_SERVER_NAME,
+} from './valut-tools.js';
+import {
+  handleCustomToolsMcpRequest,
+  CUSTOM_TOOLS_SERVER_NAME,
+} from './custom-tools-mcp.js';
 import { workspaceService } from './workspace-service.js';
 import { runWithWorkspace } from './workspace-context.js';
 
@@ -174,7 +182,17 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
                   { userId: payload.userId ?? '', sessionId: payload.sessionId ?? '' },
                   request,
                 )
-              : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } },
+              : serverName === VALUT_TOOLS_SERVER_NAME
+                ? await handleValutToolsMcpRequest(
+                    { userId: payload.userId ?? '', sessionId: payload.sessionId ?? '' },
+                    request,
+                  )
+                : serverName === CUSTOM_TOOLS_SERVER_NAME
+                  ? await handleCustomToolsMcpRequest(
+                      { userId: payload.userId ?? '', sessionId: payload.sessionId ?? '' },
+                      request,
+                    )
+                  : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } },
     );
     if (isPlatformNotification) {
       return { status: 202, body: undefined };

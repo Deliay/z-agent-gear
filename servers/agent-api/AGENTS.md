@@ -463,6 +463,46 @@ pnpm run start   # Start production server
   `graphql/resolvers/controller.test.ts`（T-CCOP4~6）、`tests/api/src/agent-api/controller.test.ts`
   （T-CCOP-API1~3，需 `MONGODB_URI`）。
 
+## 自定义渲染模板与自定义工具 MCP（#449）
+
+> 需求 #449；契约 `contracts/fragment-template.md` / `contracts/custom-tool.graphql`；计划
+> `docs/engineering/plan/20261113-feat-fragment-template-custom-tools.md`。
+
+- **Fragment 渲染唯一口径**：`services/fragment-render.ts` 的 `renderFragments(fragments, context, resolveValut)`
+  为**纯函数 + 依赖注入**（不 import Mongoose 模型）：Plain 原样（空串省略、format 恒 Generic）/
+  Valut 经注入 resolver 取 manual 明文 / Parameter 取 `context.params`；格式 Generic 恒等、
+  Json=`JSON.stringify`、Uri=`encodeURIComponent`（只编码一次）；上限 200/4096/65536 →
+  `fragment template too large`；错误文案 `valut key not found: <key>` / `missing parameter: <key>`。
+  **编辑器不求值**（前端只展示引用名），求值唯一发生在服务端。
+- **Valut 取值原语**：`valut-service.resolveManualValueByKey(key, workspaceId)` 按
+  `{workspaceId, namespace:'manual', key}` 定位后走既有 AES-256-GCM 解密；非 manual/不存在返回
+  `null`（由渲染层收敛错误），无 ALS 上下文依赖、不被任何 resolver 引用。明文只在调用栈内存中。
+- **数据层**：`models/custom-tool.ts`（集合 `customtools`，独占型 workspace-scope + `tenantId`）——
+  `name` 工作区内唯一（`uniq_custom_tool_workspace_name` 模型与迁移 **026** 同名同键）、
+  `args`（key `^[A-Za-z_][A-Za-z0-9_]{0,63}$` 唯一/≤32）、`prompt`/`http` 二选一。
+  **注意**：该集合无 `userId`，与 `valutentries`/`custommcpservers` 同口径**不进**迁移 013
+  `TENANT_ID_COLLECTIONS` 与 tenant-isolation CASES 矩阵（计划 F8/D9 的「21→22」经实现核对不适用，
+  `applyTenantScope` 对无 `userId` 集合为 no-op）。
+- **服务**：`services/custom-tool-service.ts` 唯一读写口（`requireContext` → `workspace not found`、
+  `assertWorkspaceWritable` → `global workspace is read-only`；跨工作区 `Not found`）；创建/更新共用
+  `validateCustomToolInput`：name 1..64、description ≤512、args 规则、Fragment 枚举/数量/单值、
+  **引用一致性**（Parameter 必须 ∈ args keys；Valut key 1..128 禁空白控制字符）、http
+  （method token / endpoint 首片段 Plain http(s) / header 唯一性与 key 规则 / GET 类带 bodyType
+  拒绝 / form `file` 拒绝）。重名预检 + E11000 → `duplicate custom tool name`。
+- **平台 MCP**：
+  - `agent-valut-tools`（`services/valut-tools.ts`）：唯一工具 `valut_list`，出参仅
+    `[{key, namespaceDisplayName}]`（无 id/值/refs）；任何取值工具名 → `METHOD_NOT_FOUND`。
+  - `agent-custom-tools`（`services/custom-tools-mcp.ts`）：`tools/list` **每次实时查** customtools
+    （无快照，删除即失效）；暴露名安全名原名、否则 `ct-<id 后 8 位>`（description 恒带展示名，
+    call 双向反解）；`tools/call` 参数缺失 → `INVALID_PARAMS` 列名，prompt 渲染 / http 执行。
+  - `services/custom-tool-http.ts`：undici `fetch`（`dispatcher` 仅 `insecure=true` 用模块级
+    `insecureAgent`）；30s 超时；响应 256KB 截断；json body 渲染后必须合法 JSON；错误归类
+    `request failed` / `request timeout` / `tls verification failed`；**日志红线**：正文/headers/
+    endpoint 全串/渲染中间值不入日志。
+  - 装配：`sessionService.create` 公共路径（普通/云/工作流节点会话）恒装配并去重；
+    `mcp-dispatch` platform 三元链尾部直发；默认 MCP 候选与 `setControllerDefaultMcp` 的
+    `$nin` 排除两个新名字（前端可见性沿用 preview 先例，零改动）。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

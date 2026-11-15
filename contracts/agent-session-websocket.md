@@ -477,6 +477,25 @@ Controller 转发 ACP 输出。
 - 自定义 MCP 不经 `mcp:forward:*` Redis 频道（该频道仅 registered_proxy），见
   [mcp-forward-redis.md](./mcp-forward-redis.md)。
 
+**平台内置 MCP 服务路由表（`transport=platform`，agent-api 本地 handler 直发）：**
+
+| serverName | 装配范围 | 工具 | 路由与服务端语义 |
+|------------|----------|------|------------------|
+| `agent-workflow-tools` | 工作流节点会话 | 节点推进/产物/PR 联动等 14 个工具 | `payload.workflow` 节点作用域；本地 handler 直发 |
+| `agent-workflow-admin-tools` | 工作流会话 | 管理类工具 | 仅需 `userId/sessionId`；本地 handler 直发 |
+| `agent-cloud-host-tools` | 云会话 | `workload_list`/`workload_install` | 本地 handler 直发 |
+| `agent-session-preview-tools` | 全部会话（恒装配） | `review` | 长时等待（30min 超时按 serverName 放宽） |
+| `agent-valut-tools` | 全部会话（恒装配） | `valut_list` | **名单工具**：返回当前会话工作区 manual 密钥名称；**不提供任何获取密钥值的工具**（取值诉求一律 `METHOD_NOT_FOUND`） |
+| `agent-custom-tools` | 全部会话（恒装配） | 动态目录（`tools/list` 实时枚举） | **动态目录**：`tools/list` 按会话工作区实时查询 `customtools`（无快照/缓存）；`tools/call` 参数齐全校验后 prompt 渲染返回 / http 服务端执行 |
+
+- 平台服务均由 `sessionService.create` 公共路径**恒装配并去重**，用户不可选（默认 MCP 候选与
+  `setControllerDefaultMcp` 校验的排除口径为 `$nin`，选平台服务报 `MCP_SERVER_NOT_SELECTABLE`）；
+- 平台服务**不经 Redis、不经 `mcp:forward:*`**，`mcp-dispatch` 在
+  `runWithWorkspace(buildSessionWorkspaceContext(...))` 内按 serverName 直发本地 handler；
+  JSON-RPC 通知（无 `id`）形态立即 `202` fire-and-forget；
+- `agent-valut-tools` / `agent-custom-tools` 的返回值**不含 Valut 明文**（`valut_list` 仅名称、
+  不含 id/值/refs；custom-tools 的 prompt 渲染结果是唯一合法出口）。
+
 ### 2.12.2 `mcp:response`（Server → Controller）
 
 返回 MCP 调用结果。
