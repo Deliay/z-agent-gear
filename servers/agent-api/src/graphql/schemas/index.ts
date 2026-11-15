@@ -16,6 +16,7 @@ import { cloudStorageTypeDefs } from './cloud-storage.js';
 import { workspaceTypeDefs } from './workspace.js';
 import { valutTypeDefs } from './valut.js';
 import { customMcpTypeDefs } from './custom-mcp.js';
+import { customToolTypeDefs } from './custom-tool.js';
 
 const baseTypeDefs = `#graphql
   type Query
@@ -23,4 +24,4 @@ const baseTypeDefs = `#graphql
   type Mutation
 `;
 
-export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, gatewayTypeDefs, todoTypeDefs, mcpServerTypeDefs, githubTypeDefs, workflowTypeDefs, homeTypeDefs, billingTypeDefs, cloudHostTypeDefs, cloudStorageTypeDefs, workspaceTypeDefs, valutTypeDefs, customMcpTypeDefs];
+export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, gatewayTypeDefs, todoTypeDefs, mcpServerTypeDefs, githubTypeDefs, workflowTypeDefs, homeTypeDefs, billingTypeDefs, cloudHostTypeDefs, cloudStorageTypeDefs, workspaceTypeDefs, valutTypeDefs, customMcpTypeDefs, customToolTypeDefs];

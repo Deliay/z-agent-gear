@@ -591,6 +591,14 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 - 依赖：`MONGODB_URI`（云电脑/控制器夹具）、`INTERNAL_API_TOKEN`；fake controller 注册 version `2.18.0` 并应答 `workflow-templates:scan`。
 - 检测提示（GitHub 设置成功 / 手工新增工作目录）由 `ControllerConfigPage` 组件单测覆盖触发接线。
 
+## 自定义工具（`src/settings-custom-tool.spec.ts`，#449）
+
+- E2E-CT1：设置「自定义工具」区块结构（标题 + 工作区 badge、空态、NAV 项）→ 新增 prompt 工具
+  （参数列表 + `$` 补全插入参数 chip）→ 列表展示 → 编辑 round-trip 回显（chip 不求值）→ 删除二次确认。
+- E2E-CT2：http 表单 —— GET 类隐藏 body、POST 类默认 JSON、form `file` 选项禁用并提示本期不支持。
+- E2E-CT3：Valut 名单查询仅返回名称（无 value 出参/取值入口）。
+- MCP 动态目录与 tools/call 的 wire 级行为由 `servers/agent-api` 单测覆盖。
+
 ## 第三方登录 E2E（#503 / #510）
 
 | 文件 | 说明 |

@@ -927,6 +927,14 @@ pnpm test
 - T-REPO-API4 / 5b / 7（需 `MONGODB_URI`）：cloud 控制器配置成功与列表透出；错误白名单逐字；`deleteCloudHost` 级联删除 REPO、PLATFORM 保留。
 - 前提：`INTERNAL_API_TOKEN`；fake controller 应答 `workflow-templates:scan`（fixture 与 agent-gear 真实回包同形态）。
 
+## 自定义工具（`src/agent-api/custom-tool.test.ts`，#449）
+
+- API-CT：`createCustomTool` / `updateCustomTool` / `deleteCustomTool` / `customTools` / `customTool(id)` 全链路。
+- 校验白名单逐字：`invalid custom tool name` / `invalid custom tool description` / `invalid custom tool args` /
+  `invalid fragment template` / `invalid http config`；重名 `duplicate custom tool name`。
+- 工作区隔离：跨工作区 id → `Not found`；不存在 id → `custom tool not found`。
+- 前提：`INTERNAL_API_TOKEN`（开户）；MCP 动态目录与 tools/call wire 行为由 agent-api 单测覆盖。
+
 ## 第三方登录 OAuth/OIDC（#503）
 
 | 文件 | 说明 |
