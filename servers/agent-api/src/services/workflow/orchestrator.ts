@@ -15,8 +15,9 @@ import { PLATFORM_SERVER_NAME } from './tool-handlers.js';
 import { ADMIN_PLATFORM_SERVER_NAME, ensureAdminToolsServer } from './admin-tools.js';
 import { initialModeModel, loadNodeConfig } from './node-config.js';
 import { scheduleInterruptionRetry } from './interrupt-retry.js';
+import { isCompactInFlight, runCompactPipeline } from './compact.js';
 import { isReentrantLockError } from '../keyed-mutex.js';
-import { WORKFLOW_SYSTEM_PROMPT, FALLBACK_PROMPT, IDLE_NUDGE_PROMPT } from './prompts.js';
+import { WORKFLOW_SYSTEM_PROMPT, FALLBACK_PROMPT, IDLE_NUDGE_PROMPT, RESUME_CONTINUE_PROMPT, buildReworkSection } from './prompts.js';
 
 const logger = rootLogger.child({ component: 'workflow-orchestrator' });
 
@@ -76,6 +77,8 @@ class WorkflowOrchestrator {
     if (!instance) return;
     const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
     if (!node || (node.status !== 'RUNNING' && node.status !== 'REWORK')) return;
+    // 压缩回合结束（promptCompleted→idling）不应误判为节点停滞而排期中断重试（提案 D1）
+    if (isCompactInFlight(sessionId)) return;
 
     await scheduleInterruptionRetry({
       instanceId: instance._id.toString(),
@@ -114,22 +117,33 @@ class WorkflowOrchestrator {
   }
 
   /** AI 节点 READY→RUNNING：组装提示词 → 创建打标会话（按阶段 worktree）→ 发送提示词 */
-  async startNodeSession(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
+  async startNodeSession(
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+    options?: { extraPromptSections?: string[] },
+  ): Promise<void> {
     return withSpan(
       'workflow.node.advance',
       { workflowInstanceId: instance._id.toString(), nodeId: node.nodeId },
-      () => this.startNodeSessionInner(instance, node),
+      () => this.startNodeSessionInner(instance, node, options),
     );
   }
 
-  private async startNodeSessionInner(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
+  private async startNodeSessionInner(
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+    options?: { extraPromptSections?: string[] },
+  ): Promise<void> {
     const configuredNode = await loadNodeConfig(instance, node);
     const agentConfig = configuredNode.agentConfig;
     if (!agentConfig) {
       throw new Error(`节点「${node.name}」（${node.nodeKey}）缺少 Agent 配置，无法拉起会话`);
     }
 
-    const prompt = this.assemblePrompt(instance, node, configuredNode.prompts ?? []);
+    // 追加段（如新会话返工的「返工说明」）拼入首条消息，仍一次 addMessage（提案 D2）
+    const extraSections = (options?.extraPromptSections ?? []).map((section) => section.trim()).filter(Boolean);
+    const basePrompt = this.assemblePrompt(instance, node, configuredNode.prompts ?? []);
+    const prompt = extraSections.length > 0 ? [basePrompt, ...extraSections].join('\n\n') : basePrompt;
 
     // 工作目录优先级：
     // 1. 节点 initNewWorktree && requiresWorktree → 维持现状建节点级 Worktree
@@ -197,45 +211,197 @@ class WorkflowOrchestrator {
     });
   }
 
-  /** 节点进入 REWORK：resume 原会话（初始 mode/model 带内下发）、重发打回原因 */
+  /** 节点进入 REWORK：按 reworkSessionBehavior 分流（新会话 / 原始会话 + 可选压缩） */
   async reworkNodeSession(
     instance: WorkflowInstanceDoc,
     node: WorkflowNodeDoc,
     payload: TransitionPayload,
   ): Promise<void> {
-    if (!node.sessionId) return;
-    const sessionId = node.sessionId.toString();
+    // HUMAN/FLAG 节点无会话，返工仅需引擎置 REWORK（与原行为一致）
+    if (node.type !== 'AI') return;
     const configuredNode = await loadNodeConfig(instance, node);
-    await sessionService.resume(
-      sessionId,
-      instance.userId.toString(),
-      initialModeModel(configuredNode.agentConfig),
-    );
+    const behavior = configuredNode.reworkSessionBehavior ?? 'ORIGINAL_SESSION';
+    const reworkPrompt =
+      `你的工作流节点产出被下游节点打回，需要返工。打回原因：${payload.reason ?? '（未提供）'}。\n` +
+      '请根据打回原因修订产出，通过工作流工具重新写入产物后调用 completeCurrentRework 完成返工。\n' +
+      '若返工中发现问题根源在更上游（本节点无法独立修正），可调用 rejectCurrentNode 将本节点打回并触发上游返工。';
+
+    // 新会话返工：关闭旧会话（若存在）后全新拉起，返工说明拼入首条消息
+    if (behavior === 'NEW_SESSION') {
+      await this.closeNodeSession(instance, node, 'workflow_node_rework');
+      await this.startNodeSession(instance, node, {
+        extraPromptSections: [buildReworkSection(payload.reason)],
+      });
+      return;
+    }
+
+    // 原始会话返工：会话缺失 → 降级新会话路径（D8）
+    if (!node.sessionId) {
+      logger.warn(
+        { event: 'rework-session-missing', workflowInstanceId: instance._id.toString(), nodeId: node.nodeId },
+        'rework original-session requested but session missing, falling back to new session',
+      );
+      await this.startNodeSession(instance, node, {
+        extraPromptSections: [buildReworkSection(payload.reason)],
+      });
+      return;
+    }
+
+    const sessionId = node.sessionId.toString();
+    try {
+      const resumeResult = await sessionService.resume(
+        sessionId,
+        instance.userId.toString(),
+        initialModeModel(configuredNode.agentConfig),
+      );
+      // 'Session is not ended' = 原会话仍存活（idling/running），无需 resume，直接继续；
+      // 其余失败（会话不存在/只读等）走降级新会话路径。
+      if (resumeResult && resumeResult.success === false && resumeResult.error !== 'Session is not ended') {
+        throw new Error(`resume failed: ${resumeResult.error ?? 'unknown'}`);
+      }
+    } catch (err) {
+      // resume 失败（会话不可恢复）：降级新会话路径
+      logger.warn(
+        {
+          event: 'rework-session-resume-failed',
+          workflowInstanceId: instance._id.toString(),
+          nodeId: node.nodeId,
+          sessionId,
+          err,
+        },
+        'rework session resume failed, falling back to new session',
+      );
+      await this.closeNodeSession(instance, node, 'workflow_node_rework');
+      await this.startNodeSession(instance, node, {
+        extraPromptSections: [buildReworkSection(payload.reason)],
+      });
+      return;
+    }
+
+    if (configuredNode.reworkCompactOriginalContext && configuredNode.agentConfig) {
+      const compacted = await runCompactPipeline(sessionId, configuredNode.agentConfig.acpServerType);
+      if (!compacted) {
+        logger.warn(
+          { event: 'rework-compact-degraded', workflowInstanceId: instance._id.toString(), nodeId: node.nodeId, sessionId },
+          'rework compact failed, sending rework prompt anyway',
+        );
+      }
+      // 发送前双校验：压缩期间节点可能已被人工推进/重启/实例删除
+      if (!(await this.canSendAfterWait(instance._id.toString(), node.nodeId, sessionId, 'REWORK'))) {
+        logger.info(
+          { event: 'rework-send-skipped', workflowInstanceId: instance._id.toString(), nodeId: node.nodeId, sessionId },
+          'rework prompt skipped after compact (state changed)',
+        );
+        return;
+      }
+    }
+
     await sessionService.addMessage(sessionId, {
       direction: 'input',
       type: 'text',
-      content:
-        `你的工作流节点产出被下游节点打回，需要返工。打回原因：${payload.reason ?? '（未提供）'}。\n` +
-        '请根据打回原因修订产出，通过工作流工具重新写入产物后调用 completeCurrentRework 完成返工。\n' +
-        '若返工中发现问题根源在更上游（本节点无法独立修正），可调用 rejectCurrentNode 将本节点打回并触发上游返工。',
+      content: reworkPrompt,
     });
   }
 
-  /** REJECT→RUNNING：关闭下游 REJECT 节点阻塞期间的空闲会话，再以全新会话复工（含最新上游产物与 Mode/模型配置） */
+  /**
+   * REJECT→RUNNING：按 resumeSessionBehavior 分流：
+   * - NEW_SESSION（默认/现状）：关闭空闲会话后以全新会话复工；
+   * - ORIGINAL_SESSION：resume 原会话（可选先压缩）后发送继续提示词。
+   */
   async resumeNodeSession(instance: WorkflowInstanceDoc, node: WorkflowNodeDoc): Promise<void> {
     // HUMAN/FLAG 节点无会话，复工仅需引擎置 RUNNING，无需拉起会话
     if (node.type !== 'AI') {
       return;
     }
-    // 关闭下游 REJECT 节点原有的空闲会话，避免资源浪费
-    if (node.sessionId) {
-      await sessionService.close(node.sessionId.toString(), instance.userId.toString(), {
-        suppressFallback: true,
-        reason: 'workflow_node_resume',
-      });
-      node.sessionId = undefined;
+    const configuredNode = await loadNodeConfig(instance, node);
+    const behavior = configuredNode.resumeSessionBehavior ?? 'NEW_SESSION';
+    const sessionId = node.sessionId ? node.sessionId.toString() : null;
+
+    if (behavior === 'ORIGINAL_SESSION' && sessionId) {
+      try {
+        const resumeResult = await sessionService.resume(
+          sessionId,
+          instance.userId.toString(),
+          initialModeModel(configuredNode.agentConfig),
+        );
+        // 'Session is not ended' = 原会话仍存活（idling/running），无需 resume，直接继续；
+        // 其余失败（会话不存在/只读等）走降级新会话路径。
+        if (resumeResult && resumeResult.success === false && resumeResult.error !== 'Session is not ended') {
+          throw new Error(`resume failed: ${resumeResult.error ?? 'unknown'}`);
+        }
+        if (configuredNode.resumeCompactOriginalContext && configuredNode.agentConfig) {
+          const compacted = await runCompactPipeline(sessionId, configuredNode.agentConfig.acpServerType);
+          if (!compacted) {
+            logger.warn(
+              { event: 'resume-compact-degraded', workflowInstanceId: instance._id.toString(), nodeId: node.nodeId, sessionId },
+              'resume compact failed, sending continue prompt anyway',
+            );
+          }
+          if (!(await this.canSendAfterWait(instance._id.toString(), node.nodeId, sessionId, 'RUNNING'))) {
+            logger.info(
+              { event: 'resume-send-skipped', workflowInstanceId: instance._id.toString(), nodeId: node.nodeId, sessionId },
+              'resume prompt skipped after compact (state changed)',
+            );
+            return;
+          }
+        }
+        await sessionService.addMessage(sessionId, {
+          direction: 'input',
+          type: 'text',
+          content: RESUME_CONTINUE_PROMPT,
+        });
+        return;
+      } catch (err) {
+        logger.warn(
+          {
+            event: 'resume-session-failed',
+            workflowInstanceId: instance._id.toString(),
+            nodeId: node.nodeId,
+            sessionId,
+            err,
+          },
+          'resume original session failed, falling back to new session',
+        );
+      }
     }
+
+    // 现状新会话链（默认）
+    await this.closeNodeSession(instance, node, 'workflow_node_resume');
     await this.startNodeSession(instance, node);
+  }
+
+  /** 关闭节点会话并清空 sessionId（无会话时安全跳过） */
+  private async closeNodeSession(
+    instance: WorkflowInstanceDoc,
+    node: WorkflowNodeDoc,
+    reason: 'workflow_node_rework' | 'workflow_node_resume' | 'workflow_node_restart',
+  ): Promise<void> {
+    if (!node.sessionId) return;
+    await sessionService.close(node.sessionId.toString(), instance.userId.toString(), {
+      suppressFallback: true,
+      reason,
+    });
+    node.sessionId = undefined;
+  }
+
+  /**
+   * 压缩等待后的发送前双校验（D7）：实例未删除 + 节点状态仍为预期 + sessionId 未变。
+   * 不满足说明人工 complete/restart/删除已介入，放弃发送过期提示词。
+   */
+  private async canSendAfterWait(
+    instanceId: string,
+    nodeId: string,
+    sessionId: string,
+    expectedStatus: 'RUNNING' | 'REWORK',
+  ): Promise<boolean> {
+    const current = (await WorkflowInstance.findOne({
+      _id: instanceId,
+      deletedAt: null,
+    }).lean()) as unknown as WorkflowInstanceDoc | null;
+    if (!current) return false;
+    const node = current.nodes.find((item) => item.nodeId === nodeId);
+    if (!node || node.status !== expectedStatus) return false;
+    return Boolean(node.sessionId) && node.sessionId!.toString() === sessionId;
   }
 
   /** 重启节点：关闭旧会话，以全新会话重启（可携带新 agentConfig 更新节点快照） */

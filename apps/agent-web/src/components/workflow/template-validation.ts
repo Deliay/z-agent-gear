@@ -1,5 +1,6 @@
 import type {
   WorkflowNodeType,
+  WorkflowNodeSessionBehavior,
   WorkflowTemplateNodeInput,
   ConfiguredWorkflowNodeInput,
   AgentNodeConfigInput,
@@ -14,8 +15,69 @@ export interface AgentConfigForm {
   initNewWorktree: boolean
 }
 
+/** 节点会话行为表单状态（仅 AI 节点有意义；HUMAN/FLAG 不提交） */
+export interface SessionBehaviorForm {
+  reworkSessionBehavior: WorkflowNodeSessionBehavior
+  reworkCompactOriginalContext: boolean
+  resumeSessionBehavior: WorkflowNodeSessionBehavior
+  resumeCompactOriginalContext: boolean
+}
+
+/** 返工时默认：原始会话（=服务端现状） */
+export const DEFAULT_REWORK_SESSION_BEHAVIOR: WorkflowNodeSessionBehavior = 'ORIGINAL_SESSION'
+/** 打回后默认：新会话（=服务端现状） */
+export const DEFAULT_RESUME_SESSION_BEHAVIOR: WorkflowNodeSessionBehavior = 'NEW_SESSION'
+
+/** 会话行为默认值（4 字段均与存量服务端行为一致） */
+export function emptySessionBehavior(): SessionBehaviorForm {
+  return {
+    reworkSessionBehavior: DEFAULT_REWORK_SESSION_BEHAVIOR,
+    reworkCompactOriginalContext: false,
+    resumeSessionBehavior: DEFAULT_RESUME_SESSION_BEHAVIOR,
+    resumeCompactOriginalContext: false,
+  }
+}
+
+/**
+ * 读取侧归一：行为 `??` 默认值；选择「新会话」时对应 compact 恒 false。
+ * 存量文档缺字段、HUMAN/FLAG 恒 null 均走此处。
+ */
+export function normalizeSessionBehavior(node: {
+  reworkSessionBehavior?: WorkflowNodeSessionBehavior | null
+  reworkCompactOriginalContext?: boolean | null
+  resumeSessionBehavior?: WorkflowNodeSessionBehavior | null
+  resumeCompactOriginalContext?: boolean | null
+}): SessionBehaviorForm {
+  const reworkSessionBehavior = node.reworkSessionBehavior ?? DEFAULT_REWORK_SESSION_BEHAVIOR
+  const resumeSessionBehavior = node.resumeSessionBehavior ?? DEFAULT_RESUME_SESSION_BEHAVIOR
+  return {
+    reworkSessionBehavior,
+    reworkCompactOriginalContext:
+      reworkSessionBehavior === 'ORIGINAL_SESSION'
+        ? (node.reworkCompactOriginalContext ?? false)
+        : false,
+    resumeSessionBehavior,
+    resumeCompactOriginalContext:
+      resumeSessionBehavior === 'ORIGINAL_SESSION'
+        ? (node.resumeCompactOriginalContext ?? false)
+        : false,
+  }
+}
+
+/** 提交侧口径：AI 节点携带 4 字段（新会话时 compact 恒 false）；HUMAN/FLAG 由调用方省略整组键 */
+export function sessionBehaviorInput(node: SessionBehaviorForm): SessionBehaviorForm {
+  return {
+    reworkSessionBehavior: node.reworkSessionBehavior,
+    reworkCompactOriginalContext:
+      node.reworkSessionBehavior === 'ORIGINAL_SESSION' ? node.reworkCompactOriginalContext : false,
+    resumeSessionBehavior: node.resumeSessionBehavior,
+    resumeCompactOriginalContext:
+      node.resumeSessionBehavior === 'ORIGINAL_SESSION' ? node.resumeCompactOriginalContext : false,
+  }
+}
+
 /** 模板编辑器中的可编辑节点（prompts/artifactTitles 以「每行一条」文本编辑） */
-export interface EditableNode {
+export interface EditableNode extends SessionBehaviorForm {
   nodeKey: string
   type: WorkflowNodeType
   name: string
@@ -45,6 +107,7 @@ export function createEmptyNode(type: WorkflowNodeType = 'HUMAN'): EditableNode 
     dependsOn: [],
     requiresWorktree: false,
     linkUpstreamPullRequest: false,
+    ...emptySessionBehavior(),
     agentConfig: null,
     sortOrder: null,
   }
@@ -75,6 +138,10 @@ export function templateNodeToEditable(
     requiresWorktree: boolean
     linkUpstreamPullRequest?: boolean
     sortOrder?: number | null
+    reworkSessionBehavior?: WorkflowNodeSessionBehavior | null
+    reworkCompactOriginalContext?: boolean | null
+    resumeSessionBehavior?: WorkflowNodeSessionBehavior | null
+    resumeCompactOriginalContext?: boolean | null
   },
 ): EditableNode {
   return {
@@ -88,6 +155,7 @@ export function templateNodeToEditable(
     dependsOn: node.dependsOn,
     requiresWorktree: node.requiresWorktree,
     linkUpstreamPullRequest: node.type === 'HUMAN' ? (node.linkUpstreamPullRequest ?? false) : false,
+    ...normalizeSessionBehavior(node),
     agentConfig: null,
     sortOrder: node.sortOrder ?? null,
   }
@@ -122,6 +190,8 @@ export function toNodeInput(node: EditableNode): WorkflowTemplateNodeInput {
     dependsOn: node.dependsOn,
     requiresWorktree: isAi ? node.requiresWorktree : false,
     linkUpstreamPullRequest: node.type === 'HUMAN' ? node.linkUpstreamPullRequest : false,
+    // 仅 AI 节点携带会话行为；HUMAN/FLAG 省略该组键（保持旧报文形状）
+    ...(isAi ? sessionBehaviorInput(node) : {}),
     sortOrder: node.sortOrder,
   }
 }
@@ -150,7 +220,25 @@ export function toConfiguredNodeInput(node: EditableNode): ConfiguredWorkflowNod
     requiresWorktree: isAi ? node.requiresWorktree : false,
     linkUpstreamPullRequest: node.type === 'HUMAN' ? node.linkUpstreamPullRequest : false,
     agentConfig: config,
+    // 仅 AI 节点携带会话行为；HUMAN/FLAG 省略该组键（保持旧报文形状）
+    ...(isAi ? sessionBehaviorInput(node) : {}),
     sortOrder: node.sortOrder,
+  }
+}
+
+/** 会话行为合法性校验：compact 仅在对应会话行为为「原始会话」时合法（仅 AI 节点） */
+function validateSessionBehavior(node: EditableNode, label: string, errors: string[]) {
+  if (node.type !== 'AI') return
+  const name = node.name.trim() || node.nodeKey.trim()
+  if (node.reworkCompactOriginalContext && node.reworkSessionBehavior !== 'ORIGINAL_SESSION') {
+    errors.push(
+      `${label}「${name}」：「返工时」为「新会话」时不可开启「压缩原始上下文」（仅原始会话可压缩）`,
+    )
+  }
+  if (node.resumeCompactOriginalContext && node.resumeSessionBehavior !== 'ORIGINAL_SESSION') {
+    errors.push(
+      `${label}「${name}」：「打回后」为「新会话」时不可开启「压缩原始上下文」（仅原始会话可压缩）`,
+    )
   }
 }
 
@@ -186,6 +274,7 @@ export function validateTemplateNodes(nodes: EditableNode[]): string[] {
     if (node.type !== 'HUMAN' && node.linkUpstreamPullRequest) {
       errors.push(`${label}「${node.name.trim() || node.nodeKey.trim()}」：仅人类节点可开启「联动上游 Pull Request」`)
     }
+    validateSessionBehavior(node, label, errors)
     for (const dep of node.dependsOn) {
       if (dep === node.nodeKey.trim()) {
         errors.push(`${label}：不能依赖自身`)

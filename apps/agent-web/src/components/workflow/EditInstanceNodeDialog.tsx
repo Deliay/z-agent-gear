@@ -19,8 +19,15 @@ import {
   RESTART_NODE,
   type WorkflowNodeData,
 } from '@/graphql/workflow'
-import { emptyAgentConfig, type AgentConfigForm } from './template-validation'
-import { AgentConfigFields } from './WorkflowGraphEditor'
+import {
+  emptyAgentConfig,
+  emptySessionBehavior,
+  normalizeSessionBehavior,
+  sessionBehaviorInput,
+  type AgentConfigForm,
+  type SessionBehaviorForm,
+} from './template-validation'
+import { AgentConfigFields, SessionBehaviorFields } from './WorkflowGraphEditor'
 
 interface EditInstanceNodeDialogProps {
   open: boolean
@@ -59,6 +66,7 @@ export default function EditInstanceNodeDialog({
   const [requiresWorktree, setRequiresWorktree] = useState(false)
   const [linkUpstreamPullRequest, setLinkUpstreamPullRequest] = useState(false)
   const [agentConfig, setAgentConfig] = useState<AgentConfigForm>(emptyAgentConfig())
+  const [sessionBehavior, setSessionBehavior] = useState<SessionBehaviorForm>(emptySessionBehavior())
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -86,6 +94,8 @@ export default function EditInstanceNodeDialog({
           }
         : emptyAgentConfig(),
     )
+    // 实例节点快照缺字段（存量实例 / HUMAN-FLAG）按默认值归一
+    setSessionBehavior(normalizeSessionBehavior(node))
   }, [open, node])
 
   const handleSave = async () => {
@@ -156,6 +166,8 @@ export default function EditInstanceNodeDialog({
             initNewWorktree: agentConfig.initNewWorktree,
           }
         : null,
+      // 仅 AI 节点携带会话行为；HUMAN/FLAG 省略该组键（保持旧报文形状）
+      ...(isAi ? sessionBehaviorInput(sessionBehavior) : {}),
     }
 
     setSaving(true)
@@ -286,6 +298,15 @@ export default function EditInstanceNodeDialog({
                 readOnly={false}
                 onChange={(patch) => setAgentConfig((prev) => ({ ...prev, ...patch }))}
               />
+              {!restartMode && (
+                <SessionBehaviorFields
+                  nodeType={node.type}
+                  nodeName={node.name}
+                  value={sessionBehavior}
+                  readOnly={false}
+                  onChange={(patch) => setSessionBehavior((prev) => ({ ...prev, ...patch }))}
+                />
+              )}
             </>
           )}
 

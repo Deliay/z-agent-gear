@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@apollo/client/react'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { toast } from 'sonner'
 import {
   DndContext,
@@ -38,11 +38,12 @@ import type {
   GetAcpServerOptionsQuery,
   RefreshAcpServerOptionsMutation,
 } from '@/graphql/types'
-import type { WorkflowNodeType } from '@/graphql/workflow'
+import type { WorkflowNodeType, WorkflowNodeSessionBehavior } from '@/graphql/workflow'
 import {
   createEmptyNode,
   type EditableNode,
   type AgentConfigForm,
+  type SessionBehaviorForm,
 } from './template-validation'
 import { Plus, Trash2, ChevronDown, ChevronRight, GripVertical } from 'lucide-react'
 
@@ -368,6 +369,16 @@ function SortableNodeItem({
         />
       )}
 
+      {node.type === 'AI' && (
+        <SessionBehaviorFields
+          nodeType={node.type}
+          nodeName={node.name || node.nodeKey || `节点 ${index + 1}`}
+          value={node}
+          readOnly={readOnly}
+          onChange={(patch) => onUpdate(index, patch)}
+        />
+      )}
+
       {!isCollapsed && (
         <>
           <div className="grid gap-3 sm:grid-cols-3">
@@ -563,6 +574,121 @@ export function AgentConfigFields({
           disabled={readOnly}
         />
         <Label>初始化新 Worktree</Label>
+      </div>
+    </div>
+  )
+}
+
+export interface SessionBehaviorFieldsProps {
+  /** 节点类型：仅 AI 节点渲染本区（HUMAN/FLAG 无会话概念） */
+  nodeType: WorkflowNodeType
+  /** 用于 aria-label 区分节点 */
+  nodeName: string
+  value: SessionBehaviorForm
+  readOnly: boolean
+  onChange: (patch: Partial<SessionBehaviorForm>) => void
+}
+
+const SESSION_BEHAVIOR_OPTIONS: { value: WorkflowNodeSessionBehavior; label: string }[] = [
+  { value: 'NEW_SESSION', label: '新会话' },
+  { value: 'ORIGINAL_SESSION', label: '原始会话' },
+]
+
+/**
+ * 节点会话行为配置区（模板/已配置/实例化三入口与实例节点编辑弹窗共用）：
+ * 「返工时」「打回后」两组单选；选「原始会话」才展示对应「压缩原始上下文」勾选，
+ * 切到「新会话」时隐藏并重置为 false。
+ */
+export function SessionBehaviorFields({
+  nodeType,
+  nodeName,
+  value,
+  readOnly,
+  onChange,
+}: SessionBehaviorFieldsProps) {
+  const groupId = useId()
+  if (nodeType !== 'AI') return null
+
+  return (
+    <div className="space-y-3 rounded-lg border bg-muted/20 p-3" data-testid="session-behavior-fields">
+      <div className="text-sm font-medium">会话行为</div>
+
+      <div className="space-y-2" role="radiogroup" aria-label={`${nodeName} 返工时会话行为`}>
+        <Label>返工时（节点被打回后再次执行）</Label>
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
+          {SESSION_BEHAVIOR_OPTIONS.map((option) => (
+            <label key={option.value} className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name={`rework-session-behavior-${groupId}`}
+                value={option.value}
+                aria-label={`${nodeName} 返工时 ${option.label}`}
+                checked={value.reworkSessionBehavior === option.value}
+                disabled={readOnly}
+                onChange={() =>
+                  onChange({
+                    reworkSessionBehavior: option.value,
+                    ...(option.value === 'NEW_SESSION'
+                      ? { reworkCompactOriginalContext: false }
+                      : {}),
+                  })
+                }
+              />
+              <span>{option.label}</span>
+            </label>
+          ))}
+        </div>
+        {value.reworkSessionBehavior === 'ORIGINAL_SESSION' && (
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label={`${nodeName} 返工时压缩原始上下文`}
+              checked={value.reworkCompactOriginalContext}
+              disabled={readOnly}
+              onChange={(e) => onChange({ reworkCompactOriginalContext: e.target.checked })}
+            />
+            <span>压缩原始上下文</span>
+          </label>
+        )}
+      </div>
+
+      <div className="space-y-2" role="radiogroup" aria-label={`${nodeName} 打回后会话行为`}>
+        <Label>打回后（打回上游完成后再次流转到本节点）</Label>
+        <div className="flex flex-wrap gap-x-6 gap-y-2">
+          {SESSION_BEHAVIOR_OPTIONS.map((option) => (
+            <label key={option.value} className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="radio"
+                name={`resume-session-behavior-${groupId}`}
+                value={option.value}
+                aria-label={`${nodeName} 打回后 ${option.label}`}
+                checked={value.resumeSessionBehavior === option.value}
+                disabled={readOnly}
+                onChange={() =>
+                  onChange({
+                    resumeSessionBehavior: option.value,
+                    ...(option.value === 'NEW_SESSION'
+                      ? { resumeCompactOriginalContext: false }
+                      : {}),
+                  })
+                }
+              />
+              <span>{option.label}</span>
+            </label>
+          ))}
+        </div>
+        {value.resumeSessionBehavior === 'ORIGINAL_SESSION' && (
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              aria-label={`${nodeName} 打回后压缩原始上下文`}
+              checked={value.resumeCompactOriginalContext}
+              disabled={readOnly}
+              onChange={(e) => onChange({ resumeCompactOriginalContext: e.target.checked })}
+            />
+            <span>压缩原始上下文</span>
+          </label>
+        )}
       </div>
     </div>
   )

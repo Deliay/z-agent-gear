@@ -401,6 +401,19 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-CR2 失败提示 | `lastSyncError` 在右栏红色副行展示，页面其它操作不受影响 |
 | E2E-CR3 零回归 | 未绑定 PR 的实例：右栏「暂无关联」，无「检查项」元素 |
 
+### 工作流节点会话行为 E2E (`workflow-session-behavior.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| E2E-SB1 | 模板编辑器「会话行为」区：仅 AI 节点渲染；默认「返工时=原始会话 / 打回后=新会话」；选「原始会话」展示压缩勾选、切「新会话」隐藏并重置；保存后只读查看回显一致 |
+| E2E-SB2 | 配置「打回后=原始会话」的 AI 评审节点：打回上游 → 上游返工完成 → 评审节点再次流转时复用原会话（不新建会话、`starts` 不增加）并收到「重新获取上游产物」继续提示词 |
+
+### Admin Harness 配置 E2E (`admin-harness-config.spec.ts`)
+
+| 测试 | 描述 |
+|------|------|
+| E2E-HC1 | 后台「Harness 配置」页三行（OpenCode/Kimi Code/DeepSeek Harness）可见且回显服务端指令；非法输入（不以 `/` 开头）保存禁用并提示；合法保存 → 刷新后回显新值 |
+
 ### Cloud Host Issues Linkage E2E (`cloud-host-issues-linkage.spec.ts`)
 
 > fixture 驱动（`MONGODB_URI`）：直接写云电脑 / 已配置工作流 / 联动配置，不依赖真实 K8s 与 GitHub App；触发链路与标签同步由 `tests/api` T-GHIL/T-GHI 覆盖。

@@ -17,6 +17,18 @@ export const HARNESS_TYPES = ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'] as co
 export type HarnessType = (typeof HARNESS_TYPES)[number];
 
 /**
+ * Harness 类型 → ACP Server 类型映射（单一事实源）。
+ *
+ * 模型层叶模块承载：cloud-host-service 与 harness-config（压缩指令解析）共用，
+ * 避免两处私有常量各自漂移（实现计划 D5）。
+ */
+export const HARNESS_ACP_TYPES: Record<HarnessType, string> = {
+  OPENCODE: 'opencode',
+  KIMI_CODE: 'kimi_code',
+  DEEPSEEK_HARNESS: 'deepseek_harness',
+};
+
+/**
  * 前台云电脑（集合 `cloudhosts`）。
  *
  * 生命周期：创建即启动 → 停止即销毁。`status` 是云电脑生命周期的唯一事实源；
