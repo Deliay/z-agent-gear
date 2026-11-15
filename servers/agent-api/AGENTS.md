@@ -521,6 +521,16 @@ pnpm run start   # Start production server
 - **零行为抽取**：`services/workflow/workflow-worktree.ts` 承载 `createWorkflowWorktree`/`removeWorkflowWorktree`（自 `instance.ts` 逐字搬出，`instance.ts` 私有方法委托），实例化与接续共用；`instance.test.ts` 既有断言全绿即锁定零回归。
 - **数据**：`WorkflowInstance.continuationHistory` 子文档数组（`{from/toControllerId, from/toWorkspaceId, at}`，`_id:false`，`default: []`）零迁移；`GET_WORKFLOW_INSTANCE` 返回 `continuationHistory`，`mapInstance` 归一 `?? []`。
 
+## 工作流 MCP 提示词片段（#523）
+
+> 契约 `contracts/mcp-server.graphql`（`McpServerSource.platform` 注释）；计划 `docs/engineering/plan/20261115-feat-workflow-mcp-prompt-snippets.md`。
+
+- **能力落点**：平台内置 MCP 服务 `agent-workflow-admin-tools`（`services/workflow/admin-tools.ts`）实现 MCP prompts 能力——`initialize` 返回 `capabilities: { tools: {}, prompts: {} }`（`protocolVersion`/`serverInfo` 不变）；`prompts/list` 返回 `{ prompts: ADMIN_PROMPT_DEFINITIONS }`（声明序，无 cursor 分页）；`prompts/get { name }` 返回 `{ description, messages: [{ role: 'user', content: { type: 'text', text } }] }`。节点作用域 `agent-workflow-tools`（`services/workflow/tool-handlers.ts`）**不提供**片段，其 `initialize` 保持 `capabilities: { tools: {} }`。
+- **单一来源**：`services/workflow/admin-prompts.ts` 承载 `ADMIN_PROMPT_DEFINITIONS` / `listAdminPromptNames()` / `getAdminPromptText(name)`，两段片段文本为模块内 Markdown 常量（不落库、不可在线编辑）。片段名：`workflow-schema`（顶层结构 / 节点类型与字段 / 图校验规则 / AI 节点 Agent 配置）、`workflow-project-persistence`（`.zag/workflow/templates/` 放置约定 / JSON 格式 / 文件约束 / 检测配置与快照生效方式）。
+- **同源口径**：图规则对齐 `template.ts#validateTemplateGraph`，Agent 配置对齐 `configured.ts#validateAgentConfigs`，项目文件解析对齐 `repo-templates.ts#parseRepoTemplate`，扫描上限（20 文件 / 128KiB / 1MiB / 不递归 / stat 判定符号链接）对齐 `packages/agent-controller/src/workflow-templates.ts`（跨包不可 import，守卫用字面量断言并注释来源）。**防漂移守卫**：`admin-prompts.test.ts` 的 T-AP4/T-AP5——上述规则或常量变更时测试变红，强制同步片段文本。
+- **错误形态**：`prompts/get` 缺 `params.name`/空串或未知名称 → 协议级 `error.code = INVALID_PARAMS`（非 `tools/call` 的 `isError` 工具形态），message 附「可用片段：…」（由 `listAdminPromptNames()` 生成，保证所列即所得）。
+- **零改动面**：`ensureAdminToolsServer` 与 `McpServer` 文档（prompts 不是 tool，13 工具清单与 upsert 不变）、`mcp-dispatch` 分发层、`graphql/schemas/mcp-server.ts`（手写 schema 无注释概念）均不变。
+
 ## 多租户二期（工作区资源查询口径）
 
 - **请求链路**：已归属工作区的资源（`sessions` / `controllers` / `controllerkeys` / `cloudhosts` / `cloudstorages` / `configuredworkflows` / `workflowinstances` / `workflowtemplates` / `githubaccounts` / `providers` / `models`）一律用 `actorFilter(userId)` 组合查询，**禁止显式写 `userId`**：工作区上下文存在时返回 `{}`，由 `applyWorkspaceScope` 注入可见集；无上下文（引擎/内部/迁移）才回退 `{userId}` 归属校验。典型回归：`Controller.cloudHost`、`sessionService.create` 的云电脑状态校验、云电脑创建时选择共享 GitHub 绑定、Issue 联动实例化时读取已配置工作流、会话级权限超时设置。
