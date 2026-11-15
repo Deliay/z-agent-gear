@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ExternalLink, MessageSquare, RefreshCw, RotateCcw } from 'lucide-react'
 import {
   Sheet,
@@ -7,6 +8,14 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import MarkdownContent from '@/components/session/MarkdownContent'
 import { artifactsOf } from '@/lib/artifact-owners'
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow'
@@ -28,6 +37,8 @@ interface NodeDetailDrawerProps {
   onOpenSession?: (sessionId: string) => void
   /** 重启节点（与列表视图同源：交给页面级 EditInstanceNodeDialog restartMode） */
   onRestartNode?: (node: WorkflowNodeData) => void
+  /** 立即打断节点（页面级回调，与 onRestartNode 同模式） */
+  onInterruptNode?: (node: WorkflowNodeData) => void
 }
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -39,11 +50,12 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
-function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable = false }: {
+function NodeDetail({ instance, node, onOpenSession, onRestartNode, onInterruptNode, unavailable = false }: {
   instance: WorkflowInstanceData
   node: WorkflowNodeData
   onOpenSession?: (sessionId: string) => void
   onRestartNode?: (node: WorkflowNodeData) => void
+  onInterruptNode?: (node: WorkflowNodeData) => void
   unavailable?: boolean
 }) {
   const nodeArtifacts = artifactsOf(node, instance.blackboard)
@@ -57,7 +69,12 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
       node.status === 'REWORK' ||
       node.status === 'FAILED' ||
       node.status === 'RETRY_FAILED')
+  // 立即打断：AI 节点 + RUNNING/REWORK/RETRY_FAILED（不含 FAILED——已处于失败状态）
+  const canInterrupt =
+    node.type === 'AI' &&
+    (node.status === 'RUNNING' || node.status === 'REWORK' || node.status === 'RETRY_FAILED')
   const retryProgress = retryProgressText(node)
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   return (
     <div className="min-w-0 space-y-3">
@@ -95,6 +112,19 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
             重启节点
           </Button>
         )}
+        {canInterrupt && onInterruptNode && (
+          <Button
+            size="xs"
+            variant="outline"
+            data-testid="interrupt-node"
+            onClick={() => setConfirmOpen(true)}
+            disabled={unavailable}
+            title={unavailable ? '实例不可用，请先接续' : undefined}
+          >
+            <RefreshCw className="size-3" />
+            立即失败
+          </Button>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -112,7 +142,11 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
       )}
       {node.failInfo && (node.status === 'FAILED' || node.status === 'RETRY_FAILED') && (
         <div className="rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
-          {node.status === 'RETRY_FAILED' ? '重试失败原因' : '失败原因'}：{node.failInfo.reason}
+          {node.status === 'RETRY_FAILED'
+            ? '重试失败原因'
+            : node.failInfo.source === 'MANUAL_INTERRUPT'
+              ? '已被人工立即打断'
+              : '失败原因'}：{node.failInfo.reason}
         </div>
       )}
 
@@ -180,6 +214,30 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
       )}
 
       {actionable && <HumanNodeActions instanceId={instance.id} node={node} disabled={unavailable} />}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认立即打断？</DialogTitle>
+            <DialogDescription>
+              此操作会立即中断会话、让工作流进入失败状态且不再自动重试。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+              取消
+            </Button>
+            <Button
+              onClick={() => {
+                setConfirmOpen(false)
+                onInterruptNode?.(node)
+              }}
+            >
+              确认
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -248,6 +306,7 @@ export default function NodeDetailDrawer({
   unavailable = false,
   onOpenSession,
   onRestartNode,
+  onInterruptNode,
 }: NodeDetailDrawerProps) {
   const node = target?.type === 'node' ? instance.nodes.find((item) => item.id === target.nodeId) ?? null : null
 
@@ -285,6 +344,7 @@ export default function NodeDetailDrawer({
               unavailable={unavailable}
               onOpenSession={onOpenSession}
               onRestartNode={onRestartNode}
+              onInterruptNode={onInterruptNode}
             />
           )}
           {target?.type === 'node' && !node && (

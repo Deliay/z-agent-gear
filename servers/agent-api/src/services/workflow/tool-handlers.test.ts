@@ -27,6 +27,7 @@ vi.mock('./pr-check-run-sync.js', () => ({
 vi.mock('./instance.js', () => ({
   workflowInstanceService: {
     rename: vi.fn(),
+    interruptNode: vi.fn(),
   },
 }));
 
@@ -111,7 +112,7 @@ describe('workflow tool-handlers', () => {
   });
 
   describe('工具定义', () => {
-    it('提供全部 14 个工具且带 inputSchema', () => {
+    it('T-TH1: 提供全部 15 个工具且带 inputSchema（含 interruptCurrentNode）', () => {
       const defs = getWorkflowToolDefinitions();
       expect(defs.map((d) => d.name).sort()).toEqual(
         [
@@ -127,6 +128,7 @@ describe('workflow tool-handlers', () => {
           'completeCurrentRework',
           'failCurrentNode',
           'resumeFailedNode',
+          'interruptCurrentNode',
           'linkPullRequest',
           'renameCurrentWorkflow',
         ].sort(),
@@ -135,6 +137,10 @@ describe('workflow tool-handlers', () => {
         expect(def.description).toBeTruthy();
         expect(def.inputSchema).toMatchObject({ type: 'object' });
       }
+      // interruptCurrentNode 有 description + inputSchema
+      const interruptDef = defs.find((d) => d.name === 'interruptCurrentNode')!;
+      expect(interruptDef.description).toBeTruthy();
+      expect(interruptDef.inputSchema).toMatchObject({ type: 'object' });
     });
   });
 
@@ -330,6 +336,41 @@ describe('workflow tool-handlers', () => {
       vi.mocked(workflowEngine.transition).mockRejectedValue(new Error('节点当前状态为 RUNNING，不允许执行「恢复运行」'));
       await expect(callWorkflowTool(SCOPE, 'resumeFailedNode', {})).rejects.toSatisfy(
         expectToolError('INVALID_STATE'),
+      );
+    });
+
+    it('T-TH2: interruptCurrentNode 节点作用域 + 状态门（RUNNING 调 interruptNode；DONE → INVALID_STATE；HUMAN → 服务层拒绝）', async () => {
+      // RUNNING → 调 workflowInstanceService.interruptNode 返回 {nodeId, status}
+      loadInstance();
+      vi.mocked(workflowInstanceService.interruptNode).mockResolvedValue({ nodeId: 'n2', status: 'FAILED' } as never);
+      const result = await callWorkflowTool(SCOPE, 'interruptCurrentNode', {});
+      expect(workflowInstanceService.interruptNode).toHaveBeenCalledWith('user-1', 'inst-1', 'n2');
+      expect(result).toMatchObject({ nodeId: 'n2', status: 'FAILED' });
+
+      // DONE → 状态门拒绝 INVALID_STATE
+      const doneInstance = makeInstance();
+      doneInstance.nodes[1].status = 'DONE';
+      loadInstance(doneInstance);
+      vi.mocked(workflowInstanceService.interruptNode).mockClear();
+      await expect(callWorkflowTool(SCOPE, 'interruptCurrentNode', {})).rejects.toSatisfy(
+        expectToolError('INVALID_STATE'),
+      );
+      expect(workflowInstanceService.interruptNode).not.toHaveBeenCalled();
+
+      // HUMAN → 服务层类型门拒绝（interruptNode 抛错 → INVALID_STATE）
+      const humanInstance = makeInstance();
+      humanInstance.nodes[1].type = 'HUMAN';
+      loadInstance(humanInstance);
+      vi.mocked(workflowInstanceService.interruptNode).mockRejectedValue(new Error('节点不是 AI 节点会话，无法打断'));
+      await expect(callWorkflowTool(SCOPE, 'interruptCurrentNode', {})).rejects.toSatisfy(
+        expectToolError('INVALID_STATE'),
+      );
+    });
+
+    it('T-TH3: 未知工具名返回 UNKNOWN_TOOL（15 项列表）', async () => {
+      loadInstance();
+      await expect(callWorkflowTool(SCOPE, 'hackThePlanet', {})).rejects.toSatisfy(
+        expectToolError('UNKNOWN_TOOL'),
       );
     });
 

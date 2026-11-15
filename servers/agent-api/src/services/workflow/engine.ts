@@ -93,7 +93,7 @@ export interface TransitionPayload {
   targetNodeIds?: string[];
   /** complete/completeRework：产物列表，写入黑板 */
   artifacts?: { title: string; value: string }[];
-  /** fail：失败来源（SESSION_STUCK=提醒后仍停止 / LLM_REPORTED=LLM 主动标记 / CONTROLLER_UNAVAILABLE=接续收敛） */
+  /** fail：失败来源（SESSION_STUCK=提醒后仍停止 / LLM_REPORTED=LLM 主动标记 / CONTROLLER_UNAVAILABLE=接续收敛 / MANUAL_INTERRUPT=人类立即打断） */
   source?: string;
   /** restart：可选的新 Agent 配置 */
   agentConfig?: {
@@ -144,7 +144,7 @@ const TRANSITIONS: Record<WorkflowEvent, { from: string[]; to: string }> = {
   rework: { from: ['READY', 'RUNNING', 'DONE'], to: 'REWORK' },
   completeRework: { from: ['REWORK'], to: 'DONE' },
   resume: { from: ['REJECT'], to: 'RUNNING' },
-  fail: { from: ['RUNNING', 'REWORK'], to: 'FAILED' },
+  fail: { from: ['RUNNING', 'REWORK', 'RETRY_FAILED'], to: 'FAILED' },
   resumeFailed: { from: ['FAILED', 'RETRY_FAILED'], to: 'RUNNING' },
   // 重启节点：会话失败/卡住时人工触发，关闭旧会话并拉起全新会话重试
   restart: { from: ['RUNNING', 'REWORK', 'FAILED', 'RETRY_FAILED'], to: 'RUNNING' },

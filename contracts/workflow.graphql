@@ -200,7 +200,8 @@ type WorkflowNodeFailInfo {
   reason: String!
   # 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED /
   # RETRY_EXHAUSTED（中断自动重试 10 次用尽）/
-  # CONTROLLER_UNAVAILABLE（实例接续时收敛原控制器上不可达的进行中节点）
+  # CONTROLLER_UNAVAILABLE（实例接续时收敛原控制器上不可达的进行中节点）/
+  # MANUAL_INTERRUPT（人类在工作流节点详情「立即失败」主动打断，绕过自动重试）
   source: String!
   at: String!
 }
@@ -516,6 +517,13 @@ type Mutation {
   # 重启节点（RUNNING/REWORK/FAILED/RETRY_FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话；
   # RETRY_FAILED 来源用于自动重试用尽后的人工恢复）
   restartNode(instanceId: ID!, nodeId: ID!, agentConfig: AgentNodeConfigInput): WorkflowNode!
+  # 立即打断节点：人类在工作流节点详情主动中断节点会话并让节点立即进入失败状态，
+  # 绕过中断自动重试机制（不消耗 retryCount 预算、不排期重试）。
+  # 仅允许 RUNNING/REWORK/RETRY_FAILED 的 AI 节点；实例不可用拒绝。
+  # 错误文案表：工作流实例不存在或无权限 / 工作流实例已删除 /
+  # 工作流实例不可用（控制器离线或已删除），请先接续后再操作 /
+  # 节点当前状态不允许立即打断 / 节点不是 AI 节点会话，无法打断
+  interruptNode(instanceId: ID!, nodeId: ID!): WorkflowNode!
   # 删除实例（软删除：停止流程运转、删除全部节点会话、标记 deletedAt，实例数据保留；已删实例拒绝一切流转）
   deleteWorkflowInstance(id: ID!): Boolean!
   # 归档/取消归档实例（archived=true 归档移入「已归档」分组，false 取消归档；不影响流程运转与节点会话）

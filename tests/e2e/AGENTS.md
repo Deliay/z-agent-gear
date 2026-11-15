@@ -629,3 +629,13 @@ fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`�
 - E2E-WCT1：详情页不可用提示条（控制器离线）→「接续」打开对话框 → 选目标控制器 B + 工作路径 B（Worktree 默认勾选、Harness 默认沿用 opencode）→ 提交成功 toast → 提示条消失 → 节点收敛 FAILED →「重启」确认后 B 收到 `acp:start` 恢复执行。
 - E2E-WCT2：控制器恢复在线后不可用提示条与「接续」入口随 5s 轮询自动消失；可用实例无接续入口。
 - 依赖：`MONGODB_URI`（改控制器 `status` 与伪造运行中节点 `sessionId`）、`INTERNAL_API_TOKEN`；spec 内 fake controller 应答 `acp:check`/`git:check`（isGitRepo=true）/`git:worktree:add|remove`/`acp:start|resume|stop`，目标工作区写入 `defaultBranch=main`。
+
+## 工作流支持打断 E2E（`src/workflow-interrupt.spec.ts`）
+
+> 需求 #512；计划 `docs/engineering/plan/20261116-feat-workflow-interrupt.md`。
+
+- 前置：`aspire start`（agent-api + controller-api + agent-web）+ `INTERNAL_API_TOKEN` + `MONGODB_URI`；fake controller 应答 `acp:check`/`acp:start`/`acp:stop`。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-WI1 | 工作流节点详情 →「立即失败」→ 二次确认 → 节点 `FAILED` + `failInfo.source=MANUAL_INTERRUPT` + `retryCount` 未递增 + `nextRetryAt=null` + 工作流阻断 + 人工介入待办；`RETRY_FAILED` 节点打断同样转 `FAILED` |

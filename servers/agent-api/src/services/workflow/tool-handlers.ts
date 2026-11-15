@@ -141,6 +141,14 @@ const TOOL_DEFINITIONS: ToolDefinition[] = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'interruptCurrentNode',
+    description:
+      '操作当前节点「立即打断」（RUNNING/REWORK/RETRY_FAILED→FAILED）。仅在人类明确要求立即打断节点时调用。' +
+      '中断节点会话并让节点立即进入失败状态，绕过中断自动重试机制（不消耗 retryCount 预算、不排期重试）。' +
+      '仅允许 RUNNING/REWORK/RETRY_FAILED 的 AI 节点。',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'linkPullRequest',
     description:
       '将 GitHub Pull Request 关联到当前工作流实例与当前节点（注册 PR 联动处理器）。工作流完成/归档后自动解除。同一节点重复关联以最后一次为准。只需传 pullRequestId（形如 owner/repo#123 或 PR 链接）。',
@@ -375,6 +383,23 @@ export async function callWorkflowTool(
 
     case 'resumeFailedNode': {
       return transition(toolScope, 'resumeFailed', {});
+    }
+
+    case 'interruptCurrentNode': {
+      // 状态门：仅 RUNNING/REWORK/RETRY_FAILED 可打断（与 interruptNode 服务层同口径，前置拒绝）
+      if (!['RUNNING', 'REWORK', 'RETRY_FAILED'].includes(node.status)) {
+        throw new WorkflowToolError('INVALID_STATE', '节点当前状态不允许立即打断');
+      }
+      try {
+        const updated = await workflowInstanceService.interruptNode(
+          toolScope.userId,
+          toolScope.instanceId,
+          toolScope.nodeId,
+        );
+        return { nodeId: (updated as { nodeId: string }).nodeId, status: (updated as { status: string }).status };
+      } catch (err) {
+        throw new WorkflowToolError('INVALID_STATE', err instanceof Error ? err.message : String(err));
+      }
     }
 
     case 'renameCurrentWorkflow': {

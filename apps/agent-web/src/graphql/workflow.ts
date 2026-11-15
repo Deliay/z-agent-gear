@@ -122,7 +122,8 @@ export interface WorkflowNodeFailInfoData {
   reason: string
   /**
    * SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）/
-   * SESSION_START_FAILED（节点会话启动失败或被移除）/ RETRY_EXHAUSTED（中断自动重试 10 次用尽）
+   * SESSION_START_FAILED（节点会话启动失败或被移除）/ RETRY_EXHAUSTED（中断自动重试 10 次用尽）/
+   * MANUAL_INTERRUPT（人类在工作流节点详情「立即失败」主动打断，绕过自动重试）
    */
   source: string
   at: string
@@ -708,6 +709,19 @@ export const RESTART_NODE = gql`
     }
   }
 `
+
+export const INTERRUPT_NODE = gql`
+  mutation InterruptNode($instanceId: ID!, $nodeId: ID!) {
+    interruptNode(instanceId: $instanceId, nodeId: $nodeId) {
+      id
+      status
+    }
+  }
+`
+
+export interface InterruptNodeResult {
+  interruptNode: { id: string; status: string }
+}
 
 export const SET_WORKFLOW_ADDITIONAL_PROMPT = gql`
   mutation SetWorkflowAdditionalPrompt($instanceId: ID!, $key: String!, $value: String!) {

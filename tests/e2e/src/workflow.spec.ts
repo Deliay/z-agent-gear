@@ -2808,3 +2808,63 @@ test.describe('Workflow PR 联动 E2E', () => {
     env.controller.disconnect();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 工作流支持打断（E2E-WI1）
+// ---------------------------------------------------------------------------
+test.describe('Workflow Interrupt E2E', () => {
+  test('E2E-WI1: 工作流节点详情「立即失败」→ 二次确认 → 节点 FAILED + failInfo.source=MANUAL_INTERRUPT + retryCount 未递增 + 待办', async ({ page }) => {
+    test.skip(!process.env.MONGODB_URI, 'MONGODB_URI 未配置');
+    test.setTimeout(90000);
+    const env = await setupWorkflowEnv(page, 'wi1');
+    const { instanceId, execStart } = await advanceToExecRunning(page, env, `wf-wi1-实例-${Date.now().toString(36)}`);
+    const execNode = (await getInstance(page, env.token, instanceId)).nodes.find((n) => n.nodeKey === 'exec')!;
+    const beforeRetryCount = execNode.retryCount;
+
+    // 登录并打开工作流实例页
+    await loginViaUI(page, env.username);
+    await page.goto(`/workflows/${instanceId}`);
+
+    // 打开 AI 节点详情抽屉（点击节点卡片「详情」按钮）
+    await nodeCard(page, 'AI执行').getByRole('button', { name: 'AI执行 详情' }).click();
+    const drawer = page.getByTestId('node-detail-drawer');
+    await expect(drawer).toBeVisible({ timeout: 10000 });
+
+    // 点击「立即失败」按钮
+    await drawer.getByRole('button', { name: '立即失败' }).click();
+
+    // 二次确认对话框出现，文案含「立即中断」「不再自动重试」
+    await expect(page.getByText(/立即中断/)).toBeVisible();
+    await expect(page.getByText(/不再自动重试/)).toBeVisible();
+
+    // 确认
+    await page.getByRole('button', { name: '确认' }).click();
+
+    // 节点 FAILED + failInfo.source=MANUAL_INTERRUPT + retryCount 未递增 + nextRetryAt=null
+    const after = await waitFor(
+      async () => {
+        const i = await getInstance(page, env.token, instanceId);
+        const n = i.nodes.find((x) => x.nodeKey === 'exec')!;
+        return n.status === 'FAILED' && n.failInfo?.source === 'MANUAL_INTERRUPT' ? i : undefined;
+      },
+      20000,
+      'node FAILED with MANUAL_INTERRUPT',
+    );
+    const exec = after.nodes.find((n) => n.nodeKey === 'exec')!;
+    expect(exec.status).toBe('FAILED');
+    expect(exec.failInfo?.source).toBe('MANUAL_INTERRUPT');
+    expect(exec.retryCount).toBe(beforeRetryCount);
+    expect(exec.nextRetryAt).toBeNull();
+
+    // 人工介入待办创建
+    const db = await (async () => {
+      const uri = process.env.MONGODB_URI!;
+      if (mongoose.connection.readyState === 0) await mongoose.connect(uri);
+      return mongoose.connection.db!;
+    })();
+    const todos = await db.collection('todoitems').find({ type: 'workflow_intervention' }).toArray();
+    expect(todos.length).toBeGreaterThan(0);
+
+    env.controller.disconnect();
+  });
+});

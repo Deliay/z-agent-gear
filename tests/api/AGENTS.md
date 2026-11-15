@@ -992,3 +992,17 @@ pnpm test
 | T-AP-API1 | `prompts/list` → 200，`result.prompts` 恰 2 项且 name 集合为 `{workflow-schema, workflow-project-persistence}`、description 非空 |
 | T-AP-API2 | `prompts/get {name:'workflow-schema'}` → `messages[0].content.type='text'` 且文本含「首节点」；`workflow-project-persistence` 文本含 `.zag/workflow/templates` |
 | T-AP-API3 | `prompts/get {name:'nope'}` → 200 + JSON-RPC `error.code='INVALID_PARAMS'`，message 含 `nope` 与两个可用片段名；同会话 `initialize` 返回 `capabilities.prompts` 与 `capabilities.tools` |
+
+## 工作流支持打断 API（`src/agent-api/workflow-interrupt.test.ts`）
+
+> 需求 #512；契约 `contracts/workflow.graphql`；计划
+> `docs/engineering/plan/20261116-feat-workflow-interrupt.md`。
+
+- 前置：`aspire start`（agent-api + controller-api）+ `INTERNAL_API_TOKEN` + `MONGODB_URI`（DB 断言 `failInfo`/`retryCount`/待办）；fake controller 应答 `acp:check`/`acp:start`/`acp:stop`。
+- 用例形态：`interruptNode(instanceId, nodeId)` GraphQL mutation；DB 断言 `workflowinstances` 节点 `status`/`failInfo`/`retryCount`/`nextRetryAt` + `todoitems` 待办。
+
+| 测试 | 描述 |
+|------|------|
+| T-WI-API1 | `interruptNode` mutation 门控：非 AI 节点 →「节点不是 AI 节点会话，无法打断」；不可用实例 →「工作流实例不可用（控制器离线或已删除），请先接续后再操作」；不可打断状态（DONE/REJECT/FAILED/INITIALIZING/READY）→「节点当前状态不允许立即打断」；不存在/无权限 →「工作流实例不存在或无权限」 |
+| T-WI-API2 | `interruptNode` 成功转移：AI 节点 RUNNING → `status=FAILED`、`failInfo.source=MANUAL_INTERRUPT`、`retryCount` 未递增、`nextRetryAt=null`；`workflow_intervention` 待办创建 |
+| T-WI-API3 | `restartNode` 接受 `RETRY_FAILED` 来源零回归（既有 `T-WFIR5` 不变）；`resumeFailedNode` 于 `RETRY_FAILED` → RUNNING 零回归（既有 `T-WFIR9` 不变） |

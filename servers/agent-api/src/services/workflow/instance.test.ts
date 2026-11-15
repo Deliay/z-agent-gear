@@ -27,6 +27,7 @@ vi.mock('../../models/workflow-instance.js', () => ({
 vi.mock('../../models/controller.js', () => ({
   Controller: {
     findOne: vi.fn(),
+    findById: vi.fn(),
   },
 }));
 
@@ -43,6 +44,13 @@ vi.mock('../../models/session.js', () => ({
 vi.mock('../session.js', () => ({
   sessionService: {
     delete: vi.fn(),
+    close: vi.fn(),
+  },
+}));
+
+vi.mock('../todo-service.js', () => ({
+  todoService: {
+    createWorkflowInterventionTodo: vi.fn(),
   },
 }));
 
@@ -89,6 +97,7 @@ import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { Controller } from '../../models/controller.js';
 import { Session } from '../../models/session.js';
 import { sessionService } from '../session.js';
+import { todoService } from '../todo-service.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { resolveWorkspaceDefaultBranch } from '../workspace-default-branch.js';
@@ -1426,5 +1435,161 @@ describe('WorkflowInstanceService 追加提示词与联动注销', () => {
         additionalPrompts: { 'github-pr': expect.stringContaining('## GitHub Pull Request 联动') },
       }),
     );
+  });
+});
+
+describe('WorkflowInstanceService.interruptNode（T-INT1~8）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function interruptInstance(overrides: Record<string, unknown> = {}) {
+    return {
+      _id: oid('inst-1'),
+      userId: oid('user-1'),
+      controllerId: oid('ctrl-1'),
+      workspaceId: oid('ws-1'),
+      name: '需求A开发',
+      nodes: [
+        {
+          nodeId: 'n1',
+          nodeKey: 'design',
+          type: 'AI',
+          name: '技术方案',
+          stage: '设计',
+          status: 'RUNNING',
+          sessionId: oid('sess-1'),
+          reworkCount: 0,
+          ...overrides,
+        },
+      ],
+    };
+  }
+
+  function loadInterruptInstance(instance: Record<string, unknown> = interruptInstance()) {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(instance) as never);
+    return instance;
+  }
+
+  /** 模拟 loadControllerStatus 的链式查询：findById().select().lean() */
+  function mockControllerStatus(status: string | null) {
+    vi.mocked(Controller.findById).mockReturnValue({
+      select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(status ? { status } : null) }),
+    } as never);
+  }
+
+  it('T-INT1: 归属门——实例不存在/无权限抛「工作流实例不存在或无权限」', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(null) as never);
+
+    await expect(workflowInstanceService.interruptNode('user-1', 'inst-1', 'n1')).rejects.toThrow(
+      '工作流实例不存在或无权限',
+    );
+    expect(workflowEngine.transition).not.toHaveBeenCalled();
+    expect(sessionService.close).not.toHaveBeenCalled();
+  });
+
+  it('T-INT2: 类型门——非 AI 节点抛「节点不是 AI 节点会话，无法打断」', async () => {
+    loadInterruptInstance(interruptInstance({ type: 'HUMAN' }));
+
+    await expect(workflowInstanceService.interruptNode('user-1', 'inst-1', 'n1')).rejects.toThrow(
+      '节点不是 AI 节点会话，无法打断',
+    );
+    expect(workflowEngine.transition).not.toHaveBeenCalled();
+    expect(sessionService.close).not.toHaveBeenCalled();
+  });
+
+  it('T-INT3: 不可用门——控制器离线抛「工作流实例不可用...」', async () => {
+    loadInterruptInstance();
+    mockControllerStatus('offline');
+
+    await expect(workflowInstanceService.interruptNode('user-1', 'inst-1', 'n1')).rejects.toThrow(
+      '工作流实例不可用（控制器离线或已删除），请先接续后再操作',
+    );
+    expect(workflowEngine.transition).not.toHaveBeenCalled();
+  });
+
+  it('T-INT4: 状态门——不可打断状态抛「节点当前状态不允许立即打断」', async () => {
+    for (const status of ['DONE', 'REJECT', 'FAILED', 'INITIALIZING', 'READY'] as const) {
+      loadInterruptInstance(interruptInstance({ status }));
+      mockControllerStatus('online');
+      await expect(workflowInstanceService.interruptNode('user-1', 'inst-1', 'n1')).rejects.toThrow(
+        '节点当前状态不允许立即打断',
+      );
+      expect(workflowEngine.transition).not.toHaveBeenCalled();
+    }
+  });
+
+  it('T-INT5: 受控关闭——sessionService.close 以 suppressFallback:true + reason:workflow_manual_interrupt 调用；sessionId 为 null 跳过 close', async () => {
+    mockControllerStatus('online');
+    vi.mocked(workflowEngine.transition).mockResolvedValue({ nodeId: 'n1', status: 'FAILED' } as never);
+    vi.mocked(todoService.createWorkflowInterventionTodo).mockResolvedValue({} as never);
+    vi.mocked(sessionService.close).mockResolvedValue(true as never);
+
+    // sessionId 存在 → close 被调用
+    loadInterruptInstance();
+    await workflowInstanceService.interruptNode('user-1', 'inst-1', 'n1');
+    expect(sessionService.close).toHaveBeenCalledWith('sess-1', 'user-1', {
+      suppressFallback: true,
+      reason: 'workflow_manual_interrupt',
+    });
+
+    // sessionId 为 null → 跳过 close，仍执行 fail 转移
+    vi.clearAllMocks();
+    mockControllerStatus('online');
+    vi.mocked(workflowEngine.transition).mockResolvedValue({ nodeId: 'n1', status: 'FAILED' } as never);
+    vi.mocked(todoService.createWorkflowInterventionTodo).mockResolvedValue({} as never);
+    loadInterruptInstance(interruptInstance({ sessionId: null }));
+    await workflowInstanceService.interruptNode('user-1', 'inst-1', 'n1');
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(workflowEngine.transition).toHaveBeenCalled();
+  });
+
+  it('T-INT6: fail 转移 source=MANUAL_INTERRUPT——workflowEngine.transition 以 fail + source 调用', async () => {
+    mockControllerStatus('online');
+    vi.mocked(workflowEngine.transition).mockResolvedValue({ nodeId: 'n1', status: 'FAILED' } as never);
+    vi.mocked(todoService.createWorkflowInterventionTodo).mockResolvedValue({} as never);
+    vi.mocked(sessionService.close).mockResolvedValue(true as never);
+    loadInterruptInstance();
+
+    await workflowInstanceService.interruptNode('user-1', 'inst-1', 'n1');
+
+    expect(workflowEngine.transition).toHaveBeenCalledWith('inst-1', 'n1', 'fail', {
+      source: 'MANUAL_INTERRUPT',
+      reason: '人类主动打断：立即失败，绕过中断自动重试',
+    });
+  });
+
+  it('T-INT7: 待办创建——createWorkflowInterventionTodo 含 instanceId/nodeId/nodeName/sessionId/reason', async () => {
+    mockControllerStatus('online');
+    vi.mocked(workflowEngine.transition).mockResolvedValue({ nodeId: 'n1', status: 'FAILED' } as never);
+    vi.mocked(todoService.createWorkflowInterventionTodo).mockResolvedValue({} as never);
+    vi.mocked(sessionService.close).mockResolvedValue(true as never);
+    loadInterruptInstance();
+
+    await workflowInstanceService.interruptNode('user-1', 'inst-1', 'n1');
+
+    expect(todoService.createWorkflowInterventionTodo).toHaveBeenCalledWith({
+      userId: 'user-1',
+      instanceId: 'inst-1',
+      instanceName: '需求A开发',
+      nodeId: 'n1',
+      nodeName: '技术方案',
+      sessionId: 'sess-1',
+      reason: '人类主动立即打断，节点已进入失败状态，请人工介入',
+    });
+  });
+
+  it('T-INT8: 会话已 ended 幂等——close 返回 false 仍执行 fail 转移 + 待办', async () => {
+    mockControllerStatus('online');
+    vi.mocked(workflowEngine.transition).mockResolvedValue({ nodeId: 'n1', status: 'FAILED' } as never);
+    vi.mocked(todoService.createWorkflowInterventionTodo).mockResolvedValue({} as never);
+    vi.mocked(sessionService.close).mockResolvedValue(false as never);
+    loadInterruptInstance();
+
+    await expect(workflowInstanceService.interruptNode('user-1', 'inst-1', 'n1')).resolves.toEqual(
+      expect.objectContaining({ nodeId: 'n1', status: 'FAILED' }),
+    );
+    expect(workflowEngine.transition).toHaveBeenCalled();
+    expect(todoService.createWorkflowInterventionTodo).toHaveBeenCalled();
   });
 });

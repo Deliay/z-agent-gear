@@ -17,6 +17,7 @@ import {
   removeWorkflowWorktree as removeWorkflowWorktreeHelper,
 } from './workflow-worktree.js';
 import { resolveInstanceUnavailableReason, loadControllerStatus } from './unavailable.js';
+import { todoService } from '../todo-service.js';
 import { prHandlerRegistry } from './pr-handler-registry.js';
 import { GITHUB_PR_PROMPT, GITHUB_PR_PROMPT_KEY, SYSTEM_PROMPT_KEYS } from './pr-prompts.js';
 import { actorFilter } from '../workspace-context.js';
@@ -708,6 +709,86 @@ class WorkflowInstanceService {
     return workflowEngine.transition(instanceId, nodeId, 'restart', { agentConfig });
   }
 
+  /**
+   * 立即打断节点：人类在工作流节点详情主动中断节点会话并让节点立即进入失败状态，
+   * 绕过中断自动重试机制（不消耗 retryCount 预算、不排期重试）。
+   *
+   * 严格按序（与 restartNode 同口径）：
+   * 1. 读取（归属校验）→ 不存在抛「工作流实例不存在或无权限」
+   * 2. 类型门：node.type === 'AI'（HUMAN/FLAG 无 ACP 会话）→ 否则抛「节点不是 AI 节点会话，无法打断」
+   * 3. 不可用门：resolveInstanceUnavailableReason 非空 → 抛「工作流实例不可用...」
+   * 4. 状态门：node.status ∈ { RUNNING, REWORK, RETRY_FAILED } → 否则抛「节点当前状态不允许立即打断」
+   * 5. 受控关闭会话（sessionId 存在时）：sessionService.close(suppressFallback:true, reason:'workflow_manual_interrupt')
+   * 6. 引擎 fail 转移：source='MANUAL_INTERRUPT'
+   * 7. 人工介入待办：createWorkflowInterventionTodo（失败仅 warn，不阻断主流程）
+   * 8. 返回转移后节点（mapInstanceNode）
+   */
+  async interruptNode(userId: string, instanceId: string, nodeId: string): Promise<unknown> {
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, ...actorFilter(userId), deletedAt: null }).lean();
+    if (!instance) {
+      throw new Error('工作流实例不存在或无权限');
+    }
+
+    const node = (instance as unknown as { nodes: Array<Record<string, unknown>> }).nodes.find(
+      (n) => n.nodeId === nodeId,
+    );
+    if (!node) {
+      throw new Error(`工作流实例中不存在节点：${nodeId}`);
+    }
+
+    // 类型门：仅 AI 节点有 ACP 会话可被打断
+    if (node.type !== 'AI') {
+      throw new Error('节点不是 AI 节点会话，无法打断');
+    }
+
+    // 不可用门：控制器离线/已删除拒绝流转类操作，必须先接续
+    const unavailableReason = await resolveInstanceUnavailableReason(
+      instance as unknown as Parameters<typeof resolveInstanceUnavailableReason>[0],
+      loadControllerStatus,
+    );
+    if (unavailableReason) {
+      throw new Error('工作流实例不可用（控制器离线或已删除），请先接续后再操作');
+    }
+
+    // 状态门：仅 RUNNING/REWORK/RETRY_FAILED 可打断（FAILED 已处于失败状态，无需再打断）
+    if (!['RUNNING', 'REWORK', 'RETRY_FAILED'].includes(node.status as string)) {
+      throw new Error('节点当前状态不允许立即打断');
+    }
+
+    // 5. 受控关闭会话（sessionId 存在时）：suppressFallback 跳过 sessionEndedCallback，不排期重试。
+    //    会话已 ended/disconnected 时 close 幂等返回 false，继续 fail 转移。
+    const sessionId = node.sessionId ? String(node.sessionId) : '';
+    if (sessionId) {
+      await sessionService.close(sessionId, userId, {
+        suppressFallback: true,
+        reason: 'workflow_manual_interrupt',
+      });
+    }
+
+    // 6. 引擎 fail 转移：source=MANUAL_INTERRUPT，保留 retryCount + clearRetrySchedule（既有 fail 口径）
+    const failed = await workflowEngine.transition(instanceId, nodeId, 'fail', {
+      source: 'MANUAL_INTERRUPT',
+      reason: '人类主动打断：立即失败，绕过中断自动重试',
+    });
+
+    // 7. 人工介入待办：失败仅 warn，不阻断主流程
+    try {
+      await todoService.createWorkflowInterventionTodo({
+        userId,
+        instanceId,
+        instanceName: (instance as { name: string }).name,
+        nodeId,
+        nodeName: node.name as string,
+        sessionId: sessionId ?? '',
+        reason: '人类主动立即打断，节点已进入失败状态，请人工介入',
+      });
+    } catch (err) {
+      logger.warn({ err, instanceId, nodeId }, 'interruptNode 人工介入待办创建失败');
+    }
+
+    // 8. 返回转移后节点
+    return failed;
+  }
   /**
    * 修改实例名称（GraphQL 与 MCP 共用）：
    * - trim 后 1~64 字符，非法抛 `invalid workflow name`

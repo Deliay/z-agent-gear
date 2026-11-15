@@ -39,6 +39,7 @@ vi.mock('../../services/workflow/instance.js', () => ({
     setAdditionalPrompt: vi.fn(),
     removeAdditionalPrompt: vi.fn(),
     rename: vi.fn(),
+    interruptNode: vi.fn(),
   },
 }));
 
@@ -522,6 +523,34 @@ describe('workflow resolvers', () => {
       await expect(
         workflowResolvers.Mutation.renameWorkflowInstance({}, { id: 'inst-1', name: '   ' }, ctx),
       ).rejects.toThrow('invalid workflow name');
+    });
+
+    it('T-RES1: interruptNode 委托 interruptNode + mapInstanceNode；错误文案逐字透传（wrap 白名单）', async () => {
+      const nodeDoc = { nodeId: 'n1', status: 'FAILED', failInfo: { reason: 'r', source: 'MANUAL_INTERRUPT', at: new Date() } };
+      vi.mocked(workflowInstanceService.interruptNode).mockResolvedValue(nodeDoc as never);
+
+      const result = await workflowResolvers.Mutation.interruptNode(
+        {},
+        { instanceId: 'inst-1', nodeId: 'n1' },
+        ctx,
+      );
+
+      expect(workflowInstanceService.interruptNode).toHaveBeenCalledWith('user-1', 'inst-1', 'n1');
+      expect(result).toMatchObject({ id: 'n1', status: 'FAILED' });
+
+      // 错误文案逐字透传（wrap 白名单）
+      vi.mocked(workflowInstanceService.interruptNode).mockRejectedValue(
+        new Error('节点当前状态不允许立即打断'),
+      );
+      await expect(
+        workflowResolvers.Mutation.interruptNode({}, { instanceId: 'inst-1', nodeId: 'n1' }, ctx),
+      ).rejects.toThrow('节点当前状态不允许立即打断');
+    });
+
+    it('interruptNode 未登录拒绝', async () => {
+      await expect(
+        workflowResolvers.Mutation.interruptNode({}, { instanceId: 'inst-1', nodeId: 'n1' }, emptyCtx),
+      ).rejects.toThrow('Not authenticated');
     });
 
     it('服务层非法图错误以可读 message 抛出', async () => {

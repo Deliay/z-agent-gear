@@ -404,6 +404,66 @@ describe('WorkflowEngine.transition', () => {
     }
   });
 
+  it('T-ENG1: fail 允许 RETRY_FAILED→FAILED（source=MANUAL_INTERRUPT），保留 retryCount 并清调度字段', async () => {
+    const instance = linearInstance();
+    instance.nodes[1].status = 'RETRY_FAILED';
+    instance.nodes[1].retryCount = 10;
+    instance.nodes[1].nextRetryAt = new Date('2026-01-01');
+    instance.nodes[1].retryPhase = 'SCHEDULED';
+    instance.nodes[1].retryDeadlineAt = new Date('2026-01-02');
+    instance.nodes[1].retryTrigger = 'ENDED';
+    loadInstance(instance);
+
+    const node = await workflowEngine.transition('inst-1', 'n2', 'fail', {
+      reason: '人类主动打断：立即失败，绕过中断自动重试',
+      source: 'MANUAL_INTERRUPT',
+    });
+
+    expect(node.status).toBe('FAILED');
+    expect(node.failInfo).toMatchObject({
+      reason: '人类主动打断：立即失败，绕过中断自动重试',
+      source: 'MANUAL_INTERRUPT',
+    });
+    expect(node.failInfo?.at).toBeInstanceOf(Date);
+    expect(node.retryCount).toBe(10);
+    expect(node.nextRetryAt).toBeNull();
+    expect(node.retryPhase).toBeNull();
+    expect(node.retryDeadlineAt).toBeNull();
+    expect(node.retryTrigger).toBeNull();
+  });
+
+  it('T-ENG2: fail 仍拒绝 DONE/READY/INITIALIZING（含 INITIALIZING）', async () => {
+    for (const status of ['READY', 'DONE', 'INITIALIZING'] as const) {
+      const instance = linearInstance();
+      instance.nodes[1].status = status;
+      loadInstance(instance);
+      await expect(
+        workflowEngine.transition('inst-1', 'n2', 'fail', { reason: 'r', source: 'MANUAL_INTERRUPT' }),
+      ).rejects.toThrow(/不允许/);
+    }
+  });
+
+  it('T-ENG3: fail from RETRY_FAILED 保留 retryCount + 清调度字段（起点 RETRY_FAILED）', async () => {
+    const instance = linearInstance();
+    instance.nodes[1].status = 'RETRY_FAILED';
+    instance.nodes[1].retryCount = 7;
+    instance.nodes[1].nextRetryAt = new Date('2026-01-01');
+    instance.nodes[1].retryPhase = 'RECONNECTING';
+    instance.nodes[1].retryDeadlineAt = new Date('2026-01-02');
+    instance.nodes[1].retryTrigger = 'IDLED';
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n2', 'fail', { reason: 'r', source: 'MANUAL_INTERRUPT' });
+
+    const node = instance.nodes[1];
+    expect(node.status).toBe('FAILED');
+    expect(node.retryCount).toBe(7);
+    expect(node.nextRetryAt).toBeNull();
+    expect(node.retryPhase).toBeNull();
+    expect(node.retryDeadlineAt).toBeNull();
+    expect(node.retryTrigger).toBeNull();
+  });
+
   it('R-9: 同实例并发 transition 在领域层串行化，第二次读取到已落库状态并拒绝', async () => {
     let persisted = linearInstance();
     persisted.nodes[0].status = 'RUNNING';

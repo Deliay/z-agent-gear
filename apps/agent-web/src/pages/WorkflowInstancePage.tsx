@@ -7,8 +7,10 @@ import {
   DELETE_WORKFLOW_INSTANCE,
   ARCHIVE_WORKFLOW_INSTANCE,
   RENAME_WORKFLOW_INSTANCE,
+  INTERRUPT_NODE,
   type GetWorkflowInstanceQuery,
   type WorkflowNodeData,
+  type InterruptNodeResult,
 } from '@/graphql/workflow'
 import { GET_ACP_CAPABILITIES } from '@/graphql/queries'
 import type { GetAcpCapabilitiesQuery } from '@/graphql/types'
@@ -63,6 +65,7 @@ export default function WorkflowInstancePage() {
   const [deleteWorkflowInstance] = useMutation(DELETE_WORKFLOW_INSTANCE)
   const [archiveWorkflowInstance] = useMutation(ARCHIVE_WORKFLOW_INSTANCE)
   const [renameWorkflowInstance] = useMutation(RENAME_WORKFLOW_INSTANCE)
+  const [interruptNode] = useMutation<InterruptNodeResult>(INTERRUPT_NODE)
   // 改名对话框：名称草稿 + 服务端错误文案（前端校验只提示不替代服务端）
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameDraft, setRenameDraft] = useState('')
@@ -219,6 +222,18 @@ export default function WorkflowInstancePage() {
       setRenameError(err instanceof Error ? err.message : '重命名失败，请重试')
     } finally {
       setRenaming(false)
+    }
+  }
+
+  const handleInterruptNode = async (node: WorkflowNodeData) => {
+    try {
+      await interruptNode({
+        variables: { instanceId: instance.id, nodeId: node.id },
+      })
+      toast.success('节点已立即打断')
+      void refetch()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '打断失败，请重试')
     }
   }
 
@@ -398,6 +413,7 @@ export default function WorkflowInstancePage() {
         target={detailTarget}
         onOpenSession={(sessionId) => setSideSessionId(sessionId)}
         onRestartNode={unavailable ? undefined : setRestartTarget}
+        onInterruptNode={unavailable ? undefined : handleInterruptNode}
       />
 
       {restartTarget && (

@@ -276,3 +276,96 @@ describe('NodeDetailDrawer 中断自动重试（T-FE2/T-FE3）', () => {
     expect(screen.queryByText(/正在恢复会话/)).not.toBeInTheDocument()
   })
 })
+
+describe('NodeDetailDrawer 立即失败（T-WEB1~4）', () => {
+  function renderInterrupt(
+    nodeOverrides: Partial<WorkflowNodeData>,
+    onInterruptNode = vi.fn(),
+    unavailable = false,
+  ) {
+    const inst = instance({
+      nodes: [node({ type: 'AI', status: 'RUNNING', failInfo: null, ...nodeOverrides })],
+    })
+    return render(
+      <NodeDetailDrawer
+        open
+        onOpenChange={() => {}}
+        instance={inst}
+        target={{ type: 'node', nodeId: 'n1' }}
+        onOpenSession={vi.fn()}
+        unavailable={unavailable}
+        onInterruptNode={onInterruptNode}
+      />,
+    )
+  }
+
+  it('T-WEB1: 按钮门控——AI 节点 + RUNNING/REWORK/RETRY_FAILED 可见；FAILED/非 AI 不可见；unavailable 置灰', () => {
+    renderInterrupt({ status: 'RUNNING' })
+    expect(screen.getByRole('button', { name: '立即失败' })).toBeInTheDocument()
+
+    renderInterrupt({ status: 'RETRY_FAILED' })
+    expect(screen.getByRole('button', { name: '立即失败' })).toBeInTheDocument()
+
+    renderInterrupt({ status: 'FAILED' })
+    expect(screen.queryByRole('button', { name: '立即失败' })).not.toBeInTheDocument()
+
+    renderInterrupt({ type: 'HUMAN', status: 'RUNNING' })
+    expect(screen.queryByRole('button', { name: '立即失败' })).not.toBeInTheDocument()
+
+    renderInterrupt({ status: 'RUNNING' }, vi.fn(), true)
+    const btn = screen.getByRole('button', { name: '立即失败' })
+    expect(btn).toBeDisabled()
+    expect(btn).toHaveAttribute('title', '实例不可用，请先接续')
+  });
+
+  it('T-WEB2: 二次确认对话框——点击按钮出现对话框；确认调用 onInterruptNode；取消不调用', () => {
+    const onInterruptNode = vi.fn()
+    renderInterrupt({ status: 'RUNNING' }, onInterruptNode)
+
+    fireEvent.click(screen.getByRole('button', { name: '立即失败' }))
+
+    // 对话框出现，文案含「立即中断」「不再自动重试」
+    expect(screen.getByText(/立即中断/)).toBeInTheDocument()
+    expect(screen.getByText(/不再自动重试/)).toBeInTheDocument()
+
+    // 取消 → 不调用
+    fireEvent.click(screen.getByRole('button', { name: /取消/ }))
+    expect(onInterruptNode).not.toHaveBeenCalled()
+
+    // 再次打开 → 确认 → 调用
+    fireEvent.click(screen.getByRole('button', { name: '立即失败' }))
+    fireEvent.click(screen.getByRole('button', { name: /确认/ }))
+    expect(onInterruptNode).toHaveBeenCalledTimes(1)
+    expect(onInterruptNode.mock.calls[0][0]).toMatchObject({ id: 'n1', status: 'RUNNING' })
+  });
+
+  it('T-WEB3: failInfo.source 文案映射——MANUAL_INTERRUPT / RETRY_EXHAUSTED / LLM_REPORTED', () => {
+    renderInterrupt({ status: 'FAILED', failInfo: { reason: '主动放弃', source: 'MANUAL_INTERRUPT', at: '' } })
+    expect(screen.getByText(/已被人工立即打断/)).toBeInTheDocument()
+
+    renderInterrupt({ status: 'RETRY_FAILED', failInfo: { reason: '重试用尽', source: 'RETRY_EXHAUSTED', at: '' } })
+    expect(screen.getByText(/重试失败原因：重试用尽/)).toBeInTheDocument()
+
+    renderInterrupt({ status: 'FAILED', failInfo: { reason: 'Agent 报告', source: 'LLM_REPORTED', at: '' } })
+    expect(screen.getByText(/失败原因：Agent 报告/)).toBeInTheDocument()
+  });
+
+  it('T-WEB4: NodeDetailDrawer prop 透传——onInterruptNode 回调 + unavailable 传入 NodeDetail', () => {
+    const onInterruptNode = vi.fn()
+    const { unmount } = render(
+      <NodeDetailDrawer
+        open
+        onOpenChange={() => {}}
+        instance={instance({ nodes: [node({ type: 'AI', status: 'RUNNING', failInfo: null })] })}
+        target={{ type: 'node', nodeId: 'n1' }}
+        onOpenSession={vi.fn()}
+        unavailable
+        onInterruptNode={onInterruptNode}
+      />,
+    )
+    // 按钮存在且置灰（unavailable 透传生效）
+    const btn = screen.getByRole('button', { name: '立即失败' })
+    expect(btn).toBeDisabled()
+    unmount()
+  });
+});
