@@ -2,6 +2,9 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './stores/AuthProvider'
 import { Toaster } from 'sonner'
 import LoginPage from './pages/LoginPage'
+import LoginCallbackPage from './pages/LoginCallbackPage'
+import AuthProvidersPage from './pages/AuthProvidersPage'
+import SecurityPage from './pages/SecurityPage'
 import ChangePasswordPage from './pages/ChangePasswordPage'
 import ModelConfigPage from './pages/ModelConfigPage'
 import BaseImagePage from './pages/BaseImagePage'
@@ -24,6 +27,7 @@ function App() {
         <Toaster position="top-right" />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
+          <Route path="/login/callback" element={<LoginCallbackPage />} />
           <Route path="/change-password" element={<ChangePasswordPage />} />
           <Route element={<ProtectedRoute />}>
             <Route element={<AdminLayout />}>
@@ -36,6 +40,8 @@ function App() {
               <Route path="tenants/:id" element={<TenantDetailPage />} />
               <Route path="billing" element={<BillingPage />} />
               <Route path="reconciliation" element={<ReconciliationPage />} />
+              <Route path="auth-providers" element={<AuthProvidersPage />} />
+              <Route path="settings/security" element={<SecurityPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/models" replace />} />

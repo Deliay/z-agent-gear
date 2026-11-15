@@ -7,6 +7,11 @@ const nodeEnv = process.env.NODE_ENV || 'development';
 export const config = {
   port: parseInt(process.env.PORT || '4002', 10),
   mongodbUri: process.env.MONGODB_URI || process.env.MONGODB_CONNECTION_STRING || 'mongodb://localhost:27017/agent-gear',
+  redisUri:
+    process.env.REDIS_URI ||
+    process.env.REDIS_CONNECTION_STRING ||
+    process.env.ConnectionStrings__redis ||
+    'redis://localhost:6379',
   adminJwtSecret: process.env.ADMIN_JWT_SECRET || '',
   // 不做静默兜底：缺失时启动 fail-fast（见 assertRuntimeConfig），避免用公开已知密钥加密凭据
   credentialEncryptionKey: process.env.CREDENTIAL_ENCRYPTION_KEY || '',
@@ -26,6 +31,13 @@ export const config = {
   // agent-api 内部 API（F2）：后台开户经 `POST {AGENT_API_URL}/internal/users` 转发（写权在 agent-api）。
   // 缺失时不 fail-fast（与 cloudControllerUrl 同口径）；开户返回明确错误 AGENT_API_UNAVAILABLE。
   agentApiUrl: (process.env.AGENT_API_URL || '').replace(/\/+$/, ''),
+  // agent-api 对外公开地址（配置页展示 OAuth 回调地址用；缺省从 agentApiUrl 派生，仅展示不参与调用）。
+  agentApiPublicUrl: (process.env.AGENT_API_PUBLIC_URL || process.env.AGENT_API_URL || '').replace(
+    /\/+$/,
+    '',
+  ),
+  // 后台前端地址（后台 OAuth 登录/绑定成功后 302 目标，缺省 admin-web dev 端口）。
+  adminFrontendUrl: (process.env.ADMIN_FRONTEND_URL || 'http://localhost:5174').replace(/\/+$/, ''),
   internalApiToken: process.env.INTERNAL_API_TOKEN || '',
   // 强制销毁专用超时（裁决 9）：需大于 cloud-controller 的 post 预算（默认 90s）+ shutdown 宽限（10s）+ 删 Job 重试，
   // 默认 180000（180s）。非法/缺省回落默认值，避免 NaN 让 AbortController 立即中断。

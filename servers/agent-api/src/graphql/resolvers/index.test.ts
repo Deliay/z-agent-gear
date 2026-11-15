@@ -41,4 +41,11 @@ describe('graphql resolver registry', () => {
     const summaryFields = (schema.getType('CloudStorageSummary') as GraphQLObjectType).getFields();
     expect(summaryFields.hourlyCredits.resolve).toEqual(expect.any(Function));
   });
+
+  it('registers ExternalLoginInfo provider resolvers（绑定优化 spread 登记守卫）', () => {
+    const fields = (schema.getType('ExternalLoginInfo') as GraphQLObjectType).getFields();
+    for (const name of ['providerType', 'providerDisplayName', 'providerEnabled']) {
+      expect(fields[name].resolve).toEqual(expect.any(Function));
+    }
+  });
 });

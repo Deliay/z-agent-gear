@@ -174,6 +174,44 @@ describe('POST /internal/users (front user provisioning)', () => {
     expect(await res.json()).toEqual({ error: 'USERNAME_TAKEN' });
   });
 
+  it('returns 409 when a concurrent create races in an account with a different password', async () => {
+    // 预检 null → Account.create 撞 E11000 → 回读到竞态请求创建的异密码账户
+    h.account.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ _id: 'acc-race', username: 'alice', passwordHash: 'other-hash' });
+    h.account.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }));
+    h.verifyPassword.mockResolvedValue(false);
+
+    const res = await post({ username: 'alice', password: 'secret1' });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'USERNAME_TAKEN' });
+    expect(h.verifyPassword).toHaveBeenCalledWith('secret1', 'other-hash');
+    expect(h.user.create).not.toHaveBeenCalled();
+    expect(h.billing.getAccount).not.toHaveBeenCalled();
+  });
+
+  it('treats a concurrent create with the same password as idempotent replay (200)', async () => {
+    h.account.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ _id: 'acc-race', username: 'alice', passwordHash: 'hash' });
+    h.account.create.mockRejectedValue(Object.assign(new Error('dup'), { code: 11000 }));
+    h.verifyPassword.mockResolvedValue(true);
+    h.user.findOne.mockResolvedValue({
+      _id: 'user-race',
+      name: 'alice',
+      tenantId: 'user-race',
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    h.tenant.findById.mockResolvedValue({ _id: 'user-race', name: 'alice', type: 'personal' });
+
+    const res = await post({ username: 'alice', password: 'secret1' });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.account).toEqual({ id: 'acc-race', username: 'alice' });
+    expect(h.verifyPassword).toHaveBeenCalledWith('secret1', 'hash');
+    expect(h.account.create).toHaveBeenCalledTimes(1);
+  });
+
   it('rolls back newly created documents when billing is unavailable', async () => {
     h.account.findOne.mockResolvedValue(null);
     h.account.create.mockResolvedValue({ _id: 'acc-1', username: 'alice', passwordHash: 'hash' });

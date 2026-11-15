@@ -48,7 +48,7 @@ pnpm run preview  # Preview production build
 - **会话交互卡片（需求 #490）**：`InteractionCard`（`components/session/InteractionCard.tsx`）按 `createdAt` 合入 `MessageList` 时间线（同刻消息组在前、交互在后固定 tie-break）；`data-interaction-id={interactionId}` 作为滚动定位锚点。PENDING 可作答 + 倒计时（`expiresAt` 唯一依据，归零本地立即禁用展示「已过期」）；ACCEPTED 禁用并按 schema 字段标签回显 `response.values` / 所选审批项徽标（`option.kind` 为 `reject_*` 时徽标与回显显示「已拒绝」）；其余终态禁用 + 状态徽标。elicitation 表单渲染自 `ElicitationDialog` 提取为共享组件 `components/session/elicitation-form.tsx`（纯函数在 `lib/elicitation-form.ts`），口径不变。
 - `ElicitationDialog` / `PermissionDialog` 已降级为**通知视图**（类型摘要 + 剩余时限提示 + 「前往会话处理」→ `/sessions/{sessionId}#interaction-{interactionId}`），不再承载表单/审批按钮；打开入口（`TodoListPanel`）与 `stores/elicitationDialog` 互斥机制保持不变（状态展示保留）。
 - `ElicitationDialog` 按 `resolution` / `stale` 展示「已过期/已取消/已失效/已提交/已拒绝」文案（`data-testid="elicitation-status"`），不再有定时器驱动的表单禁用。
-- 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**仅** `type: 'array'` + `items.anyOf`（ACP question 工具多选题）在提交前经 `lib/elicitation-multi-select.ts#joinMultiSelectValues` 以逗号拼接为字符串回传（顺序 = 勾选顺序，空数组保持 `[]`），`items.enum` / `items.oneOf` 数组字段仍提交数组；`anyOf` 与 `enum`/`oneOf` 并存的字段（真实 question 报文不会产生）不参与拼接、提交保持数组。
+- 多选字段识别顺序为 `items.oneOf → items.anyOf → items.enum`，统一渲染勾选组（`role="group"`，选项说明为副行）；**所有** `type: 'array'` 字段（含 ACP question 工具多选题的 `items.anyOf`）提交时保持字符串数组（顺序 = 勾选顺序，空数组保持 `[]`），**不得**转成逗号拼接字符串——OpenCode 会按 schema 校验表单回填，字符串会导致 `form.reply` 失败并被取消，最终表现为「The user dismissed this question」导致会话中断（Issue #511）。
 - 用户级 SSE `session_interaction` 事件经 `useUserEventStream.onSessionInteraction` 分发：会话页命中当前 `sessionId` 则 refetch `GET_SESSION_INTERACTIONS`；工作流实例页收到任意事件触发 `GET_WORKFLOW_INSTANCE` refetch（5s 轮询兜底）。
 - 工作流实例页列表/图形两视图：节点 `sessionId ∈ pendingInteractionSessionIds` 时渲染琥珀色感叹号（`AlertCircle`，`aria-label="有待处理的提问或审批"`），点击打开该节点会话（复用既有 `onOpenSession` / `SessionSidePanel` 链路）；列表视图 prop 由实例页下发，图形视图由 `graph-layout` 的 `hasPendingInteraction` 派生。
 - 问询弹窗打开权由 `stores/elicitationDialog.ts` 共享（`todoId + owner + 打开时快照`）：`PendingElicitationBanner`（owner=banner）与 `TodoListPanel`（owner=todo）互斥，同一时刻只渲染一个弹窗；弹窗数据按 todo id 从全量 todos 派生（不过滤 resolution），pending 清空后仍保留到终态展示，避免填表中被卸载；todo 被 TTL/limit 从列表移除时用快照渲染「已从待办移除」终态
@@ -283,6 +283,18 @@ pnpm run preview  # Preview production build
 - **图表自动定位**：`graph/graph-layout.ts` 的纯函数 `pickFocusWindow(nodes, activeIds, before=2, after=2)` 按 `position.y` 升序（同 y 按 x）定位**第一个**执行中节点，返回「前 2 + 自身 + 后 2」id 窗口（越界收敛，无执行中返回 `[]`）。`WorkflowGraphView` 用 `onInit` 保存 React Flow 实例并置 `rfReady`，effect **仅依赖 `[rfReady, activeKey]`**（执行中 id 集合拼接；节点列表经 ref 读取），首次 `duration:0`、切换 `duration:300`；无执行中节点不主动 `fitView`（保留整图首屏）。**禁止把 `nodes`/`instance` 加入该 effect 依赖**：5s 轮询每轮重建节点对象，会导致反复 fitView 抖动。
 - **测试入口**：`pages/__tests__/WorkflowInstancePage.test.tsx`（T-RNWEB1~4）、`components/workflow/graph/__tests__/WorkflowNodeCard.test.tsx`（T-WFI-NC1~3）、`components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-WFI-TC1）、`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-WFI-SH1）、`components/workflow/graph/__tests__/graph-layout.test.ts`（T-WFI1~5）、`components/workflow/__tests__/WorkflowGraphView.test.tsx`（T-WFI-V1~4，mock React Flow 断言窗口 fitView 与防抖动）、`tests/e2e/src/workflow-graph.spec.ts`（E2E-WFI1~3）。
 
+## 已实例化工作流接续（#513）
+
+> 契约 `contracts/workflow.graphql`；计划 `docs/engineering/plan/20261114-feat-workflow-instance-continuation.md`。
+
+- **数据**：`WorkflowInstanceSummaryData/WorkflowInstanceData` 新增 `unavailableReason: 'CONTROLLER_OFFLINE' | 'CONTROLLER_DELETED' | null`（`GET_WORKFLOW_INSTANCES`、`GET_WORKFLOW_INSTANCE`、`HOME_WORKFLOW_INSTANCE_FIELDS` 均选择）；详情追加 `continuationHistory`（`from/toControllerId`、`from/toWorkspaceId`、`at`）。新增 `CONTINUE_WORKFLOW_INSTANCE` mutation 与 `ContinueWorkflowInstanceInput`/`NodeHarnessMappingInput` 类型。
+- **列表入口（NavLink 嵌套禁令）**：`WorkflowInstanceCard` 仍是纯 `NavLink`；`unavailableReason` 非空时追加 destructive 徽标（`data-testid="workflow-instance-unavailable"`，离线/已删除两态文案）与**行内兄弟节点**「接续」图标按钮（`aria-label="接续工作流"`，`preventDefault()+stopPropagation()` → `navigate('/workflows/:id?continue=1')`），不得把按钮嵌进 NavLink。
+- **详情页**：顶部 `data-testid="workflow-unavailable-notice"` 提示条（`role="alert"`，两态文案 + 「已完成节点与产物保留；接续后可选择新控制器与工作路径继续流转」+「原控制器上的残留 Worktree 平台不做远程清理，请自行处理」）与「接续」按钮；`?continue=1` 深链自动打开 `ContinueWorkflowDialog`，关闭时 `setSearchParams(..., {replace:true})` 清参。不可用时向 `WorkflowNodeTree`/`WorkflowGraphView`/`NodeDetailDrawer` 下发 `unavailable`：人类节点完成/打回（`HumanNodeActions disabled`）与「重启节点」置灰并提示「实例不可用，请先接续」；归档/删除/改名/查看保持可用。
+- **接续对话框 `ContinueWorkflowDialog`**（四段）：新控制器（`GET_CONTROLLERS` 客户端过滤 `status==='online'`）→ 工作路径（`GET_WORKSPACES` 过滤 `controllerId+isEnabled`；「浏览目录新建…」复用 `AddWorkspaceDialog` + `CREATE_WORKSPACE` 后选中）→ 创建新 Worktree（默认勾选；`DETECT_GIT_REPO` 非 Git 时置灰并展示未勾选 + 提示「目标路径不是 Git 仓库，将不创建 Worktree 继续接续」）→ 逐节点 Harness 映射（列出全部未完成 AI 节点 `type==='AI' && status!=='DONE'`，原 Harness 在 `GET_ACP_CAPABILITIES` 可用清单内默认选中，否则留空并提示「原 Harness 不可用，请改选」）。
+- **提交门控**：未选控制器/工作区、任一未完成 AI 节点未选 Harness → 禁用「确认接续」；非 Git 工作区**不阻断接续**：勾选框置灰且展示未勾选，提交时强制 `createWorkflowWorktree:false`（与实例化先例同口径）；提交中 spinner；成功 `toast.success('工作流已接续到新控制器')` + `refetchQueries:[GET_WORKFLOW_INSTANCE, HOME_OVERVIEW]`；服务层错误文案原样展示且对话框保持打开。切换控制器时重置工作路径与 Harness 覆盖值。
+- **轮询口径**：不可用标识随详情 5s 轮询与首页聚合 15s 轮询自然出现/消失（控制器恢复在线即消失），不新增订阅。
+- **测试入口**：`components/workflow/__tests__/WorkflowInstanceCard.test.tsx`（T-WEB1）、`components/workflow/__tests__/ContinueWorkflowDialog.test.tsx`（T-WEB2~4）、`pages/__tests__/WorkflowInstancePage.test.tsx`（T-WEB5）。
+
 ## 会话归档与只读（会话管理优化）
 
 > 契约：`contracts/agent-session.graphql`（`Session.archived` / `SessionReadOnlyReason` / `archiveSession` / `workspaceArchiveImpact`）、`contracts/home.graphql`（`HomeOverview.archivedSessions`）。实现计划见 `docs/engineering/plan/20261104-feat-session-management-optimization.md` Phase 6~8。
@@ -347,3 +359,13 @@ pnpm run preview  # Preview production build
   `components/common/args-list-editor/__tests__/ArgsListEditor.test.tsx`（T-ALE）、
   `components/settings/__tests__/CustomToolSection.test.tsx`（T-CTW1）、
   `components/settings/__tests__/CustomToolDialog.test.tsx`（T-CTW2）。
+
+## 第三方登录入口与回调（#503 / #510）
+
+- **登录页**：查询 `authProviders`（`fetchPolicy: cache-and-network`，失败静默降级为仅密码登录），按返回渲染「使用 {displayName} 登录」（GitHub 恒「使用 GitHub 登录」）；点击跳 `oauthAuthorizeUrl(id,'front')`。`?error=<code>` 经 `lib/auth-oauth.ts#mapOauthError` 映射友好文案，未识别 code 原样兜底。
+- **回调页**：公开路由 `/login/callback`（`LoginCallbackPage`）。读 `ticket` → `exchangeLoginTicket` → `useAuth.login` → 首页；挂载后立即 `replaceState` 清除 URL。ticket 一次性，失败只提示「登录票据无效或已过期」，不循环重试；`error` 参数直接映射文案。
+- **身份选择页（#510）**：公开路由 `/login/identity-choice`（`IdentityChoicePage`）。读 `pending` 并立即清除 URL；`pendingExternalLoginInfo`（免登录、不消费票据）展示登录方式与外部帐号名；「绑定已有帐号」提交 `bindExternalLoginWithPassword`（失败可重试，文案经 `mapIdentityChoiceError`：`Invalid username or password` 原样，「过期」引导回登录页），「创建新帐号」提交 `provisionExternalLogin`；成功 `useAuth.login` 进首页。查询返回 null → 显示「登录状态已过期，请重新登录」。
+- **设置页「第三方登录绑定」**：`#account-section` 内挂载 `ExternalLoginBindingSection`（`GET_MY_EXTERNAL_LOGINS` + `GET_AUTH_PROVIDERS`）：列表展示登录方式/外部帐号名/绑定时间/最近登录时间，停用 provider 展示「已停用」；未绑定 provider 提供「绑定」→ `createFrontBindTicket(providerId)` → `oauthAuthorizeUrl(id,'front-bind',ticket)`；解绑复用 `UnbindConfirmDialog`（可传 title/description）→ `unbindExternalLogin`。无任何 provider 且无绑定时区块不渲染。
+- **回跳结果**：`SettingsPage` 识别 `/settings?bind=success`（提示「第三方登录绑定成功」）与 `?bind=error&error=<code>`（`mapOauthError` 映射），处理后 `replaceState` 仅删除 `bind`/`error`，保留其它参数（如 `section=valut`）。
+- **错误映射单一来源**：`lib/auth-oauth.ts` 的 `mapOauthError`（302 错误码；`already_bound` 前台文案「该身份已被其他账户绑定」+ `provider_already_bound`）与 `mapIdentityChoiceError`（GraphQL mutation message）。admin-web 有独立映射文件，不受影响。
+- **测试**：`pages/LoginPage.test.tsx`、`pages/__tests__/LoginCallbackPage.test.tsx`、`pages/__tests__/IdentityChoicePage.test.tsx`（T-OBO-WEB）、`components/settings/__tests__/ExternalLoginBindingSection.test.tsx`、`pages/__tests__/SettingsPage.test.tsx`（`?bind` 处理）、`lib/__tests__/auth-oauth.test.ts`；E2E 见 `tests/e2e/src/auth-oidc-binding.spec.ts`。`App.tsx` 新增公开路由 `/login/identity-choice`。

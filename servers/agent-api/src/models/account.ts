@@ -12,6 +12,8 @@ const accountSchema = new mongoose.Schema(
   {
     username: { type: String, required: true, unique: true, minlength: 2, maxlength: 20 },
     passwordHash: { type: String, required: true },
+    /** OAuth 开户置 true（密码为随机值、用户不可知，等效无密码）；解绑防呆锚点。 */
+    passwordless: { type: Boolean, default: false },
   },
   { timestamps: true },
 );

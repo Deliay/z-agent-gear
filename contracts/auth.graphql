@@ -33,10 +33,78 @@ type AuthPayload {
   user: User!
 }
 
+# ===== 第三方登录（自定义 OIDC / GitHub OAuth）=====
+#
+# 配置唯一写方在 admin-api（contracts/admin-auth-provider.graphql）；本契约仅暴露
+# 前台登录页所需的免登录入口信息与一次性票据兑换，值域与 admin 侧逐字一致。
+
+# 第三方登录类型（三个契约文件各自自足，值域由 schema 契约测试断言）
+enum AuthProviderType {
+  oidc
+  github_oauth
+}
+
+# 第三方登录入口信息（免登录查询，仅返回 enabled 且 enableFrontLogin=true 的配置）
+type AuthProviderInfo {
+  id: ID!
+  type: AuthProviderType!
+  displayName: String! # 按钮文案「使用 {displayName} 登录」；github_oauth 恒为 GitHub
+}
+
+# ===== 外部身份绑定（#510）=====
+
+# 当前登录用户的外部身份绑定信息
+type ExternalLoginInfo {
+  id: ID!
+  providerId: ID!
+  providerType: AuthProviderType!
+  providerDisplayName: String! # provider 被删除时回退外部帐号快照；enabled=false 时仍可展示
+  providerEnabled: Boolean! # false 时前端展示「已停用」
+  externalUsername: String!
+  displayName: String
+  createdAt: String! # 绑定时间
+  lastLoginAt: String # 最近登录时间（可空）
+}
+
+# 待绑定外部身份的展示信息（身份选择页；白名单字段，不含 subject/issuer）
+type PendingExternalLoginInfo {
+  providerDisplayName: String!
+  externalUsername: String!
+}
+
 type Query {
   me: User
+  # 免登录；无配置时返回 []
+  authProviders: [AuthProviderInfo!]!
+  # 需登录；当前用户全部外部身份绑定（按 createdAt 升序）
+  myExternalLogins: [ExternalLoginInfo!]!
+  # 免登录；身份选择页摘要展示（不消费 ticket，仅展示）；ticket 不存在/过期返回 null
+  pendingExternalLoginInfo(pendingToken: String!): PendingExternalLoginInfo
 }
 
 type Mutation {
   login(username: String!, password: String!): AuthPayload!
+  # 一次性登录票据兑换（OAuth 回调后前端凭 ticket 换 AuthPayload）；
+  # ticket 由 agent-api 回写 Redis（TTL 60s，GETDEL 一次性消费）。
+  # 失败：BAD_USER_INPUT('invalid or expired ticket')
+  exchangeLoginTicket(ticket: String!): AuthPayload!
+
+  # —— 身份选择页（免登录；pendingToken 一次性 600s）——
+  # 绑定已有帐号：验密 → 建立 externallogins → 签发 AuthPayload
+  # 失败：BAD_USER_INPUT('invalid or expired pending token' | 'Invalid username or password'
+  #        | 'identity already bound' | 'provider already bound' | 'provider unavailable')
+  bindExternalLoginWithPassword(pendingToken: String!, username: String!, password: String!): AuthPayload!
+  # 创建新帐号：沿用原自动开户（派生唯一用户名）→ 建立 externallogins → 签发 AuthPayload
+  # 失败：BAD_USER_INPUT('invalid or expired pending token' | 'identity already bound'
+  #        | 'provider unavailable' | 'provision failed')
+  provisionExternalLogin(pendingToken: String!): AuthPayload!
+
+  # —— 设置页绑定管理（需登录）——
+  # 为当前用户签发前台绑定票据（600s）；前端携 ticket 跳
+  # GET /api/auth/oauth/:providerId/authorize?surface=front-bind&ticket=<ticket>
+  # 失败：'provider unavailable'（不存在/未启用/未开放前台）| 'provider already bound'
+  createFrontBindTicket(providerId: ID!): String!
+  # 解绑本人一条绑定；无密码账户的最后一条绑定拒绝：
+  # 'cannot unbind last login method'；非本人/不存在：'external login not found'
+  unbindExternalLogin(id: ID!): Boolean!
 }

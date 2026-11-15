@@ -65,6 +65,9 @@ export const resolvers = {
   User: {
     ...authResolvers.User,
   },
+  ExternalLoginInfo: {
+    ...authResolvers.ExternalLoginInfo,
+  },
   Provider: {
     ...providerResolvers.Provider,
   },

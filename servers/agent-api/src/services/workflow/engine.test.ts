@@ -851,4 +851,42 @@ describe('WorkflowEngine retry transitions', () => {
     expect(node.retryDeadlineAt).toBeNull();
     expect(node.retryTrigger).toBeNull();
   });
+
+  it('T-ENG-C1: fail 允许 REWORK → FAILED（接续收敛），透传 source 并保留 retryCount', async () => {
+    const instance = makeInstance([
+      retryNode({
+        status: 'REWORK',
+        retryCount: 2,
+        retryPhase: 'SCHEDULED',
+        retryTrigger: 'IDLED',
+        retryDeadlineAt: new Date(),
+        nextRetryAt: new Date(),
+      }),
+    ]);
+    loadInstance(instance);
+
+    await workflowEngine.transition('inst-1', 'n1', 'fail', {
+      reason: '控制器不可用',
+      source: 'CONTROLLER_UNAVAILABLE',
+    });
+
+    const node = instance.nodes[0];
+    expect(node.status).toBe('FAILED');
+    expect(node.failInfo).toMatchObject({ reason: '控制器不可用', source: 'CONTROLLER_UNAVAILABLE' });
+    expect(node.retryCount).toBe(2);
+    expect(node.nextRetryAt).toBeNull();
+    expect(node.retryPhase).toBeNull();
+    expect(node.retryDeadlineAt).toBeNull();
+    expect(node.retryTrigger).toBeNull();
+  });
+
+  it('T-ENG-C1b: fail 仍拒绝 DONE/READY', async () => {
+    for (const status of ['DONE', 'READY']) {
+      const instance = makeInstance([retryNode({ status })]);
+      loadInstance(instance);
+      await expect(
+        workflowEngine.transition('inst-1', 'n1', 'fail', { reason: 'r' }),
+      ).rejects.toThrow('不允许执行');
+    }
+  });
 });

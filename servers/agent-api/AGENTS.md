@@ -551,6 +551,18 @@ pnpm run start   # Start production server
 - **入口**：GraphQL `renameWorkflowInstance`（`graphql/resolvers/workflow.ts`，`wrap()` 原样透传文案）；平台 MCP `agent-workflow-tools.renameCurrentWorkflow`（`services/workflow/tool-handlers.ts`，工具总数 **14**）复用同一 service，错误映射 `invalid workflow name → INVALID_PARAMS`、`not found → NOT_FOUND`、其余（含已删除）→ `INVALID_STATE`。
 - **已归档实例允许改名**（仅禁止已删除）；团队工作区非创建人场景与既有 13 个工具同口径，不在本期扩大范围。
 
+## 已实例化工作流接续（#513）
+
+> 契约 `contracts/workflow.graphql`；计划 `docs/engineering/plan/20261114-feat-workflow-instance-continuation.md`。
+
+- **不可用判定（字段级、不落库）**：`services/workflow/unavailable.ts` 的纯函数 `resolveUnavailableReasonFromController`——控制器文档缺失 → `CONTROLLER_DELETED`；`status !== 'online'`（offline/registering/unbound）→ `CONTROLLER_OFFLINE`；否则 `null`。`WorkflowInstance.unavailableReason` resolver 委托 `resolveInstanceUnavailableReason`，按 `controllerId` 使用 `AuthContext.controllerStatusPromiseMap` 请求级 Promise 缓存（列表 N 实例同控制器只查一次），加载器 `loadControllerStatus` **不带 actorFilter**（实例已完成归属校验，仅读存在性与状态）。
+- **接续服务**：`services/workflow/continuation.ts` 的 `continueWorkflowInstance(userId, instanceId, input)` 严格按序——读取（不过滤 `deletedAt`，区分不存在/已删除）→ 状态门（已删除/已完成）→ 不可用门（当前可用拒绝）→ `getAvailableServerTypes` 校验目标控制器归属+在线+能力 → 目标工作区归属目标控制器（`getWorkspaceContext()` 时仅 `{_id, controllerId}`，与实例化同口径）→ `harnessMappings` **恰好覆盖**全部未完成 AI 节点（`type==='AI' && status!=='DONE'`；缺失/多余/重复 → 「必须恰好覆盖」，命中实例内非 AI/已完成节点 → 「包含非 AI 或已完成节点」）且每个 Harness 在能力清单内 → 可选新 Worktree（`createWorkflowWorktree` 缺省 true；`defaultBranch` 缺失先 `resolveWorkspaceDefaultBranch` 回填，仍缺失拒绝）→ 字段级 CAS 换绑。
+- **CAS 写入形状**：`updateOne({_id, deletedAt:null, finishedAt:null, controllerId:旧值})`，`$set` 换绑 controllerId/workspaceId、worktree path/branch（未勾选 = null）、`nodes.$[hN].agentConfig.acpServerType`（逐映射 arrayFilter）、`nodes.$[u].sessionId=null`（`u.status $ne DONE`），`$push continuationHistory`。`modifiedCount===0` → 回滚本次新建 Worktree（失败仅 warn）→ 「实例已被并发接续或状态已变化，请刷新后重试」。
+- **进行中节点收敛**：CAS 成功后对 `RUNNING/REWORK` 的 **AI** 节点逐个 `workflowEngine.transition(id, nodeId, 'fail', {source:'CONTROLLER_UNAVAILABLE', reason:'控制器不可用，工作流已接续到新环境，请重启节点继续执行'})`；单节点失败仅 warn（`restartNode` 兜底）。引擎 `TRANSITIONS.fail.from` 已扩展 `REWORK`（镜像 `retryExhausted`），`failInfo.source` 新增 `CONTROLLER_UNAVAILABLE`（模型/契约/手写 schema 三处注释同步）。
+- **缓存与恢复入口**：接续成功调 `invalidateWorkflowInstanceCache(instanceId)`（自 `instance.ts` 导出，同时供既有失效点复用）；清空未完成节点 `sessionId` 后既有 `restartNode`/`resumeNodeSession` 在新控制器上自然拉起。`workflowInstanceService.restartNode` 增加不可用门：「工作流实例不可用（控制器离线或已删除），请先接续后再操作」。
+- **零行为抽取**：`services/workflow/workflow-worktree.ts` 承载 `createWorkflowWorktree`/`removeWorkflowWorktree`（自 `instance.ts` 逐字搬出，`instance.ts` 私有方法委托），实例化与接续共用；`instance.test.ts` 既有断言全绿即锁定零回归。
+- **数据**：`WorkflowInstance.continuationHistory` 子文档数组（`{from/toControllerId, from/toWorkspaceId, at}`，`_id:false`，`default: []`）零迁移；`GET_WORKFLOW_INSTANCE` 返回 `continuationHistory`，`mapInstance` 归一 `?? []`。
+
 ## 多租户二期（工作区资源查询口径）
 
 - **请求链路**：已归属工作区的资源（`sessions` / `controllers` / `controllerkeys` / `cloudhosts` / `cloudstorages` / `configuredworkflows` / `workflowinstances` / `workflowtemplates` / `githubaccounts` / `providers` / `models`）一律用 `actorFilter(userId)` 组合查询，**禁止显式写 `userId`**：工作区上下文存在时返回 `{}`，由 `applyWorkspaceScope` 注入可见集；无上下文（引擎/内部/迁移）才回退 `{userId}` 归属校验。典型回归：`Controller.cloudHost`、`sessionService.create` 的云电脑状态校验、云电脑创建时选择共享 GitHub 绑定、Issue 联动实例化时读取已配置工作流、会话级权限超时设置。
@@ -591,3 +603,17 @@ pnpm run start   # Start production server
 - **级联**：`cloudHostService.delete` 在同位追加 `configuredWorkflowService.deleteRepoScopedByController(controllerId)`
   （`deleteMany({controllerId, sourceKind:'REPO'})`，best-effort 失败仅 `logger.warn`）；PLATFORM 来源与实例历史不受影响。
 - **版本工具**：`services/version.ts#compareVersions` 为单一来源（自 `cloud-host-service.ts` 逐字搬移）。
+
+## 第三方登录 OAuth/OIDC（#503）
+
+- **唯一 REST 入口**：`routes/auth-oauth.ts`（`GET /api/auth/oauth/:providerId/authorize` + `GET /api/auth/oauth/callback`）。`surface` 为 `front|admin|admin-bind|front-bind`；错误一律 302 带 `?error=<code>`，不返回 JSON。契约见 `contracts/auth-oauth.md`。
+- **Provider 只读镜像**：`models/auth-provider.ts` 对应 admin-api 唯一写方集合 `authproviders`（`autoIndex=false`，索引由 admin-api 迁移 022 创建）；secret 解密用 `services/crypto.ts`，AppHost/compose 已向 agent-api 注入 `CREDENTIAL_ENCRYPTION_KEY`。
+- **一次性凭证**：state 600s / login ticket 60s / pending 600s / front-bind-ticket 600s 均 Redis GETDEL（`services/oauth-flow.ts`）；OIDC discovery/JWKS 缓存 1h（`services/oidc-client.ts`）；GitHub 三端点 env 可覆盖（`GITHUB_OAUTH_AUTHORIZE_URL`/`GITHUB_OAUTH_TOKEN_URL`/`GITHUB_OAUTH_API_BASE`），token 仅内存、不入库不入日志。
+- **OIDC**：openid-client v6，PKCE S256 + nonce；IdP 未宣告 S256 时降级 state+nonce（info 日志）。验签失败强刷 JWKS 重试一次；claims 归一 `preferred_username ?? email 本地段 ?? sub 前 8`，身份锚点 `{providerId, issuer, sub}`。
+- **前台首次登录（#510）**：`front` 回调命中 `externallogins` 时原链路逐字不变（签 JWT → 60s ticket）；**未命中不再静默开户**，改为写 `oauth:pending:{token}`（600s，载荷仅 `{providerId,issuer,subject,externalUsername,displayName?,avatarUrl?,failCount}`）后 302 `{FRONTEND_URL}/login/identity-choice?pending=`。身份选择页经 GraphQL 提交 `bindExternalLoginWithPassword`（验密失败仅计次不消费，≥5 次作废）或 `provisionExternalLogin`（原自动开户）；成功才 GETDEL 消费 pending 并经 `AuthPayload` 直返 JWT（JWT 不进 URL）。
+- **服务四入口**：`services/external-login.ts` 提供 `findExternalLogin`（命中更新快照/未命中 null）、`bindExternalLoginToUser`（绑定已有帐号，两个唯一索引 E11000 回读判定 `IDENTITY_ALREADY_BOUND`/`PROVIDER_ALREADY_BOUND`，不加身份锁）、`provisionExternalLogin`（开户保留身份锁，E11000 拒绝不再幂等吞并）、`unbindExternalLogin`（归属校验 + 无密码账户最后一条拒绝）。`services/provisioning.ts` 的 `Account.create` 在 `source='oauth'` 时写 `passwordless:true`。
+- **front-bind**：`createFrontBindTicket(providerId)`（需登录，provider `enabled && enableFrontLogin` 且当前账户该 provider 无绑定）签发 600s 票据（payload `{userId,providerId}`，state 复用 `bindTicket` 字段承载）；authorize 缺 ticket → `invalid_request`；回调 GETDEL 票据 → provider 匹配 → 用户存在 → 落绑定 → 302 `{FRONTEND_URL}/settings?bind=success`，失败 `?bind=error&error=<code>`。
+- **数据层**：`externallogins` 每账户每 Provider 唯一索引 `uniq_external_login_user_provider`（模型声明 + 迁移 027 双写）；`accounts.passwordless` 双服务同 PR（admin-api 只读镜像）；迁移 027 先建索引后回填 `_id ∈ externallogins.accountId` 且未设置字段的账户为 true。
+- **租户隔离**：`externallogins` 带 `userId`/`tenantId`，必须双注册（`models/tenant-isolation.test.ts` + 迁移 013 `TENANT_ID_COLLECTIONS`，集合数 22）。
+- **GraphQL**：`authProviders` 免登录（仅 enabled + enableFrontLogin）；`pendingExternalLoginInfo` 免登录且不消费 ticket（仅两白名单字段）；`myExternalLogins` / `createFrontBindTicket` / `unbindExternalLogin` 需登录；`exchangeLoginTicket` GETDEL 兑换，失败 `BAD_USER_INPUT('invalid or expired ticket')`。`ExternalLoginInfo.providerType/providerDisplayName/providerEnabled` 为类型级 resolver，**必须登记 `graphql/resolvers/index.ts` 的 `ExternalLoginInfo` 键**。
+- **测试**：单测 `services/{oauth-flow,oidc-client,github-oauth,external-login,provisioning}.test.ts`、`routes/auth-oauth.test.ts`、`migrations/{026-external-logins,027-oidc-binding-optimization}.test.ts`、`graphql/{schemas,resolvers}/auth*.test.ts`；API 全链路 `tests/api/src/agent-api/auth-oauth.test.ts`（fake IdP/GitHub，T-OA-API1~20）；E2E `tests/e2e/src/auth-oidc-binding.spec.ts`（E2E-OBO1~7）。

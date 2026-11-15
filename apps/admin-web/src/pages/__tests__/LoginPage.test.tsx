@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   useMutation: vi.fn(),
+  useQuery: vi.fn(),
   mutate: vi.fn(),
   capturedOptions: { current: null as null | {
     onCompleted?: (data: unknown) => void;
@@ -19,7 +20,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@apollo/client', () => ({ gql: vi.fn(() => '') }));
-vi.mock('@apollo/client/react', () => ({ useMutation: mocks.useMutation }));
+vi.mock('@apollo/client/react', () => ({
+  useMutation: mocks.useMutation,
+  useQuery: mocks.useQuery,
+}));
 vi.mock('sonner', () => ({
   toast: { success: mocks.toastSuccess, error: mocks.toastError, message: vi.fn() },
 }));
@@ -30,9 +34,9 @@ vi.mock('@/lib/api-base', () => ({
 }));
 vi.mock('@/lib/runtime', () => ({ reloadApp: mocks.reloadApp }));
 
-function renderLogin() {
+function renderLogin(entry = '/login') {
   return render(
-    <MemoryRouter initialEntries={['/login']}>
+    <MemoryRouter initialEntries={[entry]}>
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
@@ -48,6 +52,11 @@ describe('LoginPage', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.clearAllMocks();
+    mocks.useQuery.mockReturnValue({
+      data: { adminAuthProviders: [] },
+      loading: false,
+      error: undefined,
+    });
     mocks.useMutation.mockImplementation((_doc: unknown, options: unknown) => {
       mocks.capturedOptions.current = options as typeof mocks.capturedOptions.current;
       return [mocks.mutate, { loading: false }];
@@ -160,5 +169,33 @@ describe('LoginPage', () => {
 
     expect(screen.getByRole('alert').textContent).toContain('无法连接服务器');
     expect(screen.getByLabelText('服务器地址')).toBeDefined();
+  });
+
+  it('renders admin third-party providers and maps not_bound error', () => {
+    mocks.useQuery.mockReturnValue({
+      data: {
+        adminAuthProviders: [
+          { id: 'p1', type: 'oidc', displayName: '公司 SSO' },
+          { id: 'p2', type: 'github_oauth', displayName: 'GitHub' },
+        ],
+      },
+      loading: false,
+      error: undefined,
+    });
+    renderLogin('/login?error=not_bound');
+    expect(screen.getByRole('button', { name: '使用 公司 SSO 登录' })).toBeDefined();
+    expect(screen.getByRole('button', { name: '使用 GitHub 登录' })).toBeDefined();
+    expect(screen.getByRole('alert').textContent).toContain('该身份未绑定任何管理员账户');
+  });
+
+  it('falls back to password-only login when provider query fails', () => {
+    mocks.useQuery.mockReturnValue({
+      data: undefined,
+      loading: false,
+      error: new Error('network'),
+    });
+    renderLogin();
+    expect(screen.getByRole('button', { name: '登录' })).toBeDefined();
+    expect(screen.queryByText('或使用第三方帐号登录')).toBeNull();
   });
 });

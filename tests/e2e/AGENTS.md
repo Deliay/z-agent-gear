@@ -598,3 +598,21 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 - E2E-CT2：http 表单 —— GET 类隐藏 body、POST 类默认 JSON、form `file` 选项禁用并提示本期不支持。
 - E2E-CT3：Valut 名单查询仅返回名称（无 value 出参/取值入口）。
 - MCP 动态目录与 tools/call 的 wire 级行为由 `servers/agent-api` 单测覆盖。
+
+## 第三方登录 E2E（#503 / #510）
+
+| 文件 | 说明 |
+|------|------|
+| `src/auth-oauth-helpers.ts` | 进程内 fake OIDC/GitHub 启动 + admin-api Provider 配置/清理 + 按钮文案工具（fake 实现复用 `tests/api/src/{fake-oidc-server,mock-github-server}`）。 |
+| `src/auth-oauth.spec.ts` | E2E-OIDC1 登录页按钮随启停即时增减；E2E-OIDC2 完整重定向登录（#510 首登经身份选择页选择「创建新帐号」完成开户）；E2E-OIDC3 取消授权提示；E2E-GH1 GitHub 登录（需 agent-api 指向 fake GitHub，否则 skip）。 |
+| `src/auth-oidc-binding.spec.ts` | #510 绑定优化（E2E-OBO1~7）：已有密码账户首登身份选择摘要 + 绑定已有帐号进入原账户、创建新帐号、验密失败可重试、设置页绑定列表与第二 provider 绑定（需 fake GitHub）、解绑二次确认、无密码最后一条解绑被拒、完成绑定后再次登录直登。 |
+| `src/admin-auth-oauth.spec.ts` | E2E-AD-OA1「登录认证」CRUD 且 secret 不可见；E2E-AD-OA2 绑定→后台第三方登录；E2E-AD-OA3 未绑定被拒文案；E2E-AD-OA4 解绑后立即无法登录。 |
+
+依赖：Aspire 全量（agent-web/admin-web/agent-api/admin-api/Redis/Mongo）；`INTERNAL_API_TOKEN`、`MONGODB_URI`；
+fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`（workers=1 串行）。
+
+## 已实例化工作流接续（`src/workflow-continuation.spec.ts`）
+
+- E2E-WCT1：详情页不可用提示条（控制器离线）→「接续」打开对话框 → 选目标控制器 B + 工作路径 B（Worktree 默认勾选、Harness 默认沿用 opencode）→ 提交成功 toast → 提示条消失 → 节点收敛 FAILED →「重启」确认后 B 收到 `acp:start` 恢复执行。
+- E2E-WCT2：控制器恢复在线后不可用提示条与「接续」入口随 5s 轮询自动消失；可用实例无接续入口。
+- 依赖：`MONGODB_URI`（改控制器 `status` 与伪造运行中节点 `sessionId`）、`INTERNAL_API_TOKEN`；spec 内 fake controller 应答 `acp:check`/`git:check`（isGitRepo=true）/`git:worktree:add|remove`/`acp:start|resume|stop`，目标工作区写入 `defaultBranch=main`。

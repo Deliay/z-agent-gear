@@ -56,6 +56,51 @@ describe('mock GitHub server 真实行为对齐', () => {
     expect(server.checkRuns[0].conclusion).toBeNull();
   });
 
+  it('GitHub OAuth authorize/token/user 链路与取消授权', async () => {
+    server = await startMockGitHubServer();
+    server.setOAuthUser({ id: 2002, login: 'octo-oauth', name: 'Octo OAuth' });
+
+    const authorize = await fetch(
+      `${server.url}/login/oauth/authorize?client_id=test&redirect_uri=${encodeURIComponent('http://localhost:10001/api/auth/oauth/callback')}&state=s1`,
+      { redirect: 'manual' },
+    );
+    expect(authorize.status).toBe(302);
+    const callback = new URL(authorize.headers.get('location') ?? '');
+    expect(callback.searchParams.get('state')).toBe('s1');
+    const code = callback.searchParams.get('code') ?? '';
+    expect(code).not.toBe('');
+
+    const token = await fetch(`${server.url}/login/oauth/access_token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: 'test', client_secret: 'secret' }),
+    });
+    expect(token.status).toBe(200);
+    const tokenBody = (await token.json()) as { access_token: string };
+    expect(tokenBody.access_token).toContain('mock-github-access-');
+
+    const user = await fetch(`${server.url}/user`, {
+      headers: { Authorization: `Bearer ${tokenBody.access_token}` },
+    });
+    expect(user.status).toBe(200);
+    expect(await user.json()).toMatchObject({ id: 2002, login: 'octo-oauth' });
+
+    const replay = await fetch(`${server.url}/login/oauth/access_token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ code, client_id: 'test', client_secret: 'secret' }),
+    });
+    expect(replay.status).toBe(400);
+
+    server.denyNextOAuth();
+    const denied = await fetch(
+      `${server.url}/login/oauth/authorize?client_id=test&redirect_uri=${encodeURIComponent('http://localhost:10001/api/auth/oauth/callback')}&state=s2`,
+      { redirect: 'manual' },
+    );
+    expect(denied.status).toBe(302);
+    expect(denied.headers.get('location')).toContain('error=access_denied');
+  });
+
   it('PATCH output 标记已过期可用（应用可写字段）', async () => {
     server = await startMockGitHubServer();
     const createOk = await fetch(`${server.url}/repos/o/r/check-runs`, {

@@ -934,3 +934,27 @@ pnpm test
   `invalid fragment template` / `invalid http config`；重名 `duplicate custom tool name`。
 - 工作区隔离：跨工作区 id → `Not found`；不存在 id → `custom tool not found`。
 - 前提：`INTERNAL_API_TOKEN`（开户）；MCP 动态目录与 tools/call wire 行为由 agent-api 单测覆盖。
+
+## 第三方登录 OAuth/OIDC（#503）
+
+| 文件 | 说明 |
+|------|------|
+| `src/fake-oidc-server.ts` | 进程内 fake OIDC IdP（默认端口 `MOCK_OIDC_PORT=19419`）：discovery/JWKS、authorize（`denyNext()` 注入 `access_denied`）、token（校验 PKCE，签发含 iss/sub/aud/exp/nonce 的 RS256 id_token）。`jose` 为显式 devDependency。 |
+| `src/mock-github-server.ts` | 扩展 OAuth：`GET /login/oauth/authorize`（`denyNextOAuth()`）、`POST /login/oauth/access_token`、`GET /user`（`setOAuthUser()`）。既有 Check Runs mock 路由零改动，`mock-github-server.test.ts` 守卫。 |
+| `src/agent-api/auth-oauth.test.ts` | T-OA-API1~10（#503 基础链路，已按 #510 身份选择页适配：首登未绑定走 provision）与 T-OA-API11~20（#510）：首登未命中 302 身份选择页且不开户、pending 验密绑定既有账户、错密计次/5 次作废、创建新帐号 `passwordless:true`、pending 期间抢绑两条 mutation 均拒绝、front-bind 全链路、票据缺失/过期、同账户同 provider 重复绑定、解绑/解绑后重新首登/无密码最后一条拒绝、完成绑定后直登。 |
+| `src/admin-api/auth-provider.test.ts` | T-AP-API1~7：鉴权/secret 不回显/callbackUrl/校验矩阵/更新留空/github 单条幂等/免登录过滤。 |
+
+前置 env：agent-api 需 `PUBLIC_BASE_URL` 指向测试可达地址、`ADMIN_FRONTEND_URL`；GitHub 用例需 agent-api 以
+`GITHUB_OAUTH_AUTHORIZE_URL=http://127.0.0.1:19418/login/oauth/authorize`、`GITHUB_OAUTH_TOKEN_URL=http://127.0.0.1:19418/login/oauth/access_token`、
+`GITHUB_OAUTH_API_BASE=http://127.0.0.1:19418` 启动（未指向时 GitHub 用例显式 skip）。OIDC 用例需要 `MONGODB_URI` 用于清理与落库断言。
+#510 新增 Redis 键断言口径：`oauth:pending:{token}`（600s，验密失败仅 `failCount+1` 保留 TTL）与 `oauth:front-bind-ticket:{ticket}`（600s，GETDEL 一次性）；无需新增 env。
+
+## 已实例化工作流接续（`src/agent-api/workflow-continuation.test.ts`）
+
+- T-WFC1：`workflowInstances` / `workflowInstance` / `homeOverview.workflowInstances` 透出 `unavailableReason`——控制器 `status='offline'` → `CONTROLLER_OFFLINE`；删除控制器文档 → `CONTROLLER_DELETED`；在线控制器实例 → `null`（直连 Mongo 改状态/删文档）。
+- T-WFC2：全链路——实例（A 在线）→ A 离线 → 接续到 B（勾选 Worktree + 逐节点 Harness 映射）→ 实例绑定 B/新工作区、`unavailableReason=null`、`continuationHistory` 一条、AI 节点 `FAILED(source=CONTROLLER_UNAVAILABLE)` 且 `sessionId` 清空、Harness 已改写；随后 `restartNode` 由 B 收到 `acp:start`（新会话）。
+- T-WFC3：校验失败矩阵逐字透出——当前可用实例、已完成实例（直写 `finishedAt`）、映射缺失、映射含已完成节点、目标控制器不支持 Harness、非 Git 工作区勾选 Worktree（无 `defaultBranch` + `git:check=false`）、他人实例（`工作流实例不存在或无权限`）。
+- T-WFC4：重复接续——A→B 后 B 离线 → 允许继续接续到 C，`continuationHistory` 两条按时间升序；跨控制器工作区先命中「工作区不存在、无权限或不属于该控制器」。
+- T-WFC5：`restartNode` 于不可用实例拒绝（`工作流实例不可用（控制器离线或已删除），请先接续后再操作`）；接续后同调用成功。
+- T-WFC6：未完成节点 `sessionId` 清空、DONE 节点 `sessionId` 保留，黑板产物零改动（直读 `workflowinstances`）。
+- 前置：`aspire start`（agent-api + controller-api）+ `MONGODB_URI` + `INTERNAL_API_TOKEN`；fake controller 应答 `acp:check`（opencode/kimi_code）、`git:check`/`git:worktree:add|remove`、`acp:start/resume/stop`。

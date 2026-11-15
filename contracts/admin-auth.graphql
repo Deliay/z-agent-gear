@@ -24,8 +24,38 @@ type AdminAuthPayload {
   admin: AdminUser!
 }
 
+# ===== 后台第三方登录（自定义 OIDC / GitHub OAuth）=====
+#
+# - 后台外部身份**必须先绑定**（本人在「账号安全」完成绑定）才可登录，
+#   杜绝 IdP 任意用户自动获得管理员权限；
+# - 配置唯一写方在 admin-api（contracts/admin-auth-provider.graphql）；
+# - 枚举 AuthProviderType 与 contracts/auth.graphql 值域逐字一致（oidc / github_oauth）。
+
+enum AuthProviderType {
+  oidc
+  github_oauth
+}
+
+type AdminAuthProviderInfo {
+  id: ID!
+  type: AuthProviderType!
+  displayName: String!
+}
+
+type AdminExternalLogin {
+  id: ID!
+  providerId: ID!
+  providerDisplayName: String!
+  externalUsername: String! # 外部帐号名（github login / preferred_username）
+  createdAt: String!
+}
+
 type Query {
   adminMe: AdminUser
+  # 免登录（登录页前置查询）；仅返回 enabled 且 enableAdminLogin=true 的配置
+  adminAuthProviders: [AdminAuthProviderInfo!]!
+  # 需管理员登录；当前管理员已绑定的外部身份
+  adminExternalLogins: [AdminExternalLogin!]!
 }
 
 type Mutation {
@@ -33,4 +63,10 @@ type Mutation {
   adminLogin(username: String!, password: String!): AdminAuthPayload!
   # 修改密码（需已登录）；成功后 mustChangePassword=false 并签发新 token
   changeAdminPassword(oldPassword: String!, newPassword: String!): AdminAuthPayload!
+  # 一次性登录票据兑换（免登录，同前台口径：GETDEL、60s TTL）
+  adminExchangeLoginTicket(ticket: String!): AdminAuthPayload!
+  # 需管理员登录；为当前管理员创建绑定票据（10 分钟有效），前端携票据跳转 agent-api 发起绑定
+  createAdminBindTicket(providerId: ID!): String!
+  # 需管理员登录；解除本人一条绑定
+  unbindAdminExternalLogin(id: ID!): Boolean!
 }

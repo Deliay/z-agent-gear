@@ -887,3 +887,61 @@ export const DELETE_CUSTOM_MCP_SERVER = gql`
     deleteCustomMcpServer(id: $id)
   }
 `
+
+const AUTH_PAYLOAD_FIELDS = gql`
+  fragment AuthPayloadFields on AuthPayload {
+    token
+    user {
+      id
+      name
+      tenant {
+        id
+        name
+        type
+        memberCount
+      }
+    }
+  }
+`
+
+/** 身份选择页：绑定已有帐号（验密后建立绑定并登录）。 */
+export const BIND_EXTERNAL_LOGIN_WITH_PASSWORD = gql`
+  mutation BindExternalLoginWithPassword(
+    $pendingToken: String!
+    $username: String!
+    $password: String!
+  ) {
+    bindExternalLoginWithPassword(
+      pendingToken: $pendingToken
+      username: $username
+      password: $password
+    ) {
+      ...AuthPayloadFields
+    }
+  }
+  ${AUTH_PAYLOAD_FIELDS}
+`
+
+/** 身份选择页：创建新帐号（沿用原自动开户）。 */
+export const PROVISION_EXTERNAL_LOGIN = gql`
+  mutation ProvisionExternalLogin($pendingToken: String!) {
+    provisionExternalLogin(pendingToken: $pendingToken) {
+      ...AuthPayloadFields
+    }
+  }
+  ${AUTH_PAYLOAD_FIELDS}
+`
+
+/** 设置页：为当前用户签发前台绑定票据（600s）。 */
+export const CREATE_FRONT_BIND_TICKET = gql`
+  mutation CreateFrontBindTicket($providerId: ID!) {
+    createFrontBindTicket(providerId: $providerId)
+  }
+`
+
+/** 设置页：解绑本人一条第三方登录绑定。 */
+export const UNBIND_EXTERNAL_LOGIN = gql`
+  mutation UnbindExternalLogin($id: ID!) {
+    unbindExternalLogin(id: $id)
+  }
+`
