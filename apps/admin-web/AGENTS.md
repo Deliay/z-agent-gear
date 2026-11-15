@@ -24,7 +24,7 @@ pnpm run preview
 ## 认证与路由
 
 - 登录态持久化在 `localStorage`（`admin_token` / `admin_user`），不使用 cookie（计划期裁决 8）。
-- 路由：`/login`、`/change-password`（无侧边栏）、受保护布局 `AdminLayout` 下 `/models`（默认）、`/base-images`、`/cloud-containers`、`/cloud-workloads`、`/tenants`、`/tenants/:id`、`/billing` 与 `/reconciliation`。
+- 路由：`/login`、`/change-password`（无侧边栏）、受保护布局 `AdminLayout` 下 `/models`（默认）、`/base-images`、`/cloud-containers`、`/cloud-workloads`、`/harness-configs`、`/tenants`、`/tenants/:id`、`/billing` 与 `/reconciliation`。
 - 「云端容器」页（`/cloud-containers`）：展示 cloud-controller 管理的工作容器（名称/状态/用途/关联对象/创建时间/在线时长），`useQuery` 10s 轮询刷新；「启动」对话框本期仅提供 `idle` 任务，并可多选挂载「工作负载」（默认不选，勾选顺序即提交顺序，**最多 10 个**；工作负载列表加载中/失败分别展示「加载中」与「错误 + 重试」，避免误判为空）；每行「强制销毁」二次确认。状态展示映射见裁决 4（创建中/连接中/**初始化中**/在线/销毁中/已退出/失败），初始化中展示当前执行的工作负载脚本名（`currentWorkloadName`）；在线时长按裁决 15 前端计算（`lib/format.ts` 的 `formatOnlineDuration`）。控制面离线时保留降级数据并提示。
 - 「工作负载」页（`/cloud-workloads`）：工作负载 CRUD（名称 + 初始化脚本 + 清理脚本 + 参数表单 + 依赖），新建/编辑共用对话框，删除二次确认。脚本摘要单行截断；前端预校验「名称必填且 ≤64 字符、两脚本至少其一非空、单脚本 ≤16 KiB」（服务端仍强制）。**参数设计器**（`ParamSchemaEditor`）支持四种字段类型（下拉单选/下拉多选/文本/布尔），可增删排序、编辑可选项、随类型切换默认值控件；可选项输入框**本地保留草稿文本**（逐字符键入不丢换行/行内空格），可选项变化时把默认值裁剪到当前可选项集合（避免失效默认值造成无法自救的校验死锁）；前端预校验与服务端同口径（key 正则/唯一、label 1~64、可选项 1~50 去重非空、默认值必填且合法），服务端仍是唯一事实源。**依赖选择器**为多选（0~5、排除自身、保存前依赖环提示）。列表展示「预制」徽章、`workloadKind` 分类徽章（STANDARD/HARNESS，缺省按 STANDARD）、参数数量、依赖名称，无值显示「-」。
 - 云端容器启动对话框（`StartContainerDialog`）：工作负载按 `workloadKind` 分组渲染（「运行环境（standard）」/「云电脑（harness）」，空组不渲染标题；`workloadKind` 缺失按 `STANDARD` 兜底），选择/必选/参数/计划预览逻辑完全复用。选中带参数的工作负载展开参数表单（`WorkloadParamsForm`，默认值预填、以「键是否存在」判定是否填写，避免 `false`/空串被误判）；带依赖的工作负载展示「将自动初始化 XXX、YYY（默认参数）」提示；展示最终初始化顺序预览（`lib/workload-plan.ts` 纯函数，仅预览，最终以服务端下发的计划为准）；**依赖环或依赖不存在时前端拦截启动**（避免必然被服务端拒绝）；多选参数按可选项顺序归一（快照稳定）；提交 `workloads[]`（含 `params`）。**「必须」开关（工作负载三期）**：仅「已勾选且含 `initScript`（trim 后非空）」的工作负载展示「必须」开关（默认关，可独立设置多个）；取消勾选时清除其必须设置、重新勾选回到默认非必须；顺序预览对必须项加「必须」标识（隐式依赖不受影响）；提交时仅对必须项携带 `required=true`（非必须项省略 = 缺省 false）；说明行「标记为必须的工作负载初始化失败将导致容器被强制注销」。前端只做展示与提交，**不做本地硬失败预判**。
@@ -83,3 +83,12 @@ pnpm run preview
 - **「登录认证」页**（`/auth-providers`）：OIDC 列表新增/编辑/删除 + GitHub 单条 upsert；secret 输入恒空占位（`hasSecret` 展示「已设置」，留空 = 不变），页面不出现明文 secret；OIDC 与 GitHub 均展示可复制的 `callbackUrl`（agent-api 对外统一回调地址）。
 - **「账号安全」页**（`/settings/security`）：`adminExternalLogins` 列表 + `createAdminBindTicket` 绑定跳转（surface=admin-bind）与二次确认解绑；读 `?bind=success|error` toast。agent-api 地址由 `lib/auth-oauth.ts` 四级来源解析（localStorage / `window.__ADMIN_CONFIG__.agentApiUrl` / `VITE_AGENT_API_URL` / 同源）。
 - **测试**：`pages/__tests__/{LoginPage,LoginCallbackPage,AuthProvidersPage,SecurityPage}.test.tsx`；E2E 见 `tests/e2e/src/admin-auth-oauth.spec.ts`。
+
+## Harness 配置页（#525）
+
+- **路由与导航**：`/harness-configs`；`AdminLayout` 的 `NAV_ITEMS` 追加「Harness 配置」（icon 取 lucide 既有依赖 `Wrench`）。页面为 `pages/HarnessConfigsPage.tsx`，GraphQL 手写模块 `graphql/harness-config.ts`（`ADMIN_HARNESS_CONFIGS` 查询 / `UPSERT_HARNESS_CONFIG` mutation + `HarnessType = 'OPENCODE' | 'KIMI_CODE' | 'DEEPSEEK_HARNESS'` 与配套类型）。
+- **固定三行**：`OPENCODE` / `KIMI_CODE` / `DEEPSEEK_HARNESS` 恒展示（展示名 OpenCode / Kimi Code / DeepSeek Harness，与 agent-web 既有 harness 文案一致；行内展示枚举徽标与「更新于」）；查询未返回的行回显默认 `/compact`，库内自定义值原样回显。
+- **逐行保存（计划期裁决 D10）**：每行独立输入框 + 「保存」按钮，**不做整页单保存按钮**（三行互不影响）。保存调 `upsertHarnessConfig(harnessType, compactCommand)`（提交 trim 后值），带 `refetchQueries: [ADMIN_HARNESS_CONFIGS]`，成功 toast「<Harness> 压缩指令已保存」。
+- **校验口径**：前端预校验「trim 后非空 + 以 `/` 开头 + 长度 1~64」（`lib/harness-config.ts#validateCompactCommand`），非法时禁用该行保存并展示「指令需以 / 开头且长度 1~64」；服务端 `invalid compact command` 仍为唯一事实源，映射为同一中文提示（`mapHarnessConfigError`），其余错误原样透出。
+- **加载与错误**：加载分支一律 `loading && !data`（「加载中...」）；首次加载失败展示 `QueryError` + 重试。
+- **测试**：`pages/__tests__/HarnessConfigsPage.test.tsx`（T-HC-WEB1 三行展示/默认 `/compact` 回显/加载分支；T-HC-WEB2 逐行保存变量逐字段对齐 + refetch、非法输入禁用、服务端错误映射）；E2E 见 `tests/e2e/src/admin-harness-config.spec.ts`。
