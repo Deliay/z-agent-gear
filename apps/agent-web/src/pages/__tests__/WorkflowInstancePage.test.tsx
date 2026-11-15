@@ -8,6 +8,10 @@ const mockUseQuery = vi.fn();
 const mockDelete = vi.fn().mockResolvedValue({});
 const mockRename = vi.fn().mockResolvedValue({});
 const mockNavigate = vi.fn();
+const { searchParamsRef, setSearchParamsMock } = vi.hoisted(() => ({
+  searchParamsRef: { current: new URLSearchParams('') },
+  setSearchParamsMock: vi.fn(),
+}));
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
@@ -22,6 +26,27 @@ vi.mock('@apollo/client/react', () => ({
 vi.mock('react-router-dom', () => ({
   useParams: () => ({ id: 'inst-1' }),
   useNavigate: () => mockNavigate,
+  useSearchParams: () => [searchParamsRef.current, setSearchParamsMock],
+}));
+
+vi.mock('@/components/workflow/ContinueWorkflowDialog', () => ({
+  default: ({
+    open,
+    instance,
+    onOpenChange,
+  }: {
+    open: boolean
+    instance: { name: string }
+    onOpenChange: (open: boolean) => void
+  }) =>
+    open ? (
+      <div role="dialog" data-testid="continue-workflow-dialog">
+        {instance.name}
+        <button type="button" onClick={() => onOpenChange(false)}>
+          关闭接续
+        </button>
+      </div>
+    ) : null,
 }));
 
 vi.mock('@/components/workflow/BlackboardPanel', () => ({
@@ -538,5 +563,65 @@ describe('WorkflowInstancePage 重试用尽（T-FE4）', () => {
     const dialog = screen.getByTestId('edit-node-dialog');
     expect(dialog).toHaveAttribute('data-restart', 'true');
     expect(dialog.textContent).toContain('代码实现');
+  });
+});
+
+describe('WorkflowInstancePage 不可用与接续（T-WEB5）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    searchParamsRef.current = new URLSearchParams('')
+  });
+
+  function makeUnavailable(reason: 'CONTROLLER_OFFLINE' | 'CONTROLLER_DELETED'): WorkflowInstanceData {
+    return { ...makeInstance(), unavailableReason: reason };
+  }
+
+  it('T-WEB5a 控制器离线：提示条两态文案 + 接续按钮 + 残留 Worktree 说明', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeUnavailable('CONTROLLER_OFFLINE') }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    const notice = screen.getByTestId('workflow-unavailable-notice');
+    expect(notice).toHaveTextContent('控制器离线，实例当前不可用');
+    expect(notice).toHaveTextContent('已完成节点与产物保留');
+    expect(notice).toHaveTextContent('残留 Worktree');
+    expect(screen.getByRole('button', { name: '接续' })).toBeInTheDocument();
+    expect(screen.queryByTestId('continue-workflow-dialog')).not.toBeInTheDocument();
+  });
+
+  it('T-WEB5b 控制器已删除：提示条文案切换', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeUnavailable('CONTROLLER_DELETED') }, loading: false });
+    render(<WorkflowInstancePage />);
+    expect(screen.getByTestId('workflow-unavailable-notice')).toHaveTextContent('控制器已删除，实例当前不可用');
+  });
+
+  it('T-WEB5c ?continue=1 自动打开对话框，关闭后清除参数', () => {
+    searchParamsRef.current = new URLSearchParams('continue=1');
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeUnavailable('CONTROLLER_OFFLINE') }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    expect(screen.getByTestId('continue-workflow-dialog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '关闭接续' }));
+    expect(setSearchParamsMock).toHaveBeenCalled();
+    const [nextParams, options] = setSearchParamsMock.mock.calls[0];
+    expect((nextParams as URLSearchParams).get('continue')).toBeNull();
+    expect(options).toEqual({ replace: true });
+  });
+
+  it('T-WEB5d 不可用实例禁用流转类操作，归档/删除保持可用', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeUnavailable('CONTROLLER_OFFLINE') }, loading: false });
+    render(<WorkflowInstancePage />);
+
+    expect(screen.getByLabelText('评审 完成输入')).toBeDisabled();
+    expect(screen.getByRole('button', { name: '完成' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '打回' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /归档/ })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /删除实例/ })).not.toBeDisabled();
+  });
+
+  it('T-WEB5e 可用实例零变化：无提示条无接续按钮', () => {
+    mockUseQuery.mockReturnValue({ data: { workflowInstance: makeInstance() }, loading: false });
+    render(<WorkflowInstancePage />);
+    expect(screen.queryByTestId('workflow-unavailable-notice')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '接续' })).not.toBeInTheDocument();
   });
 });

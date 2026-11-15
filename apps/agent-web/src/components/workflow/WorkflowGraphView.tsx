@@ -28,6 +28,8 @@ import type { NodeDetailTarget } from './NodeDetailDrawer'
 
 interface WorkflowGraphViewProps {
   instance: WorkflowInstanceData
+  /** 实例不可用（控制器离线/已删除）：禁用流转类操作 */
+  unavailable?: boolean
   /** 打开节点/资源详情抽屉 */
   onOpenDetail?: (target: NodeDetailTarget) => void
   /** 详情抽屉内「打开会话」 */
@@ -42,6 +44,7 @@ const NODE_TYPES = { workflowNode: WorkflowNodeCard }
  */
 export default function WorkflowGraphView({
   instance,
+  unavailable = false,
   onOpenDetail,
   onOpenSession,
 }: WorkflowGraphViewProps) {
@@ -75,12 +78,14 @@ export default function WorkflowGraphView({
         ...node,
         data: {
           ...node.data,
+          // 实例不可用时禁用人类节点就地操作（完成/打回）
+          actionable: unavailable ? false : node.data.actionable,
           onOpenDetail: (nodeId: string) => onOpenDetail?.({ type: 'node', nodeId }),
           onOpenResource: (resource: GraphResource) => onOpenDetail?.({ type: 'resource', resource }),
           onOpenSession,
         },
       })),
-    [viewModel, onOpenDetail, onOpenSession],
+    [viewModel, unavailable, onOpenDetail, onOpenSession],
   )
 
   const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowGraphNode>(initialNodes)

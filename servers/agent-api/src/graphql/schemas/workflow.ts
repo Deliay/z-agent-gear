@@ -133,7 +133,27 @@ export const workflowTypeDefs = `#graphql
 
   type WorkflowNodeFailInfo {
     reason: String!
+    # 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED /
+    # RETRY_EXHAUSTED / CONTROLLER_UNAVAILABLE（实例接续时收敛）
     source: String!
+    at: String!
+  }
+
+  # 工作流实例不可用原因（null = 可用）
+  enum WorkflowInstanceUnavailableReason {
+    # 控制器离线（Controller.status != online）
+    CONTROLLER_OFFLINE
+    # 控制器已被删除（Controller 文档不存在）
+    CONTROLLER_DELETED
+  }
+
+  # 一次工作流实例接续记录（时间升序追加）
+  type WorkflowContinuation {
+    fromControllerId: ID!
+    fromWorkspaceId: ID!
+    toControllerId: ID!
+    toWorkspaceId: ID!
+    # ISO 字符串（本仓库无 DateTime scalar）
     at: String!
   }
 
@@ -224,6 +244,10 @@ export const workflowTypeDefs = `#graphql
     pullRequestLinks: [WorkflowPullRequestLink!]!
     # 存在「待处理且未过期」交互的节点会话 id 集合（实例级一次查询，避免 N+1）
     pendingInteractionSessionIds: [ID!]!
+    # 实例不可用原因；null = 可用（字段级 resolver 实时计算，不落库）
+    unavailableReason: WorkflowInstanceUnavailableReason
+    # 接续历史（时间升序）；无接续过为空数组
+    continuationHistory: [WorkflowContinuation!]!
     # 归属对象（供集中列表展示所属工作区/控制器）；可能已被删除，消费方须判空
     workspace: ControllerWorkspace
     controller: Controller
@@ -309,6 +333,23 @@ export const workflowTypeDefs = `#graphql
     createWorkflowWorktree: Boolean
   }
 
+  # ---------- 已实例化工作流接续 ----------
+
+  # 逐节点 Harness 映射：覆盖实例中全部未完成 AI 节点
+  input NodeHarnessMappingInput {
+    nodeId: ID!
+    acpServerType: String!
+  }
+
+  input ContinueWorkflowInstanceInput {
+    controllerId: ID!
+    workspaceId: ID!
+    # 是否创建全新工作流 Worktree（默认 true；非 Git 工作区拒绝）
+    createWorkflowWorktree: Boolean
+    # 必须恰好覆盖全部未完成 AI 节点；逐一校验目标控制器能力
+    harnessMappings: [NodeHarnessMappingInput!]!
+  }
+
   # ---------- 实例节点编辑 ----------
 
   input WorkflowNodeUpdateInput {
@@ -363,5 +404,7 @@ export const workflowTypeDefs = `#graphql
     setWorkflowAdditionalPrompt(instanceId: ID!, key: String!, value: String!): WorkflowInstance!
     # 删除工作流追加提示词（不存在时幂等成功）；系统键拒绝人工删除
     removeWorkflowAdditionalPrompt(instanceId: ID!, key: String!): WorkflowInstance!
+    # 已实例化工作流接续：仅不可用实例允许；已完成/已删除拒绝
+    continueWorkflowInstance(id: ID!, input: ContinueWorkflowInstanceInput!): WorkflowInstance!
   }
 `;

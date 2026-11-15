@@ -64,6 +64,16 @@ vi.mock('../../services/controller-workspace.js', () => ({
   },
 }));
 
+vi.mock('../../services/workflow/continuation.js', () => ({
+  continueWorkflowInstance: vi.fn(),
+}));
+
+vi.mock('../../models/controller.js', () => ({
+  Controller: {
+    findById: vi.fn(),
+  },
+}));
+
 import { workflowResolvers } from './workflow.js';
 import { sessionInteractionService } from '../../services/session-interaction-service.js';
 import { workflowTemplateService } from '../../services/workflow/template.js';
@@ -73,6 +83,8 @@ import { workflowInstanceService } from '../../services/workflow/instance.js';
 import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { prHandlerRegistry } from '../../services/workflow/pr-handler-registry.js';
+import { continueWorkflowInstance } from '../../services/workflow/continuation.js';
+import { Controller } from '../../models/controller.js';
 import { mapInstance } from './workflow.js';
 
 const ctx = { currentUser: { id: 'user-1', username: 'u' } } as never;
@@ -627,5 +639,76 @@ describe('WorkflowInstance.pendingInteractionSessionIds', () => {
       workflowResolvers.WorkflowInstance.pendingInteractionSessionIds({ nodes: [] }),
     ).resolves.toEqual([]);
     expect(sessionInteractionService.findPendingBySessionIds).toHaveBeenCalledWith([]);
+  });
+});
+
+describe('WorkflowInstance.unavailableReason（T-WFCR1）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function mockStatus(status: string | null) {
+    vi.mocked(Controller.findById).mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve(status === null ? null : { status }) }),
+    } as never);
+  }
+
+  it('同一请求内同控制器只查一次（请求级 Promise 缓存）', async () => {
+    mockStatus('offline');
+    const context: Record<string, unknown> = { currentUser: { id: 'user-1' } };
+    const parent = { controllerId: 'ctrl-1' };
+
+    const first = await workflowResolvers.WorkflowInstance.unavailableReason(parent, {}, context as never);
+    const second = await workflowResolvers.WorkflowInstance.unavailableReason(parent, {}, context as never);
+
+    expect(first).toBe('CONTROLLER_OFFLINE');
+    expect(second).toBe('CONTROLLER_OFFLINE');
+    expect(Controller.findById).toHaveBeenCalledTimes(1);
+  });
+
+  it('控制器文档缺失 → CONTROLLER_DELETED；online → null', async () => {
+    const context = { currentUser: { id: 'user-1' } } as never;
+    mockStatus(null);
+    await expect(
+      workflowResolvers.WorkflowInstance.unavailableReason({ controllerId: 'ctrl-x' }, {}, context),
+    ).resolves.toBe('CONTROLLER_DELETED');
+
+    mockStatus('online');
+    await expect(
+      workflowResolvers.WorkflowInstance.unavailableReason({ controllerId: 'ctrl-y' }, {}, context),
+    ).resolves.toBeNull();
+  });
+});
+
+describe('Mutation.continueWorkflowInstance（T-WFC-R2）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('未认证 → Not authenticated', async () => {
+    await expect(
+      workflowResolvers.Mutation.continueWorkflowInstance({}, { id: 'inst-1', input: {} as never }, emptyCtx),
+    ).rejects.toThrow('Not authenticated');
+    expect(continueWorkflowInstance).not.toHaveBeenCalled();
+  });
+
+  it('委托接续服务且服务层文案原样透传', async () => {
+    vi.mocked(continueWorkflowInstance).mockResolvedValue({ _id: 'inst-1' } as never);
+    const result = await workflowResolvers.Mutation.continueWorkflowInstance(
+      {},
+      { id: 'inst-1', input: { controllerId: 'c', workspaceId: 'w', harnessMappings: [] } as never },
+      ctx,
+    );
+    expect(result).toMatchObject({ id: 'inst-1' });
+    expect(continueWorkflowInstance).toHaveBeenCalledWith(
+      'user-1',
+      'inst-1',
+      expect.objectContaining({ controllerId: 'c', workspaceId: 'w' }),
+    );
+
+    vi.mocked(continueWorkflowInstance).mockRejectedValue(new Error('工作流实例当前可用，无需接续'));
+    await expect(
+      workflowResolvers.Mutation.continueWorkflowInstance({}, { id: 'inst-1', input: {} as never }, ctx),
+    ).rejects.toThrow('工作流实例当前可用，无需接续');
   });
 });

@@ -509,6 +509,18 @@ pnpm run start   # Start production server
 - **入口**：GraphQL `renameWorkflowInstance`（`graphql/resolvers/workflow.ts`，`wrap()` 原样透传文案）；平台 MCP `agent-workflow-tools.renameCurrentWorkflow`（`services/workflow/tool-handlers.ts`，工具总数 **14**）复用同一 service，错误映射 `invalid workflow name → INVALID_PARAMS`、`not found → NOT_FOUND`、其余（含已删除）→ `INVALID_STATE`。
 - **已归档实例允许改名**（仅禁止已删除）；团队工作区非创建人场景与既有 13 个工具同口径，不在本期扩大范围。
 
+## 已实例化工作流接续（#513）
+
+> 契约 `contracts/workflow.graphql`；计划 `docs/engineering/plan/20261114-feat-workflow-instance-continuation.md`。
+
+- **不可用判定（字段级、不落库）**：`services/workflow/unavailable.ts` 的纯函数 `resolveUnavailableReasonFromController`——控制器文档缺失 → `CONTROLLER_DELETED`；`status !== 'online'`（offline/registering/unbound）→ `CONTROLLER_OFFLINE`；否则 `null`。`WorkflowInstance.unavailableReason` resolver 委托 `resolveInstanceUnavailableReason`，按 `controllerId` 使用 `AuthContext.controllerStatusPromiseMap` 请求级 Promise 缓存（列表 N 实例同控制器只查一次），加载器 `loadControllerStatus` **不带 actorFilter**（实例已完成归属校验，仅读存在性与状态）。
+- **接续服务**：`services/workflow/continuation.ts` 的 `continueWorkflowInstance(userId, instanceId, input)` 严格按序——读取（不过滤 `deletedAt`，区分不存在/已删除）→ 状态门（已删除/已完成）→ 不可用门（当前可用拒绝）→ `getAvailableServerTypes` 校验目标控制器归属+在线+能力 → 目标工作区归属目标控制器（`getWorkspaceContext()` 时仅 `{_id, controllerId}`，与实例化同口径）→ `harnessMappings` **恰好覆盖**全部未完成 AI 节点（`type==='AI' && status!=='DONE'`；缺失/多余/重复 → 「必须恰好覆盖」，命中实例内非 AI/已完成节点 → 「包含非 AI 或已完成节点」）且每个 Harness 在能力清单内 → 可选新 Worktree（`createWorkflowWorktree` 缺省 true；`defaultBranch` 缺失先 `resolveWorkspaceDefaultBranch` 回填，仍缺失拒绝）→ 字段级 CAS 换绑。
+- **CAS 写入形状**：`updateOne({_id, deletedAt:null, finishedAt:null, controllerId:旧值})`，`$set` 换绑 controllerId/workspaceId、worktree path/branch（未勾选 = null）、`nodes.$[hN].agentConfig.acpServerType`（逐映射 arrayFilter）、`nodes.$[u].sessionId=null`（`u.status $ne DONE`），`$push continuationHistory`。`modifiedCount===0` → 回滚本次新建 Worktree（失败仅 warn）→ 「实例已被并发接续或状态已变化，请刷新后重试」。
+- **进行中节点收敛**：CAS 成功后对 `RUNNING/REWORK` 的 **AI** 节点逐个 `workflowEngine.transition(id, nodeId, 'fail', {source:'CONTROLLER_UNAVAILABLE', reason:'控制器不可用，工作流已接续到新环境，请重启节点继续执行'})`；单节点失败仅 warn（`restartNode` 兜底）。引擎 `TRANSITIONS.fail.from` 已扩展 `REWORK`（镜像 `retryExhausted`），`failInfo.source` 新增 `CONTROLLER_UNAVAILABLE`（模型/契约/手写 schema 三处注释同步）。
+- **缓存与恢复入口**：接续成功调 `invalidateWorkflowInstanceCache(instanceId)`（自 `instance.ts` 导出，同时供既有失效点复用）；清空未完成节点 `sessionId` 后既有 `restartNode`/`resumeNodeSession` 在新控制器上自然拉起。`workflowInstanceService.restartNode` 增加不可用门：「工作流实例不可用（控制器离线或已删除），请先接续后再操作」。
+- **零行为抽取**：`services/workflow/workflow-worktree.ts` 承载 `createWorkflowWorktree`/`removeWorkflowWorktree`（自 `instance.ts` 逐字搬出，`instance.ts` 私有方法委托），实例化与接续共用；`instance.test.ts` 既有断言全绿即锁定零回归。
+- **数据**：`WorkflowInstance.continuationHistory` 子文档数组（`{from/toControllerId, from/toWorkspaceId, at}`，`_id:false`，`default: []`）零迁移；`GET_WORKFLOW_INSTANCE` 返回 `continuationHistory`，`mapInstance` 归一 `?? []`。
+
 ## 多租户二期（工作区资源查询口径）
 
 - **请求链路**：已归属工作区的资源（`sessions` / `controllers` / `controllerkeys` / `cloudhosts` / `cloudstorages` / `configuredworkflows` / `workflowinstances` / `workflowtemplates` / `githubaccounts` / `providers` / `models`）一律用 `actorFilter(userId)` 组合查询，**禁止显式写 `userId`**：工作区上下文存在时返回 `{}`，由 `applyWorkspaceScope` 注入可见集；无上下文（引擎/内部/迁移）才回退 `{userId}` 归属校验。典型回归：`Controller.cloudHost`、`sessionService.create` 的云电脑状态校验、云电脑创建时选择共享 GitHub 绑定、Issue 联动实例化时读取已配置工作流、会话级权限超时设置。

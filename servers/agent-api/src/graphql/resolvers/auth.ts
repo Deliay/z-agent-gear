@@ -48,6 +48,8 @@ export interface AuthContext {
   accessibleWorkspacesPromise?: Promise<unknown[]>;
   /** 请求级平台模型库缓存（Session.availableModels 来源推断用，避免 N+1） */
   modelLibraryPromise?: Promise<Array<{ name: string; scope: 'user' | 'global' }>>;
+  /** 请求级控制器状态缓存（WorkflowInstance.unavailableReason 判定用；按 controllerId 去重） */
+  controllerStatusPromiseMap?: Map<string, Promise<{ status?: string | null } | null>>;
 }
 
 export function requireTenantId(context: AuthContext): string {
