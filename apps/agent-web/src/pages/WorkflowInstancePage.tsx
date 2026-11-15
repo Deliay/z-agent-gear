@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import {
@@ -20,6 +20,7 @@ import BlackboardPanel from '@/components/workflow/BlackboardPanel'
 import WorkflowContextPanel from '@/components/workflow/WorkflowContextPanel'
 import SessionSidePanel from '@/components/workflow/SessionSidePanel'
 import NodeDetailDrawer, { type NodeDetailTarget } from '@/components/workflow/NodeDetailDrawer'
+import ContinueWorkflowDialog from '@/components/workflow/ContinueWorkflowDialog'
 import MobileBackButton from '@/components/MobileBackButton'
 import { useUserEventStream } from '@/hooks/useUserEventStream'
 import { Badge } from '@/components/ui/badge'
@@ -49,11 +50,14 @@ function validateName(raw: string): string | null {
 export default function WorkflowInstancePage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const [sideSessionId, setSideSessionId] = useState<string | null>(null)
   // 节点/资源详情抽屉：图表与列表共用，状态提升到页面层（轮询刷新不重置）
   const [detailTarget, setDetailTarget] = useState<NodeDetailTarget | null>(null)
   // 抽屉内「重启节点」：复用实例节点对话框 restartMode（页面级持有，列表视图另有自己的对话框）
   const [restartTarget, setRestartTarget] = useState<WorkflowNodeData | null>(null)
+  // 接续对话框：列表「接续」入口经 `?continue=1` 深链打开
+  const [continueOpen, setContinueOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteWorkflowInstance] = useMutation(DELETE_WORKFLOW_INSTANCE)
@@ -94,6 +98,23 @@ export default function WorkflowInstancePage() {
 
   const instance = data?.workflowInstance
   const nodes = instance?.nodes
+  const unavailable = Boolean(instance?.unavailableReason)
+
+  // `?continue=1` 深链：实例不可用时自动打开接续对话框
+  useEffect(() => {
+    if (searchParams.get('continue') === '1' && instance?.unavailableReason) {
+      setContinueOpen(true)
+    }
+  }, [searchParams, instance?.unavailableReason])
+
+  const handleContinueOpenChange = (open: boolean) => {
+    setContinueOpen(open)
+    if (!open && searchParams.get('continue') === '1') {
+      const next = new URLSearchParams(searchParams)
+      next.delete('continue')
+      setSearchParams(next, { replace: true })
+    }
+  }
 
   // 重启对话框的可用 Harness 列表（与列表视图同源；控制器能力查询可复用缓存）
   const { data: capabilitiesData } = useQuery<GetAcpCapabilitiesQuery>(GET_ACP_CAPABILITIES, {
@@ -282,6 +303,30 @@ export default function WorkflowInstancePage() {
         </Button>
       </div>
 
+      {instance.unavailableReason && (
+        <div
+          role="alert"
+          data-testid="workflow-unavailable-notice"
+          data-reason={instance.unavailableReason}
+          className="rounded-lg border border-destructive/40 bg-destructive/10 p-3"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-semibold text-destructive">
+              {instance.unavailableReason === 'CONTROLLER_DELETED'
+                ? '控制器已删除，实例当前不可用'
+                : '控制器离线，实例当前不可用'}
+            </p>
+            <Button size="sm" variant="outline" onClick={() => handleContinueOpenChange(true)}>
+              接续
+            </Button>
+          </div>
+          <p className="mt-1 text-xs text-destructive/90">
+            已完成节点与产物保留；接续后可选择新控制器与工作路径继续流转。
+            原控制器上的残留 Worktree 平台不做远程清理，请自行处理。
+          </p>
+        </div>
+      )}
+
       {blockedNodes.length > 0 && (
         <div
           role="alert"
@@ -315,6 +360,7 @@ export default function WorkflowInstancePage() {
         <div className="min-h-0 min-w-0 flex-1">
           <WorkflowGraphView
             instance={instance}
+            unavailable={unavailable}
             onOpenDetail={setDetailTarget}
             onOpenSession={setSideSessionId}
           />
@@ -323,6 +369,7 @@ export default function WorkflowInstancePage() {
         <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
           <WorkflowNodeTree
             instance={instance}
+            unavailable={unavailable}
             onOpenSession={setSideSessionId}
             pullRequestLinks={instance.pullRequestLinks}
             onOpenDetail={(nodeId) => setDetailTarget({ type: 'node', nodeId })}
@@ -347,9 +394,10 @@ export default function WorkflowInstancePage() {
           if (!open) setDetailTarget(null)
         }}
         instance={instance}
+        unavailable={unavailable}
         target={detailTarget}
         onOpenSession={(sessionId) => setSideSessionId(sessionId)}
-        onRestartNode={setRestartTarget}
+        onRestartNode={unavailable ? undefined : setRestartTarget}
       />
 
       {restartTarget && (
@@ -370,6 +418,14 @@ export default function WorkflowInstancePage() {
         sessionId={sideSessionId}
         onClose={() => setSideSessionId(null)}
       />
+
+      {continueOpen && (
+        <ContinueWorkflowDialog
+          open={continueOpen}
+          onOpenChange={handleContinueOpenChange}
+          instance={instance}
+        />
+      )}
 
       <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
         <DialogContent>

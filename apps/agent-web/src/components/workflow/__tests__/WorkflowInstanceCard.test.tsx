@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
 import WorkflowInstanceCard from '../WorkflowInstanceCard'
 import type { WorkflowInstanceSummaryData } from '@/graphql/workflow'
+
+const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }))
 
 vi.mock('react-router-dom', () => ({
   NavLink: ({ children, to, title }: { children: React.ReactNode; to: string; title?: string }) => (
@@ -9,6 +11,7 @@ vi.mock('react-router-dom', () => ({
       {children}
     </a>
   ),
+  useNavigate: () => navigateMock,
 }))
 
 function makeInstance(overrides: Partial<WorkflowInstanceSummaryData> = {}): WorkflowInstanceSummaryData {
@@ -70,5 +73,46 @@ describe('WorkflowInstanceCard', () => {
       </ul>,
     )
     expect(screen.getByTestId('workflow-instance-status').className).toContain('destructive')
+  })
+})
+
+describe('WorkflowInstanceCard 不可用与接续入口（T-WEB1）', () => {
+  beforeEach(() => {
+    navigateMock.mockReset()
+  })
+
+  it('T-WEB1a 控制器离线：展示不可用徽标与「接续」按钮', () => {
+    render(
+      <ul>
+        <WorkflowInstanceCard instance={makeInstance({ unavailableReason: 'CONTROLLER_OFFLINE' })} />
+      </ul>,
+    )
+    expect(screen.getByTestId('workflow-instance-unavailable')).toHaveTextContent('控制器离线')
+    expect(screen.getByRole('button', { name: '接续工作流' })).toBeInTheDocument()
+  })
+
+  it('T-WEB1b 控制器已删除：展示已删除徽标', () => {
+    render(
+      <ul>
+        <WorkflowInstanceCard instance={makeInstance({ unavailableReason: 'CONTROLLER_DELETED' })} />
+      </ul>,
+    )
+    expect(screen.getByTestId('workflow-instance-unavailable')).toHaveTextContent('控制器已删除')
+  })
+
+  it('T-WEB1c 点击接续跳转 ?continue=1，不触发卡片导航', () => {
+    render(
+      <ul>
+        <WorkflowInstanceCard instance={makeInstance({ unavailableReason: 'CONTROLLER_OFFLINE' })} />
+      </ul>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '接续工作流' }))
+    expect(navigateMock).toHaveBeenCalledWith('/workflows/wf-1?continue=1')
+  })
+
+  it('T-WEB1d 可用实例零变化：无徽标无接续按钮', () => {
+    render(<ul><WorkflowInstanceCard instance={makeInstance({ unavailableReason: null })} /></ul>)
+    expect(screen.queryByTestId('workflow-instance-unavailable')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '接续工作流' })).not.toBeInTheDocument()
   })
 })

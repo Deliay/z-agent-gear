@@ -39,8 +39,21 @@ const rejectInfoSchema = new mongoose.Schema(
 const failInfoSchema = new mongoose.Schema(
   {
     reason: { type: String, required: true },
-    // 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED / RETRY_EXHAUSTED（中断自动重试用尽）
+    // 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED / RETRY_EXHAUSTED（中断自动重试用尽）/
+    // CONTROLLER_UNAVAILABLE（实例接续时收敛原控制器上不可达的进行中节点）
     source: { type: String, required: true },
+    at: { type: Date, required: true },
+  },
+  { _id: false },
+);
+
+// 工作流实例接续记录（接续成功时 $push 追加；时间升序）
+const workflowContinuationSchema = new mongoose.Schema(
+  {
+    fromControllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller' },
+    fromWorkspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerWorkspace' },
+    toControllerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Controller' },
+    toWorkspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'ControllerWorkspace' },
     at: { type: Date, required: true },
   },
   { _id: false },
@@ -139,6 +152,8 @@ const workflowInstanceSchema = new mongoose.Schema(
     worktreeCoAuthorEmail: { type: String, default: null },
     // Worktree 清理失败标记（deleteInstance 时清理失败，孤儿 worktree 需手动回收）
     worktreeCleanupFailed: { type: Boolean, default: false },
+    // 实例接续历史（时间升序；零迁移：缺省空数组）
+    continuationHistory: { type: [workflowContinuationSchema], default: [] },
   },
   { timestamps: true },
 );

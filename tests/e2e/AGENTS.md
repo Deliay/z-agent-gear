@@ -602,3 +602,9 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 依赖：Aspire 全量（agent-web/admin-web/agent-api/admin-api/Redis/Mongo）；`INTERNAL_API_TOKEN`、`MONGODB_URI`；
 fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`（workers=1 串行）。
+
+## 已实例化工作流接续（`src/workflow-continuation.spec.ts`）
+
+- E2E-WCT1：详情页不可用提示条（控制器离线）→「接续」打开对话框 → 选目标控制器 B + 工作路径 B（Worktree 默认勾选、Harness 默认沿用 opencode）→ 提交成功 toast → 提示条消失 → 节点收敛 FAILED →「重启」确认后 B 收到 `acp:start` 恢复执行。
+- E2E-WCT2：控制器恢复在线后不可用提示条与「接续」入口随 5s 轮询自动消失；可用实例无接续入口。
+- 依赖：`MONGODB_URI`（改控制器 `status` 与伪造运行中节点 `sessionId`）、`INTERNAL_API_TOKEN`；spec 内 fake controller 应答 `acp:check`/`git:check`（isGitRepo=true）/`git:worktree:add|remove`/`acp:start|resume|stop`，目标工作区写入 `defaultBranch=main`。

@@ -173,8 +173,27 @@ type WorkflowNodeRejectInfo {
 type WorkflowNodeFailInfo {
   reason: String!
   # 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED /
-  # RETRY_EXHAUSTED（中断自动重试 10 次用尽）
+  # RETRY_EXHAUSTED（中断自动重试 10 次用尽）/
+  # CONTROLLER_UNAVAILABLE（实例接续时收敛原控制器上不可达的进行中节点）
   source: String!
+  at: String!
+}
+
+# 工作流实例不可用原因（null = 可用）
+enum WorkflowInstanceUnavailableReason {
+  # 控制器离线（Controller.status != online）
+  CONTROLLER_OFFLINE
+  # 控制器已被删除（Controller 文档不存在）
+  CONTROLLER_DELETED
+}
+
+# 一次工作流实例接续记录（时间升序追加）
+type WorkflowContinuation {
+  fromControllerId: ID!
+  fromWorkspaceId: ID!
+  toControllerId: ID!
+  toWorkspaceId: ID!
+  # ISO 字符串（本仓库无 DateTime scalar）
   at: String!
 }
 
@@ -273,6 +292,11 @@ type WorkflowInstance {
   pullRequestLinks: [WorkflowPullRequestLink!]!
   # 存在「待处理且未过期」交互的节点会话 id 集合（实例级一次查询，避免 N+1）
   pendingInteractionSessionIds: [ID!]!
+  # 实例不可用原因；null = 可用。不可用时仅允许归档/删除/查看与「接续」。
+  # 由字段级 resolver 按控制器实时状态计算（不落库）。
+  unavailableReason: WorkflowInstanceUnavailableReason
+  # 接续历史（时间升序）；无接续过为空数组
+  continuationHistory: [WorkflowContinuation!]!
   # 归属对象（供集中列表展示所属工作区/控制器）；可能已被删除，消费方须判空
   workspace: ControllerWorkspace
   controller: Controller
@@ -355,6 +379,29 @@ input InstantiateWorkflowInput {
   createWorkflowWorktree: Boolean
 }
 
+# ---------- 已实例化工作流接续 ----------
+
+# 逐节点 Harness 映射：覆盖实例中全部未完成 AI 节点
+input NodeHarnessMappingInput {
+  # 实例节点 id（仅允许 AI 类型且未完成的节点）
+  nodeId: ID!
+  # 该节点接续后使用的 Harness（必须在目标控制器可用能力内）
+  acpServerType: String!
+}
+
+input ContinueWorkflowInstanceInput {
+  # 目标控制器（必须归属当前用户且在线）
+  controllerId: ID!
+  # 目标项目工作区（ControllerWorkspace id，必须归属目标控制器；
+  # 新路径由前端先经 createWorkspace 建立后传入）
+  workspaceId: ID!
+  # 是否在新工作区创建全新工作流 Worktree（默认 true；工作区非 Git 仓库时拒绝）
+  createWorkflowWorktree: Boolean
+  # 逐节点 Harness 映射：必须恰好覆盖全部未完成 AI 节点（不多不少）；
+  # 每个 acpServerType 逐一校验在目标控制器可用能力内
+  harnessMappings: [NodeHarnessMappingInput!]!
+}
+
 # ---------- 实例节点编辑 ----------
 
 input WorkflowNodeUpdateInput {
@@ -423,4 +470,14 @@ type Mutation {
   setWorkflowAdditionalPrompt(instanceId: ID!, key: String!, value: String!): WorkflowInstance!
   # 删除工作流追加提示词（不存在时幂等成功）；系统键拒绝人工删除
   removeWorkflowAdditionalPrompt(instanceId: ID!, key: String!): WorkflowInstance!
+  # 已实例化工作流接续：仅当实例处于不可用状态（unavailableReason 非空）时允许；
+  # 已完成/已删除实例拒绝；成功后实例换绑新控制器/工作区并恢复流转。
+  # 错误文案表：工作流实例不存在或无权限 / 工作流实例已删除 /
+  # 工作流实例已完成，无需接续 / 工作流实例当前可用，无需接续 /
+  # 工作区不存在、无权限或不属于该控制器 / Harness 映射必须恰好覆盖全部未完成 AI 节点 /
+  # Harness 映射包含非 AI 或已完成节点：<name> / 控制器不支持该 Harness 类型: <type> /
+  # 该工作区不是 Git 仓库（未设置默认分支），无法创建 Worktree /
+  # 实例已被并发接续或状态已变化，请刷新后重试；
+  # 目标控制器归属/离线复用既有能力校验文案原样冒泡。
+  continueWorkflowInstance(id: ID!, input: ContinueWorkflowInstanceInput!): WorkflowInstance!
 }

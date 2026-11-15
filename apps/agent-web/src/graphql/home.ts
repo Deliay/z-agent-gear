@@ -17,6 +17,7 @@ const HOME_WORKFLOW_INSTANCE_FIELDS = gql`
     lastNodeName
     lastNodeStatus
     archived
+    unavailableReason
     workspace {
       id
       name

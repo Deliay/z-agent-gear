@@ -20,6 +20,8 @@ import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil, RefreshCw,
 
 interface WorkflowNodeTreeProps {
   instance: WorkflowInstanceData
+  /** 实例不可用（控制器离线/已删除）：禁用流转类操作 */
+  unavailable?: boolean
   onOpenSession: (sessionId: string) => void
   /** 实例关联的 Pull Request（按 nodeId 展示徽标） */
   pullRequestLinks?: WorkflowPullRequestLinkData[]
@@ -42,6 +44,7 @@ function NodeCard({
   pullRequestLinks = [],
   onOpenDetail,
   hasPendingInteraction = false,
+  unavailable = false,
 }: {
   instanceId: string
   node: WorkflowNodeData
@@ -51,6 +54,7 @@ function NodeCard({
   pullRequestLinks?: WorkflowPullRequestLinkData[]
   onOpenDetail?: (nodeId: string) => void
   hasPendingInteraction?: boolean
+  unavailable?: boolean
 }) {
   // 用户手动切换后以其为准，否则按状态取默认值（状态流转后默认值自动跟随）
   const [toggled, setToggled] = useState<boolean | null>(null)
@@ -160,7 +164,13 @@ function NodeCard({
             node.status === 'REWORK' ||
             node.status === 'FAILED' ||
             node.status === 'RETRY_FAILED') && (
-            <Button size="xs" variant="outline" onClick={() => onEdit(node, true)}>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => onEdit(node, true)}
+              disabled={unavailable}
+              title={unavailable ? '实例不可用，请先接续' : undefined}
+            >
               <RefreshCw className="size-3" />
               重启
             </Button>
@@ -252,7 +262,7 @@ function NodeCard({
       )}
       {node.type === 'HUMAN' &&
         (node.status === 'READY' || node.status === 'RUNNING' || node.status === 'REWORK') && (
-          <HumanNodeActions instanceId={instanceId} node={node} />
+          <HumanNodeActions instanceId={instanceId} node={node} disabled={unavailable} />
         )}
       </>
       )}
@@ -262,6 +272,7 @@ function NodeCard({
 
 export default function WorkflowNodeTree({
   instance,
+  unavailable = false,
   onOpenSession,
   pullRequestLinks = [],
   onOpenDetail,
@@ -308,6 +319,7 @@ export default function WorkflowNodeTree({
                   pullRequestLinks={pullRequestLinks}
                   onOpenDetail={onOpenDetail}
                   hasPendingInteraction={Boolean(node.sessionId && pendingSet.has(node.sessionId))}
+                  unavailable={unavailable}
                 />
               ))}
           </div>
