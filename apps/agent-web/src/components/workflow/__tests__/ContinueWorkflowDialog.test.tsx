@@ -63,7 +63,7 @@ function makeInstance(overrides: Partial<WorkflowInstanceData> = {}): WorkflowIn
         artifactTitles: null,
         agentConfig: { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: false },
         requiresWorktree: false,
-        dependsOn: null,
+        dependsOn: [],
         linkUpstreamPullRequest: false,
         sortOrder: null,
         createdAt: '',
@@ -88,7 +88,7 @@ function makeInstance(overrides: Partial<WorkflowInstanceData> = {}): WorkflowIn
         artifactTitles: null,
         agentConfig: { acpServerType: 'kimi_code', modeId: null, modelId: null, initNewWorktree: false },
         requiresWorktree: false,
-        dependsOn: null,
+        dependsOn: [],
         linkUpstreamPullRequest: false,
         sortOrder: null,
         createdAt: '',
@@ -113,7 +113,7 @@ function makeInstance(overrides: Partial<WorkflowInstanceData> = {}): WorkflowIn
         artifactTitles: null,
         agentConfig: { acpServerType: 'opencode', modeId: null, modelId: null, initNewWorktree: false },
         requiresWorktree: false,
-        dependsOn: null,
+        dependsOn: [],
         linkUpstreamPullRequest: false,
         sortOrder: null,
         createdAt: '',
@@ -138,7 +138,7 @@ function makeInstance(overrides: Partial<WorkflowInstanceData> = {}): WorkflowIn
         artifactTitles: null,
         agentConfig: null,
         requiresWorktree: false,
-        dependsOn: null,
+        dependsOn: [],
         linkUpstreamPullRequest: false,
         sortOrder: null,
         createdAt: '',
@@ -227,6 +227,7 @@ describe('ContinueWorkflowDialog（T-WEB2/3/4）', () => {
     await waitFor(() =>
       expect(screen.getByRole('combobox', { name: '新控制器' })).toHaveTextContent('新主机A'),
     )
+    await selectWorkspaceOption('目标工作区')
     expect(screen.getByRole('checkbox', { name: '创建新 Worktree' })).toBeChecked()
     expect(screen.getByTestId('harness-mapping-n-ai-1')).toBeInTheDocument()
     expect(screen.getByTestId('harness-mapping-n-ai-2')).toBeInTheDocument()
@@ -273,16 +274,35 @@ describe('ContinueWorkflowDialog（T-WEB2/3/4）', () => {
     })
   })
 
-  it('T-WEB3b 非 Git 工作区：勾选 Worktree 时置灰并禁止提交', async () => {
+  it('T-WEB3b 非 Git 工作区：勾选框置灰未勾选 + 提示，且允许不创建 Worktree 继续接续', async () => {
     mockQueries({ git: { isGitRepo: false } })
     renderDialog()
 
     await waitFor(() => expect(screen.getByRole('combobox', { name: '新控制器' })).toHaveTextContent('新主机A'))
     await selectWorkspaceOption('目标工作区')
 
-    expect(screen.getByRole('checkbox', { name: '创建新 Worktree' })).toBeDisabled()
-    expect(screen.getByText('目标路径不是 Git 仓库，无法创建 Worktree')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '确认接续' })).toBeDisabled()
+    const checkbox = screen.getByRole('checkbox', { name: '创建新 Worktree' })
+    expect(checkbox).toBeDisabled()
+    expect(checkbox).not.toBeChecked()
+    expect(screen.getByText('目标路径不是 Git 仓库，将不创建 Worktree 继续接续')).toBeInTheDocument()
+    const confirm = screen.getByRole('button', { name: '确认接续' })
+    expect(confirm).not.toBeDisabled()
+
+    fireEvent.click(confirm)
+    await waitFor(() => expect(mockContinueWorkflowInstance).toHaveBeenCalledTimes(1))
+    expect(mockContinueWorkflowInstance.mock.calls[0][0]).toMatchObject({
+      variables: {
+        input: {
+          controllerId: 'ctrl-a',
+          workspaceId: 'ws-a',
+          createWorkflowWorktree: false,
+          harnessMappings: [
+            { nodeId: 'n-ai-1', acpServerType: 'opencode' },
+            { nodeId: 'n-ai-2', acpServerType: 'kimi_code' },
+          ],
+        },
+      },
+    })
   })
 
   it('T-WEB4 浏览目录新建工作区：调用 CREATE_WORKSPACE 并选中新工作区；切换控制器重置', async () => {

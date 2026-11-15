@@ -172,13 +172,13 @@ export default function ContinueWorkflowDialog({
   const missingHarness = unfinishedAiNodes.some(
     (node) => !mappingValueOf(node.id, node.agentConfig?.acpServerType),
   )
-  const blockedByGit = createWorkflowWorktree && !isGitRepo
+  // 非 Git 工作区：不创建 Worktree（勾选框置灰并展示未勾选），提交强制 false（与实例化先例同口径）
+  const effectiveCreateWorktree = isGitRepo && createWorkflowWorktree
   const canSubmit =
     !submitting &&
     Boolean(controllerId) &&
     Boolean(workspaceId) &&
-    !missingHarness &&
-    !blockedByGit
+    !missingHarness
 
   const handleSubmit = async () => {
     if (!canSubmit) return
@@ -195,7 +195,7 @@ export default function ContinueWorkflowDialog({
           input: {
             controllerId,
             workspaceId,
-            createWorkflowWorktree,
+            createWorkflowWorktree: effectiveCreateWorktree,
             harnessMappings,
           },
         },
@@ -298,7 +298,7 @@ export default function ContinueWorkflowDialog({
                 type="checkbox"
                 id="continue-create-worktree"
                 aria-label="创建新 Worktree"
-                checked={createWorkflowWorktree}
+                checked={effectiveCreateWorktree}
                 disabled={!workspaceId || !isGitRepo}
                 onChange={(event) => setCreateWorkflowWorktree(event.target.checked)}
                 className="h-4 w-4 rounded border-gray-300"
@@ -309,7 +309,7 @@ export default function ContinueWorkflowDialog({
             </div>
             {workspaceId && !isGitRepo && (
               <p className="text-xs text-muted-foreground">
-                目标路径不是 Git 仓库，无法创建 Worktree
+                目标路径不是 Git 仓库，将不创建 Worktree 继续接续
               </p>
             )}
           </div>
