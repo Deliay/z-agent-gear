@@ -322,3 +322,28 @@ pnpm run preview  # Preview production build
   `GithubProjectSetupDialog` 透传 `onFinished`，成功终态后 refetch `GET_CONTROLLER_WORKSPACES` 并按
   `path === cloudHost.defaultWorkspace` 定位工作区。两处均仅在「存在合法模板」时弹 `RepoWorkflowPromptDialog`；
   `stores/repo-workflow-prompt.ts` 模块级 `Set<workspaceId>` 保证同页面会话不再自动弹（取消/去配置均记入）。
+
+## 自定义工具 / FragmentEditor（设置页，#449）
+
+> 需求 #449；契约 `contracts/custom-tool.graphql` + `contracts/fragment-template.md`。
+
+- **区块**：`components/settings/CustomToolSection.tsx`（`#custom-tool-section`，标题 + 「工作区」badge）——
+  `GET_CUSTOM_TOOLS`（`cache-and-network`）+ 增删改 `refetchQueries`；空态「暂无自定义工具」、
+  删除 `ConfirmDialog` 二次确认、`useWorkspaceAccess().readOnly` 收敛新增/编辑/删除入口
+  （服务端插件为权威）。NAV「MCP」组追加「自定义工具」项（紧随「自定义 MCP」）。
+- **对话框**：`components/settings/CustomToolDialog.tsx` —— 名称/描述/类型；`ArgsListEditor` 双类型复用；
+  prompt → 提示文案 + 多行 FragmentEditor（Generic）；http → method（datalist 常用 + 自定义）/
+  endpoint（单行 Uri）/ insecure / body（GET 类隐藏、切到 POST 类默认 JSON；text|json|form）/
+  headers / queries（勾选展开按行编辑）。每处 FragmentEditor **独立受控 value**（禁止共享 store）。
+- **FragmentEditor**：`components/common/fragment-editor/FragmentEditor.tsx` —— contentEditable + 原子 chip
+  （`contentEditable=false`、`data-fragment-type` 区分 Valut/Parameter、Json/Uri 角标）；`$`/`#` 补全
+  （`$` 仅已声明 params、`#` 仅 `GET_VALUT_MANUAL_OPTIONS` manual 名单）、IME 门控、单行拦截 Enter/粘贴换行、
+  退格整体删除 chip。**不求值红线**：任何状态不请求/不展示密钥值。
+- **纯函数层**：`lib/fragment-editor.ts`（`fragmentsToNodes`/`nodesToFragments`，相邻 Plain 合并、空 Plain 省略，
+  与后端 `fragment-render` fixture 互锁）；`lib/custom-tool.ts`（契约错误文案中文映射、参数/header/query
+  校验、暴露名 `ct-<id8>` 规则）；`graphql/custom-tool.ts` 域文件承载查询/变更与手写类型。
+- **测试入口**：`lib/__tests__/fragment-editor.test.ts`（T-FE1）、
+  `components/common/fragment-editor/__tests__/FragmentEditor.test.tsx`（T-FE2/T-FE3）、
+  `components/common/args-list-editor/__tests__/ArgsListEditor.test.tsx`（T-ALE）、
+  `components/settings/__tests__/CustomToolSection.test.tsx`（T-CTW1）、
+  `components/settings/__tests__/CustomToolDialog.test.tsx`（T-CTW2）。

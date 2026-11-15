@@ -62,7 +62,7 @@ flowchart TD
 | F5 | 前端 MCP 列表过滤现状：`NewSessionDialog.tsx:90/143-144` 与 `McpDefaultSection.tsx:88` 仅排除 `agent-cloud-host-tools`；`McpRegistrySection` 以 `source` 徽标展示（`platform` →「平台内置」）；`agent-session-preview-tools` 在前端列表可见（服务端装配去重兜底，重复选择无害） | 两个新平台服务的前端可见性沿用 preview 先例：**前端过滤逻辑零改动**，registry 自然显示「平台内置」（D6） |
 | F6 | `mcp-endpoint.ts` 为 `McpEndpointService` 类（`createEndpoint(...)` 行 32 / `reissueEndpoint` 行 105，MCP+Valut 已扩展第 5 参 `customMcpServers`）；平台服务走 `mcpServerIds` 通道，JWT `serverNames` 由 mcpServerIds 对应的服务名组成 | 本期 **mcp-endpoint 零变更**：两个平台名经 mcpServerIds 并入后天然进入 JWT `serverNames`，过 dispatch 作用域校验（F2） |
 | F7 | 迁移注册点位 `src/index.ts` `runMigrations([...])` 数组（尾部 `migration025SessionInteractions`）；迁移形态 = 具名 export + `run()` + `ensureIndex` 幂等 + 同目录 `.test.ts`；`ensureNamespace('mcp-bearer-tokens', ...)` 启动自检在迁移完成后、就绪之前（行 228 先例） | 迁移编号 **026** 在需求总分支成立；但 `origin/main` 已占用 026（external-logins）/027（oidc-binding-optimization）——需求总分支落后主干，**合回主干前 merge 协调顺延**（D1） |
-| F8 | `models/tenant-isolation.test.ts` 硬编码 **21 集合**矩阵（`CASES` 逐一列出 + `TENANT_ID_COLLECTIONS` 长度断言 21）；新增带 tenantId 集合须双注册 | 新增 `customtools` 后矩阵 21→**22**、迁移 013 `TENANT_ID_COLLECTIONS` 同步追加（D9；回填对新集合为 no-op） |
+| F8 | `models/tenant-isolation.test.ts` 硬编码 **21 集合**矩阵（`CASES` 逐一列出 + `TENANT_ID_COLLECTIONS` 长度断言 21）；新增带 tenantId 集合须双注册 | **实现校正**：`customtools` 无 `userId`（独占型 workspace-scope，采集 `tenantId` 仅留档），`applyTenantScope` 对其为 no-op——与 `valutentries`/`custommcpservers` 同口径，**不进** 013 `TENANT_ID_COLLECTIONS` 与 tenant-isolation `CASES`（矩阵保持 21），由迁移 026 建索引、服务层显式写 `tenantId` 保证隔离（D9 据此失效，见下） |
 | F9 | `valut-service.ts`：`listManualOptions()`（行 249）强制 `workspaceId=当前工作区`（ALS），无上下文返回空集；`resolveValue(id)`（行 401）按**条目 id** 解密；按 key 取值的原语不存在 | 增补 `resolveManualValueByKey(key, workspaceId)`：按 `{workspaceId, namespace:'manual', key}` 定位后走既有解密路径；非 manual/取不到返回 `null`；不新增任何出参通道（D3 提案 §3.2 一致） |
 | F10 | `models/custom-mcp-server.ts` 为独占型 workspace-scope 范本：`tenantId` required 由服务层显式写入（`applyTenantScope` 对无 userId 集合为 no-op）、`applyWorkspaceScope`（不设 shared）、唯一索引 `uniq_custom_mcp_workspace_name {workspaceId,name}` 声明在模型且**与迁移同名同键** | `models/custom-tool.ts` 逐形态对齐（含注释口径）；唯一索引名 `uniq_custom_tool_workspace_name` |
 | F11 | 前端 graphql 组织：`queries.ts`/`mutations.ts`/`types.ts` 集中式与域文件（`home.ts`/`preview.ts`/`workflow.ts`）先例并存 | 提案取域文件 `graphql/custom-tool.ts`（D10），与 preview/workflow 先例一致 |
@@ -84,7 +84,7 @@ flowchart TD
 6. **D6 排除口径增补两处、前端零改动**：`session.ts:391` 与 `controller.ts:154` 的 `$nin` 数组追加两个新名字（F4）；前端 `NewSessionDialog`/`McpDefaultSection` 过滤逻辑**零改动**（沿用 preview 先例，F5），registry 以 `source=platform` 徽标自然展示。
 7. **D7 Fragment 序列化前后端同源**：`contracts/fragment-template.md` 为唯一事实源；后端 `fragment-render.ts` 与前端 `lib/fragment-editor.ts`（`fragmentsToNodes`/`nodesToFragments`）各自单测，**round-trip 互锁用例**（同一 fixture 两侧断言）防漂移；Plain 相邻合并、空 Plain 省略规则写进契约。
 8. **D8 http 组装与编码分工**：Uri/Json 编码**只**在格式管线发生（`encodeURIComponent`/`JSON.stringify`），组装层（query `URL.searchParams.append`、headers `Headers.append`、body 拼接）**不二次编码**；托管 `content-type`（json/text bodyType 显式设置）优先于用户 headers 同名项（与 custom-mcp-forwarder「托管凭据覆盖」同思路）；渲染后 endpoint 必须 `http(s)://` 开头否则工具错误。
-9. **D9 tenant 双注册 21→22**：`models/tenant-isolation.test.ts` 的 `CASES` 矩阵追加 `customtools`（总数断言 21→22）、迁移 013 `TENANT_ID_COLLECTIONS` 追加 `{model:'CustomTool', collection:'customtools'}`（F8）；`workspace-isolation` 相关测试矩阵同步追加。
+9. **D9 tenant 双注册 21→22（实现期校正：不适用）**：`customtools` 无 `userId`，与 `valutentries`/`custommcpservers` 同口径不进 013 `TENANT_ID_COLLECTIONS` 与 tenant-isolation 矩阵（保持 21 集合）；`applyTenantScope` 对无 `userId` 集合为 no-op，隔离由 `applyWorkspaceScope`（独占型）+ 服务层显式写 `tenantId` + 迁移 026 索引保证。原计划「矩阵 21→22 + 013 追加」经实现核对会破坏既有 21 集合不变量测试（已回退）。
 10. **D10 前端 graphql 域文件**：`apps/agent-web/src/graphql/custom-tool.ts` 单文件承载 `GET_CUSTOM_TOOLS`/`GET_CUSTOM_TOOL`/`CREATE_CUSTOM_TOOL`/`UPDATE_CUSTOM_TOOL`/`DELETE_CUSTOM_TOOL` 与手写类型（对齐 `preview.ts` 域文件先例，F11）；错误文案映射独立 `lib/custom-tool.ts`（契约白名单 → 中文，未命中原样展示）。
 
 ---
@@ -320,7 +320,7 @@ cd tests/e2e && BASE_URL=... API_URL=... INTERNAL_API_TOKEN=... pnpm exec playwr
 | 迁移编号与主干冲突 | 026 撞号（main 已占用 026/027） | D1：需求总分支内用 026，合回主干前 merge 协调顺延并同步本文/提案/AGENTS |
 | undici 新依赖引入面 | 依赖面扩大、版本漂移 | D2：锁 minor 版本、仅 custom-tool-http 单点 import；lockfile 随 PR 评审 |
 | contentEditable 跨浏览器差异 | 编辑器行为不一致 | 原子 chip 不可编辑 + 整体删除规避；IME 门控；组件测试覆盖关键交互 |
-| http 执行器 SSRF 面 | 服务端直连任意目标 | 与 custom-mcp-forwarder 同口径（不限制内外网，PRD 约束）；30s 超时 + 256KB 截断 + 日志红线兜底 |
+| http 执行器 SSRF 面 | 服务端直连任意目标 | 与 custom-mcp-forwarder 同口径（不限制内外网，PRD 约束）；30s 超时 + 256KB 截断 + 日志红线兜底；**已知取舍**：响应先全量缓冲再截断（受 30s 兜底），流式读取列为后续优化（评审确认本期可接受） |
 | Json 格式双引号误用 | 用户模板自写引号导致双写 | 契约/编辑器提示「Json 模式自动加引号转义」；T-FR1 锚定语义 |
 | 老会话无新平台服务 | 装配前创建的会话看不到新工具 | 接受（提案口径）：继续会话/新会话获得，不回填 |
 | 发布倒挂（新前端 + 旧 agent-api） | 新区块查询报错 | 发布顺序 agent-api → agent-web；回滚先回前端 |

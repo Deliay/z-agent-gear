@@ -62,6 +62,16 @@ vi.mock('./workflow/admin-tools.js', () => ({
   ADMIN_PLATFORM_SERVER_NAME: 'agent-workflow-admin-tools',
 }));
 
+vi.mock('./valut-tools.js', () => ({
+  handleValutToolsMcpRequest: vi.fn(),
+  VALUT_TOOLS_SERVER_NAME: 'agent-valut-tools',
+}));
+
+vi.mock('./custom-tools-mcp.js', () => ({
+  handleCustomToolsMcpRequest: vi.fn(),
+  CUSTOM_TOOLS_SERVER_NAME: 'agent-custom-tools',
+}));
+
 import jwt from 'jsonwebtoken';
 import { mcpEndpointService } from './mcp-endpoint.js';
 import { mcpForwarder, ForwardError } from './mcp-forwarder.js';
@@ -70,6 +80,8 @@ import { McpSessionEndpoint } from '../models/mcp-session-endpoint.js';
 import { customMcpForwarder } from './custom-mcp-forwarder.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { handlePlatformMcpRequest } from './workflow/tool-handlers.js';
+import { handleValutToolsMcpRequest } from './valut-tools.js';
+import { handleCustomToolsMcpRequest } from './custom-tools-mcp.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { dispatch } from './mcp-dispatch.js';
 
@@ -602,6 +614,83 @@ describe('MCP Dispatch', () => {
 
       expect(result.status).toBe(401);
       expect(handlePlatformMcpRequest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('platform server (agent-valut-tools / agent-custom-tools)', () => {
+    function mockPlatformServerByName(name: string) {
+      vi.mocked(McpServer.findOne).mockResolvedValue(
+        mockServerDoc({ name, transport: 'platform', source: 'platform' }) as never,
+      );
+    }
+
+    it('agent-valut-tools 直发本地 handler', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        ...VALID_PAYLOAD,
+        serverNames: ['agent-valut-tools'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockPlatformServerByName('agent-valut-tools');
+      vi.mocked(handleValutToolsMcpRequest).mockResolvedValue({
+        result: { tools: [{ name: 'valut_list' }] },
+      });
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-valut-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+      });
+
+      expect(result).toEqual({
+        status: 200,
+        body: { jsonrpc: '2.0', id: 1, result: { tools: [{ name: 'valut_list' }] } },
+      });
+      expect(handleValutToolsMcpRequest).toHaveBeenCalled();
+    });
+
+    it('agent-custom-tools 直发本地 handler；错误收敛为 200 + jsonRpcError', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        ...VALID_PAYLOAD,
+        serverNames: ['agent-custom-tools'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockPlatformServerByName('agent-custom-tools');
+      vi.mocked(handleCustomToolsMcpRequest).mockResolvedValue({
+        error: { code: 'METHOD_NOT_FOUND', message: '未知工具' },
+      });
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-custom-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'x' } },
+      });
+
+      expect(result).toMatchObject({
+        status: 200,
+        body: { jsonrpc: '2.0', id: 2, error: { code: 'METHOD_NOT_FOUND' } },
+      });
+      expect(handleCustomToolsMcpRequest).toHaveBeenCalled();
+    });
+
+    it('agent-custom-tools 的 notification 立即 202', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        ...VALID_PAYLOAD,
+        serverNames: ['agent-custom-tools'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockPlatformServerByName('agent-custom-tools');
+      vi.mocked(handleCustomToolsMcpRequest).mockResolvedValue({ result: {} });
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-custom-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', method: 'notifications/initialized' },
+      });
+
+      expect(result.status).toBe(202);
     });
   });
 });

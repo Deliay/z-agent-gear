@@ -404,6 +404,29 @@ export class ValutService {
   }
 
   /**
+   * 按 key 解密取明文（自定义渲染模板唯一取值原语，提案 §3.2 / 计划 Phase 1）：
+   *
+   * - **仅 manual namespace**（服务托管 `service-*` 条目视为取不到 → `null`，PRD 约束）；
+   * - 显式 `workspaceId` 定位（防 id/跨工作区猜测），不依赖调用方 ALS 上下文——与
+   *   `resolveValue` 同档内部原语，不被任何 GraphQL resolver 引用；
+   * - 取不到（不存在/非 manual/非法 key）返回 `null`，由 `renderFragments` 统一收敛为
+   *   `valut key not found: <key>`；
+   * - 解密复用既有 AES-256-GCM 路径（`CREDENTIAL_ENCRYPTION_KEY` 未配置即抛错），
+   *   明文只在调用栈内存中出现，不做任何日志。
+   */
+  async resolveManualValueByKey(key: string, workspaceId: string): Promise<string | null> {
+    const trimmedKey = typeof key === 'string' ? key.trim() : '';
+    if (!trimmedKey || !workspaceId) return null;
+    const entry = (await ValutEntry.findOne({
+      workspaceId,
+      namespace: MANUAL_NAMESPACE,
+      key: trimmedKey,
+    }).lean()) as Doc | null;
+    if (!entry) return null;
+    return decrypt(entry.valueEncrypted as EncryptedData);
+  }
+
+  /**
    * 条目元数据读取原语（Phase 2 custom-mcp-service：引用校验 / 删除级联 namespace 判定）。
    * 可见性与 `loadEntry` 同口径（跨工作区 `Not found`、不存在 `valut entry not found`）；
    * 仅返回 `{id, namespace, workspaceId}`——**不含 `valueEncrypted`**（明文边界）。
