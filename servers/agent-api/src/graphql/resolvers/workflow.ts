@@ -8,6 +8,7 @@ import { controllerWorkspaceService } from '../../services/controller-workspace.
 import { prHandlerRegistry } from '../../services/workflow/pr-handler-registry.js';
 import { sessionInteractionService } from '../../services/session-interaction-service.js';
 import { continueWorkflowInstance } from '../../services/workflow/continuation.js';
+import { normalizeNodeSessionBehavior } from '../../services/workflow/node-config.js';
 import { loadControllerStatus, resolveInstanceUnavailableReason } from '../../services/workflow/unavailable.js';
 import type { AuthContext } from './auth.js';
 
@@ -33,6 +34,8 @@ function mapTemplateNode(node: Doc) {
     dependsOn: node.dependsOn ?? [],
     requiresWorktree: node.requiresWorktree ?? false,
     linkUpstreamPullRequest: node.linkUpstreamPullRequest ?? false,
+    // 会话行为：存量节点字段缺失时按默认值归一；HUMAN/FLAG 恒 null
+    ...normalizeNodeSessionBehavior(node),
     sortOrder: node.sortOrder ?? null,
   };
 }
@@ -110,6 +113,8 @@ function mapInstanceNode(node: Doc) {
     requiresWorktree: node.requiresWorktree ?? null,
     dependsOn: node.dependsOn ?? null,
     linkUpstreamPullRequest: node.linkUpstreamPullRequest ?? false,
+    // 会话行为：实例快照缺失时按默认值归一；HUMAN/FLAG 恒 null
+    ...normalizeNodeSessionBehavior(node),
     sortOrder: node.sortOrder ?? null,
     createdAt: toIso(node.createdAt),
     startedAt: toIso(node.startedAt),

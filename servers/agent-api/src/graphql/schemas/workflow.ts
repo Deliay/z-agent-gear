@@ -29,6 +29,14 @@ export const workflowTypeDefs = `#graphql
     RETRY_FAILED
   }
 
+  # AI 节点打回/返工会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null）
+  # - NEW_SESSION：拉起全新会话
+  # - ORIGINAL_SESSION：继续使用原始会话（resume 原会话）
+  enum WorkflowNodeSessionBehavior {
+    NEW_SESSION
+    ORIGINAL_SESSION
+  }
+
   # ---------- 工作流模板 ----------
 
   type WorkflowTemplateNode {
@@ -43,6 +51,15 @@ export const workflowTypeDefs = `#graphql
     requiresWorktree: Boolean!
     # 人类节点：是否联动上游 Pull Request
     linkUpstreamPullRequest: Boolean!
+    # ---- 会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null，读取侧按默认值归一） ----
+    # 返工时行为：缺省 ORIGINAL_SESSION（=现状，继续原始会话）
+    reworkSessionBehavior: WorkflowNodeSessionBehavior
+    # 返工时=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+    reworkCompactOriginalContext: Boolean
+    # 打回后行为：缺省 NEW_SESSION（=现状，新会话）
+    resumeSessionBehavior: WorkflowNodeSessionBehavior
+    # 打回后=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+    resumeCompactOriginalContext: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }
@@ -82,6 +99,15 @@ export const workflowTypeDefs = `#graphql
     agentConfig: AgentNodeConfig
     # 人类节点：是否联动上游 Pull Request
     linkUpstreamPullRequest: Boolean!
+    # ---- 会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null，读取侧按默认值归一） ----
+    # 返工时行为：缺省 ORIGINAL_SESSION（=现状，继续原始会话）
+    reworkSessionBehavior: WorkflowNodeSessionBehavior
+    # 返工时=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+    reworkCompactOriginalContext: Boolean
+    # 打回后行为：缺省 NEW_SESSION（=现状，新会话）
+    resumeSessionBehavior: WorkflowNodeSessionBehavior
+    # 打回后=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+    resumeCompactOriginalContext: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }
@@ -174,6 +200,15 @@ export const workflowTypeDefs = `#graphql
     requiresWorktree: Boolean
     # 人类节点：是否联动上游 Pull Request（实例快照）
     linkUpstreamPullRequest: Boolean!
+    # ---- 会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null，读取侧按默认值归一） ----
+    # 返工时行为：缺省 ORIGINAL_SESSION（=现状，继续原始会话）
+    reworkSessionBehavior: WorkflowNodeSessionBehavior
+    # 返工时=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+    reworkCompactOriginalContext: Boolean
+    # 打回后行为：缺省 NEW_SESSION（=现状，新会话）
+    resumeSessionBehavior: WorkflowNodeSessionBehavior
+    # 打回后=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+    resumeCompactOriginalContext: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
     createdAt: String!
@@ -269,6 +304,13 @@ export const workflowTypeDefs = `#graphql
     requiresWorktree: Boolean!
     # 人类节点：是否联动上游 Pull Request
     linkUpstreamPullRequest: Boolean
+    # ---- 会话行为（仅 AI 节点；缺省 = 现状） ----
+    # 返工时行为：缺省 ORIGINAL_SESSION；仅 ORIGINAL_SESSION 时 compact 合法
+    reworkSessionBehavior: WorkflowNodeSessionBehavior
+    reworkCompactOriginalContext: Boolean
+    # 打回后行为：缺省 NEW_SESSION；仅 ORIGINAL_SESSION 时 compact 合法
+    resumeSessionBehavior: WorkflowNodeSessionBehavior
+    resumeCompactOriginalContext: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }
@@ -299,6 +341,13 @@ export const workflowTypeDefs = `#graphql
     agentConfig: AgentNodeConfigInput
     # 人类节点：是否联动上游 Pull Request
     linkUpstreamPullRequest: Boolean
+    # ---- 会话行为（仅 AI 节点；缺省 = 现状） ----
+    # 返工时行为：缺省 ORIGINAL_SESSION；仅 ORIGINAL_SESSION 时 compact 合法
+    reworkSessionBehavior: WorkflowNodeSessionBehavior
+    reworkCompactOriginalContext: Boolean
+    # 打回后行为：缺省 NEW_SESSION；仅 ORIGINAL_SESSION 时 compact 合法
+    resumeSessionBehavior: WorkflowNodeSessionBehavior
+    resumeCompactOriginalContext: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }
@@ -362,6 +411,13 @@ export const workflowTypeDefs = `#graphql
     agentConfig: AgentNodeConfigInput
     # 人类节点：是否联动上游 Pull Request
     linkUpstreamPullRequest: Boolean
+    # ---- 会话行为（仅 AI 节点可写；HUMAN/FLAG 传入非 null 时归一为 null） ----
+    # 返工时行为：缺省不动；仅 ORIGINAL_SESSION 时 compact 合法
+    reworkSessionBehavior: WorkflowNodeSessionBehavior
+    reworkCompactOriginalContext: Boolean
+    # 打回后行为：缺省不动；仅 ORIGINAL_SESSION 时 compact 合法
+    resumeSessionBehavior: WorkflowNodeSessionBehavior
+    resumeCompactOriginalContext: Boolean
     # 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: Int
   }

@@ -8,6 +8,14 @@ export type WorkflowNodeType = (typeof WORKFLOW_NODE_TYPES)[number];
 export const WORKFLOW_CREATED_BY = ['HUMAN', 'AI'] as const;
 export type WorkflowCreatedBy = (typeof WORKFLOW_CREATED_BY)[number];
 
+/**
+ * AI 节点打回/返工会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null）。
+ * - NEW_SESSION：拉起全新会话
+ * - ORIGINAL_SESSION：继续使用原始会话
+ */
+export const WORKFLOW_NODE_SESSION_BEHAVIORS = ['NEW_SESSION', 'ORIGINAL_SESSION'] as const;
+export type WorkflowNodeSessionBehavior = (typeof WORKFLOW_NODE_SESSION_BEHAVIORS)[number];
+
 const templateNodeSchema = new mongoose.Schema(
   {
     nodeKey: { type: String, required: true },
@@ -23,6 +31,23 @@ const templateNodeSchema = new mongoose.Schema(
     requiresWorktree: { type: Boolean, default: false },
     // 人类节点：是否联动上游 Pull Request（仅 HUMAN 可为 true）
     linkUpstreamPullRequest: { type: Boolean, default: false },
+    // ---- 会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null，读取侧按默认值归一） ----
+    // 返工时行为：缺省 ORIGINAL_SESSION（=现状）
+    reworkSessionBehavior: {
+      type: String,
+      enum: WORKFLOW_NODE_SESSION_BEHAVIORS,
+      default: undefined,
+    },
+    // 返工时=原始会话时是否先压缩上下文
+    reworkCompactOriginalContext: { type: Boolean, default: undefined },
+    // 打回后行为：缺省 NEW_SESSION（=现状）
+    resumeSessionBehavior: {
+      type: String,
+      enum: WORKFLOW_NODE_SESSION_BEHAVIORS,
+      default: undefined,
+    },
+    // 打回后=原始会话时是否先压缩上下文
+    resumeCompactOriginalContext: { type: Boolean, default: undefined },
     // 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: { type: Number, default: undefined },
   },

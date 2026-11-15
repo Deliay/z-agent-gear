@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { applyTenantScope } from '../services/tenant-scope.js';
 import { applyWorkspaceScope } from '../services/workspace-scope.js';
-import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY } from './workflow-template.js';
+import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY, WORKFLOW_NODE_SESSION_BEHAVIORS } from './workflow-template.js';
 
 export const WORKFLOW_NODE_STATUSES = [
   'INITIALIZING',
@@ -97,6 +97,20 @@ const instanceNodeSchema = new mongoose.Schema(
     requiresWorktree: { type: Boolean, default: undefined },
     // 人类节点：是否联动上游 Pull Request（实例快照，未开始的人类节点可编辑）
     linkUpstreamPullRequest: { type: Boolean, default: false },
+    // ---- 会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null，读取侧按默认值归一） ----
+    // 实例快照：实例化时从最终节点图复制；旧实例缺失时读取侧按默认值归一
+    reworkSessionBehavior: {
+      type: String,
+      enum: WORKFLOW_NODE_SESSION_BEHAVIORS,
+      default: undefined,
+    },
+    reworkCompactOriginalContext: { type: Boolean, default: undefined },
+    resumeSessionBehavior: {
+      type: String,
+      enum: WORKFLOW_NODE_SESSION_BEHAVIORS,
+      default: undefined,
+    },
+    resumeCompactOriginalContext: { type: Boolean, default: undefined },
     // 展示顺序（仅影响 UI 排列，不影响执行顺序）
     sortOrder: { type: Number, default: undefined },
   },

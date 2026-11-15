@@ -275,6 +275,59 @@ describe('WorkflowInstanceService.instantiate', () => {
     expect(created.nodes[0].nodeId).toBeTruthy();
   });
 
+  it('T-SNAP1: 实例化快照携带会话行为 4 字段（显式落库、缺省归一、HUMAN 恒 null）', async () => {
+    vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+    const nodes = makeNodes();
+    Object.assign(nodes[1], {
+      reworkSessionBehavior: 'NEW_SESSION',
+      reworkCompactOriginalContext: true,
+      resumeSessionBehavior: 'ORIGINAL_SESSION',
+      resumeCompactOriginalContext: true,
+    });
+    Object.assign(nodes[0], {
+      reworkSessionBehavior: 'NEW_SESSION',
+      reworkCompactOriginalContext: true,
+      resumeSessionBehavior: 'ORIGINAL_SESSION',
+      resumeCompactOriginalContext: true,
+    });
+
+    await workflowInstanceService.instantiate('user-1', instantiateInput({ nodes }) as never);
+
+    const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as {
+      nodes: Record<string, unknown>[];
+    };
+    // AI：显式值落库，新会话的 compact 强制 false
+    expect(created.nodes[1]).toMatchObject({
+      reworkSessionBehavior: 'NEW_SESSION',
+      reworkCompactOriginalContext: false,
+      resumeSessionBehavior: 'ORIGINAL_SESSION',
+      resumeCompactOriginalContext: true,
+    });
+    // HUMAN：四字段恒 null
+    expect(created.nodes[0]).toMatchObject({
+      reworkSessionBehavior: null,
+      reworkCompactOriginalContext: null,
+      resumeSessionBehavior: null,
+      resumeCompactOriginalContext: null,
+    });
+  });
+
+  it('T-SNAP1b: 缺省配置的 AI 节点快照落归一默认值（ORIGINAL/NEW）', async () => {
+    vi.mocked(WorkflowInstance.create).mockImplementation(async (doc) => doc as never);
+
+    await workflowInstanceService.instantiate('user-1', instantiateInput() as never);
+
+    const created = vi.mocked(WorkflowInstance.create).mock.calls[0][0] as {
+      nodes: Record<string, unknown>[];
+    };
+    expect(created.nodes[1]).toMatchObject({
+      reworkSessionBehavior: 'ORIGINAL_SESSION',
+      reworkCompactOriginalContext: false,
+      resumeSessionBehavior: 'NEW_SESSION',
+      resumeCompactOriginalContext: false,
+    });
+  });
+
   it('I1b (T-A8): 配置了自定义 worktreeDir 时，创建工作流 Worktree 下发的 wtPath 以配置值为准', async () => {
     vi.mocked(Controller.findOne).mockReturnValue(
       leanQuery({ _id: oid('ctrl-1'), userId: oid('user-1'), name: 'dev-machine', worktreeDir: '/data/wt' }),
@@ -640,6 +693,61 @@ describe('WorkflowInstanceService.updateNode', () => {
       expect.objectContaining({ arrayFilters: [{ 'n.nodeId': 'n1' }], returnDocument: 'after' }),
     );
     expect(mockRedis.del).toHaveBeenCalledWith('workflow:instance:inst-1');
+  });
+
+  it('T-SNAP2: 未开始 AI 节点可写 4 字段并落库（新会话 compact 强制 false）', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValueOnce(leanQuery(makeInstance([makeNode()]) as never));
+    vi.mocked(WorkflowInstance.findOneAndUpdate).mockReturnValueOnce(
+      leanQuery(
+        makeInstance([
+          makeNode({
+            reworkSessionBehavior: 'NEW_SESSION',
+            reworkCompactOriginalContext: false,
+            resumeSessionBehavior: 'ORIGINAL_SESSION',
+            resumeCompactOriginalContext: true,
+          }),
+        ]) as never,
+      ),
+    );
+
+    await workflowInstanceService.updateNode('user-1', 'inst-1', 'n1', {
+      reworkSessionBehavior: 'NEW_SESSION',
+      reworkCompactOriginalContext: true,
+      resumeSessionBehavior: 'ORIGINAL_SESSION',
+      resumeCompactOriginalContext: true,
+    });
+
+    const update = vi.mocked(WorkflowInstance.findOneAndUpdate).mock.calls[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(update.$set['nodes.$[n].reworkSessionBehavior']).toBe('NEW_SESSION');
+    expect(update.$set['nodes.$[n].reworkCompactOriginalContext']).toBe(false);
+    expect(update.$set['nodes.$[n].resumeSessionBehavior']).toBe('ORIGINAL_SESSION');
+    expect(update.$set['nodes.$[n].resumeCompactOriginalContext']).toBe(true);
+  });
+
+  it('T-SNAP2b: HUMAN 节点写入被归一为 null', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValueOnce(
+      leanQuery(makeInstance([makeNode({ type: 'HUMAN' })]) as never),
+    );
+    vi.mocked(WorkflowInstance.findOneAndUpdate).mockReturnValueOnce(
+      leanQuery(makeInstance([makeNode({ type: 'HUMAN' })]) as never),
+    );
+
+    await workflowInstanceService.updateNode('user-1', 'inst-1', 'n1', {
+      reworkSessionBehavior: 'NEW_SESSION',
+      reworkCompactOriginalContext: true,
+      resumeSessionBehavior: 'ORIGINAL_SESSION',
+      resumeCompactOriginalContext: true,
+    });
+
+    const update = vi.mocked(WorkflowInstance.findOneAndUpdate).mock.calls[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(update.$set['nodes.$[n].reworkSessionBehavior']).toBeNull();
+    expect(update.$set['nodes.$[n].reworkCompactOriginalContext']).toBeNull();
+    expect(update.$set['nodes.$[n].resumeSessionBehavior']).toBeNull();
+    expect(update.$set['nodes.$[n].resumeCompactOriginalContext']).toBeNull();
   });
 
   it('N2: RUNNING/DONE/REJECT/REWORK/FAILED 拒绝「节点已开始，不可修改」', async () => {

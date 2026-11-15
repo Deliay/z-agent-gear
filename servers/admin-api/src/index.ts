@@ -69,6 +69,8 @@ import * as migration020DockerShimValueOptions from './migrations/020-docker-shi
 import * as migration021DockerRegistryMirrors from './migrations/021-docker-registry-mirrors.js';
 // 022：第三方登录配置（authproviders）与后台外部身份绑定（adminexternallogins）索引
 import * as migration022AuthProviders from './migrations/022-auth-providers.js';
+// 023：Harness 平台配置（harnessconfigs）唯一索引 + 三种 Harness 默认压缩指令种子（幂等、不覆盖用户配置）
+import * as migration023HarnessConfigs from './migrations/023-harness-configs.js';
 import { CloudHost } from './models/cloud-host.js';
 import { StorageBillingCursor } from './models/storage-billing-cursor.js';
 import { storageTickService } from './services/billing/storage-tick.js';
@@ -169,6 +171,8 @@ async function start() {
   // 020-docker-shim-value-options——刷新 Docker 预制脚本为 v5：镜像代理 shim 跳过带值选项（--name/-e/-p/-v 等）
   // 021-docker-registry-mirrors——刷新 Docker 预制脚本为 v6：删除 shim 装配、清理历史 shim、写
   //   /etc/docker/daemon.json 的 registry-mirrors（配置变更重启 dockerd 并 docker info 硬校验）+ 补齐参数
+  // 023-harness-configs——Harness 平台配置索引 + 三种 Harness 默认压缩指令 `/compact` 种子
+  //   （唯一写方 admin-api；`$setOnInsert` 幂等，已存在不覆盖用户配置）
   try {
     await runMigrations([
       migration001,
@@ -195,6 +199,7 @@ async function start() {
       migration020DockerShimValueOptions,
       migration021DockerRegistryMirrors,
       migration022AuthProviders,
+      migration023HarnessConfigs,
     ]);
   } catch (err) {
     logger.error({ err }, 'runMigrations failed (non-fatal)');

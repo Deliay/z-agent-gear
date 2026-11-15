@@ -545,6 +545,23 @@ pnpm test
 
 > 实例改名用例编号从 **A51** 起（A35-A50 已被「工作流优化特性」套件占用）；实现计划中写作 A35a~e，以本节编号为准。
 
+### 工作流打回/返工会话行为 (`agent-api/workflow-session-behavior.test.ts` T-SB-API)
+
+| 测试 | 描述 |
+|------|------|
+| T-SB-API1 | 模板创建/读取 4 字段逐字段回显；缺省读取归一默认值（ORIGINAL/NEW）；HUMAN 恒 null |
+| T-SB-API2 | 已配置工作流 configure 4 字段透传与归一（新会话+compact=true → 服务端强制 false） |
+| T-SB-API3 | 实例化快照携带 4 字段；未开始节点可改、已开始拒绝；实例读取归一 |
+| T-SB-API4a | 配置「返工时=新会话」的节点被打回 → 旧会话 acp:stop、新会话 acp:start，首条消息含「## 返工说明」与 completeCurrentRework（不含 completeCurrentNode 歧义文案） |
+| T-SB-API4b | 默认配置（返工时=原始会话）节点被打回 → acp:resume（现状零回归），原会话收到返工指引 |
+
+### Harness 平台配置 API (`admin-api/harness-config.test.ts` T-HCA-API)
+
+| 测试 | 描述 |
+|------|------|
+| T-HCA-API1 | `adminHarnessConfigs` 未认证 → `Not authenticated`；认证后恒返回三 Harness（compactCommand 以 `/` 开头） |
+| T-HCA-API2 | `upsertHarnessConfig` 校验矩阵逐字 `invalid compact command`（空/纯空白/超 64/不以 `/` 开头）；合法 upsert trim 落库并可回读；重复 upsert 幂等更新 |
+
 ### 工作流 GitHub PR 联动回调 (`agent-api/workflow-pr-callback.test.ts` T-PR*)
 
 > 需要 agent-api + controller-api 就绪且配置 `EVENT_CALLBACK_TOKEN`（缺失时整套跳过）；`GITHUB_WEBHOOK_SECRET` 用于 HMAC 用例（未配置时跳过 HMAC 断言）。T-PR4~18 通过 fake controller 走 MCP relay 注册/驱动，独立用户与实例避免脏数据。
