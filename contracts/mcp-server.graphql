@@ -9,7 +9,11 @@ enum McpServerSource {
   proxy
   manual    # P2 启用
   # 平台内置服务，随系统自动注册。节点作用域工具集（agent-workflow-tools）随节点会话自动装配；
-  # 工作流管理工具集（agent-workflow-admin-tools）可装配到任意会话
+  # 工作流管理工具集（agent-workflow-admin-tools）可装配到任意会话。
+  # agent-workflow-admin-tools 支持 MCP prompts 能力（initialize 声明 capabilities.prompts）：
+  # prompts/list 返回内置提示词片段清单；prompts/get 按 name 获取片段内容（messages 形态）。
+  # 内置片段：workflow-schema（工作流 Schema 说明）、workflow-project-persistence（项目持久化指引）。
+  # prompts/get 未知名称或不传 name 返回 INVALID_PARAMS，message 列出可用片段名称。
   platform
 }
 

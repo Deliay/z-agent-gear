@@ -1,0 +1,172 @@
+# 自定义工具（工作区级）：系统内置 MCP `agent-custom-tools` 的动态工具目录来源。
+#
+# 两类工具：
+#   - type=prompt：`prompt` 为 Fragment[]（见 contracts/fragment-template.md）；调用时要求传入
+#     `args` 中声明的全部参数，参数齐全后服务端渲染模板并返回字符串；缺参拒绝调用。
+#   - type=http：`http` 配置服务端发起的 HTTP 请求（method / endpoint / insecure / body / headers /
+#     queries）；各字段引用 Fragment[]，编码只经 Fragment 格式管线（不二次编码）。
+#
+# 通用约束（服务端唯一读写口 `custom-tool-service`，校验逐字命中下方错误表）：
+#   - `name`：trim 后 1..64，**工作区内唯一**（唯一索引 `uniq_custom_tool_workspace_name`，
+#     重复 → `duplicate custom tool name`）；
+#   - `description`：可选，≤512；
+#   - `args`：≤32 项；`key` 匹配 `^[A-Za-z_][A-Za-z0-9_]{0,63}$` 且工具内唯一；`name` trim 1..64；
+#     `description` ≤256；
+#   - Fragment 通用校验：类型/格式枚举、数量 ≤200、单值 ≤4096；模板内所有 Parameter 片段的
+#     `value` 必须属于 `args` 的 key 集合；Valut 片段 `value` 为 1..128 且禁空白/控制字符；
+#   - 工作区权限：独占型可见集（仅当前工作区）；写入口 = 全局工作区 admin 可写、developer 只读
+#     （`global workspace is read-only`）；普通工作区成员可读写；跨工作区按「不存在」处理
+#     （`Not found`，不泄露存在性）。
+#
+# 安全红线（不得回退）：
+#   - 任何出参、错误信息、日志均不含 Valut 明文；
+#   - `agent-custom-tools` 的 `tools/list` 每次按会话工作区**实时枚举**（无快照/缓存），
+#     删除后调用即 `METHOD_NOT_FOUND`；
+#   - 工具对 Agent 的暴露名：命中 `^[A-Za-z0-9_-]{1,64}$` 直接用展示名，否则用稳定别名
+#     `ct-<id 后 8 位>`，`description` 恒携带展示名。
+#
+# 错误口径（白名单，逐字透传；未命中收敛 `internal error`）：
+#   `custom tool not found` / `invalid custom tool name` / `invalid custom tool description` /
+#   `invalid custom tool args` / `invalid fragment template` / `invalid http config` /
+#   `duplicate custom tool name` / `global workspace is read-only` / `Not found` /
+#   `workspace not found` / `Not authenticated`
+
+enum CustomToolType {
+  prompt
+  http
+}
+
+enum FragmentType {
+  Plain
+  Valut
+  Parameter
+}
+
+enum FragmentFormat {
+  Generic
+  Json
+  Uri
+}
+
+enum CustomToolBodyType {
+  text
+  json
+  form
+}
+
+enum CustomToolFormFieldType {
+  text
+  file  # 本期保留：保存时拒绝（`invalid http config`），UI 禁用
+}
+
+# Fragment 语义见 contracts/fragment-template.md（Plain/Valut/Parameter × Generic/Json/Uri）
+type Fragment {
+  type: FragmentType!
+  value: String!
+  format: FragmentFormat!
+}
+
+type CustomToolArg {
+  key: String!
+  name: String!
+  description: String
+}
+
+type CustomToolFormField {
+  key: String!
+  type: CustomToolFormFieldType!
+  value: [Fragment!]!
+}
+
+type CustomToolKeyValue {
+  key: String!
+  value: [Fragment!]!
+}
+
+type CustomToolHttpConfig {
+  method: String!             # HTTP method token：^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,32}$
+  endpoint: [Fragment!]!      # 首片段 Plain 且渲染后以 http:// / https:// 开头
+  insecure: Boolean!          # 跳过 TLS 证书校验（仅本次调用）
+  bodyType: CustomToolBodyType # null = 无 body（GET/HEAD 类）
+  body: [Fragment!]           # bodyType=text/json 时必填
+  form: [CustomToolFormField!] # bodyType=form 时必填
+  headers: [CustomToolKeyValue!]!
+  queries: [CustomToolKeyValue!]!
+}
+
+type CustomTool {
+  id: ID!
+  name: String!
+  description: String
+  type: CustomToolType!
+  args: [CustomToolArg!]!
+  prompt: [Fragment!]         # type=prompt 时非空；type=http 时为 null
+  http: CustomToolHttpConfig  # type=http 时非空；type=prompt 时为 null
+  workspaceId: ID!
+  createdBy: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+input FragmentInput {
+  type: FragmentType!
+  value: String!
+  format: FragmentFormat!
+}
+
+input CustomToolArgInput {
+  key: String!
+  name: String!
+  description: String
+}
+
+input CustomToolFormFieldInput {
+  key: String!
+  type: CustomToolFormFieldType!
+  value: [FragmentInput!]!
+}
+
+input CustomToolKeyValueInput {
+  key: String!
+  value: [FragmentInput!]!
+}
+
+input CustomToolHttpConfigInput {
+  method: String!
+  endpoint: [FragmentInput!]!
+  insecure: Boolean
+  bodyType: CustomToolBodyType
+  body: [FragmentInput!]
+  form: [CustomToolFormFieldInput!]
+  headers: [CustomToolKeyValueInput!]
+  queries: [CustomToolKeyValueInput!]
+}
+
+input CreateCustomToolInput {
+  name: String!
+  description: String
+  type: CustomToolType!
+  args: [CustomToolArgInput!]!
+  prompt: [FragmentInput!]
+  http: CustomToolHttpConfigInput
+}
+
+input UpdateCustomToolInput {
+  name: String
+  description: String
+  type: CustomToolType
+  args: [CustomToolArgInput!]
+  prompt: [FragmentInput!]
+  http: CustomToolHttpConfigInput
+}
+
+extend type Query {
+  customTools: [CustomTool!]!           # 当前工作区（独占型可见集）
+  customTool(id: ID!): CustomTool       # 不存在返回 null；跨工作区 `Not found`
+}
+
+extend type Mutation {
+  createCustomTool(input: CreateCustomToolInput!): CustomTool!
+  updateCustomTool(id: ID!, input: UpdateCustomToolInput!): CustomTool!
+  deleteCustomTool(id: ID!): Boolean!
+}

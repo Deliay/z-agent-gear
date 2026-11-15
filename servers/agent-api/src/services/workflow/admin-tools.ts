@@ -3,6 +3,11 @@ import { actorFilter } from '../workspace-context.js';
 import { workflowTemplateService } from './template.js';
 import { configuredWorkflowService } from './configured.js';
 import { workflowInstanceService, type InstantiateSource } from './instance.js';
+import {
+  ADMIN_PROMPT_DEFINITIONS,
+  getAdminPromptText,
+  listAdminPromptNames,
+} from './admin-prompts.js';
 
 /** 工作流管理平台服务名（transport/source: platform） */
 export const ADMIN_PLATFORM_SERVER_NAME = 'agent-workflow-admin-tools';
@@ -55,6 +60,24 @@ const ADMIN_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
             dependsOn: { type: 'array', items: { type: 'string' }, description: '上游节点 nodeKey 列表（空数组=首节点候选）' },
             requiresWorktree: { type: 'boolean', description: '该节点会话是否需要 worktree 隔离' },
             linkUpstreamPullRequest: { type: 'boolean', description: '人类节点：是否联动上游 Pull Request' },
+            reworkSessionBehavior: {
+              type: 'string',
+              enum: ['NEW_SESSION', 'ORIGINAL_SESSION'],
+              description: 'AI 节点返工时会话行为（仅 AI 节点；缺省 ORIGINAL_SESSION=现状）',
+            },
+            reworkCompactOriginalContext: {
+              type: 'boolean',
+              description: 'AI 节点返工时压缩原始上下文（仅原始会话合法；缺省 false）',
+            },
+            resumeSessionBehavior: {
+              type: 'string',
+              enum: ['NEW_SESSION', 'ORIGINAL_SESSION'],
+              description: 'AI 节点打回后会话行为（仅 AI 节点；缺省 NEW_SESSION=现状）',
+            },
+            resumeCompactOriginalContext: {
+              type: 'boolean',
+              description: 'AI 节点打回后压缩原始上下文（仅原始会话合法；缺省 false）',
+            },
           },
           required: ['nodeKey', 'type', 'name', 'stage', 'dependsOn', 'requiresWorktree'],
         },
@@ -96,6 +119,24 @@ const ADMIN_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
             dependsOn: { type: 'array', items: { type: 'string' } },
             requiresWorktree: { type: 'boolean' },
             linkUpstreamPullRequest: { type: 'boolean' },
+            reworkSessionBehavior: {
+              type: 'string',
+              enum: ['NEW_SESSION', 'ORIGINAL_SESSION'],
+              description: 'AI 节点返工时会话行为（仅 AI 节点；缺省 ORIGINAL_SESSION=现状）',
+            },
+            reworkCompactOriginalContext: {
+              type: 'boolean',
+              description: 'AI 节点返工时压缩原始上下文（仅原始会话合法；缺省 false）',
+            },
+            resumeSessionBehavior: {
+              type: 'string',
+              enum: ['NEW_SESSION', 'ORIGINAL_SESSION'],
+              description: 'AI 节点打回后会话行为（仅 AI 节点；缺省 NEW_SESSION=现状）',
+            },
+            resumeCompactOriginalContext: {
+              type: 'boolean',
+              description: 'AI 节点打回后压缩原始上下文（仅原始会话合法；缺省 false）',
+            },
             agentConfig: {
               type: 'object',
               description: 'AI 节点 Agent 配置（必填）',
@@ -181,6 +222,24 @@ const ADMIN_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
             dependsOn: { type: 'array', items: { type: 'string' } },
             requiresWorktree: { type: 'boolean' },
             linkUpstreamPullRequest: { type: 'boolean' },
+            reworkSessionBehavior: {
+              type: 'string',
+              enum: ['NEW_SESSION', 'ORIGINAL_SESSION'],
+              description: 'AI 节点返工时会话行为（仅 AI 节点；缺省 ORIGINAL_SESSION=现状）',
+            },
+            reworkCompactOriginalContext: {
+              type: 'boolean',
+              description: 'AI 节点返工时压缩原始上下文（仅原始会话合法；缺省 false）',
+            },
+            resumeSessionBehavior: {
+              type: 'string',
+              enum: ['NEW_SESSION', 'ORIGINAL_SESSION'],
+              description: 'AI 节点打回后会话行为（仅 AI 节点；缺省 NEW_SESSION=现状）',
+            },
+            resumeCompactOriginalContext: {
+              type: 'boolean',
+              description: 'AI 节点打回后压缩原始上下文（仅原始会话合法；缺省 false）',
+            },
             agentConfig: { type: 'object' },
           },
           required: ['nodeKey', 'type', 'name', 'stage', 'dependsOn', 'requiresWorktree'],
@@ -425,7 +484,7 @@ export async function handleAdminPlatformMcpRequest(
       return {
         result: {
           protocolVersion: '2025-03-26',
-          capabilities: { tools: {} },
+          capabilities: { tools: {}, prompts: {} },
           serverInfo: { name: ADMIN_PLATFORM_SERVER_NAME, version: '1.0.0' },
         },
       };
@@ -436,6 +495,36 @@ export async function handleAdminPlatformMcpRequest(
       return { result: {} };
     case 'tools/list':
       return { result: { tools: getAdminToolDefinitions() } };
+    case 'prompts/list':
+      return { result: { prompts: ADMIN_PROMPT_DEFINITIONS } };
+    case 'prompts/get': {
+      const promptName = request.params?.name;
+      const available = listAdminPromptNames().join('、');
+      if (typeof promptName !== 'string' || promptName.trim().length === 0) {
+        return {
+          error: {
+            code: 'INVALID_PARAMS',
+            message: `prompts/get 缺少 params.name。可用片段：${available}。`,
+          },
+        };
+      }
+      const text = getAdminPromptText(promptName);
+      const definition = ADMIN_PROMPT_DEFINITIONS.find((item) => item.name === promptName);
+      if (!text || !definition) {
+        return {
+          error: {
+            code: 'INVALID_PARAMS',
+            message: `未知提示词片段「${promptName}」。可用片段：${available}。`,
+          },
+        };
+      }
+      return {
+        result: {
+          description: definition.description,
+          messages: [{ role: 'user', content: { type: 'text', text } }],
+        },
+      };
+    }
     case 'tools/call': {
       const toolName = request.params?.name;
       if (!toolName) {

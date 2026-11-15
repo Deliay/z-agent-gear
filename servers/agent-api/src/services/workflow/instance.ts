@@ -7,6 +7,8 @@ import { sessionService } from '../session.js';
 import { workflowEngine } from './engine.js';
 import { validateTemplateGraph } from './template.js';
 import { validateAgentConfigs } from './configured.js';
+import { normalizeNodeSessionBehavior } from './node-config.js';
+import type { WorkflowNodeSessionBehavior } from '../../models/workflow-template.js';
 import { getRedisClient } from '../../middleware/redis.js';
 import { logger as rootLogger } from '../../observability/logger.js';
 import { getAvailableServerTypes } from './capability.js';
@@ -68,6 +70,14 @@ export interface InstantiateNodeInput {
   requiresWorktree?: boolean;
   /** 人类节点：是否联动上游 Pull Request */
   linkUpstreamPullRequest?: boolean;
+  /** 返工时会话行为（仅 AI 节点；缺省 ORIGINAL_SESSION） */
+  reworkSessionBehavior?: WorkflowNodeSessionBehavior | null;
+  /** 返工时=原始会话时是否先压缩上下文 */
+  reworkCompactOriginalContext?: boolean | null;
+  /** 打回后会话行为（仅 AI 节点；缺省 NEW_SESSION） */
+  resumeSessionBehavior?: WorkflowNodeSessionBehavior | null;
+  /** 打回后=原始会话时是否先压缩上下文 */
+  resumeCompactOriginalContext?: boolean | null;
   agentConfig?: {
     acpServerType: string;
     modeId?: string | null;
@@ -126,21 +136,32 @@ class WorkflowInstanceService {
 
   /** 将节点图归一化为完整结构（补默认值，供图校验与快照落库） */
   private normalizeNodes(nodes: InstantiateNodeInput[]) {
-    return nodes.map((n) => ({
-      nodeKey: n.nodeKey,
-      type: n.type ?? 'AI',
-      name: n.name ?? n.nodeKey,
-      description: n.description ?? null,
-      stage: n.stage ?? '默认阶段',
-      prompts: n.prompts ? [...n.prompts] : undefined,
-      artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
-      dependsOn: [...(n.dependsOn ?? [])],
-      requiresWorktree: n.requiresWorktree ?? false,
-      // 仅 HUMAN 可开启联动（避免切换节点类型后残留 true）
-      linkUpstreamPullRequest: n.type === 'HUMAN' ? (n.linkUpstreamPullRequest ?? false) : false,
-      agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
-      sortOrder: n.sortOrder ?? undefined,
-    }));
+    return nodes.map((n) => {
+      const type = n.type ?? 'AI';
+      return {
+        nodeKey: n.nodeKey,
+        type,
+        name: n.name ?? n.nodeKey,
+        description: n.description ?? null,
+        stage: n.stage ?? '默认阶段',
+        prompts: n.prompts ? [...n.prompts] : undefined,
+        artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
+        dependsOn: [...(n.dependsOn ?? [])],
+        requiresWorktree: n.requiresWorktree ?? false,
+        // 仅 HUMAN 可开启联动（避免切换节点类型后残留 true）
+        linkUpstreamPullRequest: type === 'HUMAN' ? (n.linkUpstreamPullRequest ?? false) : false,
+        // 会话行为：仅 AI 节点落显式值/缺省值；HUMAN/FLAG 归一为 null
+        ...normalizeNodeSessionBehavior({
+          type,
+          reworkSessionBehavior: n.reworkSessionBehavior,
+          reworkCompactOriginalContext: n.reworkCompactOriginalContext,
+          resumeSessionBehavior: n.resumeSessionBehavior,
+          resumeCompactOriginalContext: n.resumeCompactOriginalContext,
+        }),
+        agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
+        sortOrder: n.sortOrder ?? undefined,
+      };
+    });
   }
 
   /**
@@ -236,6 +257,11 @@ class WorkflowInstanceService {
       agentConfig: n.agentConfig ? { ...n.agentConfig } : undefined,
       requiresWorktree: n.requiresWorktree,
       linkUpstreamPullRequest: n.linkUpstreamPullRequest,
+      // 会话行为（仅 AI 节点有值；HUMAN/FLAG 为 null）
+      reworkSessionBehavior: n.reworkSessionBehavior,
+      reworkCompactOriginalContext: n.reworkCompactOriginalContext,
+      resumeSessionBehavior: n.resumeSessionBehavior,
+      resumeCompactOriginalContext: n.resumeCompactOriginalContext,
       sortOrder: n.sortOrder,
     }));
     // 首节点（入度为 0 的人类节点）READY
@@ -331,6 +357,10 @@ class WorkflowInstanceService {
     artifactTitles?: string[] | null;
     requiresWorktree?: boolean;
     linkUpstreamPullRequest?: boolean | null;
+    reworkSessionBehavior?: WorkflowNodeSessionBehavior | null;
+    reworkCompactOriginalContext?: boolean | null;
+    resumeSessionBehavior?: WorkflowNodeSessionBehavior | null;
+    resumeCompactOriginalContext?: boolean | null;
     agentConfig?: { acpServerType: string; modeId?: string | null; modelId?: string | null; initNewWorktree: boolean } | null;
     sortOrder?: number | null;
   }) {
@@ -359,6 +389,41 @@ class WorkflowInstanceService {
       }
       patch['nodes.$[n].linkUpstreamPullRequest'] =
         node.type === 'HUMAN' ? input.linkUpstreamPullRequest : false;
+    }
+    // 会话行为：仅 AI 节点可写；HUMAN/FLAG 传入非 null 时静默归一为 null（D4）
+    if (
+      input.reworkSessionBehavior !== undefined ||
+      input.reworkCompactOriginalContext !== undefined ||
+      input.resumeSessionBehavior !== undefined ||
+      input.resumeCompactOriginalContext !== undefined
+    ) {
+      const current = node as unknown as {
+        reworkSessionBehavior?: WorkflowNodeSessionBehavior | null;
+        reworkCompactOriginalContext?: boolean | null;
+        resumeSessionBehavior?: WorkflowNodeSessionBehavior | null;
+        resumeCompactOriginalContext?: boolean | null;
+      };
+      const normalized = normalizeNodeSessionBehavior({
+        type: node.type,
+        reworkSessionBehavior: input.reworkSessionBehavior ?? current.reworkSessionBehavior,
+        reworkCompactOriginalContext:
+          input.reworkCompactOriginalContext ?? current.reworkCompactOriginalContext,
+        resumeSessionBehavior: input.resumeSessionBehavior ?? current.resumeSessionBehavior,
+        resumeCompactOriginalContext:
+          input.resumeCompactOriginalContext ?? current.resumeCompactOriginalContext,
+      });
+      if (input.reworkSessionBehavior !== undefined) {
+        patch['nodes.$[n].reworkSessionBehavior'] = normalized.reworkSessionBehavior;
+      }
+      if (input.reworkCompactOriginalContext !== undefined) {
+        patch['nodes.$[n].reworkCompactOriginalContext'] = normalized.reworkCompactOriginalContext;
+      }
+      if (input.resumeSessionBehavior !== undefined) {
+        patch['nodes.$[n].resumeSessionBehavior'] = normalized.resumeSessionBehavior;
+      }
+      if (input.resumeCompactOriginalContext !== undefined) {
+        patch['nodes.$[n].resumeCompactOriginalContext'] = normalized.resumeCompactOriginalContext;
+      }
     }
 
     // 若该节点是旧实例（无快照字段），先补齐快照（回查已配置工作流）
@@ -426,6 +491,19 @@ class WorkflowInstanceService {
     fill['nodes.$[n].artifactTitles'] = configuredNode.artifactTitles ? [...configuredNode.artifactTitles] : null;
     fill['nodes.$[n].requiresWorktree'] = configuredNode.requiresWorktree ?? false;
     fill['nodes.$[n].agentConfig'] = configuredNode.agentConfig ?? null;
+    const behavior = normalizeNodeSessionBehavior({
+      type: String(node.type),
+      ...(configuredNode as {
+        reworkSessionBehavior?: WorkflowNodeSessionBehavior | null;
+        reworkCompactOriginalContext?: boolean | null;
+        resumeSessionBehavior?: WorkflowNodeSessionBehavior | null;
+        resumeCompactOriginalContext?: boolean | null;
+      }),
+    });
+    fill['nodes.$[n].reworkSessionBehavior'] = behavior.reworkSessionBehavior;
+    fill['nodes.$[n].reworkCompactOriginalContext'] = behavior.reworkCompactOriginalContext;
+    fill['nodes.$[n].resumeSessionBehavior'] = behavior.resumeSessionBehavior;
+    fill['nodes.$[n].resumeCompactOriginalContext'] = behavior.resumeCompactOriginalContext;
     await WorkflowInstance.updateOne(
       { _id: instance._id },
       { $set: fill },

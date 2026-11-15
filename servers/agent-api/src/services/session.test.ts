@@ -85,6 +85,16 @@ vi.mock('./session-preview-tools.js', () => ({
   ensureSessionPreviewToolsServer: vi.fn(async () => 'mcp-preview-tools'),
 }));
 
+vi.mock('./valut-tools.js', () => ({
+  VALUT_TOOLS_SERVER_NAME: 'agent-valut-tools',
+  ensureValutToolsServer: vi.fn(async () => 'mcp-valut-tools'),
+}));
+
+vi.mock('./custom-tools-mcp.js', () => ({
+  CUSTOM_TOOLS_SERVER_NAME: 'agent-custom-tools',
+  ensureCustomToolsServer: vi.fn(async () => 'mcp-custom-tools'),
+}));
+
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
@@ -710,7 +720,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1', 'mcp-preview-tools'],
+        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
         undefined,
         [],
       );
@@ -747,7 +757,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['mcp-preview-tools'],
+        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
         undefined,
         [],
       );
@@ -881,7 +891,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['mcp-preview-tools'],
+        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
         undefined,
         [{ id: customId, name: 'custom-a' }],
       );
@@ -912,7 +922,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1', 'mcp-preview-tools'],
+        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
         undefined,
         [{ id: customId, name: 'custom-a' }],
       );
@@ -2291,7 +2301,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1', 'mcp-preview-tools'],
+        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
         {
           instanceId: 'inst-1',
           nodeId: 'node-1',
@@ -2747,12 +2757,19 @@ describe('SessionService.create default MCP injection', () => {
     expect(McpServer.find).toHaveBeenCalledWith({
       userId: 'user-1',
       enabled: true,
-      name: { $nin: ['agent-cloud-host-tools', 'agent-session-preview-tools'] },
+      name: {
+        $nin: [
+          'agent-cloud-host-tools',
+          'agent-session-preview-tools',
+          'agent-valut-tools',
+          'agent-custom-tools',
+        ],
+      },
     });
     expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
       'sess-1',
       'user-1',
-      ['srv-a', 'srv-b', 'mcp-preview-tools'],
+      ['srv-a', 'srv-b', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
       undefined,
       [],
     );
@@ -2776,7 +2793,7 @@ describe('SessionService.create default MCP injection', () => {
     expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
       'sess-1',
       'user-1',
-      ['mcp-preview-tools'],
+      ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
       undefined,
       [],
     );

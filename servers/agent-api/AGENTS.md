@@ -463,6 +463,48 @@ pnpm run start   # Start production server
   `graphql/resolvers/controller.test.ts`（T-CCOP4~6）、`tests/api/src/agent-api/controller.test.ts`
   （T-CCOP-API1~3，需 `MONGODB_URI`）。
 
+## 自定义渲染模板与自定义工具 MCP（#449）
+
+> 需求 #449；契约 `contracts/fragment-template.md` / `contracts/custom-tool.graphql`；计划
+> `docs/engineering/plan/20261113-feat-fragment-template-custom-tools.md`。
+
+- **Fragment 渲染唯一口径**：`services/fragment-render.ts` 的 `renderFragments(fragments, context, resolveValut)`
+  为**纯函数 + 依赖注入**（不 import Mongoose 模型）：Plain 原样（空串省略、format 恒 Generic）/
+  Valut 经注入 resolver 取 manual 明文 / Parameter 取 `context.params`；格式 Generic 恒等、
+  Json=`JSON.stringify`、Uri=`encodeURIComponent`（只编码一次）；上限 200/4096/65536 →
+  `fragment template too large`；错误文案 `valut key not found: <key>` / `missing parameter: <key>`。
+  **编辑器不求值**（前端只展示引用名），求值唯一发生在服务端。
+- **Valut 取值原语**：`valut-service.resolveManualValueByKey(key, workspaceId)` 按
+  `{workspaceId, namespace:'manual', key}` 定位后走既有 AES-256-GCM 解密；非 manual/不存在返回
+  `null`（由渲染层收敛错误），无 ALS 上下文依赖、不被任何 resolver 引用。明文只在调用栈内存中。
+- **数据层**：`models/custom-tool.ts`（集合 `customtools`，独占型 workspace-scope + `tenantId`）——
+  `name` 工作区内唯一（`uniq_custom_tool_workspace_name` 模型与迁移 **026** 同名同键）、
+  `args`（key `^[A-Za-z_][A-Za-z0-9_]{0,63}$` 唯一/≤32）、`prompt`/`http` 二选一。
+  **注意**：该集合无 `userId`，与 `valutentries`/`custommcpservers` 同口径**不进**迁移 013
+  `TENANT_ID_COLLECTIONS` 与 tenant-isolation CASES 矩阵（计划 F8/D9 的「21→22」经实现核对不适用，
+  `applyTenantScope` 对无 `userId` 集合为 no-op）。
+- **服务**：`services/custom-tool-service.ts` 唯一读写口（`requireContext` → `workspace not found`、
+  `assertWorkspaceWritable` → `global workspace is read-only`；跨工作区 `Not found`）；创建/更新共用
+  `validateCustomToolInput`：name 1..64、description ≤512、args 规则、Fragment 枚举/数量/单值、
+  **引用一致性**（Parameter 必须 ∈ args keys；Valut key 1..128 禁空白控制字符）、http
+  （method token / endpoint 首片段 Plain http(s) / header 唯一性与 key 规则 / GET 类带 bodyType
+  拒绝 / form `file` 拒绝）。重名预检 + E11000 → `duplicate custom tool name`。
+- **平台 MCP**：
+  - `agent-valut-tools`（`services/valut-tools.ts`）：唯一工具 `valut_list`，出参仅
+    `[{key, namespaceDisplayName}]`（无 id/值/refs）；任何取值工具名 → `METHOD_NOT_FOUND`。
+  - `agent-custom-tools`（`services/custom-tools-mcp.ts`）：`tools/list` **每次实时查** customtools
+    （无快照，删除即失效）；暴露名安全名原名、否则 `ct-<id 后 8 位>`（description 恒带展示名，
+    call 双向反解）；`tools/call` 参数缺失 → `INVALID_PARAMS` 列名，prompt 渲染 / http 执行。
+  - `services/custom-tool-http.ts`：undici `fetch`（`dispatcher` 仅 `insecure=true` 用模块级
+    `insecureAgent`）；30s 超时；响应 256KB 截断；json body 渲染后必须合法 JSON；错误归类
+    `request failed` / `request timeout` / `tls verification failed`；**日志红线**：正文/headers/
+    endpoint 全串/渲染中间值不入日志。
+    **已知取舍**：响应体先 `arrayBuffer()` 全量缓冲再按 256KB 截断（受 30s 硬超时兜底），
+    超大响应体会整段进内存；流式读取 + 超限提前 abort 列为后续优化（本期不改，评审确认可接受）。
+  - 装配：`sessionService.create` 公共路径（普通/云/工作流节点会话）恒装配并去重；
+    `mcp-dispatch` platform 三元链尾部直发；默认 MCP 候选与 `setControllerDefaultMcp` 的
+    `$nin` 排除两个新名字（前端可见性沿用 preview 先例，零改动）。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
@@ -520,6 +562,56 @@ pnpm run start   # Start production server
 - **缓存与恢复入口**：接续成功调 `invalidateWorkflowInstanceCache(instanceId)`（自 `instance.ts` 导出，同时供既有失效点复用）；清空未完成节点 `sessionId` 后既有 `restartNode`/`resumeNodeSession` 在新控制器上自然拉起。`workflowInstanceService.restartNode` 增加不可用门：「工作流实例不可用（控制器离线或已删除），请先接续后再操作」。
 - **零行为抽取**：`services/workflow/workflow-worktree.ts` 承载 `createWorkflowWorktree`/`removeWorkflowWorktree`（自 `instance.ts` 逐字搬出，`instance.ts` 私有方法委托），实例化与接续共用；`instance.test.ts` 既有断言全绿即锁定零回归。
 - **数据**：`WorkflowInstance.continuationHistory` 子文档数组（`{from/toControllerId, from/toWorkspaceId, at}`，`_id:false`，`default: []`）零迁移；`GET_WORKFLOW_INSTANCE` 返回 `continuationHistory`，`mapInstance` 归一 `?? []`。
+
+## 工作流打回/返工会话行为（#525）
+
+> 契约 `contracts/workflow.graphql`（`WorkflowNodeSessionBehavior` + 节点 4 字段六处）；
+> 计划 `docs/engineering/plan/20261115-feat-workflow-reject-rework-session-behavior.md`。
+
+- **契约与模型**：`WorkflowNodeSessionBehavior { NEW_SESSION ORIGINAL_SESSION }`；节点 4 字段
+  `reworkSessionBehavior`（缺省 `ORIGINAL_SESSION`=现状）/`reworkCompactOriginalContext`（缺省 false）/
+  `resumeSessionBehavior`（缺省 `NEW_SESSION`=现状）/`resumeCompactOriginalContext`（缺省 false），
+  **契约六处 + 手写 schema 六处双写**（`WorkflowTemplateNode`/`ConfiguredWorkflowNode`/`WorkflowNode` +
+  三个 Input）。三处节点子 Schema（`models/workflow-template.ts` / `configured-workflow.ts` /
+  `workflow-instance.ts`）均为 `default: undefined`（零迁移；HUMAN/FLAG 恒 null，纪律同 `agentConfig`）。
+- **归一唯一事实源**：`services/workflow/node-config.ts` 的纯函数 `normalizeNodeSessionBehavior`
+  （AI：行为 `??` 默认值、`compact=true` 仅在对应行为为 ORIGINAL_SESSION 时保留，新会话强制 false；
+  HUMAN/FLAG 四字段 null）。`configured.normalizeConfiguredNodes` / `instance.normalizeNodes` /
+  `updateNode` patch / `copyFromTemplate` / `loadNodeConfig` 两路 / `mapTemplateNode`/`mapInstanceNode`
+  全部共用；`loadNodeConfig` 返回归一后的 4 字段（旧实例回查 configured 同口径）。
+- **四象限分流（`orchestrator.ts`）**：
+  - 返工 `reworkNodeSession`：`NEW_SESSION` → `close(suppressFallback, reason:'workflow_node_rework')`
+    + `startNodeSession(extraPromptSections:[buildReworkSection(reason)])`（返工说明段拼入**首条消息**，
+    一次 `addMessage`，唯一推进指引 `completeCurrentRework`）；`ORIGINAL_SESSION`（默认）→ 现状 resume
+    + 返工指引逐字不变；`sessionId` 缺失 / resume 失败 → warn 降级新会话路径；`compact=true` →
+    resume 成功后 `runCompactPipeline`（失败仅 warn 照发）。
+  - 复工 `resumeNodeSession`：`NEW_SESSION`（默认）→ 现状 close + 新会话；`ORIGINAL_SESSION` →
+    resume 原会话 + `RESUME_CONTINUE_PROMPT`；resume 失败 → 降级新会话链；可选先压缩。
+- **压缩管线（`services/workflow/compact.ts`）**：`runCompactPipeline(sessionId, acpServerType,
+  timeout=INTERRUPT_RETRY_IDLE_TIMEOUT_MS)` 顺序硬约束「登记 `compactInFlight` → `armSessionIdleWaiter`
+  → `addMessage(压缩指令)` → 等 idling → 取消登记」；失败/超时 warn + 返回 false。`orchestrator.handleSessionIdled`
+  在排期前 `isCompactInFlight(sessionId)` 直接返回（抑制压缩回合结束的停滞检测误判）；`compact.ts`
+  不 import orchestrator（循环依赖约束同 `node-config.ts`）。
+- **发送前双校验（D7）**：压缩等待结算后 Orchestrator 重读实例——未删除 + 节点状态仍为预期
+  （返工 `REWORK` / 复工 `RUNNING`）+ `sessionId` 未变，否则放弃发送过期提示词。
+- **压缩指令解析（`services/harness-config.ts`）**：`DEFAULT_COMPACT_COMMAND='/compact'`；
+  `ACP_SERVER_TO_HARNESS` 由 `HARNESS_ACP_TYPES`（已上移至 `models/cloud-host.ts`，cloud-host-service 改为 import）
+  反转派生；`resolveCompactCommand` 未映射 → 默认值；命中 → 进程内 Map 缓存（TTL 60s）→ 读只读镜像
+  `models/harness-config.ts`（`harnessconfigs`，`autoIndex=false`，索引由 admin-api 迁移 023 创建）；
+  无配置行落默认值并缓存，查询失败**不缓存**。
+- **测试**：`node-config.test.ts`（T-NSB1~4）、`compact.test.ts`（T-CPCT1~2）、`harness-config.test.ts`
+  （T-HCR1~4）、`orchestrator.test.ts`（T-ORC1~8 + T-CPCT3）、`instance.test.ts`（T-SNAP1/2）、
+  `graphql/resolvers/workflow.test.ts`（T-MAP1）、`graphql/schemas/workflow.test.ts`（T-SCHEMA1 双写守卫）。
+
+## 工作流 MCP 提示词片段（#523）
+
+> 契约 `contracts/mcp-server.graphql`（`McpServerSource.platform` 注释）；计划 `docs/engineering/plan/20261115-feat-workflow-mcp-prompt-snippets.md`。
+
+- **能力落点**：平台内置 MCP 服务 `agent-workflow-admin-tools`（`services/workflow/admin-tools.ts`）实现 MCP prompts 能力——`initialize` 返回 `capabilities: { tools: {}, prompts: {} }`（`protocolVersion`/`serverInfo` 不变）；`prompts/list` 返回 `{ prompts: ADMIN_PROMPT_DEFINITIONS }`（声明序，无 cursor 分页）；`prompts/get { name }` 返回 `{ description, messages: [{ role: 'user', content: { type: 'text', text } }] }`。节点作用域 `agent-workflow-tools`（`services/workflow/tool-handlers.ts`）**不提供**片段，其 `initialize` 保持 `capabilities: { tools: {} }`。
+- **单一来源**：`services/workflow/admin-prompts.ts` 承载 `ADMIN_PROMPT_DEFINITIONS` / `listAdminPromptNames()` / `getAdminPromptText(name)`，两段片段文本为模块内 Markdown 常量（不落库、不可在线编辑）。片段名：`workflow-schema`（顶层结构 / 节点类型与字段 / 图校验规则 / AI 节点 Agent 配置）、`workflow-project-persistence`（`.zag/workflow/templates/` 放置约定 / JSON 格式 / 文件约束 / 检测配置与快照生效方式）。
+- **同源口径**：图规则对齐 `template.ts#validateTemplateGraph`，Agent 配置对齐 `configured.ts#validateAgentConfigs`，项目文件解析对齐 `repo-templates.ts#parseRepoTemplate`，扫描上限（20 文件 / 128KiB / 1MiB / 不递归 / stat 判定符号链接）对齐 `packages/agent-controller/src/workflow-templates.ts`（跨包不可 import，守卫用字面量断言并注释来源）。**防漂移守卫**：`admin-prompts.test.ts` 的 T-AP4/T-AP5——上述规则或常量变更时测试变红，强制同步片段文本。
+- **错误形态**：`prompts/get` 缺 `params.name`/空串或未知名称 → 协议级 `error.code = INVALID_PARAMS`（非 `tools/call` 的 `isError` 工具形态），message 附「可用片段：…」（由 `listAdminPromptNames()` 生成，保证所列即所得）。
+- **零改动面**：`ensureAdminToolsServer` 与 `McpServer` 文档（prompts 不是 tool，13 工具清单与 upsert 不变）、`mcp-dispatch` 分发层、`graphql/schemas/mcp-server.ts`（手写 schema 无注释概念）均不变。
 
 ## 多租户二期（工作区资源查询口径）
 

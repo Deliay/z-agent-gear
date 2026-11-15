@@ -34,6 +34,23 @@ describe('工作流 PR 联动 GraphQL 文档', () => {
     expect(print(GET_CONFIGURED_WORKFLOWS)).toContain('linkUpstreamPullRequest')
   })
 
+  it('模板/已配置/实例节点查询包含会话行为 4 字段', () => {
+    for (const document of [
+      print(GET_WORKFLOW_TEMPLATES),
+      print(GET_CONFIGURED_WORKFLOWS),
+      print(GET_WORKFLOW_INSTANCE),
+    ]) {
+      for (const field of [
+        'reworkSessionBehavior',
+        'reworkCompactOriginalContext',
+        'resumeSessionBehavior',
+        'resumeCompactOriginalContext',
+      ]) {
+        expect(document).toContain(field)
+      }
+    }
+  })
+
   it('追加提示词 mutation 与契约一致', () => {
     expect(print(SET_WORKFLOW_ADDITIONAL_PROMPT)).toContain(
       'setWorkflowAdditionalPrompt(instanceId: $instanceId, key: $key, value: $value)',

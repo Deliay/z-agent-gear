@@ -51,6 +51,7 @@ import * as migration023ValutFoundations from './migrations/023-valut-foundation
 import * as migration023SessionReviews from './migrations/023-session-reviews.js';
 import * as migration024ResourceWorkspaceBackfill from './migrations/024-resource-workspace-backfill.js';
 import * as migration025SessionInteractions from './migrations/025-session-interactions.js';
+import * as migration026CustomTools from './migrations/026-custom-tools.js';
 import * as migration026ExternalLogins from './migrations/026-external-logins.js';
 import * as migration027OidcBindingOptimization from './migrations/027-oidc-binding-optimization.js';
 import { internalUsersRouter } from './routes/internal-users.js';
@@ -221,6 +222,7 @@ async function start() {
       migration023SessionReviews,
       migration024ResourceWorkspaceBackfill,
       migration025SessionInteractions,
+      migration026CustomTools,
       migration026ExternalLogins,
       migration027OidcBindingOptimization,
     ]);

@@ -335,6 +335,31 @@ pnpm run preview  # Preview production build
   `path === cloudHost.defaultWorkspace` 定位工作区。两处均仅在「存在合法模板」时弹 `RepoWorkflowPromptDialog`；
   `stores/repo-workflow-prompt.ts` 模块级 `Set<workspaceId>` 保证同页面会话不再自动弹（取消/去配置均记入）。
 
+## 自定义工具 / FragmentEditor（设置页，#449）
+
+> 需求 #449；契约 `contracts/custom-tool.graphql` + `contracts/fragment-template.md`。
+
+- **区块**：`components/settings/CustomToolSection.tsx`（`#custom-tool-section`，标题 + 「工作区」badge）——
+  `GET_CUSTOM_TOOLS`（`cache-and-network`）+ 增删改 `refetchQueries`；空态「暂无自定义工具」、
+  删除 `ConfirmDialog` 二次确认、`useWorkspaceAccess().readOnly` 收敛新增/编辑/删除入口
+  （服务端插件为权威）。NAV「MCP」组追加「自定义工具」项（紧随「自定义 MCP」）。
+- **对话框**：`components/settings/CustomToolDialog.tsx` —— 名称/描述/类型；`ArgsListEditor` 双类型复用；
+  prompt → 提示文案 + 多行 FragmentEditor（Generic）；http → method（datalist 常用 + 自定义）/
+  endpoint（单行 Uri）/ insecure / body（GET 类隐藏、切到 POST 类默认 JSON；text|json|form）/
+  headers / queries（勾选展开按行编辑）。每处 FragmentEditor **独立受控 value**（禁止共享 store）。
+- **FragmentEditor**：`components/common/fragment-editor/FragmentEditor.tsx` —— contentEditable + 原子 chip
+  （`contentEditable=false`、`data-fragment-type` 区分 Valut/Parameter、Json/Uri 角标）；`$`/`#` 补全
+  （`$` 仅已声明 params、`#` 仅 `GET_VALUT_MANUAL_OPTIONS` manual 名单）、IME 门控、单行拦截 Enter/粘贴换行、
+  退格整体删除 chip。**不求值红线**：任何状态不请求/不展示密钥值。
+- **纯函数层**：`lib/fragment-editor.ts`（`fragmentsToNodes`/`nodesToFragments`，相邻 Plain 合并、空 Plain 省略，
+  与后端 `fragment-render` fixture 互锁）；`lib/custom-tool.ts`（契约错误文案中文映射、参数/header/query
+  校验、暴露名 `ct-<id8>` 规则）；`graphql/custom-tool.ts` 域文件承载查询/变更与手写类型。
+- **测试入口**：`lib/__tests__/fragment-editor.test.ts`（T-FE1）、
+  `components/common/fragment-editor/__tests__/FragmentEditor.test.tsx`（T-FE2/T-FE3）、
+  `components/common/args-list-editor/__tests__/ArgsListEditor.test.tsx`（T-ALE）、
+  `components/settings/__tests__/CustomToolSection.test.tsx`（T-CTW1）、
+  `components/settings/__tests__/CustomToolDialog.test.tsx`（T-CTW2）。
+
 ## 第三方登录入口与回调（#503 / #510）
 
 - **登录页**：查询 `authProviders`（`fetchPolicy: cache-and-network`，失败静默降级为仅密码登录），按返回渲染「使用 {displayName} 登录」（GitHub 恒「使用 GitHub 登录」）；点击跳 `oauthAuthorizeUrl(id,'front')`。`?error=<code>` 经 `lib/auth-oauth.ts#mapOauthError` 映射友好文案，未识别 code 原样兜底。
@@ -344,3 +369,15 @@ pnpm run preview  # Preview production build
 - **回跳结果**：`SettingsPage` 识别 `/settings?bind=success`（提示「第三方登录绑定成功」）与 `?bind=error&error=<code>`（`mapOauthError` 映射），处理后 `replaceState` 仅删除 `bind`/`error`，保留其它参数（如 `section=valut`）。
 - **错误映射单一来源**：`lib/auth-oauth.ts` 的 `mapOauthError`（302 错误码；`already_bound` 前台文案「该身份已被其他账户绑定」+ `provider_already_bound`）与 `mapIdentityChoiceError`（GraphQL mutation message）。admin-web 有独立映射文件，不受影响。
 - **测试**：`pages/LoginPage.test.tsx`、`pages/__tests__/LoginCallbackPage.test.tsx`、`pages/__tests__/IdentityChoicePage.test.tsx`（T-OBO-WEB）、`components/settings/__tests__/ExternalLoginBindingSection.test.tsx`、`pages/__tests__/SettingsPage.test.tsx`（`?bind` 处理）、`lib/__tests__/auth-oauth.test.ts`；E2E 见 `tests/e2e/src/auth-oidc-binding.spec.ts`。`App.tsx` 新增公开路由 `/login/identity-choice`。
+
+## 工作流节点会话行为配置（#525）
+
+> 契约 `contracts/workflow.graphql` 的 `WorkflowNodeSessionBehavior` 与节点 4 字段；计划 `docs/engineering/plan/20261115-feat-workflow-reject-rework-session-behavior.md` Phase 7。
+
+- **组件单一来源**：`components/workflow/WorkflowGraphEditor.tsx` 导出 `SessionBehaviorFields`（同 `AgentConfigFields` 复用模式）——「会话行为」区含「返工时」「打回后」两组单选（新会话 / 原始会话）；各自选「原始会话」才展示对应「压缩原始上下文」勾选，切到「新会话」时隐藏并将该勾选重置为 `false`。仅 `type === 'AI'` 渲染，HUMAN/FLAG 返回 `null`。
+- **三入口自然覆盖**：`WorkflowGraphEditor` 的节点项对 AI 节点统一渲染该区，因此模板编辑器（`TemplateEditorDialog`）、已配置编辑器（`ConfigureWorkflowDialog` / `ConfigureRepoWorkflowDialog`）与实例化对话框（`InstantiateWorkflowDialog`）无需各自接线；`EditInstanceNodeDialog` 编辑模式同样渲染（读实例节点快照经 `normalizeSessionBehavior` 归一），**重启模式不渲染**（重启仅编辑 agentConfig）。
+- **类型与默认值**：`template-validation.ts` 的 `EditableNode extends SessionBehaviorForm`——`reworkSessionBehavior`（默认 `ORIGINAL_SESSION`）、`reworkCompactOriginalContext`（默认 `false`）、`resumeSessionBehavior`（默认 `NEW_SESSION`）、`resumeCompactOriginalContext`（默认 `false`），即服务端存量现状。`createEmptyNode` 写入同一默认值；`templateNodeToEditable` / `configuredNodeToEditable` 经 `normalizeSessionBehavior` 以 `??` 归一（新会话时 compact 恒 `false`）。
+- **提交口径**：`toNodeInput` / `toConfiguredNodeInput` 仅 AI 节点携带 4 字段（经 `sessionBehaviorInput`，行为为 `NEW_SESSION` 时对应 compact 恒 `false`），HUMAN/FLAG **省略整组键**（保持旧报文形状）；`EditInstanceNodeDialog` 的 `UPDATE_WORKFLOW_NODE` 同口径。
+- **校验**：「压缩原始上下文」仅在对应会话行为为「原始会话」时合法；`validateTemplateNodes`（`validateConfiguredNodes` 复用）给出中文前置错误「…为「新会话」时不可开启「压缩原始上下文」（仅原始会话可压缩）」。
+- **查询选择集**：`TEMPLATE_NODE_FIELDS`、`CONFIGURED_NODE_FIELDS` 与 `GET_WORKFLOW_INSTANCE.nodes` 均追加 4 字段（`REPO_WORKFLOW_TEMPLATES` 复用模板 fragment）。
+- **测试入口**：`components/workflow/__tests__/SessionBehaviorFields.test.tsx`（T-SB-WEB1~2）、`components/workflow/__tests__/template-validation.test.ts`（T-SB-WEB3）、`components/workflow/__tests__/EditInstanceNodeDialog.test.tsx`（T-SB-WEB4）、`graphql/__tests__/workflow.test.ts`（选择集守卫）。
