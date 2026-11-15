@@ -3,6 +3,11 @@ import { actorFilter } from '../workspace-context.js';
 import { workflowTemplateService } from './template.js';
 import { configuredWorkflowService } from './configured.js';
 import { workflowInstanceService, type InstantiateSource } from './instance.js';
+import {
+  ADMIN_PROMPT_DEFINITIONS,
+  getAdminPromptText,
+  listAdminPromptNames,
+} from './admin-prompts.js';
 
 /** 工作流管理平台服务名（transport/source: platform） */
 export const ADMIN_PLATFORM_SERVER_NAME = 'agent-workflow-admin-tools';
@@ -425,7 +430,7 @@ export async function handleAdminPlatformMcpRequest(
       return {
         result: {
           protocolVersion: '2025-03-26',
-          capabilities: { tools: {} },
+          capabilities: { tools: {}, prompts: {} },
           serverInfo: { name: ADMIN_PLATFORM_SERVER_NAME, version: '1.0.0' },
         },
       };
@@ -436,6 +441,36 @@ export async function handleAdminPlatformMcpRequest(
       return { result: {} };
     case 'tools/list':
       return { result: { tools: getAdminToolDefinitions() } };
+    case 'prompts/list':
+      return { result: { prompts: ADMIN_PROMPT_DEFINITIONS } };
+    case 'prompts/get': {
+      const promptName = request.params?.name;
+      const available = listAdminPromptNames().join('、');
+      if (typeof promptName !== 'string' || promptName.trim().length === 0) {
+        return {
+          error: {
+            code: 'INVALID_PARAMS',
+            message: `prompts/get 缺少 params.name。可用片段：${available}。`,
+          },
+        };
+      }
+      const text = getAdminPromptText(promptName);
+      const definition = ADMIN_PROMPT_DEFINITIONS.find((item) => item.name === promptName);
+      if (!text || !definition) {
+        return {
+          error: {
+            code: 'INVALID_PARAMS',
+            message: `未知提示词片段「${promptName}」。可用片段：${available}。`,
+          },
+        };
+      }
+      return {
+        result: {
+          description: definition.description,
+          messages: [{ role: 'user', content: { type: 'text', text } }],
+        },
+      };
+    }
     case 'tools/call': {
       const toolName = request.params?.name;
       if (!toolName) {
