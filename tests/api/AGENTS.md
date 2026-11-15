@@ -975,3 +975,20 @@ pnpm test
 - T-WFC5：`restartNode` 于不可用实例拒绝（`工作流实例不可用（控制器离线或已删除），请先接续后再操作`）；接续后同调用成功。
 - T-WFC6：未完成节点 `sessionId` 清空、DONE 节点 `sessionId` 保留，黑板产物零改动（直读 `workflowinstances`）。
 - 前置：`aspire start`（agent-api + controller-api）+ `MONGODB_URI` + `INTERNAL_API_TOKEN`；fake controller 应答 `acp:check`（opencode/kimi_code）、`git:check`/`git:worktree:add|remove`、`acp:start/resume/stop`。
+
+## 工作流 MCP 提示词片段（`src/agent-api/mcp-server.test.ts` T-AP-API1~3）
+
+> 需求 #523；契约 `contracts/mcp-server.graphql`（`McpServerSource.platform` 注释）；计划
+> `docs/engineering/plan/20261115-feat-workflow-mcp-prompt-snippets.md`。平台 MCP 提示词片段经
+> fake controller relay 验证（与服务端单测 T-AP1~T-AP10 互补）。
+
+- 前置：`aspire start`（agent-api + controller-api）+ `INTERNAL_API_TOKEN`（开户）；fake controller 应答
+  `acp:start` 并回传 `mcpEndpoint.token`，会话以 `mcpServerIds=[agent-workflow-admin-tools]` 创建。
+- 调用形态：fake controller 主连接 `emit('mcp:request', {requestId, sessionId, serverName:'agent-workflow-admin-tools', token, body})`，
+  body 为 JSON-RPC `prompts/list` / `prompts/get` / `initialize`，按 `requestId` 匹配 `mcp:response`。
+
+| 测试 | 描述 |
+|------|------|
+| T-AP-API1 | `prompts/list` → 200，`result.prompts` 恰 2 项且 name 集合为 `{workflow-schema, workflow-project-persistence}`、description 非空 |
+| T-AP-API2 | `prompts/get {name:'workflow-schema'}` → `messages[0].content.type='text'` 且文本含「首节点」；`workflow-project-persistence` 文本含 `.zag/workflow/templates` |
+| T-AP-API3 | `prompts/get {name:'nope'}` → 200 + JSON-RPC `error.code='INVALID_PARAMS'`，message 含 `nope` 与两个可用片段名；同会话 `initialize` 返回 `capabilities.prompts` 与 `capabilities.tools` |

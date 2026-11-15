@@ -60,6 +60,11 @@ import { workflowTemplateService } from './template.js';
 import { configuredWorkflowService } from './configured.js';
 import { workflowInstanceService } from './instance.js';
 import { Controller } from '../../models/controller.js';
+import {
+  ADMIN_PROMPT_DEFINITIONS,
+  getAdminPromptText,
+  listAdminPromptNames,
+} from './admin-prompts.js';
 
 function oid(id: string) {
   return { toString: () => id } as import('mongoose').Types.ObjectId;
@@ -282,5 +287,62 @@ describe('handleAdminPlatformMcpRequest', () => {
   it('M9: tools/call 未知工具返回可读错误', async () => {
     const out = await handleAdminPlatformMcpRequest(caller, { method: 'tools/call', params: { name: 'foo', arguments: {} } });
     expect(out.result).toMatchObject({ isError: true });
+  });
+
+  it('T-AP6: initialize 声明 tools 与 prompts 能力，协议版本与服务信息不变', async () => {
+    const out = await handleAdminPlatformMcpRequest(caller, { method: 'initialize' });
+    expect(out.result).toMatchObject({
+      protocolVersion: '2025-03-26',
+      capabilities: { tools: {}, prompts: {} },
+      serverInfo: { name: ADMIN_PLATFORM_SERVER_NAME, version: '1.0.0' },
+    });
+  });
+
+  it('T-AP7: prompts/list 输出与注册表逐项一致（长度 2、声明序稳定）', async () => {
+    const out = await handleAdminPlatformMcpRequest(caller, { method: 'prompts/list' });
+    const prompts = (out.result as { prompts: Array<{ name: string; description: string }> }).prompts;
+    expect(prompts).toHaveLength(2);
+    expect(prompts.map((item) => item.name)).toEqual(listAdminPromptNames());
+    expect(prompts).toEqual(ADMIN_PROMPT_DEFINITIONS);
+    for (const item of prompts) expect(item.description.trim().length).toBeGreaterThan(0);
+  });
+
+  it('T-AP8: prompts/get 命中返回 messages 形态且文本与注册表一致', async () => {
+    const out = await handleAdminPlatformMcpRequest(caller, {
+      method: 'prompts/get',
+      params: { name: 'workflow-schema' },
+    });
+    const result = out.result as {
+      description: string;
+      messages: Array<{ role: string; content: { type: string; text: string } }>;
+    };
+    expect(result.description).toBe(ADMIN_PROMPT_DEFINITIONS[0].description);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toEqual({
+      role: 'user',
+      content: { type: 'text', text: getAdminPromptText('workflow-schema') },
+    });
+    expect(result).not.toHaveProperty('content');
+    expect(result).not.toHaveProperty('isError');
+  });
+
+  it('T-AP9: prompts/get 缺 name 或空串返回 INVALID_PARAMS 并列出可用片段', async () => {
+    for (const params of [undefined, { name: '' }]) {
+      const out = await handleAdminPlatformMcpRequest(caller, { method: 'prompts/get', params });
+      expect(out.error?.code).toBe('INVALID_PARAMS');
+      expect(out.error?.message).toContain('缺少 params.name');
+      for (const name of listAdminPromptNames()) expect(out.error?.message).toContain(name);
+    }
+  });
+
+  it('T-AP10: prompts/get 未知名称返回 INVALID_PARAMS 并列出可用片段', async () => {
+    const out = await handleAdminPlatformMcpRequest(caller, {
+      method: 'prompts/get',
+      params: { name: 'foo' },
+    });
+    expect(out.error?.code).toBe('INVALID_PARAMS');
+    expect(out.error?.message).toContain('未知提示词片段');
+    expect(out.error?.message).toContain('foo');
+    for (const name of listAdminPromptNames()) expect(out.error?.message).toContain(name);
   });
 });

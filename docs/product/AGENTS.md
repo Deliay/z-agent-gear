@@ -173,6 +173,7 @@ flowchart LR
 - [[draft/20261113-fragment-template-custom-tools.md]] — 自定义渲染模板+自定义工具MCP（标准 Fragment 渲染 Plain/Valut/Parameter × Generic/Json/Uri 仅服务端求值、可复用 Fragment 编辑器 $/# 补全与引用名高亮不求值、Valut MCP 名单可见不可取信、工作区级自定义工具 prompt/http 经内置 MCP 动态目录提供、参数缺失拒绝调用）
 - [[draft/20261114-workflow-instance-continuation.md]] — 已实例化的工作流接续（控制器离线/被删除后实例展示不可用标识与「接续」入口，对话框选择新控制器/新工作路径/是否创建新 Worktree（默认勾选）/逐节点 AI 节点 Harness 映射，接续后保留进度恢复流转）
 - [[draft/20261115-workflow-reject-rework-session-behavior.md]] — 工作流打回/返工会话行为优化（AI 节点级「返工时」「打回后」会话策略：新会话/原始会话；选择原始会话可勾选「压缩原始上下文」——恢复后先发送压缩指令再发送继续提示词；后台按 Harness 配置压缩指令，默认 /compact）
+- [[draft/20261115-workflow-mcp-prompt-snippets.md]] — 工作流MCP提供提示词片段（工作流管理 MCP 以 MCP prompts 能力提供「工作流 Schema 说明」与「工作流项目持久化指引」两段权威提示词片段，AI 按需发现与获取，内容与平台校验规则同源同步）
 
 ### 实现中文档（`shipping/`）
 
