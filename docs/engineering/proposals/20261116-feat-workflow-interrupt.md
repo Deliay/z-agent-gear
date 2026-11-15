@@ -189,8 +189,8 @@ sequenceDiagram
     participant RES as GraphQL interruptNode
     participant INST as instance.interruptNode
     participant SES as sessionService.close
-    ENG as workflowEngine
-    TODO as TodoService
+    participant ENG as workflowEngine
+    participant TODO as TodoService
 
     U->>SV: 打开工作流节点会话详情
     SV->>SV: 判定 workflowInstanceId 非空 + 节点 RUNNING/REWORK/RETRY_FAILED
