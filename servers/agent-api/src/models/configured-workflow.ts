@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { applyTenantScope } from '../services/tenant-scope.js';
 import { applyWorkspaceScope } from '../services/workspace-scope.js';
-import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY } from './workflow-template.js';
+import { WORKFLOW_NODE_TYPES, WORKFLOW_CREATED_BY, WORKFLOW_NODE_SESSION_BEHAVIORS } from './workflow-template.js';
 
 // 注意：agentConfig 使用独立子 Schema 声明，避免内联嵌套对象被 Mongoose 物化为 {}
 //（HUMAN/FLAG 节点的 agentConfig 必须保持为 null/undefined）
@@ -28,6 +28,23 @@ const configuredNodeSchema = new mongoose.Schema(
     requiresWorktree: { type: Boolean, default: false },
     // 人类节点：是否联动上游 Pull Request（仅 HUMAN 可为 true）
     linkUpstreamPullRequest: { type: Boolean, default: false },
+    // ---- 会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null，读取侧按默认值归一） ----
+    // 返工时行为：缺省 ORIGINAL_SESSION（=现状）
+    reworkSessionBehavior: {
+      type: String,
+      enum: WORKFLOW_NODE_SESSION_BEHAVIORS,
+      default: undefined,
+    },
+    // 返工时=原始会话时是否先压缩上下文
+    reworkCompactOriginalContext: { type: Boolean, default: undefined },
+    // 打回后行为：缺省 NEW_SESSION（=现状）
+    resumeSessionBehavior: {
+      type: String,
+      enum: WORKFLOW_NODE_SESSION_BEHAVIORS,
+      default: undefined,
+    },
+    // 打回后=原始会话时是否先压缩上下文
+    resumeCompactOriginalContext: { type: Boolean, default: undefined },
     // AI 节点必填；HUMAN/FLAG 节点为 null
     agentConfig: { type: agentNodeConfigSchema, default: undefined },
     // 展示顺序（仅影响 UI 排列，不影响执行顺序）

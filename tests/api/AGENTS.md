@@ -545,6 +545,23 @@ pnpm test
 
 > 实例改名用例编号从 **A51** 起（A35-A50 已被「工作流优化特性」套件占用）；实现计划中写作 A35a~e，以本节编号为准。
 
+### 工作流打回/返工会话行为 (`agent-api/workflow-session-behavior.test.ts` T-SB-API)
+
+| 测试 | 描述 |
+|------|------|
+| T-SB-API1 | 模板创建/读取 4 字段逐字段回显；缺省读取归一默认值（ORIGINAL/NEW）；HUMAN 恒 null |
+| T-SB-API2 | 已配置工作流 configure 4 字段透传与归一（新会话+compact=true → 服务端强制 false） |
+| T-SB-API3 | 实例化快照携带 4 字段；未开始节点可改、已开始拒绝；实例读取归一 |
+| T-SB-API4a | 配置「返工时=新会话」的节点被打回 → 旧会话 acp:stop、新会话 acp:start，首条消息含「## 返工说明」与 completeCurrentRework（不含 completeCurrentNode 歧义文案） |
+| T-SB-API4b | 默认配置（返工时=原始会话）节点被打回 → acp:resume（现状零回归），原会话收到返工指引 |
+
+### Harness 平台配置 API (`admin-api/harness-config.test.ts` T-HCA-API)
+
+| 测试 | 描述 |
+|------|------|
+| T-HCA-API1 | `adminHarnessConfigs` 未认证 → `Not authenticated`；认证后恒返回三 Harness（compactCommand 以 `/` 开头） |
+| T-HCA-API2 | `upsertHarnessConfig` 校验矩阵逐字 `invalid compact command`（空/纯空白/超 64/不以 `/` 开头）；合法 upsert trim 落库并可回读；重复 upsert 幂等更新 |
+
 ### 工作流 GitHub PR 联动回调 (`agent-api/workflow-pr-callback.test.ts` T-PR*)
 
 > 需要 agent-api + controller-api 就绪且配置 `EVENT_CALLBACK_TOKEN`（缺失时整套跳过）；`GITHUB_WEBHOOK_SECRET` 用于 HMAC 用例（未配置时跳过 HMAC 断言）。T-PR4~18 通过 fake controller 走 MCP relay 注册/驱动，独立用户与实例避免脏数据。
@@ -926,6 +943,14 @@ pnpm test
 - T-REPO-API6：存量 `configureWorkflow` 落库 `sourceKind` 归一为 `PLATFORM`（回归基线）。
 - T-REPO-API4 / 5b / 7（需 `MONGODB_URI`）：cloud 控制器配置成功与列表透出；错误白名单逐字；`deleteCloudHost` 级联删除 REPO、PLATFORM 保留。
 - 前提：`INTERNAL_API_TOKEN`；fake controller 应答 `workflow-templates:scan`（fixture 与 agent-gear 真实回包同形态）。
+
+## 自定义工具（`src/agent-api/custom-tool.test.ts`，#449）
+
+- API-CT：`createCustomTool` / `updateCustomTool` / `deleteCustomTool` / `customTools` / `customTool(id)` 全链路。
+- 校验白名单逐字：`invalid custom tool name` / `invalid custom tool description` / `invalid custom tool args` /
+  `invalid fragment template` / `invalid http config`；重名 `duplicate custom tool name`。
+- 工作区隔离：跨工作区 id → `Not found`；不存在 id → `custom tool not found`。
+- 前提：`INTERNAL_API_TOKEN`（开户）；MCP 动态目录与 tools/call wire 行为由 agent-api 单测覆盖。
 
 ## 第三方登录 OAuth/OIDC（#503）
 

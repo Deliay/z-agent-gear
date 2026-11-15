@@ -1,10 +1,12 @@
 import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { actorFilter, actorOrBuiltinFilter, getWorkspaceContext } from '../workspace-context.js';
 import { WorkflowTemplate } from '../../models/workflow-template.js';
+import type { WorkflowNodeSessionBehavior } from '../../models/workflow-template.js';
 import { Controller } from '../../models/controller.js';
 import { controllerWorkspaceService } from '../controller-workspace.js';
 import { validateTemplateGraph, assertAiOwned, type WorkflowCreatedBy } from './template.js';
 import { getAvailableServerTypes } from './capability.js';
+import { normalizeNodeSessionBehavior } from './node-config.js';
 
 export interface AgentNodeConfigInput {
   acpServerType: string;
@@ -26,6 +28,14 @@ export interface ConfiguredWorkflowNodeInput {
   requiresWorktree?: boolean;
   /** 人类节点：是否联动上游 Pull Request */
   linkUpstreamPullRequest?: boolean;
+  /** 返工时会话行为（仅 AI 节点；缺省 ORIGINAL_SESSION） */
+  reworkSessionBehavior?: WorkflowNodeSessionBehavior | null;
+  /** 返工时=原始会话时是否先压缩上下文 */
+  reworkCompactOriginalContext?: boolean | null;
+  /** 打回后会话行为（仅 AI 节点；缺省 NEW_SESSION） */
+  resumeSessionBehavior?: WorkflowNodeSessionBehavior | null;
+  /** 打回后=原始会话时是否先压缩上下文 */
+  resumeCompactOriginalContext?: boolean | null;
   agentConfig?: AgentNodeConfigInput | null;
   sortOrder?: number | null;
 }
@@ -61,6 +71,10 @@ interface SourceNodeLike {
   dependsOn?: string[] | null;
   requiresWorktree: boolean;
   linkUpstreamPullRequest?: boolean | null;
+  reworkSessionBehavior?: WorkflowNodeSessionBehavior | null;
+  reworkCompactOriginalContext?: boolean | null;
+  resumeSessionBehavior?: WorkflowNodeSessionBehavior | null;
+  resumeCompactOriginalContext?: boolean | null;
 }
 
 interface TemplateLike {
@@ -98,6 +112,16 @@ export function copyFromTemplate(template: TemplateLike, input: ConfigureWorkflo
           node.type === 'HUMAN'
             ? (override?.linkUpstreamPullRequest ?? node.linkUpstreamPullRequest ?? false)
             : false,
+        // 会话行为：input 覆盖模板值，缺省按类型归一（HUMAN/FLAG 恒 null）
+        ...normalizeNodeSessionBehavior({
+          type: node.type,
+          reworkSessionBehavior: override?.reworkSessionBehavior ?? node.reworkSessionBehavior,
+          reworkCompactOriginalContext:
+            override?.reworkCompactOriginalContext ?? node.reworkCompactOriginalContext,
+          resumeSessionBehavior: override?.resumeSessionBehavior ?? node.resumeSessionBehavior,
+          resumeCompactOriginalContext:
+            override?.resumeCompactOriginalContext ?? node.resumeCompactOriginalContext,
+        }),
         agentConfig: configByKey.get(node.nodeKey) ? { ...configByKey.get(node.nodeKey)! } : null,
       };
     }),
@@ -243,20 +267,31 @@ class ConfiguredWorkflowService {
 
   /** 将输入节点归一化为完整节点结构（补默认值，供图校验与落库） */
   private normalizeConfiguredNodes(nodes: ConfiguredWorkflowNodeInput[]) {
-    return nodes.map((n) => ({
-      nodeKey: n.nodeKey,
-      type: n.type ?? 'AI',
-      name: n.name ?? n.nodeKey,
-      description: n.description ?? null,
-      stage: n.stage ?? '默认阶段',
-      prompts: n.prompts ? [...n.prompts] : undefined,
-      artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
-      dependsOn: [...(n.dependsOn ?? [])],
-      requiresWorktree: n.requiresWorktree ?? false,
-      linkUpstreamPullRequest: n.type === 'HUMAN' ? (n.linkUpstreamPullRequest ?? false) : false,
-      agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
-      sortOrder: n.sortOrder ?? undefined,
-    }));
+    return nodes.map((n) => {
+      const type = n.type ?? 'AI';
+      return {
+        nodeKey: n.nodeKey,
+        type,
+        name: n.name ?? n.nodeKey,
+        description: n.description ?? null,
+        stage: n.stage ?? '默认阶段',
+        prompts: n.prompts ? [...n.prompts] : undefined,
+        artifactTitles: n.artifactTitles ? [...n.artifactTitles] : undefined,
+        dependsOn: [...(n.dependsOn ?? [])],
+        requiresWorktree: n.requiresWorktree ?? false,
+        linkUpstreamPullRequest: type === 'HUMAN' ? (n.linkUpstreamPullRequest ?? false) : false,
+        // 会话行为：仅 AI 节点落显式值/缺省值；HUMAN/FLAG 归一为 null
+        ...normalizeNodeSessionBehavior({
+          type,
+          reworkSessionBehavior: n.reworkSessionBehavior,
+          reworkCompactOriginalContext: n.reworkCompactOriginalContext,
+          resumeSessionBehavior: n.resumeSessionBehavior,
+          resumeCompactOriginalContext: n.resumeCompactOriginalContext,
+        }),
+        agentConfig: n.agentConfig ? { ...n.agentConfig } : null,
+        sortOrder: n.sortOrder ?? undefined,
+      };
+    });
   }
 
   /**

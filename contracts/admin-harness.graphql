@@ -1,0 +1,37 @@
+# Harness 平台配置契约（压缩指令等）
+#
+# 数据归属：`harnessconfigs` 集合由 admin-api **唯一写方**维护；agent-api 只读镜像
+# （工作流返工/复工恢复原始会话时解析压缩指令）。索引由 admin-api 迁移
+# `023-harness-configs` 幂等创建。
+#
+# 通用口径：
+# - 三种 Harness（OPENCODE / KIMI_CODE / DEEPSEEK_HARNESS）固定存在；未配置行以默认
+#   `compactCommand=/compact` 归一返回；
+# - `compactCommand` 校验：trim 后长度 1~64 且以 `/` 开头，非法返回 `invalid compact command`；
+# - 鉴权：全部 Query/Mutation 需管理员 JWT（`UNAUTHENTICATED` 口径同
+#   contracts/admin-auth.graphql）。
+
+# Harness 类型（与 contracts/cloud-host.graphql 的 HarnessType 同枚举值）
+enum HarnessType {
+  OPENCODE
+  KIMI_CODE
+  DEEPSEEK_HARNESS
+}
+
+type HarnessConfig {
+  harnessType: HarnessType!
+  # 原始上下文压缩指令：以 / 开头、trim 后 1~64 字符；默认 /compact
+  compactCommand: String!
+  # ISO 字符串（未落库行返回当前时间以外的稳定值由服务端决定，前端仅展示）
+  updatedAt: String!
+}
+
+type Query {
+  # 全量 Harness 配置（未配置的 Harness 以默认 /compact 归一返回）
+  adminHarnessConfigs: [HarnessConfig!]!
+}
+
+type Mutation {
+  # 按 harnessType upsert；compactCommand 校验失败返回 `invalid compact command`
+  upsertHarnessConfig(harnessType: HarnessType!, compactCommand: String!): HarnessConfig!
+}

@@ -16,6 +16,11 @@ vi.mock('../config/index.js', () => ({ config: h.config }));
 
 vi.mock('../models/cloud-host.js', () => ({
   HARNESS_TYPES: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'],
+  HARNESS_ACP_TYPES: {
+    OPENCODE: 'opencode',
+    KIMI_CODE: 'kimi_code',
+    DEEPSEEK_HARNESS: 'deepseek_harness',
+  },
   CloudHost: {
     countDocuments: vi.fn(),
     create: vi.fn(),

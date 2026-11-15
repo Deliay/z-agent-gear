@@ -832,6 +832,63 @@ describe('valut-service（T-VAL1~4 / T-VAL7，真库）', () => {
     });
   });
 
+  describe('T-FR4 resolveManualValueByKey（自定义渲染模板取值原语）', () => {
+    it('按 {workspaceId, manual, key} 解密往返；仅 manual（service-* 返回 null）', async () => {
+      const created = await runWithWorkspace(ctxA, () =>
+        valutService.createManualEntry({ key: 'API_TOKEN', value: 'secret-value', createdBy: USER }),
+      );
+      expect(created.key).toBe('API_TOKEN');
+
+      const plaintext = await runWithWorkspace(ctxA, () =>
+        valutService.resolveManualValueByKey('API_TOKEN', WS_A),
+      );
+      expect(plaintext).toBe('secret-value');
+
+      // 服务托管 namespace 取不到
+      await entryCollection().insertOne({
+        tenantId: new mongoose.Types.ObjectId(TENANT),
+        workspaceId: new mongoose.Types.ObjectId(WS_A),
+        namespace: 'service-mcp-bearer-tokens',
+        key: 'MANAGED',
+        valueEncrypted: encrypt('managed-secret'),
+        editable: true,
+        deletable: false,
+        createdBy: new mongoose.Types.ObjectId(USER),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      await expect(
+        runWithWorkspace(ctxA, () => valutService.resolveManualValueByKey('MANAGED', WS_A)),
+      ).resolves.toBeNull();
+
+      // 不存在 / 跨工作区 / 空 key → null
+      await expect(
+        runWithWorkspace(ctxA, () => valutService.resolveManualValueByKey('NOPE', WS_A)),
+      ).resolves.toBeNull();
+      await expect(
+        runWithWorkspace(ctxB, () => valutService.resolveManualValueByKey('API_TOKEN', WS_B)),
+      ).resolves.toBeNull();
+      await expect(
+        runWithWorkspace(ctxA, () => valutService.resolveManualValueByKey('', WS_A)),
+      ).resolves.toBeNull();
+    });
+
+    it('CREDENTIAL_ENCRYPTION_KEY 缺失即抛错（沿用既有解密口径）', async () => {
+      await runWithWorkspace(ctxA, () =>
+        valutService.createManualEntry({ key: 'K', value: 'v', createdBy: USER }),
+      );
+      const original = config.credentialEncryptionKey;
+      (config as { credentialEncryptionKey?: string }).credentialEncryptionKey = '';
+      try {
+        await expect(
+          runWithWorkspace(ctxA, () => valutService.resolveManualValueByKey('K', WS_A)),
+        ).rejects.toThrow('CREDENTIAL_ENCRYPTION_KEY is not configured');
+      } finally {
+        (config as { credentialEncryptionKey?: string }).credentialEncryptionKey = original;
+      }
+    });
+  });
+
   describe('T-VAL7 日志脱敏（D4 精确路径）', () => {
     it('REDACT_PATHS 含三条精确路径、不含裸 *.value', () => {
       expect(REDACT_PATHS).toContain('*.newToken');

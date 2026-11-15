@@ -236,6 +236,33 @@ describe('workflow resolvers', () => {
       expect(result[0].nodes[1].agentConfig).toMatchObject({ acpServerType: 'opencode', initNewWorktree: true });
     });
 
+    it('T-MAP1: 存量节点（字段缺失）映射会话行为默认值；HUMAN/FLAG 恒 null', async () => {
+      vi.mocked(configuredWorkflowService.listForUser).mockResolvedValue([configuredDoc] as never);
+
+      const result = await workflowResolvers.Query.configuredWorkflows({}, {}, ctx);
+
+      expect(result[0].nodes[0]).toMatchObject({
+        reworkSessionBehavior: null,
+        reworkCompactOriginalContext: null,
+        resumeSessionBehavior: null,
+        resumeCompactOriginalContext: null,
+      });
+      expect(result[0].nodes[1]).toMatchObject({
+        reworkSessionBehavior: 'ORIGINAL_SESSION',
+        reworkCompactOriginalContext: false,
+        resumeSessionBehavior: 'NEW_SESSION',
+        resumeCompactOriginalContext: false,
+      });
+
+      const instance = mapInstance(instanceDoc);
+      expect(instance.nodes[0]).toMatchObject({
+        reworkSessionBehavior: null,
+        reworkCompactOriginalContext: null,
+        resumeSessionBehavior: null,
+        resumeCompactOriginalContext: null,
+      });
+    });
+
     it('repoWorkflowTemplates 委托扫描服务并逐字返回', async () => {
       const scanned = [
         {
