@@ -33,6 +33,14 @@ enum WorkflowNodeStatus {
   RETRY_FAILED
 }
 
+# AI 节点打回/返工会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null）
+# - NEW_SESSION：拉起全新会话
+# - ORIGINAL_SESSION：继续使用原始会话（resume 原会话）
+enum WorkflowNodeSessionBehavior {
+  NEW_SESSION
+  ORIGINAL_SESSION
+}
+
 # ---------- 工作流模板 ----------
 
 type WorkflowTemplateNode {
@@ -53,6 +61,15 @@ type WorkflowTemplateNode {
   requiresWorktree: Boolean!
   # 人类节点：是否联动上游 Pull Request（默认 false；仅 HUMAN 可为 true）
   linkUpstreamPullRequest: Boolean!
+  # ---- 会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null，读取侧按默认值归一） ----
+  # 返工时行为：缺省 ORIGINAL_SESSION（=现状，继续原始会话）
+  reworkSessionBehavior: WorkflowNodeSessionBehavior
+  # 返工时=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+  reworkCompactOriginalContext: Boolean
+  # 打回后（打回上游完成后再次流转到本节点）行为：缺省 NEW_SESSION（=现状，新会话）
+  resumeSessionBehavior: WorkflowNodeSessionBehavior
+  # 打回后=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+  resumeCompactOriginalContext: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
@@ -99,6 +116,15 @@ type ConfiguredWorkflowNode {
   agentConfig: AgentNodeConfig
   # 人类节点：是否联动上游 Pull Request（默认 false；仅 HUMAN 可为 true）
   linkUpstreamPullRequest: Boolean!
+  # ---- 会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null，读取侧按默认值归一） ----
+  # 返工时行为：缺省 ORIGINAL_SESSION（=现状，继续原始会话）
+  reworkSessionBehavior: WorkflowNodeSessionBehavior
+  # 返工时=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+  reworkCompactOriginalContext: Boolean
+  # 打回后（打回上游完成后再次流转到本节点）行为：缺省 NEW_SESSION（=现状，新会话）
+  resumeSessionBehavior: WorkflowNodeSessionBehavior
+  # 打回后=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+  resumeCompactOriginalContext: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
@@ -216,6 +242,15 @@ type WorkflowNode {
   dependsOn: [String!]
   # 人类节点：是否联动上游 Pull Request（实例化快照，未开始的人类节点可编辑）
   linkUpstreamPullRequest: Boolean!
+  # ---- 会话行为（仅 AI 节点有意义；HUMAN/FLAG 恒 null，读取侧按默认值归一） ----
+  # 返工时行为：缺省 ORIGINAL_SESSION（=现状，继续原始会话）
+  reworkSessionBehavior: WorkflowNodeSessionBehavior
+  # 返工时=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+  reworkCompactOriginalContext: Boolean
+  # 打回后行为：缺省 NEW_SESSION（=现状，新会话）
+  resumeSessionBehavior: WorkflowNodeSessionBehavior
+  # 打回后=原始会话时是否先压缩上下文（缺省 false；仅 ORIGINAL_SESSION 合法）
+  resumeCompactOriginalContext: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
   createdAt: String!
@@ -318,6 +353,13 @@ input WorkflowTemplateNodeInput {
   requiresWorktree: Boolean!
   # 人类节点：是否联动上游 Pull Request（默认 false；仅 HUMAN 可为 true）
   linkUpstreamPullRequest: Boolean
+  # ---- 会话行为（仅 AI 节点；缺省 = 现状） ----
+  # 返工时行为：缺省 ORIGINAL_SESSION；仅 ORIGINAL_SESSION 时 compact 合法
+  reworkSessionBehavior: WorkflowNodeSessionBehavior
+  reworkCompactOriginalContext: Boolean
+  # 打回后行为：缺省 NEW_SESSION；仅 ORIGINAL_SESSION 时 compact 合法
+  resumeSessionBehavior: WorkflowNodeSessionBehavior
+  resumeCompactOriginalContext: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
@@ -349,6 +391,13 @@ input ConfiguredWorkflowNodeInput {
   agentConfig: AgentNodeConfigInput
   # 人类节点：是否联动上游 Pull Request（默认 false；仅 HUMAN 可为 true）
   linkUpstreamPullRequest: Boolean
+  # ---- 会话行为（仅 AI 节点；缺省 = 现状） ----
+  # 返工时行为：缺省 ORIGINAL_SESSION；仅 ORIGINAL_SESSION 时 compact 合法
+  reworkSessionBehavior: WorkflowNodeSessionBehavior
+  reworkCompactOriginalContext: Boolean
+  # 打回后行为：缺省 NEW_SESSION；仅 ORIGINAL_SESSION 时 compact 合法
+  resumeSessionBehavior: WorkflowNodeSessionBehavior
+  resumeCompactOriginalContext: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
@@ -414,6 +463,13 @@ input WorkflowNodeUpdateInput {
   agentConfig: AgentNodeConfigInput
   # 人类节点：是否联动上游 Pull Request（仅 HUMAN 可写；true 开启联动，false/缺省关闭）
   linkUpstreamPullRequest: Boolean
+  # ---- 会话行为（仅 AI 节点可写；HUMAN/FLAG 传入非 null 时归一为 null） ----
+  # 返工时行为：缺省不动；仅 ORIGINAL_SESSION 时 compact 合法
+  reworkSessionBehavior: WorkflowNodeSessionBehavior
+  reworkCompactOriginalContext: Boolean
+  # 打回后行为：缺省不动；仅 ORIGINAL_SESSION 时 compact 合法
+  resumeSessionBehavior: WorkflowNodeSessionBehavior
+  resumeCompactOriginalContext: Boolean
   # 展示顺序（仅影响 UI 排列，不影响执行顺序）
   sortOrder: Int
 }
