@@ -243,6 +243,7 @@ flowchart LR
 - [[proposals/20261114-feat-workflow-instance-continuation.md]] — 已实例化的工作流接续（契约新增 WorkflowInstanceUnavailableReason/continuationHistory/continueWorkflowInstance（harnessMappings 逐节点映射）；agent-api 接续服务换绑控制器与工作区、可选新 Worktree、未完成 AI 节点 Harness 逐节点改写、RUNNING/REWORK 节点标记 FAILED(CONTROLLER_UNAVAILABLE)；agent-web 不可用徽标与接续对话框）
 - [[proposals/20261115-feat-workflow-reject-rework-session-behavior.md]] — 工作流打回/返工会话行为优化（契约新增 WorkflowNodeSessionBehavior 与节点 4 字段六处双写、admin-harness.graphql 新增；agent-api Orchestrator 返工/复工四象限分流、compact.ts 压缩管线复用空闲等待器 + compactInFlight 抑制停滞检测、新会话返工 assemblePrompt+返工说明段单条发送含 completeCurrentRework 指引、harnessconfigs 只读镜像 resolveCompactCommand 默认 /compact；admin-api harnessconfigs 唯一写方与种子迁移；agent-web 节点编辑器会话行为区、admin-web Harness 配置页；存量零迁移默认值即现状）
 - [[proposals/20261115-feat-workflow-mcp-prompt-snippets.md]] — 工作流MCP提供提示词片段（平台内置 MCP agent-workflow-admin-tools 实现 MCP prompts 能力：initialize 声明 prompts、prompts/list、prompts/get；新增 admin-prompts.ts 片段注册表单一来源承载 workflow-schema 与 workflow-project-persistence 两段提示词，内容与 validateTemplateGraph 及 .zag/workflow/templates 扫描约束同源对齐并有防漂移守卫；纯 agent-api 改动零数据模型变更）
+- [[proposals/20261115-feat-knowledge-base.md]] — 知识库（knowledgebases/knowledgebasedocuments/knowledgebaseevents 三集合事件溯源（删除释放路径、历史延续、库级倒序）、knowledge-base-access 四档权限矩阵纯函数（全局库跨工作区按库模式放行写、有意偏离全局只读插件）、平台 MCP agent-knowledge-base-tools 恒装配且创建库工具按角色门控、契约新增 knowledge-base.graphql；agent-web 侧边栏第五分区与 /knowledge-bases/:kbId/* 页面：树/预览/分栏编辑/localStorage 草稿/历史抽屉/设置；迁移 028）
 
 ### 实现计划（`plan/`）
 
