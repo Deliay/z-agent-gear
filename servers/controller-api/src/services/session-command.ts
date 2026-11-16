@@ -16,6 +16,7 @@ import { worktreeService } from './worktree-service.js';
 import { fsMkdirService } from './fs-mkdir-service.js';
 import { fsReadFileService } from './fs-read-file-service.js';
 import { workflowTemplatesService } from './workflow-templates-service.js';
+import { knowledgeBasesService } from './knowledge-bases-service.js';
 
 const SESSION_COMMAND_CHANNEL = 'session:command';
 const SESSION_MESSAGE_CHANNEL = 'session:message';
@@ -192,6 +193,8 @@ export class SessionCommandService {
       await fsReadFileService.handleReadFile(command.requestId, command.controllerId, command.path as string, command.maxBytes);
     } else if (command.type === 'workflow-templates:scan' && command.requestId && command.controllerId && command.path) {
       await workflowTemplatesService.handleScan(command.requestId, command.controllerId, command.path as string);
+    } else if (command.type === 'knowledge-bases:scan' && command.requestId && command.controllerId && command.path) {
+      await knowledgeBasesService.handleScan(command.requestId, command.controllerId, command.path as string);
     } else if (command.type === 'git:worktree:add' && command.requestId && command.controllerId && command.repoPath && command.worktreePath && command.branch) {
       await worktreeService.handleAdd(command.requestId, command.controllerId, command.repoPath as string, command.worktreePath as string, command.branch as string, command.committer);
     } else if (command.type === 'git:worktree:coauthor' && command.requestId && command.controllerId && command.worktreePath) {

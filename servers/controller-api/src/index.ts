@@ -18,6 +18,7 @@ import { worktreeService } from './services/worktree-service.js';
 import { fsMkdirService } from './services/fs-mkdir-service.js';
 import { fsReadFileService } from './services/fs-read-file-service.js';
 import { workflowTemplatesService } from './services/workflow-templates-service.js';
+import { knowledgeBasesService } from './services/knowledge-bases-service.js';
 import { gatewayRelayService } from './services/gateway-relay.js';
 import { permissionManager } from './services/permission-manager.js';
 import { elicitationManager } from './services/elicitation-manager.js';
@@ -87,6 +88,7 @@ async function start() {
   fsMkdirService.start(io);
   fsReadFileService.start(io);
   workflowTemplatesService.start(io);
+  knowledgeBasesService.start(io);
   gatewayRelayService.start(io);
   permissionManager.start(io);
   elicitationManager.start(io);
