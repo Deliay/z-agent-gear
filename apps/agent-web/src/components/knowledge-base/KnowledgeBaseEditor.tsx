@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useMutation } from '@apollo/client/react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Save, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -14,6 +15,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import TagBadgeInput from '@/components/knowledge-base/TagBadgeInput';
 import MarkdownContent from '@/components/session/MarkdownContent';
 import {
   CREATE_KNOWLEDGE_BASE_DOCUMENT,
@@ -33,6 +35,7 @@ import {
   type KnowledgeBaseDraft,
 } from '@/lib/knowledge-base-draft';
 import { knowledgeBaseErrorMessage } from '@/lib/knowledge-base';
+import { knowledgeBaseDocHref, normalizeDocumentPath } from '@/lib/knowledge-base-path';
 import { formatDateTime } from '@/lib/format';
 
 interface KnowledgeBaseEditorProps {
@@ -46,18 +49,16 @@ interface KnowledgeBaseEditorProps {
   onSaved?: (document: KnowledgeBaseDocumentData) => void;
 }
 
-function parseTags(raw: string): string[] {
-  return raw
-    .split(/[,，]/)
-    .map((tag) => tag.trim())
-    .filter((tag) => tag.length > 0);
-}
+const INVALID_PATH_MESSAGE = '文档路径不合法（需以 / 开头、无空路径段）';
 
 /**
  * 分栏编辑（D10：原生 textarea + MarkdownContent 实时预览，不引入 Monaco）。
  *
- * 左栏实时预览、右栏标题/描述/标签/内容；输入防抖 300ms 写入 localStorage 草稿，
+ * 左栏实时预览、右栏路径/标题/描述/标签/内容；输入防抖 300ms 写入 localStorage 草稿，
  * 保存成功后清除。进入编辑时若存在草稿，弹出「恢复未保存的内容？」对话框（恢复/放弃）。
+ *
+ * 路径可修改（需求 #541 / 提案实现点 3）：已存在文档时一次 `updateKnowledgeBaseDocument(newPath)`
+ * 原子完成「移动 + 更新」，成功后导航到新路径回预览态；文档不存在时以编辑后路径创建。
  */
 export default function KnowledgeBaseEditor({
   kbId,
@@ -68,10 +69,12 @@ export default function KnowledgeBaseEditor({
   onCancel,
   onSaved,
 }: KnowledgeBaseEditorProps) {
+  const navigate = useNavigate();
   const [pendingDraft] = useState<KnowledgeBaseDraft | null>(() => readDocumentDraft(kbId, path));
   const [restoreOpen, setRestoreOpen] = useState<boolean>(() => pendingDraft !== null);
+  const [editedPath, setEditedPath] = useState(path);
   const [title, setTitle] = useState(document?.title ?? '');
-  const [tagsText, setTagsText] = useState((document?.tags ?? []).join(', '));
+  const [tags, setTags] = useState<string[]>(document?.tags ?? []);
   const [description, setDescription] = useState(document?.description ?? '');
   const [content, setContent] = useState(document?.content ?? '');
   const [saving, setSaving] = useState(false);
@@ -84,28 +87,29 @@ export default function KnowledgeBaseEditor({
     UPDATE_KNOWLEDGE_BASE_DOCUMENT,
   );
 
-  const tags = useMemo(() => parseTags(tagsText), [tagsText]);
-
   const scheduleDraft = (next: {
+    editedPath: string;
     title: string;
-    tagsText: string;
+    tags: string[];
     description: string;
     content: string;
   }) => {
     scheduleDocumentDraft(kbId, path, {
       title: next.title,
-      tags: parseTags(next.tagsText),
+      tags: next.tags,
       description: next.description,
       content: next.content,
+      editedPath: next.editedPath,
     });
   };
 
   const handleRestore = () => {
     if (pendingDraft) {
       setTitle(pendingDraft.title);
-      setTagsText(pendingDraft.tags.join(', '));
+      setTags(pendingDraft.tags);
       setDescription(pendingDraft.description);
       setContent(pendingDraft.content);
+      setEditedPath(pendingDraft.editedPath ?? path);
     }
     setRestoreOpen(false);
   };
@@ -134,6 +138,12 @@ export default function KnowledgeBaseEditor({
       setError('内容最多 262144 个字符');
       return;
     }
+    // 客户端预校验仅体验层：服务端 normalizeDocumentPath 为权威
+    const targetPath = normalizeDocumentPath(editedPath);
+    if (!targetPath) {
+      setError(INVALID_PATH_MESSAGE);
+      return;
+    }
     if (document ? !canUpdate : !canCreate) {
       setError('没有保存该文档的权限');
       return;
@@ -145,31 +155,40 @@ export default function KnowledgeBaseEditor({
       description,
       content,
     };
+    const moving = targetPath !== path;
     setError(null);
     setSaving(true);
     try {
       const refetchQueries = [
         { query: GET_KNOWLEDGE_BASE_TREE },
-        { query: GET_KNOWLEDGE_BASE_DOCUMENT, variables: { knowledgeBaseId: kbId, path } },
-        { query: GET_KNOWLEDGE_BASE_EVENTS, variables: { knowledgeBaseId: kbId, path } },
+        { query: GET_KNOWLEDGE_BASE_DOCUMENT, variables: { knowledgeBaseId: kbId, path: targetPath } },
+        { query: GET_KNOWLEDGE_BASE_EVENTS, variables: { knowledgeBaseId: kbId, path: targetPath } },
       ];
       let saved: KnowledgeBaseDocumentData | null = null;
       if (document) {
         const result = await updateDocument({
-          variables: { knowledgeBaseId: kbId, path, input },
+          variables: {
+            knowledgeBaseId: kbId,
+            path,
+            input,
+            ...(moving ? { newPath: targetPath } : {}),
+          },
           refetchQueries,
         });
         saved = result.data?.updateKnowledgeBaseDocument ?? null;
       } else {
         const result = await createDocument({
-          variables: { knowledgeBaseId: kbId, path, input },
+          variables: { knowledgeBaseId: kbId, path: targetPath, input },
           refetchQueries,
         });
         saved = result.data?.createKnowledgeBaseDocument ?? null;
       }
+      // 原子保存成功即无草稿语义：只清旧键，不在新路径下伪造草稿（D7）
       clearDocumentDraft(kbId, path);
       toast.success('文档已保存');
+      // 先通知父级清 ?edit（其 setSearchParams 基于当前路径），再导航到新路径
       if (saved) onSaved?.(saved);
+      if (moving) navigate(knowledgeBaseDocHref(kbId, targetPath));
     } catch (err) {
       setError(knowledgeBaseErrorMessage(err, '保存失败，请重试'));
     } finally {
@@ -235,6 +254,26 @@ export default function KnowledgeBaseEditor({
 
         <section className="min-w-0 space-y-3" aria-label="编辑表单">
           <div className="space-y-1.5">
+            <Label htmlFor="kb-doc-path">路径</Label>
+            <Input
+              id="kb-doc-path"
+              aria-label="路径"
+              className="font-mono"
+              value={editedPath}
+              maxLength={512}
+              onChange={(event) => {
+                const next = event.target.value;
+                setEditedPath(next);
+                if (error) setError(null);
+                scheduleDraft({ editedPath: next, title, tags, description, content });
+              }}
+            />
+            {document && editedPath !== path && (
+              <p className="text-xs text-muted-foreground">保存后将移动到该路径（历史随文档带入）。</p>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
             <Label htmlFor="kb-doc-title">标题</Label>
             <Input
               id="kb-doc-title"
@@ -245,22 +284,22 @@ export default function KnowledgeBaseEditor({
                 const next = event.target.value;
                 setTitle(next);
                 if (error) setError(null);
-                scheduleDraft({ title: next, tagsText, description, content });
+                scheduleDraft({ editedPath, title: next, tags, description, content });
               }}
             />
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="kb-doc-tags">标签（逗号分隔）</Label>
-            <Input
+            <Label htmlFor="kb-doc-tags">标签</Label>
+            <TagBadgeInput
               id="kb-doc-tags"
               aria-label="标签"
-              value={tagsText}
-              placeholder="例如：规范, 入门"
-              onChange={(event) => {
-                const next = event.target.value;
-                setTagsText(next);
-                scheduleDraft({ title, tagsText: next, description, content });
+              value={tags}
+              placeholder="输入后回车或逗号生成标签"
+              onChange={(next) => {
+                setTags(next);
+                if (error) setError(null);
+                scheduleDraft({ editedPath, title, tags: next, description, content });
               }}
             />
           </div>
@@ -278,7 +317,7 @@ export default function KnowledgeBaseEditor({
                 const next = event.target.value;
                 setDescription(next);
                 if (error) setError(null);
-                scheduleDraft({ title, tagsText, description: next, content });
+                scheduleDraft({ editedPath, title, tags, description: next, content });
               }}
             />
           </div>
@@ -295,7 +334,7 @@ export default function KnowledgeBaseEditor({
                 const next = event.target.value;
                 setContent(next);
                 if (error) setError(null);
-                scheduleDraft({ title, tagsText, description, content: next });
+                scheduleDraft({ editedPath, title, tags, description, content: next });
               }}
             />
           </div>

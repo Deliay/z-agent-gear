@@ -16,7 +16,10 @@
 #     全局工作区 → READ_ONLY，普通工作区 → NONE。
 #
 # 文档路径：以 `/` 开头，根目录为 `/`，库内唯一；归一化 = trim → 去末尾 `/`（根除外）；
-# 拒空路径段、控制字符、NUL；单段 ≤128 字符、全长 ≤512。文档不可改名/移动（删除 + 新建替代）。
+# 拒空路径段、控制字符、NUL；单段 ≤128 字符、全长 ≤512。
+# 文档路径可修改（需求 #541）：移动时把该路径**全部历史事件**的 `path` 改写为新路径（历史随文档带入，
+# 并追加一条 `MOVE` 事件记录原路径）；新路径历史天然完整，原路径即刻释放、重建后历史从其 `CREATE` 独立起算。
+# 权限口径 = `canUpdate`（与更新文档同档，UPDATE_ONLY 模式可用），错误白名单不新增。
 #
 # 错误口径（白名单，逐字透传；未命中收敛 `internal error`）：
 #   `Not authenticated` / `workspace not found` / `knowledge base not found` /
@@ -40,6 +43,8 @@ enum KnowledgeBaseEventOp {
   CREATE
   UPDATE
   DELETE
+  # 路径修改：path = 新路径、fromPath = 原路径、快照为移动时点内容（内容不变）
+  MOVE
 }
 
 type KnowledgeBaseAccess {
@@ -92,6 +97,8 @@ type KnowledgeBaseEvent {
   id: ID!
   path: String!
   op: KnowledgeBaseEventOp!
+  # 仅 MOVE 事件有值（原路径）；其余操作恒 null
+  fromPath: String
   title: String!
   tags: [String!]!
   description: String!
@@ -128,6 +135,10 @@ extend type Mutation {
   deleteKnowledgeBase(id: ID!): Boolean!
   # path：文档路径（以 / 开头，库内唯一；由服务端归一化，非法 → invalid document path）
   createKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!): KnowledgeBaseDocument!
-  updateKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!): KnowledgeBaseDocument!
+  # newPath 可选：提供且归一化后与 path 不同 → 一次保存原子完成「移动 + 更新」（历史随文档带入新路径，
+  # 并追加 MOVE 事件）；目标路径占用 → `knowledge base document already exists`；
+  # newPath 与 path 归一后相同（含 null/缺省）→ 视为未提供（仅内容更新，不产生 MOVE 事件）。
+  # 权限 = canUpdate；路径非法 → `invalid document path`；源不存在 → `knowledge base document not found`。
+  updateKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!, newPath: String): KnowledgeBaseDocument!
   deleteKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!): Boolean!
 }
