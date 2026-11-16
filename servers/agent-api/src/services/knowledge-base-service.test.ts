@@ -415,3 +415,259 @@ describe('knowledge-base-service（T-KBS，真库）', () => {
     expect(doc?.tags).toEqual(['a', 'b']);
   });
 });
+
+describe('knowledge-base-service 移动（T-KBS-M，真库）', () => {
+  it('T-KBS-M1: 移动成功——业务行 path/updatedBy 更新、历史全量改写、末尾追加 MOVE 事件', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a', input({ title: 'v1', content: 'c1' }));
+    await inCtx(adminA, () =>
+      knowledgeBaseService.updateDocument(ADMIN, kbId, '/a', input({ title: 'v2', content: 'c2' })),
+    );
+
+    await inCtx(adminA, () =>
+      knowledgeBaseService.moveDocument(ADMIN, kbId, '/a', '/b/c'),
+    );
+
+    expect(
+      await inCtx(adminA, () => knowledgeBaseService.getDocument(ADMIN, kbId, '/a')),
+    ).toBeNull();
+    const moved = await inCtx(adminA, () => knowledgeBaseService.getDocument(ADMIN, kbId, '/b/c'));
+    expect(moved).toMatchObject({ path: '/b/c', title: 'v2', content: 'c2', updatedByName: 'Alice' });
+
+    const events = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/b/c' }),
+    );
+    expect(events.map((event) => event.op)).toEqual(['MOVE', 'UPDATE', 'CREATE']);
+    expect(events.every((event) => event.path === '/b/c')).toBe(true);
+    expect(events[0]).toMatchObject({
+      fromPath: '/a',
+      path: '/b/c',
+      title: 'v2',
+      content: 'c2',
+      actorName: 'Alice',
+    });
+    expect(events[1].fromPath).toBeNull();
+    expect(events[2].fromPath).toBeNull();
+    // 旧路径历史已被改写：按旧路径查询为空
+    expect(
+      await inCtx(adminA, () => knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/a' })),
+    ).toEqual([]);
+  });
+
+  it('T-KBS-M2: 目标占用逐字（预检 + 绕过预检直撞唯一索引 E11000）', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a');
+    await createDoc(adminA, kbId, '/b');
+
+    await expect(
+      inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/a', '/b')),
+    ).rejects.toThrow('knowledge base document already exists');
+
+    const existsSpy = vi
+      .spyOn(KnowledgeBaseDocument, 'exists')
+      .mockResolvedValueOnce(null as never);
+    await expect(
+      inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/a', '/b')),
+    ).rejects.toThrow('knowledge base document already exists');
+    existsSpy.mockRestore();
+
+    // 失败后源文档与历史保持原位
+    expect(await inCtx(adminA, () => knowledgeBaseService.getDocument(ADMIN, kbId, '/a'))).toBeTruthy();
+  });
+
+  it('T-KBS-M3: 非法 newPath 矩阵 + 源不存在', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a');
+
+    for (const bad of ['b', '/x//y', `/${'a'.repeat(300)}`, '/a\u0000b']) {
+      await expect(
+        inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/a', bad)),
+      ).rejects.toThrow('invalid document path');
+    }
+
+    await expect(
+      inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/missing', '/z')),
+    ).rejects.toThrow('knowledge base document not found');
+  });
+
+  it('T-KBS-M4: 移动权限 = canUpdate（四档矩阵）', async () => {
+    const kbId = await createKb(adminA, 'KB-MOVE-PERM');
+    await createDoc(adminA, kbId, '/a');
+
+    // NONE + developer：不可见
+    await expect(
+      inCtx(devA, () => knowledgeBaseService.moveDocument(DEV, kbId, '/a', '/dev-a')),
+    ).rejects.toThrow('knowledge base not found');
+
+    // READ_ONLY + developer：越权
+    await inCtx(adminA, () =>
+      knowledgeBaseService.updatePermission(ADMIN, kbId, 'READ_ONLY'),
+    );
+    await expect(
+      inCtx(devA, () => knowledgeBaseService.moveDocument(DEV, kbId, '/a', '/dev-a')),
+    ).rejects.toThrow('knowledge base permission denied');
+
+    // UPDATE_ONLY + developer：放行
+    await inCtx(adminA, () =>
+      knowledgeBaseService.updatePermission(ADMIN, kbId, 'UPDATE_ONLY'),
+    );
+    await expect(
+      inCtx(devA, () => knowledgeBaseService.moveDocument(DEV, kbId, '/a', '/dev-a')),
+    ).resolves.toBeUndefined();
+    expect(
+      await inCtx(adminA, () => knowledgeBaseService.getDocument(ADMIN, kbId, '/dev-a')),
+    ).toMatchObject({ updatedByName: 'Bob' });
+
+    // FULL_ACCESS + developer：放行
+    await inCtx(adminA, () =>
+      knowledgeBaseService.updatePermission(ADMIN, kbId, 'FULL_ACCESS'),
+    );
+    await expect(
+      inCtx(devA, () => knowledgeBaseService.moveDocument(DEV, kbId, '/dev-a', '/dev-b')),
+    ).resolves.toBeUndefined();
+
+    // admin 恒放行（含 NONE 模式）
+    await inCtx(adminA, () =>
+      knowledgeBaseService.updatePermission(ADMIN, kbId, 'NONE'),
+    );
+    await expect(
+      inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/dev-b', '/admin-c')),
+    ).resolves.toBeUndefined();
+  });
+
+  it('T-KBS-M5: 同路径幂等——零写零事件', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a');
+    const before = await KnowledgeBaseEvent.countDocuments({ knowledgeBaseId: kbId });
+
+    await inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/a', '/a/'));
+
+    // moveDocument 同路径：零写零事件
+    expect(await KnowledgeBaseEvent.countDocuments({ knowledgeBaseId: kbId })).toBe(before);
+
+    // updateDocument 的 newPath 归一后相同 → 视为未提供（仅内容更新，不产生 MOVE）
+    await inCtx(adminA, () =>
+      knowledgeBaseService.updateDocument(ADMIN, kbId, '/a', input(), '/a'),
+    );
+    expect(
+      await KnowledgeBaseEvent.countDocuments({ knowledgeBaseId: kbId, op: 'MOVE' }),
+    ).toBe(0);
+    expect(await inCtx(adminA, () => knowledgeBaseService.getDocument(ADMIN, kbId, '/a'))).toBeTruthy();
+  });
+
+  it('T-KBS-M6: 路径 + 内容同次保存 → MOVE（移动前快照）+ UPDATE（新内容）', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a', input({ title: 'old', content: 'old-content' }));
+
+    const saved = await inCtx(adminA, () =>
+      knowledgeBaseService.updateDocument(
+        ADMIN,
+        kbId,
+        '/a',
+        input({ title: 'new', content: 'new-content' }),
+        '/b',
+      ),
+    );
+    expect(saved).toMatchObject({ path: '/b', title: 'new', content: 'new-content' });
+
+    const events = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/b' }),
+    );
+    expect(events.map((event) => event.op)).toEqual(['UPDATE', 'MOVE', 'CREATE']);
+    expect(events[1]).toMatchObject({
+      op: 'MOVE',
+      fromPath: '/a',
+      path: '/b',
+      title: 'old',
+      content: 'old-content',
+    });
+    expect(events[0]).toMatchObject({ op: 'UPDATE', content: 'new-content' });
+  });
+
+  it('T-KBS-M7: 仅路径变化 → 仅 MOVE；未移动仅内容变化 → 仅 UPDATE（零行为变化）', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a', input({ title: 'same', content: 'same' }));
+
+    await inCtx(adminA, () =>
+      knowledgeBaseService.updateDocument(ADMIN, kbId, '/a', input({ title: 'same', content: 'same' }), '/b'),
+    );
+    let events = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/b' }),
+    );
+    expect(events.map((event) => event.op)).toEqual(['MOVE', 'CREATE']);
+
+    await inCtx(adminA, () =>
+      knowledgeBaseService.updateDocument(ADMIN, kbId, '/b', input({ title: 'changed', content: 'same' })),
+    );
+    events = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/b' }),
+    );
+    expect(events.map((event) => event.op)).toEqual(['UPDATE', 'MOVE', 'CREATE']);
+  });
+
+  it('T-KBS-M8: 原路径释放可重建，新文档历史仅含自身 CREATE', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a', input({ title: 'origin' }));
+    await inCtx(adminA, () => knowledgeBaseService.updateDocument(ADMIN, kbId, '/a', input({ title: 'origin' }), '/b'));
+
+    await createDoc(adminA, kbId, '/a', input({ title: 'reborn' }));
+    const rebornEvents = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/a' }),
+    );
+    expect(rebornEvents.map((event) => event.op)).toEqual(['CREATE']);
+    expect(rebornEvents[0].title).toBe('reborn');
+
+    const movedEvents = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/b' }),
+    );
+    expect(movedEvents.map((event) => event.op)).toEqual(['MOVE', 'CREATE']);
+    // 多次移动：历史持续跟随
+    await inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/b', '/c'));
+    const again = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/c' }),
+    );
+    expect(again.map((event) => event.op)).toEqual(['MOVE', 'MOVE', 'CREATE']);
+    expect(again[0].fromPath).toBe('/b');
+    expect(again[1].fromPath).toBe('/a');
+  });
+
+  it('T-KBS-M9: 并发同文档移动——updateOne filter 带旧路径，matchedCount=0 → not found', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a');
+    const staleRow = await KnowledgeBaseDocument.findOne({
+      knowledgeBaseId: kbId,
+      path: '/a',
+    }).lean();
+    await inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/a', '/b'));
+
+    const findSpy = vi.spyOn(KnowledgeBaseDocument, 'findOne').mockReturnValueOnce({
+      lean: async () => staleRow,
+    } as never);
+    await expect(
+      inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/a', '/c')),
+    ).rejects.toThrow('knowledge base document not found');
+    findSpy.mockRestore();
+
+    // 输家未产生任何事件，历史仍在 /b
+    const events = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/b' }),
+    );
+    expect(events.map((event) => event.op)).toEqual(['MOVE', 'CREATE']);
+    expect(
+      await inCtx(adminA, () => knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/c' })),
+    ).toEqual([]);
+  });
+
+  it('T-KBS-M10: 级联删除含 MOVE 事件；listEvents 透出 fromPath', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a');
+    await inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/a', '/b'));
+
+    expect(
+      await KnowledgeBaseEvent.countDocuments({ knowledgeBaseId: kbId, op: 'MOVE' }),
+    ).toBe(1);
+
+    await inCtx(adminA, () => knowledgeBaseService.remove(ADMIN, kbId));
+    expect(await KnowledgeBaseEvent.countDocuments({ knowledgeBaseId: kbId })).toBe(0);
+  });
+});

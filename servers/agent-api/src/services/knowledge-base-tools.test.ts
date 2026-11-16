@@ -348,3 +348,67 @@ describe('knowledge-base-tools（T-KBT）', () => {
     );
   });
 });
+
+describe('knowledge-base-tools 移动（T-KBT-M）', () => {
+  it('T-KBT-M1: newPath 生效——先移动再更新、返回新路径、历史含 MOVE；inputSchema 含可选 newPath', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await runWithWorkspace(adminA, () =>
+      knowledgeBaseService.createDocument(ADMIN, kbId, '/a', DOC_INPUT),
+    );
+
+    const outcome = await call(adminA, 'knowledge_base_document_update', {
+      knowledgeBaseId: kbId,
+      path: '/a',
+      newPath: '/b',
+      ...DOC_INPUT,
+      title: 'moved',
+    });
+    expect(isErrorOf(outcome)).toBe(false);
+    expect(textOf(outcome).path).toBe('/b');
+    expect(textOf(outcome).title).toBe('moved');
+
+    const events = await runWithWorkspace(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/b' }),
+    );
+    // 标题同次变化 → 先 MOVE（移动前快照）后 UPDATE（新内容），D5
+    expect(events.map((event) => event.op)).toEqual(['UPDATE', 'MOVE', 'CREATE']);
+    expect(events[1].fromPath).toBe('/a');
+
+    const updateTool = KNOWLEDGE_BASE_TOOL_DEFINITIONS.find(
+      (tool) => tool.name === 'knowledge_base_document_update',
+    );
+    const properties = (updateTool?.inputSchema as { properties: Record<string, unknown> })
+      .properties;
+    expect(properties).toHaveProperty('newPath');
+    expect((updateTool?.inputSchema as { required: string[] }).required).not.toContain('newPath');
+  });
+
+  it('T-KBT-M2: 创建分支携带 newPath → isError document not found；越权移动 → permission denied', async () => {
+    const kbId = await createKb(adminA, 'KB');
+
+    const created = await call(adminA, 'knowledge_base_document_update', {
+      knowledgeBaseId: kbId,
+      path: '/brand-new',
+      newPath: '/moved',
+      ...DOC_INPUT,
+    });
+    expect(isErrorOf(created)).toBe(true);
+    expect(created.result.content[0].text).toBe('knowledge base document not found');
+    expect(await KnowledgeBaseDocument.countDocuments({ knowledgeBaseId: kbId })).toBe(0);
+
+    await runWithWorkspace(adminA, () =>
+      knowledgeBaseService.createDocument(ADMIN, kbId, '/a', DOC_INPUT),
+    );
+    await runWithWorkspace(adminA, () =>
+      knowledgeBaseService.updatePermission(ADMIN, kbId, 'READ_ONLY'),
+    );
+    const denied = await call(
+      devA,
+      'knowledge_base_document_update',
+      { knowledgeBaseId: kbId, path: '/a', newPath: '/b', ...DOC_INPUT },
+      { userId: DEV, sessionId: 's' },
+    );
+    expect(isErrorOf(denied)).toBe(true);
+    expect(denied.result.content[0].text).toBe('knowledge base permission denied');
+  });
+});

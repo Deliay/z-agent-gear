@@ -161,7 +161,12 @@ export const knowledgeBaseResolvers = {
     },
     updateKnowledgeBaseDocument: async (
       _parent: unknown,
-      args: { knowledgeBaseId: string; path: string; input: KnowledgeBaseDocumentInput },
+      args: {
+        knowledgeBaseId: string;
+        path: string;
+        input: KnowledgeBaseDocumentInput;
+        newPath?: string | null;
+      },
       context: AuthContext,
     ): Promise<KnowledgeBaseDocumentView> => {
       const userId = requireUser(context);
@@ -171,6 +176,7 @@ export const knowledgeBaseResolvers = {
           args.knowledgeBaseId,
           args.path,
           args.input,
+          args.newPath ?? undefined,
         ),
       );
     },

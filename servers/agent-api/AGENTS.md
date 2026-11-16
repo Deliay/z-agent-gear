@@ -557,6 +557,26 @@ pnpm run start   # Start production server
   `graphql/{schemas,resolvers}/knowledge-base.test.ts`（契约/白名单/登记）；
   `session.test.ts` 已追加 `./knowledge-base-tools.js` mock 与装配断言；API 见 `tests/api/AGENTS.md`「知识库 API」。
 
+### 知识库路径修改（#541 增量）
+
+- **事件模型增量**：`KNOWLEDGE_BASE_EVENT_OPS` 追加 `MOVE`；`KnowledgeBaseEvent.fromPath`（可选 String，仅 MOVE 写入原路径，
+  存量事件读取为 `undefined` → GraphQL `null`）；**零新索引、零存量迁移**（移动后历史事件 `path` 已是新路径，`{knowledgeBaseId,path,createdAt:-1}` 天然命中）。
+- **唯一受控例外**：`knowledge-base-service.moveDocument` 内部 `KnowledgeBaseEvent.updateMany` 改写该路径全部历史事件 `path`
+  （事件集合仍无任何公共更新/删除入口，级联删除口径不变），模型注释已登记。
+- **`moveDocument(userId, kbId, rawPath, rawNewPath)` 三步写 + 回滚链**：`canUpdate` → 归一两路径（相同 → 幂等直接返回，零事件）→
+  源 `findOne`（缺失 `knowledge base document not found`）→ 目标预检（占用 `knowledge base document already exists`）→
+  ① 业务行 `updateOne({_id, path: oldPath}, {$set:{path, updatedBy}})`（filter 带旧路径防 TOCTOU，`matchedCount=0` → not found；E11000 → already exists）
+  → ② 历史事件 `updateMany`（失败回滚业务行）→ ③ 追加 MOVE 事件（快照=移动时点内容、`fromPath`=原路径；失败反向回滚历史改写 + 业务行）。
+- **`updateDocument(..., rawNewPath?)` 原子「移动 + 更新」**：校验顺序「权限 → 归一 path → 归一 newPath → 输入校验 → 移动 → 内容更新」
+  （全部校验先于任何写）；移动且快照与业务行四字段一致 → 短路仅 MOVE；路径+内容同次变化 → 先 MOVE（移动前快照）后 UPDATE（新内容）；
+  未移动分支保持恒 UPDATE（零行为变化）。`newPath` 与 `path` 归一后相同视为未提供（不产生 MOVE）。
+- **`upsertDocument(..., rawNewPath?)`（MCP）**：源存在 → `updateDocument(..., newPath)`；源不存在（创建分支）且提供 `newPath` →
+  `knowledge base document not found`（isError 透出，白名单零新增）。GraphQL `updateKnowledgeBaseDocument(..., newPath)` 仅 `?? undefined` 透传。
+- **MCP `knowledge_base_document_update`**：inputSchema 追加可选 `newPath`（tools/list 直出常量，零 MCP 快照迁移）；契约口径见
+  `contracts/knowledge-base.graphql` 与 `contracts/agent-session-websocket.md` §2.12.1 路由表。
+- **测试**：`knowledge-base-service.test.ts` T-KBS-M1~M10（历史全量带入 / MOVE 事件 / 占用与 E11000 / 非法路径 / 四档权限 / 同路径幂等 /
+  双事件 / 仅 MOVE / 原路径重建独立 / 并发 TOCTOU / 级联删除与 `fromPath` 透出）、`knowledge-base-tools.test.ts` T-KBT-M1~M2。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

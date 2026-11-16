@@ -527,6 +527,131 @@ test.describe('知识库', () => {
     await expect(options).toHaveCount(3);
   });
 
+  test('E2E-KB8 编辑模式修改路径保存：导航新路径、历史含移动、原路径可重建、目标占用提示', async ({
+    page,
+  }) => {
+    const user = await createFrontUser(page, { prefix: 'kbh' });
+    const kb = await apiCreateKb(page, user.token, `移动-${Date.now().toString(36)}`);
+    const doc = await apiCreateDoc(page, user.token, kb.id, '/origin', {
+      title: '待移动',
+      content: '移动前内容',
+    });
+
+    await loginViaUI(page, user.username);
+    await page.goto(docUrl(kb.id, doc.path, true));
+    await expect(page.getByTestId('knowledge-base-editor')).toBeVisible();
+
+    // 修改路径并保存 → 地址栏跳新路径、预览生效
+    await page.getByLabel('路径').fill('/moved/target');
+    await page.getByRole('button', { name: '保存' }).click();
+    await expect(page).toHaveURL(new RegExp(`/knowledge-bases/${kb.id}/moved/target$`));
+    await expect(page.getByTestId('knowledge-base-title')).toHaveText('待移动');
+    await expect(page.getByTestId('knowledge-base-content')).toContainText('移动前内容');
+
+    // 历史版本含「移动」记录且路径位展示 fromPath → path
+    await page.getByRole('button', { name: '历史版本' }).click();
+    const options = page.getByTestId('knowledge-base-history-select').locator('option');
+    await expect(options.filter({ hasText: '移动' })).toHaveCount(1);
+    const moveValue = await options.filter({ hasText: '移动' }).first().getAttribute('value');
+    await page.getByTestId('knowledge-base-history-select').selectOption(moveValue!);
+    const pathLine = page.getByTestId('knowledge-base-history-path');
+    await expect(pathLine).toContainText('/origin');
+    await expect(pathLine).toContainText('/moved/target');
+    await page.keyboard.press('Escape');
+
+    // 原路径释放：可立即重建且历史独立
+    await apiCreateDoc(page, user.token, kb.id, '/origin', {
+      title: '重建文档',
+      content: '重建内容',
+    });
+    await page.goto(docUrl(kb.id, '/origin'));
+    await expect(page.getByTestId('knowledge-base-title')).toHaveText('重建文档');
+    await page.getByRole('button', { name: '历史版本' }).click();
+    const rebornOptions = page.getByTestId('knowledge-base-history-select').locator('option');
+    await expect(rebornOptions).toHaveCount(1);
+    await page.keyboard.press('Escape');
+
+    // 目标被占用：提示「该路径已存在文档」并保持编辑态
+    await page.goto(docUrl(kb.id, '/origin', true));
+    await page.getByLabel('路径').fill('/moved/target');
+    await page.getByRole('button', { name: '保存' }).click();
+    await expect(page.getByTestId('knowledge-base-editor-error')).toContainText('该路径已存在文档');
+    await expect(page.getByTestId('knowledge-base-editor')).toBeVisible();
+    await expect(page).toHaveURL(new RegExp(`/knowledge-bases/${kb.id}/origin\\?edit=1$`));
+  });
+
+  test('E2E-KB9 标签徽章编辑：回车/逗号生成、逐枚删除、空输退格、粘贴拆分去重、16 枚上限', async ({
+    page,
+  }) => {
+    const user = await createFrontUser(page, { prefix: 'kbi' });
+    const kb = await apiCreateKb(page, user.token, `标签-${Date.now().toString(36)}`);
+    const doc = await apiCreateDoc(page, user.token, kb.id, '/tags', {
+      title: '标签文档',
+      content: '内容',
+      tags: [],
+    });
+
+    await loginViaUI(page, user.username);
+    await page.goto(docUrl(kb.id, doc.path, true));
+    const tagInput = page.getByLabel('标签');
+
+    // 三触发：Enter / 英文逗号 / 中文逗号
+    await tagInput.fill('a');
+    await tagInput.press('Enter');
+    await tagInput.fill('b');
+    await tagInput.press(',');
+    await tagInput.fill('c');
+    await tagInput.press('，');
+    for (const tag of ['a', 'b', 'c']) {
+      await expect(page.getByRole('button', { name: `删除标签 ${tag}` })).toBeVisible();
+    }
+
+    // 逐枚删除 + 空输退格删末枚
+    await page.getByRole('button', { name: '删除标签 a' }).click();
+    await expect(page.getByRole('button', { name: '删除标签 a' })).toHaveCount(0);
+    await tagInput.press('Backspace');
+    await expect(page.getByRole('button', { name: '删除标签 c' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '删除标签 b' })).toBeVisible();
+
+    // 粘贴拆分（中英文逗号）并去重
+    await tagInput.evaluate((element) => {
+      const data = new DataTransfer();
+      data.setData('text/plain', 'x, y，z');
+      element.dispatchEvent(
+        new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+      );
+    });
+    for (const tag of ['x', 'y', 'z']) {
+      await expect(page.getByRole('button', { name: `删除标签 ${tag}` })).toBeVisible();
+    }
+    await tagInput.evaluate((element) => {
+      const data = new DataTransfer();
+      data.setData('text/plain', 'x, y');
+      element.dispatchEvent(
+        new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+      );
+    });
+    await expect(page.getByTestId('tag-badge')).toHaveCount(4);
+
+    // 16 枚上限：输入框禁用并提示
+    for (let index = 4; index < 16; index += 1) {
+      await tagInput.fill(`t${index}`);
+      await tagInput.press('Enter');
+    }
+    await expect(page.getByTestId('tag-badge')).toHaveCount(16);
+    await expect(tagInput).toBeDisabled();
+    await expect(tagInput).toHaveAttribute('placeholder', '最多 16 个标签');
+
+    // 删除一枚后恢复可输
+    await page.getByRole('button', { name: '删除标签 t15' }).click();
+    await expect(tagInput).toBeEnabled();
+
+    // 保存后预览页徽章展示零回归
+    await page.getByRole('button', { name: '保存' }).click();
+    await expect(page.getByTestId('knowledge-base-tags')).toContainText('t4');
+    await expect(page.getByTestId('knowledge-base-tags')).toContainText('b');
+  });
+
   test('E2E-KB1b 服务端拒绝越权创建（developer 直接调用）', async ({ page }) => {
     const team = await createTeamFixture(page);
     const result = await gqlAs(

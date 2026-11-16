@@ -87,8 +87,18 @@ export default function KnowledgeBaseHistoryDrawer({
               <article className="min-w-0 space-y-2" data-testid="knowledge-base-history-preview">
                 <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <Badge variant="secondary">{EVENT_OP_LABELS[selected.op]}</Badge>
-                  <span className="min-w-0 truncate font-mono" title={selected.path}>
-                    {selected.path}
+                  <span
+                    className="min-w-0 truncate font-mono"
+                    title={
+                      selected.op === 'MOVE' && selected.fromPath
+                        ? `${selected.fromPath} → ${selected.path}`
+                        : selected.path
+                    }
+                    data-testid="knowledge-base-history-path"
+                  >
+                    {selected.op === 'MOVE' && selected.fromPath
+                      ? `${selected.fromPath} → ${selected.path}`
+                      : selected.path}
                   </span>
                   <span className="shrink-0">· {selected.actorName}</span>
                   <span className="shrink-0">· {formatDateTime(selected.createdAt)}</span>

@@ -123,7 +123,7 @@ const KB_DOC = `
 const KB_EVENTS = `
   query Events($knowledgeBaseId: ID!, $path: String, $limit: Int, $before: String) {
     knowledgeBaseEvents(knowledgeBaseId: $knowledgeBaseId, path: $path, limit: $limit, before: $before) {
-      id path op title tags description content actorName createdAt
+      id path op fromPath title tags description content actorName createdAt
     }
   }
 `;
@@ -145,6 +145,11 @@ const CREATE_DOC = `mutation CreateDoc($knowledgeBaseId: ID!, $path: String!, $i
 }`;
 const UPDATE_DOC = `mutation UpdateDoc($knowledgeBaseId: ID!, $path: String!, $input: KnowledgeBaseDocumentInput!) {
   updateKnowledgeBaseDocument(knowledgeBaseId: $knowledgeBaseId, path: $path, input: $input) {
+    path title tags description content createdByName updatedByName createdAt updatedAt
+  }
+}`;
+const MOVE_DOC = `mutation MoveDoc($knowledgeBaseId: ID!, $path: String!, $input: KnowledgeBaseDocumentInput!, $newPath: String) {
+  updateKnowledgeBaseDocument(knowledgeBaseId: $knowledgeBaseId, path: $path, input: $input, newPath: $newPath) {
     path title tags description content createdByName updatedByName createdAt updatedAt
   }
 }`;
@@ -562,6 +567,94 @@ describe('知识库 API（T-KB-API-*）', () => {
     ).knowledgeBaseEvents;
     expect(before).toHaveLength(1);
     expect(before[0].createdAt < limited[0].createdAt).toBe(true);
+
+    // 移动（#541）：历史随文档带入新路径 + MOVE 事件；原路径释放可重建且历史独立
+    const moveKb = await createKnowledgeBase(owner.token, normalWorkspaceId, `KB-移动-${suffix}`);
+    await setPermission(owner.token, normalWorkspaceId, moveKb.id, 'FULL_ACCESS');
+    await createDocument(owner.token, normalWorkspaceId, moveKb.id, '/from', docInput({ title: 'origin' }));
+
+    const moved = expectNoErrors(
+      await gql<{ updateKnowledgeBaseDocument: any }>(
+        MOVE_DOC,
+        {
+          knowledgeBaseId: moveKb.id,
+          path: '/from',
+          input: docInput({ title: 'origin' }),
+          newPath: '/to/nested',
+        },
+        owner.token,
+        normalWorkspaceId,
+      ),
+    ).updateKnowledgeBaseDocument;
+    expect(moved.path).toBe('/to/nested');
+
+    const movedDoc = expectNoErrors(
+      await gql<{ knowledgeBaseDocument: any }>(
+        KB_DOC,
+        { knowledgeBaseId: moveKb.id, path: '/to/nested' },
+        owner.token,
+        normalWorkspaceId,
+      ),
+    ).knowledgeBaseDocument;
+    expect(movedDoc).toMatchObject({ path: '/to/nested', title: 'origin' });
+
+    const movedEvents = expectNoErrors(
+      await gql<{ knowledgeBaseEvents: any[] }>(
+        KB_EVENTS,
+        { knowledgeBaseId: moveKb.id, path: '/to/nested' },
+        owner.token,
+        normalWorkspaceId,
+      ),
+    ).knowledgeBaseEvents;
+    expect(movedEvents.map((event) => event.op)).toEqual(['MOVE', 'CREATE']);
+    expect(movedEvents[0]).toMatchObject({
+      path: '/to/nested',
+      fromPath: '/from',
+      actorName: owner.username,
+      title: 'origin',
+    });
+    expect(movedEvents[1].fromPath).toBeNull();
+
+    // 原路径释放：可立即重建，历史仅含自身 CREATE
+    const oldDoc = expectNoErrors(
+      await gql<{ knowledgeBaseDocument: any }>(
+        KB_DOC,
+        { knowledgeBaseId: moveKb.id, path: '/from' },
+        owner.token,
+        normalWorkspaceId,
+      ),
+    ).knowledgeBaseDocument;
+    expect(oldDoc).toBeNull();
+    await createDocument(owner.token, normalWorkspaceId, moveKb.id, '/from', docInput({ title: 'reborn' }));
+    const rebornEvents = expectNoErrors(
+      await gql<{ knowledgeBaseEvents: any[] }>(
+        KB_EVENTS,
+        { knowledgeBaseId: moveKb.id, path: '/from' },
+        owner.token,
+        normalWorkspaceId,
+      ),
+    ).knowledgeBaseEvents;
+    expect(rebornEvents.map((event) => event.op)).toEqual(['CREATE']);
+
+    // 目标占用 / 非法路径逐字
+    expectError(
+      await gql(
+        MOVE_DOC,
+        { knowledgeBaseId: moveKb.id, path: '/from', input: docInput(), newPath: '/to/nested' },
+        owner.token,
+        normalWorkspaceId,
+      ),
+      'knowledge base document already exists',
+    );
+    expectError(
+      await gql(
+        MOVE_DOC,
+        { knowledgeBaseId: moveKb.id, path: '/from', input: docInput(), newPath: 'no-slash' },
+        owner.token,
+        normalWorkspaceId,
+      ),
+      'invalid document path',
+    );
   });
 
   // -------------------------------------------------------------------------
@@ -638,6 +731,28 @@ describe('知识库 API（T-KB-API-*）', () => {
         ),
       ).deleteKnowledgeBaseDocument,
     ).toBe(true);
+
+    // 移动权限 = canUpdate（#541）：READ_ONLY 拒绝、UPDATE_ONLY 放行
+    await setPermission(owner.token, normalWorkspaceId, kb.id, 'READ_ONLY');
+    expectError(
+      await gql(
+        MOVE_DOC,
+        { knowledgeBaseId: kb.id, path: '/n', input: docInput(), newPath: '/n-moved' },
+        developer.token,
+        normalWorkspaceId,
+      ),
+      'knowledge base permission denied',
+    );
+    await setPermission(owner.token, normalWorkspaceId, kb.id, 'UPDATE_ONLY');
+    const devMoved = expectNoErrors(
+      await gql<{ updateKnowledgeBaseDocument: any }>(
+        MOVE_DOC,
+        { knowledgeBaseId: kb.id, path: '/n', input: docInput(), newPath: '/n-moved' },
+        developer.token,
+        normalWorkspaceId,
+      ),
+    ).updateKnowledgeBaseDocument;
+    expect(devMoved.path).toBe('/n-moved');
 
     // 全局工作区库：普通工作区 developer 可见；READ_ONLY 只读，UPDATE_ONLY 可写（D2 有意偏离）
     const globalKb = await createKnowledgeBase(owner.token, globalWorkspaceId, `KB-全局矩阵-${suffix}`);
@@ -850,6 +965,60 @@ describe('知识库 API（T-KB-API-*）', () => {
       content: 'c2',
     });
 
+    // MCP newPath（#541）：源存在 → 先移动再更新；历史含 MOVE；创建分支携带 → isError
+    const mcpMoved = await relayTool(devController.client, devSession.id, devSession.token, {
+      jsonrpc: '2.0',
+      id: 81,
+      method: 'tools/call',
+      params: {
+        name: 'knowledge_base_document_update',
+        arguments: {
+          knowledgeBaseId: mcpKb.id,
+          path: '/mcp/doc',
+          newPath: '/mcp/moved',
+          title: 'v2',
+          tags: ['a'],
+          description: 'd',
+          content: 'c2',
+        },
+      },
+    });
+    expect(mcpMoved.body.result?.isError).toBeFalsy();
+    expect(JSON.parse(mcpMoved.body.result.content[0].text).path).toBe('/mcp/moved');
+
+    const mcpMovedEvents = expectNoErrors(
+      await gql<{ knowledgeBaseEvents: any[] }>(
+        KB_EVENTS,
+        { knowledgeBaseId: mcpKb.id, path: '/mcp/moved' },
+        owner.token,
+        normalWorkspaceId,
+      ),
+    ).knowledgeBaseEvents;
+    expect(mcpMovedEvents.map((event) => event.op)).toEqual(['MOVE', 'UPDATE', 'CREATE']);
+    expect(mcpMovedEvents[0].fromPath).toBe('/mcp/doc');
+
+    const mcpCreateWithNewPath = await relayTool(devController.client, devSession.id, devSession.token, {
+      jsonrpc: '2.0',
+      id: 82,
+      method: 'tools/call',
+      params: {
+        name: 'knowledge_base_document_update',
+        arguments: {
+          knowledgeBaseId: mcpKb.id,
+          path: '/mcp/brand-new',
+          newPath: '/mcp/elsewhere',
+          title: 'v1',
+          tags: [],
+          description: '',
+          content: '',
+        },
+      },
+    });
+    expect(mcpCreateWithNewPath.body.result?.isError).toBe(true);
+    expect(mcpCreateWithNewPath.body.result.content[0].text).toBe(
+      'knowledge base document not found',
+    );
+
     // UPDATE_ONLY：删除拒绝
     const deniedDelete = await relayTool(devController.client, devSession.id, devSession.token, {
       jsonrpc: '2.0',
@@ -857,7 +1026,7 @@ describe('知识库 API（T-KB-API-*）', () => {
       method: 'tools/call',
       params: {
         name: 'knowledge_base_document_delete',
-        arguments: { knowledgeBaseId: mcpKb.id, path: '/mcp/doc' },
+        arguments: { knowledgeBaseId: mcpKb.id, path: '/mcp/moved' },
       },
     });
     expect(deniedDelete.body.result?.isError).toBe(true);
@@ -871,7 +1040,7 @@ describe('知识库 API（T-KB-API-*）', () => {
       method: 'tools/call',
       params: {
         name: 'knowledge_base_document_delete',
-        arguments: { knowledgeBaseId: mcpKb.id, path: '/mcp/doc' },
+        arguments: { knowledgeBaseId: mcpKb.id, path: '/mcp/moved' },
       },
     });
     expect(JSON.parse(deleted.body.result.content[0].text)).toEqual({ success: true });
