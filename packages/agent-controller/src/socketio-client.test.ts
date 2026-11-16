@@ -73,7 +73,10 @@ function shutdownHandler(): (payload: { reason: string }) => void {
   return handler as (payload: { reason: string }) => void;
 }
 
-function setup(withShutdown = true) {
+function setup(
+  withShutdown = true,
+  logger?: { debug: (...args: unknown[]) => void; info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void },
+) {
   const onShutdown = vi.fn();
   connectToServer('http://localhost:4001', 'controller-key', {
     serverName: 'test-controller',
@@ -82,6 +85,7 @@ function setup(withShutdown = true) {
     handleWorkload: false,
     persistConfig: false,
     ...(withShutdown ? { onShutdown } : {}),
+    ...(logger ? { logger: logger as never } : {}),
   });
   return { onShutdown };
 }
@@ -638,7 +642,13 @@ describe('knowledge-bases:scan 事件注册（契约 §3.29/§3.30）', () => {
   });
 
   it('T-RKB-SCAN9 收到 knowledge-bases:scan → 回 knowledge-bases:scan:result（requestId + 扫描结果）', async () => {
-    setup(true);
+    const scanLogger = {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    setup(true, scanLogger);
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('fs');
     const { join } = await import('path');
     const { tmpdir } = await import('os');
@@ -676,6 +686,16 @@ describe('knowledge-bases:scan 事件注册（契约 §3.29/§3.30）', () => {
         ],
         truncated: false,
       });
+
+      // T-RKB-SCAN10 日志不含文档内容/schema 内容
+      const scanLog = scanLogger.info.mock.calls.find(
+        ([payload]) => (payload as { event?: string })?.event === 'knowledge_bases_scan',
+      );
+      expect(scanLog).toBeDefined();
+      const serializedLogs = JSON.stringify(scanLogger.info.mock.calls);
+      expect(serializedLogs).not.toContain('团队规范');
+      expect(serializedLogs).not.toContain('# Git');
+      expect(serializedLogs).not.toContain('guides/git.md');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

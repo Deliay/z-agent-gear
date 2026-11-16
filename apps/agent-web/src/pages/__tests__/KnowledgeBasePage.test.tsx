@@ -229,4 +229,14 @@ describe('KnowledgeBasePage', () => {
     expect(screen.getByTestId('repo-kb-unavailable')).toHaveTextContent('知识库不存在或不可访问');
     expect(screen.queryByTestId('repo-knowledge-base-preview')).not.toBeInTheDocument();
   });
+
+  it('畸形 repo: id 直接进入不可访问分支（不停留在加载中，R2）', () => {
+    router.params = { kbId: 'repo:broken', '*': 'a' };
+    mockUseQuery.mockImplementation(() => ({ data: undefined, loading: false }));
+
+    render(<KnowledgeBasePage />);
+
+    expect(screen.getByTestId('repo-kb-unavailable')).toHaveTextContent('知识库不存在或不可访问');
+    expect(screen.queryByText('加载中…')).not.toBeInTheDocument();
+  });
 });

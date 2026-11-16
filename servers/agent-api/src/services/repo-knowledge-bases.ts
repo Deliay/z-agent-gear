@@ -179,6 +179,9 @@ const SCHEMA_INVALID_DESCRIPTION = '知识库描述不合法（description 可�
 const SCAN_FAILED = 'repo knowledge base scan failed';
 const WORKSPACE_NOT_FOUND = 'Workspace not found';
 
+/** 工作区扫描 single-flight（进程内；单实例部署前提与中继链路一致）。 */
+const scanInFlight = new Map<string, Promise<RepoKnowledgeBaseCache>>();
+
 export function isRepoKnowledgeBaseScanSupported(version: unknown): boolean {
   if (typeof version !== 'string' || version.trim() === '') return false;
   try {
@@ -255,8 +258,11 @@ export function splitRepoFrontMatter(content: string): RepoFrontMatterSplit {
   const fallback: RepoFrontMatterSplit = { entries: [], body: content, present: false };
   if (!content.startsWith('---\n')) return fallback;
   const head = content.slice(0, FRONT_MATTER_SCAN_BYTES);
-  const close = head.indexOf('\n---', 3);
-  if (close < 0) return fallback;
+  // 闭合标记必须是独立行（`---` + 可选行尾空白，后接换行或扫描窗口末尾），
+  // 避免 `----` / `---x` 被误判为闭合（双端同规则）。
+  const closing = /\n---[ \t]*(?=\r?\n|$)/.exec(head);
+  if (!closing) return fallback;
+  const close = closing.index;
 
   const block = head.slice(4, close);
   const entries: RepoFrontMatterEntry[] = [];
@@ -497,7 +503,7 @@ class RepoKnowledgeBaseService {
       const decoded = decodeRepoKnowledgeBaseId(id);
       if (!decoded) return [];
       const loaded = await this.loadCachedKnowledgeBase(userId, decoded);
-      if (!loaded) return [];
+      if (!loaded || !loaded.valid) return [];
       const docs = loaded.documents.map((doc) => ({ path: doc.path, title: doc.title }));
       return buildKnowledgeBaseChildren(docs, path ?? '/');
     } catch {
@@ -515,7 +521,7 @@ class RepoKnowledgeBaseService {
       const decoded = decodeRepoKnowledgeBaseId(id);
       if (!decoded) return null;
       const loaded = await this.loadCachedKnowledgeBase(userId, decoded);
-      if (!loaded) return null;
+      if (!loaded || !loaded.valid) return null;
       const path = normalizeDocumentPath(rawPath);
       const doc = loaded.documents.find((item) => item.path === path);
       if (!doc) return null;
@@ -575,6 +581,22 @@ class RepoKnowledgeBaseService {
     host: { _id: unknown; name?: unknown },
   ): Promise<RepoKnowledgeBaseCache> {
     const workspaceId = String(workspace.id ?? workspace._id ?? '');
+    // 进程内 single-flight：并发首次展开同一工作区只触发一次扫描（单实例部署前提与既有中继链路一致）
+    const existing = scanInFlight.get(workspaceId);
+    if (existing) return existing;
+    const pending = this.scanWorkspaceUncached(userId, workspace, host, workspaceId).finally(() => {
+      scanInFlight.delete(workspaceId);
+    });
+    scanInFlight.set(workspaceId, pending);
+    return pending;
+  }
+
+  private async scanWorkspaceUncached(
+    userId: string,
+    workspace: Record<string, unknown>,
+    host: { _id: unknown; name?: unknown },
+    workspaceId: string,
+  ): Promise<RepoKnowledgeBaseCache> {
     const controllerId = String(workspace.controllerId ?? '');
     const path = typeof workspace.path === 'string' ? workspace.path : '';
 
@@ -699,10 +721,9 @@ class RepoKnowledgeBaseService {
     const rawDocuments = Array.isArray(raw.documents) ? (raw.documents as RawDocument[]) : [];
     for (const rawDoc of rawDocuments) {
       if (!isRecord(rawDoc) || typeof rawDoc.path !== 'string') continue;
-      if (typeof rawDoc.error === 'string' && rawDoc.error.trim() !== '') {
-        errors.push(`文档读取失败：${rawDoc.path}（${rawDoc.error}）`);
-        continue;
-      }
+      // 文档级读取失败（如单文档 >128KiB）仅剔除该文档，不影响其余文档与整库合法性
+      // （与 knowledge-base-prompts.ts 编写指引「不影响其它文档」同口径；整库不合法仅限路径冲突/归一错误）。
+      if (typeof rawDoc.error === 'string' && rawDoc.error.trim() !== '') continue;
       const content = typeof rawDoc.content === 'string' ? rawDoc.content : '';
       const parsedDoc = parseRepoDocument(rawDoc.path, content);
       if (!parsedDoc.path || parsedDoc.errors.length > 0) {

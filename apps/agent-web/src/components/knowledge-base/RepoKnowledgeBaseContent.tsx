@@ -16,7 +16,7 @@ export default function RepoKnowledgeBaseContent({
   const { frontMatter, body } = splitFrontMatter(document.content);
 
   return (
-    <article className="min-w-0" data-testid="repo-knowledge-base-content">
+    <div className="min-w-0" data-testid="repo-knowledge-base-content">
       {frontMatter.length > 0 && (
         <div className="mb-4 min-w-0 overflow-x-auto">
           <table
@@ -42,6 +42,6 @@ export default function RepoKnowledgeBaseContent({
       <div className="min-w-0 wrap-anywhere text-sm leading-6">
         <MarkdownContent content={body} />
       </div>
-    </article>
+    </div>
   );
 }

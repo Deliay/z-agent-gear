@@ -109,7 +109,21 @@ export default function KnowledgeBasePage() {
 
   if (isRepo) {
     const repoDocument = repoDocumentData?.repoKnowledgeBaseDocument ?? null;
-    if (!decodedRepo || (repoDocumentLoading && !repoDocumentData)) {
+    if (!decodedRepo) {
+      return (
+        <div className="flex h-full items-center justify-center p-6" data-testid="knowledge-base-page">
+          <div className="max-w-md space-y-2 text-center" role="alert">
+            <p className="text-sm font-medium" data-testid="repo-kb-unavailable">
+              知识库不存在或不可访问
+            </p>
+            <p className="text-xs text-muted-foreground">
+              仓库知识库可能已被移动或删除，或当前工作区无权访问。
+            </p>
+          </div>
+        </div>
+      );
+    }
+    if (repoDocumentLoading && !repoDocumentData) {
       return (
         <output
           className="flex h-full items-center justify-center text-sm text-muted-foreground"

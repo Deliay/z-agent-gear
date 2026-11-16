@@ -57,6 +57,10 @@ describe('scanKnowledgeBases', () => {
     await mkdir(join(zagDir, 'schema-dir', 'knowledge-base.json'), { recursive: true });
     await mkdir(join(zagDir, 'target-dir'), { recursive: true });
     await symlink(join(zagDir, 'target-dir'), join(zagDir, 'linked-dir'));
+    // knowledge-base.json 为符号链接指向目录 → 不识别
+    await mkdir(join(zagDir, 'schema-target'), { recursive: true });
+    await mkdir(join(zagDir, 'schema-link'), { recursive: true });
+    await symlink(join(zagDir, 'schema-target'), join(zagDir, 'schema-link', 'knowledge-base.json'));
 
     const result = await scanKnowledgeBases(root);
 
@@ -167,7 +171,7 @@ describe('scanKnowledgeBases', () => {
     await rm(limitsRoot, { recursive: true, force: true });
   });
 
-  it('T-RKB-SCAN7b 单库 >1MiB 停止读取并 truncated；单来源 >2MiB 停止', async () => {
+  it('T-RKB-SCAN7b 单库 >1MiB 停止读取并 truncated', async () => {
     const kb = await makeKb(zagDir, 'huge');
     // 每篇 ~100KiB，11 篇累计 >1MiB
     const chunk = 'x'.repeat(100 * 1024);
@@ -180,6 +184,26 @@ describe('scanKnowledgeBases', () => {
     expect(entry.truncated).toBe(true);
     expect((entry.documents?.length ?? 0)).toBeLessThan(12);
     expect(result.sources[0].truncated).toBe(true);
+  });
+
+  it('T-RKB-SCAN7c 单来源 >2MiB 停止读取（每库 <1MiB，真正命中来源累计上限）', async () => {
+    const chunk = 'x'.repeat(100 * 1024);
+    for (let b = 0; b < 3; b += 1) {
+      const kb = await makeKb(zagDir, `source-limit-${b}`);
+      for (let i = 0; i < 8; i += 1) {
+        await writeFile(join(kb, `d${i}.md`), chunk);
+      }
+    }
+
+    const result = await scanKnowledgeBases(root);
+    const source = result.sources[0];
+    const third = source.knowledgeBases.find((item) => item.folder === 'source-limit-2');
+
+    expect(result.truncated).toBe(true);
+    expect(source.truncated).toBe(true);
+    // 第三库只读取到部分文档（来源预算在库内耗尽）且条目级 truncated 同步置位
+    expect(third?.documents?.length ?? 0).toBeLessThan(8);
+    expect(third?.truncated).toBe(true);
   });
 
   it('T-RKB-SCAN8 符号链接：指向常规 .md 文件读取；指向目录/悬空跳过', async () => {

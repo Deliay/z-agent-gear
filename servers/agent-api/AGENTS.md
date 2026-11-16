@@ -580,6 +580,9 @@ pnpm run start   # Start production server
   title 1..200 / tags ≤16×1..32 去重 / description ≤1024；标题回退链 fm.title → 首个 `# ` → 文件名；
   路径归一复用 `normalizeDocumentPath`）、`buildKnowledgeBaseChildren`（文件夹在前、同组 `localeCompare`）。
   路径冲突（`a.md` vs `a.MD`）整库 `valid:false`（`文档路径冲突：<path>`，冲突文档不收录）。
+  **文档级读取失败（如单文档 >128KiB）仅剔除该文档，不影响其余文档与整库合法性**；整库不合法仅限
+  schema 非法、路径冲突/路径归一错误。`valid:false` 的 `children`/`getDocument` 统一 `[]`/`null`（R1）。
+  缓存 miss 扫描有进程内 single-flight（同一工作区并发首次展开只触发一次扫描，S4）。
 - **id 编解码（D6）**：`repo:<workspaceId>:<source(zag|docs)>:<encodeURIComponent(folder)>`；`source` 在 GraphQL
   透出为 `ZAG|DOCS`，列表顺序 zag 先于 docs、同来源 `folder.localeCompare`。
 - **知识库 MCP prompts（D14）**：`services/knowledge-base-prompts.ts` 单一来源提供

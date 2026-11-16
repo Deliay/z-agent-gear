@@ -4,7 +4,7 @@ import mongoose from 'mongoose';
 import { createFrontUser, type FrontUser } from '../support/front-users.js';
 
 /**
- * 仓库内建知识库 API（T-RKB-API1~8）。
+ * 仓库内建知识库 API（T-RKB-API1~6/8；API7 由既有 T-KB-API 套件随批回归覆盖）。
  *
  * 前置：`aspire start && aspire wait agent-api controller-api` + `INTERNAL_API_TOKEN`；
  * 云电脑夹具直写 Mongo（`MONGODB_URI`，缺省时核心套件 skip）；fake controller 应答
@@ -356,15 +356,32 @@ describe.skipIf(!HAS_MONGO)('仓库内建知识库 API（T-RKB-API1~5/8）', () 
     expect(missingChildren.repoKnowledgeBaseDocumentChildren).toEqual([]);
   });
 
-  it('T-RKB-API5 错误口径：不可见工作区 Workspace not found；版本不足 scan failed', async () => {
+  it('T-RKB-API5 错误口径：不可见工作区 Workspace not found；版本不足/控制器离线 scan failed', async () => {
     const res = await gqlRequest(REPO_KNOWLEDGE_BASES, { workspaceId: new mongoose.Types.ObjectId().toString() }, user.token);
     const body = await res.json();
-    expect(body.errors?.[0]?.message).toContain('Workspace not found');
+    expect(body.errors?.[0]?.message).toBe('Workspace not found');
 
     const oldRes = await gqlRequest(REPO_KNOWLEDGE_BASES, { workspaceId: oldWorkspaceId }, user.token);
     const oldBody = await oldRes.json();
-    expect(oldBody.errors?.[0]?.message).toContain('repo knowledge base scan failed');
+    expect(oldBody.errors?.[0]?.message).toBe('repo knowledge base scan failed');
     expect(oldFake.scans).toHaveLength(0);
+
+    // 控制器离线：同一 RUNNING 云电脑的控制器置 offline → 同文案（超时分支由服务层单测 T-RKB-SVC10 覆盖）
+    const db = await mongoDb();
+    await db.collection('controllers').updateOne(
+      { _id: new mongoose.Types.ObjectId(fake.controllerId) },
+      { $set: { status: 'offline' } },
+    );
+    try {
+      const offlineRes = await gqlRequest(REPO_KNOWLEDGE_BASES, { workspaceId }, user.token);
+      const offlineBody = await offlineRes.json();
+      expect(offlineBody.errors?.[0]?.message).toBe('repo knowledge base scan failed');
+    } finally {
+      await db.collection('controllers').updateOne(
+        { _id: new mongoose.Types.ObjectId(fake.controllerId) },
+        { $set: { status: 'online' } },
+      );
+    }
   });
 
   it('T-RKB-API8 云电脑转 STOPPED：hosts 不再列出；children/document 收敛 []/null', async () => {

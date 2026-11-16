@@ -99,6 +99,8 @@ async function collectMarkdownFiles(baseDir: string): Promise<DocCandidate[]> {
     try {
       entries = await readdir(dir, { withFileTypes: true });
     } catch {
+      // 已知口径：子目录不可读按空目录处理（与「目录不存在」一致），不使整库不合法；
+      // 单文档读取失败才逐条剔除。避免仓库权限细节放大为库级错误。
       return;
     }
     for (const entry of entries) {
@@ -145,6 +147,8 @@ async function scanKnowledgeBase(
   try {
     schemaInfo = await stat(schemaPath);
   } catch {
+    // 已知口径：stat 失败无法区分「不存在」与「不可访问」，统一视为非知识库文件夹
+    // （与「无 knowledge-base.json」同结果）；区别于 schema readFile 失败会上报 error。
     return { folder };
   }
   // 仅常规文件（或指向常规文件的符号链接）才识别为知识库
@@ -267,6 +271,8 @@ async function scanSource(
     const entry = await scanKnowledgeBase(sourceDir, folder, state);
     // 未识别为知识库（无 knowledge-base.json）的文件夹不输出
     if (entry.schema === undefined && entry.error === undefined) continue;
+    // 单来源 2MiB 截断发生在该库读取过程中时，同样置位条目级 truncated（与单库 1MiB 口径对称）
+    if (state.truncated) entry.truncated = true;
     if (entry.truncated) truncated = true;
     knowledgeBases.push(entry);
   }

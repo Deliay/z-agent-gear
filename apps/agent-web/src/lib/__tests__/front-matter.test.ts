@@ -24,10 +24,16 @@ describe('splitFrontMatter（T-RKB-WEB-L2）', () => {
     }
   });
 
-  it('仅识别前 4KiB 内闭合的 front matter', () => {
+  it('仅识别前 4KiB 内闭合的 front matter；闭合行必须独立（S3）', () => {
     const content = `---\n${'x'.repeat(5000)}\n---\n# 正文`;
     const split = splitFrontMatter(content);
     expect(split.frontMatter).toEqual([]);
     expect(split.body).toBe(content);
+
+    for (const invalid of ['---\ntitle: X\n----\n# 正文', '---\ntitle: X\n---x\n# 正文']) {
+      const parsed = splitFrontMatter(invalid);
+      expect(parsed.frontMatter).toEqual([]);
+      expect(parsed.body).toBe(invalid);
+    }
   });
 });

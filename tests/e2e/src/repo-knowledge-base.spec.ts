@@ -13,7 +13,7 @@ import {
 import { sectionToggle } from './phase4-helpers';
 
 /**
- * 仓库内建知识库 E2E（E2E-RKB1~5，需求 #545）。
+ * 仓库内建知识库 E2E（E2E-RKB1~6，需求 #545）。
  *
  * 前置：Aspire 全量（agent-web / agent-api / controller-api）+ `INTERNAL_API_TOKEN`（开户）
  * + `MONGODB_URI`（直插 RUNNING 云电脑夹具）。fake controller version=2.19.0 并应答
@@ -99,7 +99,9 @@ test.describe('仓库内建知识库 E2E', () => {
   let user: Awaited<ReturnType<typeof createFrontUser>>;
   let fake: FakeController;
   let oldFake: FakeController;
+  let emptyFake: FakeController;
   let oldHostName = '';
+  let emptyHostName = '';
 
   test.beforeAll(async ({ browser }) => {
     const page = await browser.newPage();
@@ -138,12 +140,33 @@ test.describe('仓库内建知识库 E2E', () => {
       workspaceId: oldWorkspace.id,
       name: oldHostName,
     });
+
+    const emptyKey = await createControllerKey(page, user.token);
+    emptyFake = await registerController(emptyKey.rawKey, {
+      version: '2.19.0',
+      repoKnowledgeBases: { success: true, sources: [], truncated: false },
+    });
+    const emptyWorkspace = await createWorkspace(
+      page,
+      emptyFake.controllerId,
+      `/tmp/rkb-e2e-empty-${Date.now()}`,
+      user.token,
+    );
+    emptyHostName = '空知识库云电脑';
+    await insertCloudHost({
+      userId: user.userId,
+      tenantId: user.userId,
+      controllerId: emptyFake.controllerId,
+      workspaceId: emptyWorkspace.id,
+      name: emptyHostName,
+    });
     await page.close();
   });
 
   test.afterAll(async () => {
     fake?.disconnect();
     oldFake?.disconnect();
+    emptyFake?.disconnect();
     if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
   });
 
@@ -157,6 +180,10 @@ test.describe('仓库内建知识库 E2E', () => {
     const host = page.getByRole('button', { name: /仓库云电脑/ });
     await expect(host).toHaveAttribute('aria-expanded', 'false');
     await expect(page.locator('[data-testid^="repo-kb-item-"]')).toHaveCount(0);
+    // 初始加载不得触发任何仓库扫描
+    expect(fake.scans).toHaveLength(0);
+    expect(oldFake.scans).toHaveLength(0);
+    expect(emptyFake.scans).toHaveLength(0);
   });
 
   test('E2E-RKB2 逐级展开与只读预览', async ({ page }) => {
@@ -224,12 +251,10 @@ test.describe('仓库内建知识库 E2E', () => {
     const oldHost = page.getByRole('button', { name: new RegExp(oldHostName) });
     await expect(oldHost).toBeDisabled();
     await expect(page.getByTestId('repo-kb-upgrade-hint')).toContainText('升级云电脑工作组件后可加载');
-    await expect(page.getByTestId(/repo-kb-host-/).filter({ hasText: oldHostName })).toContainText(
-      '升级',
-    );
+    expect(oldFake.scans).toHaveLength(0);
   });
 
-  test('E2E-RKB6 零回归：平台知识库树与分区入口不变', async ({ page }) => {
+  test('E2E-RKB6 空态与平台知识库零回归', async ({ page }) => {
     const res = await gqlRequest(
       page,
       `mutation CreateKb($name: String!) { createKnowledgeBase(name: $name) { id name } }`,
@@ -243,5 +268,10 @@ test.describe('仓库内建知识库 E2E', () => {
     await loginViaUI(page, user.username);
     await openRepoGroup(page);
     await expect(page.locator(KB_SECTION)).toContainText(name);
+
+    // 未放置知识库的云电脑展开为空态
+    await page.getByRole('button', { name: new RegExp(emptyHostName) }).click();
+    await expect(page.getByText('未检测到仓库知识库')).toBeVisible();
+    expect(emptyFake.scans.length).toBeGreaterThanOrEqual(1);
   });
 });

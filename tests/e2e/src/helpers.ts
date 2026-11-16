@@ -304,6 +304,8 @@ export interface FakeController {
   controllerId: string;
   disconnect: () => void;
   socket: Socket;
+  /** 收到的 knowledge-bases:scan 请求（供「是否发起扫描」断言） */
+  scans: Array<{ requestId: string; path: string }>;
 }
 
 /** 可选：项目工作流模板扫描应答 fixture（与 agent-gear 真实回包同形态） */
@@ -348,6 +350,7 @@ export function registerController(
   return new Promise((resolve, reject) => {
     const client = SocketIOClient(CONTROLLER_API_URL, { transports: ['websocket'], reconnection: false, forceNew: true });
     const timer = setTimeout(() => { client.disconnect(); reject(new Error('Timeout')); }, 10000);
+    const scans: Array<{ requestId: string; path: string }> = [];
 
     // Handle acp:check - respond with available ACP servers
     client.on('acp:check', (data: { requestId: string }) => {
@@ -368,7 +371,8 @@ export function registerController(
     });
 
     // knowledge-bases:scan - 仓库内建知识库扫描（契约 §3.29/§3.30）
-    client.on('knowledge-bases:scan', (data: { requestId: string }) => {
+    client.on('knowledge-bases:scan', (data: { requestId: string; path: string }) => {
+      scans.push(data);
       client.emit('knowledge-bases:scan:result', {
         requestId: data.requestId,
         ...(options.repoKnowledgeBases ?? { success: true, sources: [], truncated: false }),
@@ -386,7 +390,7 @@ export function registerController(
 
     client.once('registered', (data: { controllerId: string }) => {
       clearTimeout(timer);
-      resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect(), socket: client });
+      resolve({ controllerId: data.controllerId, disconnect: () => client.disconnect(), socket: client, scans });
     });
     client.once('error', (data: { code: string; message: string }) => {
       clearTimeout(timer);

@@ -201,7 +201,9 @@ function RepoKnowledgeBaseList({ host }: { host: RepoKnowledgeBaseHostData }) {
 
   const handleRefresh = async () => {
     await refetch({ workspaceId: host.workspaceId, refresh: true });
-    // 缓存失效：已展开的子条目/文档按新扫描结果重拉（D10）
+    // 缓存失效：已展开的子条目/文档按新扫描结果重拉。
+    // Apollo `evict` 仅按 fieldName 失效（无法按 workspace 维度区分 variables），
+    // 因此为全局失效——多余请求可接受，对齐计划 D10「按 field 关键词失效」口径。
     client.cache.evict({ fieldName: 'repoKnowledgeBaseDocumentChildren' });
     client.cache.evict({ fieldName: 'repoKnowledgeBaseDocument' });
   };

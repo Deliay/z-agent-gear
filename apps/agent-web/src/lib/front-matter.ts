@@ -23,8 +23,11 @@ export function splitFrontMatter(content: string): FrontMatterSplit {
   if (typeof content !== 'string' || !content.startsWith('---\n')) return fallback;
 
   const head = content.slice(0, FRONT_MATTER_SCAN_BYTES);
-  const close = head.indexOf('\n---', 3);
-  if (close < 0) return fallback;
+  // 闭合标记必须为独立行（`---` + 可选行尾空白，后接换行或扫描窗口末尾），
+  // 与服务端 `splitRepoFrontMatter` 同规则，避免 `----` / `---x` 误判。
+  const closing = /\n---[ \t]*(?=\r?\n|$)/.exec(head);
+  if (!closing) return fallback;
+  const close = closing.index;
 
   const block = head.slice(4, close);
   const frontMatter: FrontMatterEntry[] = [];

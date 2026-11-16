@@ -101,7 +101,12 @@ src/
   目录/设备/悬空链接跳过），`path` 为库内相对 POSIX 路径并读取内容。
 - **上限**：每来源 20 个知识库（文件夹名 `localeCompare` 取前 20）/ 每库 50 个文档 / `knowledge-base.json`
   64KiB / 单文档 128KiB / 单库内容累计 1MiB / 单来源内容累计 2MiB；超限按级 `truncated:true` 或条目级
-  `error:'file too large'`。目录不存在（ENOENT/ENOTDIR）视为空列表，读取权限失败整体 `permission denied`。
+  `error:'file too large'`。单来源截断发生在某库读取过程中时，该库也同步置 `truncated:true`（与单库口径对称）。
+  目录不存在（ENOENT/ENOTDIR）视为空列表，读取权限失败整体 `permission denied`。
+  已知口径：库内子目录 `readdir` 失败按空目录处理（不使整库不合法）；`knowledge-base.json` `stat` 失败
+  无法区分不存在/不可访问，统一视为非知识库文件夹。
+- **front matter 闭合**：`\n---` 必须是独立行（+ 可选行尾空白，后接换行/窗口末尾），`----` / `---x`
+  不视为闭合（与 agent-web `lib/front-matter.ts` 同规则）。
 - **事件注册**：`socketio-client` 注册 `knowledge-bases:scan` → 回 `knowledge-bases:scan:result`
   `{requestId, success, sources:[{source:'zag'|'docs', knowledgeBases:[{folder, schema?, documents?:[{path, content?|error?}], truncated?, error?}], truncated}], truncated, error?}`；
   日志 `knowledge_bases_scan` 只含 `requestId/path`，不记录 schema/文档内容。该事件**不复用** `fs:read-file`

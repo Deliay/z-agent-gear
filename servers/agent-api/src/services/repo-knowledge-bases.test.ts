@@ -172,11 +172,17 @@ describe('splitRepoFrontMatter / parseRepoDocument（T-RKB-SVC2/3）', () => {
     expect(parseRepoDocument('foo/bar.MD', '无标题').title).toBe('bar');
   });
 
-  it('仅识别前 4KiB 内闭合的 front matter', () => {
+  it('仅识别前 4KiB 内闭合的 front matter；闭合行必须独立（S3）', () => {
     const tooLate = `---\n${'x'.repeat(5000)}\n---\n# H`;
     const split = splitRepoFrontMatter(tooLate);
     expect(split.present).toBe(false);
     expect(split.body).toBe(tooLate);
+
+    for (const content of ['---\ntitle: X\n----\n# H', '---\ntitle: X\n---x\n# H']) {
+      const invalid = splitRepoFrontMatter(content);
+      expect(invalid.present).toBe(false);
+      expect(invalid.body).toBe(content);
+    }
   });
 });
 
@@ -349,6 +355,20 @@ describe('repoKnowledgeBaseService', () => {
     expect(publish).toHaveBeenCalledTimes(2);
   });
 
+  it('T-RKB-SVC9c 并发首次展开 single-flight：同一工作区只触发一次扫描（S4）', async () => {
+    redis.get.mockImplementation(async (key: string) =>
+      key.startsWith('knowledge-bases:scan:') ? JSON.stringify(SCAN_RESULT) : null,
+    );
+
+    const [a, b] = await Promise.all([
+      repoKnowledgeBaseService.listKnowledgeBases('u', 'ws-1'),
+      repoKnowledgeBaseService.listKnowledgeBases('u', 'ws-1'),
+    ]);
+
+    expect(a).toEqual(b);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
   it('T-RKB-SVC10 扫描失败矩阵统一 repo knowledge base scan failed', async () => {
     vi.mocked(Controller.findOne).mockReturnValueOnce(lean({ status: 'offline', version: '2.19.0' }));
     await expect(repoKnowledgeBaseService.listKnowledgeBases('u', 'ws-1')).rejects.toThrow(
@@ -417,6 +437,58 @@ describe('repoKnowledgeBaseService', () => {
     expect(conflict?.documentCount).toBe(0);
     expect(illegal?.valid).toBe(false);
     expect(illegal?.errors.some((error) => error.startsWith('文档路径不合法：'))).toBe(true);
+  });
+
+  it('T-RKB-SVC4b 文档级错误仅剔除该文档（B1）；不合法库 children/document 收敛 []/null（R1）', async () => {
+    redis.get.mockImplementation(async (key: string) =>
+      key.startsWith('knowledge-bases:scan:')
+        ? JSON.stringify({
+            success: true,
+            sources: [
+              {
+                source: 'zag',
+                knowledgeBases: [
+                  {
+                    folder: 'with-big-doc',
+                    schema: '{"name":"含超限文档"}',
+                    documents: [
+                      { path: 'ok.md', content: '# OK' },
+                      { path: 'big.md', error: 'file too large' },
+                    ],
+                  },
+                  {
+                    folder: 'conflict',
+                    schema: '{"name":"冲突库"}',
+                    documents: [
+                      { path: 'a.md', content: '# A' },
+                      { path: 'a.MD', content: '# A2' },
+                    ],
+                  },
+                ],
+                truncated: false,
+              },
+            ],
+            truncated: false,
+          })
+        : null,
+    );
+
+    const list = await repoKnowledgeBaseService.listKnowledgeBases('u', 'ws-1');
+    const good = list.find((item) => item.folder === 'with-big-doc');
+    const bad = list.find((item) => item.folder === 'conflict');
+
+    expect(good?.valid).toBe(true);
+    expect(good?.errors).toEqual([]);
+    expect(good?.documentCount).toBe(1);
+
+    expect(await repoKnowledgeBaseService.listChildren('u', good!.id)).toEqual([
+      { kind: 'DOCUMENT', name: 'OK', path: '/ok' },
+    ]);
+    expect(await repoKnowledgeBaseService.getDocument('u', good!.id, '/big')).toBeNull();
+
+    expect(bad?.valid).toBe(false);
+    expect(await repoKnowledgeBaseService.listChildren('u', bad!.id)).toEqual([]);
+    expect(await repoKnowledgeBaseService.getDocument('u', bad!.id, '/a')).toBeNull();
   });
 
   it('T-RKB-SVC12/13 children/getDocument 逐级派生；不可达收敛 []/null', async () => {
