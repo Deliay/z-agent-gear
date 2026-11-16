@@ -57,6 +57,7 @@ let reviewStatusRows: Array<{ id: string; status: string }> = [];
 let reviewOnCompleted: ((data: unknown) => void) | null = null;
 
 function installQueryMock(sessionId: string) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试 mock 复用任意 Apollo 选项
   mockUseQuery.mockImplementation((query: unknown, options: Record<string, any> = {}) => {
     if (query === GET_SESSION) {
       return { data: { session: sessionData(sessionId) }, loading: false, error: undefined };

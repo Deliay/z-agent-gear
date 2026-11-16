@@ -14,6 +14,11 @@ enum McpServerSource {
   # prompts/list 返回内置提示词片段清单；prompts/get 按 name 获取片段内容（messages 形态）。
   # 内置片段：workflow-schema（工作流 Schema 说明）、workflow-project-persistence（项目持久化指引）。
   # prompts/get 未知名称或不传 name 返回 INVALID_PARAMS，message 列出可用片段名称。
+  # 知识库工具集（agent-knowledge-base-tools）全部会话恒装配：`knowledge_base_create` /
+  # `knowledge_base_list` / `knowledge_base_document_list` / `knowledge_base_document_get` /
+  # `knowledge_base_document_update` / `knowledge_base_document_delete`；可见范围按「会话工作区 ∪
+  # 本租户全局工作区」× 四档权限矩阵（与界面同口径）；`knowledge_base_create` 仅在会话创建人为
+  # 租户管理员时出现在 tools/list。
   platform
 }
 

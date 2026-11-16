@@ -18,6 +18,7 @@ import { workspaceResolvers } from './workspace.js';
 import { valutResolvers } from './valut.js';
 import { customMcpResolvers } from './custom-mcp.js';
 import { customToolResolvers } from './custom-tool.js';
+import { knowledgeBaseResolvers } from './knowledge-base.js';
 
 export const resolvers = {
   JSON: GraphQLJSON,
@@ -41,6 +42,7 @@ export const resolvers = {
     ...valutResolvers.Query,
     ...customMcpResolvers.Query,
     ...customToolResolvers.Query,
+    ...knowledgeBaseResolvers.Query,
   },
   Mutation: {
     ...authResolvers.Mutation,
@@ -61,6 +63,7 @@ export const resolvers = {
     ...valutResolvers.Mutation,
     ...customMcpResolvers.Mutation,
     ...customToolResolvers.Mutation,
+    ...knowledgeBaseResolvers.Mutation,
   },
   User: {
     ...authResolvers.User,

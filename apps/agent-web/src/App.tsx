@@ -9,6 +9,7 @@ import MainLayout from './pages/MainLayout'
 import SettingsPage from './pages/SettingsPage'
 import SessionPage from './pages/SessionPage'
 import WorkflowInstancePage from './pages/WorkflowInstancePage'
+import KnowledgeBasePage from './pages/KnowledgeBasePage'
 import HomePage from './pages/HomePage'
 import BillingPage from './pages/BillingPage'
 import WorkspacePage from './pages/WorkspacePage'
@@ -41,6 +42,7 @@ function App() {
                 <Route path="sessions" element={<SessionPageRoute />} />
                 <Route path="sessions/:id" element={<SessionPageRoute />} />
                 <Route path="workflows/:id" element={<WorkflowInstancePage />} />
+                <Route path="knowledge-bases/:kbId/*" element={<KnowledgeBasePage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="billing" element={<BillingPage />} />
                 <Route path="workspaces" element={<WorkspacePage />} />

@@ -5,28 +5,39 @@ import { SIDEBAR, sectionToggle, setupPhase4Env } from './phase4-helpers'
 /**
  * UI 优化四期 · 侧边栏（E2E-UI4S1~S6）
  *
- * 覆盖：四折叠分区默认态与持久化、跨环境聚合、空态收敛、拖拽调宽、
+ * 覆盖：五折叠分区默认态与持久化、跨环境聚合、空态收敛、拖拽调宽、
  * 主机树层级缩进与设置按钮、移动端不回归。
  */
 test.describe('侧边栏 UI 四期', () => {
-  test('E2E-UI4S1 四分区默认展开态与刷新保持', async ({ page }) => {
+  test('E2E-UI4S1 五分区默认展开态与刷新保持', async ({ page }) => {
     const env = await setupPhase4Env(page, 's1')
     await loginViaUI(page, env.username)
+
+    // 第五分区「知识库」默认折叠（D3），位置在「会话」之后、「网关」之前
+    await expect(page.locator('[data-testid="sidebar-section-hosts"]')).toBeVisible()
+    await expect(page.locator('[data-testid="sidebar-section-workflows"]')).toBeVisible()
+    await expect(page.locator('[data-testid="sidebar-section-sessions"]')).toBeVisible()
+    await expect(page.locator('[data-testid="sidebar-section-knowledgeBases"]')).toBeVisible()
+    await expect(page.locator('[data-testid="sidebar-section-gateways"]')).toBeVisible()
 
     await expect(page.locator(sectionToggle('workflows'))).toHaveAttribute('aria-expanded', 'true')
     await expect(page.locator(sectionToggle('sessions'))).toHaveAttribute('aria-expanded', 'true')
     await expect(page.locator(sectionToggle('hosts'))).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator(sectionToggle('knowledgeBases'))).toHaveAttribute('aria-expanded', 'false')
     await expect(page.locator(sectionToggle('gateways'))).toHaveAttribute('aria-expanded', 'false')
 
-    // 点击标题行切换，刷新后保持
+    // 点击标题行切换，刷新后保持（含第五分区知识库）
     await page.locator(sectionToggle('hosts')).click()
     await page.locator(sectionToggle('sessions')).click()
+    await page.locator(sectionToggle('knowledgeBases')).click()
     await expect(page.locator(sectionToggle('hosts'))).toHaveAttribute('aria-expanded', 'true')
     await expect(page.locator(sectionToggle('sessions'))).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator(sectionToggle('knowledgeBases'))).toHaveAttribute('aria-expanded', 'true')
 
     await page.reload()
     await expect(page.locator(sectionToggle('hosts'))).toHaveAttribute('aria-expanded', 'true')
     await expect(page.locator(sectionToggle('sessions'))).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator(sectionToggle('knowledgeBases'))).toHaveAttribute('aria-expanded', 'true')
     await expect(page.locator(sectionToggle('workflows'))).toHaveAttribute('aria-expanded', 'true')
 
     env.controllers.forEach((controller) => controller.disconnect())

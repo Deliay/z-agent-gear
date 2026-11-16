@@ -384,6 +384,7 @@ export async function callWorkflowTool(
 }
 
 export const SIDEBAR = 'nav[aria-label="Sidebar"]'
-export const sectionToggle = (key: 'hosts' | 'workflows' | 'sessions' | 'gateways') =>
-  `[data-testid="sidebar-section-${key}"] > div > button[aria-expanded]`
+export const sectionToggle = (
+  key: 'hosts' | 'workflows' | 'sessions' | 'knowledgeBases' | 'gateways',
+) => `[data-testid="sidebar-section-${key}"] > div > button[aria-expanded]`
 export const nodeCard = (nodeId: string) => `[data-testid="workflow-node-card-${nodeId}"]`

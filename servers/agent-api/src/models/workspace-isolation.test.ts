@@ -13,6 +13,9 @@ import { CloudStorage } from './cloud-storage.js';
 import { UserCommitSetting } from './user-commit-setting.js';
 import { Provider } from './provider.js';
 import { Model } from './model.js';
+import { KnowledgeBase } from './knowledge-base.js';
+import { KnowledgeBaseDocument } from './knowledge-base-document.js';
+import { KnowledgeBaseEvent } from './knowledge-base-event.js';
 import { WORKSPACE_ID_COLLECTIONS } from '../migrations/015-team-workspaces.js';
 import { runWithWorkspace, type WorkspaceContext } from '../services/workspace-context.js';
 
@@ -264,5 +267,52 @@ describe('workspace-isolation 矩阵（T-WS，真库）', () => {
     expect(names).not.toContain('tenantmembers');
     expect(names).not.toContain('workspaces');
     expect(names).not.toContain('workspacemembers');
+  });
+
+  it('知识库三集合不挂 workspace 插件：跨上下文读写不被过滤（#495 / D5）', async () => {
+    const bases = mongoose.connection.collection('knowledgebases');
+    const documents = mongoose.connection.collection('knowledgebasedocuments');
+    const events = mongoose.connection.collection('knowledgebaseevents');
+    await bases.insertMany([
+      { tenantId: TENANT, workspaceId: WS_A, name: 'kb-a', permissionMode: 'NONE', createdBy: 'u' },
+      { tenantId: TENANT, workspaceId: WS_B, name: 'kb-b', permissionMode: 'NONE', createdBy: 'u' },
+      { tenantId: TENANT, workspaceId: WS_GLOBAL, name: 'kb-g', permissionMode: 'READ_ONLY', createdBy: 'u' },
+    ]);
+    await documents.insertMany([
+      { tenantId: TENANT, knowledgeBaseId: BUILTIN_ID, path: '/a', title: 'a', createdBy: 'u', updatedBy: 'u' },
+      { tenantId: TENANT, knowledgeBaseId: new mongoose.Types.ObjectId(), path: '/b', title: 'b', createdBy: 'u', updatedBy: 'u' },
+      { tenantId: TENANT, knowledgeBaseId: new mongoose.Types.ObjectId(), path: '/c', title: 'c', createdBy: 'u', updatedBy: 'u' },
+    ]);
+    await events.insertMany([
+      { tenantId: TENANT, knowledgeBaseId: BUILTIN_ID, path: '/a', op: 'CREATE', title: 'a', actorId: 'u', actorName: 'U' },
+      { tenantId: TENANT, knowledgeBaseId: new mongoose.Types.ObjectId(), path: '/b', op: 'CREATE', title: 'b', actorId: 'u', actorName: 'U' },
+      { tenantId: TENANT, knowledgeBaseId: new mongoose.Types.ObjectId(), path: '/c', op: 'CREATE', title: 'c', actorId: 'u', actorName: 'U' },
+    ]);
+
+    // 三集合都有 workspaceId 维度，但**不挂插件**：任意上下文都看到全部工作区行
+    const models: Array<mongoose.Model<any>> = [
+      KnowledgeBase as unknown as mongoose.Model<any>,
+      KnowledgeBaseDocument as unknown as mongoose.Model<any>,
+      KnowledgeBaseEvent as unknown as mongoose.Model<any>,
+    ];
+    for (const model of models) {
+      expect(model.schema.path('workspaceId') ?? model.schema.path('tenantId')).toBeTruthy();
+      const count = await runWithWorkspace(devA, () =>
+        model.countDocuments({ tenantId: TENANT }),
+      );
+      expect(count).toBe(3);
+    }
+
+    // 跨工作区写入不被改写 / 不报错（全局库跨工作区可写的前提）
+    const created = await runWithWorkspace(devA, () =>
+      KnowledgeBase.create({
+        tenantId: TENANT,
+        workspaceId: WS_B,
+        name: 'kb-cross',
+        permissionMode: 'NONE',
+        createdBy: 'u',
+      }),
+    );
+    expect(String(created.workspaceId)).toBe(WS_B);
   });
 });

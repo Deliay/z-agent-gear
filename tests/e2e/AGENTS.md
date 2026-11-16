@@ -332,12 +332,33 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| E2E-UI4S1 折叠分区默认态 | 四分区存在；「工作流」「会话」默认展开、「主机」「网关」默认折叠；点击标题行切换且刷新后保持 |
+| E2E-UI4S1 折叠分区默认态 | 五分区存在（主机/工作流/会话/知识库/网关）；「工作流」「会话」默认展开、「主机」「知识库」「网关」默认折叠；点击标题行切换且刷新后保持 |
 | E2E-UI4S2 跨环境聚合 | 两主机的会话/工作流出现在同一「会话」「工作流」列表；条目点击直达对应会话 |
 | E2E-UI4S3 空态收敛 | 无会话/无工作流/无网关时展开后内容区为空，无「无会话」等占位文字 |
 | E2E-UI4S4 拖拽调宽 | 拖动分界线宽度变化且 clamp 在 240–448px；刷新后保持；双击恢复默认 320px |
 | E2E-UI4S5 主机树层级 | 下级缩进为 8px（0.5rem）；设置按钮可点击进入配置页 |
 | E2E-UI4S6 移动端不回归 | 移动视口无 Resizer，且 `scrollWidth - clientWidth ≤ 1` |
+
+### 知识库 E2E (`knowledge-base.spec.ts` E2E-KB1~7)
+
+> 需求 #495；契约 `contracts/knowledge-base.graphql`。造数经 agent-api GraphQL（`createKnowledgeBase` /
+> `createKnowledgeBaseDocument` / `updateKnowledgeBaseDocument` / `deleteKnowledgeBaseDocument`），UI 驱动关键路径；
+> 团队租户（admin/developer 权限与「无创建入口」）经 admin-api `adminCreateTeamTenant` / `adminAddTenantMember` 准备，
+> developer 视角经独立 context + `localStorage['zag:current-workspace:<userId>']` 固定到团队全局工作区。
+> 依赖 agent-web / agent-api / admin-api 与 `INTERNAL_API_TOKEN`（开户；缺省回落 admin-api 开户），无需 controller。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-KB1 分区与创建入口 | 「知识库」分区存在且默认折叠；管理员见分区「+」→ 创建知识库后树中出现；developer 在团队全局工作区可见共享库但无「+」（补充：developer 直接调 `createKnowledgeBase` 返回 `not a tenant admin`） |
+| E2E-KB2 树与子文档 | 树展示知识库 → 文档层级；文档条目「+」→ 持久化 `新文档-XXXX` 子文档、地址栏跳 `/knowledge-bases/{kbId}/{parent}/新文档-xxxx?edit=1` 且处于编辑模式；保存后预览生效、树中出现新标题 |
+| E2E-KB3 分栏编辑与草稿 | 右侧输入左侧实时渲染；保存后预览生效且 `kb-doc-draft:{kbId}:{path}` 清除；刷新重进编辑弹「恢复未保存的内容？」→「恢复」载入草稿、「放弃」回到已保存内容 |
+| E2E-KB4 预览页 | 面包屑/标题/描述/Tags/Markdown 依次可见；地址栏含文档路径；超长无空格内容下内容区与整页 `scrollWidth - clientWidth ≤ 1` |
+| E2E-KB5 历史抽屉 | 创建/更新/删除/同路径重建后下拉 4 项且时间倒序；选择「删除」版本只读预览删除前内容（历史跨删除延续） |
+| E2E-KB6 设置 | 全库历史时间倒序；改权限为 NONE 后 developer 刷新视野即不可见（分区空态）；删除知识库二次确认后树下架 |
+| E2E-KB7 删除文档 | 预览页删除并确认 → 路径从树消失；同路径 API 重建成功、历史仍可查看（含删除快照） |
+
+> 权限矩阵/事件溯源/路径校验的穷举由 `servers/agent-api` 单测（T-KBA/T-KBS）与 `tests/api` T-KB-API1~6 覆盖；
+> 本套件只做 UI 关键路径与可见性收敛。
 
 ### Workflow Graph Phase 4 E2E (`workflow-graph.spec.ts`)
 

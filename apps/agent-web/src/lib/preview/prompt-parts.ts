@@ -63,7 +63,7 @@ export function checkPartSizes(parts: PromptPart[]): PartSizeCheck {
 
 /** 草稿序列化：合计 >2MB 不持久化返回 null（裁决 6） */
 export function serializeDraft(parts: PromptPart[]): string | null {
-  const json = JSON.stringify(parts.map(({ origin, ...rest }) => rest));
+  const json = JSON.stringify(parts.map(({ origin: _origin, ...rest }) => rest));
   if (json.length > DRAFT_PERSIST_LIMIT) return null;
   return json;
 }

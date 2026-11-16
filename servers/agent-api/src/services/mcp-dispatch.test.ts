@@ -72,6 +72,17 @@ vi.mock('./custom-tools-mcp.js', () => ({
   CUSTOM_TOOLS_SERVER_NAME: 'agent-custom-tools',
 }));
 
+vi.mock('./knowledge-base-tools.js', () => ({
+  handleKnowledgeBaseToolsMcpRequest: vi.fn(),
+  KNOWLEDGE_BASE_TOOLS_SERVER_NAME: 'agent-knowledge-base-tools',
+}));
+
+vi.mock('./workspace-service.js', () => ({
+  workspaceService: {
+    buildSessionWorkspaceContext: vi.fn(),
+  },
+}));
+
 import jwt from 'jsonwebtoken';
 import { mcpEndpointService } from './mcp-endpoint.js';
 import { mcpForwarder, ForwardError } from './mcp-forwarder.js';
@@ -82,6 +93,8 @@ import { getRedisClient } from '../middleware/redis.js';
 import { handlePlatformMcpRequest } from './workflow/tool-handlers.js';
 import { handleValutToolsMcpRequest } from './valut-tools.js';
 import { handleCustomToolsMcpRequest } from './custom-tools-mcp.js';
+import { handleKnowledgeBaseToolsMcpRequest } from './knowledge-base-tools.js';
+import { workspaceService } from './workspace-service.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { dispatch } from './mcp-dispatch.js';
 
@@ -691,6 +704,72 @@ describe('MCP Dispatch', () => {
       });
 
       expect(result.status).toBe(202);
+    });
+
+    it('agent-knowledge-base-tools 直发本地 handler（#495）', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        ...VALID_PAYLOAD,
+        serverNames: ['agent-knowledge-base-tools'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockPlatformServerByName('agent-knowledge-base-tools');
+      vi.mocked(handleKnowledgeBaseToolsMcpRequest).mockResolvedValue({
+        result: { tools: [{ name: 'knowledge_base_list' }] },
+      });
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-knowledge-base-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', id: 3, method: 'tools/list' },
+      });
+
+      expect(result).toEqual({
+        status: 200,
+        body: { jsonrpc: '2.0', id: 3, result: { tools: [{ name: 'knowledge_base_list' }] } },
+      });
+      expect(handleKnowledgeBaseToolsMcpRequest).toHaveBeenCalled();
+    });
+
+    it('团队工作区：平台服务行按会话租户写入，直查未命中时在会话上下文内补查（#495）', async () => {
+      const context = {
+        id: 'ws-1',
+        tenantId: 'tenant-1',
+        type: 'normal',
+        role: 'admin',
+        readOnly: false,
+        globalWorkspaceId: 'ws-global',
+      };
+      vi.mocked(workspaceService.buildSessionWorkspaceContext).mockResolvedValue(context as never);
+      vi.mocked(jwt.verify).mockReturnValue({
+        ...VALID_PAYLOAD,
+        serverNames: ['agent-knowledge-base-tools'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      vi.mocked(McpServer.findOne)
+        // 无 ALS 的直查（tenant-scope 注入 tenantId=userId）命中不到团队租户行
+        .mockResolvedValueOnce(null as never)
+        // 会话上下文内补查命中
+        .mockResolvedValueOnce(mockServerDoc({ transport: 'platform' }) as never);
+      vi.mocked(handleKnowledgeBaseToolsMcpRequest).mockResolvedValue({
+        result: { tools: [{ name: 'knowledge_base_create' }] },
+      });
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-knowledge-base-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', id: 4, method: 'tools/list' },
+      });
+
+      expect(result.status).toBe(200);
+      expect(McpServer.findOne).toHaveBeenCalledTimes(2);
+      expect(workspaceService.buildSessionWorkspaceContext).toHaveBeenCalledWith(
+        'session-1',
+        'user-1',
+      );
+      // 会话上下文只构造一次（补查与 platform 分支共用）
+      expect(workspaceService.buildSessionWorkspaceContext).toHaveBeenCalledTimes(1);
     });
   });
 });
