@@ -245,6 +245,7 @@ flowchart LR
 - [[proposals/20261115-feat-workflow-mcp-prompt-snippets.md]] — 工作流MCP提供提示词片段（平台内置 MCP agent-workflow-admin-tools 实现 MCP prompts 能力：initialize 声明 prompts、prompts/list、prompts/get；新增 admin-prompts.ts 片段注册表单一来源承载 workflow-schema 与 workflow-project-persistence 两段提示词，内容与 validateTemplateGraph 及 .zag/workflow/templates 扫描约束同源对齐并有防漂移守卫；纯 agent-api 改动零数据模型变更）
 - [[proposals/20261115-feat-knowledge-base.md]] — 知识库（knowledgebases/knowledgebasedocuments/knowledgebaseevents 三集合事件溯源（删除释放路径、历史延续、库级倒序）、knowledge-base-access 四档权限矩阵纯函数（全局库跨工作区按库模式放行写、有意偏离全局只读插件）、平台 MCP agent-knowledge-base-tools 恒装配且创建库工具按角色门控、契约新增 knowledge-base.graphql；agent-web 侧边栏第五分区与 /knowledge-bases/:kbId/* 页面：树/预览/分栏编辑/localStorage 草稿/历史抽屉/设置；迁移 028）
 - [[proposals/20261116-feat-workflow-node-manual-fail.md]] — 工作流节点「立即失败」（契约新增 failNode 变更与 failInfo.source=MANUAL；agent-api failNode 服务编排「先引擎转移落库、后中断会话」避免误排期重试，复用中断重试既有 CAS 防护零新增取消机制；agent-web 节点详情抽屉「立即失败」按钮与二次确认）
+- [[proposals/20261116-feat-knowledge-base-repo-built-in.md]] — 仓库内建知识库（agent-gear 新增 knowledge-bases:scan 白名单扫描事件直读工作区 `.zag/knowledges/` 与 `docs/knowledges/`（子文件夹含 knowledge-base.json 即知识库、库内 Markdown 为文档），controller-api 白名单中继写 Redis 结果键，agent-api 聚合 RUNNING 云电脑默认工作区扫描结果并解析校验（schema + front matter + 路径归一）经 GraphQL 只读透出；agent-web 侧边栏「仓库知识库」分组只读浏览；不落 MongoDB、不进知识库 MCP、无任何写入口）
 
 ### 实现计划（`plan/`）
 
