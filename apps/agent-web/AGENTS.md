@@ -381,3 +381,24 @@ pnpm run preview  # Preview production build
 - **校验**：「压缩原始上下文」仅在对应会话行为为「原始会话」时合法；`validateTemplateNodes`（`validateConfiguredNodes` 复用）给出中文前置错误「…为「新会话」时不可开启「压缩原始上下文」（仅原始会话可压缩）」。
 - **查询选择集**：`TEMPLATE_NODE_FIELDS`、`CONFIGURED_NODE_FIELDS` 与 `GET_WORKFLOW_INSTANCE.nodes` 均追加 4 字段（`REPO_WORKFLOW_TEMPLATES` 复用模板 fragment）。
 - **测试入口**：`components/workflow/__tests__/SessionBehaviorFields.test.tsx`（T-SB-WEB1~2）、`components/workflow/__tests__/template-validation.test.ts`（T-SB-WEB3）、`components/workflow/__tests__/EditInstanceNodeDialog.test.tsx`（T-SB-WEB4）、`graphql/__tests__/workflow.test.ts`（选择集守卫）。
+
+## 工作流节点「立即失败」
+
+> 契约 `contracts/workflow.graphql` 的 `failNode` 与 `WorkflowNodeFailInfo.source=MANUAL`；计划
+> `docs/engineering/plan/20261116-feat-workflow-node-manual-fail.md` Phase 3。
+
+- **按钮可见性**：`NodeDetailDrawer` 在「重启节点」旁新增 destructive「立即失败」按钮，可见性独立收窄——
+  仅 `node.type === 'AI' && (status === 'RUNNING' || status === 'REWORK')`（与 `canRestart` 互不影响）；
+  `unavailable=true` 时禁用并提示「实例不可用，请先接续」（与重启入口同口径）。
+- **交互与 mutation**：`hooks/useFailNodeAction.ts` 承载二次确认与提交——点击打开 `ConfirmDialog`
+  （文案含「中断会话 / 取消全部自动重试 / 阻断工作流」三项后果，确认按钮 destructive 文案「确认失败」）；
+  取消零副作用；确认调 `FAIL_WORKFLOW_NODE`（`{instanceId, nodeId}`，不传 reason 走服务端缺省
+  「人工标记失败」）。成功 `toast.success('节点已标记失败')`，失败文案原样 toast；**不本地伪造节点状态**
+  （5s 轮询收敛徽标与来源行），不额外 refetch。
+- **失败来源展示**：`WorkflowNodeTreeConstants.failSourceText` 六来源映射（`SESSION_STUCK→会话停滞` /
+  `LLM_REPORTED→AI 主动标记` / `SESSION_START_FAILED→会话启动失败` / `RETRY_EXHAUSTED→中断重试用尽` /
+  `CONTROLLER_UNAVAILABLE→控制器不可用` / `MANUAL→人工标记`，未知值原样返回）；FAILED/RETRY_FAILED
+  失败信息块在原因行下新增「失败来源：…」（`data-testid="drawer-fail-source"`，对全部来源生效）。
+- **重试进度**：`failNode` 清空 `nextRetryAt` 后 `retryProgressText` 自然返回 null，进度行随轮询消失（前端零额外逻辑）。
+- **测试入口**：`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-MNF-W1~W3）、
+  `components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-MNF-W3 映射）。

@@ -27,6 +27,7 @@ vi.mock('../../models/workflow-instance.js', () => ({
 vi.mock('../../models/controller.js', () => ({
   Controller: {
     findOne: vi.fn(),
+    findById: vi.fn(),
   },
 }));
 
@@ -43,6 +44,7 @@ vi.mock('../../models/session.js', () => ({
 vi.mock('../session.js', () => ({
   sessionService: {
     delete: vi.fn(),
+    close: vi.fn(),
   },
 }));
 
@@ -79,7 +81,7 @@ const testLog = createTestLogger();
 const childSpy = vi
   .spyOn(rootLogger, 'child')
   .mockImplementation((bindings) => testLog.logger.child(bindings));
-const { workflowInstanceService, normalizeWorkflowName } = await import('./instance.js');
+const { workflowInstanceService, normalizeWorkflowName, normalizeManualFailReason } = await import('./instance.js');
 childSpy.mockRestore();
 
 import { workflowEngine } from './engine.js';
@@ -1426,5 +1428,189 @@ describe('WorkflowInstanceService 追加提示词与联动注销', () => {
         additionalPrompts: { 'github-pr': expect.stringContaining('## GitHub Pull Request 联动') },
       }),
     );
+  });
+});
+
+describe('WorkflowInstanceService.failNode（人工立即失败，T-MNF2~T-MNF6）', () => {
+  function makeFailNode(overrides: Record<string, unknown> = {}) {
+    return {
+      nodeId: 'n1',
+      nodeKey: 'exec',
+      type: 'AI',
+      name: '执行',
+      status: 'RUNNING',
+      sessionId: 'sess-1',
+      dependsOn: [],
+      retryCount: 2,
+      nextRetryAt: new Date(),
+      retryPhase: 'SCHEDULED',
+      retryDeadlineAt: new Date(),
+      retryTrigger: 'ENDED',
+      ...overrides,
+    };
+  }
+
+  function makeFailInstance(nodeOverrides: Record<string, unknown> = {}) {
+    return {
+      _id: oid('inst-1'),
+      userId: oid('user-1'),
+      controllerId: oid('ctrl-1'),
+      nodes: [makeFailNode(nodeOverrides)],
+    };
+  }
+
+  function mockControllerStatus(status: string | null) {
+    vi.mocked(Controller.findById).mockReturnValue({
+      select: () => ({ lean: () => Promise.resolve(status === null ? null : { status }) }),
+    } as never);
+  }
+
+  function failedDoc(overrides: Record<string, unknown> = {}) {
+    return {
+      nodeId: 'n1',
+      status: 'FAILED',
+      sessionId: 'sess-1',
+      retryCount: 2,
+      nextRetryAt: null,
+      retryPhase: null,
+      failInfo: { reason: '人工标记失败', source: 'MANUAL', at: new Date() },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockControllerStatus('online');
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+  });
+
+  it('T-MNF2 门控矩阵：归属/节点存在/不可用/AI 类型/引擎状态机文案', async () => {
+    // 非归属或不存在
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(null));
+    await expect(workflowInstanceService.failNode('user-2', 'inst-1', 'n1')).rejects.toThrow(
+      '工作流实例不存在或无权限',
+    );
+
+    // 节点缺失
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(makeFailInstance()));
+    await expect(workflowInstanceService.failNode('user-1', 'inst-1', 'missing')).rejects.toThrow(
+      '工作流实例中不存在节点：missing',
+    );
+
+    // 控制器离线
+    mockControllerStatus('offline');
+    await expect(workflowInstanceService.failNode('user-1', 'inst-1', 'n1')).rejects.toThrow(
+      '工作流实例不可用（控制器离线或已删除），请先接续后再操作',
+    );
+    // 控制器文档缺失（已删除）同文案
+    mockControllerStatus(null);
+    await expect(workflowInstanceService.failNode('user-1', 'inst-1', 'n1')).rejects.toThrow(
+      '工作流实例不可用（控制器离线或已删除），请先接续后再操作',
+    );
+    mockControllerStatus('online');
+    expect(workflowEngine.transition).not.toHaveBeenCalled();
+
+    // HUMAN / FLAG 节点
+    for (const type of ['HUMAN', 'FLAG']) {
+      vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+        leanQuery(makeFailInstance({ type, status: 'RUNNING' })),
+      );
+      await expect(workflowInstanceService.failNode('user-1', 'inst-1', 'n1')).rejects.toThrow(
+        '仅 AI 节点支持立即失败',
+      );
+    }
+    expect(workflowEngine.transition).not.toHaveBeenCalled();
+
+    // 非 RUNNING/REWORK：引擎拒绝文案原样冒泡
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(makeFailInstance({ status: 'DONE' })));
+    vi.mocked(workflowEngine.transition).mockRejectedValue(
+      new Error('节点「执行」当前状态为 DONE，不允许执行「标记失败」（fail）'),
+    );
+    await expect(workflowInstanceService.failNode('user-1', 'inst-1', 'n1')).rejects.toThrow(
+      '节点「执行」当前状态为 DONE，不允许执行「标记失败」（fail）',
+    );
+  });
+
+  it('T-MNF3 成功路径：先引擎转移落库、后关闭会话（载荷与返回节点）', async () => {
+    const calls: string[] = [];
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(makeFailInstance()));
+    vi.mocked(workflowEngine.transition).mockImplementation((async () => {
+      calls.push('transition');
+      return failedDoc();
+    }) as never);
+    vi.mocked(sessionService.close).mockImplementation((async () => {
+      calls.push('close');
+      return true;
+    }) as never);
+
+    const result = await workflowInstanceService.failNode('user-1', 'inst-1', 'n1');
+
+    expect(calls).toEqual(['transition', 'close']);
+    expect(vi.mocked(workflowEngine.transition).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sessionService.close).mock.invocationCallOrder[0],
+    );
+    expect(workflowEngine.transition).toHaveBeenCalledWith('inst-1', 'n1', 'fail', {
+      reason: '人工标记失败',
+      source: 'MANUAL',
+    });
+    expect(sessionService.close).toHaveBeenCalledWith('sess-1', 'user-1', {
+      suppressFallback: true,
+      reason: 'workflow_node_manual_fail',
+    });
+    expect(result).toMatchObject({
+      status: 'FAILED',
+      failInfo: { source: 'MANUAL', reason: '人工标记失败' },
+      nextRetryAt: null,
+      retryPhase: null,
+    });
+  });
+
+  it('T-MNF4 close 抛错仅告警：不抛出、节点保持 FAILED（不回滚）', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(makeFailInstance()));
+    vi.mocked(workflowEngine.transition).mockResolvedValue(failedDoc() as never);
+    vi.mocked(sessionService.close).mockRejectedValue(new Error('controller unreachable'));
+
+    await expect(workflowInstanceService.failNode('user-1', 'inst-1', 'n1')).resolves.toMatchObject({
+      status: 'FAILED',
+    });
+    expect(sessionService.close).toHaveBeenCalledTimes(1);
+    // 不回滚：转移只调用一次，无补偿写库
+    expect(workflowEngine.transition).toHaveBeenCalledTimes(1);
+    expect(WorkflowInstance.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('T-MNF5 节点无 sessionId（启动失败场景）：跳过 close，其余行为不变', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(
+      leanQuery(makeFailInstance({ sessionId: null })),
+    );
+    vi.mocked(workflowEngine.transition).mockResolvedValue(failedDoc({ sessionId: null }) as never);
+
+    await expect(workflowInstanceService.failNode('user-1', 'inst-1', 'n1')).resolves.toMatchObject({
+      status: 'FAILED',
+    });
+    expect(sessionService.close).not.toHaveBeenCalled();
+  });
+
+  it('T-MNF6 reason 归一：缺省/空白 → 人工标记失败；trim；600 字截断至 500', async () => {
+    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(makeFailInstance()));
+    vi.mocked(workflowEngine.transition).mockResolvedValue(failedDoc() as never);
+
+    await workflowInstanceService.failNode('user-1', 'inst-1', 'n1');
+    expect(vi.mocked(workflowEngine.transition).mock.calls[0][3]).toMatchObject({ reason: '人工标记失败' });
+
+    await workflowInstanceService.failNode('user-1', 'inst-1', 'n1', '   ');
+    expect(vi.mocked(workflowEngine.transition).mock.calls[1][3]).toMatchObject({ reason: '人工标记失败' });
+
+    await workflowInstanceService.failNode('user-1', 'inst-1', 'n1', '  卡住了  ');
+    expect(vi.mocked(workflowEngine.transition).mock.calls[2][3]).toMatchObject({ reason: '卡住了' });
+
+    await workflowInstanceService.failNode('user-1', 'inst-1', 'n1', 'x'.repeat(600));
+    const truncated = vi.mocked(workflowEngine.transition).mock.calls[3][3] as { reason: string };
+    expect(truncated.reason).toHaveLength(500);
+
+    // 纯函数口径
+    expect(normalizeManualFailReason(null)).toBe('人工标记失败');
+    expect(normalizeManualFailReason(undefined)).toBe('人工标记失败');
+    expect(normalizeManualFailReason(' a ')).toBe('a');
   });
 });

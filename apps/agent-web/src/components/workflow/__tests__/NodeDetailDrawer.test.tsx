@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import NodeDetailDrawer, { type NodeDetailTarget } from '../NodeDetailDrawer'
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow'
 
@@ -7,6 +7,16 @@ vi.mock('@/components/session/MarkdownContent', () => ({
   default: ({ content }: { content: string }) => (
     <div data-testid="markdown-content">{content}</div>
   ),
+}))
+
+const mockFailNode = vi.fn()
+
+vi.mock('@apollo/client/react', () => ({
+  useMutation: () => [mockFailNode, { loading: false }],
+}))
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
 }))
 
 vi.mock('@/hooks/useHumanNodeActions', () => ({
@@ -274,5 +284,166 @@ describe('NodeDetailDrawer 中断自动重试（T-FE2/T-FE3）', () => {
     renderRetry({ retryCount: 3, nextRetryAt: null })
     expect(screen.queryByText('自动重试')).not.toBeInTheDocument()
     expect(screen.queryByText(/正在恢复会话/)).not.toBeInTheDocument()
+  })
+})
+
+describe('NodeDetailDrawer 立即失败（T-MNF-W1~W3）', () => {
+  function renderNode(nodeOverrides: Partial<WorkflowNodeData>, options: { unavailable?: boolean } = {}) {
+    const inst = instance({ nodes: [node({ ...nodeOverrides })] })
+    render(
+      <NodeDetailDrawer
+        open
+        onOpenChange={() => {}}
+        instance={inst}
+        target={{ type: 'node', nodeId: 'n1' }}
+        unavailable={options.unavailable}
+        onRestartNode={vi.fn()}
+      />,
+    )
+  }
+
+  it('T-MNF-W1 按钮可见性矩阵：仅 AI×RUNNING/REWORK 可见', () => {
+    for (const status of ['READY', 'DONE', 'REJECT', 'FAILED', 'RETRY_FAILED'] as const) {
+      const { unmount } = render(
+        <NodeDetailDrawer
+          open
+          onOpenChange={() => {}}
+          instance={instance({
+            nodes: [
+              node({
+                type: 'AI',
+                status,
+                rejectInfo: null,
+                failInfo:
+                  status === 'FAILED' || status === 'RETRY_FAILED'
+                    ? { reason: 'r', source: 'MANUAL', at: '' }
+                    : null,
+              }),
+            ],
+          })}
+          target={{ type: 'node', nodeId: 'n1' }}
+        />,
+      )
+      expect(screen.queryByRole('button', { name: '立即失败' }), `AI×${status}`).not.toBeInTheDocument()
+      unmount()
+    }
+
+    for (const type of ['HUMAN', 'FLAG'] as const) {
+      const { unmount } = render(
+        <NodeDetailDrawer
+          open
+          onOpenChange={() => {}}
+          instance={instance({ nodes: [node({ type, status: 'RUNNING', rejectInfo: null })] })}
+          target={{ type: 'node', nodeId: 'n1' }}
+        />,
+      )
+      expect(screen.queryByRole('button', { name: '立即失败' }), `${type}`).not.toBeInTheDocument()
+      unmount()
+    }
+
+    for (const status of ['RUNNING', 'REWORK'] as const) {
+      const { unmount } = render(
+        <NodeDetailDrawer
+          open
+          onOpenChange={() => {}}
+          instance={instance({ nodes: [node({ type: 'AI', status, rejectInfo: null })] })}
+          target={{ type: 'node', nodeId: 'n1' }}
+        />,
+      )
+      expect(screen.getByRole('button', { name: '立即失败' }), `AI×${status}`).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('T-MNF-W1b unavailable=true 时禁用并提示「实例不可用，请先接续」', () => {
+    renderNode({ type: 'AI', status: 'RUNNING', rejectInfo: null }, { unavailable: true })
+    const btn = screen.getByRole('button', { name: '立即失败' })
+    expect(btn).toBeDisabled()
+    expect(btn).toHaveAttribute('title', '实例不可用，请先接续')
+  })
+
+  it('T-MNF-W2 二次确认：取消零副作用，确认才以 {instanceId,nodeId} 调 mutation 并 toast', async () => {
+    renderNode({ type: 'AI', status: 'RUNNING', rejectInfo: null })
+
+    fireEvent.click(screen.getByRole('button', { name: '立即失败' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('中断会话')
+    expect(dialog).toHaveTextContent('取消全部自动重试')
+    expect(dialog).toHaveTextContent('阻断工作流')
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    expect(mockFailNode).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: '立即失败' }))
+    const confirmDialog = await screen.findByRole('dialog')
+    mockFailNode.mockResolvedValueOnce({ data: { failNode: { id: 'n1', status: 'FAILED' } } })
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: '确认失败' }))
+
+    await waitFor(() =>
+      expect(mockFailNode).toHaveBeenCalledWith({ variables: { instanceId: 'inst-1', nodeId: 'n1' } }),
+    )
+    const { toast } = await import('sonner')
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('节点已标记失败'))
+  })
+
+  it('T-MNF-W2b mutation 报错 toast 原样展示，不本地伪造状态', async () => {
+    mockFailNode.mockRejectedValueOnce(new Error('节点「执行」当前状态为 DONE，不允许执行「标记失败」（fail）'))
+    renderNode({ type: 'AI', status: 'RUNNING', rejectInfo: null })
+
+    fireEvent.click(screen.getByRole('button', { name: '立即失败' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认失败' }))
+
+    const { toast } = await import('sonner')
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        '节点「执行」当前状态为 DONE，不允许执行「标记失败」（fail）',
+      ),
+    )
+    // 状态徽标仍为执行中（未本地伪造 FAILED）
+    expect(screen.getByTestId('drawer-node-status')).toHaveTextContent('执行中')
+  })
+
+  it('T-MNF-W3 FAILED 节点展示「失败来源：人工标记」，RETRY_FAILED 原因+来源两行不回归', () => {
+    const { unmount } = render(
+      <NodeDetailDrawer
+        open
+        onOpenChange={() => {}}
+        instance={instance({
+          nodes: [
+            node({
+              type: 'AI',
+              status: 'FAILED',
+              rejectInfo: null,
+              failInfo: { reason: '人工标记失败', source: 'MANUAL', at: '' },
+            }),
+          ],
+        })}
+        target={{ type: 'node', nodeId: 'n1' }}
+      />,
+    )
+    expect(screen.getByText('失败原因：人工标记失败')).toBeInTheDocument()
+    expect(screen.getByTestId('drawer-fail-source')).toHaveTextContent('失败来源：人工标记')
+    unmount()
+
+    render(
+      <NodeDetailDrawer
+        open
+        onOpenChange={() => {}}
+        instance={instance({
+          nodes: [
+            node({
+              type: 'AI',
+              status: 'RETRY_FAILED',
+              rejectInfo: null,
+              failInfo: { reason: '重试用尽', source: 'RETRY_EXHAUSTED', at: '' },
+            }),
+          ],
+        })}
+        target={{ type: 'node', nodeId: 'n1' }}
+      />,
+    )
+    expect(screen.getByText('重试失败原因：重试用尽')).toBeInTheDocument()
+    expect(screen.getByTestId('drawer-fail-source')).toHaveTextContent('失败来源：中断重试用尽')
   })
 })

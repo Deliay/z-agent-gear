@@ -122,7 +122,8 @@ export interface WorkflowNodeFailInfoData {
   reason: string
   /**
    * SESSION_STUCK（提醒后仍会停止）/ LLM_REPORTED（LLM 调用 failCurrentNode）/
-   * SESSION_START_FAILED（节点会话启动失败或被移除）/ RETRY_EXHAUSTED（中断自动重试 10 次用尽）
+   * SESSION_START_FAILED（节点会话启动失败或被移除）/ RETRY_EXHAUSTED（中断自动重试 10 次用尽）/
+   * CONTROLLER_UNAVAILABLE（实例接续时收敛）/ MANUAL（人工「立即失败」）
    */
   source: string
   at: string
@@ -696,6 +697,20 @@ export const REJECT_NODE = gql`
     rejectNode(instanceId: $instanceId, nodeId: $nodeId, reason: $reason) {
       id
       status
+    }
+  }
+`
+
+export const FAIL_WORKFLOW_NODE = gql`
+  mutation FailWorkflowNode($instanceId: ID!, $nodeId: ID!, $reason: String) {
+    failNode(instanceId: $instanceId, nodeId: $nodeId, reason: $reason) {
+      id
+      status
+      failInfo {
+        reason
+        source
+        at
+      }
     }
   }
 `

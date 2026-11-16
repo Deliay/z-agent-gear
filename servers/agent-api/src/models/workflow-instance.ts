@@ -40,7 +40,8 @@ const failInfoSchema = new mongoose.Schema(
   {
     reason: { type: String, required: true },
     // 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED / RETRY_EXHAUSTED（中断自动重试用尽）/
-    // CONTROLLER_UNAVAILABLE（实例接续时收敛原控制器上不可达的进行中节点）
+    // CONTROLLER_UNAVAILABLE（实例接续时收敛原控制器上不可达的进行中节点）/
+    // MANUAL（人工「立即失败」）
     source: { type: String, required: true },
     at: { type: Date, required: true },
   },
