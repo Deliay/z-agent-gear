@@ -28,6 +28,8 @@ import ReviewSection from './sidebar/ReviewSection';
 import GatewayItem from './GatewayItem';
 import GatewayDialog from './GatewayDialog';
 import WorkflowInstanceCard from './workflow/WorkflowInstanceCard';
+import SidebarSection from './sidebar/SidebarSection';
+import KnowledgeBaseSection from './knowledge-base/KnowledgeBaseSection';
 import {
   Settings,
   Plus,
@@ -83,51 +85,6 @@ function ControllerPicker({
         </li>
       ))}
     </ul>
-  );
-}
-
-/** 全宽可折叠分区（类 VSCode）：标题行占满侧边栏，点击切换，右侧 actions */
-function SidebarSection({
-  sectionKey,
-  title,
-  count,
-  actions,
-  expanded,
-  onToggle,
-  children,
-}: {
-  sectionKey: SidebarSectionKey;
-  title: string;
-  count?: number;
-  actions?: React.ReactNode;
-  expanded: boolean;
-  onToggle: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="border-b border-sidebar-border/60 py-0.5" data-testid={`sidebar-section-${sectionKey}`}>
-      <div className="flex w-full items-center gap-1 rounded px-2 py-1.5 transition-colors hover:bg-sidebar-accent/60">
-        <button
-          type="button"
-          aria-expanded={expanded}
-          aria-label={title}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs font-semibold tracking-wide text-muted-foreground hover:text-foreground"
-          onClick={onToggle}
-        >
-          {expanded ? (
-            <ChevronDown className="size-3.5 shrink-0" />
-          ) : (
-            <ChevronRight className="size-3.5 shrink-0" />
-          )}
-          <span className="truncate">{title}</span>
-          {count !== undefined && (
-            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] font-normal">{count}</span>
-          )}
-        </button>
-        {actions && <div className="flex shrink-0 items-center gap-0.5">{actions}</div>}
-      </div>
-      {expanded && <div data-testid={`sidebar-section-content-${sectionKey}`} className="mt-0.5">{children}</div>}
-    </section>
   );
 }
 
@@ -578,7 +535,13 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
           </ul>
         </SidebarSection>
 
-        {/* 分区 4：网关（聚合全部环境） */}
+        {/* 分区 4：知识库（第五个分区：「会话」之后、「网关」之前，D8） */}
+        <KnowledgeBaseSection
+          expanded={sections.knowledgeBases}
+          onToggle={() => toggleSection('knowledgeBases')}
+        />
+
+        {/* 分区 5：网关（聚合全部环境） */}
         <SidebarSection
           sectionKey="gateways"
           title="网关"

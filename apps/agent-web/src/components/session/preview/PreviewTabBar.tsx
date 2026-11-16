@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 状态色映射常量与组件同文件共享（既有口径） */
 import type { PreviewTab } from '../../../stores/preview';
 import type { SessionReviewData } from '../../../graphql/preview';
 

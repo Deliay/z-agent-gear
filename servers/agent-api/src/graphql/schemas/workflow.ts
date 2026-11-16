@@ -160,7 +160,8 @@ export const workflowTypeDefs = `#graphql
   type WorkflowNodeFailInfo {
     reason: String!
     # 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED /
-    # RETRY_EXHAUSTED / CONTROLLER_UNAVAILABLE（实例接续时收敛）
+    # RETRY_EXHAUSTED / CONTROLLER_UNAVAILABLE（实例接续时收敛）/
+    # MANUAL（人工「立即失败」）
     source: String!
     at: String!
   }
@@ -452,6 +453,9 @@ export const workflowTypeDefs = `#graphql
     # 重启节点（RUNNING/REWORK/FAILED/RETRY_FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话；
     # RETRY_FAILED 来源用于自动重试用尽后的人工恢复）
     restartNode(instanceId: ID!, nodeId: ID!, agentConfig: AgentNodeConfigInput): WorkflowNode!
+    # 立即失败（人工止损）：仅 AI 节点 RUNNING/REWORK→FAILED；中断会话并取消全部中断自动重试，
+    # 阻断工作流等待人工介入；failInfo.source='MANUAL'；reason 缺省「人工标记失败」且 trim 后 ≤500 截断
+    failNode(instanceId: ID!, nodeId: ID!, reason: String): WorkflowNode!
     deleteWorkflowInstance(id: ID!): Boolean!
     archiveWorkflowInstance(id: ID!, archived: Boolean!): Boolean!
     # 修改工作流实例名称（trim 后 1~64 字符；已删除实例拒绝）

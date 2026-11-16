@@ -144,9 +144,10 @@ export default function MainLayout() {
     const path = location.pathname;
     const isSessionDetail = /^\/sessions\/[^/]+$/.test(path);
     const isWorkflowDetail = /^\/workflows\/[^/]+$/.test(path);
+    const isKnowledgeBase = path.startsWith('/knowledge-bases/');
     const isSettings = path.startsWith('/settings');
 
-    if (isSessionDetail || isWorkflowDetail || isSettings) {
+    if (isSessionDetail || isWorkflowDetail || isKnowledgeBase || isSettings) {
       layout = (
         <main className="h-screen overflow-auto">
           <Outlet />

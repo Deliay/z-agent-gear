@@ -180,7 +180,7 @@ pnpm run preview  # Preview production build
 
 > 纯前端展示层；计划见 `docs/engineering/plan/20261030-feat-ui-optimization-phase4.md`。
 
-- **侧边栏四分区**：`Sidebar` 顶层为「主机」「工作流」「会话」「网关」四个全宽折叠分区；默认展开工作流/会话、折叠主机/网关，展开态持久化在 `localStorage['sidebar-sections-expanded']`（`lib/sidebar-prefs.ts`）。工作流/会话/网关跨环境聚合（工作流含「已归档（N）」自折叠分组）；网关仅聚合**在线主机**的网关配置行（离线主机不渲染，与既有「UI 层按 status 自行隐藏该区块」口径一致）；主机分区保留「主机 → 工作区 → 会话」树与设置按钮；条目排序 `updatedAt` 倒序 + id tie-break，防轮询跳动。
+- **侧边栏折叠分区**：`Sidebar` 顶层为「主机」「工作流」「会话」「知识库」「网关」五个全宽折叠分区；默认展开工作流/会话、折叠主机/知识库/网关，展开态持久化在 `localStorage['sidebar-sections-expanded']`（`lib/sidebar-prefs.ts`，逐 key 读取，旧持久化缺 key 自动回退默认）。工作流/会话/网关跨环境聚合（工作流含「已归档（N）」自折叠分组）；网关仅聚合**在线主机**的网关配置行（离线主机不渲染，与既有「UI 层按 status 自行隐藏该区块」口径一致）；主机分区保留「主机 → 工作区 → 会话」树与设置按钮；条目排序 `updatedAt` 倒序 + id tie-break，防轮询跳动。
 - **空态收敛**：`TreeSection` 不再渲染 `emptyMessage` 占位文字（入参保留兼容），无内容时仅保留可展开空容器；层级缩进按 `level * 0.5rem`（≈2 空格）。
 - **拖拽调宽**：`SidebarResizer` 4px 热区（pointer capture），clamp 15–28rem、默认 20rem，`pointerup` 写入 `localStorage['sidebar-width']`，双击恢复默认；`MainLayout` 桌面 grid 列使用 `var(--sidebar-width,20rem)`，移动端不渲染 Resizer（`lib/sidebar-width.ts` 为宽度口径单一来源）。
 - **工作流卡片**：侧边栏条目不显示控制器名，第一行「名称 + 状态徽标」、第二行工作区；控制器名与执行中节点名走 tooltip（`WorkflowInstanceCard`）。
@@ -193,6 +193,19 @@ pnpm run preview  # Preview production build
 - **详情抽屉**：`components/ui/sheet.tsx`（Base UI 原语自实现，右侧滑出/全高/遮罩/Esc 关闭）+ `NodeDetailDrawer`（节点/资源两形态）；`WorkflowInstancePage` 提升抽屉状态，图表与列表视图共用；列表视图 `WorkflowNodeTree` 节点头部提供「详情」入口。
 - **共享人类节点操作**：`hooks/useHumanNodeActions.ts` + `HumanNodeActions` 组件，列表/卡片/抽屉三处同源（草稿键 `workflow-node-draft:{instanceId}:{nodeId}`）。
 - **测试入口**：`components/__tests__/Sidebar.test.tsx`（T-UI4-SEC/AGG）、`SidebarResizer.test.tsx`（T-UI4-RES）、`tree/__tests__/TreeSection.test.tsx`（T-UI4-TREE）、`workflow/__tests__/WorkflowInstanceCard.test.tsx`（T-UI4-IC）、`workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-UI4-TC）、`workflow/graph/__tests__/*`（T-UI4-GL/NC/RC）、`workflow/__tests__/NodeDetailDrawer.test.tsx`（T-UI4-SH）、`hooks/useNodeSessionActivity.test.tsx`（T-UI4-NA）、`hooks/useHumanNodeActions.test.tsx`（T-UI4-HA）、`tests/e2e/src/sidebar-phase4.spec.ts`（E2E-UI4S1~S6）与 `tests/e2e/src/workflow-graph.spec.ts`（E2E-UI4G1~G10）。
+
+## 知识库（#495）
+
+> 契约 `contracts/knowledge-base.graphql`；计划 `docs/engineering/plan/20261115-feat-knowledge-base.md` Phase 6。
+
+- **侧边栏第五分区**：`components/knowledge-base/KnowledgeBaseSection.tsx` 挂在「会话」之后、「网关」之前（D8），`SidebarSectionKey` 新增 `knowledgeBases` 且**默认折叠**（D3）。树独立走 `knowledgeBaseTree` 查询（不进 `HOME_OVERVIEW`，D4），`cache-and-network` + mutation `refetchQueries`；工作区切换随既有 `resetStore` 自动刷新。
+- **树与入口**：知识库按名称、文档按路径层级聚合（`lib/knowledge-base-path.ts#buildKnowledgeBaseTree`，同级按展示名字典序 + 路径稳定排序）；全局工作区来源展示「全局」徽标。分区「+」创建知识库**仅 `useWorkspaceAccess().isAdmin`** 渲染；条目「+」按服务端 `myAccess.canCreate` 渲染，**点击即持久化**子文档（`新文档-{4 位随机后缀}`、空内容，D9）并跳 `/knowledge-bases/{kbId}{path}?edit=1`；知识库条目齿轮打开设置对话框。
+- **路由与页面族**：`App.tsx` 的 `knowledge-bases/:kbId/*`（splat = 文档路径）+ `?edit=1` 编辑模式（D7）；`pages/KnowledgeBasePage.tsx` 用 `knowledgeBaseTree` 取知识库元信息/`myAccess`、按需 `knowledgeBaseDocument` 取正文；不可见/不存在统一提示且不泄露内容（服务端对不可见/无权限/不存在统一 null）。移动端 `MainLayout` 将 `/knowledge-bases/` 视为详情页（不显示列表侧边栏）。
+- **预览**：`KnowledgeBasePreview` 依次渲染面包屑/标题/描述（灰色小字）/标签/Markdown（复用 `MarkdownContent`）；内容区 `max-w-3xl` **靠左**（无 `mx-auto`）+ `min-w-0` + `wrap-anywhere` 防横向溢出；编辑/删除/历史按钮以服务端 `myAccess` 为准。
+- **分栏编辑**：`KnowledgeBaseEditor` 左预览（同一份 `MarkdownContent`）右表单（原生 textarea，D10）；输入防抖 300ms 写 `localStorage['kb-doc-draft:{kbId}:{path}']`，保存成功清除（同时取消在途计时器）；进入编辑检测到草稿弹「恢复未保存的内容？」（恢复/放弃）。草稿读写纯函数在 `lib/knowledge-base-draft.ts`（损坏 JSON/非法形状按无缓存）。
+- **历史与设置**：`KnowledgeBaseHistoryDrawer` 用 `knowledgeBaseEvents(path, limit:50)` 下拉选择版本（服务端 `createdAt` 倒序，含已删除路径历史）只读预览；`KnowledgeBaseSettingsDialog` 重命名/权限四档（`NONE/READ_ONLY/UPDATE_ONLY/FULL_ACCESS`，改动即 mutation）/全库历史/删除二次确认；管理控件以 `myAccess.canManage` 收敛，非管理员仍可看全库历史。
+- **错误文案**：`lib/knowledge-base.ts` 集中映射契约 14 条白名单（未命中原样展示），创建/保存/权限变更失败均在对话框内展示或 toast。
+- **测试入口**：`lib/__tests__/knowledge-base-path.test.ts`（T-KBP1~6）、`knowledge-base-draft.test.ts`（T-KBD1~5）、`components/knowledge-base/__tests__/*`（T-KBW1~10）、`components/__tests__/Sidebar.test.tsx`（五分区默认态）、E2E `tests/e2e/src/knowledge-base.spec.ts`（E2E-KB1~7）与 `sidebar-phase4.spec.ts`（五分区）。
 
 ## 会话内容预览子系统（#461）
 
@@ -381,3 +394,24 @@ pnpm run preview  # Preview production build
 - **校验**：「压缩原始上下文」仅在对应会话行为为「原始会话」时合法；`validateTemplateNodes`（`validateConfiguredNodes` 复用）给出中文前置错误「…为「新会话」时不可开启「压缩原始上下文」（仅原始会话可压缩）」。
 - **查询选择集**：`TEMPLATE_NODE_FIELDS`、`CONFIGURED_NODE_FIELDS` 与 `GET_WORKFLOW_INSTANCE.nodes` 均追加 4 字段（`REPO_WORKFLOW_TEMPLATES` 复用模板 fragment）。
 - **测试入口**：`components/workflow/__tests__/SessionBehaviorFields.test.tsx`（T-SB-WEB1~2）、`components/workflow/__tests__/template-validation.test.ts`（T-SB-WEB3）、`components/workflow/__tests__/EditInstanceNodeDialog.test.tsx`（T-SB-WEB4）、`graphql/__tests__/workflow.test.ts`（选择集守卫）。
+
+## 工作流节点「立即失败」
+
+> 契约 `contracts/workflow.graphql` 的 `failNode` 与 `WorkflowNodeFailInfo.source=MANUAL`；计划
+> `docs/engineering/plan/20261116-feat-workflow-node-manual-fail.md` Phase 3。
+
+- **按钮可见性**：`NodeDetailDrawer` 在「重启节点」旁新增 destructive「立即失败」按钮，可见性独立收窄——
+  仅 `node.type === 'AI' && (status === 'RUNNING' || status === 'REWORK')`（与 `canRestart` 互不影响）；
+  `unavailable=true` 时禁用并提示「实例不可用，请先接续」（与重启入口同口径）。
+- **交互与 mutation**：`hooks/useFailNodeAction.ts` 承载二次确认与提交——点击打开 `ConfirmDialog`
+  （文案含「中断会话 / 取消全部自动重试 / 阻断工作流」三项后果，确认按钮 destructive 文案「确认失败」）；
+  取消零副作用；确认调 `FAIL_WORKFLOW_NODE`（`{instanceId, nodeId}`，不传 reason 走服务端缺省
+  「人工标记失败」）。成功 `toast.success('节点已标记失败')`，失败文案原样 toast；**不本地伪造节点状态**
+  （5s 轮询收敛徽标与来源行），不额外 refetch。
+- **失败来源展示**：`WorkflowNodeTreeConstants.failSourceText` 六来源映射（`SESSION_STUCK→会话停滞` /
+  `LLM_REPORTED→AI 主动标记` / `SESSION_START_FAILED→会话启动失败` / `RETRY_EXHAUSTED→中断重试用尽` /
+  `CONTROLLER_UNAVAILABLE→控制器不可用` / `MANUAL→人工标记`，未知值原样返回）；FAILED/RETRY_FAILED
+  失败信息块在原因行下新增「失败来源：…」（`data-testid="drawer-fail-source"`，对全部来源生效）。
+- **重试进度**：`failNode` 清空 `nextRetryAt` 后 `retryProgressText` 自然返回 null，进度行随轮询消失（前端零额外逻辑）。
+- **测试入口**：`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-MNF-W1~W3）、
+  `components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-MNF-W3 映射）。

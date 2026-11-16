@@ -174,8 +174,11 @@ flowchart LR
 - [[draft/20261114-workflow-instance-continuation.md]] — 已实例化的工作流接续（控制器离线/被删除后实例展示不可用标识与「接续」入口，对话框选择新控制器/新工作路径/是否创建新 Worktree（默认勾选）/逐节点 AI 节点 Harness 映射，接续后保留进度恢复流转）
 - [[draft/20261115-workflow-reject-rework-session-behavior.md]] — 工作流打回/返工会话行为优化（AI 节点级「返工时」「打回后」会话策略：新会话/原始会话；选择原始会话可勾选「压缩原始上下文」——恢复后先发送压缩指令再发送继续提示词；后台按 Harness 配置压缩指令，默认 /compact）
 - [[draft/20261115-workflow-mcp-prompt-snippets.md]] — 工作流MCP提供提示词片段（工作流管理 MCP 以 MCP prompts 能力提供「工作流 Schema 说明」与「工作流项目持久化指引」两段权威提示词片段，AI 按需发现与获取，内容与平台校验规则同源同步）
+- [[draft/20261116-workflow-node-manual-fail.md]] — 工作流节点「立即失败」（节点详情新增「立即失败」操作：中断节点会话、取消全部中断自动重试并置为「失败」阻断工作流，失败来源「人工标记」可区分，恢复路径与既有「失败」一致）
 
 ### 实现中文档（`shipping/`）
+
+- [[shipping/20261115-knowledge-base.md]] — 知识库（工作区级 wiki 文档库：路径唯一标识文档、类 git 全生命周期版本历史（删除不删历史、重建延续）、四档权限模式控制非管理员访问（全局工作区知识库跨工作区可见按库模式判定）、侧边栏树形呈现与分栏 Markdown 编辑（localStorage 草稿恢复）、历史版本抽屉；平台向会话注入知识库 MCP 工具，可见范围由会话创建人权限与会话工作区决定）
 
 - [[shipping/20261025-cloud-container-unlimited-lifetime.md]] — 云电脑取消最长运行时间限制（云端工作容器不再因到达时间上限被平台强制销毁）
 - [[shipping/20261029-commit-author-settings-optimization.md]] — Commit 作者设置优化（提交人由团队共享改为成员独立并迁入新增「Git」区块、提交人模式下线；「自定义」增加「导入Github帐号信息」弹窗并移除「Github帐号」类型（存量自动转换）；提交身份按上下文下发：云电脑自身=平台 bot、勾选 Worktree 的会话/工作流=创建者、Issue 拉起的工作流=触发人）

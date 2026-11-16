@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components -- 同时导出测试/调用方复用的 model 缓存清理辅助 */
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { loadMonaco, type MonacoModule } from '../../../lib/preview/monaco-loader';
 import { languageFromPath } from '../../../lib/language-from-path';

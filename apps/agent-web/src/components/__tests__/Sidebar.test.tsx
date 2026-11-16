@@ -13,7 +13,8 @@ const mockNavigate = vi.fn();
 const mockRefetch = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
-  useMutation: () => [mockUseMutation],
+  // 知识库分区（CreateKnowledgeBaseDialog / KnowledgeBaseSection）解构第二项 loading
+  useMutation: () => [mockUseMutation, { loading: false }],
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useApolloClient: () => ({ resetStore: vi.fn() }),
 }));
@@ -290,12 +291,19 @@ describe('Sidebar 集成测试', () => {
     expect(input).not.toHaveProperty('customMcpServerIds');
   });
 
-  describe('① 四个平级分组渲染', () => {
-    it('渲染主机、工作流、会话、网关四个分区，且主机分区内保留工作区分组', () => {
+  describe('① 五个平级分组渲染', () => {
+    it('渲染主机、工作流、会话、知识库、网关五个分区，且主机分区内保留工作区分组', () => {
       renderSidebar();
 
-      for (const title of ['主机', '工作流', '会话', '网关']) {
-        expect(screen.getByTestId(`sidebar-section-${title === '主机' ? 'hosts' : title === '工作流' ? 'workflows' : title === '会话' ? 'sessions' : 'gateways'}`)).toBeInTheDocument();
+      const sectionTestIds: Record<string, string> = {
+        主机: 'hosts',
+        工作流: 'workflows',
+        会话: 'sessions',
+        知识库: 'knowledgeBases',
+        网关: 'gateways',
+      };
+      for (const title of Object.keys(sectionTestIds)) {
+        expect(screen.getByTestId(`sidebar-section-${sectionTestIds[title]}`)).toBeInTheDocument();
       }
       expect(screen.getByText('工作区')).toBeInTheDocument();
     });
@@ -488,12 +496,13 @@ describe('Sidebar 集成测试', () => {
 
 
   describe('UI 四期：四折叠分区与跨环境聚合', () => {
-    it('T-UI4-SEC1 默认展开「工作流」「会话」，折叠「主机」「网关」', () => {
+    it('T-UI4-SEC1 默认展开「工作流」「会话」，折叠「主机」「知识库」「网关」', () => {
       render(<Sidebar name="testuser" />);
 
       expect(screen.getByRole('button', { name: '工作流' })).toHaveAttribute('aria-expanded', 'true');
       expect(screen.getByRole('button', { name: '会话' })).toHaveAttribute('aria-expanded', 'true');
       expect(screen.getByRole('button', { name: '主机' })).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.getByRole('button', { name: '知识库' })).toHaveAttribute('aria-expanded', 'false');
       expect(screen.getByRole('button', { name: '网关' })).toHaveAttribute('aria-expanded', 'false');
     });
 
@@ -522,6 +531,7 @@ describe('Sidebar 集成测试', () => {
       render(<Sidebar name="testuser" />);
 
       expect(screen.queryByTestId('sidebar-section-content-hosts')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('sidebar-section-content-knowledgeBases')).not.toBeInTheDocument();
       expect(screen.queryByTestId('sidebar-section-content-gateways')).not.toBeInTheDocument();
       expect(screen.getByTestId('sidebar-section-content-sessions')).toBeInTheDocument();
       expect(screen.getAllByRole('button', { name: '新建会话' }).length).toBeGreaterThan(0);

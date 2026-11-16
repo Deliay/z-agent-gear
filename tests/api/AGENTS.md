@@ -992,3 +992,39 @@ pnpm test
 | T-AP-API1 | `prompts/list` → 200，`result.prompts` 恰 2 项且 name 集合为 `{workflow-schema, workflow-project-persistence}`、description 非空 |
 | T-AP-API2 | `prompts/get {name:'workflow-schema'}` → `messages[0].content.type='text'` 且文本含「首节点」；`workflow-project-persistence` 文本含 `.zag/workflow/templates` |
 | T-AP-API3 | `prompts/get {name:'nope'}` → 200 + JSON-RPC `error.code='INVALID_PARAMS'`，message 含 `nope` 与两个可用片段名；同会话 `initialize` 返回 `capabilities.prompts` 与 `capabilities.tools` |
+
+## 工作流节点「立即失败」（`src/agent-api/workflow-manual-fail.test.ts` T-MNF-API1~3）
+
+> 契约 `contracts/workflow.graphql`（`failNode` + `WorkflowNodeFailInfo.source=MANUAL`）；计划
+> `docs/engineering/plan/20261116-feat-workflow-node-manual-fail.md`。需要 agent-api + controller-api 就绪
+> 与 `MONGODB_URI`（直写重试字段 / 控制器离线 / DB 复核）；fake controller 应答 `acp:check`/`acp:start`/
+> `acp:resume`/`acp:stop`。
+
+| 测试 | 描述 |
+|------|------|
+| T-MNF-API1 | 全链路：实例化 HUMAN→AI→AI 并完成人类节点（AI 节点 RUNNING 持会话）→ `failNode` → 节点 FAILED、`failInfo.source=MANUAL`、reason 缺省「人工标记失败」、重试字段清空；fake controller 收到 `acp:stop`；下游保持 INITIALIZING；直读 DB 复核 |
+| T-MNF-API2 | 拒绝矩阵逐字：他人实例 → `工作流实例不存在或无权限`；HUMAN 节点 → `仅 AI 节点支持立即失败`；DONE AI 节点 → `节点「<name>」当前状态为 DONE，不允许执行「标记失败」（fail）`；控制器离线（直写 DB）→ 不可用文案 |
+| T-MNF-API3 | 重试短路：直写 `retryPhase=SCHEDULED` + `nextRetryAt` 过去时刻 + `retryCount=3` → `failNode` → 等待 >1 个扫描周期（35s）无 `acp:resume`、无自动重试提示词、`retryCount` 保持 3、节点保持 FAILED |
+
+## 知识库 API（`src/agent-api/knowledge-base.test.ts`）
+
+> 需求 #495；契约 `contracts/knowledge-base.graphql`；计划 `docs/engineering/plan/20261115-feat-knowledge-base.md` §6.2。
+
+前置：`aspire start && aspire wait agent-api admin-api controller-api`、`INTERNAL_API_TOKEN`（开户中转）、
+`ADMIN_INITIAL_PASSWORD`（admin-api 管理员口令归一化）、controller-api 可达（MCP 用例经 fake controller relay）。
+
+| 测试 | 描述 |
+|------|------|
+| T-KB-API1 | 未认证：Query×5 / Mutation×7 共 12 入口一律 `Not authenticated` |
+| T-KB-API2 | 库 CRUD：普通工作区默认 `NONE` / 全局工作区默认 `READ_ONLY`、重名逐字、myAccess、树含文档元信息、改名/改权限/删除级联 |
+| T-KB-API3 | 文档 CRUD + 事件：CREATE/UPDATE/DELETE 快照、删除释放路径、同路径重建历史延续、limit/before 分页、列表不含 content |
+| T-KB-API4 | team 租户 admin/developer/outsider × 四档模式 × 本工作区/全局库：收紧即时生效、无权限读返回 null、跨租户工作区头 `workspace not found` |
+| T-KB-API5 | MCP 经 fake controller relay：tools/list 角色门控、六工具（list/document_list/get/update upsert/delete）、越权 isError、name 兜底与多命中提示 |
+| T-KB-API6 | 路径与输入校验矩阵逐字（title/tags/description/content/路径/重名/不存在/not a tenant admin） |
+
+注意：
+- `createKnowledgeBaseDocument(knowledgeBaseId, path, input)` **显式接收 path**（与 update 同形），服务端归一化并校验；
+  嵌套创建传 `/父路径/新文档-xxxx`。
+- 新会话恒装配平台服务（`agent-session-preview-tools` / `agent-valut-tools` / `agent-custom-tools` /
+  `agent-knowledge-base-tools`），`session.test.ts` / `custom-mcp.test.ts` 的 `serverNames` 精确断言已按
+  D13 改为「平台恒装配集合 ∪ 显式所选」的集合比较。

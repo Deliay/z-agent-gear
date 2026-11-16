@@ -28,6 +28,20 @@ const HAS_MONGO = Boolean(process.env.MONGODB_URI);
 
 type GqlResult = { data?: any; errors?: Array<{ message: string }> };
 
+/** 恒装配平台服务（D13）：显式 `mcpServerIds: []` 时签名仍包含以下四个系统服务。 */
+const PLATFORM_MCP_SERVER_NAMES = [
+  'agent-custom-tools',
+  'agent-knowledge-base-tools',
+  'agent-session-preview-tools',
+  'agent-valut-tools',
+];
+
+function expectAssembledServerNames(start: { mcpEndpoint?: { serverNames: string[] } }, extras: string[]): void {
+  expect([...(start.mcpEndpoint?.serverNames ?? [])].sort()).toEqual(
+    [...PLATFORM_MCP_SERVER_NAMES, ...extras].sort(),
+  );
+}
+
 async function gql(
   query: string,
   variables?: Record<string, unknown>,
@@ -904,8 +918,8 @@ describe('Custom MCP API（API-CMCP / T-CMCP / T-CF）', () => {
       expect(start.sessionId).toBe(cfSessionId);
       expect(start.mcpEndpoint, 'custom-only 会话必须签发 mcpEndpoint').toBeTruthy();
       expect(start.mcpEndpoint!.token).toBeTruthy();
-      // 显式 mcpServerIds: [] → serverNames 恰为 custom 名（无个人 MCP 混入）
-      expect(start.mcpEndpoint!.serverNames).toEqual([cfMcpName]);
+      // 显式 mcpServerIds: [] → 不含个人 MCP；平台恒装配服务 + 所选 custom 名
+      expectAssembledServerNames(start, [cfMcpName]);
       expectNoPlaintext(JSON.stringify(start), cfBearerToken);
 
       devFake!.client.emit('acp:start:result', {
@@ -1058,7 +1072,7 @@ describe('Custom MCP API（API-CMCP / T-CMCP / T-CF）', () => {
     expect(sessionRes.errors, JSON.stringify(sessionRes.errors)).toBeUndefined();
     badSessionId = sessionRes.data.createSession.session.id as string;
     const start = await startPromise;
-    expect(start.mcpEndpoint!.serverNames).toEqual([badMcpName]);
+    expectAssembledServerNames(start, [badMcpName]);
     const sessionToken = start.mcpEndpoint!.token;
     devFake!.client.emit('acp:start:result', {
       requestId: start.requestId,
@@ -1102,7 +1116,7 @@ describe('Custom MCP API（API-CMCP / T-CMCP / T-CF）', () => {
     const terminalSessionId = sessionRes.data.createSession.session.id as string;
     const start = await startPromise;
     const terminalToken = start.mcpEndpoint!.token;
-    expect(start.mcpEndpoint!.serverNames).toEqual([badMcpName]);
+    expectAssembledServerNames(start, [badMcpName]);
 
     // 关闭会话：endpoint 立即 revoke（Redis mcp:endpoint:<sid>=revoked）
     const closed = await gql(CLOSE_SESSION, { id: terminalSessionId }, developer.token, ws1);
