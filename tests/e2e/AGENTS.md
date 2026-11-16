@@ -650,3 +650,13 @@ fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`�
 - E2E-WCT1：详情页不可用提示条（控制器离线）→「接续」打开对话框 → 选目标控制器 B + 工作路径 B（Worktree 默认勾选、Harness 默认沿用 opencode）→ 提交成功 toast → 提示条消失 → 节点收敛 FAILED →「重启」确认后 B 收到 `acp:start` 恢复执行。
 - E2E-WCT2：控制器恢复在线后不可用提示条与「接续」入口随 5s 轮询自动消失；可用实例无接续入口。
 - 依赖：`MONGODB_URI`（改控制器 `status` 与伪造运行中节点 `sessionId`）、`INTERNAL_API_TOKEN`；spec 内 fake controller 应答 `acp:check`/`git:check`（isGitRepo=true）/`git:worktree:add|remove`/`acp:start|resume|stop`，目标工作区写入 `defaultBranch=main`。
+
+## 工作流节点「立即失败」（`src/workflow-manual-fail.spec.ts`）
+
+- E2E-WMF1：实例准备 HUMAN→AI→AI 并完成人类节点（AI 节点持会话）→ 节点列表「详情」抽屉点「立即失败」→
+  确认框含三项后果 →「确认失败」→ toast、徽标「失败」、失败信息「失败原因：人工标记失败」+
+  「失败来源：人工标记」、重试进度消失；fake controller 收到 `acp:stop`、零 `acp:resume`；下游节点保持等待；
+  「重启节点」入口仍在（恢复路径与既有失败一致）。
+- E2E-WMF2：取消分支——打开确认框后「取消」→ 节点仍执行中、fake 零 stop；已完成的人类节点抽屉无「立即失败」按钮。
+- 依赖：agent-web / agent-api / controller-api 就绪 + `INTERNAL_API_TOKEN`（开户）；fake controller 应答
+  `acp:check`/`git:check`/`acp:start`/`acp:resume`/`acp:stop`。

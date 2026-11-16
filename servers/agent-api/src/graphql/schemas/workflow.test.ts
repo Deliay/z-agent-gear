@@ -43,6 +43,13 @@ describe('workflow schema 会话行为双写守卫', () => {
     }
   });
 
+  it('T-MNF-SCHEMA failNode 变更与 failInfo.source=MANUAL 注释双写一致', () => {
+    for (const source of [CONTRACT, workflowTypeDefs]) {
+      expect(source).toContain('failNode(instanceId: ID!, nodeId: ID!, reason: String): WorkflowNode!');
+      expect(source).toContain('MANUAL（人工「立即失败」）');
+    }
+  });
+
   it('六处所在类型与契约一致', () => {
     const names = [
       'WorkflowTemplateNode',

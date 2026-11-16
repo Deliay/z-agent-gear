@@ -255,6 +255,7 @@ pnpm run start   # Start production server
 - **单实例部署约束**：调度器与 `KeyedMutex` 同为进程内锁，多副本会重复执行同一节点的重试；必须单实例运行。
 - **会话通用状态通道**：`sessionService.onSessionStatus/notifySessionStatus`（多监听者，注册返回注销函数）在 `session-lifecycle-subscriber` 的 `handled` 过滤**之前**透传全量 `session:status`；按高频豁免口径只记结构化日志、不逐条开 span。
 - **人工入口**：`restartNode` 与 MCP `resumeFailedNode` 均接受 `RETRY_FAILED`；前端列表/抽屉提供重启入口，阻断 banner 与 toast 分档文案。
+- **人工「立即失败」（`failNode`）**：GraphQL `failNode(instanceId, nodeId, reason?)` → `workflowInstanceService.failNode`，门控与 `restartNode` 同口径（归属/未删除 → 节点存在 → 不可用门 → AI 类型门 `仅 AI 节点支持立即失败` → 引擎状态机门，非 RUNNING/REWORK 的拒绝文案原样冒泡）。**顺序硬约束「先引擎 `fail` 转移落库、后中断会话」**：转移清调度字段（保留 `retryCount`）、`failInfo.source='MANUAL'`；随后 `sessionService.close(sessionId, {suppressFallback:true, reason:'workflow_node_manual_fail'})`（best-effort，失败仅 `warn` 不回滚 FAILED）。因 `handleSessionEnded` 前置过滤要求节点仍 RUNNING，close 引发的 `ended` 不会误排期重试，且调度器扫描 A/B 的 `retryPhase` 条件已随转移清空 → 零自动重试。`reason` 归一：trim → 空白取缺省「人工标记失败」→ 500 字符截断（MCP `failCurrentNode` 口径不变）。`sessionId` 保留供详情只读回看，恢复走既有 `restart`（新会话）/`resumeFailed`。服务层直接调 `sessionService.close`（不新增 orchestrator 方法，避免 instance→orchestrator→tool-handlers→instance 依赖环）。
 - **已知取舍（D9）**：人工在会话页点「关闭」仍计为一次中断并纳入自动重试（回调只带 sessionId，平台无法区分来源）；复用旧口径，仅次数放大。如需区分须另立提案。
 
 ## Valut 工作区密钥管理

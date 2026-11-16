@@ -112,6 +112,21 @@ export function instanceStatusText(instance: {
 /** 中断自动重试预算（与 agent-api `INTERRUPT_RETRY_MAX` 对齐） */
 export const WORKFLOW_INTERRUPT_RETRY_MAX = 10
 
+/** 失败来源 → 中文文案（未知值原样返回，防御旧服务端/新来源） */
+export const FAIL_SOURCE_LABELS: Record<string, string> = {
+  SESSION_STUCK: '会话停滞',
+  LLM_REPORTED: 'AI 主动标记',
+  SESSION_START_FAILED: '会话启动失败',
+  RETRY_EXHAUSTED: '中断重试用尽',
+  CONTROLLER_UNAVAILABLE: '控制器不可用',
+  MANUAL: '人工标记',
+}
+
+export function failSourceText(source: string): string {
+  return FAIL_SOURCE_LABELS[source] ?? source
+}
+
+
 function pad2(value: number): string {
   return String(value).padStart(2, '0')
 }

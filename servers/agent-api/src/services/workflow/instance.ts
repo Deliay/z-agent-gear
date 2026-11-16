@@ -29,6 +29,17 @@ import {
 
 const logger = rootLogger.child({ component: 'workflow-instance' });
 
+/** 人工「立即失败」默认原因（未传或空白时） */
+export const WORKFLOW_NODE_MANUAL_FAIL_DEFAULT_REASON = '人工标记失败';
+/** 人工「立即失败」原因长度上限（契约注明；trim 后超长截断） */
+export const WORKFLOW_NODE_MANUAL_FAIL_REASON_MAX_LENGTH = 500;
+/**
+ * 人工「立即失败」关闭节点会话的 reason（会话 close reason 语义族：
+ * `workflow_node_restart` / `workflow_node_rework` / `workflow_node_resume` /
+ * `workflow_node_manual_fail` / `workflow_interruption_retry` / `workflow_node_done` / `workspace_deleted`）。
+ */
+export const WORKFLOW_NODE_MANUAL_FAIL_CLOSE_REASON = 'workflow_node_manual_fail';
+
 /** 失效工作流实例 Redis 缓存（供接续服务等复用；失败不阻断主流程） */
 export async function invalidateWorkflowInstanceCache(instanceId: string): Promise<void> {
   try {
@@ -56,6 +67,16 @@ export function normalizeWorkflowName(raw: string): string {
     throw new Error(WORKFLOW_NAME_INVALID);
   }
   return name;
+}
+
+/**
+ * 归一人工「立即失败」原因：trim → 空白取缺省「人工标记失败」→ 超过 500 字符截断。
+ * 仅约束本次新增的 GraphQL `failNode` 入口（MCP `failCurrentNode` 口径不变，见实现计划 D4）。
+ */
+export function normalizeManualFailReason(raw?: string | null): string {
+  const trimmed = typeof raw === 'string' ? raw.trim() : '';
+  if (!trimmed) return WORKFLOW_NODE_MANUAL_FAIL_DEFAULT_REASON;
+  return trimmed.slice(0, WORKFLOW_NODE_MANUAL_FAIL_REASON_MAX_LENGTH);
 }
 
 export interface InstantiateNodeInput {
@@ -706,6 +727,72 @@ class WorkflowInstanceService {
     }
 
     return workflowEngine.transition(instanceId, nodeId, 'restart', { agentConfig });
+  }
+
+  /**
+   * 立即失败（人工止损）：仅 AI 节点，RUNNING/REWORK → FAILED。
+   *
+   * 顺序硬约束：**先引擎转移落库、后中断会话**。
+   * - 引擎 fail 分支清调度字段（nextRetryAt/retryPhase/retryDeadlineAt/retryTrigger，保留 retryCount），
+   *   节点落库为 FAILED 后再关闭会话；close 引发的 `ended` 因 `handleSessionEnded` 前置过滤
+   *   （节点仍 RUNNING 才排期）自然不命中，绝不误排期重试。
+   * - 关闭会话为 best-effort：异常仅告警，不回滚已落库的 FAILED。
+   * - 保留 sessionId（与 SESSION_STUCK/RETRY_EXHAUSTED 失败节点一致，详情可按只读回看）。
+   *
+   * 门控顺序与 `restartNode` 同口径（归属/未删除 → 节点存在 → 不可用门 → AI 类型门 → 引擎状态机门），
+   * 非 RUNNING/REWORK 的引擎拒绝文案原样冒泡。
+   */
+  async failNode(
+    userId: string,
+    instanceId: string,
+    nodeId: string,
+    reason?: string | null,
+  ) {
+    const instance = await WorkflowInstance.findOne({ _id: instanceId, ...actorFilter(userId), deletedAt: null }).lean();
+    if (!instance) {
+      throw new Error('工作流实例不存在或无权限');
+    }
+
+    const node = instance.nodes.find((n) => n.nodeId === nodeId);
+    if (!node) {
+      throw new Error(`工作流实例中不存在节点：${nodeId}`);
+    }
+
+    // 不可用实例（控制器离线/已删除）拒绝流转类操作：必须先接续到新控制器
+    const unavailableReason = await resolveInstanceUnavailableReason(instance, loadControllerStatus);
+    if (unavailableReason) {
+      throw new Error('工作流实例不可用（控制器离线或已删除），请先接续后再操作');
+    }
+
+    if (node.type !== 'AI') {
+      throw new Error('仅 AI 节点支持立即失败');
+    }
+
+    const normalizedReason = normalizeManualFailReason(reason);
+
+    // 状态机门（非 RUNNING/REWORK 时引擎拒绝文案原样冒泡）；落库后节点 FAILED、调度字段已清
+    const failedNode = await workflowEngine.transition(instanceId, nodeId, 'fail', {
+      reason: normalizedReason,
+      source: 'MANUAL',
+    });
+
+    // 转移已落库后中断会话：失败仅告警，不回滚 FAILED（ended 事件不会误排期重试）
+    const sessionId = failedNode.sessionId ? String(failedNode.sessionId) : null;
+    if (sessionId) {
+      try {
+        await sessionService.close(sessionId, userId, {
+          suppressFallback: true,
+          reason: WORKFLOW_NODE_MANUAL_FAIL_CLOSE_REASON,
+        });
+      } catch (err) {
+        logger.warn(
+          { event: 'manual-fail-close-session-failed', instanceId, nodeId, sessionId, err },
+          'close node session failed after manual fail',
+        );
+      }
+    }
+
+    return failedNode;
   }
 
   /**

@@ -93,7 +93,7 @@ export interface TransitionPayload {
   targetNodeIds?: string[];
   /** complete/completeRework：产物列表，写入黑板 */
   artifacts?: { title: string; value: string }[];
-  /** fail：失败来源（SESSION_STUCK=提醒后仍停止 / LLM_REPORTED=LLM 主动标记 / CONTROLLER_UNAVAILABLE=接续收敛） */
+  /** fail：失败来源（SESSION_STUCK=提醒后仍停止 / LLM_REPORTED=LLM 主动标记 / CONTROLLER_UNAVAILABLE=接续收敛 / MANUAL=人工立即失败） */
   source?: string;
   /** restart：可选的新 Agent 配置 */
   agentConfig?: {
@@ -370,7 +370,8 @@ class WorkflowEngine {
       }
       case 'fail': {
         // 失败：阻断流程（非 DONE 下游永不激活），等待人工介入；不触发会话 hook
-        // （SESSION_STUCK 来源会话已 ended；LLM_REPORTED 来源会话保留供人类对话介入）
+        // （SESSION_STUCK 来源会话已 ended；LLM_REPORTED 来源会话保留供人类对话介入；
+        //  MANUAL（人工「立即失败」）来源由服务层在转移落库后中断会话）
         node.status = 'FAILED';
         this.markLastNode(instance, node);
         // 保留 retryCount（展示与排查），只清调度字段
