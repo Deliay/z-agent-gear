@@ -6,7 +6,7 @@ type: Permanent
 # 知识库 - 实现计划
 
 **功能名称**: 知识库
-**关联 PRD**: [`docs/product/draft/20261115-knowledge-base.md`](../../product/draft/20261115-knowledge-base.md)
+**关联 PRD**: [`docs/product/shipping/20261115-knowledge-base.md`](../../product/shipping/20261115-knowledge-base.md)
 **关联提案**: [`docs/engineering/proposals/20261115-feat-knowledge-base.md`](../proposals/20261115-feat-knowledge-base.md)
 **计划版本**: v1.0
 **创建日期**: 2026-11-15
@@ -419,9 +419,19 @@ cd tests/e2e && BASE_URL=http://localhost:<agent-web-port> \
 - [ ] E2E-KB1~7 全绿；`sidebar-phase4.spec.ts` 零回归
 - [ ] §6.4 回归清单全绿；PRD 功能点 1~6 逐条验收
 
-## 11. 相关文档
+## 11. 实现期偏差记录（v1.1）
 
-- [产品需求 v1.0](../../product/draft/20261115-knowledge-base.md)
+| # | 偏差 | 原因与影响 |
+|---|------|-----------|
+| I1 | 契约 `createKnowledgeBaseDocument(knowledgeBaseId, path, input)` **显式接收 path**（提案 §3.1 SDL 原缺 path） | path 是文档核心唯一键，原 SDL 无法表达「在父路径下创建」；与 `updateKnowledgeBaseDocument` 同形，服务端 `normalizeDocumentPath` 统一归一化与校验。contracts/proposal/plan/tests 同步 |
+| I2 | `mcp-dispatch` 平台服务查询增加「会话上下文内补查」 | 平台服务行由 `sessionService.create` 在请求工作区上下文内 upsert（tenantId=会话租户）；relay 链路无 ALS，tenant-scope 以 `tenantId=userId` 注入 → 团队工作区必然 `SERVER_NOT_FOUND`（既有缺陷，本需求 MCP 场景暴露）。直查未命中 → `buildSessionWorkspaceContext` + `runWithWorkspace` 内 await 补查；同一上下文复用于 platform 分支。单测回归 `mcp-dispatch.test.ts` |
+| I3 | agent-web 抽出 `components/sidebar/SidebarSection.tsx` | 第五分区需复用同构分区壳（标题/折叠/计数/actions），避免跨组件透传；既有四分区渲染零变化 |
+| I4 | 权限模式单选改为**乐观更新**（失败回滚） | 受控单选在 mutation 返回前不反映选择，交互与 E2E `check()` 语义不一致；服务端仍为权威 |
+| I5 | 前端 lint 基线修复（`eslint.config.js` 允许 `_` 前缀忽略；4 处既有文件内联豁免） | 基线本有 24 个 lint error（与本需求无关），验收要求 lint 全绿；修复面为配置与注释，零运行期行为 |
+
+## 12. 相关文档
+
+- [产品需求 v1.0](../../product/shipping/20261115-knowledge-base.md)
 - [技术提案 v1.0](../proposals/20261115-feat-knowledge-base.md)
 - [知识库契约](../../../contracts/knowledge-base.graphql)（Phase 0 产出）
 - [agent-api AGENTS](../../../servers/agent-api/AGENTS.md)

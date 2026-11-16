@@ -3,7 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 
 // seam mock：记录 monaco 交互注册（A5 批注行选、B1 高亮装饰类）
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试记录 monaco 桩对象的任意字段
 const createdEditors: Array<Record<string, any>> = [];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- 同上
 const diffEditors: Array<Record<string, any>> = [];
 const uriParses: string[] = [];
 

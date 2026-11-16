@@ -6,7 +6,7 @@ type: Permanent
 # 知识库 - 技术提案
 
 **功能名称**: 知识库
-**关联 PRD**: [[../../product/draft/20261115-knowledge-base.md]]
+**关联 PRD**: [[../../product/shipping/20261115-knowledge-base.md]]
 **技术提案版本**: v1.0
 **创建日期**: 2026-11-15
 **作者**: z-agent-bot
@@ -16,7 +16,7 @@ type: Permanent
 
 ### 1.1 背景
 
-需求来源 [Issue #495](https://github.com/Deliay/z-agent-gear/issues/495)，PRD 见 [[../../product/draft/20261115-knowledge-base.md]]。依赖已落地能力：
+需求来源 [Issue #495](https://github.com/Deliay/z-agent-gear/issues/495)，PRD 见 [[../../product/shipping/20261115-knowledge-base.md]]。依赖已落地能力：
 
 - **多租户二期**（提案 [[20261028-feat-multi-tenant-phase2.md]]）：`workspaces`（global/normal）、`tenantmembers.role`（admin/developer）、`WorkspaceContext`（`id/tenantId/type/role/readOnly/globalWorkspaceId`，ALS 承载）、`buildSessionWorkspaceContext`（MCP 链路按会话创建人构造上下文）；
 - **平台 MCP 机制**：`McpServer transport=platform` + `mcp-dispatch` 本地直发 + `sessionService.create` 公共路径恒装配（`agent-valut-tools` / `agent-custom-tools` / `agent-session-preview-tools` 先例，见 servers/agent-api/AGENTS.md）；
@@ -196,7 +196,7 @@ extend type Mutation {
   renameKnowledgeBase(id: ID!, name: String!): KnowledgeBase!
   updateKnowledgeBasePermission(id: ID!, permissionMode: KnowledgeBasePermissionMode!): KnowledgeBase!
   deleteKnowledgeBase(id: ID!): Boolean!
-  createKnowledgeBaseDocument(knowledgeBaseId: ID!, input: KnowledgeBaseDocumentInput!): KnowledgeBaseDocument!
+  createKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!): KnowledgeBaseDocument!
   updateKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!): KnowledgeBaseDocument!
   deleteKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!): Boolean!
 }
@@ -484,7 +484,7 @@ tests/e2e/src/knowledge-base.spec.ts
 
 ## 11. 相关文档
 
-- [[../../product/draft/20261115-knowledge-base.md]] — 关联 PRD
+- [[../../product/shipping/20261115-knowledge-base.md]] — 关联 PRD
 - [[20261028-feat-multi-tenant-phase2.md]] — 多租户二期（工作区/角色/上下文机制）
 - [[20261104-feat-mcp-valut-iteration.md]] — 平台 MCP 与 Valut 先例
 - [[20261113-feat-fragment-template-custom-tools.md]] — 平台 MCP 动态目录先例

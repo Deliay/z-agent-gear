@@ -2255,6 +2255,26 @@ async function listMcpServers(token: string): Promise<Array<Record<string, any>>
   return body.data.mcpServers as Array<Record<string, any>>;
 }
 
+/**
+ * 恒装配平台服务（D13 适配口径）：会话公共路径无条件装配并去重，
+ * `serverNames` 的实际集合 = 用户/默认 MCP ∪ 以下四个平台服务。
+ */
+const PLATFORM_MCP_SERVER_NAMES = [
+  'agent-custom-tools',
+  'agent-knowledge-base-tools',
+  'agent-session-preview-tools',
+  'agent-valut-tools',
+];
+
+function expectAssembledServerNames(
+  start: Record<string, any>,
+  extras: string[] = [],
+): void {
+  expect([...(start.mcpEndpoint?.serverNames ?? [])].sort()).toEqual(
+    [...PLATFORM_MCP_SERVER_NAMES, ...extras].sort(),
+  );
+}
+
 describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
   afterAll(async () => {
     if (mongoose.connection.readyState !== 0) await mongoose.disconnect();
@@ -2277,6 +2297,8 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
     });
     expect(start.mcpEndpoint).toBeTruthy();
     expect(start.mcpEndpoint.serverNames).toContain('agent-workflow-admin-tools');
+    // 知识库工具集（#495）同样恒装配
+    expect(start.mcpEndpoint.serverNames).toContain('agent-knowledge-base-tools');
     // 平台内置云主机工具不由默认解析注入（仅云会话自动并入）
     expect(start.mcpEndpoint.serverNames).not.toContain('agent-cloud-host-tools');
 
@@ -2296,7 +2318,8 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
       workspaceId,
       mcpServerIds: [],
     });
-    expect(start.mcpEndpoint).toBeUndefined();
+    // 显式 [] 不注入任何「用户可选」MCP，但平台恒装配服务仍然存在
+    expectAssembledServerNames(start);
 
     await gqlRequest(DELETE_SESSION, { id: sessionId }, token);
     client.disconnect();
@@ -2317,7 +2340,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
       workspaceId,
       mcpServerIds: [admin!.id],
     });
-    expect(start.mcpEndpoint.serverNames).toEqual(['agent-workflow-admin-tools']);
+    expectAssembledServerNames(start, ['agent-workflow-admin-tools']);
 
     await gqlRequest(DELETE_SESSION, { id: sessionId }, token);
     client.disconnect();
@@ -2348,7 +2371,7 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
       acpServerType: 'opencode',
       workspaceId,
     });
-    expect(first.start.mcpEndpoint.serverNames).toEqual(['agent-workflow-admin-tools']);
+    expectAssembledServerNames(first.start, ['agent-workflow-admin-tools']);
     await gqlRequest(DELETE_SESSION, { id: first.sessionId }, token);
 
     // 停用后默认解析剔除
@@ -2358,7 +2381,8 @@ describe('Session default MCP / mode·model / cloud tools (Phase 9)', () => {
       acpServerType: 'opencode',
       workspaceId,
     });
-    expect(second.start.mcpEndpoint).toBeUndefined();
+    // 用户可选服务已全部剔除，但平台恒装配服务仍保留
+    expectAssembledServerNames(second.start);
 
     const queried = await gqlRequest(CONTROLLER_DEFAULT_MCP_QUERY, { id: controllerId }, token);
     const queriedBody = await queried.json();

@@ -281,6 +281,7 @@ describe('ControllerService', () => {
             'agent-session-preview-tools',
             'agent-valut-tools',
             'agent-custom-tools',
+            'agent-knowledge-base-tools',
           ],
         },
       });
