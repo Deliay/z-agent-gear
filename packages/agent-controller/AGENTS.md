@@ -57,7 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.18.0`（major 保持 2；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.19.0`（major 保持 2；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.17.1 起为当前基线；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -91,6 +91,23 @@ src/
   `{requestId, success, templates:[{fileName, content|error}], truncated, error?}`；日志 `workflow_templates_scan`
   只含 `requestId/path`，不记录文件内容。该事件**不复用** `fs:read-file` 白名单（检测发生在会话启动前），
   仅直读约定子目录，不回写、不执行。
+
+## 仓库内建知识库扫描（2.19.0）
+
+- **`knowledge-bases:scan`（契约 §3.29/§3.30）**：`knowledge-bases.scanKnowledgeBases(workspacePath)`
+  直读 `<workspacePath>/.zag/knowledges/` 与 `<workspacePath>/docs/knowledges/` 两个固定子目录。
+  知识库发现**不递归**（仅来源目录的直接子文件夹，含常规文件 `knowledge-base.json` 才识别）；
+  库内文档**递归**收集 `.md` 常规文件（扩展名小写比较；符号链接按 `stat` 判定为常规文件才读取，
+  目录/设备/悬空链接跳过），`path` 为库内相对 POSIX 路径并读取内容。
+- **上限**：每来源 20 个知识库（文件夹名 `localeCompare` 取前 20）/ 每库 50 个文档 / `knowledge-base.json`
+  64KiB / 单文档 128KiB / 单库内容累计 1MiB / 单来源内容累计 2MiB；超限按级 `truncated:true` 或条目级
+  `error:'file too large'`。目录不存在（ENOENT/ENOTDIR）视为空列表，读取权限失败整体 `permission denied`。
+- **事件注册**：`socketio-client` 注册 `knowledge-bases:scan` → 回 `knowledge-bases:scan:result`
+  `{requestId, success, sources:[{source:'zag'|'docs', knowledgeBases:[{folder, schema?, documents?:[{path, content?|error?}], truncated?, error?}], truncated}], truncated, error?}`；
+  日志 `knowledge_bases_scan` 只含 `requestId/path`，不记录 schema/文档内容。该事件**不复用** `fs:read-file`
+  白名单（检测可发生在会话启动前），仅读不写、不执行。
+- **同源口径**：agent-api 编写指引 `knowledge-base-prompts.ts` 与本模块常量逐字对齐（防漂移守卫
+  `knowledge-base-prompts.test.ts` T-RKB-P4）。
 
 ## DeepSeek Harness 注入（2.9.0；insert 受管条目 2.11.0）
 

@@ -630,3 +630,54 @@ describe('workflow-templates:scan 事件注册（契约 §3.27/§3.28）', () =>
     }
   });
 });
+
+describe('knowledge-bases:scan 事件注册（契约 §3.29/§3.30）', () => {
+  beforeEach(() => {
+    fake.handlers.clear();
+    fake.socket.emit.mockClear();
+  });
+
+  it('T-RKB-SCAN9 收到 knowledge-bases:scan → 回 knowledge-bases:scan:result（requestId + 扫描结果）', async () => {
+    setup(true);
+    const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = await import('fs');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+
+    const dir = mkdtempSync(join(tmpdir(), 'sio-rkb-'));
+    const kbDir = join(dir, '.zag', 'knowledges', 'team-rules');
+    mkdirSync(join(kbDir, 'guides'), { recursive: true });
+    writeFileSync(join(kbDir, 'knowledge-base.json'), '{"name":"团队规范"}');
+    writeFileSync(join(kbDir, 'guides', 'git.md'), '---\ntitle: Git\n---\n# Git');
+    try {
+      const handler = fake.handlers.get('knowledge-bases:scan') as (
+        payload: unknown,
+      ) => Promise<void>;
+      expect(handler).toBeDefined();
+
+      await handler({ requestId: 'r-rkb', path: dir });
+
+      expect(fake.socket.emit).toHaveBeenCalledWith('knowledge-bases:scan:result', {
+        requestId: 'r-rkb',
+        success: true,
+        sources: [
+          {
+            source: 'zag',
+            knowledgeBases: [
+              {
+                folder: 'team-rules',
+                schema: '{"name":"团队规范"}',
+                documents: [{ path: 'guides/git.md', content: '---\ntitle: Git\n---\n# Git' }],
+                truncated: false,
+              },
+            ],
+            truncated: false,
+          },
+          { source: 'docs', knowledgeBases: [], truncated: false },
+        ],
+        truncated: false,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
