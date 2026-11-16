@@ -80,12 +80,17 @@ export const KNOWLEDGE_BASE_TOOL_DEFINITIONS: ToolDefinition[] = [
   {
     name: 'knowledge_base_document_update',
     description:
-      '更新知识库文档（路径不存在时创建）：传入知识库 + 路径与标题/标签/描述/内容；权限按库模式判定',
+      '更新知识库文档（路径不存在时创建）：传入知识库 + 路径与标题/标签/描述/内容；' +
+      '可选 newPath 在源文档存在时原子「移动 + 更新」（历史随文档带入新路径）；权限按库模式判定',
     inputSchema: {
       type: 'object',
       properties: {
         ...KB_LOCATOR_PROPERTIES,
         path: { type: 'string', description: '文档路径（以 / 开头，库内唯一）' },
+        newPath: {
+          type: 'string',
+          description: '新文档路径（移动，可选；仅当 path 指向已存在文档时生效）',
+        },
         title: { type: 'string', description: '标题（1~200 字符）' },
         tags: { type: 'array', items: { type: 'string' }, description: '标签（≤16 个，每个 1~32 字符）' },
         description: { type: 'string', description: '描述（≤1024 字符，可空）' },
@@ -326,6 +331,7 @@ export async function handleKnowledgeBaseToolsMcpRequest(
               kbId,
               args.path as string,
               documentInputFromArgs(args),
+              asString(args.newPath),
             );
             return ok({
               path: doc.path,

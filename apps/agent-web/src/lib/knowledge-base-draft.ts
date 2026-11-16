@@ -14,6 +14,8 @@ export interface KnowledgeBaseDraftInput {
   tags: string[];
   description: string;
   content: string;
+  /** 编辑中的文档路径（#541：路径可修改；缺省兼容旧草稿，恢复时回退当前路径） */
+  editedPath?: string;
 }
 
 export interface KnowledgeBaseDraft extends KnowledgeBaseDraftInput {
@@ -42,7 +44,8 @@ function isDraft(value: unknown): value is KnowledgeBaseDraft {
     candidate.tags.every((tag) => typeof tag === 'string') &&
     typeof candidate.description === 'string' &&
     typeof candidate.content === 'string' &&
-    typeof candidate.updatedAt === 'string'
+    typeof candidate.updatedAt === 'string' &&
+    (candidate.editedPath === undefined || typeof candidate.editedPath === 'string')
   );
 }
 
@@ -64,6 +67,7 @@ export function readDocumentDraft(kbId: string, path: string): KnowledgeBaseDraf
     tags: [...parsed.tags],
     description: parsed.description,
     content: parsed.content,
+    ...(parsed.editedPath === undefined ? {} : { editedPath: parsed.editedPath }),
     updatedAt: parsed.updatedAt,
   };
 }
@@ -81,6 +85,7 @@ export function writeDocumentDraft(
     tags: [...draft.tags],
     description: draft.description,
     content: draft.content,
+    ...(draft.editedPath === undefined ? {} : { editedPath: draft.editedPath }),
     updatedAt: new Date().toISOString(),
   };
   try {
@@ -115,6 +120,7 @@ export function scheduleDocumentDraft(
     tags: [...draft.tags],
     description: draft.description,
     content: draft.content,
+    ...(draft.editedPath === undefined ? {} : { editedPath: draft.editedPath }),
   });
   cancelTimer(key);
   const timer = setTimeout(() => {

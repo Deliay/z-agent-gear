@@ -339,7 +339,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-UI4S5 主机树层级 | 下级缩进为 8px（0.5rem）；设置按钮可点击进入配置页 |
 | E2E-UI4S6 移动端不回归 | 移动视口无 Resizer，且 `scrollWidth - clientWidth ≤ 1` |
 
-### 知识库 E2E (`knowledge-base.spec.ts` E2E-KB1~7)
+### 知识库 E2E (`knowledge-base.spec.ts` E2E-KB1~9)
 
 > 需求 #495；契约 `contracts/knowledge-base.graphql`。造数经 agent-api GraphQL（`createKnowledgeBase` /
 > `createKnowledgeBaseDocument` / `updateKnowledgeBaseDocument` / `deleteKnowledgeBaseDocument`），UI 驱动关键路径；
@@ -356,6 +356,8 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-KB5 历史抽屉 | 创建/更新/删除/同路径重建后下拉 4 项且时间倒序；选择「删除」版本只读预览删除前内容（历史跨删除延续） |
 | E2E-KB6 设置 | 全库历史时间倒序；改权限为 NONE 后 developer 刷新视野即不可见（分区空态）；删除知识库二次确认后树下架 |
 | E2E-KB7 删除文档 | 预览页删除并确认 → 路径从树消失；同路径 API 重建成功、历史仍可查看（含删除快照） |
+| E2E-KB8 修改路径 | 编辑模式「路径」输入改为新路径保存 → 地址栏跳新路径、预览生效；历史含「移动」记录且路径位展示 `fromPath → path`；原路径可立即重建且历史独立；目标被占用提示「该路径已存在文档」并保持编辑态 |
+| E2E-KB9 标签徽章编辑 | Enter/英文逗号/中文逗号生成徽章、逐枚 `×` 删除、空输入 Backspace 删末枚、粘贴「x, y，z」拆分去重、16 枚上限禁用 + 提示；保存后预览页徽章展示零回归 |
 
 > 权限矩阵/事件溯源/路径校验的穷举由 `servers/agent-api` 单测（T-KBA/T-KBS）与 `tests/api` T-KB-API1~6 覆盖；
 > 本套件只做 UI 关键路径与可见性收敛。

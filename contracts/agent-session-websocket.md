@@ -487,7 +487,7 @@ Controller 转发 ACP 输出。
 | `agent-session-preview-tools` | 全部会话（恒装配） | `review` | 长时等待（30min 超时按 serverName 放宽） |
 | `agent-valut-tools` | 全部会话（恒装配） | `valut_list` | **名单工具**：返回当前会话工作区 manual 密钥名称；**不提供任何获取密钥值的工具**（取值诉求一律 `METHOD_NOT_FOUND`） |
 | `agent-custom-tools` | 全部会话（恒装配） | 动态目录（`tools/list` 实时枚举） | **动态目录**：`tools/list` 按会话工作区实时查询 `customtools`（无快照/缓存）；`tools/call` 参数齐全校验后 prompt 渲染返回 / http 服务端执行 |
-| `agent-knowledge-base-tools` | 全部会话（恒装配） | `knowledge_base_create` / `knowledge_base_list` / `knowledge_base_document_list` / `knowledge_base_document_get` / `knowledge_base_document_update` / `knowledge_base_document_delete` | 本地 handler 直发；可见范围按「会话工作区 ∪ 本租户全局工作区」× 四档权限矩阵（与界面同口径）；`knowledge_base_create` 仅在会话创建人为租户管理员时出现在 tools/list |
+| `agent-knowledge-base-tools` | 全部会话（恒装配） | `knowledge_base_create` / `knowledge_base_list` / `knowledge_base_document_list` / `knowledge_base_document_get` / `knowledge_base_document_update` / `knowledge_base_document_delete` | 本地 handler 直发；可见范围按「会话工作区 ∪ 本租户全局工作区」× 四档权限矩阵（与界面同口径）；`knowledge_base_create` 仅在会话创建人为租户管理员时出现在 tools/list；`knowledge_base_document_update` 可选参数 `newPath`（源文档存在时先移动再更新，口径同 `updateKnowledgeBaseDocument`；源文档不存在走创建分支时提供 `newPath` → `isError` 拒绝，文案 `knowledge base document not found`） |
 
 - 平台服务均由 `sessionService.create` 公共路径**恒装配并去重**，用户不可选（默认 MCP 候选与
   `setControllerDefaultMcp` 校验的排除口径为 `$nin`，选平台服务报 `MCP_SERVER_NOT_SELECTABLE`）；

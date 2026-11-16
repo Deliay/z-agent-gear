@@ -24,7 +24,9 @@ import { getWorkspaceContext, type WorkspaceContext } from './workspace-context.
  * - 可见性/权限**只经** `resolveKnowledgeBaseAccess`（唯一判定源）；不可见一律「不存在」
  *   （`knowledge base not found` / 读文档返回 null），可见但越权 → `knowledge base permission denied`。
  * - 写路径不变量：「业务行变更 → 追加事件」同库顺序两步，事件写入失败**回滚业务行**并整体抛错
- *   （不留半提交）；事件集合无任何更新/删除入口。
+ *   （不留半提交）；事件集合无任何公共更新/删除入口。
+ * - **移动（#541）**：「业务行 path 更新 → 历史事件 path 改写 → 追加 MOVE 事件」三步写 + 回滚链
+ *   （`moveDocument`，唯一受控例外：内部 `updateMany` 改写历史事件 `path`），历史随文档带入新路径。
  * - 删除文档 = 硬删除 + DELETE 快照事件（路径即刻释放）；同路径重建 = 新 CREATE 事件接续。
  */
 
@@ -101,6 +103,8 @@ export interface KnowledgeBaseEventView {
   id: string;
   path: string;
   op: KnowledgeBaseEventOp;
+  /** 仅 MOVE 事件有值（原路径）；其余操作为 null */
+  fromPath: string | null;
   title: string;
   tags: string[];
   description: string;
@@ -138,6 +142,7 @@ interface EventRow {
   _id: unknown;
   path: string;
   op: KnowledgeBaseEventOp;
+  fromPath?: string;
   title: string;
   tags?: string[];
   description?: string;
@@ -282,6 +287,17 @@ function snapshotOf(row: DocumentRow): DocumentSnapshot {
     description: row.description ?? '',
     content: row.content ?? '',
   };
+}
+
+/** 快照与业务行四字段一致判定（D6「仅路径变化 → 仅 MOVE」短路条件）。 */
+function sameSnapshot(a: DocumentSnapshot, b: DocumentSnapshot): boolean {
+  return (
+    a.title === b.title &&
+    a.description === b.description &&
+    a.content === b.content &&
+    a.tags.length === b.tags.length &&
+    a.tags.every((tag, index) => tag === b.tags[index])
+  );
 }
 
 function escapeRegExp(value: string): string {
@@ -542,24 +558,46 @@ class KnowledgeBaseService {
     return this.mapDocumentWithNames(created);
   }
 
-  /** 更新文档：canUpdate；matchedCount=0 → 不存在；更新后追加 UPDATE 事件。 */
+  /**
+   * 更新文档：canUpdate；matchedCount=0 → 不存在；更新后追加 UPDATE 事件。
+   *
+   * `rawNewPath` 提供且归一后 ≠ `path` → 先 `moveDocument`（原子「移动 + 更新」），
+   * 之后按新路径读写；移动且快照与业务行一致时短路（仅 MOVE，不写 UPDATE，D6）。
+   * 校验顺序（D4）：权限 → 归一 path → 归一 newPath → 输入校验 → 移动 → 内容更新。
+   */
   async updateDocument(
     userId: string,
     kbId: string,
     rawPath: string,
     input: KnowledgeBaseDocumentInput,
+    rawNewPath?: string | null,
   ): Promise<KnowledgeBaseDocumentView> {
     const context = requireContext();
     const { access } = await this.loadKnowledgeBase(context, kbId);
     if (!access.canUpdate) throw new Error(KB_PERMISSION_DENIED);
     const path = normalizeDocumentPath(rawPath);
+    const newPath =
+      rawNewPath === undefined || rawNewPath === null
+        ? null
+        : normalizeDocumentPath(rawNewPath);
     const snapshot = validateDocumentInput(input);
+    const moved = newPath !== null && newPath !== path;
+    const effectivePath = moved ? (newPath as string) : path;
+    if (moved) {
+      await this.moveDocument(userId, kbId, path, effectivePath);
+    }
+
     const existing = (await KnowledgeBaseDocument.findOne({
       knowledgeBaseId: kbId,
-      path,
+      path: effectivePath,
     }).lean()) as unknown as DocumentRow | null;
     if (!existing) throw new Error(DOC_NOT_FOUND);
     const before = snapshotOf(existing);
+
+    // 仅路径变化 → 仅 MOVE：快照与业务行一致时跳过业务更新与 UPDATE 事件
+    if (moved && sameSnapshot(before, snapshot)) {
+      return this.mapDocumentWithNames(existing);
+    }
 
     const result = await KnowledgeBaseDocument.updateOne(
       { _id: existing._id },
@@ -568,7 +606,7 @@ class KnowledgeBaseService {
     if (result.matchedCount === 0) throw new Error(DOC_NOT_FOUND);
 
     try {
-      await this.appendEvent(context, kbId, path, 'UPDATE', snapshot, userId);
+      await this.appendEvent(context, kbId, effectivePath, 'UPDATE', snapshot, userId);
     } catch (err) {
       await KnowledgeBaseDocument.updateOne(
         { _id: existing._id },
@@ -585,13 +623,100 @@ class KnowledgeBaseService {
   }
 
   /**
+   * 移动文档（唯一入口，仅被 `updateDocument`/`upsertDocument` 编排调用；提案 §3.2 / 实现点 1）。
+   *
+   * 三步写 + 回滚链：
+   * 1. 业务行 `{_id, path: oldPath}` → `{path: newPath, updatedBy}`（filter 带旧路径防 TOCTOU；
+   *    matchedCount=0 → `knowledge base document not found`；E11000 → `... already exists`）；
+   * 2. `updateMany` 历史事件 `path: oldPath` → `newPath`（失败回滚业务行后抛错）；
+   * 3. 追加 MOVE 事件（`fromPath=oldPath`、快照=移动时点内容；失败反向回滚历史改写 + 业务行后抛错）。
+   * 回滚按「改写前记录的受影响事件 id 集」精确反转，不会波及新路径上已有的滞留历史。
+   * 权限 = `canUpdate`；`newPath` 归一后与 `path` 相同 → 幂等无操作（零事件，D4）。
+   */
+  async moveDocument(
+    userId: string,
+    kbId: string,
+    rawPath: string,
+    rawNewPath: string,
+  ): Promise<void> {
+    const context = requireContext();
+    const { access } = await this.loadKnowledgeBase(context, kbId);
+    if (!access.canUpdate) throw new Error(KB_PERMISSION_DENIED);
+    const path = normalizeDocumentPath(rawPath);
+    const newPath = normalizeDocumentPath(rawNewPath);
+    if (path === newPath) return;
+
+    const existing = (await KnowledgeBaseDocument.findOne({
+      knowledgeBaseId: kbId,
+      path,
+    }).lean()) as unknown as DocumentRow | null;
+    if (!existing) throw new Error(DOC_NOT_FOUND);
+    const snapshot = snapshotOf(existing);
+
+    const occupied = await KnowledgeBaseDocument.exists({ knowledgeBaseId: kbId, path: newPath });
+    if (occupied) throw new Error(DOC_EXISTS);
+
+    let result: { matchedCount: number };
+    try {
+      result = await KnowledgeBaseDocument.updateOne(
+        { _id: existing._id, path },
+        { $set: { path: newPath, updatedBy: userId } },
+      );
+    } catch (err) {
+      if (isDuplicateKey(err)) throw new Error(DOC_EXISTS);
+      throw err;
+    }
+    if (result.matchedCount === 0) throw new Error(DOC_NOT_FOUND);
+
+    let eventIds: unknown[] = [];
+    try {
+      // 先记录本路径的历史事件 id 集：正向改写与失败回滚都按 id 精确操作，
+      // 避免把新路径上已有的滞留历史（曾创建后删除文档遗留的事件）一并改写（返工加固）
+      const affected = (await KnowledgeBaseEvent.find({ knowledgeBaseId: kbId, path })
+        .select('_id')
+        .lean()) as unknown as Array<{ _id: unknown }>;
+      eventIds = affected.map((row) => row._id);
+      await KnowledgeBaseEvent.updateMany(
+        { _id: { $in: eventIds } },
+        { $set: { path: newPath } },
+      );
+    } catch (err) {
+      // 历史改写失败：回滚业务行 path（best-effort），整体抛错不留半提交
+      await KnowledgeBaseDocument.updateOne(
+        { _id: existing._id, path: newPath },
+        { $set: { path, updatedBy: existing.updatedBy } },
+      ).catch(() => undefined);
+      throw err;
+    }
+
+    try {
+      await this.appendEvent(context, kbId, newPath, 'MOVE', snapshot, userId, path);
+    } catch (err) {
+      // MOVE 事件失败：按记录的 id 集反向回滚历史改写 + 回滚业务行（best-effort）
+      await KnowledgeBaseEvent.updateMany(
+        { _id: { $in: eventIds } },
+        { $set: { path } },
+      ).catch(() => undefined);
+      await KnowledgeBaseDocument.updateOne(
+        { _id: existing._id, path: newPath },
+        { $set: { path, updatedBy: existing.updatedBy } },
+      ).catch(() => undefined);
+      throw err;
+    }
+  }
+
+  /**
    * MCP 专用 upsert：存在走更新（canUpdate）、不存在走创建（canCreate），权限分支各自判定。
+   *
+   * `rawNewPath` 同形扩展（#541）：源存在 → 先移动再更新；创建分支收到 `newPath` →
+   * `knowledge base document not found`（创建时无移动对象，D2）。
    */
   async upsertDocument(
     userId: string,
     kbId: string,
     rawPath: string,
     input: KnowledgeBaseDocumentInput,
+    rawNewPath?: string | null,
   ): Promise<KnowledgeBaseDocumentView> {
     const context = requireContext();
     const { access } = await this.loadKnowledgeBase(context, kbId);
@@ -599,8 +724,9 @@ class KnowledgeBaseService {
     const existing = await KnowledgeBaseDocument.exists({ knowledgeBaseId: kbId, path });
     if (existing) {
       if (!access.canUpdate) throw new Error(KB_PERMISSION_DENIED);
-      return this.updateDocument(userId, kbId, path, input);
+      return this.updateDocument(userId, kbId, path, input, rawNewPath);
     }
+    if (rawNewPath !== undefined && rawNewPath !== null) throw new Error(DOC_NOT_FOUND);
     if (!access.canCreate) throw new Error(KB_PERMISSION_DENIED);
     return this.createDocument(userId, kbId, path, input);
   }
@@ -670,6 +796,7 @@ class KnowledgeBaseService {
       id: String(row._id),
       path: row.path,
       op: row.op,
+      fromPath: row.fromPath ?? null,
       title: row.title,
       tags: row.tags ?? [],
       description: row.description ?? '',
@@ -697,6 +824,7 @@ class KnowledgeBaseService {
     op: KnowledgeBaseEventOp,
     snapshot: DocumentSnapshot,
     actorId: string,
+    fromPath?: string,
   ): Promise<void> {
     const actorName = await resolveActorName(actorId);
     await KnowledgeBaseEvent.create({
@@ -704,6 +832,8 @@ class KnowledgeBaseService {
       knowledgeBaseId: kbId,
       path,
       op,
+      // 仅 MOVE 事件携带原路径
+      ...(fromPath === undefined ? {} : { fromPath }),
       title: snapshot.title,
       tags: snapshot.tags,
       description: snapshot.description,
