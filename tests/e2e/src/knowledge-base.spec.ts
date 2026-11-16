@@ -593,7 +593,8 @@ test.describe('知识库', () => {
 
     await loginViaUI(page, user.username);
     await page.goto(docUrl(kb.id, doc.path, true));
-    const tagInput = page.getByLabel('标签');
+    // exact：徽章删除按钮的 aria-label（「删除标签 a」）同样包含「标签」，非精确匹配会命中多元素
+    const tagInput = page.getByLabel('标签', { exact: true });
 
     // 三触发：Enter / 英文逗号 / 中文逗号
     await tagInput.fill('a');
@@ -601,7 +602,8 @@ test.describe('知识库', () => {
     await tagInput.fill('b');
     await tagInput.press(',');
     await tagInput.fill('c');
-    await tagInput.press('，');
+    // Playwright press 只接受键盘键名，中文逗号需直接派发 keydown（React onKeyDown 按 event.key 判定）
+    await tagInput.dispatchEvent('keydown', { key: '，' });
     for (const tag of ['a', 'b', 'c']) {
       await expect(page.getByRole('button', { name: `删除标签 ${tag}` })).toBeVisible();
     }

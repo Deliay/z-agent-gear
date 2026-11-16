@@ -630,6 +630,7 @@ class KnowledgeBaseService {
    *    matchedCount=0 → `knowledge base document not found`；E11000 → `... already exists`）；
    * 2. `updateMany` 历史事件 `path: oldPath` → `newPath`（失败回滚业务行后抛错）；
    * 3. 追加 MOVE 事件（`fromPath=oldPath`、快照=移动时点内容；失败反向回滚历史改写 + 业务行后抛错）。
+   * 回滚按「改写前记录的受影响事件 id 集」精确反转，不会波及新路径上已有的滞留历史。
    * 权限 = `canUpdate`；`newPath` 归一后与 `path` 相同 → 幂等无操作（零事件，D4）。
    */
   async moveDocument(
@@ -667,9 +668,16 @@ class KnowledgeBaseService {
     }
     if (result.matchedCount === 0) throw new Error(DOC_NOT_FOUND);
 
+    let eventIds: unknown[] = [];
     try {
+      // 先记录本路径的历史事件 id 集：正向改写与失败回滚都按 id 精确操作，
+      // 避免把新路径上已有的滞留历史（曾创建后删除文档遗留的事件）一并改写（返工加固）
+      const affected = (await KnowledgeBaseEvent.find({ knowledgeBaseId: kbId, path })
+        .select('_id')
+        .lean()) as unknown as Array<{ _id: unknown }>;
+      eventIds = affected.map((row) => row._id);
       await KnowledgeBaseEvent.updateMany(
-        { knowledgeBaseId: kbId, path },
+        { _id: { $in: eventIds } },
         { $set: { path: newPath } },
       );
     } catch (err) {
@@ -684,9 +692,9 @@ class KnowledgeBaseService {
     try {
       await this.appendEvent(context, kbId, newPath, 'MOVE', snapshot, userId, path);
     } catch (err) {
-      // MOVE 事件失败：反向回滚历史改写 + 业务行（best-effort）
+      // MOVE 事件失败：按记录的 id 集反向回滚历史改写 + 回滚业务行（best-effort）
       await KnowledgeBaseEvent.updateMany(
-        { knowledgeBaseId: kbId, path: newPath },
+        { _id: { $in: eventIds } },
         { $set: { path } },
       ).catch(() => undefined);
       await KnowledgeBaseDocument.updateOne(

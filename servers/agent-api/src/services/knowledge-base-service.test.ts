@@ -670,4 +670,52 @@ describe('knowledge-base-service 移动（T-KBS-M，真库）', () => {
     await inCtx(adminA, () => knowledgeBaseService.remove(ADMIN, kbId));
     expect(await KnowledgeBaseEvent.countDocuments({ knowledgeBaseId: kbId })).toBe(0);
   });
+
+  it('T-KBS-M11: MOVE 事件失败回滚按受影响 id 精确反转，不污染新路径滞留历史', async () => {
+    const kbId = await createKb(adminA, 'KB');
+    await createDoc(adminA, kbId, '/a', input({ title: 'v1' }));
+    await inCtx(adminA, () =>
+      knowledgeBaseService.updateDocument(ADMIN, kbId, '/a', input({ title: 'v2' })),
+    );
+    // 新路径上的滞留历史（模拟「曾创建后删除文档」遗留的事件）
+    const orphan = await KnowledgeBaseEvent.create({
+      tenantId: TENANT,
+      knowledgeBaseId: new mongoose.Types.ObjectId(kbId),
+      path: '/b',
+      op: 'DELETE',
+      title: 'orphan',
+      tags: [],
+      description: '',
+      content: '',
+      actorId: ADMIN,
+      actorName: 'Alice',
+    });
+
+    const createSpy = vi
+      .spyOn(KnowledgeBaseEvent, 'create')
+      .mockRejectedValueOnce(new Error('event write failed'));
+    await expect(
+      inCtx(adminA, () => knowledgeBaseService.moveDocument(ADMIN, kbId, '/a', '/b')),
+    ).rejects.toThrow('event write failed');
+    createSpy.mockRestore();
+
+    // 业务行仍在原路径
+    expect(
+      await inCtx(adminA, () => knowledgeBaseService.getDocument(ADMIN, kbId, '/a')),
+    ).toMatchObject({ title: 'v2' });
+    expect(
+      await inCtx(adminA, () => knowledgeBaseService.getDocument(ADMIN, kbId, '/b')),
+    ).toBeNull();
+
+    // 源路径历史完整回滚（2 条），新路径仅剩滞留事件（未被改写回 /a）
+    const oldEvents = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/a' }),
+    );
+    expect(oldEvents.map((event) => event.op)).toEqual(['UPDATE', 'CREATE']);
+    const newEvents = await inCtx(adminA, () =>
+      knowledgeBaseService.listEvents(ADMIN, kbId, { path: '/b' }),
+    );
+    expect(newEvents.map((event) => String(event.id))).toEqual([String(orphan._id)]);
+    expect(newEvents[0].title).toBe('orphan');
+  });
 });
