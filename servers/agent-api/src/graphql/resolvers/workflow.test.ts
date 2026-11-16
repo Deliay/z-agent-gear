@@ -36,6 +36,7 @@ vi.mock('../../services/workflow/instance.js', () => ({
     updateNode: vi.fn(),
     completeHumanNode: vi.fn(),
     rejectNode: vi.fn(),
+    failNode: vi.fn(),
     setAdditionalPrompt: vi.fn(),
     removeAdditionalPrompt: vi.fn(),
     rename: vi.fn(),
@@ -492,6 +493,34 @@ describe('workflow resolvers', () => {
 
       await workflowResolvers.Mutation.rejectNode({}, { instanceId: 'inst-1', nodeId: 'n1', reason: '不行' }, ctx);
       expect(workflowInstanceService.rejectNode).toHaveBeenCalledWith('user-1', 'inst-1', 'n1', '不行');
+    });
+
+    it('T-MNF-R1 failNode 委托服务并映射节点（含 failInfo.source）', async () => {
+      const failed = {
+        ...instanceDoc.nodes[0],
+        status: 'FAILED',
+        failInfo: { reason: '人工标记失败', source: 'MANUAL', at: new Date('2026-11-16') },
+      };
+      vi.mocked(workflowInstanceService.failNode).mockResolvedValue(failed as never);
+
+      const result = await workflowResolvers.Mutation.failNode(
+        {},
+        { instanceId: 'inst-1', nodeId: 'n1' },
+        ctx,
+      );
+      expect(workflowInstanceService.failNode).toHaveBeenCalledWith('user-1', 'inst-1', 'n1', undefined);
+      expect(result).toMatchObject({ id: 'n1', status: 'FAILED', failInfo: { source: 'MANUAL' } });
+
+      // 未认证
+      await expect(
+        workflowResolvers.Mutation.failNode({}, { instanceId: 'inst-1', nodeId: 'n1' }, emptyCtx),
+      ).rejects.toThrow('Not authenticated');
+
+      // 服务层文案经 wrap() 原样透传
+      vi.mocked(workflowInstanceService.failNode).mockRejectedValue(new Error('仅 AI 节点支持立即失败'));
+      await expect(
+        workflowResolvers.Mutation.failNode({}, { instanceId: 'inst-1', nodeId: 'n1' }, ctx),
+      ).rejects.toThrow('仅 AI 节点支持立即失败');
     });
 
     it('renameWorkflowInstance 委托服务并映射实例', async () => {

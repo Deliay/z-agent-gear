@@ -200,7 +200,8 @@ type WorkflowNodeFailInfo {
   reason: String!
   # 失败来源：SESSION_STUCK / LLM_REPORTED / SESSION_START_FAILED /
   # RETRY_EXHAUSTED（中断自动重试 10 次用尽）/
-  # CONTROLLER_UNAVAILABLE（实例接续时收敛原控制器上不可达的进行中节点）
+  # CONTROLLER_UNAVAILABLE（实例接续时收敛原控制器上不可达的进行中节点）/
+  # MANUAL（人工「立即失败」）
   source: String!
   at: String!
 }
@@ -516,6 +517,16 @@ type Mutation {
   # 重启节点（RUNNING/REWORK/FAILED/RETRY_FAILED 会话失败或卡住时人工触发，关闭旧会话拉起全新会话；
   # RETRY_FAILED 来源用于自动重试用尽后的人工恢复）
   restartNode(instanceId: ID!, nodeId: ID!, agentConfig: AgentNodeConfigInput): WorkflowNode!
+
+  # 立即失败（人工止损）：仅 AI 节点且当前状态为 RUNNING/REWORK 时允许，转移为 FAILED；
+  # 立即取消全部中断自动重试、中断节点会话（best-effort，失败仅告警不回滚）、阻断工作流
+  # 等待人工介入。失败来源固定 failInfo.source='MANUAL'；恢复路径与既有失败一致
+  # （restartNode 拉起全新会话，或 MCP resumeFailedNode 在会话内给出指示后恢复）。
+  # reason 缺省「人工标记失败」，trim 后超过 500 字符截断。
+  # 错误文案表：工作流实例不存在或无权限 / 工作流实例中不存在节点：<nodeId> /
+  # 工作流实例不可用（控制器离线或已删除），请先接续后再操作 / 仅 AI 节点支持立即失败 /
+  # 引擎状态机拒绝文案（节点「<name>」当前状态为 <status>，不允许执行「标记失败」（fail））原样冒泡。
+  failNode(instanceId: ID!, nodeId: ID!, reason: String): WorkflowNode!
   # 删除实例（软删除：停止流程运转、删除全部节点会话、标记 deletedAt，实例数据保留；已删实例拒绝一切流转）
   deleteWorkflowInstance(id: ID!): Boolean!
   # 归档/取消归档实例（archived=true 归档移入「已归档」分组，false 取消归档；不影响流程运转与节点会话）

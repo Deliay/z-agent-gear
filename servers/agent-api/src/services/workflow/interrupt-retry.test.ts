@@ -469,3 +469,59 @@ describe('executeScheduledRetry 会话已丢失', () => {
     expect(todoService.createWorkflowInterventionTodo).toHaveBeenCalled();
   });
 });
+
+describe('中断重试短路：节点已人工立即失败（T-MNF7）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(sessionService.getSessionStatusRaw).mockResolvedValue('idling');
+    vi.mocked(sessionService.close).mockResolvedValue(true);
+    vi.mocked(sessionService.resume).mockResolvedValue({ success: true, status: 'connecting' });
+    vi.mocked(sessionService.addMessage).mockResolvedValue({});
+    vi.mocked(armSessionIdleWaiter).mockReturnValue({ promise: Promise.resolve(true), cancel: vi.fn() });
+    vi.mocked(workflowEngine.runOutsideTransitionLock).mockImplementation(((_id: string, task: () => Promise<unknown>) => task()) as never);
+  });
+
+  it('扫描 A 已到期的 SCHEDULED 节点在 fail 后不再执行管线（零 close/resume/addMessage）', async () => {
+    // 人工立即失败后：status=FAILED、retryCount 保留、调度字段已清（引擎 fail 分支）
+    stubInstance(
+      makeInstance({
+        status: 'FAILED',
+        retryCount: 3,
+        retryPhase: null,
+        nextRetryAt: null,
+        retryDeadlineAt: null,
+        retryTrigger: null,
+      }),
+    );
+    stubClaim(0);
+
+    await executeScheduledRetry(INSTANCE_ID, NODE_ID);
+
+    expect(sessionService.close).not.toHaveBeenCalled();
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    expect(sessionService.addMessage).not.toHaveBeenCalled();
+    // CAS 占位本身即以 status∈RUNNING/REWORK 为前提，FAILED 不可能命中
+    const filter = argAt(WorkflowInstance.updateOne, 0, 0) as {
+      nodes: { $elemMatch: Record<string, unknown> };
+    };
+    expect(filter.nodes.$elemMatch).toMatchObject({ status: { $in: ['RUNNING', 'REWORK'] } });
+  });
+
+  it('扫描 B 的 RECONNECTING 节点在 fail 后重排 CAS 不命中，不发送任何消息', async () => {
+    stubInstance(makeInstance({ status: 'FAILED', retryPhase: 'RECONNECTING', retryCount: 3 }));
+    stubClaim(0);
+
+    const result = await scheduleInterruptionRetry({
+      instanceId: INSTANCE_ID,
+      nodeId: NODE_ID,
+      sessionId: SESSION_ID,
+      trigger: 'ENDED',
+      expectedPhase: 'RECONNECTING',
+    });
+
+    expect(result).toBe('skipped');
+    expect(sessionService.resume).not.toHaveBeenCalled();
+    expect(sessionService.addMessage).not.toHaveBeenCalled();
+    expect(workflowEngine.runOutsideTransitionLock).not.toHaveBeenCalled();
+  });
+});

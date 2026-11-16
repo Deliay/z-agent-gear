@@ -4,6 +4,7 @@ import {
   NODE_STATUS_COLOR_VAR,
   NODE_STATUS_LABELS,
   NODE_STATUS_VISUAL,
+  failSourceText,
   retryProgressText,
 } from '../WorkflowNodeTreeConstants'
 import type { WorkflowNodeStatus } from '@/graphql/workflow'
@@ -92,5 +93,17 @@ describe('RETRY_FAILED 与自动重试进度（T-FE1）', () => {
 
   it('T-FE1c: 非法时间串不展示', () => {
     expect(retryProgressText({ retryCount: 1, nextRetryAt: 'not-a-date' })).toBeNull()
+  })
+})
+
+describe('失败来源映射（T-MNF-W3）', () => {
+  it('六来源中文映射（含 MANUAL→人工标记），未知值原样返回', () => {
+    expect(failSourceText('SESSION_STUCK')).toBe('会话停滞')
+    expect(failSourceText('LLM_REPORTED')).toBe('AI 主动标记')
+    expect(failSourceText('SESSION_START_FAILED')).toBe('会话启动失败')
+    expect(failSourceText('RETRY_EXHAUSTED')).toBe('中断重试用尽')
+    expect(failSourceText('CONTROLLER_UNAVAILABLE')).toBe('控制器不可用')
+    expect(failSourceText('MANUAL')).toBe('人工标记')
+    expect(failSourceText('UNKNOWN_SOURCE')).toBe('UNKNOWN_SOURCE')
   })
 })

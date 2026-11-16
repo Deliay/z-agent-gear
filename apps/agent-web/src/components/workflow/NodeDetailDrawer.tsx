@@ -1,4 +1,4 @@
-import { ExternalLink, MessageSquare, RefreshCw, RotateCcw } from 'lucide-react'
+import { Ban, ExternalLink, MessageSquare, RefreshCw, RotateCcw } from 'lucide-react'
 import {
   Sheet,
   SheetContent,
@@ -7,10 +7,18 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import MarkdownContent from '@/components/session/MarkdownContent'
 import { artifactsOf } from '@/lib/artifact-owners'
 import type { WorkflowInstanceData, WorkflowNodeData } from '@/graphql/workflow'
-import { NODE_STATUS_BADGE, NODE_STATUS_LABELS, NODE_TYPE_LABELS, retryProgressText } from './WorkflowNodeTreeConstants'
+import {
+  NODE_STATUS_BADGE,
+  NODE_STATUS_LABELS,
+  NODE_TYPE_LABELS,
+  failSourceText,
+  retryProgressText,
+} from './WorkflowNodeTreeConstants'
+import { useFailNodeAction } from '@/hooks/useFailNodeAction'
 import HumanNodeActions from './HumanNodeActions'
 import type { GraphResource } from './graph/graph-layout'
 
@@ -58,6 +66,7 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
       node.status === 'FAILED' ||
       node.status === 'RETRY_FAILED')
   const retryProgress = retryProgressText(node)
+  const failAction = useFailNodeAction({ instanceId: instance.id, node })
 
   return (
     <div className="min-w-0 space-y-3">
@@ -95,6 +104,18 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
             重启节点
           </Button>
         )}
+        {failAction.canFail && (
+          <Button
+            size="xs"
+            variant="destructive"
+            onClick={failAction.request}
+            disabled={unavailable}
+            title={unavailable ? '实例不可用，请先接续' : undefined}
+          >
+            <Ban className="size-3" />
+            立即失败
+          </Button>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -112,7 +133,10 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
       )}
       {node.failInfo && (node.status === 'FAILED' || node.status === 'RETRY_FAILED') && (
         <div className="rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
-          {node.status === 'RETRY_FAILED' ? '重试失败原因' : '失败原因'}：{node.failInfo.reason}
+          <div>
+            {node.status === 'RETRY_FAILED' ? '重试失败原因' : '失败原因'}：{node.failInfo.reason}
+          </div>
+          <div data-testid="drawer-fail-source">失败来源：{failSourceText(node.failInfo.source)}</div>
         </div>
       )}
 
@@ -180,6 +204,18 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
       )}
 
       {actionable && <HumanNodeActions instanceId={instance.id} node={node} disabled={unavailable} />}
+
+      {failAction.canFail && (
+        <ConfirmDialog
+          open={failAction.open}
+          onOpenChange={failAction.setOpen}
+          title="立即失败"
+          description={failAction.description}
+          confirmLabel="确认失败"
+          loading={failAction.submitting}
+          onConfirm={failAction.confirm}
+        />
+      )}
     </div>
   )
 }

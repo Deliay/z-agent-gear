@@ -889,4 +889,37 @@ describe('WorkflowEngine retry transitions', () => {
       ).rejects.toThrow('不允许执行');
     }
   });
+
+  it('T-MNF1: fail 携带 source=MANUAL（RUNNING/REWORK→FAILED，清调度字段、保留 retryCount/sessionId）', async () => {
+    for (const status of ['RUNNING', 'REWORK'] as const) {
+      const instance = makeInstance([
+        retryNode({
+          status,
+          retryCount: 3,
+          retryPhase: 'SCHEDULED',
+          retryTrigger: 'ENDED',
+          retryDeadlineAt: new Date(),
+          nextRetryAt: new Date(),
+        }),
+      ]);
+      loadInstance(instance);
+
+      await workflowEngine.transition('inst-1', 'n1', 'fail', {
+        reason: '人工标记失败',
+        source: 'MANUAL',
+      });
+
+      const node = instance.nodes[0];
+      expect(node.status, `${status}→FAILED`).toBe('FAILED');
+      expect(node.failInfo).toMatchObject({ reason: '人工标记失败', source: 'MANUAL' });
+      expect(node.failInfo?.at).toBeInstanceOf(Date);
+      expect(node.retryCount).toBe(3);
+      expect(node.nextRetryAt).toBeNull();
+      expect(node.retryPhase).toBeNull();
+      expect(node.retryDeadlineAt).toBeNull();
+      expect(node.retryTrigger).toBeNull();
+      // 保留 sessionId：服务层转移后凭此中断会话，详情仍可只读回看
+      expect(node.sessionId).toBe('sess-1');
+    }
+  });
 });
