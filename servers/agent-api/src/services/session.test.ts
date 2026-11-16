@@ -95,6 +95,11 @@ vi.mock('./custom-tools-mcp.js', () => ({
   ensureCustomToolsServer: vi.fn(async () => 'mcp-custom-tools'),
 }));
 
+vi.mock('./knowledge-base-tools.js', () => ({
+  KNOWLEDGE_BASE_TOOLS_SERVER_NAME: 'agent-knowledge-base-tools',
+  ensureKnowledgeBaseToolsServer: vi.fn(async () => 'mcp-kb-tools'),
+}));
+
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
@@ -720,7 +725,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
+        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
         undefined,
         [],
       );
@@ -757,7 +762,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
+        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
         undefined,
         [],
       );
@@ -891,7 +896,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
+        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
         undefined,
         [{ id: customId, name: 'custom-a' }],
       );
@@ -922,7 +927,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
+        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
         undefined,
         [{ id: customId, name: 'custom-a' }],
       );
@@ -2301,7 +2306,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
+        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
         {
           instanceId: 'inst-1',
           nodeId: 'node-1',
@@ -2763,13 +2768,14 @@ describe('SessionService.create default MCP injection', () => {
           'agent-session-preview-tools',
           'agent-valut-tools',
           'agent-custom-tools',
+          'agent-knowledge-base-tools',
         ],
       },
     });
     expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
       'sess-1',
       'user-1',
-      ['srv-a', 'srv-b', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
+      ['srv-a', 'srv-b', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
       undefined,
       [],
     );
@@ -2793,7 +2799,7 @@ describe('SessionService.create default MCP injection', () => {
     expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
       'sess-1',
       'user-1',
-      ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools'],
+      ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
       undefined,
       [],
     );

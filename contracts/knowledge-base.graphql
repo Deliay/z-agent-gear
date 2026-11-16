@@ -1,0 +1,133 @@
+# 知识库（工作区级，需求 #495）。
+#
+# 结构：知识库（仅名称 + 权限模式）→ 知识库文档（库内路径唯一 + 标题/标签/描述/Markdown 内容）。
+# 存储：`knowledgebases` / `knowledgebasedocuments` / `knowledgebaseevents` 三集合；
+# 文档为活动行（删除即释放路径），历史为追加式事件（CREATE/UPDATE/DELETE 全量快照，无 TTL），
+# 删除文档不删历史、同路径重建历史延续。
+#
+# 可见集与权限（服务端唯一判定源 `knowledge-base-access`，与平台 MCP 同口径）：
+#   - 可见集 = 本工作区知识库 ∪ 本租户全局工作区知识库（其他普通工作区的库对本工作区成员不可见）；
+#   - 权限模式四档：NONE（仅管理员可见/可写）、READ_ONLY（非管理员只读）、
+#     UPDATE_ONLY（非管理员可读 + 创建 + 更新，不可删除）、FULL_ACCESS（非管理员 CRUD）；
+#   - 管理员（租户 admin）命中任何模式均六项权限全开；`canManage` 恒 = 当前用户是租户管理员；
+#   - 全局工作区的库对其他工作区成员可见，且**读写按库自身权限模式判定**（有意偏离
+#     「全局工作区 developer 只读」的通用口径）；
+#   - 创建知识库需要租户管理员权限（`not a tenant admin`）；默认权限模式：
+#     全局工作区 → READ_ONLY，普通工作区 → NONE。
+#
+# 文档路径：以 `/` 开头，根目录为 `/`，库内唯一；归一化 = trim → 去末尾 `/`（根除外）；
+# 拒空路径段、控制字符、NUL；单段 ≤128 字符、全长 ≤512。文档不可改名/移动（删除 + 新建替代）。
+#
+# 错误口径（白名单，逐字透传；未命中收敛 `internal error`）：
+#   `Not authenticated` / `workspace not found` / `knowledge base not found` /
+#   `knowledge base name already exists` / `invalid knowledge base name` / `not a tenant admin` /
+#   `knowledge base permission denied` / `knowledge base document not found` /
+#   `knowledge base document already exists` / `invalid document path` /
+#   `invalid document title` / `invalid document tags` / `invalid document description` /
+#   `invalid document content`
+#
+# 不泄露存在性：`knowledgeBaseDocument` 对不可见库/无读权限/文档不存在统一返回 null；
+# 写操作对不可见库抛 `knowledge base not found`、对可见但越权抛 `knowledge base permission denied`。
+
+enum KnowledgeBasePermissionMode {
+  NONE
+  READ_ONLY
+  UPDATE_ONLY
+  FULL_ACCESS
+}
+
+enum KnowledgeBaseEventOp {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+type KnowledgeBaseAccess {
+  canRead: Boolean!
+  canCreate: Boolean!
+  canUpdate: Boolean!
+  canDelete: Boolean!
+  # 重命名/权限模式/删除库（恒 = 当前用户是租户管理员）
+  canManage: Boolean!
+}
+
+type KnowledgeBase {
+  id: ID!
+  name: String!
+  permissionMode: KnowledgeBasePermissionMode!
+  # 归属工作区是否本租户全局工作区（来源徽标）
+  global: Boolean!
+  myAccess: KnowledgeBaseAccess!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type KnowledgeBaseDocumentMeta {
+  path: String!
+  title: String!
+  tags: [String!]!
+  description: String!
+  updatedAt: String!
+}
+
+type KnowledgeBaseDocument {
+  path: String!
+  title: String!
+  tags: [String!]!
+  description: String!
+  content: String!
+  createdByName: String!
+  updatedByName: String!
+  createdAt: String!
+  updatedAt: String!
+}
+
+type KnowledgeBaseTreeItem {
+  knowledgeBase: KnowledgeBase!
+  # 全库文档元信息（侧边栏树一次拉取，不含 content）
+  documents: [KnowledgeBaseDocumentMeta!]!
+}
+
+type KnowledgeBaseEvent {
+  id: ID!
+  path: String!
+  op: KnowledgeBaseEventOp!
+  title: String!
+  tags: [String!]!
+  description: String!
+  # 快照（DELETE 保留删除前最后内容）
+  content: String!
+  actorName: String!
+  createdAt: String!
+}
+
+input KnowledgeBaseDocumentInput {
+  title: String!
+  tags: [String!]!
+  description: String!
+  content: String!
+}
+
+extend type Query {
+  # 可见知识库列表（本工作区 ∪ 本租户全局工作区，按权限模式过滤）
+  knowledgeBases: [KnowledgeBase!]!
+  # 侧边栏树：可见知识库 + 各自文档元信息
+  knowledgeBaseTree: [KnowledgeBaseTreeItem!]!
+  # 某路径前缀下的文档元信息（prefix 缺省 = 全库）
+  knowledgeBaseDocuments(knowledgeBaseId: ID!, prefix: String): [KnowledgeBaseDocumentMeta!]!
+  # 单文档完整内容；不可见/无读权限/不存在统一 null
+  knowledgeBaseDocument(knowledgeBaseId: ID!, path: String!): KnowledgeBaseDocument
+  # 历史：path 缺省 = 全库历史；恒 createdAt 倒序；limit 缺省 50 上限 200；before 为 createdAt ISO 游标
+  knowledgeBaseEvents(knowledgeBaseId: ID!, path: String, limit: Int, before: String): [KnowledgeBaseEvent!]!
+}
+
+extend type Mutation {
+  createKnowledgeBase(name: String!): KnowledgeBase!
+  renameKnowledgeBase(id: ID!, name: String!): KnowledgeBase!
+  updateKnowledgeBasePermission(id: ID!, permissionMode: KnowledgeBasePermissionMode!): KnowledgeBase!
+  deleteKnowledgeBase(id: ID!): Boolean!
+  # path：文档路径（以 / 开头，库内唯一；由服务端归一化，非法 → invalid document path）
+  createKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!): KnowledgeBaseDocument!
+  updateKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!): KnowledgeBaseDocument!
+  deleteKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!): Boolean!
+}

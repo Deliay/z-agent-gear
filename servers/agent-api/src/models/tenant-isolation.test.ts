@@ -21,6 +21,9 @@ import { GitHubAccount } from './github-account.js';
 import { SessionReview } from './session-review.js';
 import { SessionInteraction } from './session-interaction.js';
 import { ExternalLogin } from './external-login.js';
+import { KnowledgeBase } from './knowledge-base.js';
+import { KnowledgeBaseDocument } from './knowledge-base-document.js';
+import { KnowledgeBaseEvent } from './knowledge-base-event.js';
 import { TENANT_ID_COLLECTIONS } from '../migrations/013-tenant-id-backfill.js';
 
 const USER_ID = '507f1f77bcf86cd799439011';
@@ -154,5 +157,34 @@ describe('22 collections tenantId isolation (T-ISO)', () => {
     const filter = spy.mock.calls[0][0] as Record<string, unknown>;
     // 不注入 tenantId：任何工作区上下文（含无上下文）都能命中同一成员行
     expect(filter).toEqual({ userId: USER_ID });
+  });
+
+  it('T-ISO 豁免：知识库三集合无 userId、不挂 tenant 插件、查询不注入 tenantId', async () => {
+    const cases = [
+      [KnowledgeBase, 'knowledgebases', { name: 'kb-a' }],
+      [KnowledgeBaseDocument, 'knowledgebasedocuments', { path: '/a' }],
+      [KnowledgeBaseEvent, 'knowledgebaseevents', { path: '/a' }],
+    ] as const;
+    for (const [model, collection, filter] of cases) {
+      expect(model.collection.name).toBe(collection);
+      // 无 userId 主维度（同 customtools / custommcpservers 口径）：不进 T-ISO 矩阵
+      expect(model.schema.path('userId')).toBeUndefined();
+      expect(model.schema.path('tenantId')).toBeTruthy();
+
+      const spy = vi
+        .spyOn(model.collection, 'countDocuments')
+        .mockResolvedValue(0 as never);
+      const queryable = model as unknown as {
+        countDocuments: (filter: Record<string, unknown>) => Promise<number>;
+      };
+      await queryable.countDocuments(filter);
+
+      const actual = spy.mock.calls[0][0] as Record<string, unknown>;
+      // tenantId 显式由服务层写入 / 过滤，插件不得静默注入（全局库跨工作区可见的前提）
+      expect(actual).toEqual(filter);
+      spy.mockRestore();
+    }
+    // CASES 恒 22（新集合不进矩阵）
+    expect(CASES).toHaveLength(22);
   });
 });
