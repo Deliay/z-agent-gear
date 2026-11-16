@@ -21,6 +21,11 @@ export default defineConfig([
     rules: {
       'react-hooks/set-state-in-effect': 'off',
       'react-hooks/immutability': 'off',
+      // 下划线前缀 = 有意忽略（解构剔除字段/占位参数）
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
+      ],
     },
   },
 ])
