@@ -245,6 +245,7 @@ flowchart LR
 - [[proposals/20261115-feat-workflow-mcp-prompt-snippets.md]] — 工作流MCP提供提示词片段（平台内置 MCP agent-workflow-admin-tools 实现 MCP prompts 能力：initialize 声明 prompts、prompts/list、prompts/get；新增 admin-prompts.ts 片段注册表单一来源承载 workflow-schema 与 workflow-project-persistence 两段提示词，内容与 validateTemplateGraph 及 .zag/workflow/templates 扫描约束同源对齐并有防漂移守卫；纯 agent-api 改动零数据模型变更）
 - [[proposals/20261115-feat-knowledge-base.md]] — 知识库（knowledgebases/knowledgebasedocuments/knowledgebaseevents 三集合事件溯源（删除释放路径、历史延续、库级倒序）、knowledge-base-access 四档权限矩阵纯函数（全局库跨工作区按库模式放行写、有意偏离全局只读插件）、平台 MCP agent-knowledge-base-tools 恒装配且创建库工具按角色门控、契约新增 knowledge-base.graphql；agent-web 侧边栏第五分区与 /knowledge-bases/:kbId/* 页面：树/预览/分栏编辑/localStorage 草稿/历史抽屉/设置；迁移 028）
 - [[proposals/20261116-feat-workflow-node-manual-fail.md]] — 工作流节点「立即失败」（契约新增 failNode 变更与 failInfo.source=MANUAL；agent-api failNode 服务编排「先引擎转移落库、后中断会话」避免误排期重试，复用中断重试既有 CAS 防护零新增取消机制；agent-web 节点详情抽屉「立即失败」按钮与二次确认）
+- [[proposals/20261116-feat-knowledge-base-optimization.md]] — 知识库优化（updateKnowledgeBaseDocument 扩展可选 newPath 原子「移动+更新」：KnowledgeBaseEventOp 新增 MOVE、事件新增 fromPath、移动时改写该路径全部历史事件 path 使历史随文档带入新路径、原路径释放后历史独立、移动权限=canUpdate、错误白名单零新增；MCP knowledge_base_document_update 同形扩展；agent-web 编辑器路径输入与保存编排含草稿键迁移、自足 TagBadgeInput 徽章编辑器、EVENT_OP_LABELS 增补 MOVE；零新集合零新索引零存量迁移）
 
 ### 实现计划（`plan/`）
 
