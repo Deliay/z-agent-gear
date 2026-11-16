@@ -58,8 +58,9 @@ export const PERMISSION_MODE_DESCRIPTIONS: Record<KnowledgeBasePermissionMode, s
 };
 
 /** 文档事件操作类型中文标签（历史抽屉/设置页全库历史共用）。 */
-export const EVENT_OP_LABELS: Record<'CREATE' | 'UPDATE' | 'DELETE', string> = {
+export const EVENT_OP_LABELS: Record<'CREATE' | 'UPDATE' | 'DELETE' | 'MOVE', string> = {
   CREATE: '创建',
   UPDATE: '更新',
   DELETE: '删除',
+  MOVE: '移动',
 };

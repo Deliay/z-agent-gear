@@ -22,6 +22,7 @@ const EVENTS: KnowledgeBaseEventData[] = [
     id: 'e1',
     path: '/a',
     op: 'CREATE',
+    fromPath: null,
     title: 'A',
     tags: [],
     description: '',
@@ -32,7 +33,8 @@ const EVENTS: KnowledgeBaseEventData[] = [
   {
     id: 'e2',
     path: '/b',
-    op: 'UPDATE',
+    op: 'MOVE',
+    fromPath: '/a',
     title: 'B',
     tags: [],
     description: '',
@@ -85,6 +87,9 @@ describe('KnowledgeBaseSettingsDialog（T-KBW10）', () => {
     expect(events).toHaveLength(2);
     expect(events[0]).toHaveTextContent('/a');
     expect(events[0]).toHaveTextContent('创建');
+    // MOVE 事件路径位展示 fromPath → path，操作标签为「移动」
+    expect(events[1]).toHaveTextContent('移动');
+    expect(events[1]).toHaveTextContent('/a → /b');
 
     // 重命名
     fireEvent.change(screen.getByLabelText('新的知识库名称'), { target: { value: '新名字' } });
