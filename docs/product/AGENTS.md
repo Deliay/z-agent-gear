@@ -177,6 +177,8 @@ flowchart LR
 
 ### 实现中文档（`shipping/`）
 
+- [[shipping/20261115-knowledge-base.md]] — 知识库（工作区级 wiki 文档库：路径唯一标识文档、类 git 全生命周期版本历史（删除不删历史、重建延续）、四档权限模式控制非管理员访问（全局工作区知识库跨工作区可见按库模式判定）、侧边栏树形呈现与分栏 Markdown 编辑（localStorage 草稿恢复）、历史版本抽屉；平台向会话注入知识库 MCP 工具，可见范围由会话创建人权限与会话工作区决定）
+
 - [[shipping/20261025-cloud-container-unlimited-lifetime.md]] — 云电脑取消最长运行时间限制（云端工作容器不再因到达时间上限被平台强制销毁）
 - [[shipping/20261029-commit-author-settings-optimization.md]] — Commit 作者设置优化（提交人由团队共享改为成员独立并迁入新增「Git」区块、提交人模式下线；「自定义」增加「导入Github帐号信息」弹窗并移除「Github帐号」类型（存量自动转换）；提交身份按上下文下发：云电脑自身=平台 bot、勾选 Worktree 的会话/工作流=创建者、Issue 拉起的工作流=触发人）
 - [[shipping/20261113-oidc-github-oauth-login.md]] — 支持自定义 OIDC 登录和 GitHub OAuth 登录（后台统一配置全局 OIDC Provider（可多条）与 GitHub OAuth（单条），按前台/后台分别启用；前后台登录页展示跳转登录按钮，前台首次登录自动开户，后台管理员先绑定后登录）

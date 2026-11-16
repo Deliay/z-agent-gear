@@ -1,14 +1,16 @@
-/** 侧边栏四折叠分区的偏好项（localStorage 持久化） */
+/** 侧边栏折叠分区的偏好项（localStorage 持久化） */
 
-export type SidebarSectionKey = 'hosts' | 'workflows' | 'sessions' | 'gateways'
+export type SidebarSectionKey = 'hosts' | 'workflows' | 'sessions' | 'knowledgeBases' | 'gateways'
 
 export const SIDEBAR_SECTIONS_KEY = 'sidebar-sections-expanded'
 
-/** 默认展开「工作流」「会话」，折叠「主机」「网关」 */
+/** 默认展开「工作流」「会话」，折叠「主机」「知识库」「网关」 */
 export const SIDEBAR_SECTION_DEFAULTS: Record<SidebarSectionKey, boolean> = {
   hosts: false,
   workflows: true,
   sessions: true,
+  // D3：与 hosts/gateways 同档（非首屏主信息流），默认折叠
+  knowledgeBases: false,
   gateways: false,
 }
 
@@ -23,6 +25,11 @@ export function readSidebarSections(): SidebarSections {
       hosts: typeof parsed.hosts === 'boolean' ? parsed.hosts : SIDEBAR_SECTION_DEFAULTS.hosts,
       workflows: typeof parsed.workflows === 'boolean' ? parsed.workflows : SIDEBAR_SECTION_DEFAULTS.workflows,
       sessions: typeof parsed.sessions === 'boolean' ? parsed.sessions : SIDEBAR_SECTION_DEFAULTS.sessions,
+      // 旧 localStorage 无该 key 时回退默认（F14 逐 key 读取形态天然兼容）
+      knowledgeBases:
+        typeof parsed.knowledgeBases === 'boolean'
+          ? parsed.knowledgeBases
+          : SIDEBAR_SECTION_DEFAULTS.knowledgeBases,
       gateways: typeof parsed.gateways === 'boolean' ? parsed.gateways : SIDEBAR_SECTION_DEFAULTS.gateways,
     }
   } catch {

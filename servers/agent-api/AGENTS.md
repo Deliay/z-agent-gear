@@ -505,6 +505,57 @@ pnpm run start   # Start production server
     `mcp-dispatch` platform 三元链尾部直发；默认 MCP 候选与 `setControllerDefaultMcp` 的
     `$nin` 排除两个新名字（前端可见性沿用 preview 先例，零改动）。
 
+## 知识库（#495）
+
+> 需求 #495；契约 `contracts/knowledge-base.graphql`；计划
+> `docs/engineering/plan/20261115-feat-knowledge-base.md`（D2/D5/D6/D9/D11/D13）。
+
+- **三集合**（agent-api 唯一写方；迁移 `028-knowledge-base` 幂等建索引）：
+  - `knowledgebases`：`tenantId`/`workspaceId`（String，服务层显式写）、`name`（trim 1..64，工作区内唯一
+    `uniq_knowledge_base_workspace_name`）、`permissionMode`（`NONE|READ_ONLY|UPDATE_ONLY|FULL_ACCESS`）、
+    `createdBy`；索引 `{tenantId,workspaceId}`。
+  - `knowledgebasedocuments`：**仅活动文档**（删除即释放路径）、`knowledgeBaseId + path` 唯一
+    `uniq_knowledge_base_doc_path`（亦支撑前缀查询）、title/tags/description/content、createdBy/updatedBy。
+  - `knowledgebaseevents`：追加式事件（CREATE/UPDATE/DELETE 全量快照，DELETE 保留删除前内容；
+    `actorId/actorName` 名称快照），索引 `{knowledgeBaseId,createdAt:-1}` + `{knowledgeBaseId,path,createdAt:-1}`；
+    **无任何更新/删除入口**（仅删除知识库时级联清理）。
+- **有意不挂任何 scope 插件**（D2）：需求要求全局工作区库对同租户其他工作区成员可见且**按库自身模式放行写**
+  （全局 developer 亦可写），与 `applyWorkspaceScope`「写只回当前工作区 + 全局 developer 只读拦截」冲突。
+  可见性/权限**唯一判定源**为 `services/knowledge-base-access.ts` 纯函数；`models/tenant-isolation.test.ts`
+  与 `models/workspace-isolation.test.ts` 双落点豁免断言锁定（三集合无 `userId`、查询不注入 tenant/workspace 过滤）。
+- **服务层**：`services/knowledge-base-service.ts` 唯一读写口，全部方法**首参显式 `userId`**（D6：WorkspaceContext
+  无 userId；MCP relay 链路无 RequestAuth ALS），入口 `requireContext()` → `workspace not found`。
+  写路径不变量「业务行变更 → 追加事件」：事件失败**回滚业务行**并整体抛错（create 删新行 / update 还原旧值 /
+  delete 重建快照行），不留半提交。`actorName` 在 `appendEvent` 内经 `User.findById` 快照（缺失回退 userId）。
+  路径归一 `normalizeDocumentPath`（`/` 开头、去末尾 `/`、无空段/控制字符/NUL、段 ≤128、全长 ≤512）；
+  输入白名单：title 1..200 / tags ≤16×1..32 去重 / description ≤1024 / content ≤262144。
+- **GraphQL 创建文档的路径来源**：契约 `createKnowledgeBaseDocument(knowledgeBaseId, path, input)` **显式接收 path**
+  （与 `updateKnowledgeBaseDocument` 同形），服务端 `normalizeDocumentPath` 归一化并校验（非法 → `invalid document path`）。
+  「条目 +」按父路径拼 `/父路径/新文档-xxxx` 一次成型。
+- **错误白名单**：14 条逐字（`Not authenticated` / `workspace not found` / `knowledge base not found` /
+  `knowledge base name already exists` / `invalid knowledge base name` / `not a tenant admin` /
+  `knowledge base permission denied` / `knowledge base document not found` / `knowledge base document already exists` /
+  `invalid document path` / `invalid document title` / `invalid document tags` / `invalid document description` /
+  `invalid document content`）；resolver `wrap()` 逐字透传、未命中 `internal error`；MCP 统一 `isError:true` 文本。
+  读不可见/无权限/不存在统一 null（不泄露存在性），写不可见 `knowledge base not found`、可见越权
+  `knowledge base permission denied`；建库恒 `role !== 'admin' → not a tenant admin`。
+- **平台 MCP**：`services/knowledge-base-tools.ts`（`agent-knowledge-base-tools`，六工具）——
+  `sessionService.create` 公共路径**恒装配并去重**；`mcp-dispatch` platform 链尾直发；默认 MCP 候选与
+  `setControllerDefaultMcp` 的 `$nin` **两处**同步追加第 5 个名字（漏一处即口径漂移）。`tools/list` 按
+  `getWorkspaceContext().role` 门控 `knowledge_base_create`（非 admin 不出现），`tools/call` 服务层二次校验；
+  `knowledge_base_document_update` 为 upsert（存在 → UPDATE / 不存在 → CREATE，权限分支各自判定）；
+  库定位 id 优先、name 在可见集内解析（0/多命中 isError 明确提示）。
+- **mcp-dispatch 团队工作区补查（路由不变量）**：平台服务行由 `sessionService.create` 在请求工作区上下文内
+  upsert（`tenantId` = 会话租户），而 MCP relay 链路**无请求 ALS**：`McpServer.findOne({userId,name,enabled})`
+  会被 tenant-scope 注入 `tenantId=userId`，团队工作区下查不到行（表现为 serverNames 已装配却 `SERVER_NOT_FOUND`）。
+  `dispatch` 因此先直查，未命中时 `buildSessionWorkspaceContext` 构造会话上下文并在 `runWithWorkspace` 内
+  **异步 await** 再查一次（必须 await 在 ALS 作用域内，否则插件在 exec 时已退出作用域）；同一会话上下文复用给
+  platform 分支（只构造一次）。
+- **测试**：`knowledge-base-access.test.ts`（T-KBA1~8）、`knowledge-base-service.test.ts`（T-KBS1~12，真库）、
+  `knowledge-base-tools.test.ts`（T-KBT1~8，真库）、`028-knowledge-base.test.ts`（T-MIG-KB1~3）、
+  `graphql/{schemas,resolvers}/knowledge-base.test.ts`（契约/白名单/登记）；
+  `session.test.ts` 已追加 `./knowledge-base-tools.js` mock 与装配断言；API 见 `tests/api/AGENTS.md`「知识库 API」。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

@@ -21,6 +21,10 @@ import {
 } from './session-preview-tools.js';
 import { ensureValutToolsServer, VALUT_TOOLS_SERVER_NAME } from './valut-tools.js';
 import { ensureCustomToolsServer, CUSTOM_TOOLS_SERVER_NAME } from './custom-tools-mcp.js';
+import {
+  ensureKnowledgeBaseToolsServer,
+  KNOWLEDGE_BASE_TOOLS_SERVER_NAME,
+} from './knowledge-base-tools.js';
 import { sessionReviewService } from './session-review-service.js';
 import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { sanitizeWorkspaceName, generateWorktreeSuffix, resolveEffectiveWorktreeDir, worktreeScopePrefix, normalizeForCompare } from './workflow/worktree-utils.js';
@@ -401,7 +405,7 @@ export class SessionService {
     let mcpServerIds = input.mcpServerIds;
     if (mcpServerIds === undefined) {
       // 平台内置服务（agent-cloud-host-tools / agent-session-preview-tools / agent-valut-tools /
-      // agent-custom-tools）仅由会话创建时自动并入
+      // agent-custom-tools / agent-knowledge-base-tools）仅由会话创建时自动并入
       // （与前端可选列表口径一致），不作为「默认 MCP」候选（裁决 5：排除口径 $ne → $nin）。
       const enabledServers = await McpServer.find({
         userId,
@@ -412,6 +416,7 @@ export class SessionService {
             SESSION_PREVIEW_TOOLS_SERVER_NAME,
             VALUT_TOOLS_SERVER_NAME,
             CUSTOM_TOOLS_SERVER_NAME,
+            KNOWLEDGE_BASE_TOOLS_SERVER_NAME,
           ],
         },
       })
@@ -424,7 +429,7 @@ export class SessionService {
       );
     }
 
-    // 平台内置服务（上述四个）在下方自动并入，
+    // 平台内置服务（上述五个）在下方自动并入，
     // 不参与「用户所选 MCP 有效性」前置校验（平台 id 由装配点保证存在且启用）。
     const userSelectedMcpIds = mcpServerIds ?? [];
 
@@ -451,6 +456,12 @@ export class SessionService {
     {
       const customToolsId = await ensureCustomToolsServer(userId);
       mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), customToolsId]));
+    }
+
+    // 知识库工具集（agent-knowledge-base-tools）：全部类型会话公共路径装配并去重（#495）。
+    {
+      const knowledgeBaseToolsId = await ensureKnowledgeBaseToolsServer(userId);
+      mcpServerIds = Array.from(new Set([...(mcpServerIds ?? []), knowledgeBaseToolsId]));
     }
 
     const workspace = await ControllerWorkspace.findOne(

@@ -31,8 +31,12 @@ import {
   handleCustomToolsMcpRequest,
   CUSTOM_TOOLS_SERVER_NAME,
 } from './custom-tools-mcp.js';
+import {
+  handleKnowledgeBaseToolsMcpRequest,
+  KNOWLEDGE_BASE_TOOLS_SERVER_NAME,
+} from './knowledge-base-tools.js';
 import { workspaceService } from './workspace-service.js';
-import { runWithWorkspace } from './workspace-context.js';
+import { runWithWorkspace, type WorkspaceContext } from './workspace-context.js';
 
 interface McpTokenPayload {
   sessionId?: string;
@@ -147,7 +151,30 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
     return await customMcpForwarder.forward({ sessionId, snapshotEntry, body });
   }
 
-  const server = await McpServer.findOne({ userId: payload.userId, name: serverName, enabled: true });
+  // 会话工作区上下文（懒加载一次）：relay 链路无请求 ALS，而平台服务行由 `sessionService.create`
+  // 在**会话工作区上下文内** upsert（tenantId = 会话租户）。团队工作区下 tenant-scope 会把
+  // 「无 ALS 的 userId 查询」注入 tenantId=userId 而查不到行，故未命中时在会话上下文内补查一次。
+  let sessionContextPromise: Promise<WorkspaceContext | undefined> | undefined;
+  const loadSessionContext = (): Promise<WorkspaceContext | undefined> => {
+    sessionContextPromise ??= workspaceService.buildSessionWorkspaceContext(
+      payload.sessionId,
+      payload.userId,
+    );
+    return sessionContextPromise;
+  };
+
+  const serverFilter = { userId: payload.userId, name: serverName, enabled: true };
+  let server = await McpServer.findOne(serverFilter);
+  if (!server) {
+    const fallbackContext = await loadSessionContext();
+    if (fallbackContext) {
+      // 必须在 ALS 作用域**内** await：tenant-scope 在查询执行时编译过滤条件。
+      server = await runWithWorkspace(
+        fallbackContext,
+        async () => await McpServer.findOne(serverFilter),
+      );
+    }
+  }
   if (!server) {
     return { status: 200, body: jsonRpcError(request.id, 'SERVER_NOT_FOUND', 'Server not found') };
   }
@@ -156,10 +183,7 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
   if (server.transport === 'platform') {
     const isPlatformNotification = request.id === undefined || request.id === null;
     // 多租户二期（F11）：平台工具集按「会话所属租户工作区」过滤/校验
-    const sessionContext = await workspaceService.buildSessionWorkspaceContext(
-      payload.sessionId,
-      payload.userId,
-    );
+    const sessionContext = await loadSessionContext();
     // 按 serverName 分发：节点作用域工具集要求 workflow payload；管理工具集仅需 userId/sessionId
     const outcome = await runWithWorkspace(sessionContext, async () =>
       serverName === ADMIN_PLATFORM_SERVER_NAME
@@ -192,7 +216,12 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
                       { userId: payload.userId ?? '', sessionId: payload.sessionId ?? '' },
                       request,
                     )
-                  : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } },
+                  : serverName === KNOWLEDGE_BASE_TOOLS_SERVER_NAME
+                    ? await handleKnowledgeBaseToolsMcpRequest(
+                        { userId: payload.userId ?? '', sessionId: payload.sessionId ?? '' },
+                        request,
+                      )
+                    : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } },
     );
     if (isPlatformNotification) {
       return { status: 202, body: undefined };
