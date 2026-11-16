@@ -310,6 +310,8 @@ export interface FakeController {
 export interface FakeControllerOptions {
   version?: string;
   workflowTemplates?: Array<{ fileName: string; content?: string; error?: string }>;
+  /** 仓库内建知识库扫描结果 fixture（与 agent-gear 真实回包同形态；可变对象便于「重新检测」用例改内容） */
+  repoKnowledgeBases?: Record<string, unknown>;
 }
 
 /**
@@ -362,6 +364,14 @@ export function registerController(
         success: true,
         templates: options.workflowTemplates ?? [],
         truncated: false,
+      });
+    });
+
+    // knowledge-bases:scan - 仓库内建知识库扫描（契约 §3.29/§3.30）
+    client.on('knowledge-bases:scan', (data: { requestId: string }) => {
+      client.emit('knowledge-bases:scan:result', {
+        requestId: data.requestId,
+        ...(options.repoKnowledgeBases ?? { success: true, sources: [], truncated: false }),
       });
     });
 
