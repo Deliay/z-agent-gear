@@ -340,21 +340,25 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-UI4S5 主机树层级 | 下级缩进为 8px（0.5rem）；设置按钮可点击进入配置页 |
 | E2E-UI4S6 移动端不回归 | 移动视口无 Resizer，且 `scrollWidth - clientWidth ≤ 1` |
 
-### 仓库内建知识库 E2E (`repo-knowledge-base.spec.ts` E2E-RKB1~6)
+### 仓库内建知识库 E2E (`repo-knowledge-base.spec.ts` E2E-RKB1~8)
 
-> 需求 #545；契约 `contracts/knowledge-base.graphql`；计划 `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md` Phase 8。
+> 需求 #545 / #559；契约 `contracts/knowledge-base.graphql`；计划
+> `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md` Phase 8、
+> `docs/engineering/plan/20261117-feat-knowledge-base-optimization-phase2.md` Phase 6。
 > 依赖 agent-web / agent-api / controller-api、`INTERNAL_API_TOKEN`（开户）与 `MONGODB_URI`（直插 RUNNING 云电脑夹具，
 > 缺省整套 skip）；fake controller version `2.19.0` 应答 `knowledge-bases:scan`（`helpers.registerController`
-> 的 `options.repoKnowledgeBases` 可变 fixture）；串行执行。
+> 的 `options.repoKnowledgeBases` 可变 fixture，含「已截断」库与 `error:'file too large'` 文档）；串行执行。
 
 | 测试 | 描述 |
 |------|------|
 | E2E-RKB1 | 「知识库」分区内出现「仓库知识库」分组并列出候选云电脑；全部层级默认折叠（fake controller `scans[]` 为空，零扫描、无知识库条目） |
-| E2E-RKB2 | 展开云电脑 → 两来源标识/不合法灰显原因；展开知识库/目录逐级展示；点击文档进入只读预览 |
+| E2E-RKB2 | 展开云电脑 → 两来源标识/不合法灰显原因；展开知识库/目录逐级展示；点击文档进入只读预览；「已截断」徽标与「文件过大」节点不可点击 |
 | E2E-RKB3 | 预览 front matter 渲染为键值表格（含自定义键），正文紧随其后；无编辑/删除/历史入口；`?edit=1` 仍为只读 |
-| E2E-RKB4 | 修改 fixture 后点「重新检测」→ 新文档出现在树中（缓存刷新） |
+| E2E-RKB4 | 折叠态点云电脑条目尾部「重新检测」→ 修改 fixture 后展开即看到新文档（缓存刷新） |
 | E2E-RKB5 | 版本 2.18.0 云电脑展示「升级云电脑工作组件后可加载」提示且 `scans[]` 保持为空 |
 | E2E-RKB6 | 平台知识库零回归（新建库仍出现在同一分区树中）；未放置知识库的云电脑展开为空态 |
+| E2E-RKB7 | 空态三态（独立用户隔离）：平台空 + 仓库有内容 → 无「暂无知识库」；两者皆空 → 有；平台非空 → 无 |
+| E2E-RKB8 | 刷新图标在云电脑条目标题行尾部、无文字、`aria-label`/`title`「重新检测」；折叠态点击生效；重复点击不异常 |
 
 ### 知识库 E2E (`knowledge-base.spec.ts` E2E-KB1~9)
 

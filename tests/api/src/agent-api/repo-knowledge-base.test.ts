@@ -91,7 +91,7 @@ const REPO_KNOWLEDGE_BASES = `
 
 const REPO_KB_CHILDREN = `
   query RepoKbChildren($id: ID!, $path: String) {
-    repoKnowledgeBaseDocumentChildren(id: $id, path: $path) { kind name path }
+    repoKnowledgeBaseDocumentChildren(id: $id, path: $path) { kind name path error }
   }
 `;
 
@@ -100,6 +100,13 @@ const REPO_KB_DOCUMENT = `
     repoKnowledgeBaseDocument(id: $id, path: $path) { path title content }
   }
 `;
+
+const LARGE_DOC_COUNT = 55;
+const LARGE_DOC_CHUNK = 'x'.repeat(20 * 1024);
+const LARGE_DOCS = Array.from({ length: LARGE_DOC_COUNT }, (_, index) => ({
+  path: `d${String(index).padStart(2, '0')}.md`,
+  content: LARGE_DOC_CHUNK,
+}));
 
 const SCAN_FIXTURE = {
   success: true,
@@ -119,18 +126,35 @@ const SCAN_FIXTURE = {
           ],
         },
         { folder: 'broken', schema: '{bad json', documents: [] },
+        {
+          folder: 'large',
+          schema: '{"name":"大库"}',
+          // 55 篇 × 20KiB ≈ 1.1MiB：超过旧「每库 50 篇 / 1MiB」口径，二期应全量返回
+          documents: LARGE_DOCS,
+          truncated: false,
+        },
       ],
       truncated: false,
     },
     {
       source: 'docs',
       knowledgeBases: [
-        { folder: 'product-docs', schema: '{"name":"产品文档"}', documents: [] },
+        {
+          folder: 'product-docs',
+          schema: '{"name":"产品文档"}',
+          documents: [{ path: 'big.md', error: 'file too large' }],
+        },
+        {
+          folder: 'truncated-docs',
+          schema: '{"name":"截断库"}',
+          documents: [{ path: 'x.md', content: '# X' }],
+          truncated: true,
+        },
       ],
-      truncated: false,
+      truncated: true,
     },
   ],
-  truncated: false,
+  truncated: true,
 };
 
 interface FakeController {
@@ -309,8 +333,10 @@ describe.skipIf(!HAS_MONGO)('仓库内建知识库 API（T-RKB-API1~5/8）', () 
     const list = first.repoKnowledgeBases as Array<Record<string, unknown>>;
     expect(list.map((item) => [item.source, item.folder, item.valid])).toEqual([
       ['ZAG', 'broken', false],
+      ['ZAG', 'large', true],
       ['ZAG', 'team-rules', true],
       ['DOCS', 'product-docs', true],
+      ['DOCS', 'truncated-docs', true],
     ]);
     expect(list.find((item) => item.folder === 'team-rules')).toMatchObject({
       name: '团队规范',
@@ -333,13 +359,13 @@ describe.skipIf(!HAS_MONGO)('仓库内建知识库 API（T-RKB-API1~5/8）', () 
 
     const root = await gql(REPO_KB_CHILDREN, { id: kb.id }, user.token);
     expect(root.repoKnowledgeBaseDocumentChildren).toEqual([
-      { kind: 'FOLDER', name: 'guides', path: '/guides' },
-      { kind: 'DOCUMENT', name: '上手', path: '/onboarding' },
+      { kind: 'FOLDER', name: 'guides', path: '/guides', error: null },
+      { kind: 'DOCUMENT', name: '上手', path: '/onboarding', error: null },
     ]);
 
     const deep = await gql(REPO_KB_CHILDREN, { id: kb.id, path: '/guides' }, user.token);
     expect(deep.repoKnowledgeBaseDocumentChildren).toEqual([
-      { kind: 'DOCUMENT', name: 'Git 规范', path: '/guides/git' },
+      { kind: 'DOCUMENT', name: 'Git 规范', path: '/guides/git', error: null },
     ]);
 
     const doc = await gql(REPO_KB_DOCUMENT, { id: kb.id, path: '/guides/git' }, user.token);
@@ -354,6 +380,60 @@ describe.skipIf(!HAS_MONGO)('仓库内建知识库 API（T-RKB-API1~5/8）', () 
       user.token,
     );
     expect(missingChildren.repoKnowledgeBaseDocumentChildren).toEqual([]);
+  });
+
+  it('T-RKB2-API1 超过旧总额上限的 fixture 全量返回、truncated:false', async () => {
+    const listData = await gql(REPO_KNOWLEDGE_BASES, { workspaceId }, user.token);
+    const large = (listData.repoKnowledgeBases as Array<Record<string, unknown>>).find(
+      (item) => item.folder === 'large',
+    ) as { id: string; documentCount: number; truncated: boolean };
+
+    expect(large.documentCount).toBe(LARGE_DOC_COUNT);
+    expect(large.truncated).toBe(false);
+
+    const children = await gql(REPO_KB_CHILDREN, { id: large.id }, user.token);
+    const nodes = children.repoKnowledgeBaseDocumentChildren as Array<Record<string, unknown>>;
+    expect(nodes).toHaveLength(LARGE_DOC_COUNT);
+    expect(nodes.every((node) => node.kind === 'DOCUMENT' && node.error == null)).toBe(true);
+
+    const doc = await gql(REPO_KB_DOCUMENT, { id: large.id, path: '/d00' }, user.token);
+    expect(doc.repoKnowledgeBaseDocument.content).toHaveLength(LARGE_DOC_CHUNK.length);
+  });
+
+  it('T-RKB2-API2 children 返回 error；documentCount 不含错误文档；错误文档 document 为 null', async () => {
+    const listData = await gql(REPO_KNOWLEDGE_BASES, { workspaceId }, user.token);
+    const kb = (listData.repoKnowledgeBases as Array<Record<string, unknown>>).find(
+      (item) => item.folder === 'product-docs',
+    ) as { id: string; documentCount: number; valid: boolean };
+
+    expect(kb.valid).toBe(true);
+    expect(kb.documentCount).toBe(0);
+
+    const children = await gql(REPO_KB_CHILDREN, { id: kb.id }, user.token);
+    expect(children.repoKnowledgeBaseDocumentChildren).toEqual([
+      { kind: 'DOCUMENT', name: 'big', path: '/big', error: 'file too large' },
+    ]);
+
+    const doc = await gql(REPO_KB_DOCUMENT, { id: kb.id, path: '/big' }, user.token);
+    expect(doc.repoKnowledgeBaseDocument).toBeNull();
+  });
+
+  it('T-RKB2-API3 截断 fixture 在列表与 children 上口径一致，不报错', async () => {
+    const listData = await gql(REPO_KNOWLEDGE_BASES, { workspaceId }, user.token);
+    const kb = (listData.repoKnowledgeBases as Array<Record<string, unknown>>).find(
+      (item) => item.folder === 'truncated-docs',
+    ) as { id: string; truncated: boolean; valid: boolean; errors: string[] };
+
+    expect(kb.valid).toBe(true);
+    expect(kb.errors).toEqual([]);
+    expect(kb.truncated).toBe(true);
+
+    const children = await gql(REPO_KB_CHILDREN, { id: kb.id }, user.token);
+    expect(children.repoKnowledgeBaseDocumentChildren).toEqual([
+      { kind: 'DOCUMENT', name: 'X', path: '/x', error: null },
+    ]);
+    const doc = await gql(REPO_KB_DOCUMENT, { id: kb.id, path: '/x' }, user.token);
+    expect(doc.repoKnowledgeBaseDocument).toMatchObject({ path: '/x', content: '# X' });
   });
 
   it('T-RKB-API5 错误口径：不可见工作区 Workspace not found；版本不足/控制器离线 scan failed', async () => {

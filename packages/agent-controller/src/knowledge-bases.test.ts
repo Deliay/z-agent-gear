@@ -5,10 +5,8 @@ import { tmpdir } from 'node:os';
 import {
   scanKnowledgeBases,
   REPO_KNOWLEDGE_BASE_SOURCES,
-  MAX_KNOWLEDGE_BASES_PER_SOURCE,
-  MAX_DOCUMENTS_PER_BASE,
-  MAX_SCHEMA_BYTES,
-  MAX_DOCUMENT_BYTES,
+  MAX_ENTRIES_PER_FOLDER,
+  MAX_FILE_BYTES,
 } from './knowledge-bases.js';
 
 let root: string;
@@ -124,86 +122,99 @@ describe('scanKnowledgeBases', () => {
     }
   });
 
-  it('T-RKB-SCAN7 上限矩阵：库数/文档数/schema/单文档/单库截断', async () => {
-    // 每来源 >20 库：按 localeCompare 取前 20
-    for (let i = 0; i < MAX_KNOWLEDGE_BASES_PER_SOURCE + 2; i += 1) {
-      await makeKb(zagDir, `kb${String(i).padStart(2, '0')}`);
-    }
-    const result = await scanKnowledgeBases(root);
-    const zag = result.sources[0];
-    expect(zag.truncated).toBe(true);
-    expect(zag.knowledgeBases).toHaveLength(MAX_KNOWLEDGE_BASES_PER_SOURCE);
-    expect(zag.knowledgeBases[0].folder).toBe('kb00');
-    expect(zag.knowledgeBases.at(-1)?.folder).toBe('kb19');
-
-    // schema >64KiB → 该库 error:file too large
-    const bigSchemaRoot = await mkdtemp(join(tmpdir(), 'rkb-schema-'));
-    const bigSchemaDir = join(bigSchemaRoot, '.zag', 'knowledges');
-    const bigKb = join(bigSchemaDir, 'big');
-    await mkdir(bigKb, { recursive: true });
-    await writeFile(join(bigKb, 'knowledge-base.json'), 'x'.repeat(MAX_SCHEMA_BYTES + 1));
-    const bigSchemaResult = await scanKnowledgeBases(bigSchemaRoot);
-    expect(bigSchemaResult.sources[0].knowledgeBases[0]).toEqual({
-      folder: 'big',
-      error: 'file too large',
-    });
-    await rm(bigSchemaRoot, { recursive: true, force: true });
-
-    // 文档数 >50 截断；单文档 >128KiB 该文档 error；单库 >1MiB 停止并 truncated
-    const limitsRoot = await mkdtemp(join(tmpdir(), 'rkb-limits-'));
-    const limitsDir = join(limitsRoot, '.zag', 'knowledges');
-    const manyDir = join(limitsDir, 'many');
-    await mkdir(manyDir, { recursive: true });
-    await writeFile(join(manyDir, 'knowledge-base.json'), '{"name":"many"}');
-    for (let i = 0; i < MAX_DOCUMENTS_PER_BASE + 2; i += 1) {
-      await writeFile(join(manyDir, `d${String(i).padStart(2, '0')}.md`), '# x');
-    }
-    const bigDocDir = join(limitsDir, 'bigdoc');
-    await mkdir(bigDocDir, { recursive: true });
-    await writeFile(join(bigDocDir, 'knowledge-base.json'), '{"name":"bigdoc"}');
-    await writeFile(join(bigDocDir, 'big.md'), 'x'.repeat(MAX_DOCUMENT_BYTES + 1));
-    const limits = await scanKnowledgeBases(limitsRoot);
-    const many = limits.sources[0].knowledgeBases.find((item) => item.folder === 'many');
-    const bigDoc = limits.sources[0].knowledgeBases.find((item) => item.folder === 'bigdoc');
-    expect(many?.truncated).toBe(true);
-    expect(many?.documents).toHaveLength(MAX_DOCUMENTS_PER_BASE);
-    expect(bigDoc?.documents).toEqual([{ path: 'big.md', error: 'file too large' }]);
-    await rm(limitsRoot, { recursive: true, force: true });
+  it('T-RKB-SCAN7 (deprecated) 上限矩阵已由 T-RKB2-SCAN1~5 取代', () => {
+    expect(MAX_ENTRIES_PER_FOLDER).toBe(1000);
+    expect(MAX_FILE_BYTES).toBe(1024 * 1024);
   });
 
-  it('T-RKB-SCAN7b 单库 >1MiB 停止读取并 truncated', async () => {
-    const kb = await makeKb(zagDir, 'huge');
-    // 每篇 ~100KiB，11 篇累计 >1MiB
-    const chunk = 'x'.repeat(100 * 1024);
-    for (let i = 0; i < 12; i += 1) {
-      await writeFile(join(kb, `part${String(i).padStart(2, '0')}.md`), chunk);
+  it('T-RKB2-SCAN1 单库 >50 篇文档且累计 >1MiB：全部加载、不截断', async () => {
+    const kb = await makeKb(zagDir, 'many');
+    const chunk = 'x'.repeat(20 * 1024);
+    for (let i = 0; i < 60; i += 1) {
+      await writeFile(join(kb, `d${String(i).padStart(2, '0')}.md`), chunk);
     }
 
     const result = await scanKnowledgeBases(root);
     const entry = result.sources[0].knowledgeBases[0];
-    expect(entry.truncated).toBe(true);
-    expect((entry.documents?.length ?? 0)).toBeLessThan(12);
-    expect(result.sources[0].truncated).toBe(true);
+
+    expect(entry.documents).toHaveLength(60);
+    expect(entry.documents?.every((doc) => doc.content?.length === chunk.length)).toBe(true);
+    expect(entry.truncated).toBe(false);
+    expect(result.sources[0].truncated).toBe(false);
+    expect(result.truncated).toBe(false);
   });
 
-  it('T-RKB-SCAN7c 单来源 >2MiB 停止读取（每库 <1MiB，真正命中来源累计上限）', async () => {
-    const chunk = 'x'.repeat(100 * 1024);
-    for (let b = 0; b < 3; b += 1) {
-      const kb = await makeKb(zagDir, `source-limit-${b}`);
-      for (let i = 0; i < 8; i += 1) {
-        await writeFile(join(kb, `d${i}.md`), chunk);
-      }
+  it('T-RKB2-SCAN2 单文件夹 >1000 直接子项：按名称取前 1000、库级 truncated 上浮', async () => {
+    const kb = await makeKb(zagDir, 'big');
+    // 1000 个文件 + 1 个目录（目录名排序在最后）→ 直接子项 1001，目录层被截断
+    for (let i = 0; i < MAX_ENTRIES_PER_FOLDER; i += 1) {
+      await writeFile(join(kb, `a${String(i).padStart(4, '0')}.md`), '# x');
+    }
+    await mkdir(join(kb, 'z-extra'), { recursive: true });
+    await writeFile(join(kb, 'z-extra', 'deep.md'), '# deep');
+
+    const result = await scanKnowledgeBases(root);
+    const entry = result.sources[0].knowledgeBases[0];
+    expect(entry.documents).toHaveLength(MAX_ENTRIES_PER_FOLDER);
+    expect(entry.documents?.some((doc) => doc.path === 'z-extra/deep.md')).toBe(false);
+    expect(entry.truncated).toBe(true);
+    expect(result.sources[0].truncated).toBe(true);
+    expect(result.truncated).toBe(true);
+
+    // 其余目录不受影响
+    const other = await makeKb(zagDir, 'small');
+    await writeFile(join(other, 'ok.md'), '# ok');
+    const again = await scanKnowledgeBases(root);
+    const small = again.sources[0].knowledgeBases.find((item) => item.folder === 'small');
+    expect(small?.truncated).toBe(false);
+    expect(small?.documents).toHaveLength(1);
+  });
+
+  it('T-RKB2-SCAN3 单文档 >1MiB：该文档 error 不读内容，其余正常且库不截断', async () => {
+    const kb = await makeKb(zagDir, 'mixed');
+    await writeFile(join(kb, 'big.md'), 'x'.repeat(MAX_FILE_BYTES + 1));
+    await writeFile(join(kb, 'ok.md'), '# ok');
+
+    const result = await scanKnowledgeBases(root);
+    const entry = result.sources[0].knowledgeBases[0];
+    const big = entry.documents?.find((doc) => doc.path === 'big.md');
+    const ok = entry.documents?.find((doc) => doc.path === 'ok.md');
+
+    expect(big).toEqual({ path: 'big.md', error: 'file too large' });
+    expect(ok?.content).toBe('# ok');
+    expect(entry.truncated).toBe(false);
+    expect(result.truncated).toBe(false);
+  });
+
+  it('T-RKB2-SCAN4 knowledge-base.json >1MiB：整库 file too large 且不读文档', async () => {
+    const kbDir = join(zagDir, 'badschema');
+    await mkdir(kbDir, { recursive: true });
+    await writeFile(join(kbDir, 'knowledge-base.json'), 'x'.repeat(MAX_FILE_BYTES + 1));
+    await writeFile(join(kbDir, 'doc.md'), '# doc');
+
+    const result = await scanKnowledgeBases(root);
+
+    expect(result.sources[0].knowledgeBases[0]).toEqual({
+      folder: 'badschema',
+      error: 'file too large',
+    });
+  });
+
+  it('T-RKB2-SCAN5 来源目录 >1000 子文件夹：前 1000 识别、仅来源级截断', async () => {
+    for (let i = 0; i <= MAX_ENTRIES_PER_FOLDER; i += 1) {
+      await makeKb(zagDir, `kb${String(i).padStart(4, '0')}`);
     }
 
     const result = await scanKnowledgeBases(root);
     const source = result.sources[0];
-    const third = source.knowledgeBases.find((item) => item.folder === 'source-limit-2');
 
-    expect(result.truncated).toBe(true);
+    expect(source.knowledgeBases).toHaveLength(MAX_ENTRIES_PER_FOLDER);
+    expect(source.knowledgeBases[0].folder).toBe('kb0000');
+    expect(source.knowledgeBases.at(-1)?.folder).toBe('kb0999');
     expect(source.truncated).toBe(true);
-    // 第三库只读取到部分文档（来源预算在库内耗尽）且条目级 truncated 同步置位
-    expect(third?.documents?.length ?? 0).toBeLessThan(8);
-    expect(third?.truncated).toBe(true);
+    expect(result.truncated).toBe(true);
+    // 来源目录层截断不绑定到具体知识库
+    expect(source.knowledgeBases.every((item) => item.truncated !== true)).toBe(true);
   });
 
   it('T-RKB-SCAN8 符号链接：指向常规 .md 文件读取；指向目录/悬空跳过', async () => {

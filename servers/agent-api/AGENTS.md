@@ -579,14 +579,15 @@ pnpm run start   # Start production server
 - **测试**：`knowledge-base-service.test.ts` T-KBS-M1~M11（历史全量带入 / MOVE 事件 / 占用与 E11000 / 非法路径 / 四档权限 / 同路径幂等 /
   双事件 / 仅 MOVE / 原路径重建独立 / 并发 TOCTOU / 级联删除与 `fromPath` 透出 / 回滚精度）、`knowledge-base-tools.test.ts` T-KBT-M1~M2。
 
-## 仓库内建知识库（#545）
+## 仓库内建知识库（#545；上限二期 #559）
 
-> 需求 #545；契约 `contracts/knowledge-base.graphql`（`RepoKnowledgeBase*` 六个类型 + 四个只读查询）；计划
-> `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md`。
+> 需求 #545 / #559；契约 `contracts/knowledge-base.graphql`（`RepoKnowledgeBase*` 七个类型 + 四个只读查询）；计划
+> `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md`、
+> `docs/engineering/plan/20261117-feat-knowledge-base-optimization-phase2.md`。
 
-- **链路**：agent-gear 2.19.0 `knowledge-bases:scan` 扫描 `.zag/knowledges/` 与 `docs/knowledges/`（含文档内容）
+- **链路**：agent-gear `knowledge-bases:scan` 扫描 `.zag/knowledges/` 与 `docs/knowledges/`（含文档内容）
   → controller-api 白名单中继写 Redis `knowledge-bases:scan:{requestId}`（EX 60）→ agent-api
-  `services/repo-knowledge-bases.ts` 轮询消费（500ms × 30，读后即删）并解析校验 → 工作区级缓存
+  `services/repo-knowledge-bases.ts` 轮询消费（500ms × 60 ≈ 30s，读后即删）并解析校验 → 工作区级缓存
   `repo-knowledge-bases:ws:{workspaceId}`（EX 300，缓存**解析后的知识库全集含文档内容**）→ GraphQL 四个只读查询。
 - **四级懒加载（D7）**：`repoKnowledgeBaseHosts`（纯 DB 骨架：`CloudHost.find` RUNNING + workspaceId 非空 +
   deletedAt:null，读 Controller `status/version` 得到 `scanSupported`，**不触发任何 publish**）→
@@ -600,10 +601,13 @@ pnpm run start   # Start production server
 - **解析纯函数层**：`parseRepoKnowledgeBaseSchema`（JSON/name 1..64/description ≤1024，文案逐字见计划 D8）、
   `splitRepoFrontMatter` + `parseRepoDocument`（极简 front matter：`---\n` 开头 + 前 4KiB 内闭合；三键
   title 1..200 / tags ≤16×1..32 去重 / description ≤1024；标题回退链 fm.title → 首个 `# ` → 文件名；
-  路径归一复用 `normalizeDocumentPath`）、`buildKnowledgeBaseChildren`（文件夹在前、同组 `localeCompare`）。
+  路径归一复用 `normalizeDocumentPath`）、`buildKnowledgeBaseChildren`（文件夹在前、同组 `localeCompare`，
+  DOCUMENT 节点透传 `error`）。
   路径冲突（`a.md` vs `a.MD`）整库 `valid:false`（`文档路径冲突：<path>`，冲突文档不收录）。
-  **文档级读取失败（如单文档 >128KiB）仅剔除该文档，不影响其余文档与整库合法性**；整库不合法仅限
-  schema 非法、路径冲突/路径归一错误。`valid:false` 的 `children`/`getDocument` 统一 `[]`/`null`（R1）。
+  **文档级读取失败（如单文档 >1MiB）保留为不可打开节点**：`RepoKnowledgeBaseNode.error` 非空、
+  不计入 `documentCount`、不进入 `documents`、`getDocument` 恒 `null`，不影响其余文档与整库合法性；
+  错误文档路径归一失败则丢弃该节点。整库不合法仅限 schema 非法、路径冲突/路径归一错误。
+  `valid:false` 的 `children`/`getDocument` 统一 `[]`/`null`（R1）。
   缓存 miss 扫描有进程内 single-flight（同一工作区并发首次展开只触发一次扫描，S4）。
 - **id 编解码（D6）**：`repo:<workspaceId>:<source(zag|docs)>:<encodeURIComponent(folder)>`；`source` 在 GraphQL
   透出为 `ZAG|DOCS`，列表顺序 zag 先于 docs、同来源 `folder.localeCompare`。
@@ -611,6 +615,10 @@ pnpm run start   # Start production server
   `repo-knowledge-base-authoring`（编写指引）；`knowledge-base-tools.ts` 的 `initialize` 声明
   `capabilities: { tools: {}, prompts: {} }`，新增 `prompts/list` / `prompts/get`（未知/缺 name →
   `INVALID_PARAMS` 附可用片段名）。**六工具零改动**：仓库知识库不出现在任何工具结果中。
+- **扫描上限（二期 #559）**：单文件（`knowledge-base.json` 与 `.md` 同值）1MiB；单文件夹直接子项
+  （目录与文件合计）1000（超出截断，`truncated` 由知识库上浮到来源与整体）；无知识库数、文档数与内容累计
+  总量限制。编写指引 `knowledge-base-prompts.ts` 与 agent-gear 常量同源，防漂移守卫见
+  `knowledge-base-prompts.test.ts` 的 T-RKB2-P1/P2。
 - **零 MongoDB 变更**：不落库、无迁移、无索引；仓库为唯一事实源，无任何写入口。
 
 ## Related Rules
