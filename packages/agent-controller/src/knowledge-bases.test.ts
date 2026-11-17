@@ -217,6 +217,23 @@ describe('scanKnowledgeBases', () => {
     expect(source.knowledgeBases.every((item) => item.truncated !== true)).toBe(true);
   });
 
+  it('T-RKB2-SCAN5b 来源目录「目录 + 散置文件」合计 >1000：按名称合并取前 1000，窗口外文件夹不识别', async () => {
+    // 999 个散置文件 + 2 个知识库文件夹（名称排序在文件之后）→ 直接子项 1001
+    for (let i = 0; i < MAX_ENTRIES_PER_FOLDER - 1; i += 1) {
+      await writeFile(join(zagDir, `a${String(i).padStart(4, '0')}.md`), '# note');
+    }
+    await makeKb(zagDir, 'z-kb-in');
+    await makeKb(zagDir, 'z-kb-out');
+
+    const result = await scanKnowledgeBases(root);
+    const source = result.sources[0];
+
+    // 窗口内仅容纳 999 个文件 + z-kb-in；z-kb-out 在窗口外不遍历、不识别
+    expect(source.knowledgeBases.map((item) => item.folder)).toEqual(['z-kb-in']);
+    expect(source.truncated).toBe(true);
+    expect(result.truncated).toBe(true);
+  });
+
   it('T-RKB-SCAN8 符号链接：指向常规 .md 文件读取；指向目录/悬空跳过', async () => {
     const kb = await makeKb(zagDir, 'kb');
     await writeFile(join(kb, 'real.md'), '# real');

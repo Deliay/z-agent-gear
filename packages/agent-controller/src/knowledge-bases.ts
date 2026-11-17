@@ -210,8 +210,17 @@ async function scanSource(
     return null;
   }
 
+  const ordered = [...entries].sort((a, b) => a.name.localeCompare(b.name));
+  // 来源目录层与库内目录层同构：直接子项（目录与文件合计）按名称取前 1000，
+  // 窗口外不遍历并置来源 truncated；再从窗口内筛选目录/目录符号链接作为知识库候选。
+  let truncated = false;
+  if (ordered.length > MAX_ENTRIES_PER_FOLDER) {
+    ordered.length = MAX_ENTRIES_PER_FOLDER;
+    truncated = true;
+  }
+
   const folders: string[] = [];
-  for (const entry of entries) {
+  for (const entry of ordered) {
     if (entry.isDirectory()) {
       folders.push(entry.name);
       continue;
@@ -223,13 +232,6 @@ async function scanSource(
     } catch {
       // 悬空/不可解析的符号链接：跳过
     }
-  }
-
-  folders.sort((a, b) => a.localeCompare(b));
-  let truncated = false;
-  if (folders.length > MAX_ENTRIES_PER_FOLDER) {
-    folders.length = MAX_ENTRIES_PER_FOLDER;
-    truncated = true;
   }
 
   const knowledgeBases: KnowledgeBaseEntry[] = [];
