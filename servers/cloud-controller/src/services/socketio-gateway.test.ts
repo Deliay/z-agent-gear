@@ -1121,3 +1121,168 @@ describe('worker Socket.IO gateway', () => {
     expect(testLog.records.filter((record) => record.level === 'error')).toEqual([]);
   });
 });
+
+describe('T-CC-MP4 harness:models 运行期模型下发（pending ack）', () => {
+  const provision = {
+    providers: [
+      {
+        vendorId: 'zag',
+        displayName: 'Agent Gear',
+        models: [{ id: 'model-a', contextLength: 128000 }],
+      },
+    ],
+  };
+
+  interface HarnessModelsEvent {
+    requestId: string;
+    provision: unknown;
+    _meta?: unknown;
+  }
+
+  /** 连接并收集 `harness:models` 事件（不注册也可下发——网关只要求 socket 在线）。 */
+  async function connectHarness(): Promise<{
+    container: { id: string };
+    socket: ClientSocket;
+    received: HarnessModelsEvent[];
+  }> {
+    const { container, token } = await newContainer([], { purpose: 'harness' });
+    const socket = await connectWith(token);
+    const received: HarnessModelsEvent[] = [];
+    socket.on('harness:models', (payload: HarnessModelsEvent) => received.push(payload));
+    return { container, socket, received };
+  }
+
+  it('worker 收到 harness:models{requestId,provision}；回 result → delivered/appliedTypes', async () => {
+    const { container, socket, received } = await connectHarness();
+
+    const pending = gatewayHandle.requestHarnessModels(container.id, provision);
+    await waitForCondition(() => received.length === 1);
+    expect(received[0]!.provision).toEqual(provision);
+    expect(typeof received[0]!.requestId).toBe('string');
+    expect(received[0]!.requestId.length).toBeGreaterThan(0);
+    // 统一注入顶层 _meta（withTraceMeta）
+    expectValidMeta(received[0]!._meta);
+
+    socket.emit('harness:models:result', {
+      requestId: received[0]!.requestId,
+      success: true,
+      appliedTypes: ['opencode', 'deepseek_harness'],
+    });
+
+    await expect(pending).resolves.toEqual({
+      delivered: true,
+      appliedTypes: ['opencode', 'deepseek_harness'],
+    });
+    socket.close();
+  });
+
+  it('超时（无 ack）→ ack_timeout', async () => {
+    const { container, socket } = await connectHarness();
+
+    await expect(gatewayHandle.requestHarnessModels(container.id, provision, 50)).resolves.toEqual(
+      { delivered: false, reason: 'ack_timeout' },
+    );
+    socket.close();
+  });
+
+  it('worker 回报 success:false → worker_error', async () => {
+    const { container, socket, received } = await connectHarness();
+
+    const pending = gatewayHandle.requestHarnessModels(container.id, provision);
+    await waitForCondition(() => received.length === 1);
+    socket.emit('harness:models:result', {
+      requestId: received[0]!.requestId,
+      success: false,
+      appliedTypes: [],
+      error: 'write failed',
+    });
+
+    await expect(pending).resolves.toEqual({ delivered: false, reason: 'worker_error' });
+    socket.close();
+  });
+
+  it('断连 → offline', async () => {
+    const { container, socket, received } = await connectHarness();
+
+    const pending = gatewayHandle.requestHarnessModels(container.id, provision);
+    await waitForCondition(() => received.length === 1);
+    socket.close();
+
+    await expect(pending).resolves.toEqual({ delivered: false, reason: 'offline' });
+  });
+
+  it('未连接容器 → offline（不 emit）', async () => {
+    const { container } = await newContainer([], { purpose: 'harness' });
+    await expect(gatewayHandle.requestHarnessModels(container.id, provision)).resolves.toEqual({
+      delivered: false,
+      reason: 'offline',
+    });
+  });
+
+  it('未知 requestId / 其他容器响应被忽略；并发两请求按 requestId 隔离', async () => {
+    const first = await connectHarness();
+    const second = await connectHarness();
+
+    const firstPending = gatewayHandle.requestHarnessModels(first.container.id, provision);
+    const secondPending = gatewayHandle.requestHarnessModels(second.container.id, provision);
+    await waitForCondition(
+      () => first.received.length === 1 && second.received.length === 1,
+    );
+
+    // 未知 requestId（来自 first 的 socket）→ 忽略，不影响任何 pending
+    first.socket.emit('harness:models:result', {
+      requestId: 'unknown-request-id',
+      success: true,
+      appliedTypes: ['opencode'],
+    });
+    // 跨容器响应（second 的 socket 用 first 的 requestId）→ 忽略
+    second.socket.emit('harness:models:result', {
+      requestId: first.received[0]!.requestId,
+      success: true,
+      appliedTypes: ['should-not-apply'],
+    });
+
+    // 正常回包（乱序）各自收敛到自己的 requestId
+    second.socket.emit('harness:models:result', {
+      requestId: second.received[0]!.requestId,
+      success: true,
+      appliedTypes: ['deepseek_harness'],
+    });
+    first.socket.emit('harness:models:result', {
+      requestId: first.received[0]!.requestId,
+      success: true,
+      appliedTypes: ['opencode'],
+    });
+
+    await expect(secondPending).resolves.toEqual({
+      delivered: true,
+      appliedTypes: ['deepseek_harness'],
+    });
+    await expect(firstPending).resolves.toEqual({
+      delivered: true,
+      appliedTypes: ['opencode'],
+    });
+
+    first.socket.close();
+    second.socket.close();
+  });
+
+  it('同容器并发新请求以 worker_error 收敛旧请求（pending 有界）', async () => {
+    const { container, socket, received } = await connectHarness();
+
+    const older = gatewayHandle.requestHarnessModels(container.id, provision);
+    await waitForCondition(() => received.length === 1);
+    const newer = gatewayHandle.requestHarnessModels(container.id, provision);
+    await waitForCondition(() => received.length === 2);
+
+    await expect(older).resolves.toEqual({ delivered: false, reason: 'worker_error' });
+
+    socket.emit('harness:models:result', {
+      requestId: received[1]!.requestId,
+      success: true,
+      appliedTypes: ['opencode'],
+    });
+    await expect(newer).resolves.toEqual({ delivered: true, appliedTypes: ['opencode'] });
+    socket.close();
+  });
+});

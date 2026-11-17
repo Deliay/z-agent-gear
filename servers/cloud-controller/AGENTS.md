@@ -151,7 +151,7 @@ pnpm run test:coverage
   - `status.sync.tick` — 状态对账**每轮一个 span**（属性记 `checked`/`changed` 条数，不逐容器开 span）；
   - `workload.dispatch` — `workload:run` **批次一个 span**（属性 `workload.count`，不逐条脚本开 span）。
 - **Socket.IO 握手 / `_meta` 封套位置**：worker 事件报文顶层 `_meta: { traceparent? }` 与云电脑 Job env 注入表见 [`contracts/cloud-controller-websocket.md`](../../contracts/cloud-controller-websocket.md) **附录 B**（B.1 `_meta` 可选字段 / B.2 Job env 注入表）；`emitToContainer()` 统一注入 `_meta.traceparent`，消费者必须容忍 `_meta` 缺失。agent-gear 侧握手 `auth.traceparent` 见 `contracts/agent-session-websocket.md` §7。
-- **env 变量**：`LOG_LEVEL`（默认 `info`；仅非 engine-path 逐请求 `http-request` 为 `debug` 级需提升，级别口径见「回连失败排查」）/ `LOG_PRETTY`（仅非生产生效）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 不启用导出、零外发**）/ `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS`（仅经 env 传递，**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` / `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORT_TIMEOUT_MS`，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。harness Job 注入的 `OTEL_*` + `ZAG_INIT_TRACEPARENT` 由 `buildHarnessJobEnv` 生成（附录 B.2）。
+- **env 变量**：`LOG_LEVEL`（默认 `info`；仅非 engine-path 逐请求 `http-request` 为 `debug` 级需提升，级别口径见「回连失败排查」）/ `LOG_PRETTY`（仅非生产生效）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 不启用导出、零外发**）/ `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS`（仅经 env 传递，**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` / `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORT_TIMEOUT_MS`，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。harness Job 注入的 `OTEL_*` + `ZAG_INIT_TRACEPARENT` 由 `buildHarnessEnv` 生成（附录 B.2）。
 - **排障**：
   - `LOG_LEVEL=debug pnpm run dev`（或部署 env）补看非 engine-path 的逐请求 `http-request` 日志（upgrade/握手/engine path `http-request` 等默认 `info` 已可见）；`LOG_PRETTY=1` 非生产看人类可读输出。
   - `OTEL_SDK_DISABLED=true` 可在不回滚的情况下关闭追踪导出（日志不受影响）。
@@ -216,3 +216,23 @@ pnpm run test:coverage
 - **操作查询**：`GET /internal/storages/:id/operations/:operationId`（`operationId/type/status/usageBytes/startedAt/finishedAt/failureReason`）。
 - **巡检**：`StatusSyncService` 每轮在 `reconcileArchives` 后调用 `reconcileStorageOperations`：超 `ARCHIVE_TIMEOUT_MS` → failed + 回调；本进程无执行任务（重启）→ 重跑；终态未送达回调 → 重投一次（agent-api 幂等）。
 - **零回归**：`storageArchive` 缺省时 destroy 报文/落库/terminal 与改动前逐字段一致；未挂载存储不写 `storageArchiveSkipped`、不携带 `archiveSkipped`。
+
+## 运行期模型下发（harness-models，#533）
+
+> 契约 `contracts/cloud-controller-websocket.md` §2.11/§2.12、A.2.2、A.2.14、B.2；计划
+> `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` Phase 3。
+
+- **端点**：`POST /internal/containers/:containerId/harness-models`（Bearer `INTERNAL_API_TOKEN`）。状态矩阵：
+  非法 id/不存在 → 404 `NOT_FOUND`；终态（exited/failed/destroying）→ 409 `CONTAINER_NOT_ONLINE`；
+  中间态（creating/connecting/initializing）→ 200 `{delivered:false,reason:'offline'}`；payload 非法 → 400
+  `INVALID_MODEL_PROVISION`；`requestHarnessModels` 未注入 → 503 `UNAVAILABLE`。
+- **顺序硬约束**：先 `containerService.updateModelProvision`（SecretStore + `cloudcontainersecrets`：`modelProviders`
+  原样 + 旧字段投影）**再** emit；secret 已被清理（容器走完）→ 409，不把「容器已不存在」误报成保存失败。
+- **ack 网关**：`socketio-gateway.ts#requestHarnessModels` 生成 `requestId`、10s 超时；`harness:models:result` 只接受
+  同容器 pending；同容器并发新请求先以 `worker_error` 收敛旧请求；断连/重连/关停 → `offline`。`delivered=false`
+  一律不视为失败（best-effort）。
+- **版本短路**：`services/worker-version.ts#MIN_HARNESS_MODELS_WORKER_VERSION='2.20.0'` + `supportsHarnessModelPush`：
+  版本可得且更低 → 200 `worker_unsupported`（不 emit）；版本不可得 → 正常 emit 等 ack。**不提升注册门禁**（仍 2.17.1）。
+- **secrets/env**：`HarnessSecrets.modelProviders?: string`（ModelProvision JSON，可选、零迁移、读取侧回退旧字段）；
+  `buildHarnessEnv` 仅在携带时注入 `ZAG_MODEL_PROVIDERS`，init 与 runtime 两条路径同源。
+- **解析口径**：`services/model-provision.ts#parseModelProvisionPayload` 只做结构校验（不做业务语义），路由与服务共用。

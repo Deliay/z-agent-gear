@@ -85,6 +85,8 @@ vi.mock('./key-cache.js', () => ({ evictKeyById: vi.fn() }));
 
 vi.mock('./model.js', () => ({ modelService: { findAll: vi.fn() } }));
 
+vi.mock('./provider.js', () => ({ providerService: { findAll: vi.fn() } }));
+
 vi.mock('./session.js', () => ({
   sessionService: { create: vi.fn(), endByController: vi.fn() },
 }));
@@ -144,6 +146,7 @@ import { cloudControllerClient } from './cloud-controller-client.js';
 import { cloudWorkloadReader } from './cloud-workload-reader.js';
 import { evictKeyById } from './key-cache.js';
 import { modelService } from './model.js';
+import { providerService } from './provider.js';
 import { sessionService } from './session.js';
 import { controllerKeyService } from './controller-key.js';
 import { controllerService } from './controller.js';
@@ -205,10 +208,18 @@ function setupCreateSuccess() {
   } as never);
   vi.mocked(CloudHost.create).mockResolvedValue({} as never);
   vi.mocked(modelService.findAll).mockResolvedValue([
-    { name: 'model-a', isEnabled: true, contextLength: 128000 },
-    { name: 'model-a', isEnabled: true, contextLength: 64000 },
-    { name: 'model-b', isEnabled: true, contextLength: null },
-    { name: 'disabled', isEnabled: false, contextLength: 1000 },
+    { name: 'model-a', isEnabled: true, contextLength: 128000, scope: 'user', providerId: 'provider-1' },
+    { name: 'model-a', isEnabled: true, contextLength: 64000, scope: 'user', providerId: 'provider-1' },
+    { name: 'model-b', isEnabled: true, contextLength: null, scope: 'user', providerId: 'provider-1' },
+    { name: 'disabled', isEnabled: false, contextLength: 1000, scope: 'user', providerId: 'provider-1' },
+  ] as never);
+  vi.mocked(providerService.findAll).mockResolvedValue([
+    {
+      id: 'provider-1',
+      name: '我的 OpenAI',
+      isEnabled: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+    },
   ] as never);
   vi.mocked(billingClient.createCloudHostApiKey).mockResolvedValue({
     apiKey: { id: 'model-key-1' },
@@ -478,6 +489,20 @@ describe('CloudHostService', () => {
         // 同名保留首个有效值；contextLength=null 与禁用模型不出现
         modelContextLengths: '{"model-a":128000}',
         defaultWorkspace: '/home/worker/workspace',
+      });
+      // ModelProvision 是唯一构建口径：zag 组恒首位（可为空），旧字段是其投影（D1/D4）
+      expect(JSON.parse(payload.secrets.modelProviders)).toEqual({
+        providers: [
+          { vendorId: 'zag', displayName: 'Agent Gear', models: [] },
+          {
+            vendorId: 'provider-1',
+            displayName: '我的 OpenAI',
+            models: [
+              { id: 'model-a', contextLength: 128000 },
+              { id: 'model-b' },
+            ],
+          },
+        ],
       });
     });
 

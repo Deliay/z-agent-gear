@@ -1,4 +1,5 @@
 import { config } from '../config/index.js';
+import type { ModelProvision } from './model-provision.js';
 
 export interface StartHarnessStorageInput {
   id: string;
@@ -42,8 +43,17 @@ export interface StartHarnessInput {
     modelIds: string;
     /** 模型 ID → 最长上下文（token）JSON object 字符串（无有效条目时为 `{}`）。 */
     modelContextLengths: string;
+    /** ModelProvision JSON 字符串（多 vendor 载荷，与旧字段同源投影，D1）。 */
+    modelProviders: string;
     defaultWorkspace: string;
   };
+}
+
+/** 运行期模型下发结果（契约 A.2.14；`delivered=false` 不视为失败，D11）。 */
+export interface HarnessModelsPushResult {
+  delivered: boolean;
+  appliedTypes?: string[];
+  reason?: string;
 }
 
 export interface CloudContainerSummary {
@@ -258,6 +268,34 @@ export class CloudControllerClient {
       method: 'DELETE',
       ...(body ? { body } : {}),
     });
+  }
+
+  /**
+   * 运行期模型下发（契约 A.2.14）：先由 cloud-controller 更新 secret + 落库，再 emit 等 ack（≤10s）。
+   * 4xx/5xx 抛 `CloudControllerRequestError`（保留 status/code），网络/解析失败抛不可用。
+   */
+  async pushHarnessModels(
+    containerId: string,
+    provision: ModelProvision,
+  ): Promise<HarnessModelsPushResult> {
+    const result = await this.requestWithError<{
+      delivered?: unknown;
+      appliedTypes?: unknown;
+      reason?: unknown;
+    }>(`/internal/containers/${encodeURIComponent(containerId)}/harness-models`, {
+      method: 'POST',
+      body: JSON.stringify({ provision }),
+    });
+    if (!result || typeof result !== 'object' || typeof result.delivered !== 'boolean') {
+      throw new CloudControllerUnavailableError();
+    }
+    return {
+      delivered: result.delivered,
+      ...(Array.isArray(result.appliedTypes)
+        ? { appliedTypes: result.appliedTypes.filter((type): type is string => typeof type === 'string') }
+        : {}),
+      ...(typeof result.reason === 'string' ? { reason: result.reason } : {}),
+    };
   }
 
   private async requestWithError<T>(path: string, init: RequestInit = {}): Promise<T> {

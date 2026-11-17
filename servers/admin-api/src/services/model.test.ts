@@ -39,6 +39,7 @@ vi.mock('../models/provider.js', () => ({
 vi.mock('./llm-api', () => ({
   llmApiService: {
     fetchModels: vi.fn(),
+    fetchModelCatalog: vi.fn(),
   },
 }));
 
@@ -80,7 +81,11 @@ describe('ModelService (admin / global scope)', () => {
     (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: VALID_OID, scope: 'global' }) });
     // 默认：无同名全局模型（assertNamesAvailable 通过）
     (Model.find as any).mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
-    (llmApiService.fetchModels as any).mockResolvedValue(['gpt-4o', 'claude', 'gpt-4o']);
+    (llmApiService.fetchModelCatalog as any).mockResolvedValue([
+      { name: 'gpt-4o' },
+      { name: 'claude' },
+      { name: 'gpt-4o' },
+    ]);
     (providerService.getDecryptedConnection as any).mockResolvedValue({
       type: 'OpenAI',
       endpoint: 'https://api.openai.com/v1',
@@ -394,7 +399,11 @@ describe('ModelService manual import / global name uniqueness', () => {
     vi.clearAllMocks();
     (Provider.findOne as any).mockReturnValue({ lean: vi.fn().mockResolvedValue({ _id: VALID_OID, scope: 'global' }) });
     (Model.find as any).mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
-    (llmApiService.fetchModels as any).mockResolvedValue(['gpt-4o', 'claude', 'gpt-4o']);
+    (llmApiService.fetchModelCatalog as any).mockResolvedValue([
+      { name: 'gpt-4o' },
+      { name: 'claude' },
+      { name: 'gpt-4o' },
+    ]);
     (providerService.getDecryptedConnection as any).mockResolvedValue({
       type: 'OpenAI',
       endpoint: 'https://api.openai.com/v1',
@@ -433,14 +442,18 @@ describe('ModelService manual import / global name uniqueness', () => {
     const result = await modelService.listProviderModels(VALID_OID);
 
     expect(result).toEqual([
-      { name: 'gpt-4o', isImported: true, isDuplicate: false },
-      { name: 'claude', isImported: false, isDuplicate: true },
+      { name: 'gpt-4o', contextLength: null, isImported: true, isDuplicate: false },
+      { name: 'claude', contextLength: null, isImported: false, isDuplicate: true },
     ]);
-    expect(llmApiService.fetchModels).toHaveBeenCalledWith('OpenAI', 'https://api.openai.com/v1', 'sk-key');
+    expect(llmApiService.fetchModelCatalog).toHaveBeenCalledWith(
+      'OpenAI',
+      'https://api.openai.com/v1',
+      'sk-key',
+    );
   });
 
   it('U-M4: listProviderModels normalizes upstream connectivity failures', async () => {
-    (llmApiService.fetchModels as any).mockRejectedValue(new Error('Connection error.'));
+    (llmApiService.fetchModelCatalog as any).mockRejectedValue(new Error('Connection error.'));
 
     await expect(modelService.listProviderModels(VALID_OID)).rejects.toThrow(
       '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
@@ -477,7 +490,7 @@ describe('ModelService manual import / global name uniqueness', () => {
     });
 
     await expect(modelService.importModels(VALID_OID, ['gpt-4o'])).resolves.toEqual([]);
-    expect(llmApiService.fetchModels).not.toHaveBeenCalled();
+    expect(llmApiService.fetchModelCatalog).not.toHaveBeenCalled();
     expect(Model.insertMany).not.toHaveBeenCalled();
   });
 
@@ -496,7 +509,7 @@ describe('ModelService manual import / global name uniqueness', () => {
 
   it('U-M8: importModels rejects empty names before calling upstream', async () => {
     await expect(modelService.importModels(VALID_OID, ['  ', 'gpt-4o'])).rejects.toThrow('Model name is invalid');
-    expect(llmApiService.fetchModels).not.toHaveBeenCalled();
+    expect(llmApiService.fetchModelCatalog).not.toHaveBeenCalled();
   });
 
   it('U-M9: importModels maps concurrent E11000 to the duplicate-name message', async () => {
@@ -513,7 +526,61 @@ describe('ModelService manual import / global name uniqueness', () => {
 
   it('U-M12: importModels returns [] for an empty name list (裁决 4)', async () => {
     await expect(modelService.importModels(VALID_OID, [])).resolves.toEqual([]);
+    expect(llmApiService.fetchModelCatalog).not.toHaveBeenCalled();
+    expect(Model.insertMany).not.toHaveBeenCalled();
+  });
+
+  it('T-UMC7: listProviderModels exposes upstream contextLength (null when absent)', async () => {
+    (llmApiService.fetchModelCatalog as any).mockResolvedValue([
+      { name: 'gpt-4o', contextLength: 128_000 },
+      { name: 'claude' },
+      { name: ' gpt-4o ', contextLength: 1 },
+    ]);
+
+    const result = await modelService.listProviderModels(VALID_OID);
+
+    expect(result).toEqual([
+      { name: 'gpt-4o', contextLength: 128_000, isImported: false, isDuplicate: false },
+      { name: 'claude', contextLength: null, isImported: false, isDuplicate: false },
+    ]);
+    expect(llmApiService.fetchModelCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-UMC7: importModels writes upstream contextLength and null when not provided', async () => {
+    (llmApiService.fetchModelCatalog as any).mockResolvedValue([
+      { name: 'gpt-4o', contextLength: 128_000 },
+      { name: 'claude' },
+    ]);
+    (Model.insertMany as any).mockImplementation((docs: Array<Record<string, unknown>>) =>
+      Promise.resolve(
+        docs.map((doc, i) => ({
+          ...doc,
+          _id: { toString: () => `new-${i}` },
+          createdAt: new Date('2026-01-01'),
+          updatedAt: new Date('2026-01-01'),
+        })),
+      ),
+    );
+
+    await modelService.importModels(VALID_OID, ['gpt-4o', 'claude', 'gemini']);
+
+    const docs = (Model.insertMany as any).mock.calls[0][0] as Array<Record<string, unknown>>;
+    expect(docs.map((doc) => [doc.name, doc.contextLength])).toEqual([
+      ['gpt-4o', 128_000],
+      ['claude', null],
+      ['gemini', null],
+    ]);
+    // 单次上游调用同时承担连通性门禁与元数据映射
+    expect(llmApiService.fetchModelCatalog).toHaveBeenCalledTimes(1);
     expect(llmApiService.fetchModels).not.toHaveBeenCalled();
+  });
+
+  it('T-UMC7: importModels keeps the connectivity error message when the catalog call fails', async () => {
+    (llmApiService.fetchModelCatalog as any).mockRejectedValue(new Error('upstream down'));
+
+    await expect(modelService.importModels(VALID_OID, ['claude'])).rejects.toThrow(
+      '供应商连通性测试失败，请检查 API 地址和凭据是否正确',
+    );
     expect(Model.insertMany).not.toHaveBeenCalled();
   });
 });

@@ -1012,3 +1012,246 @@ describe('LLM create dedupe regression (issue 54)', () => {
     },
   );
 });
+
+// ---------------------------------------------------------------------------
+// 模型下发优化 #533（计划 §6.2 T-MCS-API2 / 契约 `contracts/llm.graphql`）：
+// 供应商上游上下文元数据 → 同步模型 contextLength；人工编辑优先（重同步不覆盖）；
+// updateModelContextLength 设/改/清空与非法值拒绝；global 模型前台只读；
+// providerModelOptions 返回上游清单（含 / 不含上下文两态）。
+// ---------------------------------------------------------------------------
+describe('用户模型上下文长度（T-MCS-API2）', () => {
+  const MODELS_BY_PROVIDER_WITH_CONTEXT = `
+    query ModelsByProviderWithContext($providerId: ID!) {
+      modelsByProvider(providerId: $providerId) { id name contextLength }
+    }
+  `;
+
+  const UPDATE_MODEL_CONTEXT_LENGTH = `
+    mutation UpdateModelContextLength($modelId: ID!, $contextLength: Int) {
+      updateModelContextLength(modelId: $modelId, contextLength: $contextLength) {
+        id contextLength
+      }
+    }
+  `;
+
+  const PROVIDER_MODEL_OPTIONS = `
+    query ProviderModelOptions($providerId: ID!) {
+      providerModelOptions(providerId: $providerId) { name contextLength }
+    }
+  `;
+
+  const CREATE_GLOBAL_PROVIDER = `
+    mutation CreateGlobalProvider($input: ProviderInput!) {
+      createGlobalProvider(input: $input) { id scope }
+    }
+  `;
+  const CREATE_GLOBAL_CUSTOM_MODEL = `
+    mutation CreateGlobalCustomModel($input: CustomModelInput!) {
+      createGlobalCustomModel(input: $input) { id name scope }
+    }
+  `;
+
+  let mock: MockServer;
+  let token = '';
+  let providerId = '';
+  let withContextModelId = '';
+  let plainModelId = '';
+  const withContextName = `ctx-with-${Date.now()}`;
+  const plainName = `ctx-plain-${Date.now()}`;
+
+  type ProviderModelRow = { id: string; name: string; contextLength: number | null };
+
+  async function modelsByProvider(): Promise<ProviderModelRow[]> {
+    const res = await gqlRequest(
+      MODELS_BY_PROVIDER_WITH_CONTEXT,
+      { providerId },
+      token,
+    );
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    return body.data.modelsByProvider as ProviderModelRow[];
+  }
+
+  async function updateContextLength(modelId: string, contextLength: number | null) {
+    const res = await gqlRequest(
+      UPDATE_MODEL_CONTEXT_LENGTH,
+      { modelId, contextLength },
+      token,
+    );
+    return (await res.json()) as {
+      data?: { updateModelContextLength: { id: string; contextLength: number | null } };
+      errors?: Array<{ message: string }>;
+    };
+  }
+
+  beforeAll(async () => {
+    // 上游 /v1/models 同时返回「含 context_length」与「不含」两态条目（mock-server 扩展）。
+    mock = await startMockServer([
+      { id: withContextName, contextLength: 200_000 },
+      { id: plainName },
+    ]);
+
+    const frontUser = await createFrontUser();
+    token = frontUser.token;
+    expect(token).toBeTruthy();
+
+    const created = await gqlRequest(
+      CREATE_PROVIDER,
+      {
+        input: {
+          name: `ctx-provider-${Date.now()}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-test-fake-key',
+        },
+      },
+      token,
+    );
+    const createdBody = await created.json();
+    expect(createdBody.errors).toBeUndefined();
+    providerId = createdBody.data.createProvider.id as string;
+
+    const rows = await modelsByProvider();
+    withContextModelId = rows.find((row) => row.name === withContextName)?.id ?? '';
+    plainModelId = rows.find((row) => row.name === plainName)?.id ?? '';
+    expect(withContextModelId).toBeTruthy();
+    expect(plainModelId).toBeTruthy();
+  });
+
+  afterAll(async () => {
+    if (providerId) await gqlRequest(DELETE_PROVIDER, { id: providerId }, token);
+    await mock?.close();
+  });
+
+  it('创建供应商同步模型时携带上游 context_length（未提供为 null）', async () => {
+    const rows = await modelsByProvider();
+    const withContext = rows.find((row) => row.name === withContextName);
+    const plain = rows.find((row) => row.name === plainName);
+    expect(withContext?.contextLength).toBe(200_000);
+    expect(plain?.contextLength).toBeNull();
+  });
+
+  it('providerModelOptions 返回上游清单含上下文与不含上下文两态', async () => {
+    const res = await gqlRequest(PROVIDER_MODEL_OPTIONS, { providerId }, token);
+    const body = await res.json();
+    expect(body.errors).toBeUndefined();
+    const options = body.data.providerModelOptions as Array<{
+      name: string;
+      contextLength: number | null;
+    }>;
+    const withContext = options.find((option) => option.name === withContextName);
+    const plain = options.find((option) => option.name === plainName);
+    expect(withContext).toBeDefined();
+    expect(withContext?.contextLength).toBe(200_000);
+    expect(plain).toBeDefined();
+    // 上游未提供上下文元数据 → null（不是 0 / 缺失字段）
+    expect(plain?.contextLength).toBeNull();
+  });
+
+  it('重同步不覆盖人工修改的 contextLength（仅补未设置行）', async () => {
+    const manual = 4096;
+    const updated = await updateContextLength(withContextModelId, manual);
+    expect(updated.errors).toBeUndefined();
+    expect(updated.data!.updateModelContextLength.contextLength).toBe(manual);
+
+    // 改凭据触发重同步（上游仍返回 200000）：人工值优先。
+    const resync = await gqlRequest(
+      UPDATE_PROVIDER,
+      {
+        id: providerId,
+        input: {
+          name: `ctx-provider-resync-${Date.now()}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-resync-key',
+        },
+      },
+      token,
+    );
+    expect((await resync.json()).errors).toBeUndefined();
+
+    const rows = await modelsByProvider();
+    expect(rows.find((row) => row.name === withContextName)?.contextLength).toBe(manual);
+    // 未设置行仍保持未设置（上游为 null 不会写成 0）
+    expect(rows.find((row) => row.name === plainName)?.contextLength).toBeNull();
+  });
+
+  it('updateModelContextLength 可设 / 改 / 清空', async () => {
+    const set = await updateContextLength(withContextModelId, 8192);
+    expect(set.errors).toBeUndefined();
+    expect(set.data!.updateModelContextLength.contextLength).toBe(8192);
+
+    const changed = await updateContextLength(withContextModelId, 16_384);
+    expect(changed.errors).toBeUndefined();
+    expect(changed.data!.updateModelContextLength.contextLength).toBe(16_384);
+
+    // null = 清空（回到「未设置」）
+    const cleared = await updateContextLength(withContextModelId, null);
+    expect(cleared.errors).toBeUndefined();
+    expect(cleared.data!.updateModelContextLength.contextLength).toBeNull();
+
+    const rows = await modelsByProvider();
+    expect(rows.find((row) => row.name === withContextName)?.contextLength).toBeNull();
+  });
+
+  it('非法 contextLength（0 / 负数 / 小数）拒绝', async () => {
+    // 0 / 负数：合法 Int 值 → 进入服务层，文案逐字。
+    for (const invalid of [0, -1]) {
+      const res = await updateContextLength(withContextModelId, invalid);
+      expect(res.errors, `contextLength=${invalid}`).toBeDefined();
+      expect(res.errors![0].message, `contextLength=${invalid}`).toBe(
+        'contextLength must be a positive integer',
+      );
+    }
+    // 小数：GraphQL `Int` 标量层即拒绝（不进入服务层），同属「小数被拒」语义。
+    const decimal = await updateContextLength(withContextModelId, 1.5);
+    expect(decimal.errors, 'contextLength=1.5').toBeDefined();
+    expect(decimal.errors!.map((error) => error.message).join('\n')).toMatch(
+      /positive integer|Int cannot represent/,
+    );
+
+    // 拒绝路径零副作用：值仍为未设置
+    const rows = await modelsByProvider();
+    expect(rows.find((row) => row.name === withContextName)?.contextLength).toBeNull();
+  });
+
+  it('global 模型前台拒绝编辑（Model not found）', async () => {
+    const adminToken = await ensureAdminLogin();
+    const createdProvider = await adminGql<{ createGlobalProvider: { id: string } }>(
+      CREATE_GLOBAL_PROVIDER,
+      {
+        input: {
+          name: `ctx-global-provider-${Date.now()}`,
+          type: 'OpenAI',
+          endpoint: `http://127.0.0.1:${mock.port}/v1`,
+          credentialType: 'api_key',
+          credentialValue: 'sk-test-fake-key',
+        },
+      },
+      adminToken,
+    );
+    expect(createdProvider.errors).toBeUndefined();
+    const globalProviderId = createdProvider.data!.createGlobalProvider.id;
+
+    try {
+      const createdModel = await adminGql<{
+        createGlobalCustomModel: { id: string; scope: string };
+      }>(
+        CREATE_GLOBAL_CUSTOM_MODEL,
+        { input: { providerId: globalProviderId, name: `ctx-global-model-${Date.now()}` } },
+        adminToken,
+      );
+      expect(createdModel.errors).toBeUndefined();
+      expect(createdModel.data!.createGlobalCustomModel.scope).toBe('global');
+      const globalModelId = createdModel.data!.createGlobalCustomModel.id;
+
+      const res = await updateContextLength(globalModelId, 1000);
+      expect(res.errors).toBeDefined();
+      expect(res.errors![0].message).toBe('Model not found');
+    } finally {
+      await adminGql(`mutation($id: ID!) { deleteGlobalProvider(id: $id) }`, { id: globalProviderId }, adminToken);
+    }
+  });
+});

@@ -448,3 +448,20 @@ pnpm run preview  # Preview production build
 - **重试进度**：`failNode` 清空 `nextRetryAt` 后 `retryProgressText` 自然返回 null，进度行随轮询消失（前端零额外逻辑）。
 - **测试入口**：`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-MNF-W1~W3）、
   `components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-MNF-W3 映射）。
+
+## 设置页模型下发提醒与上下文编辑（#533）
+
+> 契约 `contracts/llm.graphql`；计划 `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` Phase 7。
+
+- **统一提醒**：`src/lib/model-config-notice.ts` 是文案单一来源
+  `MODEL_CONFIG_APPLIED_NOTICE`（「已保存并下发到运行中的云电脑；部分 Harness 运行时不会重载模型配置，
+  已运行的会话可能需要重启后生效」）+ `notifyModelConfigApplied()`（`toast.success`）。
+  **会触发下发的用户侧保存类操作**成功后统一调用：自定义模型新增/上下文编辑、启停、删除、排序，供应商创建/更新；
+  供应商 toggle/delete/batch 保持静默（后台同理，无提醒）。
+- **上下文展示/编辑**：`GET_MODELS` 选含 `contextLength`；`ModelItem` 行内展示「最长上下文：N tokens / 未设置」
+  （`data-testid="model-context-length"`）；仅 `scope==='user' && !readOnly` 显示 PencilLine「编辑上下文」入口；
+  编辑复用 `CustomModelDialog` 编辑模式（供应商/名称只读，仅上下文可改/清空）→ `UPDATE_MODEL_CONTEXT_LENGTH` →
+  `refetchQueries: [GET_MODELS]`。
+- **新增模型**：`CREATE_CUSTOM_MODEL` 携带 `contextLength`（数字或 null）；「最长上下文大小（token）」输入
+  `inputMode="numeric"`、正整数校验（文案与 admin-web 逐字一致）、留空 = 未设置；选定供应商并输入模型名后
+  400ms 去抖调 `PROVIDER_MODEL_OPTIONS` 按同名项预填（失败静默；用户已手改不覆盖；服务端不缓存清单）。

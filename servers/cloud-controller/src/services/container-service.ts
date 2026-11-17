@@ -17,6 +17,8 @@ import type { K8sJobManager } from './k8s-job-manager.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import type { TokenService } from './token-service.js';
 import { SecretStore, type HarnessSecrets } from './secret-store.js';
+import type { ModelProvision } from './model-provision.js';
+import { projectModelProvision } from './model-provision.js';
 import type { StorageService, StartStorageInput } from './storage-service.js';
 import { type ObservationLogger } from '../observability/logger.js';
 import { injectTraceparent, withSpan } from '../observability/trace.js';
@@ -701,6 +703,43 @@ export class ContainerService {
 
   async getById(containerId: string): Promise<CloudContainerEntity | null> {
     return this.repo.findById(containerId);
+  }
+
+  /**
+   * 读取容器记录（**不触发** K8s 巡检/状态回写）：运行期模型下发端点用它做 404/409 判定，
+   * 避免像 `list()` 那样因 Job 消失而改写状态。
+   */
+  async get(containerId: string): Promise<CloudContainerEntity | null> {
+    return this.repo.findById(containerId);
+  }
+
+  /**
+   * 运行期模型清单下发前的持久化（契约 A.2.14 / 计划 D11）：
+   * 读取内存 secret → 合并 `modelProviders`（原样 JSON）+ 旧字段投影
+   * （`modelIds` 展开去重、`modelContextLengths` 同 id 首个正整数）→ 写内存 + 落库。
+   *
+   * - secret 不存在（容器未创建 secret / 已被终态清理）→ 返回 `null`（调用方 409）；
+   * - 落库失败仅 `error` 日志（内存副本对本进程仍有效，重启恢复降级）。
+   *
+   * 本方法不打印任何 secret 值。
+   */
+  async updateModelProvision(
+    containerId: string,
+    provision: ModelProvision,
+  ): Promise<HarnessSecrets | null> {
+    const current = this.secretStore.get(containerId);
+    if (!current) return null;
+
+    const projected = projectModelProvision(provision);
+    const next: HarnessSecrets = {
+      ...current,
+      modelProviders: JSON.stringify(provision),
+      modelIds: JSON.stringify(projected.modelIds),
+      modelContextLengths: JSON.stringify(projected.modelContextLengths),
+    };
+    this.secretStore.put(containerId, next);
+    await this.persistHarnessSecret(containerId, next);
+    return next;
   }
 
   /**

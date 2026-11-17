@@ -53,4 +53,9 @@ export const providerTypeDefs = `#graphql
     batchDisableGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
     batchDeleteGlobalProviders(ids: [ID!]!): ProviderBatchPayload!
   }
+
+  # 运行期下发注记（与 contracts/admin-llm.graphql 逐字对齐）：
+  # 上述 global 供应商 mutation 成功后，服务端会以 best-effort fire-and-forget 方式通知 agent-api
+  # 把最新模型清单（含供应商显示名）实时下发到运行中的云电脑；失败只告警，不影响 mutation 返回。
+  # 部分 Harness 运行时不会重载模型配置；模型启停/供应商禁用对网关逐请求立即生效。
 `;

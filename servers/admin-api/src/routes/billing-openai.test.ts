@@ -36,7 +36,7 @@ interface PublisherMock {
 
 let upstream: Server;
 let upstreamUrl = '';
-let upstreamMode: 'complete' | 'hang' = 'complete';
+let upstreamMode: 'complete' | 'hang' | 'delay' = 'complete';
 let upstreamHeaders: Record<string, string | string[] | undefined> = {};
 let gateway: Server;
 let gatewayUrl = '';
@@ -51,18 +51,24 @@ function startUpstream(): Promise<void> {
       let body = '';
       req.on('data', (chunk) => (body += chunk));
       req.on('end', () => {
-        res.setHeader('Content-Type', 'application/json');
-        res.end(
-          JSON.stringify({
-            id: 'chatcmpl-test',
-            object: 'chat.completion',
-            created: 0,
-            model: 'test-model',
-            choices: [
-              { index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' },
-            ],
-            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
-          }),
+        // 可控延迟：供「进行中请求不因后续禁用中断」用例
+        setTimeout(
+          () => {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(
+              JSON.stringify({
+                id: 'chatcmpl-test',
+                object: 'chat.completion',
+                created: 0,
+                model: 'test-model',
+                choices: [
+                  { index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' },
+                ],
+                usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+              }),
+            );
+          },
+          upstreamMode === 'delay' ? 300 : 0,
         );
       });
     });
@@ -597,6 +603,112 @@ describe('billing-openai gateway（R3/R6：完成/中断计费事实）', () => 
       expect(entry).toBeDefined();
       expect('context_length' in entry!).toBe(false);
     }
+  });
+
+  it('T-OWN1: /v1/models 的 owned_by — global=Agent Gear、user=供应商名、account=Agent Gear', async () => {
+    const { secret } = await seedCloudHostKey();
+    const userProviderName = `User Provider ${Date.now()}`;
+    const userProvider = await Provider.create({
+      name: userProviderName,
+      type: 'OpenAI',
+      endpoint: upstreamUrl,
+      encryptedCredential: encrypt('sk-test'),
+      isEnabled: true,
+      scope: 'user',
+    });
+    await Model.create({
+      providerId: userProvider._id,
+      name: 'user-owned-model',
+      isCustom: true,
+      isEnabled: true,
+      scope: 'user',
+    });
+    // 悬空 providerId（供应商已不存在）：不列出
+    await Model.collection.insertOne({
+      providerId: new mongoose.Types.ObjectId(),
+      name: 'dangling-provider-model',
+      isCustom: true,
+      isEnabled: true,
+      sortOrder: 0,
+      scope: 'user',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    // 同名 global 优先（user 同名不重复出现，owned_by 跟随 global）
+    await seedCustomModel('test-model');
+    // 全局同名存在但供应商禁用：占位后不回退到同名 user 模型
+    await seedGlobalModel('blocked-name', { providerEnabled: false });
+    await seedCustomModel('blocked-name');
+
+    const body = (await (await listModels(secret)).json()) as {
+      data: Array<{ id: string; owned_by: string }>;
+    };
+    const byId = new Map(body.data.map((entry) => [entry.id, entry]));
+    expect(byId.get('test-model')?.owned_by).toBe('Agent Gear');
+    expect(byId.get('user-owned-model')?.owned_by).toBe(userProviderName);
+    expect(byId.has('dangling-provider-model')).toBe(false);
+    expect(byId.has('blocked-name')).toBe(false);
+
+    // account Key 分支恒 Agent Gear
+    const accountBody = (await (await listModels(apiKeySecret)).json()) as {
+      data: Array<{ id: string; owned_by: string }>;
+    };
+    expect(accountBody.data.find((entry) => entry.id === 'test-model')?.owned_by).toBe('Agent Gear');
+    expect(accountBody.data.every((entry) => entry.owned_by === 'Agent Gear')).toBe(true);
+  });
+
+  it('T-OWN2: 禁用模型 → /chat/completions 404 model_not_found；重新启用恢复', async () => {
+    const { secret } = await seedCloudHostKey();
+    await Model.updateOne({ scope: 'global', name: 'test-model' }, { $set: { isEnabled: false } });
+
+    const disabled = await callWithKey(secret, {
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(disabled.status).toBe(404);
+    const errorBody = (await disabled.json()) as { error?: { code?: string } };
+    expect(errorBody.error?.code).toBe('model_not_found');
+
+    // 列表同步消失（即时生效，无缓存）
+    const list = (await (await listModels(secret)).json()) as { data: Array<{ id: string }> };
+    expect(list.data.map((entry) => entry.id)).not.toContain('test-model');
+
+    await Model.updateOne({ scope: 'global', name: 'test-model' }, { $set: { isEnabled: true } });
+    const restored = await callWithKey(secret, {
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(restored.status).toBe(200);
+    await restored.json();
+  });
+
+  it('T-OWN2: global 同名模型禁用时回退到同名 user 模型', async () => {
+    const { secret } = await seedCloudHostKey();
+    await Model.updateOne({ scope: 'global', name: 'test-model' }, { $set: { isEnabled: false } });
+    await seedCustomModel('test-model');
+
+    const res = await callWithKey(secret, {
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(res.status).toBe(200);
+    await res.json();
+  });
+
+  it('T-OWN2: 进行中的请求不因后续禁用中断', async () => {
+    upstreamMode = 'delay';
+    const pending = callGateway();
+    // 等上游已接收请求（模型解析/预扣费已完成）后再禁用
+    await vi.waitFor(() => expect(Object.keys(upstreamHeaders).length).toBeGreaterThan(0));
+    await Model.updateOne({ scope: 'global', name: 'test-model' }, { $set: { isEnabled: false } });
+
+    const res = await pending;
+    expect(res.status).toBe(200);
+    await res.json();
+
+    // 后续新请求立即 404
+    const after = await callGateway();
+    expect(after.status).toBe(404);
   });
 
   it('T-BK11: 系统模型调用 — 计量/outbox、cloudHostId 归因、billable=true', async () => {

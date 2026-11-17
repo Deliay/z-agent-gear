@@ -18,6 +18,9 @@ import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
 import { scanWorkflowTemplates } from './workflow-templates.js';
 import { scanKnowledgeBases } from './knowledge-bases.js';
+import { resolvePrepareTypes } from './harness/env.js';
+import { resolveConfiguredCredentials } from './harness/model-credentials.js';
+import { applyModelProvision, parseModelProvision } from './harness/model-providers.js';
 import { gatewayManager } from './gateway.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
@@ -155,6 +158,15 @@ export interface ConnectToServerOptions {
   onShutdown?: (payload: ShutdownPayload) => void;
   /** 注入 logger（测试用）；缺省进程级单例，统一 `component: 'socketio-client'`。 */
   logger?: ObservationLogger;
+  /**
+   * 运行期模型下发（`harness:models`）的写盘目录覆盖（测试/定制场景）。
+   * 缺省 `~/.config/opencode`、`~/.dsh` 与 `~/.zag/model-providers-state.json`。
+   */
+  harnessModelPaths?: {
+    configDir?: string;
+    dshHome?: string;
+    statePath?: string;
+  };
 }
 
 interface ErrorPayload {
@@ -1578,6 +1590,77 @@ export function connectToServer(
     );
     const result = await scanKnowledgeBases(data.path);
     socket.emit('knowledge-bases:scan:result', { requestId: data.requestId, ...result });
+  });
+
+  // 运行期模型下发（契约 §2.11/§2.12）：全量替换 opencode/dsh 的模型配置。
+  // 仅 `/worker` 连接处理（handleWorkload=true）；标准连接零响应。
+  socket.on('harness:models', async (data: { requestId?: unknown; provision?: unknown }) => {
+    if (!handleWorkload) return;
+    const requestId = typeof data?.requestId === 'string' ? data.requestId : '';
+    log.info({ event: 'harness_models', requestId }, 'harness:models received');
+
+    const secrets = collectSecretValues(process.env);
+    const fail = (message: string, appliedTypes: string[] = []): void => {
+      // 错误文本可能含调用栈/上游片段：统一脱敏后再回包（契约 §2.12）。
+      const error = redactSecrets(message, secrets);
+      log.warn({ event: 'harness_models_failed', requestId, error }, 'harness:models failed');
+      socket.emit('harness:models:result', {
+        requestId,
+        success: false,
+        appliedTypes,
+        error,
+      });
+    };
+
+    let provision: ReturnType<typeof parseModelProvision>;
+    try {
+      // 载荷非法也回报 success:false，避免服务端空等（契约 §2.11）。
+      provision = parseModelProvision(data?.provision);
+    } catch (error) {
+      fail((error as Error).message);
+      return;
+    }
+
+    const env = await resolveConfiguredCredentials({
+      configDir: options?.harnessModelPaths?.configDir,
+      dshHome: options?.harnessModelPaths?.dshHome,
+    });
+    if (env.modelApiKey) {
+      // 配置回读的凭据不在进程 env 中：并入脱敏集合，避免错误文本带出原值。
+      secrets.push(env.modelApiKey);
+    }
+    if (!env.modelBaseUrl || !env.modelApiKey) {
+      fail('missing required environment variable(s): ZAG_MODEL_BASE_URL, ZAG_MODEL_API_KEY');
+      return;
+    }
+
+    const result = await applyModelProvision({
+      provision,
+      env,
+      types: resolvePrepareTypes(process.env),
+      configDir: options?.harnessModelPaths?.configDir,
+      dshHome: options?.harnessModelPaths?.dshHome,
+      statePath: options?.harnessModelPaths?.statePath,
+    });
+
+    if (result.errors.length > 0) {
+      fail(
+        result.errors.map((item) => `${item.type}: ${item.message}`).join('; '),
+        result.appliedTypes,
+      );
+      return;
+    }
+
+    // 只记录类型与数量，不记录模型名/凭据（契约 §2.11）。
+    log.info(
+      { event: 'harness_models_applied', requestId, appliedTypes: result.appliedTypes },
+      'harness:models applied',
+    );
+    socket.emit('harness:models:result', {
+      requestId,
+      success: true,
+      appliedTypes: result.appliedTypes,
+    });
   });
 
   // Reconnection reconciliation

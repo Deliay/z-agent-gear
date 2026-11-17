@@ -326,11 +326,17 @@ function toApiError(
   openAiError(res, status, { type, code, message });
 }
 
-function toModelEntry(model: {
-  name: string;
-  createdAt?: Date;
-  contextLength?: number | null;
-}): {
+/** 平台自有模型（global）与 account Key 列表的 `owned_by` 显示名（与云电脑内 `Agent Gear` 分组同口径）。 */
+const GLOBAL_OWNED_BY = 'Agent Gear';
+
+function toModelEntry(
+  model: {
+    name: string;
+    createdAt?: Date;
+    contextLength?: number | null;
+  },
+  ownedBy: string,
+): {
   id: string;
   object: string;
   owned_by: string;
@@ -340,7 +346,7 @@ function toModelEntry(model: {
   return {
     id: model.name,
     object: 'model',
-    owned_by: 'agent-gear',
+    owned_by: ownedBy,
     created: Math.floor(new Date(model.createdAt ?? Date.now()).getTime() / 1000),
     // 未设置（null/undefined）时省略字段，下游视为「未知」
     ...(typeof model.contextLength === 'number' && model.contextLength >= 1
@@ -354,19 +360,23 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
   const router = Router();
   const logger = deps.logger;
 
-  /** 批量查询供应商启用状态；列表与调用（404）口径共用。 */
+  /**
+   * 批量查询供应商启用状态并返回 `id → name` 映射；列表与调用（404）口径共用。
+   * - 仅启用供应商进入映射（禁用 = 不可列出/不可调用）；
+   * - 名称用于 `/v1/models` 的 `owned_by`（user 模型 → 绑定供应商名称，一次查询避免 N+1）。
+   */
   const enabledProviderIdSet = async (
     models: Array<{ providerId: unknown }>,
-  ): Promise<Set<string>> => {
+  ): Promise<Map<string, string>> => {
     const providerIds = [...new Set(models.map((model) => String(model.providerId)))];
-    if (providerIds.length === 0) return new Set();
+    if (providerIds.length === 0) return new Map();
     const providers = await Provider.find({ _id: { $in: providerIds } })
-      .select({ isEnabled: 1 })
-      .lean<Array<{ _id: unknown; isEnabled?: boolean }>>();
-    return new Set(
+      .select({ isEnabled: 1, name: 1 })
+      .lean<Array<{ _id: unknown; isEnabled?: boolean; name?: string }>>();
+    return new Map(
       providers
         .filter((provider) => provider.isEnabled !== false)
-        .map((provider) => String(provider._id)),
+        .map((provider) => [String(provider._id), String(provider.name ?? '')]),
     );
   };
 
@@ -412,7 +422,17 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         if (seen.has(model.name)) continue;
         seen.add(model.name);
         if (!selectable(model)) continue;
-        data.push(toModelEntry(model as unknown as { name: string; createdAt?: Date; contextLength?: number | null }));
+        // D17：global → Agent Gear；user（含存量无 scope）→ 绑定供应商名称。
+        const ownedBy =
+          model.scope === 'global'
+            ? GLOBAL_OWNED_BY
+            : (enabledProviderIds.get(String(model.providerId)) || GLOBAL_OWNED_BY);
+        data.push(
+          toModelEntry(
+            model as unknown as { name: string; createdAt?: Date; contextLength?: number | null },
+            ownedBy,
+          ),
+        );
       }
       res.json({ object: 'list', data });
       return;
@@ -426,7 +446,13 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         const pricing = pricingFromModel(model.pricing);
         return pricing && pricing.isBillable && isPricingComplete(pricing);
       })
-      .map((model) => toModelEntry(model as unknown as { name: string; createdAt?: Date; contextLength?: number | null }));
+      .map((model) =>
+        toModelEntry(
+          model as unknown as { name: string; createdAt?: Date; contextLength?: number | null },
+          // 账号 Key 列表恒为平台模型 → Agent Gear
+          GLOBAL_OWNED_BY,
+        ),
+      );
     res.json({ object: 'list', data });
   });
 

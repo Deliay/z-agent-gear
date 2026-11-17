@@ -1,9 +1,11 @@
 import type { Server as SocketIOServer, Socket } from 'socket.io';
+import { randomUUID } from 'node:crypto';
 import { runWithLogContext } from '../observability/log-context.js';
 import { type ObservationLogger } from '../observability/logger.js';
 import { injectTraceparent, withSpan } from '../observability/trace.js';
 import type { ContainerService } from './container-service.js';
 import type { HeartbeatTracker } from './heartbeat-tracker.js';
+import type { ModelProvision } from './model-provision.js';
 import type { TokenService } from './token-service.js';
 import type { WorkloadDispatcher } from './workload-dispatcher.js';
 import {
@@ -74,7 +76,30 @@ export interface WorkerGatewayHandle {
    * 返回 undefined。供 runtime harness 安装的逐类型版本门禁使用（不得回退成「放行」以外的语义）。
    */
   getWorkerVersion: (containerId: string) => string | undefined;
+  /**
+   * 运行期模型清单下发（契约 §2.11 / A.2.14）：emit `harness:models { requestId, provision }`
+   * 并等待 worker 的 `harness:models:result`。
+   *
+   * 结果语义（`delivered=false` 不视为失败，由调用方 best-effort 处理）：
+   * - 收到 `success:true` → `{ delivered: true, appliedTypes }`；
+   * - `success:false` / 同容器并发新请求收敛旧请求 → `{ delivered:false, reason:'worker_error' }`；
+   * - 容器无活跃 socket / 断连 / 重连 / 关停 → `{ delivered:false, reason:'offline' }`；
+   * - 超时（默认 10s）→ `{ delivered:false, reason:'ack_timeout' }`。
+   */
+  requestHarnessModels: (
+    containerId: string,
+    provision: ModelProvision,
+    timeoutMs?: number,
+  ) => Promise<HarnessModelsPushResult>;
 }
+
+/** `requestHarnessModels` 的结果（`worker_unsupported` 由路由层短路产生，不在此返回）。 */
+export type HarnessModelsPushResult =
+  | { delivered: true; appliedTypes: string[] }
+  | { delivered: false; reason: 'offline' | 'ack_timeout' | 'worker_error' };
+
+/** 运行期模型下发的 ack 等待上限（契约 §2.11 / A.2.14：≤10s）。 */
+export const DEFAULT_HARNESS_MODELS_TIMEOUT_MS = 10_000;
 
 /**
  * 轻量滑动窗口速率限制：按 key 统计窗口内握手次数。
@@ -212,6 +237,39 @@ export function registerWorkerGateway(
   const activeSockets = new Map<string, Set<string>>();
   /** containerId → 最近一次 register 上报的 agent-gear 版本（runtime harness 版本门禁用）。 */
   const workerVersions = new Map<string, string>();
+  /**
+   * 运行期模型下发的 pending ack（requestId → 待收敛请求）。
+   *
+   * 有界性：**同容器**新请求会先以 `worker_error` 收敛旧请求再发出新请求（全量替换语义下旧请求已无意义），
+   * 故同一容器最多 1 条 pending；条目在 resolve / 超时 / 断连（含重连窗口与进程关停）时删除。
+   */
+  const pendingHarnessModels = new Map<
+    string,
+    { containerId: string; resolve: (result: HarnessModelsPushResult) => void; timer: NodeJS.Timeout }
+  >();
+
+  /** 以给定结果收敛一条 pending（不存在返回 false）。 */
+  const settleHarnessModels = (requestId: string, result: HarnessModelsPushResult): boolean => {
+    const pending = pendingHarnessModels.get(requestId);
+    if (!pending) return false;
+    pendingHarnessModels.delete(requestId);
+    clearTimeout(pending.timer);
+    pending.resolve(result);
+    return true;
+  };
+
+  /** 收敛某容器的全部 pending（断连/重连/关停/并发覆盖）。 */
+  const settleHarnessModelsForContainer = (
+    containerId: string,
+    result: HarnessModelsPushResult,
+  ): number => {
+    let settled = 0;
+    for (const [requestId, pending] of pendingHarnessModels) {
+      if (pending.containerId !== containerId) continue;
+      if (settleHarnessModels(requestId, result)) settled += 1;
+    }
+    return settled;
+  };
 
   /** 下发事件到 containerId 房间：统一注入顶层 `_meta.traceparent`（T-OBS13）。 */
   const emitToContainer = (containerId: string, event: string, payload: unknown): void => {
@@ -220,6 +278,42 @@ export function registerWorkerGateway(
   const isConnected = (containerId: string): boolean => (activeSockets.get(containerId)?.size ?? 0) > 0;
   const getWorkerVersion = (containerId: string): string | undefined =>
     workerVersions.get(containerId);
+
+  const requestHarnessModels = (
+    containerId: string,
+    provision: ModelProvision,
+    timeoutMs: number = DEFAULT_HARNESS_MODELS_TIMEOUT_MS,
+  ): Promise<HarnessModelsPushResult> => {
+    // 有界：同容器并发新请求先收敛旧请求（全量替换语义，旧请求结果已无意义）。
+    const superseded = settleHarnessModelsForContainer(containerId, {
+      delivered: false,
+      reason: 'worker_error',
+    });
+    if (superseded > 0) {
+      logger.warn(
+        { event: 'harness_models_superseded', containerId, count: superseded },
+        'harness:models request superseded by a newer one',
+      );
+    }
+    if (!isConnected(containerId)) {
+      return Promise.resolve({ delivered: false, reason: 'offline' as const });
+    }
+
+    const requestId = randomUUID();
+    return new Promise<HarnessModelsPushResult>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingHarnessModels.delete(requestId);
+        logger.warn(
+          { event: 'harness_models_ack_timeout', containerId, requestId, timeoutMs },
+          'harness:models ack timeout',
+        );
+        resolve({ delivered: false, reason: 'ack_timeout' });
+      }, timeoutMs);
+      timer.unref?.();
+      pendingHarnessModels.set(requestId, { containerId, resolve, timer });
+      emitToContainer(containerId, 'harness:models', { requestId, provision });
+    });
+  };
 
   nsp.use((socket: Socket, next) => {
     // 问题 59：部署形态下 worker 经 nginx Ingress 回连，TCP 对端是所有 worker 共享的
@@ -467,6 +561,70 @@ export function registerWorkerGateway(
       });
     });
 
+    socket.on('harness:models:result', (payload: unknown) => {
+      runWithLogContext({ containerId }, () => {
+        const record =
+          payload && typeof payload === 'object' && !Array.isArray(payload)
+            ? (payload as Record<string, unknown>)
+            : null;
+        const requestId =
+          record && typeof record.requestId === 'string' ? record.requestId : '';
+        const appliedTypes = record?.appliedTypes;
+        if (
+          !record ||
+          !requestId ||
+          typeof record.success !== 'boolean' ||
+          !Array.isArray(appliedTypes) ||
+          appliedTypes.some((type) => typeof type !== 'string')
+        ) {
+          logger.warn(
+            { event: 'harness_models_result_invalid', containerId },
+            'harness:models:result payload invalid',
+          );
+          return;
+        }
+
+        const pending = pendingHarnessModels.get(requestId);
+        // 未知 requestId（已超时/已收敛/伪造）与其他容器的响应一律忽略并告警（契约 §2.12）。
+        if (!pending) {
+          logger.warn(
+            { event: 'harness_models_result_unknown', containerId, requestId: requestId.slice(0, 64) },
+            'harness:models:result without pending request',
+          );
+          return;
+        }
+        if (pending.containerId !== containerId) {
+          logger.warn(
+            {
+              event: 'harness_models_result_container_mismatch',
+              containerId,
+              pendingContainerId: pending.containerId,
+            },
+            'harness:models:result container mismatch',
+          );
+          return;
+        }
+
+        settleHarnessModels(
+          requestId,
+          record.success === true
+            ? { delivered: true, appliedTypes: appliedTypes as string[] }
+            : { delivered: false, reason: 'worker_error' },
+        );
+        if (record.success !== true && typeof record.error === 'string') {
+          logger.warn(
+            {
+              event: 'harness_models_worker_error',
+              containerId,
+              // 错误文本由 worker 脱敏，仍与非版本串同口径清洗后再写日志。
+              error: sanitizeVersionForLog(record.error),
+            },
+            'worker reported harness:models failure',
+          );
+        }
+      });
+    });
+
     socket.on('unregister', () => {
       runWithLogContext({ containerId }, () => {
         socket.emit('unregistered', withTraceMeta({}));
@@ -495,6 +653,8 @@ export function registerWorkerGateway(
         activeSockets.delete(containerId);
         // 离线后版本信息不再可信（runtime 门禁按「版本不可得 → 放行 + 告警」处理）。
         workerVersions.delete(containerId);
+        // 断连/重连窗口：pending 模型下发以 offline 收敛（契约 §2.12），避免等待方空等到超时。
+        settleHarnessModelsForContainer(containerId, { delivered: false, reason: 'offline' });
 
         deps.heartbeatTracker.remove(containerId);
         if (!socket.data.registered) return;
@@ -514,5 +674,5 @@ export function registerWorkerGateway(
     });
   });
 
-  return { emitToContainer, isConnected, getWorkerVersion };
+  return { emitToContainer, isConnected, getWorkerVersion, requestHarnessModels };
 }
