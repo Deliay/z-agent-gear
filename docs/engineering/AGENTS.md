@@ -256,6 +256,7 @@ flowchart LR
 - [[proposals/20261116-feat-knowledge-base-repo-built-in.md]] — 仓库内建知识库（agent-gear 新增 knowledge-bases:scan 白名单扫描事件直读工作区 `.zag/knowledges/` 与 `docs/knowledges/`，controller-api 白名单中继写 Redis 结果键，agent-api 懒加载四级只读查询（候选云电脑骨架→单云电脑知识库列表→逐级子条目→单文档）；agent-web 侧边栏分组默认全部折叠点击展开才加载、front matter 渲染为表格；知识库 MCP 新增 prompts 能力提供编写指引；不落 MongoDB、不进知识库工具、无任何写入口）
 - [[proposals/20261117-feat-cloud-host-model-config-sync.md]] — 模型下发优化与云电脑配置实时下发（ModelProvision 多 vendor 下发载荷唯一构建口径、agent-api 推送服务扇出 + admin-api 经内部端点通知、cloud-controller harness-models 端点与 /worker harness:models 事件、agent-gear 2.20.0 多 vendor 重写 opencode/dsh 配置、vendor id=providerId 与平台组 Agent Gear 显示名、网关逐请求实时口径锁定与 owned_by、前台保存重载提醒、global 变更 ACP 缓存全量失效、用户模型上下文长度编辑与服务商上下文元数据尽力获取）
 - [[proposals/20261117-feat-cloud-agent-gear-upgrade-optimization.md]] — 云电脑控制器包升级优化（entrypoint 两条安装路径改「pnpm info --json 取精确最新版 + 钉版安装」绕开 minimumReleaseAge；cloud-controller register 版本落库 cloudcontainers.agentGearVersion 与 agent-gear:upgrade 事件对 + A.2.14 端点；agent-api 最新版本服务（npm registry + Redis 10 分钟）与 CloudHost.agentGearVersion/upgradeCloudHostAgentGear；agent-gear 2.20.0 回执后优雅退出委托保活钉版重启；agent-web 设置页版本区块与「立即升级」）
+- [[proposals/20261117-feat-knowledge-base-optimization-phase2.md]] — 知识库优化二期（agent-gear 2.21.0 扫描上限重构：取消每来源 20 库/每库 50 文档/单库 1MiB/单来源 2MiB 总额限制、新增单文件夹直接子项 ≤1000、单文件统一 1MiB；契约 §3.29/§3.30 与 knowledge-base.graphql 注释口径同步、MCP 编写指引与防漂移守卫字面量更新；中继/轮询超时 15s→30s；agent-web 空态收敛（「暂无知识库」双空才展示、hosts 查询上提）与「重新检测」迁移至云电脑条目尾部仅图标折叠可点、truncated/文件过大标示；领域模型 B0-知识库与 common-rules 仓库知识库约束同步）
 
 ### 实现计划（`plan/`）
 
