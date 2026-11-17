@@ -329,7 +329,7 @@ export async function startCloudHostSupervisor(
         connectController();
       }
     },
-    onShutdown: (payload) => shutdown(`worker shutdown: ${payload.reason}`),
+    onShutdown: (payload) => shutdown(`worker shutdown: ${payload.reason}`, payload.exitCode),
   });
 
   if (deps.installSignalHandlers !== false) {

@@ -1047,3 +1047,18 @@ pnpm test
 - 新会话恒装配平台服务（`agent-session-preview-tools` / `agent-valut-tools` / `agent-custom-tools` /
   `agent-knowledge-base-tools`），`session.test.ts` / `custom-mcp.test.ts` 的 `serverNames` 精确断言已按
   D13 改为「平台恒装配集合 ∪ 显式所选」的集合比较。
+
+## 云电脑工作组件版本与立即升级（T-UPG-API，需求 #551）
+
+- 文件：`src/agent-api/cloud-host.test.ts`（追加 `T-UPG-API1~5` 三组 describe）。
+- **T-UPG-API1**（仅 `HARNESS_ENABLED=true`）：`cloudHost(id).agentGearVersion` 与
+  `upgradeCloudHostAgentGear` 未认证均报 `Not authenticated`。
+- **T-UPG-API2/3**（需 `MONGODB_URI` + `REDIS_URL`）：Mongo 直写
+  `cloudcontainers.agentGearVersion`、Redis 直写 `agent-gear:latest-version`（JSON `{version, fetchedAt}`）
+  → 四字段透出（含 `upgradeAvailable` 两态）；Redis 键缺失/非法 → `latestVersion=null`、
+  `upgradeAvailable=false` 且查询不报错。
+- **T-UPG-API4/5**（需 `MONGODB_URI`）：真实 agent-api → cloud-controller 全链路——Mongo 把云电脑推进
+  `RUNNING` 后，容器非 online → `container is not online`；非 RUNNING → `cloud host is not running`；
+  他人 `controllerId` → `Cloud host not found`。
+- 注意：`REDIS_URL` 与 agent-api `REDIS_URI` 同一实例；Aspire 编排下为 `rediss://`（dev 自签证书），
+  按上表设置 `NODE_EXTRA_CA_CERTS` 或 `NODE_TLS_REJECT_UNAUTHORIZED=0`。

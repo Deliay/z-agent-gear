@@ -448,3 +448,12 @@ pnpm run preview  # Preview production build
 - **重试进度**：`failNode` 清空 `nextRetryAt` 后 `retryProgressText` 自然返回 null，进度行随轮询消失（前端零额外逻辑）。
 - **测试入口**：`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-MNF-W1~W3）、
   `components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-MNF-W3 映射）。
+
+## 云电脑工作组件版本区块（需求 #551）
+
+> 契约 `contracts/cloud-host.graphql`（`CloudHostAgentGearVersion` / `upgradeCloudHostAgentGear`）。
+
+- **选择集单点扩展**：`CLOUD_HOST_FIELDS`（`graphql/queries.ts`）追加 `agentGearVersion { currentVersion latestVersion upgradeAvailable autoUpdateIntervalMinutes }`，`GET_CONTROLLERS` / `CLOUD_HOST` / `MY_CLOUD_HOSTS` 共用；手写类型 `CloudHostData.agentGearVersion?` 同步。
+- **版本区块**：`ControllerConfigPage` 的 `CloudHostPanel` 内 `data-testid="cloud-host-agent-gear-version"`——`当前版本 {currentVersion ?? '—'}` / `最新版本 {latestVersion ?? '—'}`，「立即升级」按钮仅在 `upgradeAvailable && status==='RUNNING' && !deletedAt` 时渲染；小字 `自动升级每 {autoUpdateIntervalMinutes ?? 10} 分钟检查一次`（`text-xs text-muted-foreground`）。
+- **升级流程（D14）**：点击 → `UPGRADE_CLOUD_HOST_AGENT_GEAR({ controllerId })` → 升级中态（按钮禁用 + spinner）→ 每 **2s** `CLOUD_HOST`（`fetchPolicy: network-only`）轮询 → `currentVersion === latestVersion` toast「工作组件已升级到 {version}」，**3 分钟**超时 toast 可重试/等待自动升级；组件卸载清理定时器不残留；成功后 `refetch` 控制器列表刷新版本信息。
+- **错误文案单一来源**：`lib/cloud-host-agent-gear.ts` 的 `CLOUD_HOST_AGENT_GEAR_ERROR_MESSAGES`（契约六条 + `internal error` 兜底，未命中原样展示）；`isAgentGearUpgradeAvailable` 为按钮可见性纯函数。测试入口：`lib/__tests__/cloud-host-agent-gear.test.ts`（T-UPG-W-L）与 `pages/__tests__/ControllerConfigPage.test.tsx`（T-UPG-W1~W5）。

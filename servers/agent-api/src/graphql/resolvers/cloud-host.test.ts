@@ -9,9 +9,20 @@ vi.mock('../../services/cloud-host-service.js', () => ({
     stop: vi.fn(),
     delete: vi.fn(),
     mapCloudHost: vi.fn((host: Record<string, unknown>) => ({ id: String(host._id), ...host })),
+    getAgentGearVersionInfo: vi.fn(),
+    upgradeCloudHostAgentGear: vi.fn(),
   },
   toCloudHostGraphQLError: (err: unknown): never => {
-    throw err;
+    const message = err instanceof Error ? err.message : String(err);
+    const whitelist = new Set([
+      'Not authenticated',
+      'Cloud host not found',
+      'cloud host is not running',
+      'container is not online',
+      'agent-gear upgrade is not supported by the current version',
+      'agent-gear upgrade already in progress',
+    ]);
+    throw new Error(whitelist.has(message) ? message : 'internal error');
   },
 }));
 
@@ -77,6 +88,15 @@ describe('cloudHostResolvers authentication', () => {
     [
       'deleteCloudHost',
       () => cloudHostResolvers.Mutation.deleteCloudHost({}, { id: '507f1f77bcf86cd799439011' }, context),
+    ],
+    [
+      'upgradeCloudHostAgentGear',
+      () =>
+        cloudHostResolvers.Mutation.upgradeCloudHostAgentGear(
+          {},
+          { controllerId: '507f1f77bcf86cd799439012' },
+          context,
+        ),
     ],
   ])('%s requires authentication', async (_name, invoke) => {
     await expect(invoke()).rejects.toThrow('Not authenticated');
@@ -278,5 +298,90 @@ describe('cloudHostResolvers.Query.cloudHostBillingQuote', () => {
     expect(accountCall![0]).not.toHaveProperty('reason');
 
     warnSpy.mockRestore();
+  });
+});
+
+describe('云电脑工作组件版本与立即升级 resolver（T-UPG-R）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('T-UPG-R1: CloudHost.agentGearVersion 委托 service；service 抛错降级 null 不拖垮查询', async () => {
+    const info = {
+      currentVersion: '2.19.0',
+      latestVersion: '2.20.0',
+      upgradeAvailable: true,
+      autoUpdateIntervalMinutes: 10,
+    };
+    vi.mocked(cloudHostService.getAgentGearVersionInfo).mockResolvedValueOnce(info as never);
+    await expect(
+      cloudHostResolvers.CloudHost.agentGearVersion({ id: HOST_ID } as never),
+    ).resolves.toEqual(info);
+
+    vi.mocked(cloudHostService.getAgentGearVersionInfo).mockRejectedValueOnce(
+      new Error('boom'),
+    );
+    await expect(
+      cloudHostResolvers.CloudHost.agentGearVersion({ id: HOST_ID } as never),
+    ).resolves.toMatchObject({
+      currentVersion: null,
+      latestVersion: null,
+      upgradeAvailable: false,
+    });
+  });
+
+  it('T-UPG-R2: 未认证 → Not authenticated；白名单六条逐字透传；未命中 → internal error；参数透传', async () => {
+    await expect(
+      cloudHostResolvers.Mutation.upgradeCloudHostAgentGear(
+        {},
+        { controllerId: '507f1f77bcf86cd799439012' },
+        context,
+      ),
+    ).rejects.toThrow('Not authenticated');
+
+    for (const message of [
+      'Cloud host not found',
+      'cloud host is not running',
+      'container is not online',
+      'agent-gear upgrade is not supported by the current version',
+      'agent-gear upgrade already in progress',
+    ]) {
+      vi.mocked(cloudHostService.upgradeCloudHostAgentGear).mockRejectedValueOnce(
+        new Error(message),
+      );
+      await expect(
+        cloudHostResolvers.Mutation.upgradeCloudHostAgentGear(
+          {},
+          { controllerId: '507f1f77bcf86cd799439012' },
+          authContext,
+        ),
+      ).rejects.toThrow(message);
+    }
+
+    vi.mocked(cloudHostService.upgradeCloudHostAgentGear).mockRejectedValueOnce(
+      new Error('UnexpectedFailure'),
+    );
+    await expect(
+      cloudHostResolvers.Mutation.upgradeCloudHostAgentGear(
+        {},
+        { controllerId: '507f1f77bcf86cd799439012' },
+        authContext,
+      ),
+    ).rejects.toThrow('internal error');
+
+    vi.mocked(cloudHostService.upgradeCloudHostAgentGear).mockResolvedValueOnce({
+      accepted: true,
+    });
+    await expect(
+      cloudHostResolvers.Mutation.upgradeCloudHostAgentGear(
+        {},
+        { controllerId: '507f1f77bcf86cd799439012' },
+        authContext,
+      ),
+    ).resolves.toEqual({ accepted: true });
+    expect(cloudHostService.upgradeCloudHostAgentGear).toHaveBeenLastCalledWith(
+      '507f1f77bcf86cd799439012',
+      'user-1',
+    );
   });
 });

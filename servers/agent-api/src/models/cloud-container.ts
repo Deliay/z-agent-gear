@@ -17,6 +17,8 @@ const cloudContainerSchema = new mongoose.Schema(
     purpose: { type: String, default: 'idle' },
     status: { type: String, default: 'creating' },
     harnessTypes: { type: [String], default: [] },
+    // 与 cloud-controller 写方同步演进（#551）：worker register 上报的 agent-gear 版本（只读镜像）
+    agentGearVersion: { type: String, default: null },
     expiresAt: { type: Date, default: null },
     hostName: { type: String, default: null },
     exitReason: { type: String, default: null },
