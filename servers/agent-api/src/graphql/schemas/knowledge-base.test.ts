@@ -21,6 +21,12 @@ const COMPARED_DEFINITIONS = [
   'KnowledgeBaseTreeItem',
   'KnowledgeBaseEvent',
   'KnowledgeBaseDocumentInput',
+  'RepoKnowledgeBaseSource',
+  'RepoKnowledgeBaseHost',
+  'RepoKnowledgeBase',
+  'RepoKnowledgeBaseNodeKind',
+  'RepoKnowledgeBaseNode',
+  'RepoKnowledgeBaseDocument',
   'Query',
   'Mutation',
 ] as const;

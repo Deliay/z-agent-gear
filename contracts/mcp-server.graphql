@@ -19,6 +19,10 @@ enum McpServerSource {
   # `knowledge_base_document_update` / `knowledge_base_document_delete`；可见范围按「会话工作区 ∪
   # 本租户全局工作区」× 四档权限矩阵（与界面同口径）；`knowledge_base_create` 仅在会话创建人为
   # 租户管理员时出现在 tools/list。
+  # 该服务支持 MCP prompts 能力（initialize 声明 capabilities.prompts）：prompts/list 返回单个
+  # 内置片段 `repo-knowledge-base-authoring`（仓库知识库编写指引），prompts/get 按 name 返回指引文本
+  # （messages 形态），未知名称/缺 name → INVALID_PARAMS 附可用片段名。
+  # 仓库内建知识库仍不出现在任何工具结果中（六工具清单与行为不变；AI 可直接读会话工作目录中的仓库文件）。
   platform
 }
 

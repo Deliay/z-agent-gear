@@ -17,6 +17,7 @@ import { gitHandler } from './git-handler.js';
 import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
 import { scanWorkflowTemplates } from './workflow-templates.js';
+import { scanKnowledgeBases } from './knowledge-bases.js';
 import { gatewayManager } from './gateway.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
@@ -1567,6 +1568,16 @@ export function connectToServer(
     );
     const result = await scanWorkflowTemplates(data.path);
     socket.emit('workflow-templates:scan:result', { requestId: data.requestId, ...result });
+  });
+
+  // 仓库内建知识库扫描（契约 §3.29/§3.30：两个约定子目录 + knowledge-base.json + 分级上限）
+  socket.on('knowledge-bases:scan', async (data: { requestId: string; path: string }) => {
+    log.info(
+      { event: 'knowledge_bases_scan', requestId: data.requestId, path: data.path },
+      'knowledge-bases:scan received',
+    );
+    const result = await scanKnowledgeBases(data.path);
+    socket.emit('knowledge-bases:scan:result', { requestId: data.requestId, ...result });
   });
 
   // Reconnection reconciliation

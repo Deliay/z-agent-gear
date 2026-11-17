@@ -1,5 +1,10 @@
 import { McpServer } from '../models/mcp-server.js';
 import { knowledgeBaseService } from './knowledge-base-service.js';
+import {
+  REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS,
+  getKnowledgeBasePromptText,
+  listKnowledgeBasePromptNames,
+} from './knowledge-base-prompts.js';
 import { getWorkspaceContext } from './workspace-context.js';
 
 /**
@@ -234,7 +239,7 @@ export async function handleKnowledgeBaseToolsMcpRequest(
       return {
         result: {
           protocolVersion: '2025-03-26',
-          capabilities: { tools: {} },
+          capabilities: { tools: {}, prompts: {} },
           serverInfo: { name: KNOWLEDGE_BASE_TOOLS_SERVER_NAME, version: '1.0.0' },
         },
       };
@@ -243,6 +248,38 @@ export async function handleKnowledgeBaseToolsMcpRequest(
       return { result: {} };
     case 'ping':
       return { result: {} };
+    case 'prompts/list':
+      return { result: { prompts: REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS } };
+    case 'prompts/get': {
+      const promptName = request.params?.name;
+      const available = listKnowledgeBasePromptNames().join('、');
+      if (typeof promptName !== 'string' || promptName.trim().length === 0) {
+        return {
+          error: {
+            code: 'INVALID_PARAMS',
+            message: `prompts/get 缺少 params.name。可用片段：${available}。`,
+          },
+        };
+      }
+      const text = getKnowledgeBasePromptText(promptName);
+      const definition = REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS.find(
+        (item) => item.name === promptName,
+      );
+      if (!text || !definition) {
+        return {
+          error: {
+            code: 'INVALID_PARAMS',
+            message: `未知提示词片段「${promptName}」。可用片段：${available}。`,
+          },
+        };
+      }
+      return {
+        result: {
+          description: definition.description,
+          messages: [{ role: 'user', content: { type: 'text', text } }],
+        },
+      };
+    }
     case 'tools/list': {
       // 会话上下文已由 mcp-dispatch 的 runWithWorkspace 注入；无上下文按非 admin 收紧
       const isAdmin = getWorkspaceContext()?.role === 'admin';
