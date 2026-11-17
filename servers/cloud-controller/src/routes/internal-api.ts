@@ -1022,10 +1022,12 @@ export function createInternalRouter(
    * 运行期模型清单下发（契约 A.2.14）：先更新 `SecretStore` + `cloudcontainersecrets`
    * （`modelProviders` 原样 + 旧字段投影），再 emit `harness:models` 并等待 ack（≤10s）。
    *
-   * 状态矩阵（计划 D10）：不存在/非法 id → 404；终态 → 409 `CONTAINER_NOT_ONLINE`；
-   * creating/connecting/initializing → 200 `{delivered:false, reason:'offline'}`（稍后自然收敛）；
-   * worker 版本可得且 <2.20.0 → 200 `worker_unsupported`（不 emit）；payload 非法 → 400；
-   * secret 缺失（已销毁）→ 409；网关未注入 → 503。`delivered=false` 不视为失败（D11）。
+   * 状态矩阵（计划 D10）：不存在/非法 id → 404；payload 非法 → 400（先于离线/版本短路）；
+   * 终态 → 409 `CONTAINER_NOT_ONLINE`；secret 缺失（已销毁）→ 409；网关未注入 → 503。
+   * 通过上述校验后**先持久化** secret（`modelProviders` + 旧字段投影，D11/F17）：
+   * creating/connecting/initializing → 200 `{delivered:false, reason:'offline'}`（不 emit）；
+   * worker 版本可得且 <2.20.0 → 200 `worker_unsupported`（不 emit）；其余 emit 并等 ack。
+   * `delivered=false` 不视为失败（D11）。
    */
   router.post(
     '/containers/:containerId/harness-models',
@@ -1054,6 +1056,30 @@ export function createInternalRouter(
           });
           return;
         }
+
+        // payload 校验先于离线/版本短路：非法载荷不得被 `200 delivered:false` 掩盖（返回 400）。
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const provision = parseModelProvisionPayload(body.provision);
+        if (!provision) {
+          res.status(400).json({
+            error: 'INVALID_MODEL_PROVISION',
+            message: 'provision 结构非法',
+          });
+          return;
+        }
+
+        // 先持久化（内存 + 落库）再判断可下发性/emit（D11）：
+        // secret 是「下次任意变更自然收敛」的兜底事实源，离线/版本不支持的当次载荷也不能丢
+        // （否则运行期补装 harness 的 init 脚本会拿到创建期旧快照）。
+        const updated = await containerService.updateModelProvision(containerId, provision);
+        if (!updated) {
+          res.status(409).json({
+            error: 'CONTAINER_NOT_ONLINE',
+            message: '容器 secret 不存在（可能已销毁）',
+          });
+          return;
+        }
+
         if (container.status !== 'online') {
           // 创建中间态：非错误，下一次任意模型变更或创建期快照会自然收敛。
           res.status(200).json({ delivered: false, reason: 'offline' });
@@ -1061,6 +1087,7 @@ export function createInternalRouter(
         }
 
         // 版本短路：仅在版本可得且低于 2.20.0 时跳过 emit（避免旧容器批量 10s 空等）。
+        // 注意只豁免 emit，持久化已在上方完成。
         const workerVersion = deps.getWorkerVersion?.(containerId);
         if (!supportsHarnessModelPush(workerVersion)) {
           log.info(
@@ -1072,26 +1099,6 @@ export function createInternalRouter(
             'worker does not support harness:models; skipping push',
           );
           res.status(200).json({ delivered: false, reason: 'worker_unsupported' });
-          return;
-        }
-
-        const body = (req.body ?? {}) as Record<string, unknown>;
-        const provision = parseModelProvisionPayload(body.provision);
-        if (!provision) {
-          res.status(400).json({
-            error: 'INVALID_MODEL_PROVISION',
-            message: 'provision 结构非法',
-          });
-          return;
-        }
-
-        // 先持久化（内存 + 落库）再 emit：secret 是「下次任意变更自然收敛」的兜底事实源。
-        const updated = await containerService.updateModelProvision(containerId, provision);
-        if (!updated) {
-          res.status(409).json({
-            error: 'CONTAINER_NOT_ONLINE',
-            message: '容器 secret 不存在（可能已销毁）',
-          });
           return;
         }
 

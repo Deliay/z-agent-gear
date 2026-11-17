@@ -258,7 +258,8 @@ export class CloudControllerClient {
   async destroyContainer(
     id: string,
     options?: { storageArchive?: boolean },
-  ): Promise<void> {    // D4：仅显式 false 时下发 `storageArchive:false`；true/缺省保持旧报文形状（无 body）。
+  ): Promise<void> {
+    // D4：仅显式 false 时下发 `storageArchive:false`；true/缺省保持旧报文形状（无 body）。
     const body =
       options?.storageArchive === false
         ? JSON.stringify({ storageArchive: false })

@@ -426,7 +426,7 @@ export function createBillingOpenAiRouter(deps: BillingOpenAiRouterDeps): Router
         const ownedBy =
           model.scope === 'global'
             ? GLOBAL_OWNED_BY
-            : (enabledProviderIds.get(String(model.providerId)) ?? GLOBAL_OWNED_BY);
+            : (enabledProviderIds.get(String(model.providerId)) || GLOBAL_OWNED_BY);
         data.push(
           toModelEntry(
             model as unknown as { name: string; createdAt?: Date; contextLength?: number | null },

@@ -305,7 +305,8 @@ opencode / dsh 的模型配置文件。仅对 `/worker` 连接（`purpose=harnes
 **服务端行为：**
 
 1. 先更新 `SecretStore` 与 `cloudcontainersecrets`（`modelProviders` + 旧字段 `modelIds` / `modelContextLengths` 投影），**再** emit；
-2. worker 版本可得且 `< 2.20.0` → 不 emit，直接以 `delivered:false / worker_unsupported` 收敛；
+   离线/版本不支持等 `delivered:false` 场景同样先持久化（仅终态 409 不写），保证下次任意变更或补装 harness 的 init 脚本拿到最新载荷；
+2. worker 版本可得且 `< 2.20.0` → 不 emit，直接以 `delivered:false / worker_unsupported` 收敛（**持久化已完成**）；
 3. 等待 `harness:models:result`，超时 **10s** → `delivered:false / ack_timeout`；
 4. 容器离线 / 断连 → `delivered:false / offline`；worker 回报失败 → `delivered:false / worker_error`。
 

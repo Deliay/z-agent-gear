@@ -76,4 +76,10 @@ export const modelTypeDefs = `#graphql
     # 更新模型最长上下文（token）；传 null 表示清空（回到「未设置」）
     updateModelContextLength(modelId: ID!, contextLength: Int): Model!
   }
+
+  # 运行期下发注记（与 contracts/admin-llm.graphql 逐字对齐）：
+  # 上述 global 模型 mutation 成功后，服务端会以 best-effort fire-and-forget 方式通知 agent-api
+  # 把最新模型清单实时下发到运行中的云电脑（失败只告警，不影响 mutation 返回）；
+  # 部分 Harness 运行时不会重载模型配置，云电脑内已运行会话可能需要重启后生效。
+  # 模型启停对 OpenAI 兼容网关逐请求生效：禁用后新请求立即返回模型不可用，进行中的请求不受影响。
 `;

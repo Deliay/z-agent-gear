@@ -424,3 +424,49 @@ describe('writeOpencodeConfig (T-AG9..T-AG12 / T-AG-MP2)', () => {
     expect(normalizeProvision(MULTI_PROVISION).providers[0].vendorId).toBe('zag');
   });
 });
+
+describe('legacy 单 vendor 黄金用例（T-AG-MP5）', () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('无 ZAG_MODEL_PROVIDERS 时产物与 2.19.0 除 zag 显示名（ZAG→Agent Gear）外逐字一致', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    const statePath = join(dir, 'model-providers-state.json');
+
+    await writeOpencodeConfig({
+      env: { ...ENV, modelContextLengths: { 'model-a': 128000 } },
+      configDir: dir,
+      statePath,
+    });
+
+    // 全文黄金：任意字段/缩进/顺序漂移都会失败（zag.name 为 2.20.0 唯一的预期差异）。
+    expect(await readFile(join(dir, 'opencode.jsonc'), 'utf8')).toBe(`{
+  "providers": {
+    "zag": {
+      "package": "@opencode/ai/providers/openai-compatible",
+      "name": "Agent Gear",
+      "settings": {
+        "baseURL": "http://admin-api:8002/v1",
+        "apiKey": "zag_sk_super_secret"
+      },
+      "models": {
+        "model-a": {
+          "name": "model-a",
+          "limit": {
+            "context": 128000
+          }
+        },
+        "model-b": {
+          "name": "model-b"
+        }
+      }
+    }
+  }
+}
+`);
+  });
+});

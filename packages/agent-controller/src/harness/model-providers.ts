@@ -151,6 +151,7 @@ export function parseModelProvision(raw: unknown): ModelProvision {
  * 不改动入参（返回新对象）。
  */
 export function normalizeProvision(provision: ModelProvision): ModelProvision {
+  // 浅拷贝：只复制 provider 对象与 models 数组，模型条目按不可变值使用（调用方不修改）。
   const zagIndex = provision.providers.findIndex((item) => item.vendorId === ZAG_VENDOR_ID);
   const zag: ModelProvisionProvider =
     zagIndex === -1

@@ -57,7 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.19.0`（major 保持 2；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.20.0`（major 保持 2；运行期模型下发 `harness:models` / 多 vendor 重写与 `ZAG_MODEL_PROVIDERS` 自 2.20.0 起；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.17.1 起为当前基线；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -240,8 +240,8 @@ init 脚本（admin-api 迁移 006）在安装固定版本 OpenCode 后执行
 3. `mkdir -p ZAG_DEFAULT_WORKSPACE`。
 4. 定位 `~/.config/opencode/opencode.jsonc`：同目录已有 `.json` 且无 `.jsonc` 时合并 `.json`；否则新建
    `.jsonc`。使用 `jsonc-parser` 保留注释与既有 provider，仅替换 `providers.zag`；权限 0600。
-   `providers.zag = { package: '@opencode/ai/providers/openai-compatible', name: 'ZAG', settings: { baseURL, apiKey }, models: { <id>: { name: <id>, limit?: { context } } } }`
-   （OpenCode v2 配置形态；`limit.context` 仅在 `ZAG_MODEL_CONTEXT_LENGTHS` 含该模型正整数上下文时写入）。
+   `providers.zag = { package: '@opencode/ai/providers/openai-compatible', name: 'Agent Gear', settings: { baseURL, apiKey }, models: { <id>: { name: <id>, limit?: { context } } } }`
+   （OpenCode v2 配置形态；`name` 自 2.20.0 起为显示名 `Agent Gear`，用户组取供应商名称；`limit.context` 仅在 `ZAG_MODEL_CONTEXT_LENGTHS`/`ZAG_MODEL_PROVIDERS` 含该模型正整数上下文时写入）。
 
 > 镜像**不预装** `@opencode/cli`，由 harness 工作负载按 `OPENCODE_CLI_VERSION` 固定版本安装。
 
@@ -400,7 +400,8 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 p
 
 - **载荷与解析**：`src/harness/model-providers.ts`。`parseModelProvision` 只做结构校验（非法抛 `ModelProvisionError`，
   消息只含字段名/索引、不含原值）；`resolveProvision(env)` 优先 `ZAG_MODEL_PROVIDERS`，缺省由
-  `ZAG_MODEL_IDS`/`ZAG_MODEL_CONTEXT_LENGTHS` 合成单 `zag` 组（旧服务端兼容，产物与 2.19.0 逐字一致）。
+  `ZAG_MODEL_IDS`/`ZAG_MODEL_CONTEXT_LENGTHS` 合成单 `zag` 组（旧服务端兼容：产物与 2.19.0 **除 `zag` 显示名
+  `ZAG`→`Agent Gear` 外**逐字一致）。
 - **多 vendor 重写**：`zag` 组恒写（`name='Agent Gear'`，可为空 `models: []`）且恒首位；用户组 `providers.<providerId>`
   的 `name/displayName` 取供应商名；`contextLength` 写 `models.<id>.limit.context`（opencode）/ 对应 dsh 结构。
   只重写文件，**不重新跑 harness CLI 硬校验**（容器内可能未安装）；`prepareHarness` 复用同一写函数。

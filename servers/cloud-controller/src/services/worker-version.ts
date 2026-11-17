@@ -186,7 +186,10 @@ export function isSupportedHarnessWorkerVersion(
 export function supportsHarnessModelPush(raw: unknown): boolean {
   const parsed = parseWorkerVersion(raw);
   if (!parsed.ok) return true;
-  return isSupportedWorkerVersion(raw, MIN_HARNESS_MODELS_WORKER_VERSION).supported;
+  const minimum = parseWorkerVersion(MIN_HARNESS_MODELS_WORKER_VERSION);
+  if (!minimum.ok) return true;
+  // 纯版本比较：未来 major（如 3.0.0）仍具备该能力，不能复用注册门禁的 major 限制误判。
+  return compareVersions(parsed, minimum) >= 0;
 }
 
 /**

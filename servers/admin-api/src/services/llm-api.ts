@@ -28,8 +28,13 @@ export const CONTEXT_LENGTH_FIELDS = [
 
 /** 读取正整数元数据：只接受 `>= 1` 的整数（字符串/小数/0/负数/NaN 一律忽略）。 */
 function readPositiveInt(source: Record<string, unknown>, key: string): number | undefined {
-  const value = source[key];
-  return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : undefined;
+  try {
+    const value = source[key];
+    return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : undefined;
+  } catch {
+    // 单字段读取异常（元数据 getter 抛错）不影响其余白名单字段
+    return undefined;
+  }
 }
 
 /** 从上游原始模型条目中按白名单提取上下文长度；取不到返回 `undefined`。 */

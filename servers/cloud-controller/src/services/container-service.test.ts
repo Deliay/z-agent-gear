@@ -1030,7 +1030,8 @@ describe('T-OBS15 Job env 观测注入（F12）', () => {
   });
 });
 
-describe('T-OBS15 container.start span 与 ZAG_INIT_TRACEPARENT（SDK 运行）', () => {  it('注入 ZAG_INIT_TRACEPARENT 且与 container.start span 同 trace；span 属性含容器标识', async () => {
+describe('T-OBS15 container.start span 与 ZAG_INIT_TRACEPARENT（SDK 运行）', () => {
+  it('注入 ZAG_INIT_TRACEPARENT 且与 container.start span 同 trace；span 属性含容器标识', async () => {
     vi.stubEnv('OTEL_EXPORTER_OTLP_ENDPOINT', 'http://127.0.0.1:4318');
     vi.stubEnv('OTEL_METRICS_ENABLED', 'false');
     vi.stubEnv('OTEL_SDK_DISABLED', '');

@@ -347,8 +347,8 @@ sequenceDiagram
 |------|------|------|
 | T-MCS-API1 | `tests/api/src/cloud-controller/internal-api.test.ts`（扩） | 创建 harness 时 secrets 透传 `modelProviders` → 直读 `cloudcontainersecrets.modelProviders` 等于提交 JSON，旧字段同时写入；未携带 → 字段 null（旧调用方零回归） |
 | T-MCS-API2 | `tests/api/src/agent-api/llm.test.ts`（扩） | 供应商 create（上游返回 `context_length`）→ 同步模型带 `contextLength`；重同步不覆盖人工值；`updateModelContextLength` 可设/改/清空、非法值拒绝、global 模型前台拒绝；`providerModelOptions` 返回上游清单含/不含上下文两态 |
-| T-MCS-API3 | `tests/api/src/agent-api/model-config-push.test.ts`（新） | 前台模型 mutation 后，fake cloud-controller（本地 HTTP 桩）收到 `POST /internal/containers/:id/harness-models`，body 的 provision 分组/显示名/vendorId 正确；无 RUNNING 云电脑 → 零请求且 mutation 正常返回；桩返回 500 → mutation 仍成功 |
-| T-MCS-API4 | 同上 | 后台全局 mutation → `POST /internal/model-config/refresh` 被调用（admin-api → agent-api，需真实 `AGENT_API_URL`）→ 全量 RUNNING 云电脑各一次推送；`scope` 非法 400 |
+| T-MCS-API3 | `tests/api/src/agent-api/model-config-push.test.ts`（新） | **实施口径（返工 P2-8）**：`CLOUD_CONTROLLER_URL` 为 agent-api 进程级配置，测试进程无法运行期改指向本地桩，故 API 层锁定「前台模型/供应商 mutation 在无 RUNNING 云电脑时非阻塞成功返回、字段正确」+「`POST /internal/containers/:id/harness-models` 鉴权/404 契约」；provision 分组/显示名/vendorId 正确、桩 500 → mutation 仍成功由单测 T-MP1~6/T-CP1~3 覆盖 |
+| T-MCS-API4 | 同上 | 鉴权（无/错 token → 401）、`scope!=='global'`/body 非法 → 400 `INVALID_SCOPE`、合法 → 202 `{accepted:true}` 且重复调用幂等受理；admin-api → agent-api 的 `notifyModelConfigChanged` 真实调用与 single-flight 全量推送副作用由 T-NOTIFY1/2 与 T-CP3 单测覆盖（不引入跨进程桩） |
 | T-OWN-API1 | `tests/api/src/admin-api/billing-gateway.test.ts`（扩） | `/v1/models` 的 `owned_by`：global `Agent Gear`、user 供应商名；禁用模型立即从列表消失且 `/chat/completions` 404，重新启用恢复 |
 
 ### 6.3 E2E（`tests/e2e`，Playwright）
@@ -500,7 +500,7 @@ pnpm exec playwright test src/model-config-sync.spec.ts
 ### 10.5 Phase 8（测试与文档）
 
 - [ ] 单测矩阵 T-MP1~6 / T-CP1~5 / T-CAT1 / T-UMC1~7 / T-CC-MP1~5 / T-AG-MP1~4 / T-OWN1~2 / T-NOTIFY1~2 / T-MCWEB1~4 全绿
-- [ ] `tests/api` T-MCS-API1~4、T-OWN-API1 全绿；E2E-MCS1~3 通过
+- [ ] `tests/api` T-MCS-API1~4、T-OWN-API1 全绿；E2E-MCS1~3 通过（T-MCS-API3/4 按 §6.2 实施口径：API 层锁定端点契约与 mutation 非阻塞，推送副作用由单测 T-MP/T-CP/T-NOTIFY 覆盖）
 - [ ] 回归清单（§6.4）全绿，无 API 契约漂移
 - [ ] 各包 `AGENTS.md` 与 `docs/engineering/AGENTS.md` 索引已同步
 

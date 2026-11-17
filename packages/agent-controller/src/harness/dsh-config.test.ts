@@ -563,3 +563,58 @@ describe('writeDshConfig insert 受管条目（T-MASQ*）', () => {
     expect(await readFile(patchPath, 'utf-8')).toBe(broken);
   });
 });
+
+describe('legacy 单 vendor 黄金用例（T-AG-MP5）', () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('无 ZAG_MODEL_PROVIDERS 时 cordis.patch.yml / .credentials.yaml 全文与 2.19.0 除 zag 显示名外逐字一致', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+
+    await writeDshConfig({ env: ENV, dshHome: home });
+
+    expect(await readFile(join(home, 'profiles', 'acp', 'cordis.patch.yml'), 'utf8')).toBe(`- id: llm-deepseek
+  disabled: true
+- id: llm-pi-ai
+  config:
+    providers:
+      zag:
+        displayName: Agent Gear
+        apiKeyEnv: ZAG_MODEL_API_KEY
+        api: openai-completions
+        baseURL: http://admin-api:8002/v1
+        models:
+          - id: model-a
+            name: model-a
+            contextWindow: 128000
+          - id: model-b
+            name: model-b
+- id: agent-default-model
+  config:
+    provider: zag
+    model: model-a
+- id: acp
+  name: "@deepseek-ai/dsh-acp"
+  config:
+    provider: zag
+    model: model-a
+- insert:
+    - id: header-masq
+      name: dsh-header-masq
+      config:
+        source: x-deepseek-harness-session-id
+        targets:
+          - x-opencode-session
+        fallbackToSessionId: true
+        debug: false
+`);
+    expect(await readFile(join(home, '.credentials.yaml'), 'utf8')).toBe(`version: 1
+refs:
+  ZAG_MODEL_API_KEY: zag_sk_dsh_super_secret
+`);
+  });
+});

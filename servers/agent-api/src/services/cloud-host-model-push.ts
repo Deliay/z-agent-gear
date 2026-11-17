@@ -27,8 +27,6 @@ async function listRunningHosts(extraFilter: Record<string, unknown>): Promise<P
   const filter: Record<string, unknown> = {
     status: 'RUNNING',
     deletedAt: null,
-    containerId: { $nin: [null, ''] },
-    resourceWorkspaceId: { $ne: null },
     ...extraFilter,
   };
   return runWithWorkspace(undefined, async () => {

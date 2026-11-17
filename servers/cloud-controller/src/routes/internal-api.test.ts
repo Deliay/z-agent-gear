@@ -1251,16 +1251,16 @@ describe('internal management API', () => {
     expect(terminal.status).toBe(409);
     expect(((await terminal.json()) as { error: string }).error).toBe('CONTAINER_NOT_ONLINE');
 
-    // 创建中间态（creating/connecting/initializing）→ 200 offline，且不写 secret、不 emit
+    // 创建中间态（creating/connecting/initializing）→ 200 offline；**仍先持久化**，不 emit
     for (const status of ['creating', 'connecting', 'initializing'] as const) {
       const res = await push(newContainer(status));
       expect(res.status, status).toBe(200);
       expect(await res.json(), status).toEqual({ delivered: false, reason: 'offline' });
     }
-    expect(pushUpdateModelProvision).not.toHaveBeenCalled();
+    expect(pushUpdateModelProvision).toHaveBeenCalledTimes(3);
     expect(requestHarnessModelsStub).not.toHaveBeenCalled();
 
-    // worker 版本 <2.20.0 → 200 worker_unsupported（不 emit、不写 secret）
+    // worker 版本 <2.20.0 → 200 worker_unsupported（不 emit，但**已持久化**，D11/F17）
     pushWorkerVersion.mockReturnValue('2.19.0');
     const unsupported = await push(newContainer('online'));
     expect(unsupported.status).toBe(200);
@@ -1269,7 +1269,13 @@ describe('internal management API', () => {
       reason: 'worker_unsupported',
     });
     expect(requestHarnessModelsStub).not.toHaveBeenCalled();
-    expect(pushUpdateModelProvision).not.toHaveBeenCalled();
+    expect(pushUpdateModelProvision).toHaveBeenCalledTimes(4);
+
+    // 非法 payload 先于离线/版本短路：中间态也返回 400（不被 200 delivered:false 掩盖）
+    const offlineInvalid = await push(newContainer('creating'), { provision: { providers: 'nope' } });
+    expect(offlineInvalid.status).toBe(400);
+    expect(((await offlineInvalid.json()) as { error: string }).error).toBe('INVALID_MODEL_PROVISION');
+    expect(pushUpdateModelProvision).toHaveBeenCalledTimes(4);
 
     // 版本不可得 → 不短路（正常 emit）
     pushWorkerVersion.mockReturnValue(undefined);

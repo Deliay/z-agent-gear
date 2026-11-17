@@ -1612,7 +1612,7 @@ export function connectToServer(
       });
     };
 
-    let provision;
+    let provision: ReturnType<typeof parseModelProvision>;
     try {
       // 载荷非法也回报 success:false，避免服务端空等（契约 §2.11）。
       provision = parseModelProvision(data?.provision);
@@ -1625,6 +1625,10 @@ export function connectToServer(
       configDir: options?.harnessModelPaths?.configDir,
       dshHome: options?.harnessModelPaths?.dshHome,
     });
+    if (env.modelApiKey) {
+      // 配置回读的凭据不在进程 env 中：并入脱敏集合，避免错误文本带出原值。
+      secrets.push(env.modelApiKey);
+    }
     if (!env.modelBaseUrl || !env.modelApiKey) {
       fail('missing required environment variable(s): ZAG_MODEL_BASE_URL, ZAG_MODEL_API_KEY');
       return;

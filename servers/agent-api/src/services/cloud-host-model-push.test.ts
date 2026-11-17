@@ -75,14 +75,12 @@ beforeEach(() => {
 });
 
 describe('pushModelProvisionForTenant（T-CP1）', () => {
-  it('only selects RUNNING non-deleted hosts of the tenant with a container', async () => {
+  it('only selects RUNNING non-deleted hosts of the tenant（缺失 container/workspace 的存量行由逐台 warn 跳过）', async () => {
     await pushModelProvisionForTenant('tenant-1');
 
     expect(mocks.cloudHostFind).toHaveBeenCalledWith({
       status: 'RUNNING',
       deletedAt: null,
-      containerId: { $nin: [null, ''] },
-      resourceWorkspaceId: { $ne: null },
       tenantId: 'tenant-1',
     });
   });
