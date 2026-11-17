@@ -802,6 +802,82 @@ describe.skipIf(!TOKEN)('cloud-controller internal API', () => {
       await expect(invalid.json()).resolves.toMatchObject({ error: 'INVALID_HARNESS' });
     },
   );
+
+  // -------------------------------------------------------------------------
+  // 模型下发优化 #533（计划 §6.2 T-MCS-API1 / 契约 A.2.2）：
+  // 创建期 secrets.modelProviders 透传 → `cloudcontainersecrets.modelProviders` 原样落库，
+  // 旧字段 modelIds / modelContextLengths 同时写入；未携带 → null（旧调用方零回归）。
+  // -------------------------------------------------------------------------
+  it.skipIf(!HAS_MONGO)(
+    'T-MCS-API1: 创建 harness 时 modelProviders 原样落库且旧字段并存；未携带时为 null',
+    async () => {
+      const db = await mongoDb();
+      expect(db).not.toBeNull();
+      const wid = await ensureHarnessWorkload();
+
+      const readSecret = (containerId: string) =>
+        db!.collection('cloudcontainersecrets').findOne({ containerId });
+
+      const modelProviders = JSON.stringify({
+        providers: [
+          {
+            vendorId: 'zag',
+            displayName: 'Agent Gear',
+            models: [{ id: 'model-a', contextLength: 128000 }],
+          },
+          {
+            vendorId: new mongoose.Types.ObjectId().toString(),
+            displayName: '我的 OpenAI',
+            models: [{ id: 'gpt-5.1' }],
+          },
+        ],
+      });
+      const modelIds = '["model-a","gpt-5.1"]';
+      const modelContextLengths = '{"model-a":128000}';
+
+      const baseSecrets = harnessBody(['opencode'], wid).secrets as Record<string, string>;
+
+      // 1) 新调用方携带 modelProviders：原样落库，旧字段投影同时写入。
+      const withProviders = await req('/internal/containers', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...harnessBody(['opencode'], wid),
+          secrets: { ...baseSecrets, modelIds, modelContextLengths, modelProviders },
+        }),
+      });
+      expect(withProviders.status).toBe(201);
+      const createdWith = (await withProviders.json()) as { id: string };
+      try {
+        const doc = await readSecret(createdWith.id);
+        expect(doc, 'cloudcontainersecrets 文档应存在').toBeTruthy();
+        // 契约 A.2.2：modelProviders 为提交的 JSON 原文（不做重排/裁剪）
+        expect(doc!.modelProviders).toBe(modelProviders);
+        // 旧字段照旧写入（旧 worker 读取侧回退来源）
+        expect(doc!.modelIds).toBe(modelIds);
+        expect(doc!.modelContextLengths).toBe(modelContextLengths);
+      } finally {
+        await req(`/internal/containers/${createdWith.id}`, { method: 'DELETE' });
+        await db!.collection('cloudcontainersecrets').deleteOne({ containerId: createdWith.id });
+      }
+
+      // 2) 旧调用方未携带 modelProviders：字段落 null，其余口径零回归。
+      const legacy = await req('/internal/containers', {
+        method: 'POST',
+        body: JSON.stringify({ ...harnessBody(['opencode'], wid), secrets: baseSecrets }),
+      });
+      expect(legacy.status).toBe(201);
+      const createdLegacy = (await legacy.json()) as { id: string };
+      try {
+        const doc = await readSecret(createdLegacy.id);
+        expect(doc, 'cloudcontainersecrets 文档应存在').toBeTruthy();
+        expect(doc!.modelProviders).toBeNull();
+        expect(doc!.modelIds).toBe(baseSecrets.modelIds);
+      } finally {
+        await req(`/internal/containers/${createdLegacy.id}`, { method: 'DELETE' });
+        await db!.collection('cloudcontainersecrets').deleteOne({ containerId: createdLegacy.id });
+      }
+    },
+  );
 });
 
 // Phase 4：通过真实 Job manifest 构造断言 ephemeral-storage（无需 K8s 集群）

@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import { modelService } from '../../services/model.js';
 import { modelRenameRecordService } from '../../services/model-rename-record.js';
+import { notifyModelConfigChanged } from '../../services/model-push-notifier.js';
 import { providerService, PROVIDER_CONNECTIVITY_ERROR } from '../../services/provider.js';
 import { assertAdmin } from './guard.js';
 import type { AdminAuthContext } from './auth.js';
@@ -67,7 +68,10 @@ export const modelResolvers = {
     ) => {
       assertAdmin(context);
       try {
-        return await modelService.createCustom(args.input);
+        const result = await modelService.createCustom(args.input);
+        // fire-and-forget：通知 agent-api 全量下发（内部吞错，不影响 mutation 成功语义）
+        void notifyModelConfigChanged();
+        return result;
       } catch (err) {
         mapModelError(err);
       }
@@ -79,7 +83,9 @@ export const modelResolvers = {
     ) => {
       assertAdmin(context);
       try {
-        return await modelService.importModels(args.providerId, args.names);
+        const result = await modelService.importModels(args.providerId, args.names);
+        void notifyModelConfigChanged();
+        return result;
       } catch (err) {
         mapModelError(err);
       }
@@ -94,6 +100,7 @@ export const modelResolvers = {
       if (!result) {
         throw new GraphQLError('Model not found');
       }
+      void notifyModelConfigChanged();
       return result;
     },
     toggleGlobalModel: async (
@@ -106,6 +113,7 @@ export const modelResolvers = {
       if (!result) {
         throw new GraphQLError('Model not found or its provider is disabled');
       }
+      void notifyModelConfigChanged();
       return result;
     },
     updateGlobalModelSortOrder: async (
@@ -114,7 +122,9 @@ export const modelResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      return modelService.updateSortOrder(args.ids);
+      const result = await modelService.updateSortOrder(args.ids);
+      void notifyModelConfigChanged();
+      return result;
     },
     updateModelContextLength: async (
       _parent: unknown,
@@ -123,7 +133,9 @@ export const modelResolvers = {
     ) => {
       assertAdmin(context);
       try {
-        return await modelService.updateContextLength(args.modelId, args.contextLength ?? null);
+        const result = await modelService.updateContextLength(args.modelId, args.contextLength ?? null);
+        void notifyModelConfigChanged();
+        return result;
       } catch (err) {
         mapModelError(err);
       }

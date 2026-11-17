@@ -35,6 +35,8 @@ export interface CloudContainerEntity {
   containerApiKeyId: string | null;
   /** 云电脑最低 agent-gear 版本（已按 max(常量, 请求值) 收敛）；普通容器为 null。 */
   agentGearMinVersion: string | null;
+  /** worker `register` 上报的 agent-gear 版本（门禁通过后刷新）；未注册过为 null。 */
+  agentGearVersion: string | null;
   /** 容器 TTL 到期时间；历史记录为 null。 */
   expiresAt: Date | null;
   tokenHash: string | null;
@@ -98,6 +100,7 @@ export interface CreateContainerInput {
   controllerKeyId?: string | null;
   containerApiKeyId?: string | null;
   agentGearMinVersion?: string | null;
+  agentGearVersion?: string | null;
   expiresAt?: Date | null;
   status?: CloudContainerStatus;
   tokenHash?: string | null;
@@ -181,6 +184,7 @@ interface RawDoc {
   controllerKeyId?: string | null;
   containerApiKeyId?: string | null;
   agentGearMinVersion?: string | null;
+  agentGearVersion?: string | null;
   expiresAt?: Date | null;
   tokenHash?: string | null;
   image: string;
@@ -286,6 +290,7 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     controllerKeyId: doc.controllerKeyId ?? null,
     containerApiKeyId: doc.containerApiKeyId ?? null,
     agentGearMinVersion: doc.agentGearMinVersion ?? null,
+    agentGearVersion: doc.agentGearVersion ?? null,
     expiresAt: doc.expiresAt ?? null,
     tokenHash: doc.tokenHash ?? null,
     image: doc.image,
@@ -355,6 +360,7 @@ export class MongoContainerRepository implements ContainerRepository {
       controllerKeyId: input.controllerKeyId ?? null,
       containerApiKeyId: input.containerApiKeyId ?? null,
       agentGearMinVersion: input.agentGearMinVersion ?? null,
+      agentGearVersion: input.agentGearVersion ?? null,
       expiresAt: input.expiresAt ?? null,
       tokenHash: input.tokenHash ?? null,
       connectedAt: input.connectedAt ?? null,
@@ -460,6 +466,7 @@ export class InMemoryContainerRepository implements ContainerRepository {
       controllerKeyId: input.controllerKeyId ?? null,
       containerApiKeyId: input.containerApiKeyId ?? null,
       agentGearMinVersion: input.agentGearMinVersion ?? null,
+      agentGearVersion: input.agentGearVersion ?? null,
       expiresAt: input.expiresAt ?? null,
       tokenHash: input.tokenHash ?? null,
       image: input.image,

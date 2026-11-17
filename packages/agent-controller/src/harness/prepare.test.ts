@@ -242,6 +242,42 @@ describe('prepareHarness (T-AG7..T-AG12)', () => {
     expect(secondPatch).toBe(firstPatch);
   });
 
+  it('T-AG-MP4: ZAG_MODEL_PROVIDERS only（无 ZAG_MODEL_IDS）→ 多 vendor 写入，摘要为投影数量', async () => {
+    const dir = await makeDir();
+    dirs.push(dir);
+    const configDir = join(dir, 'config');
+
+    const result = await prepareHarness({
+      env: {
+        ZAG_MODEL_BASE_URL: 'http://admin-api:8002/v1',
+        ZAG_MODEL_API_KEY: 'zag_sk_super_secret',
+        ZAG_DEFAULT_WORKSPACE: join(dir, 'workspace'),
+        ZAG_HARNESS_TYPES: 'opencode',
+        ZAG_MODEL_PROVIDERS: JSON.stringify({
+          providers: [
+            {
+              vendorId: 'zag',
+              displayName: 'Agent Gear',
+              models: [{ id: 'model-a', contextLength: 128000 }],
+            },
+            { vendorId: 'p1', displayName: 'P1', models: [{ id: 'model-b' }] },
+          ],
+        }),
+      },
+      runner: async () => ({ stdout: '1.2.3', stderr: '' }),
+      configDir,
+      makeDir: async () => {},
+    });
+
+    expect(result.env.modelCount).toBe(2);
+    expect(result.items[0].modelCount).toBe(2);
+    const config = parse(await readFile(join(configDir, 'opencode.jsonc'), 'utf-8'));
+    expect(Object.keys(config.providers)).toEqual(['zag', 'p1']);
+    expect(config.providers.zag.name).toBe('Agent Gear');
+    expect(config.providers.p1.name).toBe('P1');
+    expect(formatPrepareSummary(result)).not.toContain('zag_sk_super_secret');
+  });
+
   it('T-PREP5: dsh 校验失败 → 整体抛错且不写配置（opencode 未执行）', async () => {
     const dir = await makeDir();
     dirs.push(dir);

@@ -8,7 +8,28 @@ const FAKE_MODELS = [
   'gpt-3.5-turbo',
 ];
 
-function handleRequest(req: IncomingMessage, res: ServerResponse, models: string[]) {
+/**
+ * 可选的模型条目形态（模型下发优化 #533）：
+ * 纯字符串保持历史响应逐字不变；带 `contextLength` 的对象额外输出 `context_length`，
+ * 用于验证「上游提供上下文元数据 → 同步模型携带 contextLength」（T-MCS-API2）。
+ */
+export type MockModelSpec = string | { id: string; contextLength?: number };
+
+function toModelEntry(spec: MockModelSpec): Record<string, unknown> {
+  const id = typeof spec === 'string' ? spec : spec.id;
+  const entry: Record<string, unknown> = {
+    id,
+    object: 'model',
+    created: 1715368187,
+    owned_by: 'openai',
+  };
+  if (typeof spec !== 'string' && typeof spec.contextLength === 'number') {
+    entry.context_length = spec.contextLength;
+  }
+  return entry;
+}
+
+function handleRequest(req: IncomingMessage, res: ServerResponse, models: MockModelSpec[]) {
   const url = req.url ?? '';
 
   // OpenAI: GET /v1/models or GET /models（Anthropic 也走同一路径；旧 x-api-key 分支永远不可达，已清理）
@@ -17,12 +38,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse, models: string
     res.end(
       JSON.stringify({
         object: 'list',
-        data: models.map((id) => ({
-          id,
-          object: 'model',
-          created: 1715368187,
-          owned_by: 'openai',
-        })),
+        data: models.map(toModelEntry),
       }),
     );
     return;
@@ -37,7 +53,7 @@ export interface MockServer {
   close: () => Promise<void>;
 }
 
-export function startMockServer(models: string[] = FAKE_MODELS): Promise<MockServer> {
+export function startMockServer(models: MockModelSpec[] = FAKE_MODELS): Promise<MockServer> {
   return new Promise((resolve) => {
     const server = createServer((req, res) => handleRequest(req, res, models));
     server.listen(0, '127.0.0.1', () => {

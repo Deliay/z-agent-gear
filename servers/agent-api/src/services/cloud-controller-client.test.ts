@@ -41,6 +41,7 @@ describe('CloudControllerClient', () => {
         modelBaseUrl: 'http://admin-api/v1',
         modelIds: '["a"]',
         modelContextLengths: '{"a":128000}',
+        modelProviders: '{"providers":[]}',
         defaultWorkspace: '/home/worker/workspace',
       },
     });
@@ -79,6 +80,25 @@ describe('CloudControllerClient', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('T-UPG-CL1: upgradeAgentGear POST A.2.14（可选 targetVersion）并返回 accepted', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ accepted: true, containerId: 'container-1', currentVersion: '2.20.0' }),
+    });
+    const client = new CloudControllerClient('http://cc:10004', 'internal-token');
+    await expect(
+      client.upgradeAgentGear('container-1', { targetVersion: '2.21.0' }),
+    ).resolves.toEqual({ accepted: true, containerId: 'container-1', currentVersion: '2.20.0' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://cc:10004/internal/containers/container-1/upgrade-agent-gear');
+    expect((init as RequestInit).method).toBe('POST');
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({ targetVersion: '2.21.0' });
+
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ accepted: true }) });
+    await client.upgradeAgentGear('container-1');
+    expect((fetchMock.mock.calls[1][1] as RequestInit).body).toBeUndefined();
+  });
+
   it('filters container list by hostId/userId', async () => {
     fetchMock.mockResolvedValue({ ok: true, json: async () => [] });
     const client = new CloudControllerClient('http://cc', 'token');
@@ -86,5 +106,48 @@ describe('CloudControllerClient', () => {
     expect(fetchMock.mock.calls[0][0]).toBe(
       'http://cc/internal/containers?hostId=h1&userId=u1',
     );
+  });
+
+  it('pushes harness models to the container and normalizes the ack result', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ delivered: true, appliedTypes: ['opencode', 'deepseek_harness'] }),
+    });
+    const client = new CloudControllerClient('http://cc', 'token');
+    const provision = {
+      providers: [{ vendorId: 'zag', displayName: 'Agent Gear', models: [{ id: 'a' }] }],
+    };
+
+    await expect(client.pushHarnessModels('c 1', provision)).resolves.toEqual({
+      delivered: true,
+      appliedTypes: ['opencode', 'deepseek_harness'],
+    });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://cc/internal/containers/c%201/harness-models');
+    expect((init as RequestInit).method).toBe('POST');
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({ provision });
+  });
+
+  it('returns delivered:false with reason instead of throwing', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ delivered: false, reason: 'ack_timeout' }),
+    });
+    const client = new CloudControllerClient('http://cc', 'token');
+    await expect(
+      client.pushHarnessModels('c1', { providers: [] }),
+    ).resolves.toEqual({ delivered: false, reason: 'ack_timeout' });
+  });
+
+  it('maps non-2xx to CloudControllerRequestError with status/code', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: 'CONTAINER_NOT_ONLINE' }),
+    });
+    const client = new CloudControllerClient('http://cc', 'token');
+    await expect(
+      client.pushHarnessModels('c1', { providers: [] }),
+    ).rejects.toMatchObject({ status: 409, code: 'CONTAINER_NOT_ONLINE' });
   });
 });

@@ -6,6 +6,9 @@ import { resetRepoWorkflowPrompted } from '@/stores/repo-workflow-prompt';
 
 const mockUseQuery = vi.fn();
 const mockClientQuery = vi.fn();
+const mockMutate = vi.fn();
+const mockToastSuccess = vi.fn();
+const mockToastError = vi.fn();
 const mockUseApolloClient = vi.fn(() => ({ query: mockClientQuery }));
 const mockIsMobile = vi.fn(() => false);
 const mockNavigate = vi.fn();
@@ -13,6 +16,14 @@ const mockNavigate = vi.fn();
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useApolloClient: () => mockUseApolloClient(),
+  useMutation: () => [mockMutate, { loading: false }],
+}));
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+    error: (...args: unknown[]) => mockToastError(...args),
+  },
 }));
 
 vi.mock('../../hooks/useIsMobile', () => ({
@@ -596,5 +607,195 @@ describe('ControllerConfigPage 工作流页签（T-RW-WEB6）', () => {
     await waitFor(() => {
       expect(screen.getByTestId('repo-workflow-prompt-dialog')).toBeInTheDocument();
     });
+  });
+});
+
+describe('ControllerConfigPage 工作组件版本区块（T-UPG-W）', () => {
+  const props = { controllerId: 'ctrl-1', onBack: vi.fn() };
+
+  function renderWithHost(host: CloudHostData) {
+    mockControllers([makeController({ type: 'cloud', cloudHost: host })]);
+    return render(<ControllerConfigPage {...props} />);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsMobile.mockReturnValue(false);
+    mockMutate.mockReset();
+    mockClientQuery.mockReset();
+  });
+
+  it('T-UPG-W1: 版本区块三态渲染与自动升级周期小字', () => {
+    const { unmount } = renderWithHost(
+      makeCloudHost({
+        agentGearVersion: {
+          currentVersion: '2.20.0',
+          latestVersion: '2.20.0',
+          upgradeAvailable: false,
+          autoUpdateIntervalMinutes: 10,
+        },
+      }),
+    );
+    const block = screen.getByTestId('cloud-host-agent-gear-version');
+    expect(block).toHaveTextContent('当前版本 2.20.0');
+    expect(block).toHaveTextContent('最新版本 2.20.0');
+    expect(block).toHaveTextContent('自动升级每 10 分钟检查一次');
+    expect(screen.queryByRole('button', { name: '立即升级' })).not.toBeInTheDocument();
+    unmount();
+
+    renderWithHost(
+      makeCloudHost({
+        agentGearVersion: {
+          currentVersion: '2.19.0',
+          latestVersion: '2.20.0',
+          upgradeAvailable: true,
+          autoUpdateIntervalMinutes: 5,
+        },
+      }),
+    );
+    expect(screen.getByRole('button', { name: '立即升级' })).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-host-agent-gear-version')).toHaveTextContent(
+      '自动升级每 5 分钟检查一次',
+    );
+  });
+
+  it('T-UPG-W1b: 版本字段缺失展示 —、无按钮、周期回退默认 10', () => {
+    renderWithHost(makeCloudHost());
+    const block = screen.getByTestId('cloud-host-agent-gear-version');
+    expect(block).toHaveTextContent('当前版本 —');
+    expect(block).toHaveTextContent('最新版本 —');
+    expect(block).toHaveTextContent('自动升级每 10 分钟检查一次');
+    expect(screen.queryByRole('button', { name: '立即升级' })).not.toBeInTheDocument();
+  });
+
+  it('T-UPG-W2: 按钮可见性门（非 RUNNING / 已软删 / upgradeAvailable=false 均不渲染）', () => {
+    const available = {
+      currentVersion: '2.19.0',
+      latestVersion: '2.20.0',
+      upgradeAvailable: true,
+      autoUpdateIntervalMinutes: 10,
+    };
+    for (const overrides of [
+      { status: 'STARTING' as const, agentGearVersion: available },
+      { status: 'STOPPED' as const, agentGearVersion: available },
+      { status: 'RUNNING' as const, deletedAt: '2026-01-01T00:00:00Z', agentGearVersion: available },
+      {
+        status: 'RUNNING' as const,
+        agentGearVersion: { ...available, upgradeAvailable: false },
+      },
+    ]) {
+      const { unmount } = renderWithHost(makeCloudHost(overrides));
+      expect(screen.queryByRole('button', { name: '立即升级' })).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('T-UPG-W3: 点击立即升级携带 controllerId、进入升级中态、轮询收敛 toast', async () => {
+    let resolveMutation: ((value: unknown) => void) | undefined;
+    mockMutate.mockReturnValue(
+      new Promise((resolve) => {
+        resolveMutation = resolve;
+      }),
+    );
+    mockClientQuery.mockResolvedValue({
+      data: {
+        cloudHost: {
+          agentGearVersion: {
+            currentVersion: '2.21.0',
+            latestVersion: '2.21.0',
+            upgradeAvailable: false,
+            autoUpdateIntervalMinutes: 10,
+          },
+        },
+      },
+    });
+    renderWithHost(
+      makeCloudHost({
+        agentGearVersion: {
+          currentVersion: '2.20.0',
+          latestVersion: '2.21.0',
+          upgradeAvailable: true,
+          autoUpdateIntervalMinutes: 10,
+        },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '立即升级' }));
+    await waitFor(() =>
+      expect(mockMutate).toHaveBeenCalledWith({ variables: { controllerId: 'ctrl-1' } }),
+    );
+    expect(screen.getByRole('button', { name: /升级中/ })).toBeDisabled();
+
+    resolveMutation?.({ data: { upgradeCloudHostAgentGear: { accepted: true } } });
+    await waitFor(() =>
+      expect(mockToastSuccess).toHaveBeenCalledWith('工作组件已升级到 2.21.0'),
+    );
+    expect(mockClientQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variables: { id: 'cloud-1' },
+        fetchPolicy: 'network-only',
+      }),
+    );
+  });
+
+  it('T-UPG-W4: 轮询 3 分钟超时 toast；卸载清理定时器', async () => {
+    vi.useFakeTimers();
+    try {
+      mockMutate.mockResolvedValue({ data: { upgradeCloudHostAgentGear: { accepted: true } } });
+      mockClientQuery.mockResolvedValue({
+        data: {
+          cloudHost: {
+            agentGearVersion: {
+              currentVersion: '2.20.0',
+              latestVersion: '2.21.0',
+              upgradeAvailable: true,
+              autoUpdateIntervalMinutes: 10,
+            },
+          },
+        },
+      });
+      const { unmount } = renderWithHost(
+        makeCloudHost({
+          agentGearVersion: {
+            currentVersion: '2.20.0',
+            latestVersion: '2.21.0',
+            upgradeAvailable: true,
+            autoUpdateIntervalMinutes: 10,
+          },
+        }),
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: '立即升级' }));
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(3 * 60 * 1000 + 2000);
+      expect(mockToastError).toHaveBeenCalledWith('升级超时，可重试或等待自动升级');
+
+      const callsBeforeUnmount = mockClientQuery.mock.calls.length;
+      unmount();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockClientQuery.mock.calls.length).toBe(callsBeforeUnmount);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('T-UPG-W5: mutation 失败经 lib 映射为中文 toast，按钮恢复可重试', async () => {
+    mockMutate.mockRejectedValue(new Error('container is not online'));
+    renderWithHost(
+      makeCloudHost({
+        agentGearVersion: {
+          currentVersion: '2.20.0',
+          latestVersion: '2.21.0',
+          upgradeAvailable: true,
+          autoUpdateIntervalMinutes: 10,
+        },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '立即升级' }));
+    await waitFor(() =>
+      expect(mockToastError).toHaveBeenCalledWith('云电脑未在线，请稍后重试或等待自动升级'),
+    );
+    expect(screen.getByRole('button', { name: '立即升级' })).toBeEnabled();
   });
 });

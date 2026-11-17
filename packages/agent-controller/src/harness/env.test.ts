@@ -65,6 +65,80 @@ describe('readHarnessEnv (T-AG7/T-AG11)', () => {
   });
 });
 
+describe('readHarnessEnv ZAG_MODEL_PROVIDERS（T-AG-MP1）', () => {
+  const PROVISION = {
+    providers: [
+      {
+        vendorId: 'zag',
+        displayName: 'Agent Gear',
+        models: [{ id: 'kimi-k2', contextLength: 262144 }],
+      },
+      { vendorId: 'p1', displayName: '我的 OpenAI', models: [{ id: 'gpt-5.1' }] },
+    ],
+  };
+
+  it('accepts ZAG_MODEL_PROVIDERS without ZAG_MODEL_IDS and projects legacy fields', () => {
+    const env = readHarnessEnv({
+      ...VALID_ENV,
+      ZAG_MODEL_IDS: undefined,
+      ZAG_MODEL_PROVIDERS: JSON.stringify(PROVISION),
+    } as NodeJS.ProcessEnv);
+
+    expect(env.modelProviders).toEqual(PROVISION);
+    expect(env.modelIds).toEqual(['kimi-k2', 'gpt-5.1']);
+    expect(env.modelContextLengths).toEqual({ 'kimi-k2': 262144 });
+  });
+
+  it('keeps explicit ZAG_MODEL_IDS/modelContextLengths when both are provided', () => {
+    const env = readHarnessEnv({
+      ...VALID_ENV,
+      ZAG_MODEL_PROVIDERS: JSON.stringify(PROVISION),
+    });
+
+    expect(env.modelProviders).toEqual(PROVISION);
+    expect(env.modelIds).toEqual(['model-a', 'model-b']);
+    expect(env.modelContextLengths).toEqual({});
+  });
+
+  it('rejects an invalid ZAG_MODEL_PROVIDERS without echoing the raw value', () => {
+    let error: unknown;
+    try {
+      readHarnessEnv({ ...VALID_ENV, ZAG_MODEL_PROVIDERS: 'not-json-secret-value' });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(HarnessEnvError);
+    const message = (error as Error).message;
+    expect(message).toContain('ZAG_MODEL_PROVIDERS');
+    expect(message).not.toContain('not-json-secret-value');
+  });
+
+  it('rejects structurally invalid providers (field/index only in the message)', () => {
+    let error: unknown;
+    try {
+      readHarnessEnv({
+        ...VALID_ENV,
+        ZAG_MODEL_PROVIDERS: JSON.stringify({
+          providers: [{ vendorId: '', displayName: 'x', models: [] }],
+        }),
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(HarnessEnvError);
+    expect((error as Error).message).toContain('providers[0].vendorId');
+    expect((error as Error).message).not.toContain('displayName');
+  });
+
+  it('still requires ZAG_MODEL_IDS when ZAG_MODEL_PROVIDERS is absent', () => {
+    expect(() =>
+      readHarnessEnv({ ...VALID_ENV, ZAG_MODEL_IDS: '' } as NodeJS.ProcessEnv),
+    ).toThrowError(/ZAG_MODEL_IDS/);
+  });
+});
+
 describe('parseModelIds (T-AG11)', () => {
   it('dedupes and drops empty/whitespace entries while preserving order', () => {
     expect(parseModelIds('["b"," a ","b","","   ","c","a"]')).toEqual(['b', 'a', 'c']);

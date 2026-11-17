@@ -1,7 +1,9 @@
 import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { readHarnessEnv, resolvePrepareTypes, type HarnessEnv, type PrepareHarnessType } from './env.js';
 import { verifyDshCli } from './dsh-cli.js';
 import { writeDshConfig, defaultDshHome, type WriteDshConfigResult } from './dsh-config.js';
+import { resolveProvision, projectToLegacy } from './model-providers.js';
 import { verifyOpencodeCli, type CommandRunner } from './opencode-cli.js';
 import { writeOpencodeConfig, type WriteOpencodeConfigResult } from './opencode-config.js';
 
@@ -33,6 +35,8 @@ export interface PrepareHarnessOptions {
   runner?: CommandRunner;
   /** 覆盖 OpenCode 配置目录（测试/定制场景）。 */
   configDir?: string;
+  /** 覆盖 opencode vendor 状态文件（测试/定制场景）。 */
+  statePath?: string;
   /** 覆盖 dsh home（测试/定制场景；缺省 `$DSH_HOME` 或 `~/.dsh`）。 */
   dshHome?: string;
   /** 创建工作区的实现（测试注入）。 */
@@ -77,6 +81,14 @@ export async function prepareHarness(
   const sourceEnv = options.env ?? process.env;
   const env = readHarnessEnv(sourceEnv);
   const types = resolvePrepareTypes(sourceEnv);
+  const provision = resolveProvision(env);
+  // 摘要口径与旧版一致：投影后的模型数量（组序展开、同名去重）。
+  const modelCount = projectToLegacy(provision).modelIds.length;
+  // 状态文件缺省 `~/.zag/model-providers-state.json`；注入 configDir（测试/定制）时跟随该目录，
+  // 避免测试/定制场景写用户主目录。
+  const statePath =
+    options.statePath ??
+    (options.configDir ? join(options.configDir, '.model-providers-state.json') : undefined);
 
   const makeDir =
     options.makeDir ?? ((path: string) => mkdir(path, { recursive: true }).then(() => undefined));
@@ -99,7 +111,12 @@ export async function prepareHarness(
   for (const type of types) {
     const version = versions.get(type)!;
     if (type === 'opencode') {
-      const config = await writeOpencodeConfig({ env, configDir: options.configDir });
+      const config = await writeOpencodeConfig({
+        env,
+        provision,
+        configDir: options.configDir,
+        statePath,
+      });
       items.push({
         type,
         ok: true,
@@ -113,6 +130,7 @@ export async function prepareHarness(
 
     const config = await writeDshConfig({
       env,
+      provision,
       dshHome: options.dshHome ?? defaultDshHome(sourceEnv),
     });
     items.push({
@@ -129,7 +147,7 @@ export async function prepareHarness(
     env: {
       modelBaseUrl: env.modelBaseUrl,
       defaultWorkspace: env.defaultWorkspace,
-      modelCount: env.modelIds.length,
+      modelCount,
       types,
     },
     items,

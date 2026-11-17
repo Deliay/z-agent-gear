@@ -18,6 +18,9 @@ import { worktreeHandler } from './worktree-handler.js';
 import { fsHandler } from './fs-handler.js';
 import { scanWorkflowTemplates } from './workflow-templates.js';
 import { scanKnowledgeBases } from './knowledge-bases.js';
+import { resolvePrepareTypes } from './harness/env.js';
+import { resolveConfiguredCredentials } from './harness/model-credentials.js';
+import { applyModelProvision, parseModelProvision } from './harness/model-providers.js';
 import { gatewayManager } from './gateway.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { McpRelay } from './mcp/relay.js';
@@ -38,6 +41,9 @@ const { version: CONTROLLER_VERSION } = createRequire(import.meta.url)('../packa
 const workloadExecutor = new WorkloadExecutor();
 // shutdown 到达时若仍有 post 批次在跑，最多等待该时长后退出（契约 §2.8）。
 const SHUTDOWN_WORKLOAD_WAIT_MS = 5000;
+// 升级回执 emit 后延迟约 100ms 再优雅停机（D5）：保证 ack flush 出 socket 缓冲，
+// 避免服务端误判回执超时（`UPGRADE_NOT_ACCEPTED`）而用户侧已重启。
+const AGENT_GEAR_UPGRADE_SHUTDOWN_DELAY_MS = 100;
 // 云电脑模式 `KEY_ALREADY_ONLINE` 退避重连：断开后手动重连（1s→2s→…→30s）。
 // 非云电脑模式保持既有行为（仅断开，不做额外兜底）。
 const CLOUD_HOST_RECONNECT_BASE_MS = 1000;
@@ -155,6 +161,15 @@ export interface ConnectToServerOptions {
   onShutdown?: (payload: ShutdownPayload) => void;
   /** 注入 logger（测试用）；缺省进程级单例，统一 `component: 'socketio-client'`。 */
   logger?: ObservationLogger;
+  /**
+   * 运行期模型下发（`harness:models`）的写盘目录覆盖（测试/定制场景）。
+   * 缺省 `~/.config/opencode`、`~/.dsh` 与 `~/.zag/model-providers-state.json`。
+   */
+  harnessModelPaths?: {
+    configDir?: string;
+    dshHome?: string;
+    statePath?: string;
+  };
 }
 
 interface ErrorPayload {
@@ -164,6 +179,8 @@ interface ErrorPayload {
 
 interface ShutdownPayload {
   reason: string;
+  /** 显式退出码（云电脑升级事件传 0；缺省按 reason 分类，见 exit-codes.ts）。 */
+  exitCode?: number;
 }
 
 interface AcpCheckPayload {
@@ -495,6 +512,8 @@ export function connectToServer(
   let reconnectAttempt = 0;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let shutdownStarted = false;
+  // 升级事件幂等守卫：已接受过升级后再次收到事件只回执拒绝，不重复停机。
+  let upgradeAccepted = false;
 
   const clearReconnectTimer = (): void => {
     if (reconnectTimer) {
@@ -659,6 +678,38 @@ export function connectToServer(
     } else {
       finishShutdown();
     }
+  });
+
+  // 云电脑升级事件（契约 `cloud-controller-websocket.md` §2.11/§2.12，agent-gear 2.20.0 起）。
+  // worker **不执行安装**：回执后延迟 ~100ms（D5，保证 ack flush）再优雅退出 0，
+  // 由入口保活链路完成「钉版安装 → 以新版本重启」。本地模式同样注册但事件永不到达
+  // （controller-api 从不下发），仅保留 `process.exit(0)` 死路径。
+  socket.on('agent-gear:upgrade', (data?: { targetVersion?: string }) => {
+    const targetVersion = typeof data?.targetVersion === 'string' ? data.targetVersion : undefined;
+    if (upgradeAccepted || shutdownStarted) {
+      log.info(
+        { event: 'agent_gear_upgrade', targetVersion, currentVersion: CONTROLLER_VERSION, accepted: false },
+        'agent-gear upgrade rejected: shutting down',
+      );
+      socket.emit('agent-gear:upgrade:result', { accepted: false, reason: 'shutting_down' });
+      return;
+    }
+    upgradeAccepted = true;
+    log.info(
+      { event: 'agent_gear_upgrade', targetVersion, currentVersion: CONTROLLER_VERSION, accepted: true },
+      'agent-gear upgrade accepted',
+    );
+    socket.emit('agent-gear:upgrade:result', { accepted: true, currentVersion: CONTROLLER_VERSION });
+    setTimeout(() => {
+      if (shutdownStarted) return;
+      if (options?.onShutdown) {
+        // 云电脑模式：由 supervisor 关闭双连接，以退出码 0 结束（入口保活重启并钉版安装）。
+        notifyShutdown({ reason: 'agent-gear upgrade', exitCode: 0 });
+        return;
+      }
+      // 本地模式死路径：复用既有「信号退出 0」语义，不新增退出码常量。
+      process.exit(0);
+    }, AGENT_GEAR_UPGRADE_SHUTDOWN_DELAY_MS);
   });
 
   // Workload events
@@ -1578,6 +1629,77 @@ export function connectToServer(
     );
     const result = await scanKnowledgeBases(data.path);
     socket.emit('knowledge-bases:scan:result', { requestId: data.requestId, ...result });
+  });
+
+  // 运行期模型下发（契约 §2.13/§2.14）：全量替换 opencode/dsh 的模型配置。
+  // 仅 `/worker` 连接处理（handleWorkload=true）；标准连接零响应。
+  socket.on('harness:models', async (data: { requestId?: unknown; provision?: unknown }) => {
+    if (!handleWorkload) return;
+    const requestId = typeof data?.requestId === 'string' ? data.requestId : '';
+    log.info({ event: 'harness_models', requestId }, 'harness:models received');
+
+    const secrets = collectSecretValues(process.env);
+    const fail = (message: string, appliedTypes: string[] = []): void => {
+      // 错误文本可能含调用栈/上游片段：统一脱敏后再回包（契约 §2.14）。
+      const error = redactSecrets(message, secrets);
+      log.warn({ event: 'harness_models_failed', requestId, error }, 'harness:models failed');
+      socket.emit('harness:models:result', {
+        requestId,
+        success: false,
+        appliedTypes,
+        error,
+      });
+    };
+
+    let provision: ReturnType<typeof parseModelProvision>;
+    try {
+      // 载荷非法也回报 success:false，避免服务端空等（契约 §2.13）。
+      provision = parseModelProvision(data?.provision);
+    } catch (error) {
+      fail((error as Error).message);
+      return;
+    }
+
+    const env = await resolveConfiguredCredentials({
+      configDir: options?.harnessModelPaths?.configDir,
+      dshHome: options?.harnessModelPaths?.dshHome,
+    });
+    if (env.modelApiKey) {
+      // 配置回读的凭据不在进程 env 中：并入脱敏集合，避免错误文本带出原值。
+      secrets.push(env.modelApiKey);
+    }
+    if (!env.modelBaseUrl || !env.modelApiKey) {
+      fail('missing required environment variable(s): ZAG_MODEL_BASE_URL, ZAG_MODEL_API_KEY');
+      return;
+    }
+
+    const result = await applyModelProvision({
+      provision,
+      env,
+      types: resolvePrepareTypes(process.env),
+      configDir: options?.harnessModelPaths?.configDir,
+      dshHome: options?.harnessModelPaths?.dshHome,
+      statePath: options?.harnessModelPaths?.statePath,
+    });
+
+    if (result.errors.length > 0) {
+      fail(
+        result.errors.map((item) => `${item.type}: ${item.message}`).join('; '),
+        result.appliedTypes,
+      );
+      return;
+    }
+
+    // 只记录类型与数量，不记录模型名/凭据（契约 §2.13）。
+    log.info(
+      { event: 'harness_models_applied', requestId, appliedTypes: result.appliedTypes },
+      'harness:models applied',
+    );
+    socket.emit('harness:models:result', {
+      requestId,
+      success: true,
+      appliedTypes: result.appliedTypes,
+    });
   });
 
   // Reconnection reconciliation

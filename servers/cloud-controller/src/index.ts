@@ -22,9 +22,10 @@ import { MongoStorageOperationRepository } from './repositories/storage-operatio
 import { ContainerService } from './services/container-service.js';
 import { StatusSyncService } from './services/status-sync.js';
 import { HeartbeatTracker } from './services/heartbeat-tracker.js';
-import { ENGINE_PATH, registerWorkerGateway } from './services/socketio-gateway.js';
+import { ENGINE_PATH, registerWorkerGateway, type HarnessModelsPushResult } from './services/socketio-gateway.js';
 import { WorkloadDispatcher } from './services/workload-dispatcher.js';
 import { SecretStore } from './services/secret-store.js';
+import type { ModelProvision } from './services/model-provision.js';
 import {
   AgentApiClient,
   buildTerminalStorageState,
@@ -327,10 +328,21 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
     emitToContainer: (containerId: string, event: string, payload: unknown) => void;
     isConnected: (containerId: string) => boolean;
     getWorkerVersion: (containerId: string) => string | undefined;
+    requestHarnessModels: (
+      containerId: string,
+      provision: ModelProvision,
+      timeoutMs?: number,
+    ) => Promise<HarnessModelsPushResult>;
+    requestAgentGearUpgrade: (
+      containerId: string,
+      payload?: { targetVersion?: string },
+    ) => Promise<import('./services/socketio-gateway.js').UpgradeRequestResult>;
   } = {
     emitToContainer: () => {},
     isConnected: () => false,
     getWorkerVersion: () => undefined,
+    requestHarnessModels: async () => ({ delivered: false, reason: 'offline' }),
+    requestAgentGearUpgrade: async () => ({ code: 'NOT_ONLINE' }),
   };
   const dispatcher = new WorkloadDispatcher({
     containerRepository: repo,
@@ -371,6 +383,8 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
   gatewayBridge.emitToContainer = gateway.emitToContainer;
   gatewayBridge.isConnected = gateway.isConnected;
   gatewayBridge.getWorkerVersion = gateway.getWorkerVersion;
+  gatewayBridge.requestHarnessModels = gateway.requestHarnessModels;
+  gatewayBridge.requestAgentGearUpgrade = gateway.requestAgentGearUpgrade;
 
   app.use(
     '/internal',
@@ -380,6 +394,10 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
       workloadLogRepository,
       workloadDispatcher: dispatcher,
       getWorkerVersion: (containerId) => gatewayBridge.getWorkerVersion(containerId),
+      requestHarnessModels: (containerId, provision, timeoutMs) =>
+        gatewayBridge.requestHarnessModels(containerId, provision, timeoutMs),
+      requestAgentGearUpgrade: (containerId, payload) =>
+        gatewayBridge.requestAgentGearUpgrade(containerId, payload),
       storageService,
     }),
   );

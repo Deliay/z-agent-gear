@@ -97,6 +97,16 @@ export const CREATE_CUSTOM_MODEL = gql`
       isCustom
       isEnabled
       sortOrder
+      contextLength
+    }
+  }
+`
+
+export const UPDATE_MODEL_CONTEXT_LENGTH = gql`
+  mutation UpdateModelContextLength($modelId: ID!, $contextLength: Int) {
+    updateModelContextLength(modelId: $modelId, contextLength: $contextLength) {
+      id
+      contextLength
     }
   }
 `
@@ -511,6 +521,14 @@ export const STOP_CLOUD_HOST = gql`
 export const DELETE_CLOUD_HOST = gql`
   mutation DeleteCloudHost($id: ID!) {
     deleteCloudHost(id: $id)
+  }
+`
+
+export const UPGRADE_CLOUD_HOST_AGENT_GEAR = gql`
+  mutation UpgradeCloudHostAgentGear($controllerId: ID!) {
+    upgradeCloudHostAgentGear(controllerId: $controllerId) {
+      accepted
+    }
   }
 `
 

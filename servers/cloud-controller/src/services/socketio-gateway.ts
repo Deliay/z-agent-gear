@@ -1,9 +1,11 @@
 import type { Server as SocketIOServer, Socket } from 'socket.io';
+import { randomUUID } from 'node:crypto';
 import { runWithLogContext } from '../observability/log-context.js';
 import { type ObservationLogger } from '../observability/logger.js';
 import { injectTraceparent, withSpan } from '../observability/trace.js';
 import type { ContainerService } from './container-service.js';
 import type { HeartbeatTracker } from './heartbeat-tracker.js';
+import type { ModelProvision } from './model-provision.js';
 import type { TokenService } from './token-service.js';
 import type { WorkloadDispatcher } from './workload-dispatcher.js';
 import {
@@ -63,7 +65,25 @@ export interface WorkerGatewayDeps {
   workloadDispatcher?: WorkloadDispatcher;
   /** 结构化日志（pino 调用面，必填注入；contracts/observability.md §2）。 */
   logger: ObservationLogger;
+  /** 升级事件在飞互斥窗（ms，默认 60000；仅单测缩短）。 */
+  upgradeInflightMs?: number;
+  /** 升级事件回执等待超时（ms，默认 10000；仅单测缩短）。 */
+  upgradeResultTimeoutMs?: number;
 }
+
+/** `requestAgentGearUpgrade` 的结果码（A.2.14 由 internal-api 映射为 HTTP 错误码）。 */
+export type UpgradeRequestCode = 'ACCEPTED' | 'NOT_ACCEPTED' | 'NOT_ONLINE' | 'IN_PROGRESS';
+
+export interface UpgradeRequestResult {
+  code: UpgradeRequestCode;
+  /** worker 回执携带的当前版本（`ACCEPTED` 时尽力给出；缺失为 undefined）。 */
+  currentVersion?: string;
+}
+
+/** 升级在飞互斥窗默认值（契约 A.2.14：60s）。 */
+export const DEFAULT_UPGRADE_INFLIGHT_MS = 60_000;
+/** 升级回执等待默认超时（契约 A.2.14：10s）。 */
+export const DEFAULT_UPGRADE_RESULT_TIMEOUT_MS = 10_000;
 
 /** 网关对外暴露的桥接句柄：供 dispatcher 注入 emitToContainer/isConnected（避免循环依赖）。 */
 export interface WorkerGatewayHandle {
@@ -74,7 +94,40 @@ export interface WorkerGatewayHandle {
    * 返回 undefined。供 runtime harness 安装的逐类型版本门禁使用（不得回退成「放行」以外的语义）。
    */
   getWorkerVersion: (containerId: string) => string | undefined;
+  /**
+   * 运行期模型清单下发（契约 §2.13 / A.2.15）：emit `harness:models { requestId, provision }`
+   * 并等待 worker 的 `harness:models:result`。
+   *
+   * 结果语义（`delivered=false` 不视为失败，由调用方 best-effort 处理）：
+   * - 收到 `success:true` → `{ delivered: true, appliedTypes }`；
+   * - `success:false` / 同容器并发新请求收敛旧请求 → `{ delivered:false, reason:'worker_error' }`；
+   * - 容器无活跃 socket / 断连 / 重连 / 关停 → `{ delivered:false, reason:'offline' }`；
+   * - 超时（默认 10s）→ `{ delivered:false, reason:'ack_timeout' }`。
+   */
+  requestHarnessModels: (
+    containerId: string,
+    provision: ModelProvision,
+    timeoutMs?: number,
+  ) => Promise<HarnessModelsPushResult>;
+
+  /**
+   * 触发云电脑工作组件立即升级（契约 A.2.14 / §2.11）：emit `agent-gear:upgrade` 并等待
+   * `agent-gear:upgrade:result` 回执。在飞互斥（默认 60s）与回执超时（默认 10s）收敛在本句柄，
+   * 路由层只做门禁与错误码映射。
+   */
+  requestAgentGearUpgrade: (
+    containerId: string,
+    payload?: { targetVersion?: string },
+  ) => Promise<UpgradeRequestResult>;
 }
+
+/** `requestHarnessModels` 的结果（`worker_unsupported` 由路由层短路产生，不在此返回）。 */
+export type HarnessModelsPushResult =
+  | { delivered: true; appliedTypes: string[] }
+  | { delivered: false; reason: 'offline' | 'ack_timeout' | 'worker_error' };
+
+/** 运行期模型下发的 ack 等待上限（契约 §2.13 / A.2.15：≤10s）。 */
+export const DEFAULT_HARNESS_MODELS_TIMEOUT_MS = 10_000;
 
 /**
  * 轻量滑动窗口速率限制：按 key 统计窗口内握手次数。
@@ -212,6 +265,50 @@ export function registerWorkerGateway(
   const activeSockets = new Map<string, Set<string>>();
   /** containerId → 最近一次 register 上报的 agent-gear 版本（runtime harness 版本门禁用）。 */
   const workerVersions = new Map<string, string>();
+  /**
+   * 运行期模型下发的 pending ack（requestId → 待收敛请求）。
+   *
+   * 有界性：**同容器**新请求会先以 `worker_error` 收敛旧请求再发出新请求（全量替换语义下旧请求已无意义），
+   * 故同一容器最多 1 条 pending；条目在 resolve / 超时 / 断连（含重连窗口与进程关停）时删除。
+   */
+  const pendingHarnessModels = new Map<
+    string,
+    { containerId: string; resolve: (result: HarnessModelsPushResult) => void; timer: NodeJS.Timeout }
+  >();
+
+  /** 以给定结果收敛一条 pending（不存在返回 false）。 */
+  const settleHarnessModels = (requestId: string, result: HarnessModelsPushResult): boolean => {
+    const pending = pendingHarnessModels.get(requestId);
+    if (!pending) return false;
+    pendingHarnessModels.delete(requestId);
+    clearTimeout(pending.timer);
+    pending.resolve(result);
+    return true;
+  };
+
+  /** 收敛某容器的全部 pending（断连/重连/关停/并发覆盖）。 */
+  const settleHarnessModelsForContainer = (
+    containerId: string,
+    result: HarnessModelsPushResult,
+  ): number => {
+    let settled = 0;
+    for (const [requestId, pending] of pendingHarnessModels) {
+      if (pending.containerId !== containerId) continue;
+      if (settleHarnessModels(requestId, result)) settled += 1;
+    }
+    return settled;
+  };
+
+  /** containerId → 升级在飞互斥截止时间（ms；窗口内重复请求返回 IN_PROGRESS）。 */
+  const upgradeInflight = new Map<string, number>();
+  /** containerId → 待回执（一次性 resolve + 超时定时器）。 */
+  const upgradePending = new Map<
+    string,
+    { resolve: (result: UpgradeRequestResult) => void; timer: NodeJS.Timeout }
+  >();
+  const upgradeInflightMs = deps.upgradeInflightMs ?? DEFAULT_UPGRADE_INFLIGHT_MS;
+  const upgradeResultTimeoutMs =
+    deps.upgradeResultTimeoutMs ?? DEFAULT_UPGRADE_RESULT_TIMEOUT_MS;
 
   /** 下发事件到 containerId 房间：统一注入顶层 `_meta.traceparent`（T-OBS13）。 */
   const emitToContainer = (containerId: string, event: string, payload: unknown): void => {
@@ -220,6 +317,87 @@ export function registerWorkerGateway(
   const isConnected = (containerId: string): boolean => (activeSockets.get(containerId)?.size ?? 0) > 0;
   const getWorkerVersion = (containerId: string): string | undefined =>
     workerVersions.get(containerId);
+
+  const requestHarnessModels = (
+    containerId: string,
+    provision: ModelProvision,
+    timeoutMs: number = DEFAULT_HARNESS_MODELS_TIMEOUT_MS,
+  ): Promise<HarnessModelsPushResult> => {
+    // 有界：同容器并发新请求先收敛旧请求（全量替换语义，旧请求结果已无意义）。
+    const superseded = settleHarnessModelsForContainer(containerId, {
+      delivered: false,
+      reason: 'worker_error',
+    });
+    if (superseded > 0) {
+      logger.warn(
+        { event: 'harness_models_superseded', containerId, count: superseded },
+        'harness:models request superseded by a newer one',
+      );
+    }
+    if (!isConnected(containerId)) {
+      return Promise.resolve({ delivered: false, reason: 'offline' as const });
+    }
+
+    const requestId = randomUUID();
+    return new Promise<HarnessModelsPushResult>((resolve) => {
+      const timer = setTimeout(() => {
+        pendingHarnessModels.delete(requestId);
+        logger.warn(
+          { event: 'harness_models_ack_timeout', containerId, requestId, timeoutMs },
+          'harness:models ack timeout',
+        );
+        resolve({ delivered: false, reason: 'ack_timeout' });
+      }, timeoutMs);
+      timer.unref?.();
+      pendingHarnessModels.set(requestId, { containerId, resolve, timer });
+      emitToContainer(containerId, 'harness:models', { requestId, provision });
+    });
+  };
+
+  /** 清理待回执（超时/断连）：resolve 一次并移除定时器。 */
+  const settleUpgradePending = (containerId: string, result: UpgradeRequestResult): void => {
+    const pending = upgradePending.get(containerId);
+    if (!pending) return;
+    upgradePending.delete(containerId);
+    clearTimeout(pending.timer);
+    pending.resolve(result);
+  };
+
+  const requestAgentGearUpgrade = async (
+    containerId: string,
+    payload?: { targetVersion?: string },
+  ): Promise<UpgradeRequestResult> => {
+    if (!isConnected(containerId)) return { code: 'NOT_ONLINE' };
+    const now = Date.now();
+    const deadline = upgradeInflight.get(containerId);
+    if (deadline !== undefined && now < deadline) return { code: 'IN_PROGRESS' };
+    if (upgradePending.has(containerId)) return { code: 'IN_PROGRESS' };
+
+    upgradeInflight.set(containerId, now + upgradeInflightMs);
+    const result = new Promise<UpgradeRequestResult>((resolve) => {
+      const timer = setTimeout(() => {
+        // 兜底超时：服务端不再等待回执；在飞窗保留至截止（避免重启窗口内并发升级）。
+        settleUpgradePending(containerId, { code: 'NOT_ACCEPTED' });
+      }, upgradeResultTimeoutMs);
+      timer.unref?.();
+      upgradePending.set(containerId, { resolve, timer });
+    });
+
+    const eventPayload: { targetVersion?: string } = {};
+    if (payload?.targetVersion) eventPayload.targetVersion = payload.targetVersion;
+    emitToContainer(containerId, 'agent-gear:upgrade', eventPayload);
+    logger.info(
+      {
+        event: 'agent_gear_upgrade_requested',
+        containerId,
+        targetVersion: payload?.targetVersion ?? null,
+        resultTimeoutMs: upgradeResultTimeoutMs,
+        inflightMs: upgradeInflightMs,
+      },
+      'agent-gear upgrade requested',
+    );
+    return result;
+  };
 
   nsp.use((socket: Socket, next) => {
     // 问题 59：部署形态下 worker 经 nginx Ingress 回连，TCP 对端是所有 worker 共享的
@@ -405,6 +583,21 @@ export function registerWorkerGateway(
           // 记录上报版本：runtime 安装 harness 负载的逐类型版本门禁读取（注册已过基础门禁）。
           if (typeof payload?.version === 'string' && payload.version) {
             workerVersions.set(containerId, payload.version);
+            // 读侧展示（A.3 `agentGearVersion`）：门禁通过后的注册副作用阶段落库；
+            // 写失败仅 WARN，不阻断注册（拒绝路径保持零副作用）。
+            try {
+              await deps.containerService.recordAgentGearVersion(containerId, payload.version);
+            } catch (err) {
+              logger.warn(
+                {
+                  err,
+                  event: 'agent_gear_version_persist_failed',
+                  containerId,
+                  version: sanitizeVersionForLog(payload.version),
+                },
+                'failed to persist agentGearVersion; registration continues',
+              );
+            }
           }
           deps.heartbeatTracker.record(containerId);
 
@@ -467,6 +660,98 @@ export function registerWorkerGateway(
       });
     });
 
+    socket.on('harness:models:result', (payload: unknown) => {
+      runWithLogContext({ containerId }, () => {
+        const record =
+          payload && typeof payload === 'object' && !Array.isArray(payload)
+            ? (payload as Record<string, unknown>)
+            : null;
+        const requestId =
+          record && typeof record.requestId === 'string' ? record.requestId : '';
+        const appliedTypes = record?.appliedTypes;
+        if (
+          !record ||
+          !requestId ||
+          typeof record.success !== 'boolean' ||
+          !Array.isArray(appliedTypes) ||
+          appliedTypes.some((type) => typeof type !== 'string')
+        ) {
+          logger.warn(
+            { event: 'harness_models_result_invalid', containerId },
+            'harness:models:result payload invalid',
+          );
+          return;
+        }
+
+        const pending = pendingHarnessModels.get(requestId);
+        // 未知 requestId（已超时/已收敛/伪造）与其他容器的响应一律忽略并告警（契约 §2.14）。
+        if (!pending) {
+          logger.warn(
+            { event: 'harness_models_result_unknown', containerId, requestId: requestId.slice(0, 64) },
+            'harness:models:result without pending request',
+          );
+          return;
+        }
+        if (pending.containerId !== containerId) {
+          logger.warn(
+            {
+              event: 'harness_models_result_container_mismatch',
+              containerId,
+              pendingContainerId: pending.containerId,
+            },
+            'harness:models:result container mismatch',
+          );
+          return;
+        }
+
+        settleHarnessModels(
+          requestId,
+          record.success === true
+            ? { delivered: true, appliedTypes: appliedTypes as string[] }
+            : { delivered: false, reason: 'worker_error' },
+        );
+        if (record.success !== true && typeof record.error === 'string') {
+          logger.warn(
+            {
+              event: 'harness_models_worker_error',
+              containerId,
+              // 错误文本由 worker 脱敏，仍与非版本串同口径清洗后再写日志。
+              error: sanitizeVersionForLog(record.error),
+            },
+            'worker reported harness:models failure',
+          );
+        }
+      });
+    });
+
+    // 升级回执（契约 §2.12）：一次性解析待回执，accepted:false 与超时同收敛为 NOT_ACCEPTED。
+    socket.on('agent-gear:upgrade:result', (payload: unknown) => {
+      runWithLogContext({ containerId }, () => {
+        if (!upgradePending.has(containerId)) return;
+        const record = (payload ?? {}) as { accepted?: unknown; currentVersion?: unknown };
+        const accepted = record.accepted === true;
+        const currentVersion =
+          typeof record.currentVersion === 'string' && record.currentVersion
+            ? record.currentVersion
+            : undefined;
+        logger.info(
+          {
+            event: 'agent_gear_upgrade_result',
+            containerId,
+            accepted,
+            currentVersion: currentVersion ? sanitizeVersionForLog(currentVersion) : null,
+          },
+          'agent-gear upgrade result received',
+        );
+        settleUpgradePending(
+          containerId,
+          accepted
+            ? { code: 'ACCEPTED', ...(currentVersion ? { currentVersion } : {}) }
+            : { code: 'NOT_ACCEPTED' },
+        );
+      });
+    });
+
     socket.on('unregister', () => {
       runWithLogContext({ containerId }, () => {
         socket.emit('unregistered', withTraceMeta({}));
@@ -495,6 +780,11 @@ export function registerWorkerGateway(
         activeSockets.delete(containerId);
         // 离线后版本信息不再可信（runtime 门禁按「版本不可得 → 放行 + 告警」处理）。
         workerVersions.delete(containerId);
+        // 断连/重连窗口：pending 模型下发以 offline 收敛（契约 §2.14），避免等待方空等到超时。
+        settleHarnessModelsForContainer(containerId, { delivered: false, reason: 'offline' });
+        // 升级在飞窗/待回执随断连清理：重启窗口内不会误判并发，回执未到按 NOT_ACCEPTED 收敛。
+        upgradeInflight.delete(containerId);
+        settleUpgradePending(containerId, { code: 'NOT_ACCEPTED' });
 
         deps.heartbeatTracker.remove(containerId);
         if (!socket.data.registered) return;
@@ -514,5 +804,11 @@ export function registerWorkerGateway(
     });
   });
 
-  return { emitToContainer, isConnected, getWorkerVersion };
+  return {
+    emitToContainer,
+    isConnected,
+    getWorkerVersion,
+    requestHarnessModels,
+    requestAgentGearUpgrade,
+  };
 }

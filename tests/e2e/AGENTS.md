@@ -63,7 +63,8 @@ pnpm exec playwright test
 | `ADMIN_WEB_URL` | admin-web 地址（admin 套件使用） | 回落到 `BASE_URL` |
 | `API_URL` | agent-api GraphQL 地址 | `http://localhost:10001/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 地址 | `http://localhost:10003/graphql` |
-| `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；缺省时该用例跳过） | -（可 `aspire describe mongodb` 获取） |
+| `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；#551 版本区块夹具直写 `cloudhosts`/`cloudcontainers`；缺省时相关用例跳过） | -（可 `aspire describe mongodb` 获取） |
+| `REDIS_URL` | 共享 Redis 连接串（#551 版本区块夹具直写 `agent-gear:latest-version`）；Aspire 编排下为 `rediss://`，测试进程需 `NODE_EXTRA_CA_CERTS` 指向 Aspire 签发的 `cert.pem` 或 `NODE_TLS_REJECT_UNAUTHORIZED=0` | -（可 `aspire describe redis` 获取） |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）。E2E 通过 `MONGODB_URI` 直接改写 Mongo 口令哈希，故通常无需设置；如需固定值排查可注入 | -（`MONGODB_URI` 提供时自动重置） |
 | `INTERNAL_API_TOKEN` | agent-api 内部 Bearer token（前台账号开户 `POST /internal/users`、`E2E-1` 驱动 cloud host ready 回调；**缺省时开户回落 admin-api `adminCreateFrontUser`，E2E-1 显式 skip**） | -（与 Aspire 注入的 `internal-api-token` 一致） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:35273` |
@@ -678,3 +679,31 @@ fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`�
 - E2E-WMF2：取消分支——打开确认框后「取消」→ 节点仍执行中、fake 零 stop；已完成的人类节点抽屉无「立即失败」按钮。
 - 依赖：agent-web / agent-api / controller-api 就绪 + `INTERNAL_API_TOKEN`（开户）；fake controller 应答
   `acp:check`/`git:check`/`acp:start`/`acp:resume`/`acp:stop`。
+
+## 模型下发与上下文编辑（#533）
+
+> 需求 #533；契约 `contracts/llm.graphql`；计划
+> `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` §6.3。文件 `src/model-config-sync.spec.ts`。
+> 依赖 agent-web / agent-api + `INTERNAL_API_TOKEN`（开户，缺省回落 admin-api `adminCreateFrontUser`，需 `MONGODB_URI`）。
+> 供应商/模型一律按 `e2e-mcs-` 前缀自建自清（前台删除供应商连带其模型；后台 `batchDeleteGlobalProviders` 仅在
+> `e2e-mcs-` 前缀内清理，不触碰外部数据）。上游 LLM 为 spec 内进程内 mock：`startMockLlmServer`（连通性/同步）
+> 与带 `context_length` 的本地 mock（预填与上游上下文展示）。E2E-MCS2b 断言 admin-web 保存路径，需
+> `ADMIN_WEB_URL`（缺省时该用例 skip）与 `MONGODB_URI`（管理员口令归一化）。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-MCS1 | 设置-「可用模型」新增自定义模型：输入上游同名模型 → 400ms 去抖后上下文自动预填（32000）→ 改自定义名并手填 128000 → 保存后 toast 含「部分 Harness 运行时不会重载模型配置」→ 展开供应商组：同步模型行展示「最长上下文：32,000 tokens」、自定义模型行展示「128,000 tokens」→「编辑上下文」清空 → 展示「未设置」 |
+| E2E-MCS2 | 前台「添加供应商」保存成功 → 同一 toast 文案（与模型保存共用 `MODEL_CONFIG_APPLIED_NOTICE`）+ 列表出现供应商 |
+| E2E-MCS2b | 后台「模型配置」页「添加供应商」保存成功 → 供应商可见，且页面 `部分 Harness 运行时不会重载模型配置` 计数为 0（只断言 admin 侧不存在该文案，不做跨 app 断言） |
+| E2E-MCS3 | 非法上下文 `0` / `-5` / `abc` → 行内「请输入正整数」且「保存」禁用；恢复合法值后错误消失、保存可用；回到非法值后取消 → 列表无该模型且 API 回读 `models` 不含该名称（未落库） |
+## 云电脑工作组件版本与立即升级（E2E-UPG，需求 #551）
+
+- 文件：`src/settings-cloud-host-upgrade.spec.ts`；前置 `HARNESS_ENABLED=true` + `MONGODB_URI` + `REDIS_URL`。
+- 范围（计划 D8）：版本区块三态展示、按钮可见性、周期小字、点击后错误提示路径；
+  happy path（worker 收事件 → 钉版重启 → 版本收敛）不在 E2E（外部拿不到合法 worker 一次性 token），
+  由 cloud-controller 集成测试与 `tests/api` 错误映射覆盖。
+- 夹具：`cloudhosts.status=RUNNING`、`cloudcontainers.agentGearVersion`、Redis `agent-gear:latest-version`
+  直写；串行执行（全局 `workers: 1`）。
+- 用例：E2E-UPG1 一致态展示 + 无按钮 / E2E-UPG2 不一致 → 按钮、字段缺失 → `—` 且无按钮 /
+  E2E-UPG3 点击 → 升级中态 + `container is not online` 中文 toast + 按钮恢复 /
+  E2E-UPG4 非 RUNNING 无按钮 / E2E-UPG5 既有面板关键路径零回归。

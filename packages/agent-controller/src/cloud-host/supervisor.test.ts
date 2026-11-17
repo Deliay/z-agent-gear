@@ -404,6 +404,38 @@ describe('startCloudHostSupervisor', () => {
     expect(context.exit).toHaveBeenCalledWith(1);
   });
 
+  it('T-AGU5: worker shutdown forwards payload.exitCode (upgrade exits 0, keepalive restarts)', async () => {
+    const context = setup();
+    await startCloudHostSupervisor(context.deps);
+    const workerOptions = context.connect.mock.calls[0][2] as ConnectToServerOptions;
+    workerOptions.onRegistered?.({ controllerId: 'container-1', initializing: false });
+
+    workerOptions.onShutdown?.({ reason: 'agent-gear upgrade', exitCode: 0 });
+
+    expect(context.worker.disconnect).toHaveBeenCalled();
+    expect(context.controller.disconnect).toHaveBeenCalled();
+    expect(context.exit).toHaveBeenCalledTimes(1);
+    expect(context.exit).toHaveBeenCalledWith(0);
+    expect(context.worker.emit).not.toHaveBeenCalledWith('unregister', expect.anything());
+  });
+
+  it('T-AGU5b: worker shutdown without exitCode keeps reason-based code unchanged', async () => {
+    const context = setup();
+    await startCloudHostSupervisor(context.deps);
+    const workerOptions = context.connect.mock.calls[0][2] as ConnectToServerOptions;
+
+    workerOptions.onShutdown?.({ reason: 'server requested shutdown' });
+
+    expect(context.exit).toHaveBeenCalledWith(42);
+
+    const failure = setup();
+    await startCloudHostSupervisor(failure.deps);
+    const failureWorker = failure.connect.mock.calls[0][2] as ConnectToServerOptions;
+    failureWorker.onShutdown?.({ reason: 'version_mismatch: agent-gear 版本不兼容' });
+
+    expect(failure.exit).toHaveBeenCalledWith(1);
+  });
+
   it('T-AG7b: rejects with a clear error instead of connecting when cloud-host env is incomplete', async () => {
     const context = setup({ env: { ...BASE_ENV, ZAG_HOST_KEY: '' } });
 

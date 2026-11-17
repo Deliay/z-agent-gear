@@ -1,7 +1,15 @@
-import { useState } from 'react';
-import { useApolloClient, useQuery } from '@apollo/client/react';
-import { GET_CONTROLLERS, GET_CONTROLLER_WORKSPACES } from '@/graphql/queries';
-import type { CloudHostData, CloudHostSetupOperationData, GetControllerWorkspacesQuery, GetControllersQuery } from '@/graphql/types';
+import { useEffect, useRef, useState } from 'react';
+import { useApolloClient, useMutation, useQuery } from '@apollo/client/react';
+import { CLOUD_HOST, GET_CONTROLLERS, GET_CONTROLLER_WORKSPACES } from '@/graphql/queries';
+import { UPGRADE_CLOUD_HOST_AGENT_GEAR } from '@/graphql/mutations';
+import type {
+  CloudHostData,
+  CloudHostQuery,
+  CloudHostSetupOperationData,
+  GetControllerWorkspacesQuery,
+  GetControllersQuery,
+  UpgradeCloudHostAgentGearMutation,
+} from '@/graphql/types';
 import WorkspaceSection from '@/components/settings/WorkspaceSection';
 import HarnessToolsSection from '@/components/settings/HarnessToolsSection';
 import StopCloudHostDialog from '@/components/cloud-host/StopCloudHostDialog';
@@ -26,11 +34,19 @@ import {
   cloudHostStatusText,
 } from '@/components/cloud-host/cloud-host-status';
 import { cloudStorageStatusLabel } from '@/lib/cloud-storage';
+import {
+  AGENT_GEAR_UPGRADE_POLL_INTERVAL_MS,
+  AGENT_GEAR_UPGRADE_TIMEOUT_MESSAGE,
+  AGENT_GEAR_UPGRADE_TIMEOUT_MS,
+  agentGearUpgradeErrorMessage,
+  isAgentGearUpgradeAvailable,
+} from '@/lib/cloud-host-agent-gear';
 import { useHomeOverview } from '@/stores/homeOverview';
 import { useIsMobile } from '../hooks/useIsMobile';
 import MobileBackButton from '../components/MobileBackButton';
 import { Button } from '@/components/ui/button';
-import { Cloud, GitBranch, HardDrive } from 'lucide-react';
+import { Cloud, Cpu, GitBranch, HardDrive, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface ControllerConfigPageProps {
   controllerId: string;
@@ -45,20 +61,99 @@ interface ControllerConfigPageProps {
  */
 function CloudHostPanel({
   cloudHost,
+  controllerId,
   onStop,
   onDelete,
   onOpenStorage,
+  onUpgraded,
 }: {
   cloudHost: CloudHostData;
+  controllerId: string;
   onStop: () => void;
   onDelete: () => void;
   onOpenStorage: () => void;
+  /** 升级成功后刷新控制器/云电脑数据（版本信息收敛） */
+  onUpgraded?: () => void;
 }) {
   const stoppable = canStopCloudHost(cloudHost);
   const deletable = canDeleteCloudHost(cloudHost);
   const showStorage =
     Boolean(cloudHost.storage) &&
     (cloudHost.status === 'RUNNING' || cloudHost.status === 'STOPPED');
+  const client = useApolloClient();
+  const [upgradeCloudHostAgentGear, { loading: mutationLoading }] = useMutation<
+    UpgradeCloudHostAgentGearMutation
+  >(UPGRADE_CLOUD_HOST_AGENT_GEAR);
+  const [upgrading, setUpgrading] = useState(false);
+  const upgradeTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mounted = useRef(true);
+  const version = cloudHost.agentGearVersion;
+  const canUpgrade = isAgentGearUpgradeAvailable(cloudHost);
+
+  const clearUpgradeTimer = () => {
+    if (upgradeTimer.current) {
+      clearInterval(upgradeTimer.current);
+      upgradeTimer.current = null;
+    }
+  };
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      clearUpgradeTimer();
+    };
+  }, []);
+
+  /** D14：mutation 成功后每 2s 轮询 cloudHost(id)，版本收敛或 3 分钟超时收敛。 */
+  const pollUntilUpgraded = (startedAt: number) => {
+    clearUpgradeTimer();
+    const tick = async () => {
+      if (!mounted.current) return;
+      if (Date.now() - startedAt >= AGENT_GEAR_UPGRADE_TIMEOUT_MS) {
+        clearUpgradeTimer();
+        setUpgrading(false);
+        toast.error(AGENT_GEAR_UPGRADE_TIMEOUT_MESSAGE);
+        onUpgraded?.();
+        return;
+      }
+      try {
+        const { data } = await client.query<CloudHostQuery>({
+          query: CLOUD_HOST,
+          variables: { id: cloudHost.id },
+          fetchPolicy: 'network-only',
+        });
+        if (!mounted.current) return;
+        const next = data?.cloudHost?.agentGearVersion;
+        if (
+          next?.currentVersion &&
+          next.latestVersion &&
+          next.currentVersion === next.latestVersion
+        ) {
+          clearUpgradeTimer();
+          setUpgrading(false);
+          toast.success(`工作组件已升级到 ${next.currentVersion}`);
+          onUpgraded?.();
+        }
+      } catch {
+        // 轮询失败按重试处理（下一个 tick 再试），超时后提示可重试
+      }
+    };
+    upgradeTimer.current = setInterval(() => void tick(), AGENT_GEAR_UPGRADE_POLL_INTERVAL_MS);
+    void tick();
+  };
+
+  const handleUpgrade = async () => {
+    if (upgrading || mutationLoading) return;
+    setUpgrading(true);
+    try {
+      await upgradeCloudHostAgentGear({ variables: { controllerId } });
+      pollUntilUpgraded(Date.now());
+    } catch (err) {
+      setUpgrading(false);
+      toast.error(agentGearUpgradeErrorMessage(err));
+    }
+  };
 
   return (
     <div data-testid="cloud-host-panel" className="mb-4 rounded-lg border border-border p-4">
@@ -99,6 +194,41 @@ function CloudHostPanel({
           <dd className="break-words">{cloudHost.harnessTypes.join(', ') || '—'}</dd>
         </div>
       </dl>
+      <div
+        className="mt-3 rounded-md border border-border p-3 text-sm"
+        data-testid="cloud-host-agent-gear-version"
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <Cpu className="size-4 shrink-0" />
+          <span className="font-medium">工作组件</span>
+          <span className="min-w-0 break-words text-muted-foreground">
+            当前版本 {version?.currentVersion ?? '—'} · 最新版本{' '}
+            {version?.latestVersion ?? '—'}
+          </span>
+          {canUpgrade && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="ml-auto"
+              disabled={upgrading || mutationLoading}
+              onClick={() => void handleUpgrade()}
+            >
+              {upgrading || mutationLoading ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  升级中...
+                </>
+              ) : (
+                '立即升级'
+              )}
+            </Button>
+          )}
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          自动升级每 {version?.autoUpdateIntervalMinutes ?? 10} 分钟检查一次
+        </p>
+      </div>
       {showStorage && cloudHost.storage && (
         <div
           className="mt-3 flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-border p-3 text-sm"
@@ -244,9 +374,11 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
   const panel = cloudHost ? (
     <CloudHostPanel
       cloudHost={cloudHost}
+      controllerId={controllerId}
       onStop={() => setStopDialogOpen(true)}
       onDelete={() => setDeleteDialogOpen(true)}
       onOpenStorage={() => (onOpenStorage ?? onBack)()}
+      onUpgraded={refreshHostData}
     />
   ) : null;
 

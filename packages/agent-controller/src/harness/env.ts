@@ -5,6 +5,12 @@
  * 绝不回显其它 env 的值（尤其 `ZAG_MODEL_API_KEY` 等 secret）。
  */
 
+import {
+  parseModelProvision,
+  projectToLegacy,
+  type ModelProvision,
+} from './model-providers.js';
+
 /** harness prepare 需要的环境（已归一）。 */
 export interface HarnessEnv {
   /** 模型网关地址（`ZAG_MODEL_BASE_URL`）。 */
@@ -15,6 +21,11 @@ export interface HarnessEnv {
   modelIds: string[];
   /** 模型 ID → 最长上下文 token 数（`ZAG_MODEL_CONTEXT_LENGTHS`，可选；缺省 `{}`）。 */
   modelContextLengths: Record<string, number>;
+  /**
+   * 运行期模型清单（`ZAG_MODEL_PROVIDERS`，可选）：多 vendor 全量替换载荷。
+   * 携带时 `modelIds`/`modelContextLengths` 缺省由投影补齐（事件链路与旧服务端双兼容）。
+   */
+  modelProviders?: ModelProvision;
   /** 默认工作区（`ZAG_DEFAULT_WORKSPACE`）。 */
   defaultWorkspace: string;
 }
@@ -116,9 +127,11 @@ export function parseModelContextLengths(raw: string): Record<string, number> {
 /**
  * 读取并校验 harness env。
  *
- * 必需：`ZAG_MODEL_BASE_URL` / `ZAG_MODEL_API_KEY` / `ZAG_MODEL_IDS` / `ZAG_DEFAULT_WORKSPACE`
+ * 必需：`ZAG_MODEL_BASE_URL` / `ZAG_MODEL_API_KEY` / `ZAG_DEFAULT_WORKSPACE`，
+ * 以及 `ZAG_MODEL_IDS` **或** `ZAG_MODEL_PROVIDERS` 之一
  * （云电脑 Job env 与 `workload:run.env` 均由 agent-api 注入，缺失说明编排不正确）。
- * 可选：`ZAG_MODEL_CONTEXT_LENGTHS`（缺省/空串归一为 `{}`；旧服务端不下发时优雅降级）。
+ * 可选：`ZAG_MODEL_CONTEXT_LENGTHS`（缺省/空串归一为 `{}`）、`ZAG_MODEL_PROVIDERS`
+ * （多 vendor 清单；`modelIds`/`modelContextLengths` 同时缺省时由投影补齐）。
  */
 export function readHarnessEnv(env: NodeJS.ProcessEnv = process.env): HarnessEnv {
   const missing: string[] = [];
@@ -127,7 +140,8 @@ export function readHarnessEnv(env: NodeJS.ProcessEnv = process.env): HarnessEnv
   const modelApiKey = nonEmpty(env.ZAG_MODEL_API_KEY);
   if (!modelApiKey) missing.push('ZAG_MODEL_API_KEY');
   const rawModelIds = nonEmpty(env.ZAG_MODEL_IDS);
-  if (!rawModelIds) missing.push('ZAG_MODEL_IDS');
+  const rawModelProviders = nonEmpty(env.ZAG_MODEL_PROVIDERS);
+  if (!rawModelIds && !rawModelProviders) missing.push('ZAG_MODEL_IDS');
   const defaultWorkspace = nonEmpty(env.ZAG_DEFAULT_WORKSPACE);
   if (!defaultWorkspace) missing.push('ZAG_DEFAULT_WORKSPACE');
 
@@ -137,11 +151,33 @@ export function readHarnessEnv(env: NodeJS.ProcessEnv = process.env): HarnessEnv
 
   const rawModelContextLengths = nonEmpty(env.ZAG_MODEL_CONTEXT_LENGTHS);
 
+  let modelProviders: ModelProvision | undefined;
+  if (rawModelProviders) {
+    try {
+      modelProviders = parseModelProvision(rawModelProviders);
+    } catch (error) {
+      // 只报变量名与字段/索引；不回显原值（可能含模型名）。
+      throw new HarnessEnvError(`invalid ZAG_MODEL_PROVIDERS: ${(error as Error).message}`);
+    }
+  }
+
+  let modelIds = rawModelIds ? parseModelIds(rawModelIds) : [];
+  let modelContextLengths = rawModelContextLengths
+    ? parseModelContextLengths(rawModelContextLengths)
+    : {};
+  // 事件链路/新服务端：只带 modelProviders 时由投影补齐旧字段（与旧产物逐字一致）。
+  if (modelProviders && !rawModelIds && !rawModelContextLengths) {
+    const legacy = projectToLegacy(modelProviders);
+    modelIds = legacy.modelIds;
+    modelContextLengths = legacy.modelContextLengths;
+  }
+
   return {
     modelBaseUrl,
     modelApiKey,
-    modelIds: parseModelIds(rawModelIds),
-    modelContextLengths: rawModelContextLengths ? parseModelContextLengths(rawModelContextLengths) : {},
+    modelIds,
+    modelContextLengths,
+    ...(modelProviders ? { modelProviders } : {}),
     defaultWorkspace,
   };
 }

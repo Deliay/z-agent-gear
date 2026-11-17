@@ -270,6 +270,18 @@ export interface ForkCloudStorageMutation {
   forkCloudStorage: CloudStorageData
 }
 
+/** 云电脑工作组件（agent-gear）版本信息（contracts/cloud-host.graphql） */
+export interface CloudHostAgentGearVersionData {
+  /** worker register 上报并落库的当前版本；未上报过为 null */
+  currentVersion: string | null
+  /** agent-api 从发布源刷新到的最新版本；尚未成功抓取时为 null */
+  latestVersion: string | null
+  /** current 与 latest 均存在且不一致 */
+  upgradeAvailable: boolean
+  /** 自动升级检查周期（分钟），默认 10 */
+  autoUpdateIntervalMinutes: number
+}
+
 /** 前台云电脑（contracts/cloud-host.graphql）；非云电脑控制器为 null */
 export interface CloudHostData {
   id: string
@@ -301,6 +313,8 @@ export interface CloudHostData {
   storage?: CloudStorageSummaryData | null
   /** STARTING 且存储正在从归档恢复数据 */
   storageRestoring?: boolean
+  /** 工作组件版本信息；旧服务端未返回时为 undefined */
+  agentGearVersion?: CloudHostAgentGearVersionData | null
 }
 
 /** 云电脑创建/运行报价（金额单位 credits） */
@@ -422,6 +436,13 @@ export interface StopCloudHostMutation {
   stopCloudHost: CloudHostData
 }
 
+/** 工作组件立即升级结果（accepted=false 不会出现在成功响应，失败走错误） */
+export interface UpgradeCloudHostAgentGearMutation {
+  upgradeCloudHostAgentGear: {
+    accepted: boolean
+  }
+}
+
 export interface DeleteCloudHostMutation {
   deleteCloudHost: boolean
 }
@@ -523,6 +544,8 @@ export interface ModelData {
   isCustom: boolean
   isEnabled: boolean
   sortOrder: number
+  /** 最长上下文大小（token）；null/缺省 = 未设置 */
+  contextLength?: number | null
   scope: 'user' | 'global'
   /** 所属租户工作区；scope=global 恒为 null（多租户二期） */
   workspaceId?: string | null
@@ -684,6 +707,17 @@ export interface GetProvidersQuery {
 
 export interface GetModelsQuery {
   models: ModelData[]
+}
+
+/** 供应商上游模型清单条目（providerModelOptions） */
+export interface ProviderModelOptionData {
+  name: string
+  /** 上游尽力提供的上下文长度（token）；取不到为 null */
+  contextLength: number | null
+}
+
+export interface GetProviderModelOptionsQuery {
+  providerModelOptions: ProviderModelOptionData[]
 }
 
 export interface GetSessionsQuery {

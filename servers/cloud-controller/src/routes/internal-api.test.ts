@@ -21,7 +21,7 @@ const testLog = createTestLogger();
 const childSpy = vi
   .spyOn(rootLogger, 'child')
   .mockImplementation((bindings) => testLog.logger.child(bindings));
-const { createInternalRouter } = await import('./internal-api.js');
+const { createInternalRouter, parseHarnessRequest } = await import('./internal-api.js');
 childSpy.mockRestore();
 
 const INTERNAL_TOKEN = 'test-internal-token';
@@ -36,8 +36,17 @@ let workloadRepository: InMemoryWorkloadRepository;
 let stubWorkspaceResolver: ReturnType<typeof vi.fn>;
 /** runtime harness 版本门禁用：在线 worker 版本读取（可按用例改返回值）。 */
 let getWorkerVersion: ReturnType<typeof vi.fn>;
+/** 升级端点用桩：gateway 句柄（在飞/回执结果由用例驱动）。 */
+let requestAgentGearUpgrade: ReturnType<typeof vi.fn>;
 /** runtime 路由用桩 dispatcher（不执行真实编排，仅断言入参/门禁）。 */
 let runtimeDispatcher: { startRuntimeBatch: ReturnType<typeof vi.fn> };
+/** 运行期模型下发（A.2.15）用桩：gateway 未注入的 503 用例走 `/internal` 路由。 */
+let requestHarnessModelsStub: ReturnType<typeof vi.fn>;
+let pushWorkerVersion: ReturnType<typeof vi.fn>;
+/** A.2.15 端点用例：受控容器状态与 secret 存在性（真实 repo 的 ID 为 UUID，不满足 ObjectId 口径）。 */
+let pushContainers: Map<string, { status: string; hasSecret: boolean }>;
+let pushUpdateModelProvision: ReturnType<typeof vi.fn>;
+let pushSeq: number;
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return { Authorization: `Bearer ${INTERNAL_TOKEN}`, ...extra };
@@ -251,6 +260,51 @@ beforeAll(async () => {
       getWorkerVersion,
     }),
   );
+  // 运行期模型下发（A.2.15）：注入 gateway 桩与 worker 版本读取。
+  // 容器读取/secret 写入用受控桩（真实 repo 的 ID 为 UUID，端点按 ObjectId 口径判 404）。
+  requestHarnessModelsStub = vi.fn();
+  requestHarnessModelsStub.mockResolvedValue({
+    delivered: true,
+    appliedTypes: ['opencode'],
+  });
+  pushWorkerVersion = vi.fn();
+  pushWorkerVersion.mockReturnValue('2.20.0');
+  pushContainers = new Map();
+  pushSeq = 0;
+  pushUpdateModelProvision = vi.fn(async (containerId: string) => {
+    const container = pushContainers.get(containerId);
+    if (!container || !container.hasSecret) return null;
+    return {};
+  });
+  const pushContainerService = {
+    get: async (containerId: string) => {
+      const container = pushContainers.get(containerId);
+      return container ? { id: containerId, status: container.status } : null;
+    },
+    updateModelProvision: pushUpdateModelProvision,
+  };
+  app.use(
+    '/modelpush',
+    internalAuth(INTERNAL_TOKEN),
+    createInternalRouter(pushContainerService as never, {
+      workloadRepository,
+      workloadLogRepository,
+      getWorkerVersion: pushWorkerVersion,
+      requestHarnessModels: requestHarnessModelsStub as never,
+    }),
+  );
+
+  requestAgentGearUpgrade = vi.fn();
+  app.use(
+    '/upgrade',
+    internalAuth(INTERNAL_TOKEN),
+    createInternalRouter(service, {
+      workloadRepository,
+      workloadLogRepository,
+      getWorkerVersion,
+      requestAgentGearUpgrade,
+    }),
+  );
   httpServer = createServer(app);
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
@@ -271,6 +325,7 @@ describe('internal management API', () => {
     const body = (await created.json()) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(
       [
+        'agentGearVersion',
         'billingAccountId',
         'billingStartedAt',
         'installedWorkloads',
@@ -1133,6 +1188,180 @@ describe('internal management API', () => {
     expect(standardInput.entries[0]!.requiresHarnessEnv).toBe(false);
   });
 
+  it('T-CC-MP2: parseHarnessRequest 可选 modelProviders（携带透传 / 缺失不写 / 非法 400）', async () => {
+    const modelProviders = JSON.stringify({
+      providers: [
+        { vendorId: 'zag', displayName: 'Agent Gear', models: [{ id: 'model-a' }] },
+      ],
+    });
+    const base = harnessPayload() as Record<string, unknown>;
+    const secrets = base.secrets as Record<string, unknown>;
+    const deps = { resolveGlobalWorkspaceId: async () => null };
+
+    // 携带即透传（不参与必填校验、不做业务语义校验）
+    const carried = await parseHarnessRequest(
+      { ...base, secrets: { ...secrets, modelProviders } },
+      deps,
+    );
+    expect(carried?.secrets.modelProviders).toBe(modelProviders);
+
+    // 缺失 → 不写字段（旧调用方零回归）
+    const missing = await parseHarnessRequest({ ...base }, deps);
+    expect(missing).not.toBeNull();
+    expect('modelProviders' in (missing?.secrets ?? {})).toBe(false);
+
+    // 空串 / 非字符串 → 非法（400 INVALID_HARNESS 由路由层返回）
+    for (const invalid of ['', '   ', 1, { providers: [] }]) {
+      const raw = await parseHarnessRequest(
+        { ...base, secrets: { ...secrets, modelProviders: invalid } },
+        deps,
+      );
+      expect(raw, String(invalid)).toBeNull();
+    }
+
+    // 路由层口径：空串 → 400 INVALID_HARNESS
+    const res = await createContainer({
+      ...base,
+      secrets: { ...secrets, modelProviders: '' },
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('INVALID_HARNESS');
+  });
+
+  it('T-CC-MP3: harness-models 端点四态矩阵（404/409/offline/worker_unsupported/400/503/ack）', async () => {
+    const provision = {
+      providers: [
+        { vendorId: 'zag', displayName: 'Agent Gear', models: [{ id: 'model-a' }] },
+      ],
+    };
+    const push = (containerId: string, body: unknown = { provision }, base = '/modelpush') =>
+      fetch(`${baseUrl}${base}/containers/${containerId}/harness-models`, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(body),
+      });
+    /** 受控容器（合法 ObjectId）：状态与 secret 存在性由用例决定。 */
+    const newContainer = (status: string, hasSecret = true): string => {
+      pushSeq += 1;
+      const id = `507f1f77bcf86cd7994${String(pushSeq).padStart(5, '0')}`;
+      pushContainers.set(id, { status, hasSecret });
+      return id;
+    };
+
+    requestHarnessModelsStub.mockClear();
+    pushUpdateModelProvision.mockClear();
+    pushWorkerVersion.mockReset();
+    pushWorkerVersion.mockReturnValue('2.20.0');
+
+    // 非法 ID / 不存在 → 404
+    const invalidId = await push('not-an-object-id');
+    expect(invalidId.status).toBe(404);
+    expect(((await invalidId.json()) as { error: string }).error).toBe('NOT_FOUND');
+    const missing = await push('507f1f77bcf86cd799439011');
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as { error: string }).error).toBe('NOT_FOUND');
+
+    // 终态 → 409 CONTAINER_NOT_ONLINE
+    const terminal = await push(newContainer('exited'));
+    expect(terminal.status).toBe(409);
+    expect(((await terminal.json()) as { error: string }).error).toBe('CONTAINER_NOT_ONLINE');
+
+    // 创建中间态（creating/connecting/initializing）→ 200 offline；**仍先持久化**，不 emit
+    for (const status of ['creating', 'connecting', 'initializing'] as const) {
+      const res = await push(newContainer(status));
+      expect(res.status, status).toBe(200);
+      expect(await res.json(), status).toEqual({ delivered: false, reason: 'offline' });
+    }
+    expect(pushUpdateModelProvision).toHaveBeenCalledTimes(3);
+    expect(requestHarnessModelsStub).not.toHaveBeenCalled();
+
+    // worker 版本 <2.20.0 → 200 worker_unsupported（不 emit，但**已持久化**，D11/F17）
+    pushWorkerVersion.mockReturnValue('2.19.0');
+    const unsupported = await push(newContainer('online'));
+    expect(unsupported.status).toBe(200);
+    expect(await unsupported.json()).toEqual({
+      delivered: false,
+      reason: 'worker_unsupported',
+    });
+    expect(requestHarnessModelsStub).not.toHaveBeenCalled();
+    expect(pushUpdateModelProvision).toHaveBeenCalledTimes(4);
+
+    // 非法 payload 先于离线/版本短路：中间态也返回 400（不被 200 delivered:false 掩盖）
+    const offlineInvalid = await push(newContainer('creating'), { provision: { providers: 'nope' } });
+    expect(offlineInvalid.status).toBe(400);
+    expect(((await offlineInvalid.json()) as { error: string }).error).toBe('INVALID_MODEL_PROVISION');
+    expect(pushUpdateModelProvision).toHaveBeenCalledTimes(4);
+
+    // 版本不可得 → 不短路（正常 emit）
+    pushWorkerVersion.mockReturnValue(undefined);
+    const unknownVersionRes = await push(newContainer('online'));
+    expect(unknownVersionRes.status).toBe(200);
+    expect(await unknownVersionRes.json()).toEqual({
+      delivered: true,
+      appliedTypes: ['opencode'],
+    });
+    expect(requestHarnessModelsStub).toHaveBeenCalledTimes(1);
+
+    // payload 非法 → 400 INVALID_MODEL_PROVISION
+    requestHarnessModelsStub.mockClear();
+    pushUpdateModelProvision.mockClear();
+    pushWorkerVersion.mockReturnValue('2.20.0');
+    const online = newContainer('online');
+    for (const bad of [
+      {},
+      { provision: null },
+      { provision: { providers: 'nope' } },
+      {
+        provision: {
+          providers: [
+            { vendorId: 'zag', displayName: 'Agent Gear', models: [{ id: 'a', contextLength: 0 }] },
+          ],
+        },
+      },
+    ]) {
+      const res = await push(online, bad);
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('INVALID_MODEL_PROVISION');
+    }
+    expect(pushUpdateModelProvision).not.toHaveBeenCalled();
+    expect(requestHarnessModelsStub).not.toHaveBeenCalled();
+
+    // secret 缺失（容器已销毁/未创建 secret）→ 409
+    const noSecret = await push(newContainer('online', false));
+    expect(noSecret.status).toBe(409);
+    expect(((await noSecret.json()) as { error: string }).error).toBe('CONTAINER_NOT_ONLINE');
+
+    // 正常路径：先持久化再 emit，回传 ack 结果
+    pushUpdateModelProvision.mockClear();
+    requestHarnessModelsStub.mockClear();
+    const success = await push(online);
+    expect(success.status).toBe(200);
+    expect(await success.json()).toEqual({ delivered: true, appliedTypes: ['opencode'] });
+    expect(pushUpdateModelProvision).toHaveBeenCalledWith(online, provision);
+    expect(requestHarnessModelsStub).toHaveBeenCalledTimes(1);
+    expect(requestHarnessModelsStub.mock.calls[0]![0]).toBe(online);
+    expect(requestHarnessModelsStub.mock.calls[0]![1]).toEqual(provision);
+    expect(pushUpdateModelProvision.mock.invocationCallOrder[0]!).toBeLessThan(
+      requestHarnessModelsStub.mock.invocationCallOrder[0]!,
+    );
+
+    // 网关回传失败也按 200 + delivered:false（不视为保存失败）
+    requestHarnessModelsStub.mockResolvedValueOnce({
+      delivered: false,
+      reason: 'ack_timeout',
+    });
+    const timeoutRes = await push(online);
+    expect(timeoutRes.status).toBe(200);
+    expect(await timeoutRes.json()).toEqual({ delivered: false, reason: 'ack_timeout' });
+
+    // 网关未注入 → 503（`/internal` 路由无 requestHarnessModels；优先于容器校验）
+    const unavailable = await push('507f1f77bcf86cd799439011', { provision }, '/internal');
+    expect(unavailable.status).toBe(503);
+    expect(((await unavailable.json()) as { error: string }).error).toBe('UNAVAILABLE');
+
+    requestHarnessModelsStub.mockResolvedValue({ delivered: true, appliedTypes: ['opencode'] });
+  });
+
   it('T-CC15: GET /containers 支持 hostId/userId 过滤，无参数保持全量', async () => {
     const makeHarness = (hostId: string, userId: string) =>
       createContainer({
@@ -1184,5 +1413,109 @@ describe('internal management API', () => {
     ).json()) as unknown[];
     expect(missing).toEqual([]);
     expect(all.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('A.2.14 立即升级工作组件（T-UPG-I）', () => {
+  beforeEach(() => {
+    getWorkerVersion.mockReset();
+    requestAgentGearUpgrade.mockReset();
+  });
+
+  async function makeContainer(status: 'online' | 'connecting' | 'exited' = 'online') {
+    return repo.create({
+      name: `zag-worker-upg-${Math.random().toString(36).slice(2, 8)}`,
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status,
+    });
+  }
+
+  function upgrade(id: string, body?: Record<string, unknown>): Promise<Response> {
+    return fetch(`${baseUrl}/upgrade/containers/${id}/upgrade-agent-gear`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  }
+
+  it('T-UPG-I1: 容器不存在 → 404 NOT_FOUND', async () => {
+    const res = await upgrade('507f1f77bcf86cd799439011');
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe('NOT_FOUND');
+    expect(requestAgentGearUpgrade).not.toHaveBeenCalled();
+  });
+
+  it('T-UPG-I2: 非 online / 无活跃 socket → 409 CONTAINER_NOT_ONLINE', async () => {
+    const connecting = await makeContainer('connecting');
+    const res = await upgrade(connecting.id);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('CONTAINER_NOT_ONLINE');
+
+    const online = await makeContainer('online');
+    getWorkerVersion.mockReturnValueOnce('2.20.0');
+    requestAgentGearUpgrade.mockResolvedValueOnce({ code: 'NOT_ONLINE' });
+    const noSocket = await upgrade(online.id);
+    expect(noSocket.status).toBe(409);
+    expect((await noSocket.json()).error).toBe('CONTAINER_NOT_ONLINE');
+  });
+
+  it('T-UPG-I3: 上报版本 <2.20.0 或未上报 → 400 UPGRADE_UNSUPPORTED；2.20.0 放行', async () => {
+    const container = await makeContainer('online');
+    for (const version of [undefined, '2.19.0']) {
+      getWorkerVersion.mockReturnValueOnce(version);
+      const res = await upgrade(container.id);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('UPGRADE_UNSUPPORTED');
+    }
+
+    getWorkerVersion.mockReturnValueOnce('2.20.0');
+    requestAgentGearUpgrade.mockResolvedValueOnce({
+      code: 'ACCEPTED',
+      currentVersion: '2.20.0',
+    });
+    const ok = await upgrade(container.id, { targetVersion: '2.21.0' });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({
+      accepted: true,
+      containerId: container.id,
+      currentVersion: '2.20.0',
+    });
+    expect(requestAgentGearUpgrade).toHaveBeenLastCalledWith(container.id, {
+      targetVersion: '2.21.0',
+    });
+  });
+
+  it('T-UPG-I4: 在飞 409 IN_PROGRESS；拒绝/超时 409 NOT_ACCEPTED', async () => {
+    const container = await makeContainer('online');
+    getWorkerVersion.mockReturnValue('2.20.0');
+    for (const [code, expected] of [
+      ['IN_PROGRESS', 'UPGRADE_IN_PROGRESS'],
+      ['NOT_ACCEPTED', 'UPGRADE_NOT_ACCEPTED'],
+    ] as const) {
+      requestAgentGearUpgrade.mockResolvedValueOnce({ code });
+      const res = await upgrade(container.id);
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toBe(expected);
+    }
+    getWorkerVersion.mockReset();
+  });
+
+  it('T-UPG-I5: A.3 透出 agentGearVersion（有值透传、缺省 null）', async () => {
+    const empty = await makeContainer('online');
+    const valued = await repo.create({
+      name: `zag-worker-upg2-${Math.random().toString(36).slice(2, 8)}`,
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status: 'online',
+      agentGearVersion: '2.20.0',
+    });
+    const list = await fetch(`${baseUrl}/internal/containers`, { headers: authHeaders() });
+    const items = (await list.json()) as Array<Record<string, unknown>>;
+    const byId = new Map(items.map((item) => [item.id, item]));
+    expect(byId.get(empty.id)?.agentGearVersion).toBeNull();
+    expect(byId.get(valued.id)?.agentGearVersion).toBe('2.20.0');
   });
 });

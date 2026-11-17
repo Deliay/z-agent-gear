@@ -31,6 +31,7 @@ interface RawHarnessSecretDoc {
   modelBaseUrl: string;
   modelIds: string;
   modelContextLengths?: string | null;
+  modelProviders?: string | null;
   defaultWorkspace: string;
 }
 
@@ -44,6 +45,7 @@ function toRecord(doc: RawHarnessSecretDoc): PersistedHarnessSecret {
       modelBaseUrl: doc.modelBaseUrl,
       modelIds: doc.modelIds,
       ...(doc.modelContextLengths ? { modelContextLengths: doc.modelContextLengths } : {}),
+      ...(doc.modelProviders ? { modelProviders: doc.modelProviders } : {}),
       defaultWorkspace: doc.defaultWorkspace,
     },
   };
@@ -62,6 +64,7 @@ export class MongoHarnessSecretRepository implements HarnessSecretRepository {
           modelBaseUrl: secrets.modelBaseUrl,
           modelIds: secrets.modelIds,
           modelContextLengths: secrets.modelContextLengths ?? null,
+          modelProviders: secrets.modelProviders ?? null,
           defaultWorkspace: secrets.defaultWorkspace,
         },
       },

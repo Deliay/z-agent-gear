@@ -1047,3 +1047,41 @@ pnpm test
 - 新会话恒装配平台服务（`agent-session-preview-tools` / `agent-valut-tools` / `agent-custom-tools` /
   `agent-knowledge-base-tools`），`session.test.ts` / `custom-mcp.test.ts` 的 `serverNames` 精确断言已按
   D13 改为「平台恒装配集合 ∪ 显式所选」的集合比较。
+
+## 模型下发优化（#533，`T-MCS-API*` / `T-OWN-API1`）
+
+> 需求 `docs/product/draft/20261117-cloud-host-model-config-sync.md`；计划
+> `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` §6.2；契约
+> `contracts/llm.graphql`、`contracts/cloud-controller-websocket.md` §2.13/A.2.2/A.2.15、`contracts/billing-openai.openapi.yaml`。
+
+前置：`aspire start && aspire wait agent-api admin-api controller-api cloud-controller` +
+`INTERNAL_API_TOKEN`（开户 / 内部端点）+ `MONGODB_URI`（`cloudcontainersecrets` / `cloudhosts` / `models` /
+`providers` 直读断言；**Aspire Mongo 自签 TLS 需带 `tlsAllowInvalidCertificates=true`**）+
+`CLOUD_CONTROLLER_INTERNAL_TOKEN`（harness-models 端点守卫；缺失时该条跳过）。fake 上游使用 `src/mock-server.ts`：
+`startMockServer([{ id, contextLength }])` 额外输出 `context_length`，纯字符串条目保持历史响应逐字不变。
+
+| 测试 | 文件 | 断言 |
+|------|------|------|
+| T-MCS-API1 | `src/cloud-controller/internal-api.test.ts`（扩） | 创建 harness 时 `secrets.modelProviders` → 直读 `cloudcontainersecrets.modelProviders` 等于提交 JSON 原文，旧字段 `modelIds`/`modelContextLengths` 同时写入；未携带 → `modelProviders=null`（旧调用方零回归） |
+| T-MCS-API2 | `src/agent-api/llm.test.ts`（扩） | 供应商 create（上游 `/v1/models` 含 `context_length`）→ 同步模型带 `contextLength`、上游未提供为 null；`updateProvider` 重同步不覆盖人工值（仅补未设置行）；`updateModelContextLength` 设/改/清空；0 / 负数 → `contextLength must be a positive integer`、小数由 GraphQL `Int` 标量层拒绝（均零副作用）；global 模型前台 → `Model not found`；`providerModelOptions` 返回上游清单含/不含上下文两态 |
+| T-MCS-API3 | `src/agent-api/model-config-push.test.ts`（新） | 前台模型/供应商 mutation（toggleModel / updateModelContextLength / createCustomModel / deleteCustomModel / toggleProvider）在触发下发后正常返回（fire-and-forget 不阻塞、不破坏返回）；直读 `cloudhosts` 断言该租户无 RUNNING 云电脑（= 零候选零请求——`CLOUD_CONTROLLER_URL` 为进程级配置，测试进程无法在运行期指向本地桩）；`CLOUD_CONTROLLER_INTERNAL_TOKEN` 提供时守卫目标端点契约（缺 Bearer 401 / 未知容器 404 `NOT_FOUND`）。载荷分组/显示名/vendorId、并发≤5 与单台失败隔离由单测 T-CP1~3 / T-MP1~6 覆盖 |
+| T-MCS-API4 | `src/agent-api/model-config-push.test.ts`（新） | `POST /internal/model-config/refresh`：无 / 错 token → 401 `UNAUTHORIZED`；`scope!=='global'`（含空 body / null）→ 400 `INVALID_SCOPE`；合法 → 202 `{accepted:true}`，重复调用仍 202（single-flight 幂等受理）。agent-api 内部地址取 `API_URL` 去 `/graphql`（`agentApiBaseUrl()`） |
+| T-OWN-API1 | `src/admin-api/billing-gateway.test.ts`（扩） | `/v1/models` 的 `owned_by`：global = `Agent Gear`（account Key 与 cloud_host Key 同口径）、user = 绑定供应商名称；user / global 模型禁用后立即从列表消失且 `/chat/completions` 404 `model_not_found`，重新启用后恢复（列表回归 + 调用不再 `model_not_found`） |
+
+> T-MCS-API3 的「桩返回 500 → mutation 仍成功」分支同样不可黑盒注入（原因同上），由
+> `servers/agent-api/src/services/cloud-host-model-push.test.ts`（T-CP2：单台抛错不影响其余、不 reject）锁定。
+
+## 云电脑工作组件版本与立即升级（T-UPG-API，需求 #551）
+
+- 文件：`src/agent-api/cloud-host.test.ts`（追加 `T-UPG-API1~5` 三组 describe）。
+- **T-UPG-API1**（仅 `HARNESS_ENABLED=true`）：`cloudHost(id).agentGearVersion` 与
+  `upgradeCloudHostAgentGear` 未认证均报 `Not authenticated`。
+- **T-UPG-API2/3**（需 `MONGODB_URI` + `REDIS_URL`）：Mongo 直写
+  `cloudcontainers.agentGearVersion`、Redis 直写 `agent-gear:latest-version`（JSON `{version, fetchedAt}`）
+  → 四字段透出（含 `upgradeAvailable` 两态）；Redis 键缺失/非法 → `latestVersion=null`、
+  `upgradeAvailable=false` 且查询不报错。
+- **T-UPG-API4/5**（需 `MONGODB_URI`）：真实 agent-api → cloud-controller 全链路——Mongo 把云电脑推进
+  `RUNNING` 后，容器非 online → `container is not online`；非 RUNNING → `cloud host is not running`；
+  他人 `controllerId` → `Cloud host not found`。
+- 注意：`REDIS_URL` 与 agent-api `REDIS_URI` 同一实例；Aspire 编排下为 `rediss://`（dev 自签证书），
+  按上表设置 `NODE_EXTRA_CA_CERTS` 或 `NODE_TLS_REJECT_UNAUTHORIZED=0`。

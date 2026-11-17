@@ -1,6 +1,6 @@
 import { Model } from '../models/model.js';
 import { Provider } from '../models/provider.js';
-import { llmApiService } from './llm-api.js';
+import { llmApiService, type ProviderModelEntry } from './llm-api.js';
 import { providerService, PROVIDER_CONNECTIVITY_ERROR } from './provider.js';
 import mongoose from 'mongoose';
 
@@ -9,6 +9,8 @@ const GLOBAL_SCOPE: 'global' = 'global';
 
 export interface ProviderModelOption {
   name: string;
+  /** 上游尽力提供的上下文长度（token）；取不到为 null */
+  contextLength: number | null;
   isImported: boolean;
   isDuplicate: boolean;
 }
@@ -33,19 +35,29 @@ export interface MappedModel {
 }
 
 /**
- * 规范化上游返回的模型名：trim、剔除空名、按首次出现顺序去重。
- * 上游网关/代理可能返回重复名或空名，直接写入会触发唯一索引 E11000。
+ * 规范化上游返回的模型清单：trim、剔除空名、按首次出现顺序去重，并保留首次出现条目的
+ * 上下文长度（仅 `>= 1` 的整数，其余归一为 null）。
+ *
+ * 上游网关/代理可能返回重复名或空名，直接写入会触发唯一索引 E11000；
+ * 同名条目的上下文元数据以首次出现为准（与去重语义一致）。
  */
-function dedupeModelNames(models: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const raw of models) {
-    const name = typeof raw === 'string' ? raw.trim() : '';
-    if (name.length === 0 || seen.has(name)) continue;
-    seen.add(name);
-    result.push(name);
+function indexProviderCatalog(entries: ProviderModelEntry[]): {
+  names: string[];
+  contextLengthByName: Map<string, number | null>;
+} {
+  const names: string[] = [];
+  const contextLengthByName = new Map<string, number | null>();
+  for (const entry of entries) {
+    const name = typeof entry?.name === 'string' ? entry.name.trim() : '';
+    if (name.length === 0 || contextLengthByName.has(name)) continue;
+    const value = entry.contextLength;
+    names.push(name);
+    contextLengthByName.set(
+      name,
+      typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : null,
+    );
   }
-  return result;
+  return { names, contextLengthByName };
 }
 
 /**
@@ -134,13 +146,17 @@ export class ModelService {
   async listProviderModels(providerId: string): Promise<ProviderModelOption[]> {
     const connection = await this.getConnectionOrThrow(providerId);
 
-    let fetched: string[];
+    let fetched: ProviderModelEntry[];
     try {
-      fetched = await llmApiService.fetchModels(connection.type, connection.endpoint, connection.apiKey);
+      fetched = await llmApiService.fetchModelCatalog(
+        connection.type,
+        connection.endpoint,
+        connection.apiKey,
+      );
     } catch {
       throw new Error(PROVIDER_CONNECTIVITY_ERROR);
     }
-    const names = dedupeModelNames(fetched);
+    const { names, contextLengthByName } = indexProviderCatalog(fetched);
 
     const existing = await Model.find(
       { scope: GLOBAL_SCOPE, name: { $in: names } },
@@ -159,6 +175,7 @@ export class ModelService {
 
     return names.map((name) => ({
       name,
+      contextLength: contextLengthByName.get(name) ?? null,
       isImported: importedNames.has(name),
       isDuplicate: occupiedByOthers.has(name),
     }));
@@ -169,6 +186,7 @@ export class ModelService {
    * 1) 剔除该供应商下已存在的名字（重复导入直接跳过，不报错）；
    * 2) 剩余为空时直接返回 `[]`，不访问上游；
    * 3) 反之上游连通性门禁失败 → `PROVIDER_CONNECTIVITY_ERROR`；
+   *    同一份上游清单提供 `name → contextLength` 映射，写入时携带（上游未提供 → null）；
    * 4) 全局重名 → `Model name already exists: <names>`；
    * 5) `insertMany(ordered: false)` 写入，并发冲突由唯一索引兜底并映射为同一文案。
    *
@@ -201,11 +219,18 @@ export class ModelService {
     if (!connection) {
       throw new Error('Provider not found');
     }
+    // 一次拉取同时承担连通性门禁与上下文元数据映射（避免二次上游调用）
+    let catalog: ProviderModelEntry[];
     try {
-      await llmApiService.fetchModels(connection.type, connection.endpoint, connection.apiKey);
+      catalog = await llmApiService.fetchModelCatalog(
+        connection.type,
+        connection.endpoint,
+        connection.apiKey,
+      );
     } catch {
       throw new Error(PROVIDER_CONNECTIVITY_ERROR);
     }
+    const { contextLengthByName } = indexProviderCatalog(catalog);
 
     await this.assertNamesAvailable(toCreate);
 
@@ -222,6 +247,8 @@ export class ModelService {
       isEnabled: true,
       sortOrder: nextSort++,
       scope: GLOBAL_SCOPE,
+      // 上游未提供上下文元数据 → null（未设置），不影响导入
+      contextLength: contextLengthByName.get(name) ?? null,
     }));
 
     let created: Array<Record<string, unknown>>;

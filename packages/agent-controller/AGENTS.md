@@ -57,7 +57,8 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.19.0`（major 保持 2；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.20.0`（major 保持 2；运行期模型下发 `harness:models` / 多 vendor 重写与 `ZAG_MODEL_PROVIDERS` 自 2.20.0 起；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.20.0`（major 保持 2；`agent-gear:upgrade` 升级事件自 2.20.0 起；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.17.1 起为当前基线；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -225,6 +226,23 @@ hook 抛错时本批每个 item 直接回报 `failed` + `Github 凭据申请失�
 - 双连接只启动一个 `LocalMcpServer`：`/worker` 连接 `skipLocalMcpStart=true`，标准连接负责启动。
 - 未检测到云电脑模式时保持本地控制器单连接旧行为不变。
 
+## 云电脑升级事件（2.20.0）
+
+- **事件对**（契约 `contracts/cloud-controller-websocket.md` §2.11/§2.12）：`/worker` 连接接收
+  `agent-gear:upgrade { targetVersion? }`，回 `agent-gear:upgrade:result`：
+  `{ accepted:true, currentVersion }` 或 `{ accepted:false, reason:'shutting_down' }`。
+- **客户端行为**：**不自安装**。接受后延迟约 100ms（D5，保证回执 flush 出 socket 缓冲）再走既有优雅退出：
+  云电脑模式 `notifyShutdown({ reason:'agent-gear upgrade', exitCode:0 })` 由 supervisor 关闭双连接并以
+  退出码 0 退出（**委托入口保活链路**按「非 42」退避 → 钉版安装 → 以新版本重启）；不发送 `unregister`。
+- **幂等守卫**：已接受升级 / `shutdownStarted`（正在退出）时再次收到事件只回执
+  `{ accepted:false, reason:'shutting_down' }`，不重复停机；日志 `agent_gear_upgrade` 仅含
+  `targetVersion/currentVersion/accepted`（无凭据）。
+- **本地模式零变化**：本地连接同样注册监听，但 controller-api 从不下发该事件（死路径 `process.exit(0)`）；
+  `shutdown` / `unregistered` / `error` 既有退出码语义逐字不变。
+- `ShutdownPayload` 追加可选 `exitCode`（D6），supervisor worker 连接原样透传给 `shutdown()`；
+  缺省时仍按 reason 分类，既有路径零变化。回归：`agent-gear-upgrade.test.ts`（T-AGU1~T-AGU4）、
+  `cloud-host/supervisor.test.ts`（T-AGU5）。
+
 ## harness prepare（OpenCode）
 
 init 脚本（admin-api 迁移 006）在安装固定版本 OpenCode 后执行
@@ -240,8 +258,8 @@ init 脚本（admin-api 迁移 006）在安装固定版本 OpenCode 后执行
 3. `mkdir -p ZAG_DEFAULT_WORKSPACE`。
 4. 定位 `~/.config/opencode/opencode.jsonc`：同目录已有 `.json` 且无 `.jsonc` 时合并 `.json`；否则新建
    `.jsonc`。使用 `jsonc-parser` 保留注释与既有 provider，仅替换 `providers.zag`；权限 0600。
-   `providers.zag = { package: '@opencode/ai/providers/openai-compatible', name: 'ZAG', settings: { baseURL, apiKey }, models: { <id>: { name: <id>, limit?: { context } } } }`
-   （OpenCode v2 配置形态；`limit.context` 仅在 `ZAG_MODEL_CONTEXT_LENGTHS` 含该模型正整数上下文时写入）。
+   `providers.zag = { package: '@opencode/ai/providers/openai-compatible', name: 'Agent Gear', settings: { baseURL, apiKey }, models: { <id>: { name: <id>, limit?: { context } } } }`
+   （OpenCode v2 配置形态；`name` 自 2.20.0 起为显示名 `Agent Gear`，用户组取供应商名称；`limit.context` 仅在 `ZAG_MODEL_CONTEXT_LENGTHS`/`ZAG_MODEL_PROVIDERS` 含该模型正整数上下文时写入）。
 
 > 镜像**不预装** `@opencode/cli`，由 harness 工作负载按 `OPENCODE_CLI_VERSION` 固定版本安装。
 
@@ -392,3 +410,24 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 p
 - 引入新协议或修改现有协议时，先编写跨服务的集成测试（启动真实 agent-controller 或 mock 端精确模拟协议格式）
 - handleTunnelData 的测试必须覆盖所有入站数据类型（纯 TCP 数据 + JSON 协议数据）
 - handleTunnelData 的出站（localSocket.on('data')）测试必须验证响应格式与 controller-api 端期望的格式一致
+
+## 多 vendor 模型下发与 `harness:models`（#533，agent-gear 2.20.0）
+
+> 契约 `contracts/cloud-controller-websocket.md` §2.13/§2.14；计划
+> `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` Phase 4。
+
+- **载荷与解析**：`src/harness/model-providers.ts`。`parseModelProvision` 只做结构校验（非法抛 `ModelProvisionError`，
+  消息只含字段名/索引、不含原值）；`resolveProvision(env)` 优先 `ZAG_MODEL_PROVIDERS`，缺省由
+  `ZAG_MODEL_IDS`/`ZAG_MODEL_CONTEXT_LENGTHS` 合成单 `zag` 组（旧服务端兼容：产物与 2.19.0 **除 `zag` 显示名
+  `ZAG`→`Agent Gear` 外**逐字一致）。
+- **多 vendor 重写**：`zag` 组恒写（`name='Agent Gear'`，可为空 `models: []`）且恒首位；用户组 `providers.<providerId>`
+  的 `name/displayName` 取供应商名；`contextLength` 写 `models.<id>.limit.context`（opencode）/ 对应 dsh 结构。
+  只重写文件，**不重新跑 harness CLI 硬校验**（容器内可能未安装）；`prepareHarness` 复用同一写函数。
+- **差集清理**：状态文件 `~/.zag/model-providers-state.json`（0600、原子写、`statePath` 可注入）记录上次写入的
+  vendor；仅清理「上次有本次无」的 vendor，**不误删用户手写 provider**；状态文件读写失败只告警，配置正确性优先。
+- **dsh 默认模型**：`agent-default-model`/`acp` 取「首个**非空**组」的第一个模型；全部为空 → 保持 `{provider:'zag'}`。
+  `.credentials.yaml` 的单点 `refs.ZAG_MODEL_API_KEY` 不变（凭据仍走平台网关）。
+- **事件处理**：`socketio-client.ts` 注册 `harness:models`，**仅 `handleWorkload=true`（`/worker`）处理**；非法 payload 也回
+  `success:false`（避免服务端空等）；`appliedTypes` 为实际重写成功类型，任一类失败 → `success:false` + 脱敏 `error`。
+  运行期凭据优先取进程 env，缺失项由 `src/harness/model-credentials.ts` 从已写入的 opencode/dsh 配置回读。
+- **版本**：`package.json` 2.20.0；服务端仅以该版本做推送短路判断，**不提升注册门禁**（旧 worker 静默忽略事件）。

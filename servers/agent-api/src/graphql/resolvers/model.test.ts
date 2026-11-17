@@ -12,15 +12,30 @@ vi.mock('../../services/model.js', () => ({
     delete: vi.fn(),
     toggle: vi.fn(),
     updateSortOrder: vi.fn(),
+    updateContextLength: vi.fn(),
   },
 }));
 
 vi.mock('../../services/provider.js', () => ({
-  providerService: { findSummaryById: vi.fn() },
+  providerService: { findSummaryById: vi.fn(), getDecryptedConnection: vi.fn() },
+}));
+
+vi.mock('../../services/acp-options-cache.js', () => ({
+  invalidateAcpOptionsForUser: vi.fn().mockResolvedValue(0),
+}));
+
+vi.mock('../../services/cloud-host-model-push.js', () => ({
+  pushModelProvisionForTenant: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../services/llm-api.js', () => ({
+  llmApiService: { fetchModelCatalog: vi.fn() },
 }));
 
 import { modelService } from '../../services/model.js';
 import { providerService } from '../../services/provider.js';
+import { pushModelProvisionForTenant } from '../../services/cloud-host-model-push.js';
+import { llmApiService } from '../../services/llm-api.js';
 
 const mockContext = { currentUser: { id: 'user1', username: 'testuser' } };
 
@@ -159,5 +174,197 @@ describe('modelResolvers', () => {
         (modelResolvers.Query as any).models({}, {}, mockContext),
       ).resolves.toEqual([{ id: 'm1' }]);
     });
+  });
+});
+
+describe('providerModelOptions（T-UMC5）', () => {
+  const Query = modelResolvers.Query as any;
+  const context = { currentUser: { id: 'user1' }, tenantId: 'tenant-1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('rejects anonymous callers', async () => {
+    await expect(
+      Query.providerModelOptions({}, { providerId: 'p1' }, { currentUser: null }),
+    ).rejects.toThrow('Not authenticated');
+  });
+
+  it('rejects when the provider is not visible to the user', async () => {
+    (providerService.getDecryptedConnection as any).mockResolvedValue(null);
+
+    await expect(
+      Query.providerModelOptions({}, { providerId: 'p1' }, context),
+    ).rejects.toThrow('Provider not found');
+    expect(llmApiService.fetchModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it('returns the upstream catalog with context lengths', async () => {
+    (providerService.getDecryptedConnection as any).mockResolvedValue({
+      type: 'OpenAI',
+      endpoint: 'https://api.openai.com/v1',
+      apiKey: 'sk-decrypted',
+    });
+    (llmApiService.fetchModelCatalog as any).mockResolvedValue([
+      { name: 'gpt-4o', contextLength: 128000 },
+      { name: 'gpt-4o-mini' },
+    ]);
+
+    await expect(
+      Query.providerModelOptions({}, { providerId: 'p1' }, context),
+    ).resolves.toEqual([
+      { name: 'gpt-4o', contextLength: 128000 },
+      { name: 'gpt-4o-mini' },
+    ]);
+    expect(providerService.getDecryptedConnection).toHaveBeenCalledWith('p1');
+    expect(llmApiService.fetchModelCatalog).toHaveBeenCalledWith(
+      'OpenAI',
+      'https://api.openai.com/v1',
+      'sk-decrypted',
+    );
+  });
+
+  it('normalizes upstream failures to a readable message without leaking details', async () => {
+    (providerService.getDecryptedConnection as any).mockResolvedValue({
+      type: 'OpenAI',
+      endpoint: 'https://api.openai.com/v1',
+      apiKey: 'sk-decrypted',
+    });
+    (llmApiService.fetchModelCatalog as any).mockRejectedValue(
+      new Error('401 invalid api key sk-decrypted at https://internal.example.com'),
+    );
+
+    await expect(
+      Query.providerModelOptions({}, { providerId: 'p1' }, context),
+    ).rejects.toThrow('拉取供应商模型清单失败，请检查 API 地址和凭据是否正确');
+  });
+});
+
+describe('updateModelContextLength（T-UMC5）', () => {
+  const Mutation = modelResolvers.Mutation as any;
+  const context = { currentUser: { id: 'user1' }, tenantId: 'tenant-1' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (pushModelProvisionForTenant as any).mockResolvedValue(undefined);
+  });
+
+  it('requires authentication', async () => {
+    await expect(
+      Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 1000 }, { currentUser: null }),
+    ).rejects.toThrow('Not authenticated');
+  });
+
+  it('writes the value, invalidates ACP options and schedules a push', async () => {
+    (modelService.updateContextLength as any).mockResolvedValue({
+      id: 'm1',
+      contextLength: 128000,
+    });
+
+    await expect(
+      Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 128000 }, context),
+    ).resolves.toEqual({ id: 'm1', contextLength: 128000 });
+    expect(modelService.updateContextLength).toHaveBeenCalledWith('m1', 128000);
+    await vi.waitFor(() =>
+      expect(pushModelProvisionForTenant).toHaveBeenCalledWith('tenant-1'),
+    );
+  });
+
+  it('passes null when clearing the value', async () => {
+    (modelService.updateContextLength as any).mockResolvedValue({ id: 'm1', contextLength: null });
+
+    await Mutation.updateModelContextLength({}, { modelId: 'm1' }, context);
+    expect(modelService.updateContextLength).toHaveBeenCalledWith('m1', null);
+  });
+
+  it('maps service errors to GraphQLError messages verbatim', async () => {
+    (modelService.updateContextLength as any).mockRejectedValue(new Error('Model not found'));
+
+    await expect(
+      Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 1000 }, context),
+    ).rejects.toThrow('Model not found');
+  });
+
+  it('maps invalid context length errors verbatim', async () => {
+    (modelService.updateContextLength as any).mockRejectedValue(
+      new Error('contextLength must be a positive integer'),
+    );
+
+    await expect(
+      Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 0 }, context),
+    ).rejects.toThrow('contextLength must be a positive integer');
+  });
+});
+
+describe('model mutations schedule the model push（T-CP5）', () => {
+  const Mutation = modelResolvers.Mutation as any;
+  const context = { currentUser: { id: 'user1', tenantId: 'tenant-9' }, tenantId: 'tenant-9' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (pushModelProvisionForTenant as any).mockResolvedValue(undefined);
+  });
+
+  it('pushes once with the tenant id after createCustomModel (contextLength passthrough)', async () => {
+    (modelService.createCustom as any).mockResolvedValue({ id: 'm1' });
+
+    await Mutation.createCustomModel(
+      {},
+      { input: { providerId: 'p1', name: 'custom', contextLength: 128000 } },
+      context,
+    );
+
+    expect(modelService.createCustom).toHaveBeenCalledWith({
+      providerId: 'p1',
+      name: 'custom',
+      contextLength: 128000,
+    });
+    await vi.waitFor(() =>
+      expect(pushModelProvisionForTenant).toHaveBeenCalledTimes(1),
+    );
+    expect(pushModelProvisionForTenant).toHaveBeenCalledWith('tenant-9');
+  });
+
+  it('pushes after deleteCustomModel / toggleModel / updateModelSortOrder', async () => {
+    (modelService.delete as any).mockResolvedValue({ id: 'm1' });
+    (modelService.toggle as any).mockResolvedValue({ id: 'm2' });
+    (modelService.updateSortOrder as any).mockResolvedValue([{ id: 'm3' }]);
+
+    await Mutation.deleteCustomModel({}, { id: 'm1' }, context);
+    await Mutation.toggleModel({}, { id: 'm2' }, context);
+    await Mutation.updateModelSortOrder({}, { ids: ['m3'] }, context);
+
+    await vi.waitFor(() =>
+      expect(pushModelProvisionForTenant).toHaveBeenCalledTimes(3),
+    );
+  });
+
+  it('does not push on failure paths', async () => {
+    (modelService.delete as any).mockResolvedValue(null);
+    (modelService.createCustom as any).mockRejectedValue(new Error('Provider not found'));
+
+    await expect(Mutation.deleteCustomModel({}, { id: 'm1' }, context)).rejects.toThrow(
+      'Model not found or is not a custom model',
+    );
+    await expect(
+      Mutation.createCustomModel({}, { input: { providerId: 'p1', name: 'x' } }, context),
+    ).rejects.toThrow('Provider not found');
+
+    // 让可能排入的微任务跑完，再断言零副作用
+    await Promise.resolve();
+    expect(pushModelProvisionForTenant).not.toHaveBeenCalled();
+  });
+
+  it('swallows push rejections (mutation still succeeds)', async () => {
+    (modelService.createCustom as any).mockResolvedValue({ id: 'm1' });
+    (pushModelProvisionForTenant as any).mockRejectedValue(new Error('push down'));
+
+    await expect(
+      Mutation.createCustomModel({}, { input: { providerId: 'p1', name: 'x' } }, context),
+    ).resolves.toEqual({ id: 'm1' });
+    await vi.waitFor(() =>
+      expect(pushModelProvisionForTenant).toHaveBeenCalledTimes(1),
+    );
   });
 });

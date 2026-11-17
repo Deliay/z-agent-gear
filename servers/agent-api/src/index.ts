@@ -19,6 +19,7 @@ import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
 import { internalCloudHostRouter } from './routes/internal-cloud-host.js';
 import { internalCloudStorageRouter } from './routes/internal-cloud-storage.js';
+import { internalModelConfigRouter } from './routes/internal-model-config.js';
 import { eventCallbackRouter } from './routes/event-callback.js';
 import { githubWebhookRouter } from './routes/github-webhook.js';
 import { authOauthRouter } from './routes/auth-oauth.js';
@@ -60,6 +61,7 @@ import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
 import { scheduleTenantSelfCheck } from './services/tenant-self-check.js';
 import { scheduleCloudStorageReconcile } from './services/cloud-storage-service.js';
+import { startAgentGearVersionRefresh } from './services/agent-gear-version.js';
 import { valutService } from './services/valut-service.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
@@ -166,6 +168,7 @@ app.use('/api', githubRouter);
 app.use('/api', authOauthRouter);
 app.use('/internal/cloud-hosts', internalCloudHostRouter);
 app.use('/internal/cloud-storages', internalCloudStorageRouter);
+app.use('/internal/model-config', internalModelConfigRouter);
 app.use('/internal/users', internalUsersRouter);
 app.use('/internal/tenants', internalTenantsRouter);
 
@@ -323,6 +326,8 @@ async function start() {
     scheduleTenantSelfCheck();
     // 云存储 ARCHIVING 对账（回调最终丢失兜底；定时器 unref，不阻塞退出）
     scheduleCloudStorageReconcile(config.cloudStorageReconcileMs);
+    // agent-gear 最新版本刷新（启动即抓一次 + 周期刷新；interval=0 时仅启动一次）
+    startAgentGearVersionRefresh();
   });
 }
 

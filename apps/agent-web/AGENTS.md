@@ -448,3 +448,28 @@ pnpm run preview  # Preview production build
 - **重试进度**：`failNode` 清空 `nextRetryAt` 后 `retryProgressText` 自然返回 null，进度行随轮询消失（前端零额外逻辑）。
 - **测试入口**：`components/workflow/__tests__/NodeDetailDrawer.test.tsx`（T-MNF-W1~W3）、
   `components/workflow/__tests__/WorkflowNodeTreeConstants.test.ts`（T-MNF-W3 映射）。
+
+## 设置页模型下发提醒与上下文编辑（#533）
+
+> 契约 `contracts/llm.graphql`；计划 `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` Phase 7。
+
+- **统一提醒**：`src/lib/model-config-notice.ts` 是文案单一来源
+  `MODEL_CONFIG_APPLIED_NOTICE`（「已保存并下发到运行中的云电脑；部分 Harness 运行时不会重载模型配置，
+  已运行的会话可能需要重启后生效」）+ `notifyModelConfigApplied()`（`toast.success`）。
+  **会触发下发的用户侧保存类操作**成功后统一调用：自定义模型新增/上下文编辑、启停、删除、排序，供应商创建/更新；
+  供应商 toggle/delete/batch 保持静默（后台同理，无提醒）。
+- **上下文展示/编辑**：`GET_MODELS` 选含 `contextLength`；`ModelItem` 行内展示「最长上下文：N tokens / 未设置」
+  （`data-testid="model-context-length"`）；仅 `scope==='user' && !readOnly` 显示 PencilLine「编辑上下文」入口；
+  编辑复用 `CustomModelDialog` 编辑模式（供应商/名称只读，仅上下文可改/清空）→ `UPDATE_MODEL_CONTEXT_LENGTH` →
+  `refetchQueries: [GET_MODELS]`。
+- **新增模型**：`CREATE_CUSTOM_MODEL` 携带 `contextLength`（数字或 null）；「最长上下文大小（token）」输入
+  `inputMode="numeric"`、正整数校验（文案与 admin-web 逐字一致）、留空 = 未设置；选定供应商并输入模型名后
+  400ms 去抖调 `PROVIDER_MODEL_OPTIONS` 按同名项预填（失败静默；用户已手改不覆盖；服务端不缓存清单）。
+## 云电脑工作组件版本区块（需求 #551）
+
+> 契约 `contracts/cloud-host.graphql`（`CloudHostAgentGearVersion` / `upgradeCloudHostAgentGear`）。
+
+- **选择集单点扩展**：`CLOUD_HOST_FIELDS`（`graphql/queries.ts`）追加 `agentGearVersion { currentVersion latestVersion upgradeAvailable autoUpdateIntervalMinutes }`，`GET_CONTROLLERS` / `CLOUD_HOST` / `MY_CLOUD_HOSTS` 共用；手写类型 `CloudHostData.agentGearVersion?` 同步。
+- **版本区块**：`ControllerConfigPage` 的 `CloudHostPanel` 内 `data-testid="cloud-host-agent-gear-version"`——`当前版本 {currentVersion ?? '—'}` / `最新版本 {latestVersion ?? '—'}`，「立即升级」按钮仅在 `upgradeAvailable && status==='RUNNING' && !deletedAt` 时渲染；小字 `自动升级每 {autoUpdateIntervalMinutes ?? 10} 分钟检查一次`（`text-xs text-muted-foreground`）。
+- **升级流程（D14）**：点击 → `UPGRADE_CLOUD_HOST_AGENT_GEAR({ controllerId })` → 升级中态（按钮禁用 + spinner）→ 每 **2s** `CLOUD_HOST`（`fetchPolicy: network-only`）轮询 → `currentVersion === latestVersion` toast「工作组件已升级到 {version}」，**3 分钟**超时 toast 可重试/等待自动升级；组件卸载清理定时器不残留；成功后 `refetch` 控制器列表刷新版本信息。
+- **错误文案单一来源**：`lib/cloud-host-agent-gear.ts` 的 `CLOUD_HOST_AGENT_GEAR_ERROR_MESSAGES`（契约六条 + `internal error` 兜底，未命中原样展示）；`isAgentGearUpgradeAvailable` 为按钮可见性纯函数。测试入口：`lib/__tests__/cloud-host-agent-gear.test.ts`（T-UPG-W-L）与 `pages/__tests__/ControllerConfigPage.test.tsx`（T-UPG-W1~W5）。

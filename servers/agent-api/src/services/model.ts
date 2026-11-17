@@ -1,7 +1,9 @@
 import { Model, type IModel } from '../models/model.js';
 import { Provider } from '../models/provider.js';
 import { GLOBAL_WRITE_FORBIDDEN } from './constants.js';
+import { decrypt } from './crypto.js';
 import { getWorkspaceContext } from './workspace-context.js';
+import { llmApiService, type ProviderType } from './llm-api.js';
 import mongoose from 'mongoose';
 
 // 用户可用模型：scope=user 全量（兼容无 scope 字段的存量数据）∪ scope=global 且启用的全局模型
@@ -15,6 +17,19 @@ const AVAILABLE_MODELS_FILTER: mongoose.QueryFilter<IModel> = {
 
 function normalizeScope(value: unknown): 'user' | 'global' {
   return value === 'global' ? 'global' : 'user';
+}
+
+/**
+ * 最长上下文统一校验出口（与 admin-api `assertContextLength` 同口径，D14）：
+ * - `null/undefined` → `null`（未设置）
+ * - 其余必须是 `>= 1` 的整数（拒绝 0/负数/小数/字符串）
+ */
+export function assertContextLength(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    throw new Error('contextLength must be a positive integer');
+  }
+  return value;
 }
 
 export class ModelService {
@@ -46,18 +61,28 @@ export class ModelService {
     return models.map(this.mapModel.bind(this));
   }
 
-  async createCustom(input: { providerId: string; name: string }) {
+  async createCustom(input: { providerId: string; name: string; contextLength?: number | null }) {
     // 名称必须非空（trim 后），避免写入纯空白模型名
     const name = (input.name ?? '').trim();
     if (!name) {
       throw new Error('Model name is required');
     }
+    // 显式非法值必须在任何 DB 读写之前拒绝
+    let contextLength = assertContextLength(input.contextLength);
 
     // 校验目标供应商存在且为用户自己的（scope=user）配置，防止向全局供应商挂模型
     if (!mongoose.Types.ObjectId.isValid(input.providerId)) {
       throw new Error('Provider not found');
     }
-    const provider = await Provider.findOne({ _id: input.providerId }).select('scope workspaceId').lean() as { scope?: string; workspaceId?: unknown } | null;
+    const provider = await Provider.findOne({ _id: input.providerId })
+      .select('scope workspaceId type endpoint encryptedCredential')
+      .lean() as {
+        scope?: string;
+        workspaceId?: unknown;
+        type?: string;
+        endpoint?: string;
+        encryptedCredential?: { iv: string; ciphertext: string; tag: string } | null;
+      } | null;
     if (!provider) {
       throw new Error('Provider not found');
     }
@@ -68,6 +93,11 @@ export class ModelService {
     if (context && provider.workspaceId && String(provider.workspaceId) !== context.id) {
       // 共享读允许看到全局工作区供应商；写（挂模型）仅限当前工作区自身
       throw new Error('Provider not found');
+    }
+
+    // 缺省（undefined）才尽力补全：前端显式传 null（用户清空）时不得打上游（D15）
+    if (input.contextLength === undefined) {
+      contextLength = await this.resolveUpstreamContextLength(provider, name);
     }
 
     const maxSort = await Model.findOne({ providerId: input.providerId })
@@ -82,10 +112,61 @@ export class ModelService {
       isEnabled: true,
       sortOrder: (maxSort?.sortOrder ?? -1) + 1,
       scope: 'user',
+      contextLength,
       ...(context ? { tenantId: context.tenantId, workspaceId: context.id } : {}),
     });
 
     return this.mapModel(model.toObject());
+  }
+
+  /**
+   * 尽力从供应商上游元数据补全同名模型的上下文长度。
+   * 任何失败/超时/未命中 → null（不阻塞创建，D15）。
+   */
+  private async resolveUpstreamContextLength(
+    provider: {
+      type?: string;
+      endpoint?: string;
+      encryptedCredential?: { iv: string; ciphertext: string; tag: string } | null;
+    },
+    name: string,
+  ): Promise<number | null> {
+    if (!provider.encryptedCredential || !provider.type || !provider.endpoint) return null;
+    try {
+      const apiKey = decrypt(provider.encryptedCredential);
+      const entries = await llmApiService.fetchModelCatalog(
+        provider.type as ProviderType,
+        provider.endpoint,
+        apiKey,
+      );
+      const match = entries.find((entry) => entry.name === name);
+      const value = match?.contextLength;
+      return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 编辑用户自有模型的上下文长度（D14）。
+   *
+   * `findOneAndUpdate({_id, scope:{$ne:'global'}})`：写插件（workspace-scope）会把过滤收敛到
+   * 当前工作区，跨工作区/他人/global/不存在统一命中空 → `Model not found`（不泄露存在性）。
+   */
+  async updateContextLength(id: string, value: unknown) {
+    const contextLength = assertContextLength(value);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      throw new Error('Model not found');
+    }
+    const model = await Model.findOneAndUpdate(
+      { _id: id, scope: { $ne: 'global' } },
+      { $set: { contextLength } },
+      { returnDocument: 'after', lean: true },
+    );
+    if (!model) {
+      throw new Error('Model not found');
+    }
+    return this.mapModel(model as unknown as Record<string, unknown>);
   }
 
   async delete(id: string) {

@@ -151,7 +151,7 @@ pnpm run test:coverage
   - `status.sync.tick` — 状态对账**每轮一个 span**（属性记 `checked`/`changed` 条数，不逐容器开 span）；
   - `workload.dispatch` — `workload:run` **批次一个 span**（属性 `workload.count`，不逐条脚本开 span）。
 - **Socket.IO 握手 / `_meta` 封套位置**：worker 事件报文顶层 `_meta: { traceparent? }` 与云电脑 Job env 注入表见 [`contracts/cloud-controller-websocket.md`](../../contracts/cloud-controller-websocket.md) **附录 B**（B.1 `_meta` 可选字段 / B.2 Job env 注入表）；`emitToContainer()` 统一注入 `_meta.traceparent`，消费者必须容忍 `_meta` 缺失。agent-gear 侧握手 `auth.traceparent` 见 `contracts/agent-session-websocket.md` §7。
-- **env 变量**：`LOG_LEVEL`（默认 `info`；仅非 engine-path 逐请求 `http-request` 为 `debug` 级需提升，级别口径见「回连失败排查」）/ `LOG_PRETTY`（仅非生产生效）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 不启用导出、零外发**）/ `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS`（仅经 env 传递，**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` / `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORT_TIMEOUT_MS`，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。harness Job 注入的 `OTEL_*` + `ZAG_INIT_TRACEPARENT` 由 `buildHarnessJobEnv` 生成（附录 B.2）。
+- **env 变量**：`LOG_LEVEL`（默认 `info`；仅非 engine-path 逐请求 `http-request` 为 `debug` 级需提升，级别口径见「回连失败排查」）/ `LOG_PRETTY`（仅非生产生效）/ `OTEL_SDK_DISABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT`（**空 = 不启用导出、零外发**）/ `OTEL_EXPORTER_OTLP_PROTOCOL` / `OTEL_EXPORTER_OTLP_HEADERS`（仅经 env 传递，**禁止出现在任何日志**）/ `OTEL_SERVICE_NAME` / `OTEL_TRACES_SAMPLER(+_ARG)` / `OTEL_RESOURCE_ATTRIBUTES` / `OTEL_EXPORT_TIMEOUT_MS`，完整契约见 [`contracts/observability.md`](../../contracts/observability.md) §3。harness Job 注入的 `OTEL_*` + `ZAG_INIT_TRACEPARENT` 由 `buildHarnessEnv` 生成（附录 B.2）。
 - **排障**：
   - `LOG_LEVEL=debug pnpm run dev`（或部署 env）补看非 engine-path 的逐请求 `http-request` 日志（upgrade/握手/engine path `http-request` 等默认 `info` 已可见）；`LOG_PRETTY=1` 非生产看人类可读输出。
   - `OTEL_SDK_DISABLED=true` 可在不回滚的情况下关闭追踪导出（日志不受影响）。
@@ -216,3 +216,32 @@ pnpm run test:coverage
 - **操作查询**：`GET /internal/storages/:id/operations/:operationId`（`operationId/type/status/usageBytes/startedAt/finishedAt/failureReason`）。
 - **巡检**：`StatusSyncService` 每轮在 `reconcileArchives` 后调用 `reconcileStorageOperations`：超 `ARCHIVE_TIMEOUT_MS` → failed + 回调；本进程无执行任务（重启）→ 重跑；终态未送达回调 → 重投一次（agent-api 幂等）。
 - **零回归**：`storageArchive` 缺省时 destroy 报文/落库/terminal 与改动前逐字段一致；未挂载存储不写 `storageArchiveSkipped`、不携带 `archiveSkipped`。
+
+## 运行期模型下发（harness-models，#533）
+
+> 契约 `contracts/cloud-controller-websocket.md` §2.13/§2.14、A.2.2、A.2.15、B.2；计划
+> `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` Phase 3。
+
+- **端点**：`POST /internal/containers/:containerId/harness-models`（Bearer `INTERNAL_API_TOKEN`）。状态矩阵：
+  非法 id/不存在 → 404 `NOT_FOUND`；终态（exited/failed/destroying）→ 409 `CONTAINER_NOT_ONLINE`；
+  中间态（creating/connecting/initializing）→ 200 `{delivered:false,reason:'offline'}`；payload 非法 → 400
+  `INVALID_MODEL_PROVISION`；`requestHarnessModels` 未注入 → 503 `UNAVAILABLE`。
+- **顺序硬约束**：先 `containerService.updateModelProvision`（SecretStore + `cloudcontainersecrets`：`modelProviders`
+  原样 + 旧字段投影）**再** emit；secret 已被清理（容器走完）→ 409，不把「容器已不存在」误报成保存失败。
+- **ack 网关**：`socketio-gateway.ts#requestHarnessModels` 生成 `requestId`、10s 超时；`harness:models:result` 只接受
+  同容器 pending；同容器并发新请求先以 `worker_error` 收敛旧请求；断连/重连/关停 → `offline`。`delivered=false`
+  一律不视为失败（best-effort）。
+- **版本短路**：`services/worker-version.ts#MIN_HARNESS_MODELS_WORKER_VERSION='2.20.0'` + `supportsHarnessModelPush`：
+  版本可得且更低 → 200 `worker_unsupported`（不 emit）；版本不可得 → 正常 emit 等 ack。**不提升注册门禁**（仍 2.17.1）。
+- **secrets/env**：`HarnessSecrets.modelProviders?: string`（ModelProvision JSON，可选、零迁移、读取侧回退旧字段）；
+  `buildHarnessEnv` 仅在携带时注入 `ZAG_MODEL_PROVIDERS`，init 与 runtime 两条路径同源。
+- **解析口径**：`services/model-provision.ts#parseModelProvisionPayload` 只做结构校验（不做业务语义），路由与服务共用。
+## agent-gear 升级事件与版本落库（需求 #551）
+
+> 契约 `contracts/cloud-controller-websocket.md` §2.11/§2.12/A.2.14/A.3。
+
+- **版本落库（A.3 `agentGearVersion`）**：`cloudcontainers.agentGearVersion`（String，`default: null`，**零迁移**、不建索引、历史行 null 容忍）为 worker `register` 上报的 agent-gear 版本。写入点在 `socketio-gateway` 的注册副作用阶段、与内存 `workerVersions.set` 同位（**版本门禁通过之后**；拒绝路径保持零副作用）；写失败仅 WARN（`event: agent_gear_version_persist_failed`），不阻断注册。每次成功注册（含升级重启后的重连）刷新；内存 `workerVersions` 继续服务 runtime harness 版本门禁。
+- **升级事件对（§2.11/§2.12）**：`Server → Worker agent-gear:upgrade { targetVersion? }`；worker 回执 `agent-gear:upgrade:result { accepted, currentVersion?, reason? }`。worker **不自安装**：`accepted:true` 后优雅退出（退出码 0），由入口保活链路钉版安装并以新版本重启。
+- **A.2.14**：`POST /internal/containers/:id/upgrade-agent-gear`。门禁顺序：`getById` 缺失 → 404 `NOT_FOUND`；`status!=='online'` 或无活跃 socket → 409 `CONTAINER_NOT_ONLINE`；上报版本 < `MIN_UPGRADE_WORKER_VERSION`（2.20.0，含未上报）→ 400 `UPGRADE_UNSUPPORTED`；在飞（60s 窗）→ 409 `UPGRADE_IN_PROGRESS`；worker 拒绝/10s 回执超时 → 409 `UPGRADE_NOT_ACCEPTED`；接受 → 200 `{accepted:true, containerId, currentVersion}`。
+- **在飞互斥与回执**：收敛在 gateway 句柄 `requestAgentGearUpgrade(containerId, {targetVersion?})`——进程内 `Map<containerId, deadline>`（60s）+ `Map<containerId, {resolve, timer}>`（10s 超时，timer unref）；连接处理器注册 `agent-gear:upgrade:result` 解析待回执；worker 断连清理两份 Map（在飞窗随之释放）。单实例部署前提与既有 KeyedMutex/调度器一致。路由层只做门禁与错误码薄映射。
+- **常量**：`MIN_UPGRADE_WORKER_VERSION='2.20.0'`（`services/worker-version.ts`，代码常量、不 env 化）；`worker-version.test.ts` T-UPG-V2 读 `packages/agent-controller/package.json` 版本字面量防漂移（agent-gear 发版须同步提升）。
