@@ -714,7 +714,7 @@ export class ContainerService {
   }
 
   /**
-   * 运行期模型清单下发前的持久化（契约 A.2.14 / 计划 D11）：
+   * 运行期模型清单下发前的持久化（契约 A.2.15 / 计划 D11）：
    * 读取内存 secret → 合并 `modelProviders`（原样 JSON）+ 旧字段投影
    * （`modelIds` 展开去重、`modelContextLengths` 同 id 首个正整数）→ 写内存 + 落库。
    *
@@ -740,6 +740,15 @@ export class ContainerService {
     this.secretStore.put(containerId, next);
     await this.persistHarnessSecret(containerId, next);
     return next;
+  }
+
+  /**
+   * 记录 worker `register` 上报的 agent-gear 版本（契约 A.3 `agentGearVersion`）：
+   * 仅在版本门禁通过后的注册副作用阶段调用；写失败由调用方降级为 WARN（不阻断注册）。
+   * 内存 `workerVersions`（gateway）继续服务 runtime harness 门禁，本方法是读侧展示的落库来源。
+   */
+  async recordAgentGearVersion(containerId: string, version: string): Promise<void> {
+    await this.repo.update(containerId, { agentGearVersion: version });
   }
 
   /**

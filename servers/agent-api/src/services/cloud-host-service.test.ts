@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
     controllerApiPublicEndpoint: 'wss://controller-api',
     cloudHostModelBaseUrl: 'http://admin-api:8002/v1',
     cloudHostDefaultWorkspace: '/home/worker/workspace',
+    agentGearAutoUpdateIntervalMinutes: 10,
   },
 }));
 
@@ -35,7 +36,7 @@ vi.mock('../models/cloud-host.js', () => ({
 }));
 
 vi.mock('../models/controller.js', () => ({
-  Controller: { deleteOne: vi.fn() },
+  Controller: { deleteOne: vi.fn(), findOne: vi.fn() },
 }));
 
 vi.mock('../models/controller-key.js', () => ({
@@ -68,11 +69,22 @@ vi.mock('./billing-client.js', () => ({
 
 vi.mock('./cloud-controller-client.js', () => ({
   CloudControllerUnavailableError: class extends Error {},
+  CloudControllerRequestError: class CloudControllerRequestError extends Error {
+    constructor(
+      public readonly status: number,
+      public readonly code: string,
+      message?: string,
+    ) {
+      super(message ?? code);
+      this.name = 'CloudControllerRequestError';
+    }
+  },
   CloudControllerClient: class {},
   cloudControllerClient: {
     startHarness: vi.fn(),
     destroyContainer: vi.fn(),
     listContainers: vi.fn(),
+    upgradeAgentGear: vi.fn(),
   },
 }));
 
@@ -134,7 +146,19 @@ vi.mock('./cloud-storage-service.js', () => ({
   },
 }));
 
-import { CloudHostService, toCloudHostGraphQLError } from './cloud-host-service.js';
+const agentGearVersionMock = vi.hoisted(() => ({
+  getLatestAgentGearVersion: vi.fn(),
+}));
+vi.mock('./agent-gear-version.js', () => agentGearVersionMock);
+
+vi.mock('../models/cloud-container.js', () => ({
+  CloudContainer: { findOne: vi.fn() },
+}));
+
+import { CloudHostService, mapAgentGearUpgradeError, toCloudHostGraphQLError } from './cloud-host-service.js';
+import { CloudContainer } from '../models/cloud-container.js';
+import { getLatestAgentGearVersion } from './agent-gear-version.js';
+import { CloudControllerRequestError } from './cloud-controller-client.js';
 import { runWithWorkspace } from './workspace-context.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { Controller } from '../models/controller.js';
@@ -1726,5 +1750,127 @@ describe('CloudHostService', () => {
         toCloudHostGraphQLError(new Error('MongoServerError: duplicate key')),
       ).toThrow('internal error');
     });
+  });
+});
+
+describe('云电脑工作组件版本与立即升级（T-UPG-S）', () => {
+  const service = new CloudHostService();
+  const controllerFindOne = Controller.findOne as unknown as {
+    mockReturnValue: (value: unknown) => void;
+  };
+
+  function containerChain(value: unknown) {
+    return {
+      select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(value) }),
+    } as never;
+  }
+
+  it('T-UPG-S1: getAgentGearVersionInfo 组装 current/latest/upgradeAvailable/周期；单字段失败降级', async () => {
+    vi.mocked(CloudContainer.findOne).mockReturnValue(containerChain({ agentGearVersion: '2.19.0' }) as never);
+    vi.mocked(getLatestAgentGearVersion).mockResolvedValue('2.20.0');
+    await expect(service.getAgentGearVersionInfo({ containerId: '507f1f77bcf86cd799439021' })).resolves.toEqual({
+      currentVersion: '2.19.0',
+      latestVersion: '2.20.0',
+      upgradeAvailable: true,
+      autoUpdateIntervalMinutes: 10,
+    });
+
+    // 一致 → false
+    vi.mocked(CloudContainer.findOne).mockReturnValue(containerChain({ agentGearVersion: '2.20.0' }) as never);
+    await expect(service.getAgentGearVersionInfo({ containerId: '507f1f77bcf86cd799439021' })).resolves.toMatchObject({
+      upgradeAvailable: false,
+    });
+
+    // 任一缺失 → false
+    vi.mocked(CloudContainer.findOne).mockReturnValue(containerChain({ agentGearVersion: null }) as never);
+    await expect(service.getAgentGearVersionInfo({ containerId: '507f1f77bcf86cd799439021' })).resolves.toMatchObject({
+      currentVersion: null,
+      upgradeAvailable: false,
+    });
+    vi.mocked(getLatestAgentGearVersion).mockResolvedValue(null);
+    await expect(service.getAgentGearVersionInfo({})).resolves.toMatchObject({
+      latestVersion: null,
+      upgradeAvailable: false,
+    });
+
+    // 查询抛错 → currentVersion=null（不拖垮）
+    vi.mocked(CloudContainer.findOne).mockImplementation(() => {
+      throw new Error('mongo down');
+    });
+    await expect(service.getAgentGearVersionInfo({ containerId: '507f1f77bcf86cd799439021' })).resolves.toMatchObject({
+      currentVersion: null,
+    });
+  });
+
+  it('T-UPG-S2: upgradeCloudHostAgentGear 门禁链（归属 / 非 RUNNING 逐字文案）', async () => {
+    controllerFindOne.mockReturnValue(chain(null) as never);
+    await expect(service.upgradeCloudHostAgentGear(CONTROLLER_ID, 'user-1')).rejects.toThrow(
+      'Cloud host not found',
+    );
+
+    controllerFindOne.mockReturnValue(chain({ _id: CONTROLLER_ID }) as never);
+    vi.mocked(CloudHost.findOne).mockReturnValue(chain(null) as never);
+    await expect(service.upgradeCloudHostAgentGear(CONTROLLER_ID, 'user-1')).rejects.toThrow(
+      'Cloud host not found',
+    );
+
+    for (const status of ['STARTING', 'STOPPED', 'FAILED']) {
+      vi.mocked(CloudHost.findOne).mockReturnValue(
+        chain({ status, containerId: 'container-1' }) as never,
+      );
+      await expect(service.upgradeCloudHostAgentGear(CONTROLLER_ID, 'user-1')).rejects.toThrow(
+        'cloud host is not running',
+      );
+    }
+
+    vi.mocked(CloudHost.findOne).mockReturnValue(
+      chain({ status: 'RUNNING', containerId: null }) as never,
+    );
+    await expect(service.upgradeCloudHostAgentGear(CONTROLLER_ID, 'user-1')).rejects.toThrow(
+      'container is not online',
+    );
+  });
+
+  it('T-UPG-S3: 客户端错误码五分支映射与成功返回', async () => {
+    controllerFindOne.mockReturnValue(chain({ _id: CONTROLLER_ID }) as never);
+    vi.mocked(CloudHost.findOne).mockReturnValue(
+      chain({ status: 'RUNNING', containerId: 'container-1' }) as never,
+    );
+
+    const cases: Array<[string, string]> = [
+      ['NOT_FOUND', 'Cloud host not found'],
+      ['CONTAINER_NOT_ONLINE', 'container is not online'],
+      ['UPGRADE_UNSUPPORTED', 'agent-gear upgrade is not supported by the current version'],
+      ['UPGRADE_IN_PROGRESS', 'agent-gear upgrade already in progress'],
+      ['UPGRADE_NOT_ACCEPTED', 'container is not online'],
+    ];
+    for (const [code, message] of cases) {
+      vi.mocked(cloudControllerClient.upgradeAgentGear).mockRejectedValueOnce(
+        new CloudControllerRequestError(409, code),
+      );
+      await expect(service.upgradeCloudHostAgentGear(CONTROLLER_ID, 'user-1')).rejects.toThrow(
+        message,
+      );
+      expect(mapAgentGearUpgradeError(new CloudControllerRequestError(409, code))).toBe(message);
+    }
+
+    vi.mocked(cloudControllerClient.upgradeAgentGear).mockResolvedValueOnce({ accepted: true });
+    await expect(service.upgradeCloudHostAgentGear(CONTROLLER_ID, 'user-1')).resolves.toEqual({
+      accepted: true,
+    });
+    expect(cloudControllerClient.upgradeAgentGear).toHaveBeenLastCalledWith('container-1');
+  });
+
+  it('T-UPG-S4: 白名单三条逐字透传；未知错误收敛 internal error', () => {
+    for (const message of [
+      'container is not online',
+      'agent-gear upgrade is not supported by the current version',
+      'agent-gear upgrade already in progress',
+    ]) {
+      expect(() => toCloudHostGraphQLError(new Error(message))).toThrow(message);
+    }
+    expect(() => toCloudHostGraphQLError(new Error('UPGRADE_SECRET_LEAK'))).toThrow(
+      'internal error',
+    );
   });
 });

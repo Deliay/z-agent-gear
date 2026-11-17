@@ -6,7 +6,7 @@ import {
 } from './model-provision.js';
 
 /**
- * A.2.14 载荷结构校验与旧字段投影（cloud-controller 侧唯一口径）。
+ * A.2.15 载荷结构校验与旧字段投影（cloud-controller 侧唯一口径）。
  * 只校验结构，不做业务语义（`zag` 首位 / vendor 归属由 agent-api 保证）。
  */
 describe('parseModelProvisionPayload', () => {

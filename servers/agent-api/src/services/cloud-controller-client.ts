@@ -49,7 +49,7 @@ export interface StartHarnessInput {
   };
 }
 
-/** 运行期模型下发结果（契约 A.2.14；`delivered=false` 不视为失败，D11）。 */
+/** 运行期模型下发结果（契约 A.2.15；`delivered=false` 不视为失败，D11）。 */
 export interface HarnessModelsPushResult {
   delivered: boolean;
   appliedTypes?: string[];
@@ -271,7 +271,7 @@ export class CloudControllerClient {
   }
 
   /**
-   * 运行期模型下发（契约 A.2.14）：先由 cloud-controller 更新 secret + 落库，再 emit 等 ack（≤10s）。
+   * 运行期模型下发（契约 A.2.15）：先由 cloud-controller 更新 secret + 落库，再 emit 等 ack（≤10s）。
    * 4xx/5xx 抛 `CloudControllerRequestError`（保留 status/code），网络/解析失败抛不可用。
    */
   async pushHarnessModels(
@@ -505,6 +505,25 @@ export class CloudControllerClient {
     return this.requestWithError<{ accepted: boolean }>(
       `/internal/storages/${encodeURIComponent(storageId)}/usage-refresh`,
       { method: 'POST', body: JSON.stringify({ containerId: input.containerId }) },
+    );
+  }
+
+  /**
+   * 立即升级云电脑工作组件（契约 A.2.14）：cloud-controller 门禁通过后下发 `agent-gear:upgrade`
+   * 并等待 worker 回执；成功返回 `{accepted:true, currentVersion?}`，失败抛
+   * `CloudControllerRequestError`（code 表由服务层映射为 GraphQL 白名单文案）。
+   */
+  async upgradeAgentGear(
+    containerId: string,
+    input?: { targetVersion?: string },
+  ): Promise<{ accepted: boolean; currentVersion?: string }> {
+    const body =
+      input?.targetVersion && input.targetVersion.trim()
+        ? JSON.stringify({ targetVersion: input.targetVersion.trim() })
+        : undefined;
+    return this.requestWithError<{ accepted: boolean; currentVersion?: string }>(
+      `/internal/containers/${encodeURIComponent(containerId)}/upgrade-agent-gear`,
+      { method: 'POST', ...(body ? { body } : {}) },
     );
   }
 }

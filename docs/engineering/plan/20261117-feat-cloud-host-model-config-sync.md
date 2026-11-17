@@ -1,5 +1,5 @@
 ---
-description: 模型下发优化与云电脑配置实时下发实现计划：契约先行（cloud-controller-websocket 事件/A.2.14/B.2、billing-openai owned_by、llm×2 GraphQL 增量）；agent-api ModelProvision 纯函数唯一构建口径 + 推送扇出 + 内部 refresh 端点 + 用户模型上下文编辑/自动补全；admin-api 全局变更通知 + 网关 owned_by + 导入元数据；cloud-controller harness-models 端点、secrets.modelProviders、ZAG_MODEL_PROVIDERS 与 ack 网关、agent-gear 2.20.0 多 vendor 配置重写；agent-web 保存提醒与上下文编辑 UI；含 F1~F32 代码事实、D1~D20 计划期裁决、T-MP/T-CP/T-CC-MP/T-AG-MP/T-CAT/T-UMC/T-MCWEB/API/E2E 测试矩阵
+description: 模型下发优化与云电脑配置实时下发实现计划：契约先行（cloud-controller-websocket 事件/A.2.15/B.2、billing-openai owned_by、llm×2 GraphQL 增量）；agent-api ModelProvision 纯函数唯一构建口径 + 推送扇出 + 内部 refresh 端点 + 用户模型上下文编辑/自动补全；admin-api 全局变更通知 + 网关 owned_by + 导入元数据；cloud-controller harness-models 端点、secrets.modelProviders、ZAG_MODEL_PROVIDERS 与 ack 网关、agent-gear 2.20.0 多 vendor 配置重写；agent-web 保存提醒与上下文编辑 UI；含 F1~F32 代码事实、D1~D20 计划期裁决、T-MP/T-CP/T-CC-MP/T-AG-MP/T-CAT/T-UMC/T-MCWEB/API/E2E 测试矩阵
 type: Permanent
 ---
 
@@ -20,7 +20,7 @@ type: Permanent
 
 ```mermaid
 flowchart LR
-    P0[Phase 0<br/>契约先行<br/>ws/A.2.14/B.2 + owned_by + llm×2] --> P1[Phase 1<br/>agent-api<br/>ModelProvision 纯函数<br/>+ 创建期双写]
+    P0[Phase 0<br/>契约先行<br/>ws/A.2.15/B.2 + owned_by + llm×2] --> P1[Phase 1<br/>agent-api<br/>ModelProvision 纯函数<br/>+ 创建期双写]
     P1 --> P2[Phase 2<br/>agent-api<br/>推送服务/refresh 端点/触发点]
     P2 --> P3[Phase 3<br/>cloud-controller<br/>端点 + secrets + ack 网关 + env]
     P3 --> P4[Phase 4<br/>agent-gear 2.20.0<br/>事件 + 多 vendor 重写]
@@ -198,7 +198,7 @@ sequenceDiagram
 
 | 文件 | 变更 |
 |------|------|
-| `contracts/cloud-controller-websocket.md` | ① §2.1 事件总览增 `harness:models` / `harness:models:result` 两行；② 新增 §2.11/§2.12（字段表 + requestId + ack 10s + 全量替换语义 + 旧 worker 忽略）；③ 附录 A.2.14 端点（请求/响应/错误码/先持久化后 emit）；④ A.2.2 `secrets` 增可选 `modelProviders`；⑤ B.2 Job env 增 `ZAG_MODEL_PROVIDERS`；⑥ §3.4 版本兼容补「事件能力自 agent-gear 2.20.0，旧版本静默忽略」 |
+| `contracts/cloud-controller-websocket.md` | ① §2.1 事件总览增 `harness:models` / `harness:models:result` 两行；② 新增 §2.13/§2.14（字段表 + requestId + ack 10s + 全量替换语义 + 旧 worker 忽略）；③ 附录 A.2.15 端点（请求/响应/错误码/先持久化后 emit）；④ A.2.2 `secrets` 增可选 `modelProviders`；⑤ B.2 Job env 增 `ZAG_MODEL_PROVIDERS`；⑥ §3.4 版本兼容补「事件能力自 agent-gear 2.20.0，旧版本静默忽略」 |
 | `contracts/billing-openai.openapi.yaml` | `owned_by` 描述：`scope=global → Agent Gear`；`scope=user（含存量无 scope）→ 该模型绑定的供应商名称`；account Key 列表恒 `Agent Gear`；其余结构不变 |
 | `contracts/llm.graphql` | `CustomModelInput.contextLength`、`ProviderModelOption`、`Query.providerModelOptions`、`Mutation.updateModelContextLength`；`Model.contextLength` 注释改「可编辑（用户自有模型）」；补下发与网关即时生效注记 |
 | `contracts/admin-llm.graphql` | `ProviderModelOption.contextLength`；`importGlobalModels` 注释补上下文元数据；补下发注记 |
@@ -470,7 +470,7 @@ pnpm exec playwright test src/model-config-sync.spec.ts
 
 - [ ] `contracts/llm.graphql` 与 `graphql/schemas/model.ts` 逐字一致（`contextLength` / `ProviderModelOption` / `providerModelOptions` / `updateModelContextLength`），漂移守卫测试绿
 - [ ] `contracts/admin-llm.graphql` 的 `ProviderModelOption.contextLength` 与导入注释已补
-- [ ] `contracts/cloud-controller-websocket.md`：事件两行 + §2.11/§2.12 + A.2.14 + A.2.2 `modelProviders` + B.2 `ZAG_MODEL_PROVIDERS` + §3.4 版本说明
+- [ ] `contracts/cloud-controller-websocket.md`：事件两行 + §2.13/§2.14 + A.2.15 + A.2.2 `modelProviders` + B.2 `ZAG_MODEL_PROVIDERS` + §3.4 版本说明
 - [ ] `contracts/billing-openai.openapi.yaml` 的 `owned_by` 口径已更新
 
 ### 10.2 Phase 1~3（载荷/推送/cloud-controller）

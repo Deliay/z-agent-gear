@@ -168,7 +168,7 @@ flowchart LR
 
 旧 worker（<2.20.0）未注册该事件 handler，Socket.IO 语义下静默忽略 → 服务端按 ack 超时收敛 `delivered=false`（优雅降级，决策 D5）。
 
-**内部端点（附录 A.2.14）**：
+**内部端点（附录 A.2.15）**：
 
 ```
 POST /internal/containers/:containerId/harness-models
@@ -325,7 +325,7 @@ sequenceDiagram
 
 #### 实现点 4：cloud-controller 下发端点与 secrets 演进
 
-- **描述**: `routes/internal-api.ts` 新增 A.2.14 端点；`secret-store.ts` / `harness-secret-repository.ts` / `models/harness-secret.ts` 增 `modelProviders`；`workload-dispatcher.ts` 注入 `ZAG_MODEL_PROVIDERS`（携带时）；`internal-api.ts` 的 `startHarness` secrets 解析同步。
+- **描述**: `routes/internal-api.ts` 新增 A.2.15 端点；`secret-store.ts` / `harness-secret-repository.ts` / `models/harness-secret.ts` 增 `modelProviders`；`workload-dispatcher.ts` 注入 `ZAG_MODEL_PROVIDERS`（携带时）；`internal-api.ts` 的 `startHarness` secrets 解析同步。
 - **技术细节**: 先持久化后 emit；ack 等待 10s；`restoreHarnessSecrets()` 重启恢复口径自然覆盖新字段。
 - **风险点**: 推送与容器销毁并发 —— emit 前容器进入终态按 `CONTAINER_NOT_ONLINE` 收敛。
 
@@ -421,7 +421,7 @@ servers/admin-api/src/
 ├── routes/billing-openai.ts               # 改：owned_by 口径
 └── graphql/resolvers/{model,provider}.ts  # 改：全局 mutation 后通知
 servers/cloud-controller/src/
-├── routes/internal-api.ts                 # 改：A.2.14 端点 + secrets 解析
+├── routes/internal-api.ts                 # 改：A.2.15 端点 + secrets 解析
 ├── services/{secret-store,workload-dispatcher}.ts  # 改：modelProviders / ZAG_MODEL_PROVIDERS
 ├── repositories/harness-secret-repository.ts       # 改：持久化新字段
 └── models/harness-secret.ts               # 改：schema 新字段
@@ -434,7 +434,7 @@ apps/agent-web/src/components/settings/
 ├── {ProviderSection,ModelSection}.tsx     # 改：保存成功提醒（含上下文编辑路径）
 └── {CustomModelDialog,ModelItem}.tsx      # 改（返工新增）：上下文长度编辑/展示与自动带出
 contracts/
-├── cloud-controller-websocket.md          # 改：事件 + A.2.14 + B.2
+├── cloud-controller-websocket.md          # 改：事件 + A.2.15 + B.2
 ├── billing-openai.openapi.yaml            # 改：owned_by 口径
 └── {llm,admin-llm}.graphql                # 改：结构变更（返工新增）+ 注释补注
 ```

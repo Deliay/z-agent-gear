@@ -1052,7 +1052,7 @@ pnpm test
 
 > 需求 `docs/product/draft/20261117-cloud-host-model-config-sync.md`；计划
 > `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` §6.2；契约
-> `contracts/llm.graphql`、`contracts/cloud-controller-websocket.md` §2.11/A.2.2/A.2.14、`contracts/billing-openai.openapi.yaml`。
+> `contracts/llm.graphql`、`contracts/cloud-controller-websocket.md` §2.13/A.2.2/A.2.15、`contracts/billing-openai.openapi.yaml`。
 
 前置：`aspire start && aspire wait agent-api admin-api controller-api cloud-controller` +
 `INTERNAL_API_TOKEN`（开户 / 内部端点）+ `MONGODB_URI`（`cloudcontainersecrets` / `cloudhosts` / `models` /
@@ -1071,3 +1071,17 @@ pnpm test
 > T-MCS-API3 的「桩返回 500 → mutation 仍成功」分支同样不可黑盒注入（原因同上），由
 > `servers/agent-api/src/services/cloud-host-model-push.test.ts`（T-CP2：单台抛错不影响其余、不 reject）锁定。
 
+## 云电脑工作组件版本与立即升级（T-UPG-API，需求 #551）
+
+- 文件：`src/agent-api/cloud-host.test.ts`（追加 `T-UPG-API1~5` 三组 describe）。
+- **T-UPG-API1**（仅 `HARNESS_ENABLED=true`）：`cloudHost(id).agentGearVersion` 与
+  `upgradeCloudHostAgentGear` 未认证均报 `Not authenticated`。
+- **T-UPG-API2/3**（需 `MONGODB_URI` + `REDIS_URL`）：Mongo 直写
+  `cloudcontainers.agentGearVersion`、Redis 直写 `agent-gear:latest-version`（JSON `{version, fetchedAt}`）
+  → 四字段透出（含 `upgradeAvailable` 两态）；Redis 键缺失/非法 → `latestVersion=null`、
+  `upgradeAvailable=false` 且查询不报错。
+- **T-UPG-API4/5**（需 `MONGODB_URI`）：真实 agent-api → cloud-controller 全链路——Mongo 把云电脑推进
+  `RUNNING` 后，容器非 online → `container is not online`；非 RUNNING → `cloud host is not running`；
+  他人 `controllerId` → `Cloud host not found`。
+- 注意：`REDIS_URL` 与 agent-api `REDIS_URI` 同一实例；Aspire 编排下为 `rediss://`（dev 自签证书），
+  按上表设置 `NODE_EXTRA_CA_CERTS` 或 `NODE_TLS_REJECT_UNAUTHORIZED=0`。

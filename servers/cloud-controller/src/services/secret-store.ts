@@ -20,7 +20,7 @@ export interface HarnessSecrets {
   /** 模型 ID → 最长上下文（token）JSON object 字符串；可选，缺省/空串表示无上下文信息。 */
   modelContextLengths?: string;
   /**
-   * `ModelProvision` JSON 字符串（多 vendor 模型清单，契约 §2.11）；可选。
+   * `ModelProvision` JSON 字符串（多 vendor 模型清单，契约 §2.13）；可选。
    *
    * 缺省/空串表示旧版本创建（读取侧回退由 `modelIds` / `modelContextLengths` 合成的单 `zag` 组），
    * 不参与必填校验；携带时经 `workload:run.env` 的 `ZAG_MODEL_PROVIDERS` 透传给 worker。

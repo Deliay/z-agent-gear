@@ -4,6 +4,7 @@ import { config } from '../config/index.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { withSpan } from '../observability/trace.js';
 import { CloudHost, HARNESS_TYPES, HARNESS_ACP_TYPES, type HarnessType } from '../models/cloud-host.js';
+import { CloudContainer } from '../models/cloud-container.js';
 import { Controller } from '../models/controller.js';
 import { ControllerKey } from '../models/controller-key.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
@@ -12,6 +13,7 @@ import { Session } from '../models/session.js';
 import { billingClient, BillingServiceUnavailableError, InsufficientBalanceError } from './billing-client.js';
 import {
   CloudControllerClient,
+  CloudControllerRequestError,
   CloudControllerUnavailableError,
   cloudControllerClient,
 } from './cloud-controller-client.js';
@@ -35,8 +37,17 @@ import {
 } from './cloud-host-workload-plan.js';
 import { cloudStorageService, type CloudStorageService } from './cloud-storage-service.js';
 import { compareVersions } from './version.js';
+import { getLatestAgentGearVersion } from './agent-gear-version.js';
 
 export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.17.1';
+
+/** 工作组件版本信息（契约 `CloudHostAgentGearVersion`）。 */
+export interface CloudHostAgentGearVersionInfo {
+  currentVersion: string | null;
+  latestVersion: string | null;
+  upgradeAvailable: boolean;
+  autoUpdateIntervalMinutes: number;
+}
 
 const logger = rootLogger.child({ component: 'cloud-host' });
 
@@ -1046,6 +1057,77 @@ export class CloudHostService {
     });
   }
 
+  /**
+   * 工作组件版本信息（契约 `CloudHost.agentGearVersion` 字段级组装）：
+   * - current：只读镜像按 `host.containerId` 读 `cloudcontainers.agentGearVersion`（查询失败/缺失 → null）；
+   * - latest：agent-api 最新版本服务（Redis 缓存 + single-flight，失败 → null 降级）；
+   * - upgradeAvailable：两者非空且不一致；
+   * - autoUpdateIntervalMinutes：config 展示值（默认 10）。
+   */
+  async getAgentGearVersionInfo(host: Doc): Promise<CloudHostAgentGearVersionInfo> {
+    let currentVersion: string | null = null;
+    const containerId = host.containerId ? String(host.containerId) : '';
+    if (containerId && mongoose.isValidObjectId(containerId)) {
+      try {
+        const container = await CloudContainer.findOne({ _id: containerId })
+          .select({ agentGearVersion: 1 })
+          .lean();
+        currentVersion =
+          typeof container?.agentGearVersion === 'string' && container.agentGearVersion
+            ? container.agentGearVersion
+            : null;
+      } catch (err) {
+        logger.warn(
+          { event: 'agent-gear-version-read-failed', containerId, err },
+          'read agentGearVersion failed; degrading to null',
+        );
+      }
+    }
+    const latestVersion = await getLatestAgentGearVersion().catch(() => null);
+    return {
+      currentVersion,
+      latestVersion,
+      upgradeAvailable: Boolean(
+        currentVersion && latestVersion && currentVersion !== latestVersion,
+      ),
+      autoUpdateIntervalMinutes: config.agentGearAutoUpdateIntervalMinutes,
+    };
+  }
+
+  /**
+   * 立即升级云电脑工作组件（契约 `upgradeCloudHostAgentGear` / A.2.14）：
+   * 归属 → 云电脑存在且未软删 → RUNNING → containerId → cloud-controller 升级端点；
+   * 错误码按白名单映射为可读文案（未命中由 resolver 收敛 `internal error`）。
+   */
+  async upgradeCloudHostAgentGear(
+    controllerId: string,
+    userId: string,
+  ): Promise<{ accepted: boolean }> {
+    if (!mongoose.isValidObjectId(controllerId)) {
+      throw new Error('Cloud host not found');
+    }
+    const controller = await Controller.findOne({
+      _id: controllerId,
+      ...actorFilter(userId),
+    }).lean();
+    if (!controller) throw new Error('Cloud host not found');
+    const host = await CloudHost.findOne({
+      controllerId,
+      ...actorFilter(userId),
+      deletedAt: null,
+    }).lean();
+    if (!host) throw new Error('Cloud host not found');
+    if (host.status !== 'RUNNING') throw new Error('cloud host is not running');
+    const containerId = host.containerId ? String(host.containerId) : '';
+    if (!containerId) throw new Error('container is not online');
+    try {
+      const result = await this.controllerClient.upgradeAgentGear(containerId);
+      return { accepted: result.accepted === true };
+    } catch (err) {
+      throw new Error(mapAgentGearUpgradeError(err));
+    }
+  }
+
   mapCloudHost(host: Doc, activeSessionCount = 0): Doc {
     return {
       id: String(host._id ?? host.id),
@@ -1071,8 +1153,31 @@ export class CloudHostService {
   }
 }
 
-/** 契约允许透传的错误文案（B19：未知异常统一 internal error，避免泄露 Mongo/驱动信息）。 */
-const CLOUD_HOST_PUBLIC_ERRORS = new Set([
+/**
+ * cloud-controller A.2.14 错误码 → 契约白名单文案（实现点 6）：
+ * NOT_FOUND → Cloud host not found；CONTAINER_NOT_ONLINE / UPGRADE_NOT_ACCEPTED → container is not online；
+ * UPGRADE_UNSUPPORTED / UPGRADE_IN_PROGRESS 各自专用文案；其余保留原 message（未命中由 resolver 收敛 internal error）。
+ */
+export function mapAgentGearUpgradeError(err: unknown): string {
+  if (err instanceof CloudControllerRequestError) {
+    switch (err.code) {
+      case 'NOT_FOUND':
+        return 'Cloud host not found';
+      case 'CONTAINER_NOT_ONLINE':
+      case 'UPGRADE_NOT_ACCEPTED':
+        return 'container is not online';
+      case 'UPGRADE_UNSUPPORTED':
+        return 'agent-gear upgrade is not supported by the current version';
+      case 'UPGRADE_IN_PROGRESS':
+        return 'agent-gear upgrade already in progress';
+      default:
+        return err.message;
+    }
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** 契约允许透传的错误文案（B19：未知异常统一 internal error，避免泄露 Mongo/驱动信息）。 */const CLOUD_HOST_PUBLIC_ERRORS = new Set([
   'name is required',
   'name is too long',
   'insufficient balance',
@@ -1100,6 +1205,10 @@ const CLOUD_HOST_PUBLIC_ERRORS = new Set([
   'at least one repo is required',
   'too many repos',
   'linkage not found',
+  // 工作组件立即升级（契约六条白名单的云电脑侧三条）
+  'container is not online',
+  'agent-gear upgrade is not supported by the current version',
+  'agent-gear upgrade already in progress',
 ]);
 
 /** 供 resolver 统一把 service 错误转为 GraphQLError（白名单透传契约文案）。 */

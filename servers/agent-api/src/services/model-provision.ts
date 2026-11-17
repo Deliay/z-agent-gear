@@ -6,7 +6,7 @@
  * 2. 运行期推送：`cloud-host-model-push` 逐台重算后经
  *    `POST /internal/containers/:id/harness-models` 下发。
  *
- * 契约见 `contracts/cloud-controller-websocket.md` §2.11 与实现计划 §3.1。
+ * 契约见 `contracts/cloud-controller-websocket.md` §2.13 与实现计划 §3.1。
  * 本模块为纯函数（不 import Mongoose / logger），便于逐条锁定不变量。
  */
 

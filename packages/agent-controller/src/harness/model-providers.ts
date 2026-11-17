@@ -1,7 +1,7 @@
 /**
  * 运行期模型清单（`ModelProvision`）解析与重写。
  *
- * 契约见 `contracts/cloud-controller-websocket.md` §2.11/§2.12：
+ * 契约见 `contracts/cloud-controller-websocket.md` §2.13/§2.14：
  *
  * - 载荷**不含** baseURL/apiKey/凭据（D8）——凭据仍由已写入的配置（或进程 env）提供；
  * - `zag` 组恒存在（可为空 `models: []`）且恒首位；`zag` 显示名固定 `Agent Gear`（D4）；

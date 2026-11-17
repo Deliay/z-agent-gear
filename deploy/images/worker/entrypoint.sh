@@ -27,15 +27,18 @@
 #   ZAG_KEEPALIVE_BACKOFF_MS      退避整体缩放（毫秒；仅测试用）
 #   ZAG_STORAGE_HOME=1            当前容器挂载了云存储（/home/worker 为 PVC）：仅用于失败日志/回滚语义
 #
-# 周期自升级口径（docs/engineering/plan/20261113-feat-cloud-agent-gear-auto-upgrade.md）：
-# - main 在保活前启动 auto_update_loop 后台循环：默认每 10 分钟 `pnpm view agent-gear version`
-#   比对本地 `agent-gear --version`，不一致则 `pnpm add -g agent-gear@latest` 安装；
+# 周期自升级口径（docs/engineering/plan/20261117-feat-cloud-agent-gear-upgrade-optimization.md）：
+# - main 在保活前启动 auto_update_loop 后台循环：默认每 10 分钟 `pnpm info agent-gear --json`
+#   解析 registry 精确最新版，与本地 `agent-gear --version` 比对，不一致则
+#   `pnpm add -g agent-gear@<精确版本>` 钉版安装；
+# - **钉版安装绕开 pnpm `minimumReleaseAge`**：标签 `@latest` 解析会被年龄门回退到满足条件的
+#   旧版本，而精确版本号安装不受该过滤（pnpm/pnpm#9989 行为，worker 固定 pnpm 12.16.1）；
+#   因此新版本发布后一个检查周期内即可安装到位；
 # - 安装经 $RUN_DIR/update.lock.d 的 mkdir 原子互斥，与启动/每轮自更新共享同一把锁；
 # - 运行态经 $RUN_DIR/agent.pid 传递：运行中 → SIGTERM，由保活非 42 路径带出新版本；
 #   退避/更新窗口（无 pid）→ 不打断退避，下次启动自然生效；
-# - 仅当安装后版本 == registry latest 且 != 当前运行版本才 TERM：pnpm 默认 minimumReleaseAge
-#   （pnpm 12 默认 24h 供应链隔离）会把刚发布的 latest 排除在解析外，`pnpm add` 退出 0 但版本
-#   不变；此时不重启，只 WARN 并按周期重试，避免「每个检查周期全体会话断连一次」；
+# - 装后校验保留为**防御兜底**（钉版后正常路径恒 `installed == latest`）：版本未变/未到 latest
+#   时不重启，只 WARN 并按周期重试，避免「每个检查周期全体会话断连一次」；
 # - 销毁优先：shutdown 先置 $RUN_DIR/shutdown 并终止循环，销毁后绝不升级/重启/重连；
 # - 检查/安装失败仅 WARN 并按固定周期重试（不缩短间隔）；最新版恒取 registry latest，
 #   发布侧回滚 latest 指针后下一周期自动回落（缺陷版本自愈合）。
@@ -234,11 +237,43 @@ ensure_pnpm() {
   run_as_worker "$PNPM_CMD" setup >/dev/null 2>&1 || true
 }
 
-# 启动 / 每轮自更新：pnpm add -g agent-gear@latest（写入 PNPM_HOME 全局 bin）。
-# 失败不阻断保活；skip 开关跳过全部自更新。
+# 从 registry 元数据解析精确最新版本：`pnpm info agent-gear --json` → worker 环境 Node 单行解析
+# `.version`（不引 jq，与入口零依赖风格一致）→ normalize_version 归一。
+# 任一步失败（pnpm 非零/JSON 非法/version 缺失或非字符串/输出不可归一）返回非零；
+# 调用方仅 WARN 并等待下一周期重试。
+resolve_latest_version() {
+  local raw="" parsed="" rc=0
+  raw=$(run_as_worker "$PNPM_CMD" info agent-gear --json 2>/dev/null) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return 1
+  fi
+  parsed=$(printf '%s' "$raw" | run_as_worker node -e '
+    let s = "";
+    process.stdin.on("data", (d) => { s += d; });
+    process.stdin.on("end", () => {
+      try {
+        const v = JSON.parse(s).version;
+        if (typeof v !== "string" || v.trim() === "") process.exit(1);
+        process.stdout.write(v);
+      } catch {
+        process.exit(1);
+      }
+    });
+  ' 2>/dev/null) || return 1
+  normalize_version "$parsed" || return 1
+}
+
+# 启动 / 每轮自更新：先解析 registry 精确最新版，再 `pnpm add -g agent-gear@<version>` 钉版安装
+# （写入 PNPM_HOME 全局 bin）。resolve 失败仅 WARN 并继续保活（沿用既有容忍口径）；
+# skip 开关跳过全部自更新。
 update_agent_gear() {
   if [ "${ZAG_SKIP_AGENT_GEAR_UPDATE:-0}" = "1" ]; then
     log "skipping agent-gear update (ZAG_SKIP_AGENT_GEAR_UPDATE=1)"
+    return 0
+  fi
+  local latest=""
+  if ! latest=$(resolve_latest_version); then
+    log "WARN: agent-gear update check failed (pnpm info agent-gear --json); continuing with the pre-installed version ($(run_as_worker agent-gear --version 2>/dev/null || echo 'version unknown'))"
     return 0
   fi
   # 与周期自升级共享同一把安装锁：另一路径正在安装最新版时跳过本次安装（等价既有失败容忍）。
@@ -248,9 +283,9 @@ update_agent_gear() {
   fi
   local registry
   registry=$(run_as_worker "$PNPM_CMD" config get registry 2>/dev/null || echo unknown)
-  log "updating agent-gear via pnpm (registry=$registry)"
+  log "updating agent-gear via pnpm (registry=$registry, version=$latest)"
   local rc=0
-  run_as_worker_exec "$PNPM_CMD" add -g agent-gear@latest &
+  run_as_worker_exec "$PNPM_CMD" add -g "agent-gear@$latest" &
   CHILD_PID=$!
   wait "$CHILD_PID" || rc=$?
   CHILD_PID=""
@@ -330,9 +365,8 @@ auto_update_loop() {
     [ -f "$RUN_DIR/shutdown" ] && return 0
 
     rc=0
-    latest=$(run_as_worker "$PNPM_CMD" view agent-gear version 2>/dev/null) || rc=$?
-    if [ "$rc" -ne 0 ] || ! latest=$(normalize_version "$latest"); then
-      log "WARN: agent-gear update check failed (pnpm view agent-gear version exit=$rc)"
+    if ! latest=$(resolve_latest_version); then
+      log "WARN: agent-gear update check failed (pnpm info agent-gear --json)"
       continue
     fi
     rc=0
@@ -346,13 +380,13 @@ auto_update_loop() {
       continue
     fi
 
-    log "new agent-gear version available: $current -> $latest; installing"
+    log "new agent-gear version available: $current -> $latest; installing (pinned)"
     if ! acquire_update_lock; then
       log "agent-gear update skipped: another install in progress"
       continue
     fi
     rc=0
-    run_as_worker_exec "$PNPM_CMD" add -g agent-gear@latest &
+    run_as_worker_exec "$PNPM_CMD" add -g "agent-gear@$latest" &
     install_pid=$!
     wait "$install_pid" || rc=$?
     if [ "$rc" -ne 0 ]; then

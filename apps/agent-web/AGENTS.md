@@ -465,3 +465,11 @@ pnpm run preview  # Preview production build
 - **新增模型**：`CREATE_CUSTOM_MODEL` 携带 `contextLength`（数字或 null）；「最长上下文大小（token）」输入
   `inputMode="numeric"`、正整数校验（文案与 admin-web 逐字一致）、留空 = 未设置；选定供应商并输入模型名后
   400ms 去抖调 `PROVIDER_MODEL_OPTIONS` 按同名项预填（失败静默；用户已手改不覆盖；服务端不缓存清单）。
+## 云电脑工作组件版本区块（需求 #551）
+
+> 契约 `contracts/cloud-host.graphql`（`CloudHostAgentGearVersion` / `upgradeCloudHostAgentGear`）。
+
+- **选择集单点扩展**：`CLOUD_HOST_FIELDS`（`graphql/queries.ts`）追加 `agentGearVersion { currentVersion latestVersion upgradeAvailable autoUpdateIntervalMinutes }`，`GET_CONTROLLERS` / `CLOUD_HOST` / `MY_CLOUD_HOSTS` 共用；手写类型 `CloudHostData.agentGearVersion?` 同步。
+- **版本区块**：`ControllerConfigPage` 的 `CloudHostPanel` 内 `data-testid="cloud-host-agent-gear-version"`——`当前版本 {currentVersion ?? '—'}` / `最新版本 {latestVersion ?? '—'}`，「立即升级」按钮仅在 `upgradeAvailable && status==='RUNNING' && !deletedAt` 时渲染；小字 `自动升级每 {autoUpdateIntervalMinutes ?? 10} 分钟检查一次`（`text-xs text-muted-foreground`）。
+- **升级流程（D14）**：点击 → `UPGRADE_CLOUD_HOST_AGENT_GEAR({ controllerId })` → 升级中态（按钮禁用 + spinner）→ 每 **2s** `CLOUD_HOST`（`fetchPolicy: network-only`）轮询 → `currentVersion === latestVersion` toast「工作组件已升级到 {version}」，**3 分钟**超时 toast 可重试/等待自动升级；组件卸载清理定时器不残留；成功后 `refetch` 控制器列表刷新版本信息。
+- **错误文案单一来源**：`lib/cloud-host-agent-gear.ts` 的 `CLOUD_HOST_AGENT_GEAR_ERROR_MESSAGES`（契约六条 + `internal error` 兜底，未命中原样展示）；`isAgentGearUpgradeAvailable` 为按钮可见性纯函数。测试入口：`lib/__tests__/cloud-host-agent-gear.test.ts`（T-UPG-W-L）与 `pages/__tests__/ControllerConfigPage.test.tsx`（T-UPG-W1~W5）。

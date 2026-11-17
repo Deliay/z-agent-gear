@@ -36,12 +36,14 @@ let workloadRepository: InMemoryWorkloadRepository;
 let stubWorkspaceResolver: ReturnType<typeof vi.fn>;
 /** runtime harness 版本门禁用：在线 worker 版本读取（可按用例改返回值）。 */
 let getWorkerVersion: ReturnType<typeof vi.fn>;
+/** 升级端点用桩：gateway 句柄（在飞/回执结果由用例驱动）。 */
+let requestAgentGearUpgrade: ReturnType<typeof vi.fn>;
 /** runtime 路由用桩 dispatcher（不执行真实编排，仅断言入参/门禁）。 */
 let runtimeDispatcher: { startRuntimeBatch: ReturnType<typeof vi.fn> };
-/** 运行期模型下发（A.2.14）用桩：gateway 未注入的 503 用例走 `/internal` 路由。 */
+/** 运行期模型下发（A.2.15）用桩：gateway 未注入的 503 用例走 `/internal` 路由。 */
 let requestHarnessModelsStub: ReturnType<typeof vi.fn>;
 let pushWorkerVersion: ReturnType<typeof vi.fn>;
-/** A.2.14 端点用例：受控容器状态与 secret 存在性（真实 repo 的 ID 为 UUID，不满足 ObjectId 口径）。 */
+/** A.2.15 端点用例：受控容器状态与 secret 存在性（真实 repo 的 ID 为 UUID，不满足 ObjectId 口径）。 */
 let pushContainers: Map<string, { status: string; hasSecret: boolean }>;
 let pushUpdateModelProvision: ReturnType<typeof vi.fn>;
 let pushSeq: number;
@@ -258,7 +260,7 @@ beforeAll(async () => {
       getWorkerVersion,
     }),
   );
-  // 运行期模型下发（A.2.14）：注入 gateway 桩与 worker 版本读取。
+  // 运行期模型下发（A.2.15）：注入 gateway 桩与 worker 版本读取。
   // 容器读取/secret 写入用受控桩（真实 repo 的 ID 为 UUID，端点按 ObjectId 口径判 404）。
   requestHarnessModelsStub = vi.fn();
   requestHarnessModelsStub.mockResolvedValue({
@@ -291,6 +293,18 @@ beforeAll(async () => {
       requestHarnessModels: requestHarnessModelsStub as never,
     }),
   );
+
+  requestAgentGearUpgrade = vi.fn();
+  app.use(
+    '/upgrade',
+    internalAuth(INTERNAL_TOKEN),
+    createInternalRouter(service, {
+      workloadRepository,
+      workloadLogRepository,
+      getWorkerVersion,
+      requestAgentGearUpgrade,
+    }),
+  );
   httpServer = createServer(app);
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
   baseUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
@@ -311,6 +325,7 @@ describe('internal management API', () => {
     const body = (await created.json()) as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(
       [
+        'agentGearVersion',
         'billingAccountId',
         'billingStartedAt',
         'installedWorkloads',
@@ -1398,5 +1413,109 @@ describe('internal management API', () => {
     ).json()) as unknown[];
     expect(missing).toEqual([]);
     expect(all.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('A.2.14 立即升级工作组件（T-UPG-I）', () => {
+  beforeEach(() => {
+    getWorkerVersion.mockReset();
+    requestAgentGearUpgrade.mockReset();
+  });
+
+  async function makeContainer(status: 'online' | 'connecting' | 'exited' = 'online') {
+    return repo.create({
+      name: `zag-worker-upg-${Math.random().toString(36).slice(2, 8)}`,
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status,
+    });
+  }
+
+  function upgrade(id: string, body?: Record<string, unknown>): Promise<Response> {
+    return fetch(`${baseUrl}/upgrade/containers/${id}/upgrade-agent-gear`, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  }
+
+  it('T-UPG-I1: 容器不存在 → 404 NOT_FOUND', async () => {
+    const res = await upgrade('507f1f77bcf86cd799439011');
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe('NOT_FOUND');
+    expect(requestAgentGearUpgrade).not.toHaveBeenCalled();
+  });
+
+  it('T-UPG-I2: 非 online / 无活跃 socket → 409 CONTAINER_NOT_ONLINE', async () => {
+    const connecting = await makeContainer('connecting');
+    const res = await upgrade(connecting.id);
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('CONTAINER_NOT_ONLINE');
+
+    const online = await makeContainer('online');
+    getWorkerVersion.mockReturnValueOnce('2.20.0');
+    requestAgentGearUpgrade.mockResolvedValueOnce({ code: 'NOT_ONLINE' });
+    const noSocket = await upgrade(online.id);
+    expect(noSocket.status).toBe(409);
+    expect((await noSocket.json()).error).toBe('CONTAINER_NOT_ONLINE');
+  });
+
+  it('T-UPG-I3: 上报版本 <2.20.0 或未上报 → 400 UPGRADE_UNSUPPORTED；2.20.0 放行', async () => {
+    const container = await makeContainer('online');
+    for (const version of [undefined, '2.19.0']) {
+      getWorkerVersion.mockReturnValueOnce(version);
+      const res = await upgrade(container.id);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('UPGRADE_UNSUPPORTED');
+    }
+
+    getWorkerVersion.mockReturnValueOnce('2.20.0');
+    requestAgentGearUpgrade.mockResolvedValueOnce({
+      code: 'ACCEPTED',
+      currentVersion: '2.20.0',
+    });
+    const ok = await upgrade(container.id, { targetVersion: '2.21.0' });
+    expect(ok.status).toBe(200);
+    expect(await ok.json()).toEqual({
+      accepted: true,
+      containerId: container.id,
+      currentVersion: '2.20.0',
+    });
+    expect(requestAgentGearUpgrade).toHaveBeenLastCalledWith(container.id, {
+      targetVersion: '2.21.0',
+    });
+  });
+
+  it('T-UPG-I4: 在飞 409 IN_PROGRESS；拒绝/超时 409 NOT_ACCEPTED', async () => {
+    const container = await makeContainer('online');
+    getWorkerVersion.mockReturnValue('2.20.0');
+    for (const [code, expected] of [
+      ['IN_PROGRESS', 'UPGRADE_IN_PROGRESS'],
+      ['NOT_ACCEPTED', 'UPGRADE_NOT_ACCEPTED'],
+    ] as const) {
+      requestAgentGearUpgrade.mockResolvedValueOnce({ code });
+      const res = await upgrade(container.id);
+      expect(res.status).toBe(409);
+      expect((await res.json()).error).toBe(expected);
+    }
+    getWorkerVersion.mockReset();
+  });
+
+  it('T-UPG-I5: A.3 透出 agentGearVersion（有值透传、缺省 null）', async () => {
+    const empty = await makeContainer('online');
+    const valued = await repo.create({
+      name: `zag-worker-upg2-${Math.random().toString(36).slice(2, 8)}`,
+      namespace: 'zag-workers',
+      purpose: 'idle',
+      image: 'zero-tools/zag-worker:latest',
+      status: 'online',
+      agentGearVersion: '2.20.0',
+    });
+    const list = await fetch(`${baseUrl}/internal/containers`, { headers: authHeaders() });
+    const items = (await list.json()) as Array<Record<string, unknown>>;
+    const byId = new Map(items.map((item) => [item.id, item]));
+    expect(byId.get(empty.id)?.agentGearVersion).toBeNull();
+    expect(byId.get(valued.id)?.agentGearVersion).toBe('2.20.0');
   });
 });

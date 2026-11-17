@@ -333,11 +333,16 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
       provision: ModelProvision,
       timeoutMs?: number,
     ) => Promise<HarnessModelsPushResult>;
+    requestAgentGearUpgrade: (
+      containerId: string,
+      payload?: { targetVersion?: string },
+    ) => Promise<import('./services/socketio-gateway.js').UpgradeRequestResult>;
   } = {
     emitToContainer: () => {},
     isConnected: () => false,
     getWorkerVersion: () => undefined,
     requestHarnessModels: async () => ({ delivered: false, reason: 'offline' }),
+    requestAgentGearUpgrade: async () => ({ code: 'NOT_ONLINE' }),
   };
   const dispatcher = new WorkloadDispatcher({
     containerRepository: repo,
@@ -379,6 +384,7 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
   gatewayBridge.isConnected = gateway.isConnected;
   gatewayBridge.getWorkerVersion = gateway.getWorkerVersion;
   gatewayBridge.requestHarnessModels = gateway.requestHarnessModels;
+  gatewayBridge.requestAgentGearUpgrade = gateway.requestAgentGearUpgrade;
 
   app.use(
     '/internal',
@@ -390,6 +396,8 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
       getWorkerVersion: (containerId) => gatewayBridge.getWorkerVersion(containerId),
       requestHarnessModels: (containerId, provision, timeoutMs) =>
         gatewayBridge.requestHarnessModels(containerId, provision, timeoutMs),
+      requestAgentGearUpgrade: (containerId, payload) =>
+        gatewayBridge.requestAgentGearUpgrade(containerId, payload),
       storageService,
     }),
   );

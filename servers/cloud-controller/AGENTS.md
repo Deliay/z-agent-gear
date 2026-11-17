@@ -219,7 +219,7 @@ pnpm run test:coverage
 
 ## 运行期模型下发（harness-models，#533）
 
-> 契约 `contracts/cloud-controller-websocket.md` §2.11/§2.12、A.2.2、A.2.14、B.2；计划
+> 契约 `contracts/cloud-controller-websocket.md` §2.13/§2.14、A.2.2、A.2.15、B.2；计划
 > `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` Phase 3。
 
 - **端点**：`POST /internal/containers/:containerId/harness-models`（Bearer `INTERNAL_API_TOKEN`）。状态矩阵：
@@ -236,3 +236,12 @@ pnpm run test:coverage
 - **secrets/env**：`HarnessSecrets.modelProviders?: string`（ModelProvision JSON，可选、零迁移、读取侧回退旧字段）；
   `buildHarnessEnv` 仅在携带时注入 `ZAG_MODEL_PROVIDERS`，init 与 runtime 两条路径同源。
 - **解析口径**：`services/model-provision.ts#parseModelProvisionPayload` 只做结构校验（不做业务语义），路由与服务共用。
+## agent-gear 升级事件与版本落库（需求 #551）
+
+> 契约 `contracts/cloud-controller-websocket.md` §2.11/§2.12/A.2.14/A.3。
+
+- **版本落库（A.3 `agentGearVersion`）**：`cloudcontainers.agentGearVersion`（String，`default: null`，**零迁移**、不建索引、历史行 null 容忍）为 worker `register` 上报的 agent-gear 版本。写入点在 `socketio-gateway` 的注册副作用阶段、与内存 `workerVersions.set` 同位（**版本门禁通过之后**；拒绝路径保持零副作用）；写失败仅 WARN（`event: agent_gear_version_persist_failed`），不阻断注册。每次成功注册（含升级重启后的重连）刷新；内存 `workerVersions` 继续服务 runtime harness 版本门禁。
+- **升级事件对（§2.11/§2.12）**：`Server → Worker agent-gear:upgrade { targetVersion? }`；worker 回执 `agent-gear:upgrade:result { accepted, currentVersion?, reason? }`。worker **不自安装**：`accepted:true` 后优雅退出（退出码 0），由入口保活链路钉版安装并以新版本重启。
+- **A.2.14**：`POST /internal/containers/:id/upgrade-agent-gear`。门禁顺序：`getById` 缺失 → 404 `NOT_FOUND`；`status!=='online'` 或无活跃 socket → 409 `CONTAINER_NOT_ONLINE`；上报版本 < `MIN_UPGRADE_WORKER_VERSION`（2.20.0，含未上报）→ 400 `UPGRADE_UNSUPPORTED`；在飞（60s 窗）→ 409 `UPGRADE_IN_PROGRESS`；worker 拒绝/10s 回执超时 → 409 `UPGRADE_NOT_ACCEPTED`；接受 → 200 `{accepted:true, containerId, currentVersion}`。
+- **在飞互斥与回执**：收敛在 gateway 句柄 `requestAgentGearUpgrade(containerId, {targetVersion?})`——进程内 `Map<containerId, deadline>`（60s）+ `Map<containerId, {resolve, timer}>`（10s 超时，timer unref）；连接处理器注册 `agent-gear:upgrade:result` 解析待回执；worker 断连清理两份 Map（在飞窗随之释放）。单实例部署前提与既有 KeyedMutex/调度器一致。路由层只做门禁与错误码薄映射。
+- **常量**：`MIN_UPGRADE_WORKER_VERSION='2.20.0'`（`services/worker-version.ts`，代码常量、不 env 化）；`worker-version.test.ts` T-UPG-V2 读 `packages/agent-controller/package.json` 版本字面量防漂移（agent-gear 发版须同步提升）。

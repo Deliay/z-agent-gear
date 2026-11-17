@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   MIN_DEEPSEEK_HARNESS_WORKER_VERSION,
   MIN_HARNESS_MODELS_WORKER_VERSION,
   MIN_HARNESS_VERSION_BY_TYPE,
   MIN_HARNESS_WORKER_VERSION,
   MIN_KIMI_HARNESS_WORKER_VERSION,
+  MIN_UPGRADE_WORKER_VERSION,
   MIN_WORKER_VERSION,
   SUPPORTED_MAJOR,
   harnessMinVersion,
@@ -216,5 +218,22 @@ describe('sanitizeVersionForLog', () => {
     expect(sanitizeVersionForLog('')).toBe('unknown');
     expect(sanitizeVersionForLog({})).toBe('unknown');
     expect(sanitizeVersionForLog('\u0001\u0002')).toBe('unknown');
+  });
+});
+
+describe('MIN_UPGRADE_WORKER_VERSION（T-UPG-V，契约 §3.4 / A.2.14）', () => {
+  it('T-UPG-V1: 常量 2.20.0；2.20.0 通过、2.19.0 拒绝', () => {
+    expect(MIN_UPGRADE_WORKER_VERSION).toBe('2.20.0');
+    expect(isSupportedWorkerVersion('2.20.0', MIN_UPGRADE_WORKER_VERSION).supported).toBe(true);
+    expect(isSupportedWorkerVersion('2.21.0', MIN_UPGRADE_WORKER_VERSION).supported).toBe(true);
+    expect(isSupportedWorkerVersion('2.19.0', MIN_UPGRADE_WORKER_VERSION).supported).toBe(false);
+    expect(isSupportedWorkerVersion(undefined, MIN_UPGRADE_WORKER_VERSION).supported).toBe(false);
+  });
+
+  it('T-UPG-V2: 防漂移——常量与 packages/agent-controller/package.json version 字面量一致（D13）', () => {
+    // 跨包不可 import：读同仓 package.json 字面量比对，随 agent-gear 发版同步提升。
+    const pkgPath = new URL('../../../../packages/agent-controller/package.json', import.meta.url);
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string };
+    expect(pkg.version).toBe(MIN_UPGRADE_WORKER_VERSION);
   });
 });

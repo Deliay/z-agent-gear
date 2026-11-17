@@ -49,6 +49,13 @@ export const MIN_HARNESS_MODELS_WORKER_VERSION = '2.20.0';
 /** 本期支持的 worker major 版本。 */
 export const SUPPORTED_MAJOR = 2;
 
+/**
+ * `agent-gear:upgrade` 升级事件（cloud-controller → worker）最低兼容版本：
+ * agent-gear 2.20.0 起提供该事件监听与回执（`accepted` 后优雅退出 0 委托入口保活钉版重启）。
+ * 仅用于 A.2.14 升级端点门禁，不影响 `register` 既有门禁；代码常量，不通过环境变量配置。
+ */
+export const MIN_UPGRADE_WORKER_VERSION = '2.20.0';
+
 /** 版本串长度上限：超长直接拒绝，避免日志污染与无谓解析。 */
 const MAX_VERSION_LENGTH = 64;
 

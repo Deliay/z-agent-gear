@@ -1,8 +1,8 @@
 /**
- * 运行期模型下发载荷 `ModelProvision`（契约 §2.11 / A.2.14）。
+ * 运行期模型下发载荷 `ModelProvision`（契约 §2.13 / A.2.15）。
  *
  * 本文件是 cloud-controller 侧的**结构校验与投影**唯一口径：
- * - `parseModelProvisionPayload`：路由（A.2.14 请求体）与内部服务共用，避免两处校验漂移；
+ * - `parseModelProvisionPayload`：路由（A.2.15 请求体）与内部服务共用，避免两处校验漂移；
  * - `projectModelProvision`：把多 vendor 载荷投影为旧的扁平字段
  *   （`modelIds` / `modelContextLengths`），供旧 worker 与 `workload:run.env` 消费。
  *
@@ -48,7 +48,7 @@ function nonEmptyString(value: unknown): string | null {
 }
 
 /**
- * 结构校验 `ModelProvision`（契约 A.2.14）：
+ * 结构校验 `ModelProvision`（契约 A.2.15）：
  * - `providers` 必须为数组（**允许空数组**）；
  * - `vendorId` / `displayName` 非空字符串；
  * - `models` 必须为数组，条目 `id` 非空字符串；

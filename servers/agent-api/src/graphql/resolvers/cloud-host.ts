@@ -361,9 +361,39 @@ export const cloudHostResolvers = {
         toCloudHostGraphQLError(err);
       }
     },
+    upgradeCloudHostAgentGear: async (
+      _parent: unknown,
+      args: { controllerId: string },
+      context: AuthContext,
+    ) => {
+      const userId = requireUser(context);
+      try {
+        return await cloudHostService.upgradeCloudHostAgentGear(args.controllerId, userId);
+      } catch (err) {
+        toCloudHostGraphQLError(err);
+      }
+    },
   },
   CloudHost: {
     defaultWorkspace: async (parent: Doc) => cloudHostService.defaultWorkspace(parent),
+    // 工作组件版本信息（字段级）：service 内部已对单字段失败降级；此处再兜底，
+    // 保证 agentGearVersion 字段永不拖垮 CloudHost/controllers 查询。
+    agentGearVersion: async (parent: Doc) => {
+      try {
+        return await cloudHostService.getAgentGearVersionInfo(parent);
+      } catch (err) {
+        rootLogger.warn(
+          { event: 'agent-gear-version-field-failed', err },
+          'agentGearVersion field degraded',
+        );
+        return {
+          currentVersion: null,
+          latestVersion: null,
+          upgradeAvailable: false,
+          autoUpdateIntervalMinutes: config.agentGearAutoUpdateIntervalMinutes,
+        };
+      }
+    },
     storage: async (parent: Doc) => loadHostStorage(parent),
     storageRestoring: async (parent: Doc) => {
       if (parent.status !== 'STARTING') return false;
