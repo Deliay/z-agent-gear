@@ -695,13 +695,16 @@ pnpm run start   # Start production server
     resume 成功后 `runCompactPipeline`（失败仅 warn 照发）。
   - 复工 `resumeNodeSession`：`NEW_SESSION`（默认）→ 现状 close + 新会话；`ORIGINAL_SESSION` →
     resume 原会话 + `RESUME_CONTINUE_PROMPT`；resume 失败 → 降级新会话链；可选先压缩。
-- **压缩管线（`services/workflow/compact.ts`）**：`runCompactPipeline(sessionId, acpServerType,
-  timeout=INTERRUPT_RETRY_IDLE_TIMEOUT_MS)` 顺序硬约束「登记 `compactInFlight` → `armSessionIdleWaiter`
-  → `addMessage(压缩指令)` → 等 idling → 取消登记」；失败/超时 warn + 返回 false。`orchestrator.handleSessionIdled`
-  在排期前 `isCompactInFlight(sessionId)` 直接返回（抑制压缩回合结束的停滞检测误判）；`compact.ts`
-  不 import orchestrator（循环依赖约束同 `node-config.ts`）。
-- **发送前双校验（D7）**：压缩等待结算后 Orchestrator 重读实例——未删除 + 节点状态仍为预期
-  （返工 `REWORK` / 复工 `RUNNING`）+ `sessionId` 未变，否则放弃发送过期提示词。
+- **压缩管线（`services/workflow/compact.ts`，返工修订：两个连续发送动作）**：`runCompactPipeline(sessionId,
+  acpServerType, timeout=INTERRUPT_RETRY_IDLE_TIMEOUT_MS)` 只承担**第一个发送动作**——登记 `compactInFlight`
+  → `addMessage(压缩指令)` → **立即返回**（不等待压缩回合空闲；等待会在压缩迟迟不 idling 时把会话卡住）。
+  调用方随后**立即发送第二个动作**（返工指引 / 继续提示词）——两条独立的会话输入消息，由 harness 侧输入队列
+  保序执行（先压缩、后提示词）。返回 `false` 仅表示压缩指令发送失败（warn 降级照发提示词），不代表压缩是否成功。
+  `compactInFlight` 由 `orchestrator.handleSessionIdled` 在排期前 `consumeCompactInFlight(sessionId)` **一次性消费**
+  （抑制压缩回合结束的停滞检测误判，后续回合恢复既有行为）；兜底定时器（同 `timeout`）保证压缩回合始终不结束 /
+  会话被关闭等异常下不会永久抑制。`compact.ts` 不 import orchestrator（循环依赖约束同 `node-config.ts`）。
+- **无发送前双校验（返工修订）**：压缩与提示词连续发送、中间无等待窗口，原 D7「等待器结算后重读实例校验
+  节点状态 / sessionId」已移除；发送后的状态变化由引擎状态机与中断重试的既有 CAS 兜底。
 - **压缩指令解析（`services/harness-config.ts`）**：`DEFAULT_COMPACT_COMMAND='/compact'`；
   `ACP_SERVER_TO_HARNESS` 由 `HARNESS_ACP_TYPES`（已上移至 `models/cloud-host.ts`，cloud-host-service 改为 import）
   反转派生；`resolveCompactCommand` 未映射 → 默认值；命中 → 进程内 Map 缓存（TTL 60s）→ 读只读镜像

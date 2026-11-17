@@ -233,11 +233,11 @@ flowchart TD
     C -->|否| N[降级：新会话返工]
     D --> E{reworkCompactOriginalContext?}
     E -->|否| F[发送返工指引 同现状]
-    E -->|是| G[布防空闲等待器 → resume → 等空闲]
+    E -->|是| G[发送压缩指令（不等待压缩回合空闲）]
     G --> H[resolveCompactCommand 取指令]
-    H --> I[compactInFlight 登记 → 发送压缩指令 → 等压缩回合空闲]
-    I --> J[取消登记 → 发送返工指引]
-    I -.失败/超时.-> K[warn 降级 → 取消登记 → 直接发送返工指引]
+    H --> I[compactInFlight 登记 → 发送压缩指令 → 立即返回]
+    I --> J[发送返工指引（第二个发送动作）]
+    I -.发送失败.-> K[warn 降级 → 取消登记 → 直接发送返工指引]
     B -->|NEW_SESSION| L[close 旧会话 suppressFallback reason=workflow_node_rework]
     L --> M[startNodeSession 提示词 = assemblePrompt + 返工说明段]
     N --> M
@@ -271,21 +271,22 @@ sequenceDiagram
     participant O as Orchestrator
     participant C as compact.ts
     participant S as sessionService
-    participant W as idle-waiter
     participant H as Harness
     O->>C: runCompactPipeline(sessionId, acpServerType)
-    C->>C: compactInFlight.add(sessionId)
-    C->>S: addMessage(compactCommand)
+    C->>C: compactInFlight 登记
+    C->>S: 发送动作 1/2：addMessage(compactCommand)
     S->>H: session:message
-    C->>W: armSessionIdleWaiter(5min)（发送前布防）
-    H-->>W: promptCompleted → idling
-    W-->>C: true
-    C->>C: compactInFlight.delete(sessionId)
-    C-->>O: success
-    Note over C,H: 超时/失败：warn 降级返回 false，调用方照发继续提示词
+    C-->>O: true（立即返回，不等待压缩回合空闲）
+    O->>S: 发送动作 2/2：addMessage(返工指引 / 继续提示词)
+    S->>H: session:message（harness 输入队列保序：先压缩、后提示词）
+    H-->>O: promptCompleted → idling（压缩回合结束）
+    O->>C: consumeCompactInFlight → 抑制本次停滞检测
+    Note over C,H: 发送失败：warn 降级返回 false，调用方照发提示词；<br/>抑制登记一次性消费，兜底定时器（5min）避免永久抑制
 ```
 
-**与中断自动重试的冲突裁决（D1）**：压缩回合结束（promptCompleted→idling）会触发 `handleSessionIdled` → 节点 RUNNING/REWORK 时排期中断重试并重发兜底提示词，会污染压缩窗口。方案：进程内 `compactInFlight: Set<string>`（`compact.ts` 导出 `isCompactInFlight(sessionId)`）；`orchestrator.handleSessionIdled` 在查到节点后、排期前检查命中即跳过。单实例部署前提与 `KeyedMutex`/重试调度器一致。正常 resume 产生的是裸 `idling`（无 promptCompleted），天然不触发停滞检测；返工指引/继续提示词回合结束后的 idled 行为与现状一致（属正常工作回合）。
+> **返工修订（压缩不再等待）**：原设计「发送压缩指令 → 等压缩回合 idling → 再发送提示词」在压缩回合迟迟不 idling 时会让会话卡住（表现为节点停滞直至等待超时）。现改为**两个连续的发送动作**：`runCompactPipeline` 只发送压缩指令并立即返回，Orchestrator 随即发送后续提示词；执行顺序由 harness 侧输入队列保证（`sendInput` 在 `activePrompt` 未结束时入队）。原「发送前双校验」（等待器结算后重读实例）随等待窗口一并移除。
+
+**与中断自动重试的冲突裁决（D1）**：压缩回合结束（promptCompleted→idling）会触发 `handleSessionIdled` → 节点 RUNNING/REWORK 时排期中断重试并重发兜底提示词，会污染压缩窗口。方案：进程内 `compactInFlight` 登记（`compact.ts` 导出 `consumeCompactInFlight(sessionId)` 一次性消费）；`orchestrator.handleSessionIdled` 在查到节点后、排期前 `if (consumeCompactInFlight(sessionId)) return;`——只抑制压缩回合那一次空闲通知，后续回合恢复既有停滞检测。兜底定时器（同 5 分钟）保证压缩回合始终不结束/会话被关闭等异常下不会永久抑制。单实例部署前提与 `KeyedMutex`/重试调度器一致。正常 resume 产生的是裸 `idling`（无 promptCompleted），天然不触发停滞检测。
 
 ### 5.2 关键实现点
 
@@ -309,9 +310,9 @@ sequenceDiagram
 
 #### 实现点 4: 压缩管线与停滞检测抑制
 
-- **描述**: `services/workflow/compact.ts` 承载 `runCompactPipeline` 与 `isCompactInFlight`；`handleSessionIdled` 接入抑制；
-- **技术细节**: 发送压缩指令前布防等待器（`armSessionIdleWaiter(sessionId, 5min)`），空闲后删除登记并返回 true；超时/异常 warn 返回 false（调用方降级直发继续提示词）；`handleSessionIdled` 在节点匹配后 `if (isCompactInFlight(sessionId)) return;`；
-- **风险点**: 压缩等待期间节点被人工 complete/restart/删除——等待器结算后发送前需「双校验」（实例未删除 + 节点状态与 sessionId 未变，镜像 interrupt-retry 的发送前校验），不满足则放弃发送。
+- **描述**: `services/workflow/compact.ts` 承载 `runCompactPipeline` 与 `consumeCompactInFlight`；`handleSessionIdled` 接入一次性抑制；
+- **技术细节**: 发送压缩指令前登记 `compactInFlight`（Map<sessionId, 兜底定时器>），`addMessage(compactCommand)` 成功后**立即返回 true**（不等待压缩回合空闲）；异常 → warn + 取消登记 + 返回 false（调用方降级照发提示词）；`handleSessionIdled` 在节点匹配后 `if (consumeCompactInFlight(sessionId)) return;`；
+- **风险点**: ~~压缩等待期间节点被人工 complete/restart/删除~~（等待窗口已移除，双校验不再需要）；抑制为一次性消费 + 兜底定时器，避免「压缩回合不结束」时永久抑制停滞检测。
 
 #### 实现点 5: Harness 压缩指令配置（admin-api 写方 + agent-api 只读镜像）
 
@@ -365,7 +366,7 @@ servers/agent-api/src/
 ├── services/
 │   ├── harness-config.ts            # 新增：resolveCompactCommand + DEFAULT_COMPACT_COMMAND
 │   └── workflow/
-│       ├── compact.ts               # 新增：runCompactPipeline / isCompactInFlight
+│       ├── compact.ts               # 新增：runCompactPipeline / consumeCompactInFlight
 │       ├── orchestrator.ts          # rework/resume 分流 + handleSessionIdled 抑制
 │       ├── configured.ts            # normalizeConfiguredNodes 归一
 │       ├── instance.ts              # 实例化快照复制 / updateWorkflowNode

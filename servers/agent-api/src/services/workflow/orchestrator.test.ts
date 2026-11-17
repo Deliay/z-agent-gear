@@ -54,7 +54,7 @@ vi.mock('./interrupt-retry.js', () => ({
 
 // 压缩管线：编排层只编排顺序与降级，管线内部由 compact.test.ts 覆盖
 vi.mock('./compact.js', () => ({
-  isCompactInFlight: vi.fn().mockReturnValue(false),
+  consumeCompactInFlight: vi.fn().mockReturnValue(false),
   runCompactPipeline: vi.fn().mockResolvedValue(true),
 }));
 
@@ -79,7 +79,7 @@ import { ConfiguredWorkflow } from '../../models/configured-workflow.js';
 import { WorkflowInstance } from '../../models/workflow-instance.js';
 import { McpServer } from '../../models/mcp-server.js';
 import { scheduleInterruptionRetry } from './interrupt-retry.js';
-import { isCompactInFlight, runCompactPipeline } from './compact.js';
+import { consumeCompactInFlight, runCompactPipeline } from './compact.js';
 import { RESUME_CONTINUE_PROMPT } from './prompts.js';
 
 function oid(id: string) {
@@ -1361,29 +1361,31 @@ describe('WorkflowOrchestrator 会话行为分流（T-ORC）', () => {
     expect(sessionService.create).toHaveBeenCalledTimes(1);
   });
 
-  it('T-ORC8: 发送前双校验：等待器结算后节点状态/sessionId 变化 → 放弃发送继续提示词', async () => {
+  it('T-ORC8: 压缩指令与继续提示词连续发送（不等待压缩回合空闲，两个独立发送动作）', async () => {
     configuredWith({ resumeSessionBehavior: 'ORIGINAL_SESSION', resumeCompactOriginalContext: true }, 'impl');
     const instance = makeInstance([runningAiNode('sess-3')]);
-    const changed = makeInstance([
-      makeNode({ nodeId: 'n3', nodeKey: 'impl', type: 'AI', name: '代码实现', stage: 'impl', status: 'DONE', dependsOn: [], sessionId: 'sess-3' }),
-    ]);
-    vi.mocked(WorkflowInstance.findOne).mockReturnValue(leanQuery(changed) as never);
 
     await workflowOrchestrator.resumeNodeSession(instance, instance.nodes[0]);
 
-    expect(runCompactPipeline).toHaveBeenCalled();
-    expect(sessionService.addMessage).not.toHaveBeenCalled();
+    expect(runCompactPipeline).toHaveBeenCalledWith('sess-3', 'opencode');
+    expect(sessionService.addMessage).toHaveBeenCalledTimes(1);
+    expect(lastInputMessage()).toBe(RESUME_CONTINUE_PROMPT);
+    // 压缩返回后立即发送后续提示词：中间不做实例状态复查（无等待窗口）
+    expect(vi.mocked(runCompactPipeline).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sessionService.addMessage).mock.invocationCallOrder[0],
+    );
   });
 
-  it('T-CPCT3: 压缩在途时空闲停滞检测被抑制；登记取消后恢复既有行为', async () => {
+  it('T-CPCT3: 压缩回合空闲通知被一次性消费；后续回合恢复既有停滞检测', async () => {
     const instance = makeInstance([runningAiNode('sess-3')]);
     vi.mocked(WorkflowInstance.findOne).mockResolvedValue(instance as never);
 
-    vi.mocked(isCompactInFlight).mockReturnValueOnce(true);
+    vi.mocked(consumeCompactInFlight).mockReturnValueOnce(true);
     await workflowOrchestrator.handleSessionIdled('sess-3');
+    expect(consumeCompactInFlight).toHaveBeenCalledWith('sess-3');
     expect(scheduleInterruptionRetry).not.toHaveBeenCalled();
 
-    vi.mocked(isCompactInFlight).mockReturnValueOnce(false);
+    vi.mocked(consumeCompactInFlight).mockReturnValueOnce(false);
     await workflowOrchestrator.handleSessionIdled('sess-3');
     expect(scheduleInterruptionRetry).toHaveBeenCalledTimes(1);
   });

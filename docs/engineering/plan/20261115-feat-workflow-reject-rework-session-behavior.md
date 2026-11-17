@@ -50,7 +50,7 @@ flowchart LR
 | F4 | `assemblePrompt` 纯函数拼装：系统提示 + 节点描述 + 提示词数组 + 上游产物 + 追加提示词（key 升序） | `orchestrator.ts:405-435` | 返工说明段作为 `extraPromptSections` 追加在 assemblePrompt 结果尾部，不侵入该函数 |
 | F5 | `loadNodeConfig` 快照优先（`prompts !== undefined \|\| agentConfig !== undefined` 即用快照）、缺失回查已配置工作流；`ConfiguredNodeLike` 为返回类型 | `services/workflow/node-config.ts:11-60` | `ConfiguredNodeLike` 扩展 4 个可选字段并在两路（快照/回查）统一归一（`?? 默认值`）；orchestrator 只消费归一结果 |
 | F6 | 空闲等待器：`armSessionIdleWaiter(sessionId, timeoutMs)` 返回 `{promise, cancel}`；须先布防再触发动作；`idling` 以 DB 复核成功；`ended+error` 立即失败；15s DB 心跳兜底；定时器 `unref` | `services/session-idle-waiter.ts:104-179` | 压缩管线直接复用（5 分钟上限）；「先布防再 addMessage 压缩指令」为硬性顺序 |
-| F7 | 停滞检测：`handleSessionIdled` 查到节点（RUNNING/REWORK）即 `scheduleInterruptionRetry({trigger:'IDLED'})`；resume 成功的裸 `idling`（不带 promptCompleted）天然不触发 | `orchestrator.ts:71-86`、`session-idle-waiter.ts` 头注 | 压缩回合结束（promptCompleted→idling）会命中此路径 → 必须在排期前以 `isCompactInFlight(sessionId)` 抑制（提案 D1） |
+| F7 | 停滞检测：`handleSessionIdled` 查到节点（RUNNING/REWORK）即 `scheduleInterruptionRetry({trigger:'IDLED'})`；resume 成功的裸 `idling`（不带 promptCompleted）天然不触发 | `orchestrator.ts:71-86`、`session-idle-waiter.ts` 头注 | 压缩回合结束（promptCompleted→idling）会命中此路径 → 必须在排期前以 `consumeCompactInFlight(sessionId)` 一次性抑制（提案 D1） |
 | F8 | 压缩等待超时常量口径：`INTERRUPT_RETRY_IDLE_TIMEOUT_MS = 5 * 60_000` | `services/workflow/interrupt-retry.ts:20` | 压缩管线复用同一常量（提案 §9.2：无新增环境变量） |
 | F9 | 三处节点子 Schema 各自独立声明；`agentConfig` 用独立子 Schema（避免内联嵌套被 Mongoose 物化为 `{}`，HUMAN/FLAG 保持 null/undefined） | `models/workflow-template.ts:11-30`、`models/configured-workflow.ts:6-37`（含 :6-7 注释）、`models/workflow-instance.ts:62-104` | 4 字段逐字加到三处；HUMAN/FLAG 恒 null 的纪律与 `agentConfig` 相同（`default: undefined` + 归一层写 null） |
 | F10 | 契约六处 + 手写 schema 六处一一对应：`WorkflowTemplateNode` / `ConfiguredWorkflowNode` / `WorkflowNode` / `WorkflowTemplateNodeInput` / `ConfiguredWorkflowNodeInput` / `WorkflowNodeUpdateInput` | `contracts/workflow.graphql:38/88/200/309/338/407`、`servers/agent-api/src/graphql/schemas/workflow.ts:34/72/160/260/289/355` | Phase 0 双写 12 个位置 + 新增枚举；漏改即运行时 `Cannot query field`，契约对齐测试锁定 |
@@ -111,11 +111,13 @@ flowchart TD
     F -->|是| G[resume 原会话 初始 mode/model 带内]
     G --> H{reworkCompactOriginalContext?}
     H -->|否| I[发送返工指引 同现状]
-    H -->|是| J[runCompactPipeline<br/>登记 compactInFlight → 布防等待器<br/>→ 发送压缩指令 → 等空闲 → 取消登记]
-    J -->|成功| I
-    J -->|失败/超时| K[warn 降级] --> I
+    H -->|是| J[runCompactPipeline<br/>登记 compactInFlight → 发送压缩指令<br/>（不等待空闲，立即返回）]
+    J -->|发送成功| I
+    J -->|发送失败| K[warn 降级] --> I
     G -.resume 失败/会话缺失.-> L[warn 降级为新会话路径] --> E
 ```
+
+> **返工修订（压缩不再等待）**：压缩指令与返工指引是**两个连续的发送动作**——`runCompactPipeline` 只发送压缩指令并立即返回，Orchestrator 随后立即发送返工指引；两者由 harness 侧输入队列保序（先压缩、后提示词）。原「等压缩回合空闲再发送」会在压缩回合迟迟不 idling 时把会话卡住。
 
 ### 4.2 打回后复工（resume）四象限
 
@@ -142,21 +144,20 @@ sequenceDiagram
     participant O as Orchestrator
     participant C as compact.ts
     participant S as sessionService
-    participant W as idle-waiter
     participant H as Harness
     O->>C: runCompactPipeline(sessionId, acpServerType, timeoutMs=5min)
-    C->>C: compactInFlight.add(sessionId)（先于发送，抑制停滞检测）
-    C->>W: armSessionIdleWaiter(sessionId, timeoutMs)（先布防）
-    C->>S: addMessage(resolveCompactCommand(acpServerType))
+    C->>C: compactInFlight 登记（先于发送，抑制停滞检测）
+    C->>S: 发送动作 1/2：addMessage(resolveCompactCommand(acpServerType))
     S->>H: session:message（压缩指令即普通会话文本）
-    H-->>W: promptCompleted → idling
-    W-->>C: true
-    C->>C: compactInFlight.delete(sessionId)
-    C-->>O: true
-    Note over C,H: 超时/异常/ended+error：warn + 取消登记 + 返回 false；<br/>调用方照发继续提示词（提案 D5）
+    C-->>O: true（不等待压缩回合空闲）
+    O->>S: 发送动作 2/2：addMessage(返工指引 / 继续提示词)
+    S->>H: session:message（harness 输入队列保序：先压缩、后提示词）
+    H-->>O: promptCompleted → idling（压缩回合结束）
+    O->>C: consumeCompactInFlight(sessionId) → 抑制本次停滞检测
+    Note over C,H: 压缩指令发送失败：warn + 取消登记 + 返回 false；<br/>调用方照发提示词（提案 D5）。抑制登记由一次性消费解除，<br/>兜底定时器（同 timeout）避免异常情况下永久抑制。
 ```
 
-**发送前双校验**（镜像 interrupt-retry 管线）：等待器结算后、发送继续提示词前，Orchestrator 重新读实例——实例未删除 + 节点状态仍为 REWORK（返工）/RUNNING（复工）+ `sessionId` 未变，不满足则放弃发送（人工 complete/restart/删除已介入）。
+**无发送前双校验（返工修订）**：压缩与提示词连续发送、中间没有等待窗口，原「等待器结算后重读实例校验节点状态/sessionId」不再适用；提示词发送后的状态变化由引擎状态机与中断重试的既有 CAS 兜底。
 
 ## 5. 变更清单
 
@@ -211,8 +212,8 @@ sequenceDiagram
 
 | 文件 | 变更 |
 |------|------|
-| `servers/agent-api/src/services/workflow/compact.ts`（新增） | ① 进程内 `compactInFlight: Set<string>` + `isCompactInFlight(sessionId)`；② `runCompactPipeline(sessionId, acpServerType, timeoutMs = INTERRUPT_RETRY_IDLE_TIMEOUT_MS)`：登记 → `armSessionIdleWaiter`（先布防）→ `sessionService.addMessage(compactCommand)` → 等空闲 → 取消登记 → 返回 true；超时/异常/等待器 false → `logger.warn` + 取消登记 + 返回 false；`compact.ts` 只依赖 session/session-idle-waiter/harness-config（不 import orchestrator，循环依赖约束同 node-config.ts） |
-| `servers/agent-api/src/services/workflow/orchestrator.ts` | `handleSessionIdled` 在查到节点（RUNNING/REWORK）后、排期前：`if (isCompactInFlight(sessionId)) return;`（F7） |
+| `servers/agent-api/src/services/workflow/compact.ts`（新增） | ① 进程内 `compactInFlight: Map<sessionId, 兜底定时器>` + `isCompactInFlight`（观测）/`consumeCompactInFlight`（一次性消费）/`clearCompactInFlight`（测试）；② `runCompactPipeline(sessionId, acpServerType, timeoutMs = INTERRUPT_RETRY_IDLE_TIMEOUT_MS)`：登记 → `sessionService.addMessage(compactCommand)` → **立即返回 true（不等待压缩回合空闲）**；发送异常 → `logger.warn` + 取消登记 + 返回 false（调用方照发提示词）；兜底定时器到点解除登记并 warn。`compact.ts` 只依赖 session/harness-config（不 import orchestrator，循环依赖约束同 node-config.ts） |
+| `servers/agent-api/src/services/workflow/orchestrator.ts` | `handleSessionIdled` 在查到节点（RUNNING/REWORK）后、排期前：`if (consumeCompactInFlight(sessionId)) return;`（F7；一次性消费，后续回合恢复既有停滞检测） |
 
 ### 5.7 Phase 6：Orchestrator 分流与提示词
 
@@ -266,15 +267,15 @@ sequenceDiagram
 | T-SNAP3 | `services/workflow/continuation.test.ts` | 接续只映射 acpServerType，4 字段随快照原样保留（零改动锁定） |
 | T-ORC1 | `services/workflow/orchestrator.test.ts` | 返工-原始会话-不压缩（默认）：resume + 返工指引，与现状逐字一致（零回归锚点） |
 | T-ORC2 | 同上 | 返工-新会话：close（reason=workflow_node_rework）+ startNodeSession；首条消息单条发送且含 assemblePrompt 全文 + 「## 返工说明」段（含打回原因与 `completeCurrentRework` 指引、不含引导 completeCurrentNode 完成返工的歧义文案） |
-| T-ORC3 | 同上 | 返工-原始会话+压缩：调用顺序断言 resume → addMessage(compactCommand) → 空闲 → addMessage(返工指引)；压缩失败/超时仍发送返工指引（warn 一次） |
+| T-ORC3 | 同上 | 返工-原始会话+压缩：调用顺序断言 resume → runCompactPipeline（发送压缩指令）→ addMessage(返工指引)；压缩指令发送失败仍发送返工指引（warn 一次） |
 | T-ORC4 | 同上 | 返工-原始会话但 sessionId 缺失 / resume 返回失败 → warn 降级新会话路径（close 不调用或安全跳过 + startNodeSession 含返工说明段） |
 | T-ORC5 | 同上 | 复工-新会话（默认）：close + startNodeSession，与现状逐字一致（零回归锚点）；HUMAN/FLAG 直接返回 |
 | T-ORC6 | 同上 | 复工-原始会话：不 close、不新建会话；resume + addMessage(RESUME_CONTINUE_PROMPT)（文案含「重新获取上游产物」与 completeCurrentNode 指引） |
 | T-ORC7 | 同上 | 复工-原始会话+压缩顺序；resume 失败降级新会话链 |
-| T-ORC8 | 同上 | 发送前双校验：等待器结算后节点状态已变（被人工 complete/restart）或 sessionId 已变 → 放弃发送继续提示词 |
-| T-CPCT1 | `services/workflow/compact.test.ts`（新增） | 成功路径：登记先于发送（发送瞬间 `isCompactInFlight` 为 true）、布防先于 addMessage、空闲后返回 true 且取消登记 |
-| T-CPCT2 | 同上 | 超时/等待器 false/addMessage 抛错 → 返回 false 且登记取消（无残留）；warn 日志一次 |
-| T-CPCT3 | 同上 | `handleSessionIdled` 命中 `isCompactInFlight` → 不调用 scheduleInterruptionRetry；登记取消后恢复既有行为 |
+| T-ORC8 | 同上 | 压缩与继续提示词**连续发送**（不等待压缩回合空闲、无发送前双校验）；顺序 compact → addMessage(RESUME_CONTINUE_PROMPT) |
+| T-CPCT1 | `services/workflow/compact.test.ts`（新增） | 成功路径：登记先于发送（发送瞬间 `isCompactInFlight` 为 true）、发送压缩指令后立即返回 true（不等待空闲）、`consumeCompactInFlight` 一次性消费 |
+| T-CPCT2 | 同上 | 兜底定时器到点解除登记（自定义超时/缺省 5 分钟）；addMessage 抛错 → 返回 false 且无残留登记 |
+| T-CPCT3 | `orchestrator.test.ts` | `handleSessionIdled` 命中 `consumeCompactInFlight` → 不调用 scheduleInterruptionRetry；下次未命中恢复既有行为 |
 | T-HCR1 | `services/harness-config.test.ts`（新增） | `resolveCompactCommand('opencode'/'kimi_code'/'deepseek_harness')` 映射命中并读镜像值 |
 | T-HCR2 | 同上 | 未映射 acpServerType / 镜像无配置行 → 返回 `/compact` |
 | T-HCR3 | 同上 | 60s 缓存：第二次调用无 DB 查询；过期后重新查询；查询失败不缓存（下次重试） |
@@ -406,8 +407,8 @@ cd tests/e2e && pnpm exec playwright test src/admin-harness-config.spec.ts
 ### 10.3 Phase 5~6（压缩管线与分流）
 
 - [ ] 四象限分流全部命中（T-ORC1~8）；默认路径与现状逐字一致
-- [ ] 压缩顺序「resume → 压缩指令 → 空闲 → 继续提示词」可验证；失败/超时降级不阻断
-- [ ] 压缩期间停滞检测抑制、结束后恢复；发送前双校验放弃过期发送
+- [ ] 压缩为两个连续发送动作「resume → 压缩指令 → 立即发送继续提示词」可验证（不等待压缩回合空闲）；发送失败降级不阻断
+- [ ] 压缩回合结束的停滞检测被一次性抑制、结束后恢复；无发送前双校验（无等待窗口）
 - [ ] 新会话返工单条消息含「## 返工说明」且唯一指引 completeCurrentRework
 
 ### 10.4 Phase 7~8（前端）
