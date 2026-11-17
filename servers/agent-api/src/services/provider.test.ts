@@ -9,6 +9,7 @@ vi.mock('../models/provider.js');
 vi.mock('../models/model.js');
 vi.mock('./llm-api', () => ({
   llmApiService: {
+    fetchModelCatalog: vi.fn().mockResolvedValue([{ name: 'gpt-4o' }, { name: 'gpt-4o-mini' }]),
     fetchModels: vi.fn().mockResolvedValue(['gpt-4o', 'gpt-4o-mini']),
   },
 }));
@@ -215,12 +216,12 @@ describe('ProviderService', () => {
 
     it('dedupes duplicate upstream model names so insert cannot hit the unique index (issue 54)', async () => {
       const { llmApiService } = await import('./llm-api');
-      (llmApiService.fetchModels as any).mockResolvedValueOnce([
-        'gpt-4o',
-        'gpt-4o',
-        'gpt-4o-mini',
-        'gpt-4o',
-        'gpt-4o-mini',
+      (llmApiService.fetchModelCatalog as any).mockResolvedValueOnce([
+        { name: 'gpt-4o' },
+        { name: 'gpt-4o' },
+        { name: 'gpt-4o-mini' },
+        { name: 'gpt-4o' },
+        { name: 'gpt-4o-mini' },
       ]);
 
       const result = await providerService.create({
@@ -242,11 +243,11 @@ describe('ProviderService', () => {
 
     it('skips empty upstream model names before syncing', async () => {
       const { llmApiService } = await import('./llm-api');
-      (llmApiService.fetchModels as any).mockResolvedValueOnce([
-        'gpt-4o',
-        '',
-        '   ',
-        'gpt-4o-mini',
+      (llmApiService.fetchModelCatalog as any).mockResolvedValueOnce([
+        { name: 'gpt-4o' },
+        { name: '' },
+        { name: '   ' },
+        { name: 'gpt-4o-mini' },
       ]);
 
       await providerService.create({
@@ -328,7 +329,7 @@ describe('ProviderService', () => {
       expect(result).not.toBeNull();
       expect(result!.name).toBe('Updated Provider');
       expect(cryptoModule.encrypt).toHaveBeenCalledWith('sk-new-key');
-      expect(llmApiService.fetchModels).toHaveBeenCalledWith(
+      expect(llmApiService.fetchModelCatalog).toHaveBeenCalledWith(
         'Anthropic', 'https://api.anthropic.com', 'sk-new-key',
       );
       // 问题 48：重同步改为按 (providerId,name) upsert，不再 delete+insert
@@ -379,7 +380,7 @@ describe('ProviderService', () => {
       expect(result).not.toBeNull();
       expect(result!.name).toBe('Renamed Provider');
       expect(cryptoModule.encrypt).not.toHaveBeenCalled();
-      expect(llmApiService.fetchModels).toHaveBeenCalledWith(
+      expect(llmApiService.fetchModelCatalog).toHaveBeenCalledWith(
         'OpenAI', 'https://custom.openai.com/v1', 'sk-proj-decrypted-key',
       );
     });
@@ -511,6 +512,162 @@ describe('ProviderService', () => {
         credentialValue: 'sk-x',
       })).rejects.toThrow('全局配置请在管理后台修改');
       expect(Provider.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('syncSyncedModels contextLength（T-UMC3）', () => {
+    const VALID_OID = '507f1f77bcf86cd799439011';
+    const mockExisting = {
+      _id: { toString: () => VALID_OID },
+      name: 'Existing Provider',
+      type: 'OpenAI',
+      endpoint: 'https://api.openai.com/v1',
+      credentialType: 'api_key',
+      encryptedCredential: { iv: 'old-iv', ciphertext: 'old-enc', tag: 'old-tag' },
+      isEnabled: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    function mockFindRows(customRows: unknown[], existingRows: unknown[]) {
+      (Model.find as any) = vi
+        .fn()
+        .mockImplementation((filter: Record<string, unknown>) => ({
+          select: vi.fn().mockReturnValue({
+            lean: vi
+              .fn()
+              .mockResolvedValue(filter.isCustom === true ? customRows : existingRows),
+          }),
+        }));
+    }
+
+    function setFor(name: string): Record<string, unknown> {
+      const ops = (Model.bulkWrite as any).mock.calls[0][0] as Array<{
+        updateOne: { filter: { name: string }; update: { $set: Record<string, unknown> } };
+      }>;
+      const op = ops.find((candidate) => candidate.updateOne.filter.name === name);
+      return (op as NonNullable<typeof op>).updateOne.update.$set;
+    }
+
+    async function runUpdate() {
+      (Provider.findById as any) = vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue(mockExisting),
+      });
+      (Provider.findByIdAndUpdate as any) = vi.fn().mockResolvedValue({ ...mockExisting });
+      (Model.bulkWrite as any) = vi.fn().mockResolvedValue({});
+      (Model.deleteMany as any) = vi.fn().mockResolvedValue({});
+      return providerService.update(VALID_OID, {
+        name: 'Existing Provider',
+        type: 'OpenAI' as const,
+        // 与既有 endpoint 不同 → needsResync=true，触发上游清单重同步（本组用例目标）
+        endpoint: 'https://api.changed.example.com/v1',
+        credentialType: 'api_key',
+        credentialValue: '',
+      });
+    }
+
+    it('fills contextLength only for rows that are not set yet, keeps existing values', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModelCatalog as any).mockResolvedValueOnce([
+        { name: 'gpt-4o', contextLength: 128000 },
+        { name: 'gpt-4o-mini', contextLength: 64000 },
+        { name: 'brand-new', contextLength: 32000 },
+      ]);
+      mockFindRows([], [
+        { name: 'gpt-4o', contextLength: 256000 },
+        { name: 'gpt-4o-mini', contextLength: null },
+      ]);
+
+      await runUpdate();
+
+      // 已有值：不进 $set（人工值优先）
+      expect(setFor('gpt-4o')).not.toHaveProperty('contextLength');
+      // 未设置：补上游值
+      expect(setFor('gpt-4o-mini').contextLength).toBe(64000);
+      // 新建行：携带上游值
+      expect(setFor('brand-new').contextLength).toBe(32000);
+      // 删除集合逻辑不变
+      expect(Model.deleteMany).toHaveBeenCalledWith({
+        providerId: VALID_OID,
+        isCustom: false,
+        scope: { $ne: 'global' },
+        name: { $nin: ['gpt-4o', 'gpt-4o-mini', 'brand-new'] },
+      });
+    });
+
+    it('keeps contextLength unset when the upstream provides none', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModelCatalog as any).mockResolvedValueOnce([
+        { name: 'gpt-4o' },
+        { name: 'gpt-4o-mini', contextLength: 0 },
+      ]);
+      mockFindRows([], []);
+
+      await runUpdate();
+
+      expect(setFor('gpt-4o')).not.toHaveProperty('contextLength');
+      expect(setFor('gpt-4o-mini')).not.toHaveProperty('contextLength');
+    });
+
+    it('still skips custom models with the same name (no contextLength write)', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (llmApiService.fetchModelCatalog as any).mockResolvedValueOnce([
+        { name: 'gpt-4o', contextLength: 128000 },
+        { name: 'gpt-4o-mini', contextLength: 64000 },
+      ]);
+      mockFindRows([{ name: 'gpt-4o' }], []);
+
+      await runUpdate();
+
+      const ops = (Model.bulkWrite as any).mock.calls[0][0] as Array<{
+        updateOne: { filter: { name: string } };
+      }>;
+      expect(ops.map((op) => op.updateOne.filter.name)).toEqual(['gpt-4o-mini']);
+    });
+  });
+
+  describe('getDecryptedConnection（T-UMC4）', () => {
+    const VALID_OID = '507f1f77bcf86cd799439011';
+
+    it('returns decrypted user-provider connection', async () => {
+      (Provider.findById as any) = vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue({
+          _id: { toString: () => VALID_OID },
+          name: 'My OpenAI',
+          type: 'OpenAI',
+          endpoint: 'https://api.openai.com/v1',
+          scope: 'user',
+          encryptedCredential: { iv: 'iv', ciphertext: 'enc', tag: 'tag' },
+        }),
+      });
+
+      await expect(providerService.getDecryptedConnection(VALID_OID)).resolves.toEqual({
+        type: 'OpenAI',
+        endpoint: 'https://api.openai.com/v1',
+        apiKey: 'sk-proj-decrypted-key',
+      });
+      expect(cryptoModule.decrypt).toHaveBeenCalledWith({
+        iv: 'iv',
+        ciphertext: 'enc',
+        tag: 'tag',
+      });
+    });
+
+    it('returns null for global providers', async () => {
+      (Provider.findById as any) = vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ scope: 'global', encryptedCredential: { iv: 'i', ciphertext: 'c', tag: 't' } }),
+      });
+      await expect(providerService.getDecryptedConnection(VALID_OID)).resolves.toBeNull();
+      expect(cryptoModule.decrypt).not.toHaveBeenCalled();
+    });
+
+    it('returns null for missing / malformed ids without touching the DB', async () => {
+      (Provider.findById as any) = vi.fn().mockReturnValue({
+        lean: vi.fn().mockResolvedValue(null),
+      });
+      await expect(providerService.getDecryptedConnection(VALID_OID)).resolves.toBeNull();
+      await expect(providerService.getDecryptedConnection('not-an-object-id')).resolves.toBeNull();
+      expect(Provider.findById).toHaveBeenCalledTimes(1);
     });
   });
 

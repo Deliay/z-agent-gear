@@ -80,6 +80,14 @@ export async function invalidateAcpOptionsForController(controllerId: string): P
 }
 
 /**
+ * 失效**全部**控制器的工具选项缓存（后台 global 模型变更；合约 `acp:options:*`）。
+ * 复用同一 SCAN 通道，失败仅告警（最长由 300s TTL 兜底）。
+ */
+export async function invalidateAllAcpOptions(): Promise<number> {
+  return deleteKeysByPattern(`${ACP_OPTIONS_KEY_PREFIX}*`);
+}
+
+/**
  * 失效某用户全部控制器的工具选项缓存。
  * 枚举该用户的 controllerId 后逐个 SCAN 删除。
  *

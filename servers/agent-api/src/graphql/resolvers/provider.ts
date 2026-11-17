@@ -1,6 +1,7 @@
 import { GraphQLError } from 'graphql';
 import { providerService } from '../../services/provider.js';
 import { rethrowAsGraphQLError } from './errors.js';
+import { scheduleModelPush } from './model.js';
 import type { AuthContext } from './auth.js';
 
 const PROVIDER_ERROR_MAPPINGS: Array<[string, string]> = [
@@ -27,7 +28,9 @@ export const providerResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        return await providerService.create(args.input as { name: string; type: 'OpenAI' | 'Anthropic'; endpoint: string; credentialType: string; credentialValue: string });
+        const result = await providerService.create(args.input as { name: string; type: 'OpenAI' | 'Anthropic'; endpoint: string; credentialType: string; credentialValue: string });
+        scheduleModelPush(context);
+        return result;
       } catch (err) {
         rethrowAsGraphQLError(err, PROVIDER_ERROR_MAPPINGS);
       }
@@ -45,6 +48,7 @@ export const providerResolvers = {
         if (!result) {
           throw new GraphQLError('Provider not found');
         }
+        scheduleModelPush(context);
         return result;
       } catch (err) {
         rethrowAsGraphQLError(err, PROVIDER_ERROR_MAPPINGS);
@@ -59,7 +63,11 @@ export const providerResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        return await providerService.delete(args.id);
+        const result = await providerService.delete(args.id);
+        if (result) {
+          scheduleModelPush(context);
+        }
+        return result;
       } catch (err) {
         rethrowAsGraphQLError(err);
       }
@@ -77,6 +85,7 @@ export const providerResolvers = {
         if (!result) {
           throw new GraphQLError('Provider not found');
         }
+        scheduleModelPush(context);
         return result;
       } catch (err) {
         rethrowAsGraphQLError(err);
@@ -91,7 +100,11 @@ export const providerResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        return await providerService.batchEnable(args.ids);
+        const result = await providerService.batchEnable(args.ids);
+        if (result.successCount > 0) {
+          scheduleModelPush(context);
+        }
+        return result;
       } catch (err) {
         rethrowAsGraphQLError(err);
       }
@@ -105,7 +118,11 @@ export const providerResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        return await providerService.batchDisable(args.ids);
+        const result = await providerService.batchDisable(args.ids);
+        if (result.successCount > 0) {
+          scheduleModelPush(context);
+        }
+        return result;
       } catch (err) {
         rethrowAsGraphQLError(err);
       }
@@ -119,7 +136,11 @@ export const providerResolvers = {
         throw new GraphQLError('Not authenticated');
       }
       try {
-        return await providerService.batchDelete(args.ids);
+        const result = await providerService.batchDelete(args.ids);
+        if (result.successCount > 0) {
+          scheduleModelPush(context);
+        }
+        return result;
       } catch (err) {
         rethrowAsGraphQLError(err);
       }

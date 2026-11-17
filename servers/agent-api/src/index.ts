@@ -19,6 +19,7 @@ import { gatewayProxyRouter } from './routes/gateway-proxy.js';
 import { githubRouter } from './routes/github.js';
 import { internalCloudHostRouter } from './routes/internal-cloud-host.js';
 import { internalCloudStorageRouter } from './routes/internal-cloud-storage.js';
+import { internalModelConfigRouter } from './routes/internal-model-config.js';
 import { eventCallbackRouter } from './routes/event-callback.js';
 import { githubWebhookRouter } from './routes/github-webhook.js';
 import { authOauthRouter } from './routes/auth-oauth.js';
@@ -166,6 +167,7 @@ app.use('/api', githubRouter);
 app.use('/api', authOauthRouter);
 app.use('/internal/cloud-hosts', internalCloudHostRouter);
 app.use('/internal/cloud-storages', internalCloudStorageRouter);
+app.use('/internal/model-config', internalModelConfigRouter);
 app.use('/internal/users', internalUsersRouter);
 app.use('/internal/tenants', internalTenantsRouter);
 
