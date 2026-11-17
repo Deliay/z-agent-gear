@@ -1,7 +1,7 @@
 import { Provider, type IProvider } from '../models/provider.js';
 import { Model } from '../models/model.js';
 import { encrypt, decrypt } from './crypto.js';
-import { llmApiService, ProviderType } from './llm-api.js';
+import { llmApiService, ProviderType, type ProviderModelEntry } from './llm-api.js';
 import { GLOBAL_WRITE_FORBIDDEN } from './constants.js';
 import { getWorkspaceContext } from './workspace-context.js';
 import mongoose from 'mongoose';
@@ -13,6 +13,11 @@ const USER_SCOPE_FILTER: mongoose.QueryFilter<IProvider> = {
 
 function normalizeScope(value: unknown): 'user' | 'global' {
   return value === 'global' ? 'global' : 'user';
+}
+
+/** 上游/存量上下文长度归一：仅正整数视为「已设置」。 */
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
 }
 
 /**
@@ -44,6 +49,32 @@ export class ProviderService {
     return this.mapProviderSummary(provider);
   }
 
+  /**
+   * 解密后的用户供应商连接信息（`providerModelOptions` / 上游元数据探测用）。
+   *
+   * 口径：仅 user scope（兼容无 scope 存量行）可见；不存在/global/非法 id → null。
+   * 返回明文凭据只在调用栈内存中，**不得**透出到 GraphQL 出参。
+   */
+  async getDecryptedConnection(
+    id: string,
+  ): Promise<{ type: ProviderType; endpoint: string; apiKey: string } | null> {
+    if (!mongoose.Types.ObjectId.isValid(id)) return null;
+    const provider = await Provider.findById(id).lean() as {
+      scope?: string;
+      type?: string;
+      endpoint?: string;
+      encryptedCredential?: { iv: string; ciphertext: string; tag: string } | null;
+    } | null;
+    if (!provider) return null;
+    if (normalizeScope(provider.scope) !== 'user') return null;
+    if (!provider.encryptedCredential) return null;
+    return {
+      type: provider.type as ProviderType,
+      endpoint: String(provider.endpoint ?? ''),
+      apiKey: decrypt(provider.encryptedCredential),
+    };
+  }
+
   async create(input: {
     name: string;
     type: ProviderType;
@@ -57,7 +88,7 @@ export class ProviderService {
 
     const encrypted = encrypt(input.credentialValue);
 
-    const models = await llmApiService.fetchModels(input.type, input.endpoint, input.credentialValue);
+    const entries = await llmApiService.fetchModelCatalog(input.type, input.endpoint, input.credentialValue);
 
     const provider = await Provider.create({
       name: input.name,
@@ -72,7 +103,7 @@ export class ProviderService {
     // 问题 54：与 update/resync 共用同一套 upsert/skip-custom 逻辑，对上游模型名去重（跳过空名），
     // 避免重复名触发 (providerId,name) 唯一索引 E11000 留下孤儿供应商。
     try {
-      await this.syncSyncedModels(String(provider._id), models);
+      await this.syncSyncedModels(String(provider._id), entries);
     } catch (err) {
       // 尽力回滚：standalone Mongo 无事务，模型写入失败时清理已写入的模型并删除刚创建的供应商，
       // 避免留下孤儿供应商 / 孤儿模型（回滚本身失败不掩盖原始错误）。
@@ -124,9 +155,9 @@ export class ProviderService {
     const endpointChanged = input.endpoint !== existingProvider.endpoint;
     const needsResync = credentialChanged || typeChanged || endpointChanged;
 
-    // 先取远端模型列表（连通性/网络错误在落库前抛出，供应商与模型均保持原状）
-    const fetchedModels = needsResync
-      ? await llmApiService.fetchModels(input.type, input.endpoint, effectiveApiKey)
+    // 先取远端模型清单（连通性/网络错误在落库前抛出，供应商与模型均保持原状）
+    const fetchedEntries = needsResync
+      ? await llmApiService.fetchModelCatalog(input.type, input.endpoint, effectiveApiKey)
       : null;
 
     // 先写供应商：供应商写入失败（如改名撞唯一键）时不触碰模型，避免模型被先删后失败导致丢数据（问题 48）。
@@ -144,8 +175,8 @@ export class ProviderService {
     if (!provider) return null;
 
     // 供应商落库成功后再重同步模型（standalone Mongo 无事务，尽力而为；失败不影响 provider 写入）。
-    if (fetchedModels) {
-      await this.syncSyncedModels(id, fetchedModels);
+    if (fetchedEntries) {
+      await this.syncSyncedModels(id, fetchedEntries);
     }
 
     return this.mapProvider(provider);
@@ -156,9 +187,11 @@ export class ProviderService {
    * - 保留用户自定义模型（isCustom: true）；与自定义模型**同名**的 API 模型跳过，
    *   避免 `(providerId, name)` 唯一索引冲突（该索引不含 isCustom 维度）导致 E11000；
    * - 以 `(providerId, name)` 为键 **upsert**，替代 delete+insert，重同步幂等且无「先删后失败」的丢数据窗口；
-   * - 仅删除「不在期望集合内」的自动同步模型，保留自定义模型与全局模型（scope 过滤与 batch* 对齐）。
+   * - 仅删除「不在期望集合内」的自动同步模型，保留自定义模型与全局模型（scope 过滤与 batch* 对齐）；
+   * - **上下文长度「仅补未设置」**（D15）：已有值不进 `$set`（人工值优先），新建行携带上游值，
+   *   上游未提供则保持 null。
    */
-  private async syncSyncedModels(providerId: string, fetchedNames: string[]) {
+  private async syncSyncedModels(providerId: string, entries: ProviderModelEntry[]) {
     const customModels = await Model.find({
       providerId,
       isCustom: true,
@@ -169,24 +202,60 @@ export class ProviderService {
     const customNames = new Set(customModels.map((m) => (m as { name: string }).name));
 
     // 去重并跳过空名：同名重复会让同一 bulkWrite 批次产生冲突的 upsert（问题 54）
-    const desired = [...new Set(fetchedNames)]
-      .filter((name) => typeof name === 'string' && name.trim().length > 0)
-      .filter((name) => !customNames.has(name));
+    const desiredContextLengths = new Map<string, number | undefined>();
+    for (const entry of entries) {
+      const name = typeof entry?.name === 'string' ? entry.name : '';
+      if (!name.trim().length || customNames.has(name) || desiredContextLengths.has(name)) continue;
+      desiredContextLengths.set(name, positiveInteger(entry.contextLength));
+    }
+    const desired = [...desiredContextLengths.keys()];
     const objectId = new mongoose.Types.ObjectId(providerId);
     const workspaceFields = this.workspaceFields();
 
+    // 既有同步行的上下文长度：仅「未设置」行允许被上游补齐
+    const existingRows = desired.length > 0
+      ? await Model.find({
+          providerId,
+          isCustom: false,
+          scope: { $ne: 'global' },
+          name: { $in: desired },
+        })
+          .select('name contextLength')
+          .lean()
+      : [];
+    const existingContextLengths = new Map<string, unknown>();
+    for (const row of existingRows) {
+      const record = row as { name: string; contextLength?: unknown };
+      existingContextLengths.set(String(record.name), record.contextLength);
+    }
+
     if (desired.length > 0) {
-      const ops = desired.map((name, sortOrder) => ({
-        updateOne: {
-          // 建议 I：`isCustom: { $ne: true }` 关闭「读自定义模型 → upsert」之间的 TOCTOU 窗口，
-          // 并发插入的同名自定义模型不会被 upsert 命中并改写为同步模型。
-          filter: { providerId: objectId, name, isCustom: { $ne: true } },
-          update: {
-            $set: { isCustom: false, isEnabled: true, sortOrder, scope: 'user' as const, ...workspaceFields },
+      const ops = desired.map((name, sortOrder) => {
+        const $set: Record<string, unknown> = {
+          isCustom: false,
+          isEnabled: true,
+          sortOrder,
+          scope: 'user' as const,
+          ...workspaceFields,
+        };
+        const upstreamContextLength = desiredContextLengths.get(name);
+        const isNew = !existingContextLengths.has(name);
+        const existingContextLength = positiveInteger(existingContextLengths.get(name));
+        if (isNew) {
+          if (upstreamContextLength !== undefined) $set.contextLength = upstreamContextLength;
+        } else if (existingContextLength === undefined && upstreamContextLength !== undefined) {
+          $set.contextLength = upstreamContextLength;
+        }
+        return {
+          updateOne: {
+            // 建议 I：`isCustom: { $ne: true }` 关闭「读自定义模型 → upsert」之间的 TOCTOU 窗口，
+            // 并发插入的同名自定义模型不会被 upsert 命中并改写为同步模型。
+            filter: { providerId: objectId, name, isCustom: { $ne: true } },
+            update: { $set },
+            upsert: true,
           },
-          upsert: true,
-        },
-      }));
+        };
+      });
       await Model.bulkWrite(ops);
     }
 

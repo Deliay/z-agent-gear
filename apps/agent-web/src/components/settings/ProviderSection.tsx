@@ -20,6 +20,7 @@ import ProviderFormDialog from './ProviderFormDialog'
 import BatchActionBar from './BatchActionBar'
 import { useResourceSourceResolver } from '@/hooks/useResourceSource'
 import { useWorkspaceAccess } from '@/stores/workspace'
+import { notifyModelConfigApplied } from '@/lib/model-config-notice'
 
 interface ProviderInput {
   name: string
@@ -90,6 +91,8 @@ export default function ProviderSection() {
         refetchQueries: [GET_PROVIDERS, GET_MODELS],
       })
     }
+    // 创建/更新会触发服务端下发给运行中的云电脑；toggle/delete 保持静默（D18）
+    notifyModelConfigApplied()
     setFormOpen(false)
     setEditingProvider(null)
     setEditingId(null)

@@ -28,6 +28,13 @@ const harnessSecretSchema = new mongoose.Schema(
     modelIds: { type: String, required: true },
     /** 模型 ID → 最长上下文 JSON object 字符串；无上下文信息时为 null。 */
     modelContextLengths: { type: String, default: null },
+    /**
+     * `ModelProvision` JSON 字符串（多 vendor 模型清单；agent-gear 2.20.0 起，可选）。
+     *
+     * 零迁移：缺省 `null` 表示旧版本创建（读取侧回退 `modelIds` / `modelContextLengths`）。
+     * 只由运行期模型下发端点（A.2.15）与容器创建写入口更新。
+     */
+    modelProviders: { type: String, default: null },
     /** 默认工作区。 */
     defaultWorkspace: { type: String, required: true },
   },

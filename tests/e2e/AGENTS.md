@@ -680,6 +680,22 @@ fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`�
 - 依赖：agent-web / agent-api / controller-api 就绪 + `INTERNAL_API_TOKEN`（开户）；fake controller 应答
   `acp:check`/`git:check`/`acp:start`/`acp:resume`/`acp:stop`。
 
+## 模型下发与上下文编辑（#533）
+
+> 需求 #533；契约 `contracts/llm.graphql`；计划
+> `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` §6.3。文件 `src/model-config-sync.spec.ts`。
+> 依赖 agent-web / agent-api + `INTERNAL_API_TOKEN`（开户，缺省回落 admin-api `adminCreateFrontUser`，需 `MONGODB_URI`）。
+> 供应商/模型一律按 `e2e-mcs-` 前缀自建自清（前台删除供应商连带其模型；后台 `batchDeleteGlobalProviders` 仅在
+> `e2e-mcs-` 前缀内清理，不触碰外部数据）。上游 LLM 为 spec 内进程内 mock：`startMockLlmServer`（连通性/同步）
+> 与带 `context_length` 的本地 mock（预填与上游上下文展示）。E2E-MCS2b 断言 admin-web 保存路径，需
+> `ADMIN_WEB_URL`（缺省时该用例 skip）与 `MONGODB_URI`（管理员口令归一化）。
+
+| 测试 | 描述 |
+|------|------|
+| E2E-MCS1 | 设置-「可用模型」新增自定义模型：输入上游同名模型 → 400ms 去抖后上下文自动预填（32000）→ 改自定义名并手填 128000 → 保存后 toast 含「部分 Harness 运行时不会重载模型配置」→ 展开供应商组：同步模型行展示「最长上下文：32,000 tokens」、自定义模型行展示「128,000 tokens」→「编辑上下文」清空 → 展示「未设置」 |
+| E2E-MCS2 | 前台「添加供应商」保存成功 → 同一 toast 文案（与模型保存共用 `MODEL_CONFIG_APPLIED_NOTICE`）+ 列表出现供应商 |
+| E2E-MCS2b | 后台「模型配置」页「添加供应商」保存成功 → 供应商可见，且页面 `部分 Harness 运行时不会重载模型配置` 计数为 0（只断言 admin 侧不存在该文案，不做跨 app 断言） |
+| E2E-MCS3 | 非法上下文 `0` / `-5` / `abc` → 行内「请输入正整数」且「保存」禁用；恢复合法值后错误消失、保存可用；回到非法值后取消 → 列表无该模型且 API 回读 `models` 不含该名称（未落库） |
 ## 云电脑工作组件版本与立即升级（E2E-UPG，需求 #551）
 
 - 文件：`src/settings-cloud-host-upgrade.spec.ts`；前置 `HARNESS_ENABLED=true` + `MONGODB_URI` + `REDIS_URL`。

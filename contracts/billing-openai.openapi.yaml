@@ -154,6 +154,12 @@ components:
           enum: [model]
         owned_by:
           type: string
+          description: |
+            模型归属显示名（与云电脑内 harness 分组口径一致）：
+            - `scope=global`（平台内置模型）→ `Agent Gear`
+            - `scope=user`（含存量无 scope）→ 该模型绑定的供应商名称（provider.name）
+            - 使用账户 Key（account Key）列举时恒为 `Agent Gear`
+            不返回任何内部供应商 id / 地址 / 凭据信息。
         created:
           type: integer
         # 新增（可选）：模型最长上下文大小（token，>= 1）；未设置时不返回该字段

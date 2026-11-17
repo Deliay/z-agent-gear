@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import {
   STARTABLE_PURPOSES,
   SUPPORTED_HARNESS_TYPES,
+  isTerminalStatus,
   type WorkloadPlanEntry,
 } from '../models/cloud-container.js';
 import { logger as rootLogger } from '../observability/logger.js';
@@ -38,13 +39,19 @@ import {
 } from '../services/storage-service.js';
 import { StoragePvcConflictError } from '../services/k8s-storage-manager.js';
 import type { HarnessSecrets } from '../services/secret-store.js';
+import {
+  parseModelProvisionPayload,
+  type ModelProvision,
+} from '../services/model-provision.js';
 import { resolveGlobalWorkspaceId } from '../services/workspace-resolver.js';
+import type { HarnessModelsPushResult } from '../services/socketio-gateway.js';
 import type { UpgradeRequestResult } from '../services/socketio-gateway.js';
 import {
   harnessMinVersion,
   isSupportedWorkerVersion,
   maxWorkerVersion,
   sanitizeVersionForLog,
+  supportsHarnessModelPush,
   MIN_HARNESS_VERSION_BY_TYPE,
   MIN_HARNESS_WORKER_VERSION,
   MIN_UPGRADE_WORKER_VERSION,
@@ -217,6 +224,16 @@ export interface InternalRouterDeps {
    */
   getWorkerVersion?: (containerId: string) => string | undefined;
   /**
+   * 运行期模型清单下发（socketio-gateway 注入）：emit `harness:models` 并等待 ack（≤10s）。
+   * 未注入时端点返回 503 `UNAVAILABLE`（契约 A.2.15）。
+   */
+  requestHarnessModels?: (
+    containerId: string,
+    provision: ModelProvision,
+    timeoutMs?: number,
+  ) => Promise<HarnessModelsPushResult>;
+
+  /**
    * 升级事件触发（gateway 句柄）：A.2.14 端点 emit `agent-gear:upgrade` 并等待回执；
    * 缺省（单测/未注入）时端点按容器离线处理。
    */
@@ -224,6 +241,7 @@ export interface InternalRouterDeps {
     containerId: string,
     payload?: { targetVersion?: string },
   ) => Promise<UpgradeRequestResult>;
+
   /** 云存储编排（PVC / 归档 / 恢复 / 用量 / 清理）；缺省时存储端点返回 503。 */
   storageService?: StorageService;
 }
@@ -532,6 +550,15 @@ export async function parseHarnessRequest(
   const modelContextLengths = nonEmptyString(record.modelContextLengths);
   if (modelContextLengths) secrets.modelContextLengths = modelContextLengths;
   if (Object.values(secrets).some((value) => value.length === 0)) return null;
+
+  // 运行期模型清单（agent-gear 2.20.0 起，可选；契约 A.2.2）。必须在必填 6 字段校验**之后**
+  // 解析，否则不传该字段的旧调用方会直接 400（F15）。显式下发但空串/非字符串 → 400。
+  const rawModelProviders = record.modelProviders;
+  if (rawModelProviders !== undefined && rawModelProviders !== null) {
+    const modelProviders = nonEmptyString(rawModelProviders);
+    if (!modelProviders) return null;
+    secrets.modelProviders = modelProviders;
+  }
 
   const controllerId = nonEmptyString(body.controllerId);
 
@@ -1004,6 +1031,101 @@ export function createInternalRouter(
       respondRuntimeError(res, err);
     }
   });
+
+  /**
+   * 运行期模型清单下发（契约 A.2.15）：先更新 `SecretStore` + `cloudcontainersecrets`
+   * （`modelProviders` 原样 + 旧字段投影），再 emit `harness:models` 并等待 ack（≤10s）。
+   *
+   * 状态矩阵（计划 D10）：不存在/非法 id → 404；payload 非法 → 400（先于离线/版本短路）；
+   * 终态 → 409 `CONTAINER_NOT_ONLINE`；secret 缺失（已销毁）→ 409；网关未注入 → 503。
+   * 通过上述校验后**先持久化** secret（`modelProviders` + 旧字段投影，D11/F17）：
+   * creating/connecting/initializing → 200 `{delivered:false, reason:'offline'}`（不 emit）；
+   * worker 版本可得且 <2.20.0 → 200 `worker_unsupported`（不 emit）；其余 emit 并等 ack。
+   * `delivered=false` 不视为失败（D11）。
+   */
+  router.post(
+    '/containers/:containerId/harness-models',
+    async (req: Request, res: Response) => {
+      const requestHarnessModels = deps.requestHarnessModels;
+      if (!requestHarnessModels) {
+        res.status(503).json({ error: 'UNAVAILABLE', message: 'worker gateway not configured' });
+        return;
+      }
+      const containerId = String(req.params.containerId);
+      if (!mongoose.isValidObjectId(containerId)) {
+        res.status(404).json({ error: 'NOT_FOUND', message: `Container not found: ${containerId}` });
+        return;
+      }
+
+      try {
+        const container = await containerService.get(containerId);
+        if (!container) {
+          res.status(404).json({ error: 'NOT_FOUND', message: `Container not found: ${containerId}` });
+          return;
+        }
+        if (isTerminalStatus(container.status)) {
+          res.status(409).json({
+            error: 'CONTAINER_NOT_ONLINE',
+            message: `容器不在线（${container.status}）`,
+          });
+          return;
+        }
+
+        // payload 校验先于离线/版本短路：非法载荷不得被 `200 delivered:false` 掩盖（返回 400）。
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        const provision = parseModelProvisionPayload(body.provision);
+        if (!provision) {
+          res.status(400).json({
+            error: 'INVALID_MODEL_PROVISION',
+            message: 'provision 结构非法',
+          });
+          return;
+        }
+
+        // 先持久化（内存 + 落库）再判断可下发性/emit（D11）：
+        // secret 是「下次任意变更自然收敛」的兜底事实源，离线/版本不支持的当次载荷也不能丢
+        // （否则运行期补装 harness 的 init 脚本会拿到创建期旧快照）。
+        const updated = await containerService.updateModelProvision(containerId, provision);
+        if (!updated) {
+          res.status(409).json({
+            error: 'CONTAINER_NOT_ONLINE',
+            message: '容器 secret 不存在（可能已销毁）',
+          });
+          return;
+        }
+
+        if (container.status !== 'online') {
+          // 创建中间态：非错误，下一次任意模型变更或创建期快照会自然收敛。
+          res.status(200).json({ delivered: false, reason: 'offline' });
+          return;
+        }
+
+        // 版本短路：仅在版本可得且低于 2.20.0 时跳过 emit（避免旧容器批量 10s 空等）。
+        // 注意只豁免 emit，持久化已在上方完成。
+        const workerVersion = deps.getWorkerVersion?.(containerId);
+        if (!supportsHarnessModelPush(workerVersion)) {
+          log.info(
+            {
+              event: 'harness-models-worker-unsupported',
+              containerId,
+              workerVersion: sanitizeVersionForLog(workerVersion),
+            },
+            'worker does not support harness:models; skipping push',
+          );
+          res.status(200).json({ delivered: false, reason: 'worker_unsupported' });
+          return;
+        }
+
+        const result = await requestHarnessModels(containerId, provision);
+        res.status(200).json(result);
+      } catch (err) {
+        res.status(500).json({
+          error: 'INTERNAL_ERROR',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
 
   // 立即升级云电脑工作组件（契约 A.2.14）：online/版本/在飞门禁 → gateway emit + 回执等待。
   router.post('/containers/:id/upgrade-agent-gear', async (req: Request, res: Response) => {

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
   MIN_DEEPSEEK_HARNESS_WORKER_VERSION,
+  MIN_HARNESS_MODELS_WORKER_VERSION,
   MIN_HARNESS_VERSION_BY_TYPE,
   MIN_HARNESS_WORKER_VERSION,
   MIN_KIMI_HARNESS_WORKER_VERSION,
@@ -14,6 +15,7 @@ import {
   maxWorkerVersion,
   parseWorkerVersion,
   sanitizeVersionForLog,
+  supportsHarnessModelPush,
 } from './worker-version.js';
 
 describe('worker-version constants', () => {
@@ -184,6 +186,24 @@ describe('maxWorkerVersion (C-4)', () => {
     expect(maxWorkerVersion('bad', '2.5.0')).toBe('2.5.0');
     expect(maxWorkerVersion('2.10.0', 'bad')).toBe('2.10.0');
     expect(maxWorkerVersion('bad', 'bad')).toBe(MIN_HARNESS_WORKER_VERSION);
+  });
+});
+
+describe('supportsHarnessModelPush（运行期模型下发短路）', () => {
+  it('仅做版本比较：2.19.9 → 否，2.20.0/2.20.1/3.0.0 → 是，不可得/畸形 → 不短路', () => {
+    expect(MIN_HARNESS_MODELS_WORKER_VERSION).toBe('2.20.0');
+    expect(supportsHarnessModelPush('2.19.9')).toBe(false);
+    expect(supportsHarnessModelPush('2.20.0')).toBe(true);
+    expect(supportsHarnessModelPush('2.20.1')).toBe(true);
+    expect(supportsHarnessModelPush('2.99.0')).toBe(true);
+    // 未来 major 仍具备该能力：不能复用注册门禁的 major 限制
+    expect(supportsHarnessModelPush('3.0.0')).toBe(true);
+    expect(supportsHarnessModelPush(undefined)).toBe(true);
+    expect(supportsHarnessModelPush(null)).toBe(true);
+    expect(supportsHarnessModelPush('')).toBe(true);
+    expect(supportsHarnessModelPush('2.20')).toBe(true);
+    expect(supportsHarnessModelPush('v2.20.0')).toBe(true);
+    expect(supportsHarnessModelPush(220)).toBe(true);
   });
 });
 

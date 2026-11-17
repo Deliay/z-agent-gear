@@ -10,7 +10,9 @@ const mocks = vi.hoisted(() => ({
   toggle: vi.fn(),
   sort: vi.fn(),
   create: vi.fn(),
+  update: vi.fn(),
   remove: vi.fn(),
+  loadOptions: vi.fn(),
 }))
 
 vi.mock('@apollo/client', () => ({
@@ -19,14 +21,20 @@ vi.mock('@apollo/client', () => ({
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mocks.useQuery(...args),
+  useLazyQuery: () => [mocks.loadOptions, { loading: false }],
   useMutation: (doc: unknown) => {
     const source = String(doc)
     if (source.includes('ToggleModel')) return [mocks.toggle, { loading: false }]
     if (source.includes('SortOrder')) return [mocks.sort, { loading: false }]
     if (source.includes('CreateCustomModel')) return [mocks.create, { loading: false }]
+    if (source.includes('UpdateModelContextLength')) return [mocks.update, { loading: false }]
     if (source.includes('DeleteCustomModel')) return [mocks.remove, { loading: false }]
     return [vi.fn(), { loading: false }]
   },
+}))
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }))
 
 vi.mock('@dnd-kit/core', async () => {
@@ -102,6 +110,9 @@ function expandGroup(title: string) {
 describe('agent-web ModelSection', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
+    resetWorkspaceStore()
+    mocks.loadOptions.mockResolvedValue({ data: { providerModelOptions: [] } })
   })
 
   it('T-AW1: puts global models into a first 系统内置 group, collapsed by default', () => {
@@ -303,5 +314,129 @@ describe('agent-web ModelSection', () => {
     // 组头不展示单一来源徽标；行内分别展示「本工作区」「全局工作区」
     expect(screen.getAllByText('本工作区')).toHaveLength(1)
     expect(screen.getAllByText('全局工作区')).toHaveLength(1)
+  })
+
+  // ---------- T-MCWEB1：上下文长度展示与编辑上下文 ----------
+
+  it('T-MCWEB1a: 行内展示最长上下文（数值 / 未设置）', () => {
+    setupQueries([
+      model('u1', { contextLength: 200000 }),
+      model('u2', { contextLength: null }),
+    ])
+    render(<ModelSection />)
+    expandGroup('My OpenAI')
+
+    expect(screen.getByText('最长上下文：200,000 tokens')).toBeDefined()
+    expect(screen.getByText('最长上下文：未设置')).toBeDefined()
+  })
+
+  it('T-MCWEB1b: 编辑入口仅用户模型且非只读可见', () => {
+    setupQueries([
+      model('u1'),
+      model('g1', { scope: 'global', provider: { id: 'gp', name: 'Backend', type: 'OpenAI', isEnabled: true } }),
+    ])
+    render(<ModelSection />)
+
+    expandGroup('系统内置')
+    expect(screen.queryByLabelText('编辑上下文')).toBeNull()
+
+    expandGroup('My OpenAI')
+    expect(screen.getByLabelText('编辑上下文')).toBeDefined()
+  })
+
+  it('T-MCWEB1b2: 只读上下文隐藏编辑入口', () => {
+    resetWorkspaceStore()
+    const tenant = { id: 't1', name: '团队', type: 'team' as const, memberCount: 2 }
+    const readOnlyGlobal = {
+      id: 'g1', name: '全局工作区', type: 'global' as const, tenant,
+      memberCount: 2, myRole: 'developer' as const, readOnly: true, createdAt: '',
+    }
+    syncWorkspaceContext({
+      workspaces: [readOnlyGlobal],
+      tenants: [{ tenant, role: 'developer' }],
+      userId: 'u1',
+    })
+    selectWorkspace('g1')
+    setupQueries([model('u1', { workspaceId: 'g1' })])
+    render(<ModelSection />)
+    expandGroup('My OpenAI')
+
+    expect(screen.getByText('model-u1')).toBeDefined()
+    expect(screen.queryByLabelText('编辑上下文')).toBeNull()
+  })
+
+  it('T-MCWEB1c: 编辑保存调用 UPDATE_MODEL_CONTEXT_LENGTH（数值 / null）', async () => {
+    setupQueries([model('u1', { contextLength: 128000 })])
+    mocks.update.mockResolvedValue({})
+    render(<ModelSection />)
+    expandGroup('My OpenAI')
+
+    fireEvent.click(screen.getByLabelText('编辑上下文'))
+    // 编辑模式：供应商与名称只读展示（行内 + 对话框各一处）
+    expect(screen.getByText('编辑模型')).toBeDefined()
+    expect(screen.getAllByText('model-u1')).toHaveLength(2)
+    const input = screen.getByLabelText('最长上下文大小（token）')
+    expect(input).toHaveValue('128000')
+
+    fireEvent.change(input, { target: { value: '200000' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          variables: { modelId: 'u1', contextLength: 200000 },
+        }),
+      ),
+    )
+
+    // 再次打开并清空 → 提交 null
+    fireEvent.click(screen.getByLabelText('编辑上下文'))
+    fireEvent.change(screen.getByLabelText('最长上下文大小（token）'), { target: { value: '' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() =>
+      expect(mocks.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          variables: { modelId: 'u1', contextLength: null },
+        }),
+      ),
+    )
+  })
+
+  it('T-MCWEB1d: 非法上下文提示且不发 mutation', () => {
+    setupQueries([model('u1')])
+    render(<ModelSection />)
+    expandGroup('My OpenAI')
+
+    fireEvent.click(screen.getByLabelText('编辑上下文'))
+    fireEvent.change(screen.getByLabelText('最长上下文大小（token）'), {
+      target: { value: '0' },
+    })
+
+    expect(screen.getByText('请输入正整数')).toBeDefined()
+    const save = screen.getByRole('button', { name: '保存' })
+    expect(save).toBeDisabled()
+    fireEvent.click(save)
+    expect(mocks.update).not.toHaveBeenCalled()
+  })
+
+  it('T-MCWEB1e: 新增自定义模型携带 contextLength', async () => {
+    setupQueries([model('u1')], [
+      { id: 'p1', name: 'My OpenAI', type: 'OpenAI', isEnabled: true, models: [] },
+    ])
+    mocks.create.mockResolvedValue({})
+    render(<ModelSection />)
+
+    fireEvent.click(screen.getByRole('button', { name: '自定义模型' }))
+    fireEvent.change(screen.getByLabelText('模型名称'), { target: { value: 'new-model' } })
+    fireEvent.change(screen.getByLabelText('最长上下文大小（token）'), {
+      target: { value: '128000' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(mocks.create).toHaveBeenCalled())
+    expect(mocks.create.mock.calls[0][0]).toMatchObject({
+      variables: { input: { providerId: 'p1', name: 'new-model', contextLength: 128000 } },
+    })
   })
 })

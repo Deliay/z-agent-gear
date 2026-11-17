@@ -1057,3 +1057,100 @@ describe('T-OBS15 container.start span 与 ZAG_INIT_TRACEPARENT（SDK 运行）'
     vi.unstubAllEnvs();
   });
 });
+
+describe('T-CC-MP1 updateModelProvision（运行期模型清单持久化）', () => {
+  const provision = {
+    providers: [
+      {
+        vendorId: 'zag',
+        displayName: 'Agent Gear',
+        models: [{ id: 'model-a', contextLength: 128000 }],
+      },
+      {
+        vendorId: '65f0a1b2c3d4e5f60718293a',
+        displayName: '我的 OpenAI',
+        models: [{ id: 'model-b' }, { id: 'model-a', contextLength: 64000 }],
+      },
+    ],
+  };
+
+  it('SecretStore 与 harvestSecretRepository.upsert 同步更新：modelProviders 原样、旧字段为投影', async () => {
+    const { service, secretStore, harnessSecretRepository, repo } = setup();
+    const created = await service.start('harness', 'ck-1', [], [], harnessOptions());
+    const upsertsBefore = harnessSecretRepository.operations.filter((op) =>
+      op.startsWith('upsert:'),
+    ).length;
+
+    const result = await service.updateModelProvision(created.id, provision);
+
+    const expectedProviders = JSON.stringify(provision);
+    // modelIds 按组序展开去重；modelContextLengths 同 id 首个正整数
+    const expectedIds = '["model-a","model-b"]';
+    const expectedLengths = '{"model-a":128000}';
+
+    expect(result).not.toBeNull();
+    expect(secretStore.get(created.id)).toMatchObject({
+      modelProviders: expectedProviders,
+      modelIds: expectedIds,
+      modelContextLengths: expectedLengths,
+    });
+    expect(harnessSecretRepository.get(created.id)).toMatchObject({
+      modelProviders: expectedProviders,
+      modelIds: expectedIds,
+      modelContextLengths: expectedLengths,
+    });
+    // 其余 secret 原样保留（凭据不因模型下发丢失）
+    expect(secretStore.get(created.id)?.modelApiKey).toBe('zag_sk_model-secret');
+
+    const upsertsAfter = harnessSecretRepository.operations.filter((op) =>
+      op.startsWith('upsert:'),
+    ).length;
+    expect(upsertsAfter).toBe(upsertsBefore + 1);
+    // secret 不进入容器实体
+    expect(JSON.stringify(await repo.findById(created.id))).not.toContain('zag_sk_model-secret');
+  });
+
+  it('get(id) 读取记录且不触发 K8s 巡检；不存在返回 null', async () => {
+    const { service, client } = setup();
+    const created = await service.start('idle');
+    const getJobSpy = vi.spyOn(client, 'getJob');
+
+    const found = await service.get(created.id);
+    expect(found?.id).toBe(created.id);
+    expect(await service.get('507f1f77bcf86cd799439011')).toBeNull();
+    // 与 list() 不同：不查 Job、不改写状态
+    expect(getJobSpy).not.toHaveBeenCalled();
+    getJobSpy.mockRestore();
+  });
+
+  it('secret 缺失（未创建/已清理）→ 返回 null 且不写库', async () => {
+    const { service, harnessSecretRepository } = setup();
+    const created = await service.start('idle');
+
+    const result = await service.updateModelProvision(created.id, provision);
+
+    expect(result).toBeNull();
+    expect(harnessSecretRepository.operations.some((op) => op.startsWith('upsert:'))).toBe(false);
+  });
+
+  it('落库失败仅 error 日志，内存副本仍更新', async () => {
+    class FailingSecretRepository extends InMemoryHarnessSecretRepository {
+      override async upsert(): Promise<void> {
+        throw new Error('mongo down');
+      }
+    }
+    const harnessSecretRepository = new FailingSecretRepository();
+    const { service, secretStore, testLog } = setup({}, { harnessSecretRepository });
+    const created = await service.start('harness', 'ck-1', [], [], harnessOptions());
+
+    const result = await service.updateModelProvision(created.id, provision);
+
+    expect(result).not.toBeNull();
+    expect(secretStore.get(created.id)?.modelProviders).toBe(JSON.stringify(provision));
+    expect(
+      testLog.records.some(
+        (r) => r.level === 'error' && r.msg.includes('failed to persist harness secret'),
+      ),
+    ).toBe(true);
+  });
+});

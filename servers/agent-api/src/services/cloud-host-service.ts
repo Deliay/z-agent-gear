@@ -21,6 +21,8 @@ import { cloudWorkloadReader, harnessSlug, type HarnessPreset } from './cloud-wo
 import { evictKeyById } from './key-cache.js';
 import { KeyedMutex } from './keyed-mutex.js';
 import { modelService } from './model.js';
+import { providerService } from './provider.js';
+import { buildModelProvision, projectProvision } from './model-provision.js';
 import { sessionService } from './session.js';
 import { actorFilter, getWorkspaceContext } from './workspace-context.js';
 import { controllerKeyService } from './controller-key.js';
@@ -373,25 +375,9 @@ export class CloudHostService {
         });
 
         const models = await modelService.findAll();
-        const modelIds = Array.from(
-          new Set(
-            models
-              .filter((model) => (model as { isEnabled?: boolean }).isEnabled !== false)
-              .map((model) => String((model as { name?: string }).name ?? '').trim())
-              .filter(Boolean),
-          ),
-        );
-        // 模型 ID → 最长上下文快照（同名保留首个有效值；未设置 contextLength 的模型不出现）。
-        const modelContextLengths: Record<string, number> = {};
-        for (const model of models) {
-          if ((model as { isEnabled?: boolean }).isEnabled === false) continue;
-          const name = String((model as { name?: string }).name ?? '').trim();
-          if (!name || modelContextLengths[name] !== undefined) continue;
-          const contextLength = (model as { contextLength?: number | null }).contextLength;
-          if (typeof contextLength === 'number' && Number.isInteger(contextLength) && contextLength > 0) {
-            modelContextLengths[name] = contextLength;
-          }
-        }
+        const providers = await providerService.findAll();
+        const provision = buildModelProvision(models, providers);
+        const legacy = projectProvision(provision);
 
         const modelKey = await billingClient.createCloudHostApiKey({
           accountId: account.id,
@@ -425,8 +411,9 @@ export class CloudHostService {
               hostKey: createdKey.rawKey,
               modelApiKey: modelKey.secret,
               modelBaseUrl: config.cloudHostModelBaseUrl,
-              modelIds: JSON.stringify(modelIds),
-              modelContextLengths: JSON.stringify(modelContextLengths),
+              modelIds: JSON.stringify(legacy.modelIds),
+              modelContextLengths: JSON.stringify(legacy.modelContextLengths),
+              modelProviders: JSON.stringify(provision),
               defaultWorkspace: config.cloudHostDefaultWorkspace,
             },
           })

@@ -8,6 +8,16 @@ vi.mock('../models/provider.js', () => ({
   Provider: { findOne: vi.fn() },
 }));
 
+vi.mock('./crypto', () => ({
+  decrypt: vi.fn().mockReturnValue('sk-decrypted-key'),
+}));
+
+vi.mock('./llm-api', () => ({
+  llmApiService: {
+    fetchModelCatalog: vi.fn(),
+  },
+}));
+
 const USER_PROVIDER_OID = '507f1f77bcf86cd799439011';
 
 function mockProviderScope(scope: 'user' | 'global' | null) {
@@ -16,6 +26,32 @@ function mockProviderScope(scope: 'user' | 'global' | null) {
       lean: vi.fn().mockResolvedValue(scope ? { scope } : null),
     }),
   });
+}
+
+/** 带上游连接信息的供应商（自动补全链路用）。 */
+function mockProviderConnection(doc: Record<string, unknown> | null) {
+  (Provider.findOne as any).mockReturnValue({
+    select: vi.fn().mockReturnValue({
+      lean: vi.fn().mockResolvedValue(doc),
+    }),
+  });
+}
+
+function createdModelDoc(overrides: Record<string, unknown> = {}) {
+  const doc = {
+    _id: { toString: () => 'model-new' },
+    providerId: { toString: () => USER_PROVIDER_OID },
+    name: 'custom-model',
+    isCustom: true,
+    isEnabled: true,
+    sortOrder: 6,
+    scope: 'user',
+    contextLength: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+  return { ...doc, toObject: () => doc };
 }
 
 describe('ModelService', () => {
@@ -202,6 +238,114 @@ describe('ModelService', () => {
 
       expect(Model.create).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'trimmed-model' }),
+      );
+    });
+
+    it('persists an explicit contextLength', async () => {
+      (Model.create as any) = vi.fn().mockResolvedValue(createdModelDoc({ contextLength: 200000 }));
+
+      await modelService.createCustom({
+        providerId: USER_PROVIDER_OID,
+        name: 'custom-model',
+        contextLength: 200000,
+      });
+
+      expect(Model.create).toHaveBeenCalledWith(
+        expect.objectContaining({ contextLength: 200000 }),
+      );
+    });
+
+    it('rejects an invalid explicit contextLength before any DB write', async () => {
+      (Model.create as any) = vi.fn();
+      await expect(
+        modelService.createCustom({
+          providerId: USER_PROVIDER_OID,
+          name: 'custom-model',
+          contextLength: 0,
+        }),
+      ).rejects.toThrow('contextLength must be a positive integer');
+      expect(Model.create).not.toHaveBeenCalled();
+      expect(Provider.findOne).not.toHaveBeenCalled();
+    });
+
+    it('does not call the upstream when contextLength is explicitly null (user cleared it)', async () => {
+      const { llmApiService } = await import('./llm-api');
+      (Model.create as any) = vi.fn().mockResolvedValue(createdModelDoc({ contextLength: null }));
+
+      await modelService.createCustom({
+        providerId: USER_PROVIDER_OID,
+        name: 'custom-model',
+        contextLength: null,
+      });
+
+      expect(llmApiService.fetchModelCatalog).not.toHaveBeenCalled();
+      expect(Model.create).toHaveBeenCalledWith(
+        expect.objectContaining({ contextLength: null }),
+      );
+    });
+
+    it('best-effort fills contextLength from the upstream when omitted (match)', async () => {
+      const { llmApiService } = await import('./llm-api');
+      mockProviderConnection({
+        scope: 'user',
+        type: 'OpenAI',
+        endpoint: 'https://api.openai.com/v1',
+        encryptedCredential: { iv: 'iv', ciphertext: 'enc', tag: 'tag' },
+      });
+      (llmApiService.fetchModelCatalog as any).mockResolvedValue([
+        { name: 'other-model', contextLength: 8000 },
+        { name: 'custom-model', contextLength: 128000 },
+      ]);
+      (Model.create as any) = vi.fn().mockResolvedValue(createdModelDoc({ contextLength: 128000 }));
+
+      await modelService.createCustom({ providerId: USER_PROVIDER_OID, name: 'custom-model' });
+
+      expect(llmApiService.fetchModelCatalog).toHaveBeenCalledWith(
+        'OpenAI',
+        'https://api.openai.com/v1',
+        'sk-decrypted-key',
+      );
+      expect(Model.create).toHaveBeenCalledWith(
+        expect.objectContaining({ contextLength: 128000 }),
+      );
+    });
+
+    it('keeps contextLength unset when the upstream has no matching entry', async () => {
+      const { llmApiService } = await import('./llm-api');
+      mockProviderConnection({
+        scope: 'user',
+        type: 'OpenAI',
+        endpoint: 'https://api.openai.com/v1',
+        encryptedCredential: { iv: 'iv', ciphertext: 'enc', tag: 'tag' },
+      });
+      (llmApiService.fetchModelCatalog as any).mockResolvedValue([
+        { name: 'other-model', contextLength: 8000 },
+      ]);
+      (Model.create as any) = vi.fn().mockResolvedValue(createdModelDoc());
+
+      await modelService.createCustom({ providerId: USER_PROVIDER_OID, name: 'custom-model' });
+
+      expect(Model.create).toHaveBeenCalledWith(
+        expect.objectContaining({ contextLength: null }),
+      );
+    });
+
+    it('does not block creation when the upstream lookup throws', async () => {
+      const { llmApiService } = await import('./llm-api');
+      mockProviderConnection({
+        scope: 'user',
+        type: 'OpenAI',
+        endpoint: 'https://api.openai.com/v1',
+        encryptedCredential: { iv: 'iv', ciphertext: 'enc', tag: 'tag' },
+      });
+      (llmApiService.fetchModelCatalog as any).mockRejectedValue(new Error('timeout'));
+      (Model.create as any) = vi.fn().mockResolvedValue(createdModelDoc());
+
+      await expect(
+        modelService.createCustom({ providerId: USER_PROVIDER_OID, name: 'custom-model' }),
+      ).resolves.toMatchObject({ name: 'custom-model' });
+      expect(Model.create).toHaveBeenCalledWith(
+        expect.objectContaining({ contextLength: null }),
       );
     });
   });
@@ -394,6 +538,84 @@ describe('ModelService', () => {
       });
 
       await expect(modelService.toggle('global-model')).rejects.toThrow('全局配置请在管理后台修改');
+    });
+  });
+
+  describe('updateContextLength（T-UMC2）', () => {
+    const MODEL_OID = '507f1f77bcf86cd7994390aa';
+
+    function mappedDoc(contextLength: number | null) {
+      return {
+        _id: { toString: () => MODEL_OID },
+        providerId: { toString: () => USER_PROVIDER_OID },
+        name: 'custom-model',
+        isCustom: true,
+        isEnabled: true,
+        sortOrder: 0,
+        scope: 'user',
+        contextLength,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+    }
+
+    it('writes a positive integer through findOneAndUpdate (user-scope filter)', async () => {
+      (Model.findOneAndUpdate as any) = vi.fn().mockResolvedValue(mappedDoc(128000));
+
+      const result = await modelService.updateContextLength(MODEL_OID, 128000);
+
+      expect(Model.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: MODEL_OID, scope: { $ne: 'global' } },
+        { $set: { contextLength: 128000 } },
+        { returnDocument: 'after', lean: true },
+      );
+      expect(result.contextLength).toBe(128000);
+    });
+
+    it('clears the value when null is passed', async () => {
+      (Model.findOneAndUpdate as any) = vi.fn().mockResolvedValue(mappedDoc(null));
+
+      const result = await modelService.updateContextLength(MODEL_OID, null);
+
+      expect(Model.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: MODEL_OID, scope: { $ne: 'global' } },
+        { $set: { contextLength: null } },
+        { returnDocument: 'after', lean: true },
+      );
+      expect(result.contextLength).toBeNull();
+    });
+
+    it.each([0, -1, 1.5, '128000', Number.NaN])(
+      'rejects invalid value %s with the shared message',
+      async (value) => {
+        (Model.findOneAndUpdate as any) = vi.fn();
+        await expect(
+          modelService.updateContextLength(MODEL_OID, value),
+        ).rejects.toThrow('contextLength must be a positive integer');
+        expect(Model.findOneAndUpdate).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects malformed ids without touching the DB', async () => {
+      (Model.findOneAndUpdate as any) = vi.fn();
+      await expect(
+        modelService.updateContextLength('not-an-object-id', 1000),
+      ).rejects.toThrow('Model not found');
+      expect(Model.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('maps global / other-workspace / missing rows (empty match) to Model not found', async () => {
+      (Model.findOneAndUpdate as any) = vi.fn().mockResolvedValue(null);
+
+      await expect(
+        modelService.updateContextLength(MODEL_OID, 1000),
+      ).rejects.toThrow('Model not found');
+      // 写插件把过滤收敛到当前工作区；global 由 scope 条件排除 → 未命中即不泄露存在性
+      expect(Model.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: MODEL_OID, scope: { $ne: 'global' } },
+        { $set: { contextLength: 1000 } },
+        { returnDocument: 'after', lean: true },
+      );
     });
   });
 });

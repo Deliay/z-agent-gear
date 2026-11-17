@@ -779,6 +779,32 @@ pnpm run start   # Start production server
 - **GraphQL**：`authProviders` 免登录（仅 enabled + enableFrontLogin）；`pendingExternalLoginInfo` 免登录且不消费 ticket（仅两白名单字段）；`myExternalLogins` / `createFrontBindTicket` / `unbindExternalLogin` 需登录；`exchangeLoginTicket` GETDEL 兑换，失败 `BAD_USER_INPUT('invalid or expired ticket')`。`ExternalLoginInfo.providerType/providerDisplayName/providerEnabled` 为类型级 resolver，**必须登记 `graphql/resolvers/index.ts` 的 `ExternalLoginInfo` 键**。
 - **测试**：单测 `services/{oauth-flow,oidc-client,github-oauth,external-login,provisioning}.test.ts`、`routes/auth-oauth.test.ts`、`migrations/{026-external-logins,027-oidc-binding-optimization}.test.ts`、`graphql/{schemas,resolvers}/auth*.test.ts`；API 全链路 `tests/api/src/agent-api/auth-oauth.test.ts`（fake IdP/GitHub，T-OA-API1~20）；E2E `tests/e2e/src/auth-oidc-binding.spec.ts`（E2E-OBO1~7）。
 
+## 模型下发优化与运行期实时下发（#533）
+
+> 需求 `docs/product/draft/20261117-cloud-host-model-config-sync.md`；提案/计划
+> `docs/engineering/{proposals,plan}/20261117-*cloud-host-model-config-sync.md`；契约 `contracts/llm.graphql`、
+> `contracts/cloud-controller-websocket.md` §2.13/§2.14/A.2.15。
+
+- **唯一构建口径**：`services/model-provision.ts` 的 `buildModelProvision(models, providers)` 同时服务创建期快照
+  （`cloud-host-service.create` 写 `secrets.modelProviders`）与运行期推送；旧字段 `modelIds`/`modelContextLengths`
+  一律由 `projectProvision` 投影派生，禁止第二处手写。
+- **载荷不变量**：`providers` 恒含且仅含一个 `zag` 组（可为空）且恒首位，`zag.displayName='Agent Gear'`；
+  用户组 `vendorId=providerId`、`displayName=provider.name`，组序按 provider `createdAt` 升序；同名 global 优先；
+  仅正整数 `contextLength` 携带；剔除禁用模型与 provider 缺失/禁用的 user 模型；载荷不含任何凭据。
+- **推送扇出**：`services/cloud-host-model-push.ts`。用户侧变更按 `tenantId`、后台全局变更全量；逐台按
+  `host.resourceWorkspaceId` → `workspaceService.systemWorkspaceContext` → `runWithWorkspace` 内 `findAll` **重算**
+  （D2：绝不能裸跑 `findAll`，否则无 ALS 时会跨租户越权）。并发上限 5；缺失/解析失败跳过并 warn；单台失败只 warn。
+- **触发点**：GraphQL resolver 成功路径 fire-and-forget（`scheduleModelPush`，与 `invalidateAcpOptionsBestEffort` 同层）；
+  `routes/internal-model-config.ts` 的 `POST /internal/model-config/refresh`（Bearer `INTERNAL_API_TOKEN`，`scope='global'`
+  → 202 后异步执行）供 admin-api 调用，进程内 single-flight「同 tick 合并 + 轮次中触发结束后补跑一轮」。
+- **用户侧上下文能力**：`Model.contextLength` 可经 `updateModelContextLength` 编辑（正整数；null 清空；global/他人工作区
+  统一 `Model not found`）；`createCustom` 缺省字段时尽力从上游补全（显式 null 不查上游，失败不阻塞创建）；
+  `providerModelOptions` 返回供应商上游清单（不缓存，失败归一为可读文案）。同步模型的上下文「仅补未设置」（D15）。
+- **网关即时生效**：模型启停由 admin-api 网关逐请求查库，禁用即 404 `model_not_found`，进行中请求不中断；
+  `owned_by` 口径 global=`Agent Gear`、user=供应商名。
+- **测试**：`services/{model-provision,cloud-host-model-push,cloud-host-service,llm-api,model,provider}.test.ts`、
+  `routes/internal-model-config.test.ts`、`graphql/resolvers/{model,provider}.test.ts`；API/E2E 见 `tests/api` T-MCS-API* 与
+  `tests/e2e` E2E-MCS*。
 ## 云电脑工作组件版本与立即升级（需求 #551）
 
 > 契约 `contracts/cloud-host.graphql`（`CloudHostAgentGearVersion` / `CloudHost.agentGearVersion` / `upgradeCloudHostAgentGear`）与 `contracts/cloud-controller-websocket.md` A.2.14。

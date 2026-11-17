@@ -41,10 +41,21 @@ export const GET_MODELS = gql`
       isCustom
       isEnabled
       sortOrder
+      contextLength
       scope
       workspaceId
       createdAt
       updatedAt
+    }
+  }
+`
+
+/** 供应商上游模型清单（新增自定义模型时按同名项预填上下文长度） */
+export const PROVIDER_MODEL_OPTIONS = gql`
+  query ProviderModelOptions($providerId: ID!) {
+    providerModelOptions(providerId: $providerId) {
+      name
+      contextLength
     }
   }
 `

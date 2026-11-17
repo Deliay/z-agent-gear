@@ -1372,6 +1372,57 @@ describe('WorkloadDispatcher - harness env', () => {
     await post;
   });
 
+  it('T-CC-MP5: secrets 携带 modelProviders 时 init/runtime 同源注入 ZAG_MODEL_PROVIDERS', async () => {
+    const provision = JSON.stringify({
+      providers: [
+        { vendorId: 'zag', displayName: 'Agent Gear', models: [{ id: 'model-a' }] },
+      ],
+    });
+    const secretStore = new SecretStore();
+    const { dispatcher, workloadRepository, createHarnessContainer, runs } = setup({
+      secretStore,
+    });
+    workloadRepository.add(mkWorkload('w1', 'opencode', { initScript: 'echo init' }));
+    const container = await createHarnessContainer(['w1']);
+    secretStore.put(container.id, { ...secrets, modelProviders: provision });
+
+    await dispatcher.startInit(container.id);
+
+    expect(runs('init')[0]!.payload.env).toMatchObject({ ZAG_MODEL_PROVIDERS: provision });
+
+    // runtime 批次与 init 同源（共用 buildHarnessEnv）：运行期补装 harness 也能拿到最新载荷。
+    const online = await createHarnessContainer([], { status: 'online' });
+    secretStore.put(online.id, { ...secrets, modelProviders: provision });
+    await dispatcher.startRuntimeBatch(online.id, {
+      entries: [
+        {
+          workloadId: 'w-harness',
+          workloadName: 'opencode',
+          script: 'agent-gear harness prepare',
+          requiresHarnessEnv: true,
+        },
+      ],
+      source: 'user',
+    });
+
+    expect(runs('init').at(-1)!.payload.env).toMatchObject({ ZAG_MODEL_PROVIDERS: provision });
+  });
+
+  it('T-CC-MP5: secrets 缺失 modelProviders 时 env 不含 ZAG_MODEL_PROVIDERS（向后兼容）', async () => {
+    const secretStore = new SecretStore();
+    const { dispatcher, workloadRepository, createHarnessContainer, runs } = setup({
+      secretStore,
+    });
+    workloadRepository.add(mkWorkload('w1', 'opencode', { initScript: 'echo init' }));
+    const container = await createHarnessContainer(['w1']);
+    secretStore.put(container.id, secrets);
+
+    await dispatcher.startInit(container.id);
+
+    const env = runs('init')[0]!.payload.env as Record<string, string>;
+    expect('ZAG_MODEL_PROVIDERS' in env).toBe(false);
+  });
+
   describe('runtime batch', () => {
     it('T-WD-R1/R2/R4: 在线容器 runtime 批次 → githubAuth 透传、成功回填已安装并直接 online', async () => {
       const { repo, dispatcher, workloadLogRepository, runs } = setup();
