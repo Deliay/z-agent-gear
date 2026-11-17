@@ -7,3 +7,5 @@
 上述操作完成后中断agent循环，如果没有review comment，则提示用户你已准备好修改产品文档，询问用户哪些地方需要修改。如果有review comment，完成后再次询问用户是否还有修改。
 
 如果没有则`commit and push your changes`。
+
+如果修改涉及领域概念、术语、上下文边界、聚合、状态机或权限变化，同步更新 `docs/knowledges/domain` 对应上下文文档、索引与上下文地图，随本次修改一并提交。

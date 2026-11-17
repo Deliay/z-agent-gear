@@ -49,6 +49,7 @@ Z-Product 提供标准化的产品文档创建、修改与发布流程，支持�
 - 产品文档中**禁止提及技术细节**
 - 不涉及项目结构、前端组件、后端 API 等技术内容
 - 文档应图文并茂，推荐使用 Mermaid 图表
+- 创建/修改产品文档时必须同步更新 `docs/knowledges/domain` 领域模型（概念、术语、边界、状态、权限等变化），规范见 `docs/engineering/common-rules.md` 的「Domain Model Sync（领域模型同步）」
 
 ## 相关文档
 
@@ -57,3 +58,4 @@ Z-Product 提供标准化的产品文档创建、修改与发布流程，支持�
 - [[prd/edit-prd.md]]
 - [[prd/product-document-template.md]]
 - [[prd/reviewed-prd.md]]
+- `docs/knowledges/domain/00-领域模型库-索引.md`（领域模型知识库）

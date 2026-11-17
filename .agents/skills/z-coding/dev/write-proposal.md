@@ -10,6 +10,8 @@
 
 模板参考[[dev-proposal-template.md]]。
 
+编写提案时必须同步更新 `docs/knowledges/domain`：受影响的上下文 `00-上下文概览.md` / `01-聚合与实体.md`，以及索引与上下文地图，并随提案同一 PR 提交。规范见 `docs/engineering/common-rules.md` 的「Domain Model Sync（领域模型同步）」。
+
 使用<SKILL: z-git> （如果没有z-git这个skill，可以无视分支管理这部分，或者遵循其他分支管理的skill规范）或其他skill中的git规范，分支前缀的`<type>`使用`proposal`，分支基于`<feat-branch>`，编写完成后写入`proposals`文件，路径为`docs/engineering/proposals/<年月日>-proposal-<功能>.md`，并提pull request，合并的目标分支是`<feat-branch>`，完成后中断agent循环，让用户review这个pull request。
 
 如果有修改意见则让提取pull request中的review comment和inline review comment，进行修改，如果用户显式告知review通过则操作合并这个pull request到`<feat-branch>`。

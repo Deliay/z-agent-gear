@@ -6,7 +6,35 @@
 2. **Contract-First**: Define API contracts (GraphQL schema, OpenAPI spec) before implementation.
 3. **TDD**: Write tests before implementation code where possible.
 4. **Product Doc Review**: Load and review product documents before starting implementation.
-5. **Code Review**: All code must be reviewed before merging to main.
+5. **Domain Model Sync**: 编写或修改产品方案（PRD）与技术方案（proposal / plan）时，同步更新 `docs/knowledges/domain` 领域模型（详见下文）。
+6. **Code Review**: All code must be reviewed before merging to main.
+
+## Domain Model Sync（领域模型同步）
+
+**编写或修改产品方案（PRD）与技术方案（technical proposal / plan）时，必须同步更新仓库内建领域模型知识库 `docs/knowledges/domain`。** 领域模型同步是方案的一部分，不是事后补记；未同步的 PRD / proposal / plan 视为未完成。
+
+### 触发时机
+
+- 新增或修改 `docs/product/` 下的产品文档。
+- 新增或修改 `docs/engineering/proposals/` 下的技术提案。
+- 新增或修改 `docs/engineering/plan/` 下的实现计划。
+- 实现过程中发现代码事实与领域模型不一致（以代码为准，回写修正领域模型）。
+
+### 更新对象
+
+- `00-领域模型库-索引.md`：上下文或文档增删、重命名时同步「文档清单」。
+- `02-上下文地图.md`：上下文边界、上下游依赖、集成事件、共享数据变化时同步全景图与清单。
+- 受影响的上下文目录（如 `40-云资源与Harness/`）：
+  - `00-上下文概览.md`：职责边界、聚合清单、核心不变量、状态机、领域事件、对外契约、跨上下文关系、口径陷阱。
+  - `01-聚合与实体.md`：字段级明细（字段、类型、默认值、约束、索引）。
+- 新增限界上下文时，新建 `<编号>-<上下文名>/00-上下文概览.md` 与 `01-聚合与实体.md`，并回写索引与上下文地图。
+
+### 写法与校验
+
+- 只写代码与契约可验证的事实（Mongoose 模型、GraphQL/OpenAPI/AsyncAPI 契约、服务层状态机），不写推测；事实优先级为 **代码 > 契约 > 领域模型文档**。
+- front matter 使用平台识别的 `title` / `tags` / `description`，标题与内容保持一致。
+- 遵守仓库知识库约束：直接子目录 `docs/knowledges/`；≤ 50 篇；单篇 ≤ 128 KiB；总量 ≤ 1 MiB；平台侧仓库知识库只读，唯一写入口是仓库文件。
+- 领域模型改动与方案改动放在同一分支、同一 PR；PR 描述列出受影响的领域模型文档。
 
 ## TDD Workflow
 

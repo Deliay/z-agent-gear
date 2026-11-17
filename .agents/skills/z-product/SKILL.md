@@ -25,6 +25,10 @@ description: 'USE FOR: product design, product solution, write product document,
 - `docs/product/shipping` 开始实现的的产品文档
 - `docs/product/released` 已经通过产品验收，成功上线的产品文档
 
+### 同步更新领域模型
+
+编写或修改产品文档时，必须同步更新 `docs/knowledges/domain` 领域模型（概念、术语、上下文边界、聚合、状态机、权限等变化）；产品文档本身仍禁止技术细节。规范见 `docs/engineering/common-rules.md` 的「Domain Model Sync（领域模型同步）」，库结构见 `docs/knowledges/domain/00-领域模型库-索引.md`。
+
 ### SCM管理
 如果有<SKILL: z-git>或其他git技能，则加载相关技能
 

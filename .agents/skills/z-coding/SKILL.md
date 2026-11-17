@@ -21,7 +21,7 @@ description: 'USE FOR: development, dev, write code, read code, write tech propo
 
 ## 开发流程
 
-创建需求分支 -> 编写技术方案 -> 更新Contract -> 创建开发分支 -> 编写实现[1] -> 编排服务 -> 覆盖API测试 -> 覆盖e2e测试。
+创建需求分支 -> 编写技术方案（同步更新领域模型） -> 更新Contract -> 创建开发分支 -> 编写实现[1] -> 编排服务 -> 覆盖API测试 -> 覆盖e2e测试。
 
 [1] 编写实现部分是并行进行subagent调用。
 
@@ -35,6 +35,8 @@ description: 'USE FOR: development, dev, write code, read code, write tech propo
 
 每次进行代码编写，需要加载`docs/engineering/common-rules.md`
 
+编写或修改产品/技术方案时，需要加载 `docs/knowledges/domain/00-领域模型库-索引.md` 及受影响上下文文档。
+
 ### 创建需求分支
 
 在指定了需要开发的产品文档后，在远端创建开发分支`<feat-branch>`，分支名是`feat/<slug>`，其中`<slug>`产品文档内容的提炼。
@@ -43,6 +45,13 @@ description: 'USE FOR: development, dev, write code, read code, write tech propo
 
 USE FOR: write proposal, update proposal
 REFERENCE: [[dev/dev-proposal-template.md]]
+
+### 同步更新领域模型
+
+USE FOR: update domain model, 更新领域模型
+REFERENCE: `docs/knowledges/domain`
+
+编写或修改产品方案、技术方案或实现计划时，必须同步更新 `docs/knowledges/domain`：受影响的 `00-上下文概览.md` 与 `01-聚合与实体.md`，以及索引与上下文地图。实现阶段发现代码与领域模型不一致时，以代码为准回写修正。规范见 `docs/engineering/common-rules.md` 的「Domain Model Sync（领域模型同步）」。
 
 ### 更新Contract
 
