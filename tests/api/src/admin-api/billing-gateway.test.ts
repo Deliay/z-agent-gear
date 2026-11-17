@@ -318,6 +318,230 @@ describe('计费网关分支覆盖（直写模型，MONGODB_URI 缺失即失败�
   });
 });
 
+/**
+ * 模型下发优化 #533（计划 §6.2 T-OWN-API1）：`/v1/models` 的 `owned_by` 口径
+ * （global → `Agent Gear`，user → 绑定供应商名称）+ 模型启停对网关逐请求立即生效。
+ *
+ * 需要 `MONGODB_URI`（直写模型/供应商）与 `INTERNAL_API_TOKEN`（铸造 cloud_host Key）。
+ */
+describe('网关模型显示口径与启停即时生效（T-OWN-API1，MONGODB_URI 缺失即失败）', () => {
+  let secret = '';
+  let cloudHostKey = '';
+  const stamp = Date.now();
+  const cloudHostId = new mongoose.Types.ObjectId();
+  const globalProviderId = new mongoose.Types.ObjectId();
+  const userProviderId = new mongoose.Types.ObjectId();
+  const globalModelName = `owned-global-${stamp}`;
+  const userModelName = `owned-user-${stamp}`;
+  const userProviderName = `owned-user-provider-${stamp}`;
+
+  const modelEntry = async (key: string, name: string) => {
+    const res = await fetch(`${HTTP}/v1/models`, {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      data: Array<{ id: string; owned_by?: string }>;
+    };
+    return body.data.find((item) => item.id === name);
+  };
+
+  const chatStatus = async (key: string, name: string) => {
+    const res = await fetch(`${HTTP}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: name, messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    return { status: res.status, code: openAiError(await res.json())?.code };
+  };
+
+  beforeAll(async () => {
+    if (!process.env.MONGODB_URI) return;
+    const db = (await mongoDb())!;
+    const token = await ensureAdminLogin();
+    const created = await adminGql<{ createBillingApiKey: { secret: string } }>(
+      CREATE_KEY,
+      { name: `gateway-owned-${stamp}` },
+      token,
+    );
+    secret = created.data!.createBillingApiKey.secret;
+
+    const now = new Date();
+    const pricing = {
+      inputPerMillion: 1,
+      cachedInputPerMillion: 0,
+      outputPerMillion: 1,
+      isBillable: true,
+    };
+    await db.collection('providers').insertMany([
+      {
+        _id: globalProviderId,
+        name: `owned-global-provider-${stamp}`,
+        type: 'OpenAI',
+        endpoint: 'http://127.0.0.1:1',
+        credentialType: 'api_key',
+        encryptedCredential: { iv: 'a', ciphertext: 'b', tag: 'c' },
+        isEnabled: true,
+        scope: 'global',
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        _id: userProviderId,
+        name: userProviderName,
+        type: 'OpenAI',
+        endpoint: 'http://127.0.0.1:1',
+        credentialType: 'api_key',
+        encryptedCredential: { iv: 'a', ciphertext: 'b', tag: 'c' },
+        isEnabled: true,
+        scope: 'user',
+        tenantId: null,
+        workspaceId: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+    await db.collection('models').insertMany([
+      {
+        providerId: globalProviderId,
+        name: globalModelName,
+        isCustom: false,
+        isEnabled: true,
+        sortOrder: 0,
+        scope: 'global',
+        pricing,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        providerId: userProviderId,
+        name: userModelName,
+        isCustom: false,
+        isEnabled: true,
+        sortOrder: 0,
+        scope: 'user',
+        pricing: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+    ]);
+
+    // 云电脑内运行时 Key（cloud_host 口径：系统模型 ∪ 用户模型）
+    const internalToken = process.env.INTERNAL_API_TOKEN;
+    if (!internalToken) return;
+    const userId = new mongoose.Types.ObjectId().toString();
+    await db.collection('cloudhosts').insertOne({
+      _id: cloudHostId,
+      userId: new mongoose.Types.ObjectId(userId),
+      tenantId: new mongoose.Types.ObjectId(userId),
+      name: `owned-gw-host-${stamp}`,
+      harnessTypes: ['OPENCODE'],
+      status: 'RUNNING',
+      controllerId: new mongoose.Types.ObjectId(),
+      keyId: new mongoose.Types.ObjectId(),
+      workspaceId: new mongoose.Types.ObjectId(),
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const minted = await fetch(`${HTTP}/internal/billing/api-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${internalToken}` },
+      body: JSON.stringify({
+        ownerType: 'tenant',
+        ownerId: userId,
+        name: `owned-gw-key-${stamp}`,
+        scope: 'cloud_host',
+        cloudHostId: cloudHostId.toString(),
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+      }),
+    });
+    expect(minted.status).toBe(201);
+    cloudHostKey = ((await minted.json()) as { secret: string }).secret;
+  });
+
+  afterAll(async () => {
+    const db = await mongoDb();
+    if (db) {
+      await db.collection('models').deleteMany({ name: { $in: [globalModelName, userModelName] } });
+      await db
+        .collection('providers')
+        .deleteMany({ _id: { $in: [globalProviderId, userProviderId] } });
+      await db.collection('billingapikeys').deleteMany({ cloudHostId });
+      await db.collection('cloudhosts').deleteOne({ _id: cloudHostId });
+    }
+    await mongoose.disconnect();
+  });
+
+  it('owned_by：global → Agent Gear（account Key 与 cloud_host Key 同口径）；user → 供应商名称', async () => {
+    expect(process.env.MONGODB_URI, 'MONGODB_URI 必须注入，T-OWN-API1 不允许静默 skip').toBeTruthy();
+    expect(process.env.INTERNAL_API_TOKEN, 'INTERNAL_API_TOKEN 必须注入以铸造 cloud_host Key').toBeTruthy();
+
+    // account Key：仅平台模型 → 恒 Agent Gear
+    const accountGlobal = await modelEntry(secret, globalModelName);
+    expect(accountGlobal).toBeDefined();
+    expect(accountGlobal?.owned_by).toBe('Agent Gear');
+
+    // cloud_host Key：global 同为 Agent Gear，user 为绑定供应商名称
+    const hostGlobal = await modelEntry(cloudHostKey, globalModelName);
+    expect(hostGlobal).toBeDefined();
+    expect(hostGlobal?.owned_by).toBe('Agent Gear');
+    const hostUser = await modelEntry(cloudHostKey, userModelName);
+    expect(hostUser).toBeDefined();
+    expect(hostUser?.owned_by).toBe(userProviderName);
+  });
+
+  it('user 模型禁用后立即从列表消失且 /chat/completions 404 model_not_found；重新启用恢复', async () => {
+    expect(process.env.MONGODB_URI, 'MONGODB_URI 必须注入，T-OWN-API1 不允许静默 skip').toBeTruthy();
+    const db = (await mongoDb())!;
+
+    // 启用态：可列出，且调用已解析到该 user 模型（非 404 model_not_found）
+    expect(await modelEntry(cloudHostKey, userModelName)).toBeDefined();
+    const before = await chatStatus(cloudHostKey, userModelName);
+    expect(before.code).not.toBe('model_not_found');
+
+    await db
+      .collection('models')
+      .updateOne({ providerId: userProviderId, name: userModelName }, { $set: { isEnabled: false } });
+
+    // 禁用即生效（逐请求实时查库，无缓存）
+    expect(await modelEntry(cloudHostKey, userModelName)).toBeUndefined();
+    const disabled = await chatStatus(cloudHostKey, userModelName);
+    expect(disabled.status).toBe(404);
+    expect(disabled.code).toBe('model_not_found');
+
+    await db
+      .collection('models')
+      .updateOne({ providerId: userProviderId, name: userModelName }, { $set: { isEnabled: true } });
+
+    expect(await modelEntry(cloudHostKey, userModelName)).toBeDefined();
+    const restored = await chatStatus(cloudHostKey, userModelName);
+    expect(restored.code).not.toBe('model_not_found');
+  });
+
+  it('global 模型禁用后立即从列表消失且 /chat/completions 404 model_not_found；重新启用恢复', async () => {
+    expect(process.env.MONGODB_URI, 'MONGODB_URI 必须注入，T-OWN-API1 不允许静默 skip').toBeTruthy();
+    const db = (await mongoDb())!;
+
+    expect(await modelEntry(secret, globalModelName)).toBeDefined();
+
+    await db
+      .collection('models')
+      .updateOne({ providerId: globalProviderId, name: globalModelName }, { $set: { isEnabled: false } });
+
+    expect(await modelEntry(secret, globalModelName)).toBeUndefined();
+    const disabled = await chatStatus(secret, globalModelName);
+    expect(disabled.status).toBe(404);
+    expect(disabled.code).toBe('model_not_found');
+
+    await db
+      .collection('models')
+      .updateOne({ providerId: globalProviderId, name: globalModelName }, { $set: { isEnabled: true } });
+
+    expect(await modelEntry(secret, globalModelName)).toBeDefined();
+  });
+});
+
 const ADMIN_ACCOUNTS = `
   query Accounts {
     adminBillingAccounts(ownerType: admin_user, keyword: "admin", page: 1, pageSize: 5) {
