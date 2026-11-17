@@ -175,6 +175,7 @@ flowchart LR
 - [[draft/20261115-workflow-reject-rework-session-behavior.md]] — 工作流打回/返工会话行为优化（AI 节点级「返工时」「打回后」会话策略：新会话/原始会话；选择原始会话可勾选「压缩原始上下文」——恢复后先发送压缩指令再发送继续提示词；后台按 Harness 配置压缩指令，默认 /compact）
 - [[draft/20261115-workflow-mcp-prompt-snippets.md]] — 工作流MCP提供提示词片段（工作流管理 MCP 以 MCP prompts 能力提供「工作流 Schema 说明」与「工作流项目持久化指引」两段权威提示词片段，AI 按需发现与获取，内容与平台校验规则同源同步）
 - [[draft/20261116-workflow-node-manual-fail.md]] — 工作流节点「立即失败」（节点详情新增「立即失败」操作：中断节点会话、取消全部中断自动重试并置为「失败」阻断工作流，失败来源「人工标记」可区分，恢复路径与既有「失败」一致）
+- [[draft/20261116-knowledge-base-optimization.md]] — 知识库优化（文档路径创建后仍可修改：移动时全部历史版本随文档带入新路径并留「移动」记录、原路径释放后重建历史独立；标签改为 badge 徽章编辑器：回车/逗号/失焦成 badge、逐枚删除、空输退格删末枚、粘贴拆分去重，展示侧 badge 零回归）
 - [[draft/20261116-knowledge-base-repo-built-in.md]] — 仓库内建知识库（知识库支持在代码仓库中内建：仓库 `.zag/knowledges/` 与 `docs/knowledges/` 下含 knowledge-base.json 的文件夹即知识库、库内 Markdown 为文档；前端侧边栏「仓库知识库」分组默认全部折叠、点击展开逐级懒加载，文档 front matter 渲染为表格，只读、不进入知识库 MCP 工具；知识库 MCP 提供仓库知识库编写指引提示词）
 
 ### 实现中文档（`shipping/`）

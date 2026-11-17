@@ -1036,9 +1036,9 @@ pnpm test
 |------|------|
 | T-KB-API1 | 未认证：Query×5 / Mutation×7 共 12 入口一律 `Not authenticated` |
 | T-KB-API2 | 库 CRUD：普通工作区默认 `NONE` / 全局工作区默认 `READ_ONLY`、重名逐字、myAccess、树含文档元信息、改名/改权限/删除级联 |
-| T-KB-API3 | 文档 CRUD + 事件：CREATE/UPDATE/DELETE 快照、删除释放路径、同路径重建历史延续、limit/before 分页、列表不含 content |
-| T-KB-API4 | team 租户 admin/developer/outsider × 四档模式 × 本工作区/全局库：收紧即时生效、无权限读返回 null、跨租户工作区头 `workspace not found` |
-| T-KB-API5 | MCP 经 fake controller relay：tools/list 角色门控、六工具（list/document_list/get/update upsert/delete）、越权 isError、name 兜底与多命中提示 |
+| T-KB-API3 | 文档 CRUD + 事件：CREATE/UPDATE/DELETE 快照、删除释放路径、同路径重建历史延续、limit/before 分页、列表不含 content；**增补移动**：`updateKnowledgeBaseDocument(newPath)` 后新路径文档可访问、历史全量带入且含 MOVE 事件（fromPath/path/actorName）、原路径释放可重建且历史独立、目标占用与非法路径逐字 |
+| T-KB-API4 | team 租户 admin/developer/outsider × 四档模式 × 本工作区/全局库：收紧即时生效、无权限读返回 null、跨租户工作区头 `workspace not found`；**增补移动行**：READ_ONLY developer 移动拒绝 `knowledge base permission denied`、UPDATE_ONLY developer 移动放行 |
+| T-KB-API5 | MCP 经 fake controller relay：tools/list 角色门控、六工具（list/document_list/get/update upsert/delete）、越权 isError、name 兜底与多命中提示；**增补 newPath**：源存在 → 移动生效且历史含 MOVE、创建分支携带 `newPath` → isError `knowledge base document not found` |
 | T-KB-API6 | 路径与输入校验矩阵逐字（title/tags/description/content/路径/重名/不存在/not a tenant admin） |
 
 注意：

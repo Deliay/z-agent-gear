@@ -12,6 +12,7 @@ export const knowledgeBaseTypeDefs = `#graphql
     CREATE
     UPDATE
     DELETE
+    MOVE
   }
 
   type KnowledgeBaseAccess {
@@ -61,6 +62,7 @@ export const knowledgeBaseTypeDefs = `#graphql
     id: ID!
     path: String!
     op: KnowledgeBaseEventOp!
+    fromPath: String
     title: String!
     tags: [String!]!
     description: String!
@@ -139,7 +141,7 @@ export const knowledgeBaseTypeDefs = `#graphql
     updateKnowledgeBasePermission(id: ID!, permissionMode: KnowledgeBasePermissionMode!): KnowledgeBase!
     deleteKnowledgeBase(id: ID!): Boolean!
     createKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!): KnowledgeBaseDocument!
-    updateKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!): KnowledgeBaseDocument!
+    updateKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!, input: KnowledgeBaseDocumentInput!, newPath: String): KnowledgeBaseDocument!
     deleteKnowledgeBaseDocument(knowledgeBaseId: ID!, path: String!): Boolean!
   }
 `;

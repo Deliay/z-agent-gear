@@ -272,8 +272,17 @@ export default function KnowledgeBaseSettingsDialog({
                         {EVENT_OP_LABELS[event.op]}
                       </span>
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-mono text-[11px]" title={event.path}>
-                          {event.path}
+                        <span
+                          className="block truncate font-mono text-[11px]"
+                          title={
+                            event.op === 'MOVE' && event.fromPath
+                              ? `${event.fromPath} → ${event.path}`
+                              : event.path
+                          }
+                        >
+                          {event.op === 'MOVE' && event.fromPath
+                            ? `${event.fromPath} → ${event.path}`
+                            : event.path}
                         </span>
                         <span className="block truncate text-muted-foreground">
                           {event.actorName} · {formatDateTime(event.createdAt)}

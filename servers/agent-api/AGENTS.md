@@ -557,6 +557,28 @@ pnpm run start   # Start production server
   `graphql/{schemas,resolvers}/knowledge-base.test.ts`（契约/白名单/登记）；
   `session.test.ts` 已追加 `./knowledge-base-tools.js` mock 与装配断言；API 见 `tests/api/AGENTS.md`「知识库 API」。
 
+### 知识库路径修改（#541 增量）
+
+- **事件模型增量**：`KNOWLEDGE_BASE_EVENT_OPS` 追加 `MOVE`；`KnowledgeBaseEvent.fromPath`（可选 String，仅 MOVE 写入原路径，
+  存量事件读取为 `undefined` → GraphQL `null`）；**零新索引、零存量迁移**（移动后历史事件 `path` 已是新路径，`{knowledgeBaseId,path,createdAt:-1}` 天然命中）。
+- **唯一受控例外**：`knowledge-base-service.moveDocument` 内部 `KnowledgeBaseEvent.updateMany` 改写该路径全部历史事件 `path`
+  （事件集合仍无任何公共更新/删除入口，级联删除口径不变），模型注释已登记。
+- **`moveDocument(userId, kbId, rawPath, rawNewPath)` 三步写 + 回滚链**：`canUpdate` → 归一两路径（相同 → 幂等直接返回，零事件）→
+  源 `findOne`（缺失 `knowledge base document not found`）→ 目标预检（占用 `knowledge base document already exists`）→
+  ① 业务行 `updateOne({_id, path: oldPath}, {$set:{path, updatedBy}})`（filter 带旧路径防 TOCTOU，`matchedCount=0` → not found；E11000 → already exists）
+  → ② 先 `find({knowledgeBaseId, path: oldPath}).select('_id')` 记录受影响事件 id 集，再按 `{_id: {$in: ids}}` 改写为新路径（失败回滚业务行）
+  → ③ 追加 MOVE 事件（快照=移动时点内容、`fromPath`=原路径；失败**按同一 id 集**精确反向回滚历史改写 + 回滚业务行）。
+  **回滚精度**：正向改写与回滚都按记录的 id 集操作，不会把新路径上已有的滞留历史（曾创建后删除文档遗留事件）一并改写回源路径（T-KBS-M11 锁定）。
+- **`updateDocument(..., rawNewPath?)` 原子「移动 + 更新」**：校验顺序「权限 → 归一 path → 归一 newPath → 输入校验 → 移动 → 内容更新」
+  （全部校验先于任何写）；移动且快照与业务行四字段一致 → 短路仅 MOVE；路径+内容同次变化 → 先 MOVE（移动前快照）后 UPDATE（新内容）；
+  未移动分支保持恒 UPDATE（零行为变化）。`newPath` 与 `path` 归一后相同视为未提供（不产生 MOVE）。
+- **`upsertDocument(..., rawNewPath?)`（MCP）**：源存在 → `updateDocument(..., newPath)`；源不存在（创建分支）且提供 `newPath` →
+  `knowledge base document not found`（isError 透出，白名单零新增）。GraphQL `updateKnowledgeBaseDocument(..., newPath)` 仅 `?? undefined` 透传。
+- **MCP `knowledge_base_document_update`**：inputSchema 追加可选 `newPath`（tools/list 直出常量，零 MCP 快照迁移）；契约口径见
+  `contracts/knowledge-base.graphql` 与 `contracts/agent-session-websocket.md` §2.12.1 路由表。
+- **测试**：`knowledge-base-service.test.ts` T-KBS-M1~M11（历史全量带入 / MOVE 事件 / 占用与 E11000 / 非法路径 / 四档权限 / 同路径幂等 /
+  双事件 / 仅 MOVE / 原路径重建独立 / 并发 TOCTOU / 级联删除与 `fromPath` 透出 / 回滚精度）、`knowledge-base-tools.test.ts` T-KBT-M1~M2。
+
 ## 仓库内建知识库（#545）
 
 > 需求 #545；契约 `contracts/knowledge-base.graphql`（`RepoKnowledgeBase*` 六个类型 + 四个只读查询）；计划

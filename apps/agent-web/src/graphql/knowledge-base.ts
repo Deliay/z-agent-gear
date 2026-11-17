@@ -10,7 +10,7 @@ import { gql } from '@apollo/client';
  */
 
 export type KnowledgeBasePermissionMode = 'NONE' | 'READ_ONLY' | 'UPDATE_ONLY' | 'FULL_ACCESS';
-export type KnowledgeBaseEventOp = 'CREATE' | 'UPDATE' | 'DELETE';
+export type KnowledgeBaseEventOp = 'CREATE' | 'UPDATE' | 'DELETE' | 'MOVE';
 
 export interface KnowledgeBaseAccessData {
   canRead: boolean;
@@ -54,6 +54,8 @@ export interface KnowledgeBaseEventData {
   id: string;
   path: string;
   op: KnowledgeBaseEventOp;
+  /** 仅 MOVE 事件有值（原路径） */
+  fromPath: string | null;
   title: string;
   tags: string[];
   description: string;
@@ -123,6 +125,7 @@ const KNOWLEDGE_BASE_EVENT_FIELDS = gql`
     id
     path
     op
+    fromPath
     title
     tags
     description
@@ -235,8 +238,14 @@ export const UPDATE_KNOWLEDGE_BASE_DOCUMENT = gql`
     $knowledgeBaseId: ID!
     $path: String!
     $input: KnowledgeBaseDocumentInput!
+    $newPath: String
   ) {
-    updateKnowledgeBaseDocument(knowledgeBaseId: $knowledgeBaseId, path: $path, input: $input) {
+    updateKnowledgeBaseDocument(
+      knowledgeBaseId: $knowledgeBaseId
+      path: $path
+      input: $input
+      newPath: $newPath
+    ) {
       ...KnowledgeBaseDocumentFields
     }
   }

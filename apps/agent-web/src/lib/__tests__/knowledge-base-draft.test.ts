@@ -90,6 +90,24 @@ describe('knowledge-base-draft（T-KBD1~5）', () => {
     expect(readDocumentDraft('kb-1', '/a')).toBeNull();
   });
 
+  it('T-KBD-M1 形状扩展：editedPath 写入/读取/缺省兼容', () => {
+    writeDocumentDraft('kb-1', '/a', { ...base, editedPath: '/b' });
+    expect(readDocumentDraft('kb-1', '/a')?.editedPath).toBe('/b');
+
+    // 旧草稿（无该字段）读取为 undefined，isDraft 放行
+    writeDocumentDraft('kb-1', '/legacy', base);
+    const legacy = readDocumentDraft('kb-1', '/legacy');
+    expect(legacy).not.toBeNull();
+    expect(legacy?.editedPath).toBeUndefined();
+
+    // 类型非法 → 按无缓存
+    localStorage.setItem(
+      documentDraftKey('kb-1', '/bad'),
+      JSON.stringify({ ...base, editedPath: 1, updatedAt: new Date().toISOString() }),
+    );
+    expect(readDocumentDraft('kb-1', '/bad')).toBeNull();
+  });
+
   it('T-KBD5 恢复读取与 flush 立即落盘', () => {
     const written = writeDocumentDraft('kb-1', '/a', base);
     expect(written?.title).toBe(base.title);
