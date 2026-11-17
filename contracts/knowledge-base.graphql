@@ -28,6 +28,20 @@
 #
 # 不泄露存在性：`knowledgeBaseDocument` 对不可见库/无读权限/文档不存在统一返回 null；
 # 写操作对不可见库抛 `knowledge base not found`、对可见但越权抛 `knowledge base permission denied`。
+#
+# 仓库内建知识库（需求 #545）：
+#   - 仓库 `.zag/knowledges/` 与 `docs/knowledges/` 两个约定目录下，每个含 `knowledge-base.json`
+#     标识文件的子文件夹即一个知识库，库内（含子目录）Markdown 文件为文档；
+#   - **只读**：无任何 mutation/写入口，仓库为唯一事实源，平台不落 MongoDB（仅 Redis 短缓存）；
+#   - **不进知识库 MCP 工具**：`agent-knowledge-base-tools` 的六个工具与结果均不包含仓库知识库
+#     （AI 可直接读会话工作目录中的仓库文件）；知识库 MCP 仅新增 prompts 能力提供编写指引；
+#   - 历史即 Git 历史，平台不提供仓库知识库的编辑/删除/历史版本/权限设置；
+#   - 懒加载四级只读查询：候选云电脑骨架（纯 DB 读，不触发扫描）→ 单云电脑知识库列表（首次展开触发扫描）
+#     → 逐级子条目（展开知识库/目录）→ 单文档内容（点击文档）；
+#   - 错误口径：除既有 `Not authenticated` 外，`workspaceId` 不可见/非云电脑默认工作区 →
+#     `Workspace not found`；单工作区扫描失败（离线/超时/版本不支持/中继异常）→
+#     `repo knowledge base scan failed`（前端节点级失败与重试）；children/document 对任何不可达统一
+#     返回 `[]` / `null`（不泄露存在性）。
 
 enum KnowledgeBasePermissionMode {
   NONE
@@ -108,6 +122,61 @@ input KnowledgeBaseDocumentInput {
   content: String!
 }
 
+# 仓库知识库来源目录：ZAG = `.zag/knowledges/`，DOCS = `docs/knowledges/`
+enum RepoKnowledgeBaseSource {
+  ZAG
+  DOCS
+}
+
+# 候选云电脑骨架（纯 DB 读，不触发仓库扫描）
+type RepoKnowledgeBaseHost {
+  cloudHostId: ID!
+  cloudHostName: String!
+  workspaceId: ID!
+  # 工作组件版本是否支持扫描（false 时前端展示升级提示，不发起加载）
+  scanSupported: Boolean!
+}
+
+type RepoKnowledgeBase {
+  # repo:<workspaceId>:<source>:<encodeURIComponent(folder)>
+  id: ID!
+  # schema.name（不合法时为空串，看 valid/errors）
+  name: String!
+  description: String!
+  source: RepoKnowledgeBaseSource!
+  folder: String!
+  workspaceId: ID!
+  cloudHostId: ID!
+  cloudHostName: String!
+  valid: Boolean!
+  errors: [String!]!
+  # 合法库的文档总数（不合法库为 0）
+  documentCount: Int!
+  # 该库是否因上限截断
+  truncated: Boolean!
+}
+
+enum RepoKnowledgeBaseNodeKind {
+  FOLDER
+  DOCUMENT
+}
+
+# 知识库内某一目录的直接子条目（懒加载逐级展开）
+type RepoKnowledgeBaseNode {
+  kind: RepoKnowledgeBaseNodeKind!
+  # 文件夹=目录段名；文档=展示标题
+  name: String!
+  # 归一路径（/ 开头；文档用于打开预览）
+  path: String!
+}
+
+type RepoKnowledgeBaseDocument {
+  path: String!
+  title: String!
+  # 原文全文（含文首 front matter 块，不剥离）；前端将其渲染为键值表格
+  content: String!
+}
+
 extend type Query {
   # 可见知识库列表（本工作区 ∪ 本租户全局工作区，按权限模式过滤）
   knowledgeBases: [KnowledgeBase!]!
@@ -119,6 +188,15 @@ extend type Query {
   knowledgeBaseDocument(knowledgeBaseId: ID!, path: String!): KnowledgeBaseDocument
   # 历史：path 缺省 = 全库历史；恒 createdAt 倒序；limit 缺省 50 上限 200；before 为 createdAt ISO 游标
   knowledgeBaseEvents(knowledgeBaseId: ID!, path: String, limit: Int, before: String): [KnowledgeBaseEvent!]!
+
+  # 候选云电脑骨架：当前用户可见、RUNNING 且已有默认工作区的云电脑（纯 DB 读，不触发扫描）
+  repoKnowledgeBaseHosts: [RepoKnowledgeBaseHost!]!
+  # 某云电脑默认工作区的仓库知识库列表；首次展开触发扫描；refresh=true 重新检测
+  repoKnowledgeBases(workspaceId: ID!, refresh: Boolean): [RepoKnowledgeBase!]!
+  # 某知识库内某目录的直接子条目（path 缺省 = 根层级）
+  repoKnowledgeBaseDocumentChildren(id: ID!, path: String): [RepoKnowledgeBaseNode!]!
+  # 单文档完整内容（含 front matter 原文）；不可达/不存在统一 null（不泄露存在性）
+  repoKnowledgeBaseDocument(id: ID!, path: String!): RepoKnowledgeBaseDocument
 }
 
 extend type Mutation {

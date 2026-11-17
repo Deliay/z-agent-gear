@@ -557,6 +557,40 @@ pnpm run start   # Start production server
   `graphql/{schemas,resolvers}/knowledge-base.test.ts`（契约/白名单/登记）；
   `session.test.ts` 已追加 `./knowledge-base-tools.js` mock 与装配断言；API 见 `tests/api/AGENTS.md`「知识库 API」。
 
+## 仓库内建知识库（#545）
+
+> 需求 #545；契约 `contracts/knowledge-base.graphql`（`RepoKnowledgeBase*` 六个类型 + 四个只读查询）；计划
+> `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md`。
+
+- **链路**：agent-gear 2.19.0 `knowledge-bases:scan` 扫描 `.zag/knowledges/` 与 `docs/knowledges/`（含文档内容）
+  → controller-api 白名单中继写 Redis `knowledge-bases:scan:{requestId}`（EX 60）→ agent-api
+  `services/repo-knowledge-bases.ts` 轮询消费（500ms × 30，读后即删）并解析校验 → 工作区级缓存
+  `repo-knowledge-bases:ws:{workspaceId}`（EX 300，缓存**解析后的知识库全集含文档内容**）→ GraphQL 四个只读查询。
+- **四级懒加载（D7）**：`repoKnowledgeBaseHosts`（纯 DB 骨架：`CloudHost.find` RUNNING + workspaceId 非空 +
+  deletedAt:null，读 Controller `status/version` 得到 `scanSupported`，**不触发任何 publish**）→
+  `repoKnowledgeBases(workspaceId, refresh)`（首次展开才扫描；缓存命中直接返回；`refresh=true` 先 DEL 再重扫）→
+  `repoKnowledgeBaseDocumentChildren(id, path)`（缓存派生直接子条目，FOLDER 在前）→
+  `repoKnowledgeBaseDocument(id, path)`（返回原文全文，**含 front matter**）。
+- **归属与错误口径**：`listKnowledgeBases` 先 `controllerWorkspaceService.findById`，再要求该工作区为某 RUNNING
+  云电脑默认工作区，否则 `Workspace not found`；扫描链路任何失败（离线/版本 <2.19.0/超时/`success:false`/
+  非法 JSON）统一 `repo knowledge base scan failed`；children/document 对任何不可达统一 `[]` / `null`（不泄露存在性）。
+  resolver `wrap()` 白名单追加上述两条（共 16 条）。
+- **解析纯函数层**：`parseRepoKnowledgeBaseSchema`（JSON/name 1..64/description ≤1024，文案逐字见计划 D8）、
+  `splitRepoFrontMatter` + `parseRepoDocument`（极简 front matter：`---\n` 开头 + 前 4KiB 内闭合；三键
+  title 1..200 / tags ≤16×1..32 去重 / description ≤1024；标题回退链 fm.title → 首个 `# ` → 文件名；
+  路径归一复用 `normalizeDocumentPath`）、`buildKnowledgeBaseChildren`（文件夹在前、同组 `localeCompare`）。
+  路径冲突（`a.md` vs `a.MD`）整库 `valid:false`（`文档路径冲突：<path>`，冲突文档不收录）。
+  **文档级读取失败（如单文档 >128KiB）仅剔除该文档，不影响其余文档与整库合法性**；整库不合法仅限
+  schema 非法、路径冲突/路径归一错误。`valid:false` 的 `children`/`getDocument` 统一 `[]`/`null`（R1）。
+  缓存 miss 扫描有进程内 single-flight（同一工作区并发首次展开只触发一次扫描，S4）。
+- **id 编解码（D6）**：`repo:<workspaceId>:<source(zag|docs)>:<encodeURIComponent(folder)>`；`source` 在 GraphQL
+  透出为 `ZAG|DOCS`，列表顺序 zag 先于 docs、同来源 `folder.localeCompare`。
+- **知识库 MCP prompts（D14）**：`services/knowledge-base-prompts.ts` 单一来源提供
+  `repo-knowledge-base-authoring`（编写指引）；`knowledge-base-tools.ts` 的 `initialize` 声明
+  `capabilities: { tools: {}, prompts: {} }`，新增 `prompts/list` / `prompts/get`（未知/缺 name →
+  `INVALID_PARAMS` 附可用片段名）。**六工具零改动**：仓库知识库不出现在任何工具结果中。
+- **零 MongoDB 变更**：不落库、无迁移、无索引；仓库为唯一事实源，无任何写入口。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

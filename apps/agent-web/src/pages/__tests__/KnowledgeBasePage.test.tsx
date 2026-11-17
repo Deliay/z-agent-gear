@@ -159,4 +159,84 @@ describe('KnowledgeBasePage', () => {
     expect(screen.queryByTestId('knowledge-base-editor')).not.toBeInTheDocument();
     expect(screen.getByText('加载中…')).toBeInTheDocument();
   });
+
+  it('repo: id 走只读分支：front matter 表格 + 无编辑/删除/历史，?edit=1 忽略', () => {
+    router.params = { kbId: 'repo:ws-1:zag:a-base', '*': 'guides/git' };
+    router.search = new URLSearchParams('edit=1');
+    mockUseQuery.mockImplementation((document: unknown) => {
+      const operation = print(document as never);
+      if (operation.includes('GetRepoKnowledgeBaseDocument')) {
+        return {
+          data: {
+            repoKnowledgeBaseDocument: {
+              path: '/guides/git',
+              title: 'Git 规范',
+              content: '---\ncustom: 自定义\n---\n# 正文',
+            },
+          },
+          loading: false,
+        };
+      }
+      if (operation.includes('GetRepoKnowledgeBases')) {
+        return {
+          data: {
+            repoKnowledgeBases: [
+              {
+                id: 'repo:ws-1:zag:a-base',
+                name: '甲库',
+                description: '',
+                source: 'ZAG',
+                folder: 'a-base',
+                workspaceId: 'ws-1',
+                cloudHostId: 'h1',
+                cloudHostName: '云电脑一',
+                valid: true,
+                errors: [],
+                documentCount: 1,
+                truncated: false,
+              },
+            ],
+          },
+          loading: false,
+        };
+      }
+      return { data: undefined, loading: false };
+    });
+
+    render(<KnowledgeBasePage />);
+
+    expect(screen.getByTestId('knowledge-base-title')).toHaveTextContent('Git 规范');
+    expect(screen.getByTestId('repo-kb-breadcrumb')).toHaveTextContent('甲库');
+    expect(screen.getByTestId('repo-kb-front-matter-table')).toHaveTextContent('自定义');
+    expect(screen.queryByTestId('knowledge-base-editor')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '编辑文档' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '删除文档' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '历史版本' })).not.toBeInTheDocument();
+  });
+
+  it('repo document === null → 不可访问提示且不泄露内容', () => {
+    router.params = { kbId: 'repo:ws-1:zag:a-base', '*': 'missing' };
+    mockUseQuery.mockImplementation((document: unknown) => {
+      const operation = print(document as never);
+      if (operation.includes('GetRepoKnowledgeBaseDocument')) {
+        return { data: { repoKnowledgeBaseDocument: null }, loading: false };
+      }
+      return { data: undefined, loading: false };
+    });
+
+    render(<KnowledgeBasePage />);
+
+    expect(screen.getByTestId('repo-kb-unavailable')).toHaveTextContent('知识库不存在或不可访问');
+    expect(screen.queryByTestId('repo-knowledge-base-preview')).not.toBeInTheDocument();
+  });
+
+  it('畸形 repo: id 直接进入不可访问分支（不停留在加载中，R2）', () => {
+    router.params = { kbId: 'repo:broken', '*': 'a' };
+    mockUseQuery.mockImplementation(() => ({ data: undefined, loading: false }));
+
+    render(<KnowledgeBasePage />);
+
+    expect(screen.getByTestId('repo-kb-unavailable')).toHaveTextContent('知识库不存在或不可访问');
+    expect(screen.queryByText('加载中…')).not.toBeInTheDocument();
+  });
 });

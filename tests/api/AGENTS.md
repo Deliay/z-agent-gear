@@ -1006,6 +1006,25 @@ pnpm test
 | T-MNF-API2 | 拒绝矩阵逐字：他人实例 → `工作流实例不存在或无权限`；HUMAN 节点 → `仅 AI 节点支持立即失败`；DONE AI 节点 → `节点「<name>」当前状态为 DONE，不允许执行「标记失败」（fail）`；控制器离线（直写 DB）→ 不可用文案 |
 | T-MNF-API3 | 重试短路：直写 `retryPhase=SCHEDULED` + `nextRetryAt` 过去时刻 + `retryCount=3` → `failNode` → 等待 >1 个扫描周期（35s）无 `acp:resume`、无自动重试提示词、`retryCount` 保持 3、节点保持 FAILED |
 
+## 仓库内建知识库（`src/agent-api/repo-knowledge-base.test.ts` T-RKB-API1~6/8）
+
+> 需求 #545；契约 `contracts/knowledge-base.graphql`（`RepoKnowledgeBase*`）；计划
+> `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md`。**T-RKB-API7（平台知识库零回归）
+> 由既有 `knowledge-base.test.ts`（T-KB-API1~6）随批回归覆盖，本套件不重复。** 前置：agent-api + controller-api 就绪、
+> `INTERNAL_API_TOKEN`（开户）；核心套件直插 `cloudhosts` RUNNING 夹具（需 `MONGODB_URI`，缺省 skip）；
+> fake controller version `2.19.0` 应答 `knowledge-bases:scan`（fixture 与 agent-gear 真实回包同形态）
+> 并记录 `scans[]`，2.18.0 控制器不应答。
+
+| 测试 | 描述 |
+|------|------|
+| T-RKB-API1 | 四个新查询未认证一律 `Not authenticated` |
+| T-RKB-API2 | `repoKnowledgeBaseHosts` 只列 RUNNING + 默认工作区云电脑；调用前后 `scans[]` 不增长；2.18.0 → `scanSupported=false` |
+| T-RKB-API3 | 首次展开触发一次扫描并缓存；二次调用不增长；`refresh:true` 强制重扫；两来源顺序/合法与不合法形状/`documentCount` |
+| T-RKB-API4 | children 逐级派生（FOLDER 在前）；document 返回含 front matter 原文全文；不可达 `[]`/`null` |
+| T-RKB-API5 | 不可见/非默认工作区 → `Workspace not found`（逐字）；版本不足/控制器离线 → `repo knowledge base scan failed`（逐字，且零扫描）；轮询超时分支由服务层单测 T-RKB-SVC10 覆盖 |
+| T-RKB-API6 | MCP relay：`initialize.capabilities.prompts`、`prompts/list` 单片段、`prompts/get` 指引文本、六工具不含仓库知识库 |
+| T-RKB-API8 | 云电脑转 STOPPED → hosts 不再列出；children/document 收敛 `[]`/`null`（另一 RUNNING 主机不受影响） |
+
 ## 知识库 API（`src/agent-api/knowledge-base.test.ts`）
 
 > 需求 #495；契约 `contracts/knowledge-base.graphql`；计划 `docs/engineering/plan/20261115-feat-knowledge-base.md` §6.2。

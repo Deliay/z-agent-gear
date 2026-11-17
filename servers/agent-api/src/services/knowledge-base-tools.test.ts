@@ -142,7 +142,7 @@ describe('knowledge-base-tools（T-KBT）', () => {
     ).resolves.toMatchObject({
       result: {
         protocolVersion: '2025-03-26',
-        capabilities: { tools: {} },
+        capabilities: { tools: {}, prompts: {} },
         serverInfo: { name: KNOWLEDGE_BASE_TOOLS_SERVER_NAME },
       },
     });
@@ -158,6 +158,56 @@ describe('knowledge-base-tools（T-KBT）', () => {
 
     const unknownTool = await call(adminA, 'knowledge_base_delete_everything');
     expect(unknownTool.error).toMatchObject({ code: 'METHOD_NOT_FOUND' });
+  });
+
+  it('T-RKB-P5: prompts/list 单片段；prompts/get 正常返回与 INVALID_PARAMS 两分支', async () => {
+    await expect(
+      handleKnowledgeBaseToolsMcpRequest(caller, { method: 'prompts/list' }),
+    ).resolves.toEqual({
+      result: {
+        prompts: [
+          {
+            name: 'repo-knowledge-base-authoring',
+            description: expect.stringContaining('仓库知识库编写指引'),
+          },
+        ],
+      },
+    });
+
+    const got = await handleKnowledgeBaseToolsMcpRequest(caller, {
+      method: 'prompts/get',
+      params: { name: 'repo-knowledge-base-authoring' },
+    });
+    expect(got.error).toBeUndefined();
+    expect(got.result).toMatchObject({
+      description: expect.stringContaining('仓库知识库编写指引'),
+      messages: [
+        {
+          role: 'user',
+          content: { type: 'text', text: expect.stringContaining('.zag/knowledges/') },
+        },
+      ],
+    });
+
+    await expect(
+      handleKnowledgeBaseToolsMcpRequest(caller, { method: 'prompts/get' }),
+    ).resolves.toMatchObject({
+      error: {
+        code: 'INVALID_PARAMS',
+        message: expect.stringContaining('repo-knowledge-base-authoring'),
+      },
+    });
+    await expect(
+      handleKnowledgeBaseToolsMcpRequest(caller, {
+        method: 'prompts/get',
+        params: { name: 'unknown' },
+      }),
+    ).resolves.toMatchObject({
+      error: {
+        code: 'INVALID_PARAMS',
+        message: expect.stringContaining('repo-knowledge-base-authoring'),
+      },
+    });
   });
 
   it('T-KBT3: developer 直接调 knowledge_base_create → isError not a tenant admin（双校验）', async () => {

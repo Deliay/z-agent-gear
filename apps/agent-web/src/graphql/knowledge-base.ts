@@ -292,3 +292,110 @@ export interface UpdateKnowledgeBaseDocumentMutation {
 export interface DeleteKnowledgeBaseDocumentMutation {
   deleteKnowledgeBaseDocument: boolean;
 }
+
+/* ------------------------------------------------------------------ */
+/* 仓库内建知识库（需求 #545，四级只读查询 + 懒加载）                   */
+/* ------------------------------------------------------------------ */
+
+export type RepoKnowledgeBaseSourceData = 'ZAG' | 'DOCS';
+export type RepoKnowledgeBaseNodeKindData = 'FOLDER' | 'DOCUMENT';
+
+export interface RepoKnowledgeBaseHostData {
+  cloudHostId: string;
+  cloudHostName: string;
+  workspaceId: string;
+  scanSupported: boolean;
+}
+
+export interface RepoKnowledgeBaseData {
+  id: string;
+  name: string;
+  description: string;
+  source: RepoKnowledgeBaseSourceData;
+  folder: string;
+  workspaceId: string;
+  cloudHostId: string;
+  cloudHostName: string;
+  valid: boolean;
+  errors: string[];
+  documentCount: number;
+  truncated: boolean;
+}
+
+export interface RepoKnowledgeBaseNodeData {
+  kind: RepoKnowledgeBaseNodeKindData;
+  name: string;
+  path: string;
+}
+
+export interface RepoKnowledgeBaseDocumentData {
+  path: string;
+  title: string;
+  content: string;
+}
+
+export const GET_REPO_KNOWLEDGE_BASE_HOSTS = gql`
+  query GetRepoKnowledgeBaseHosts {
+    repoKnowledgeBaseHosts {
+      cloudHostId
+      cloudHostName
+      workspaceId
+      scanSupported
+    }
+  }
+`;
+
+export const GET_REPO_KNOWLEDGE_BASES = gql`
+  query GetRepoKnowledgeBases($workspaceId: ID!, $refresh: Boolean) {
+    repoKnowledgeBases(workspaceId: $workspaceId, refresh: $refresh) {
+      id
+      name
+      description
+      source
+      folder
+      workspaceId
+      cloudHostId
+      cloudHostName
+      valid
+      errors
+      documentCount
+      truncated
+    }
+  }
+`;
+
+export const GET_REPO_KNOWLEDGE_BASE_CHILDREN = gql`
+  query GetRepoKnowledgeBaseChildren($id: ID!, $path: String) {
+    repoKnowledgeBaseDocumentChildren(id: $id, path: $path) {
+      kind
+      name
+      path
+    }
+  }
+`;
+
+export const GET_REPO_KNOWLEDGE_BASE_DOCUMENT = gql`
+  query GetRepoKnowledgeBaseDocument($id: ID!, $path: String!) {
+    repoKnowledgeBaseDocument(id: $id, path: $path) {
+      path
+      title
+      content
+    }
+  }
+`;
+
+export interface GetRepoKnowledgeBaseHostsQuery {
+  repoKnowledgeBaseHosts: RepoKnowledgeBaseHostData[];
+}
+
+export interface GetRepoKnowledgeBasesQuery {
+  repoKnowledgeBases: RepoKnowledgeBaseData[];
+}
+
+export interface GetRepoKnowledgeBaseChildrenQuery {
+  repoKnowledgeBaseDocumentChildren: RepoKnowledgeBaseNodeData[];
+}
+
+export interface GetRepoKnowledgeBaseDocumentQuery {
+  repoKnowledgeBaseDocument: RepoKnowledgeBaseDocumentData | null;
+}

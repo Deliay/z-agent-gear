@@ -135,6 +135,17 @@ pnpm run test    # Run tests
   `{success:false, templates:[], truncated:false, error:'not found'}` 兜底落键，防异常报文撑爆轮询端解析。
 - 下游 agent-api 以 500ms × 30 轮询消费，超时/失败降级为空列表。
 
+## 仓库内建知识库扫描中继
+
+- **`knowledge-bases:scan` 中继（契约 §3.29/§3.30）**：`session:command` 白名单新增
+  `knowledge-bases:scan`（`requestId && controllerId && path` 齐备才分发，缺任一忽略）→
+  `knowledge-bases-service.handleScan`（Controller → socketId → `socket.emit('knowledge-bases:scan', withTraceMeta({requestId, path}))`；
+  控制器不存在/离线/socket 缺失仅记 error，不写 Redis、不 crash）。
+- **结果回写**：`socketio.ts` 监听 `knowledge-bases:scan:result` → `handleScanResult` 写
+  Redis `knowledge-bases:scan:{requestId}`（`EX 60`）；`sources` 非数组时按
+  `{success:false, sources:[], truncated:false, error:'not found'}` 兜底落键，防异常报文撑爆轮询端解析。
+- 下游 agent-api 以 500ms × 30 轮询消费（读后即删），并在工作区级 Redis 缓存解析结果 300s。
+
 ## 日志与可观测性
 
 - **日志形态**：pino 单行 JSON（vendored `src/observability/`），字段字典与调用签名见 [`contracts/observability.md`](../../contracts/observability.md) §2 与 [`common-rules.md`](../../docs/engineering/common-rules.md)「日志与可观测性规范」。
