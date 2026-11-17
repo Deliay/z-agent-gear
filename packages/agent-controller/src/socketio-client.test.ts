@@ -701,3 +701,156 @@ describe('knowledge-bases:scan 事件注册（契约 §3.29/§3.30）', () => {
     }
   });
 });
+
+describe('harness:models 运行期模型下发（T-AG-MP4）', () => {
+  const PROVIDER_ID = '65f0a1b2c3d4e5f60718293a';
+  const PROVISION = {
+    providers: [
+      {
+        vendorId: 'zag',
+        displayName: 'Agent Gear',
+        models: [{ id: 'model-a', contextLength: 128000 }],
+      },
+      { vendorId: PROVIDER_ID, displayName: '我的 OpenAI', models: [{ id: 'gpt-5.1' }] },
+    ],
+  };
+
+  const dirs: string[] = [];
+  const savedEnv = {
+    baseUrl: process.env.ZAG_MODEL_BASE_URL,
+    apiKey: process.env.ZAG_MODEL_API_KEY,
+    types: process.env.ZAG_HARNESS_TYPES,
+  };
+
+  function setupWorker(paths: { configDir: string; dshHome: string; statePath: string }) {
+    connectToServer('http://localhost:4001', 'controller-key', {
+      serverName: 'test-controller',
+      handshakeToken: 'controller-key',
+      skipLocalMcpStart: true,
+      handleWorkload: true,
+      persistConfig: false,
+      onShutdown: vi.fn(),
+      harnessModelPaths: paths,
+      logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    });
+  }
+
+  async function makePaths() {
+    const { mkdtempSync } = await import('fs');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const dir = mkdtempSync(join(tmpdir(), 'sio-hm-'));
+    dirs.push(dir);
+    return {
+      configDir: join(dir, 'config'),
+      dshHome: join(dir, 'dsh'),
+      statePath: join(dir, 'state.json'),
+    };
+  }
+
+  beforeEach(() => {
+    fake.handlers.clear();
+    fake.socket.emit.mockClear();
+    process.env.ZAG_MODEL_BASE_URL = 'http://admin-api:8002/v1';
+    process.env.ZAG_MODEL_API_KEY = 'zag_sk_super_secret';
+    process.env.ZAG_HARNESS_TYPES = 'opencode';
+  });
+
+  afterEach(async () => {
+    const { rmSync } = await import('fs');
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+    if (savedEnv.baseUrl === undefined) delete process.env.ZAG_MODEL_BASE_URL;
+    else process.env.ZAG_MODEL_BASE_URL = savedEnv.baseUrl;
+    if (savedEnv.apiKey === undefined) delete process.env.ZAG_MODEL_API_KEY;
+    else process.env.ZAG_MODEL_API_KEY = savedEnv.apiKey;
+    if (savedEnv.types === undefined) delete process.env.ZAG_HARNESS_TYPES;
+    else process.env.ZAG_HARNESS_TYPES = savedEnv.types;
+  });
+
+  it('T-AG-MP4: applies every vendor and replies success with appliedTypes', async () => {
+    const paths = await makePaths();
+    setupWorker(paths);
+    const handler = fake.handlers.get('harness:models') as (
+      payload: unknown,
+    ) => Promise<void>;
+    expect(handler).toBeDefined();
+
+    await handler({ requestId: 'r-hm1', provision: PROVISION });
+
+    expect(fake.socket.emit).toHaveBeenCalledWith('harness:models:result', {
+      requestId: 'r-hm1',
+      success: true,
+      appliedTypes: ['opencode'],
+    });
+
+    const { readFile } = await import('fs/promises');
+    const { parse } = await import('jsonc-parser');
+    const { join } = await import('path');
+    const config = parse(await readFile(join(paths.configDir, 'opencode.jsonc'), 'utf-8'));
+    expect(config.providers.zag.name).toBe('Agent Gear');
+    expect(config.providers[PROVIDER_ID].name).toBe('我的 OpenAI');
+  });
+
+  it('T-AG-MP4: an invalid payload still replies success:false (no empty wait)', async () => {
+    const paths = await makePaths();
+    setupWorker(paths);
+    const handler = fake.handlers.get('harness:models') as (
+      payload: unknown,
+    ) => Promise<void>;
+
+    await handler({ requestId: 'r-bad', provision: { providers: [{ vendorId: '' }] } });
+
+    expect(fake.socket.emit).toHaveBeenCalledWith(
+      'harness:models:result',
+      expect.objectContaining({
+        requestId: 'r-bad',
+        success: false,
+        appliedTypes: [],
+        error: expect.stringContaining('providers[0].vendorId'),
+      }),
+    );
+    expect(JSON.stringify(fake.socket.emit.mock.calls)).not.toContain('zag_sk_super_secret');
+  });
+
+  it('T-AG-MP4: a failing type keeps the other type applied; error is redacted', async () => {
+    const { mkdirSync, writeFileSync } = await import('fs');
+    const { join } = await import('path');
+    const paths = await makePaths();
+    mkdirSync(join(paths.dshHome, 'profiles', 'acp'), { recursive: true });
+    writeFileSync(join(paths.dshHome, 'profiles', 'acp', 'cordis.patch.yml'), '- broken: [\n');
+    process.env.ZAG_HARNESS_TYPES = 'opencode,deepseek_harness';
+    setupWorker(paths);
+    const handler = fake.handlers.get('harness:models') as (
+      payload: unknown,
+    ) => Promise<void>;
+
+    await handler({ requestId: 'r-partial', provision: PROVISION });
+
+    const call = fake.socket.emit.mock.calls.find(
+      ([event]) => event === 'harness:models:result',
+    ) as [string, { success: boolean; appliedTypes: string[]; error?: string }];
+    expect(call[1].success).toBe(false);
+    expect(call[1].appliedTypes).toEqual(['opencode']);
+    expect(call[1].error).toContain('deepseek_harness');
+    expect(call[1].error).not.toContain('zag_sk_super_secret');
+  });
+
+  it('T-AG-MP4: the standard (controller-api) connection never responds', async () => {
+    const paths = await makePaths();
+    connectToServer('http://localhost:4001', 'controller-key', {
+      serverName: 'test-controller',
+      handshakeToken: 'controller-key',
+      skipLocalMcpStart: true,
+      handleWorkload: false,
+      persistConfig: false,
+      harnessModelPaths: paths,
+    });
+    const handler = fake.handlers.get('harness:models') as (
+      payload: unknown,
+    ) => Promise<void>;
+
+    await handler({ requestId: 'r-std', provision: PROVISION });
+
+    expect(fake.socket.emit).not.toHaveBeenCalled();
+  });
+});

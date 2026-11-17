@@ -392,3 +392,23 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 p
 - 引入新协议或修改现有协议时，先编写跨服务的集成测试（启动真实 agent-controller 或 mock 端精确模拟协议格式）
 - handleTunnelData 的测试必须覆盖所有入站数据类型（纯 TCP 数据 + JSON 协议数据）
 - handleTunnelData 的出站（localSocket.on('data')）测试必须验证响应格式与 controller-api 端期望的格式一致
+
+## 多 vendor 模型下发与 `harness:models`（#533，agent-gear 2.20.0）
+
+> 契约 `contracts/cloud-controller-websocket.md` §2.11/§2.12；计划
+> `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` Phase 4。
+
+- **载荷与解析**：`src/harness/model-providers.ts`。`parseModelProvision` 只做结构校验（非法抛 `ModelProvisionError`，
+  消息只含字段名/索引、不含原值）；`resolveProvision(env)` 优先 `ZAG_MODEL_PROVIDERS`，缺省由
+  `ZAG_MODEL_IDS`/`ZAG_MODEL_CONTEXT_LENGTHS` 合成单 `zag` 组（旧服务端兼容，产物与 2.19.0 逐字一致）。
+- **多 vendor 重写**：`zag` 组恒写（`name='Agent Gear'`，可为空 `models: []`）且恒首位；用户组 `providers.<providerId>`
+  的 `name/displayName` 取供应商名；`contextLength` 写 `models.<id>.limit.context`（opencode）/ 对应 dsh 结构。
+  只重写文件，**不重新跑 harness CLI 硬校验**（容器内可能未安装）；`prepareHarness` 复用同一写函数。
+- **差集清理**：状态文件 `~/.zag/model-providers-state.json`（0600、原子写、`statePath` 可注入）记录上次写入的
+  vendor；仅清理「上次有本次无」的 vendor，**不误删用户手写 provider**；状态文件读写失败只告警，配置正确性优先。
+- **dsh 默认模型**：`agent-default-model`/`acp` 取「首个**非空**组」的第一个模型；全部为空 → 保持 `{provider:'zag'}`。
+  `.credentials.yaml` 的单点 `refs.ZAG_MODEL_API_KEY` 不变（凭据仍走平台网关）。
+- **事件处理**：`socketio-client.ts` 注册 `harness:models`，**仅 `handleWorkload=true`（`/worker`）处理**；非法 payload 也回
+  `success:false`（避免服务端空等）；`appliedTypes` 为实际重写成功类型，任一类失败 → `success:false` + 脱敏 `error`。
+  运行期凭据优先取进程 env，缺失项由 `src/harness/model-credentials.ts` 从已写入的 opencode/dsh 配置回读。
+- **版本**：`package.json` 2.20.0；服务端仅以该版本做推送短路判断，**不提升注册门禁**（旧 worker 静默忽略事件）。

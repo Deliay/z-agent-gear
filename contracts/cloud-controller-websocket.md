@@ -51,6 +51,8 @@
 | Server → Worker | `workload:run` | 下发工作负载脚本批次（初始化 / 清理）；见 §2.9 |
 | Worker → Server | `workload:result` | 回报单条脚本执行结果；见 §2.10 |
 | Server → Worker | `shutdown` | cloud-controller 通知容器退出；容器清理并退出进程（有清理脚本时在 post 批次完成后发送，见 §2.8） |
+| Server → Worker | `harness:models` | 运行期模型清单全量下发（见 §2.11；agent-gear ≥ 2.20.0） |
+| Worker → Server | `harness:models:result` | 运行期模型清单应用结果回报（见 §2.12；带 `requestId`） |
 
 ### 2.2 `register`（Worker → Server）
 
@@ -265,6 +267,72 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
 
 ---
 
+### 2.11 `harness:models`（Server → Worker）
+
+运行期把最新模型清单（`ModelProvision`）**全量替换**下发到运行中的云电脑，由 agent-gear 重写
+opencode / dsh 的模型配置文件。仅对 `/worker` 连接（`purpose=harness`）下发。
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 服务端生成的请求 ID（1~128 字符），回报时必须原样带回 |
+| `provision` | `ModelProvision` | 是 | 模型清单（见下），**全量替换**语义：本次未出现的 vendor/模型即视为删除 |
+
+`ModelProvision` 结构：
+
+```jsonc
+{
+  "providers": [
+    {
+      "vendorId": "zag",
+      "displayName": "Agent Gear",
+      "models": [{ "id": "kimi-k2", "contextLength": 262144 }]
+    },
+    {
+      "vendorId": "65f0a1b2c3d4e5f60718293a",
+      "displayName": "我的 OpenAI",
+      "models": [{ "id": "gpt-5.1" }]
+    }
+  ]
+}
+```
+
+- `providers` 恒含且仅含一个 `zag` 组（可为空 `models: []`），且恒首位；`zag` 的 `displayName` 固定 `Agent Gear`；
+- 用户组 `vendorId = providerId`（字符串），`displayName = 供应商名称`；组内模型 `id` 为模型名，`contextLength` 仅正整数携带；
+- 载荷**不含** baseURL / apiKey / 任何凭据（凭据仍由进程 env `ZAG_MODEL_BASE_URL` / `ZAG_MODEL_API_KEY` 提供）。
+
+**服务端行为：**
+
+1. 先更新 `SecretStore` 与 `cloudcontainersecrets`（`modelProviders` + 旧字段 `modelIds` / `modelContextLengths` 投影），**再** emit；
+2. worker 版本可得且 `< 2.20.0` → 不 emit，直接以 `delivered:false / worker_unsupported` 收敛；
+3. 等待 `harness:models:result`，超时 **10s** → `delivered:false / ack_timeout`；
+4. 容器离线 / 断连 → `delivered:false / offline`；worker 回报失败 → `delivered:false / worker_error`。
+
+**Worker 行为（agent-gear ≥ 2.20.0）：**
+
+- 解析 `provision` → 重写 opencode（`providers.<vendorId>`，`name = displayName`，`models.<id>.limit.context`）与
+  dsh（`providers.<vendorId>.displayName`）配置；`zag` 组恒写；按状态文件差集清理「上次有本次无」的 vendor；
+- 只重写文件，**不**重新执行 harness CLI 硬校验；
+- 非法 payload 也回报 `success:false`，避免服务端空等；错误文本脱敏（不含凭据原值）；
+- **旧 worker（< 2.20.0）静默忽略**未知事件 → 服务端按 ack 超时收敛，配置保持创建快照（不视为失败）。
+
+### 2.12 `harness:models:result`（Worker → Server）
+
+**Payload:**
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应 `harness:models.requestId` |
+| `success` | `boolean` | 是 | 是否全部类型应用成功 |
+| `appliedTypes` | `string[]` | 是 | 实际重写成功的 harness 类型（如 `["opencode","deepseek_harness"]`；无 harness 时为空数组） |
+| `error` | `string` | 否 | 失败原因（已脱敏） |
+
+**服务端行为：** 仅接受与 pending 请求 `requestId` 及同一 `containerId` 匹配的结果；未知 `requestId` / 其他容器响应忽略并告警；
+同一容器并发新请求会以 `worker_error` 收敛旧请求再发出新请求；断连/重连/关停时以 `offline` / `worker_error` 收敛 pending。
+
+---
+
 ## 3. 连接生命周期
 
 ```
@@ -336,8 +404,7 @@ Worker                              cloud-controller
   （`MIN_KIMI_HARNESS_WORKER_VERSION` / `MIN_DEEPSEEK_HARNESS_WORKER_VERSION`），
   以 2.12.0 为底取 max 后 `opencode` / `kimi_code` / `deepseek_harness` 及其组合恒为 2.12.0
   （`kimi_code` 的 2.8.0 低于基线；`deepseek_harness` 的 2.12.0 与基线同值）——max 语义自动收编。注册门禁继续读逐容器 `agentGearMinVersion`（`socketio-gateway` 不改）。
-- **支持类型白名单**：`SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code', 'deepseek_harness']`；非白名单类型返回
-  `400 INVALID_HARNESS`，不创建 Job。
+- **支持类型白名单**：`SUPPORTED_HARNESS_TYPES = ['opencode', 'kimi_code', 'deepseek_harness']`；非白名单类型返回  `400 INVALID_HARNESS`，不创建 Job。
 - **预置工作负载映射**：`opencode → presetKey 'harness-opencode'`（迁移 006）、
   `kimi_code → presetKey 'harness-kimi-code'`（迁移 009）、
   `deepseek_harness → presetKey 'harness-deepseek-harness'`（迁移 010，`workloadKind='harness'`、
@@ -346,6 +413,9 @@ Worker                              cloud-controller
 - 任一条件不满足返回 `VERSION_MISMATCH`（§2.4，含 `currentVersion`/`minimumVersion`/`supportedMajor`）并 `disconnect(true)`。
 - **拒绝副作用约束**：版本校验必须位于所有注册副作用之前——不设置 `socket.data.registered`，不调用心跳计时、初始化脚本查询/下发、`online`/`initializing` 状态迁移，不写入 `connectedAt`，不下发 `workload:run`。因此被拒绝的容器销毁时按「从未完成兼容注册」处理：不发送 shutdown、不等待宽限，直接删除 Job。
 - 兼容 worker（`>=2.2.0` 且 major 为 `2`）的注册、心跳、工作负载、重连与销毁协议不变。
+- **运行期模型下发能力自 agent-gear 2.20.0**：`harness:models` / `harness:models:result` 事件与 A.2.14 端点的
+  推送短路常量 `MIN_HARNESS_MODELS_WORKER_VERSION = '2.20.0'` 仅用于「是否值得 emit」判断，**不提升**注册门禁；
+  旧版本 worker 静默忽略未知事件，服务端按 `delivered:false / ack_timeout` 收敛，模型配置保持创建期快照。
 
 ---
 
@@ -445,6 +515,7 @@ Content-Type: application/json
 - `expiresAt` 仅落库留存（容器 TTL 留档，不再关联模型 Key 有效期；模型 Key 改为随容器回收）；Job **不再设置 `activeDeadlineSeconds`**，工作容器最长运行时间无限制，不会因到期被 K8s 强制销毁。
 - `secrets` 同时持有于进程内 `SecretStore` 与持久化集合 `cloudcontainersecrets`（仅供 cloud-controller 在重启/滚动发布后恢复，Issue #446）；**不返回、不打印**，容器进入终态（exited/failed/destroying）后删除。cloud-controller 启动时把活跃容器的记录加载回内存，并清理已终态/不存在容器的残留记录。
 - `secrets.modelContextLengths` 为**可选**字段：`模型 ID → 最长上下文（token，正整数）` 的 JSON object 字符串（无有效条目时为 `{}`）；缺省/空串表示无上下文信息（滚动升级期间旧调用方不下发），不纳入「secrets 各字段非空」必填校验；携带时经 `workload:run.env` 的 `ZAG_MODEL_CONTEXT_LENGTHS` 透传给 worker。
+- `secrets.modelProviders` 为**可选**字段（agent-gear 2.20.0 起）：`ModelProvision` JSON 字符串（多 vendor 模型清单，见 §2.11），用于运行期全量替换模型配置；缺省/空串表示旧调用方（读取侧回退由 `modelIds` / `modelContextLengths` 合成的单 `zag` 组），不纳入「secrets 各字段非空」必填校验；携带时持久化到 `cloudcontainersecrets.modelProviders` 并经 `workload:run.env` 的 `ZAG_MODEL_PROVIDERS` 透传给 worker。
 - Job env：`ZAG_SERVER_ENDPOINT` + `ZAG_CONTROLLER_KEY`（`/worker` 一次性 token）维持不变；harness 追加 `ZAG_HOST_ENDPOINT`、`ZAG_HOST_KEY`（标准连接）、`ZAG_HOST_NAME`、`ZAG_HARNESS_TYPES`、`ZAG_DEFAULT_WORKSPACE`、`ZAG_USER_TYPE`、`ZAG_USER_ID`、`ZAG_AGENT_API_ENDPOINT`（agent-api 内部地址，来自 `AGENT_API_URL`）、`ZAG_CONTROLLER_ID`（云主机 controllerId）。模型 Key/BaseURL/模型列表仅经 `workload:run.env` 下发，不进入 Job env。
 - `workloadIds` 可选（缺省或空数组行为与现状一致）。传入时服务端校验：必须为字符串数组、**数组长度（去重前）≤ 10**、去重且保持选择顺序、每个 ID 均为已存在的 `cloudworkloads` 记录；校验通过后按选择顺序落库到容器 `workloadIds`。
 - `workloadPlan` 可选，为**已展开、已排序、已去重**的最终执行计划，数组顺序即执行顺序。服务端校验：必须为数组、**长度 ≤ 10**、`workloadId` 去重且全部存在、`params` 为对象（缺省归一为 `{}`）、`implicit` 为布尔（缺省归一为 `false`）、`required` 为布尔（缺省或 `null` 归一为 `false`；非布尔返回 `400` `INVALID_WORKLOAD`）；非法返回 `400` `INVALID_WORKLOAD`。
@@ -730,6 +801,33 @@ Content-Type: application/json
 - 操作查询与回调均 Bearer `INTERNAL_API_TOKEN`；restores 回调按 `operationId` 幂等、终态单调；回调失败按 `0/250ms/1s/3s` 退避重试，agent-api 以操作查询端点兜底对账（与归档回调同模式）。
 - 台账巡检并入既有 15s `status-sync`：`pending/running` 超 `ARCHIVE_TIMEOUT_MS` → `failed` + 回调；本进程无执行任务（重启）→ 重跑；终态且 `callbackDeliveredAt=null` → 重投一次（幂等）。
 
+### A.2.14 运行期模型清单下发（agent-api → cloud-controller）
+
+```
+POST /internal/containers/:containerId/harness-models
+Authorization: Bearer <INTERNAL_API_TOKEN>
+Content-Type: application/json
+
+{ "provision": { "providers": [ { "vendorId": "zag", "displayName": "Agent Gear", "models": [ { "id": "model-a", "contextLength": 128000 } ] } ] } }
+```
+
+**响应 200：**
+
+```jsonc
+{ "delivered": true, "appliedTypes": ["opencode", "deepseek_harness"] }
+// 或
+{ "delivered": false, "reason": "offline" } // offline | ack_timeout | worker_error | worker_unsupported
+```
+
+- 语义：**先**更新 `SecretStore` 与 `cloudcontainersecrets`（`modelProviders` 原样 + `modelIds` / `modelContextLengths` 投影），**再**经 `/worker` emit `harness:models` 并等待 ack（≤10s，见 §2.11）；
+- 容器不存在 / ID 非法 → `404 NOT_FOUND`；`provision` 结构非法 → `400 INVALID_MODEL_PROVISION`；
+  容器处于终态（`exited` / `failed` / `destroying`）或 secret 缺失 → `409 CONTAINER_NOT_ONLINE`；
+  网关未注入 `requestHarnessModels` → `503 UNAVAILABLE`；
+- 容器处于创建中间态（`creating` / `connecting` / `initializing`）→ `200 { "delivered": false, "reason": "offline" }`
+  （下一次任意模型变更或创建期快照会自然收敛）；
+- worker 版本可得且 `< 2.20.0` → `200 { "delivered": false, "reason": "worker_unsupported" }`（不 emit，避免空等）；
+- `delivered=false` **不视为失败**：保存动作与推送均以 best-effort 处理，失败只告警。
+
 ### A.3 CloudContainer JSON 结构
 
 | 字段 | 类型 | 说明 |
@@ -911,5 +1009,6 @@ cloud-controller 创建云电脑（`purpose=harness`）Job 时经 `buildHarnessJ
 | `OTEL_RESOURCE_ATTRIBUTES` | 同上 | 追加 `zag.container.id`、`zag.cloud.host.id`、`zag.user.id`、`zag.tenant.id`、`zag.workspace.id` |
 | `ZAG_INIT_TRACEPARENT` | 同上且 `container.start` span 存在 | 创建链路 `traceparent`；容器内 `agent-gear` 将 `startup` span 以 **link**（非 parent）关联 |
 | `OTEL_SDK_DISABLED` | **未配置采集端** | 固定 `true`（容器内 SDK 完全不启动，仅注入此一项） |
+| `ZAG_MODEL_PROVIDERS` | harness secrets 携带 `modelProviders` | `ModelProvision` JSON 字符串（多 vendor 模型清单）；旧 worker 忽略；init 批次与 runtime 批次同源注入 |
 
 - 旧容器（未适配观测的 worker 版本）不识别以上变量，行为不变；不提升版本门禁。

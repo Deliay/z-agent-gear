@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { DshConfigError, defaultDshHome, writeDshConfig } from './dsh-config.js';
+import type { ModelProvision } from './model-providers.js';
 
 const TMP_BASE = '/tmp/opencode';
 const API_KEY = 'zag_sk_dsh_super_secret';
@@ -72,7 +73,7 @@ describe('writeDshConfig (T-DSH*)', () => {
     ]);
     expect(patch[0]).toEqual({ id: 'llm-deepseek', disabled: true });
     expect(patch[1].config.providers.zag).toMatchObject({
-      displayName: 'ZAG',
+      displayName: 'Agent Gear',
       apiKeyEnv: 'ZAG_MODEL_API_KEY',
       api: 'openai-completions',
       baseURL: 'http://admin-api:8002/v1',
@@ -287,6 +288,124 @@ describe('writeDshConfig (T-DSH*)', () => {
     } catch (error) {
       expect(JSON.stringify((error as Error).message)).not.toContain(API_KEY);
     }
+  });
+});
+
+describe('writeDshConfig 多 vendor 模型下发（T-AG-MP3）', () => {
+  const dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  const MULTI: ModelProvision = {
+    providers: [
+      { vendorId: 'zag', displayName: 'Agent Gear', models: [] },
+      {
+        vendorId: '65f0a1b2c3d4e5f60718293a',
+        displayName: '我的 OpenAI',
+        models: [{ id: 'gpt-5.1', contextLength: 400000 }, { id: 'gpt-5.1-mini' }],
+      },
+    ],
+  };
+
+  it('T-AG-MP3: writes every vendor into llm-pi-ai.providers', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+
+    const result = await writeDshConfig({ env: ENV, provision: MULTI, dshHome: home });
+
+    expect(result.modelCount).toBe(2);
+    const patch = (await readYaml(result.patchPath)) as Array<Record<string, any>>;
+    const providers = patch.find((entry) => entry.id === 'llm-pi-ai')!.config.providers;
+    expect(Object.keys(providers)).toEqual(['zag', '65f0a1b2c3d4e5f60718293a']);
+    expect(providers.zag).toMatchObject({
+      displayName: 'Agent Gear',
+      apiKeyEnv: 'ZAG_MODEL_API_KEY',
+      api: 'openai-completions',
+      baseURL: 'http://admin-api:8002/v1',
+      models: [],
+    });
+    expect(providers['65f0a1b2c3d4e5f60718293a']).toMatchObject({
+      displayName: '我的 OpenAI',
+      apiKeyEnv: 'ZAG_MODEL_API_KEY',
+      api: 'openai-completions',
+      baseURL: 'http://admin-api:8002/v1',
+      models: [
+        { id: 'gpt-5.1', name: 'gpt-5.1', contextWindow: 400000 },
+        { id: 'gpt-5.1-mini', name: 'gpt-5.1-mini' },
+      ],
+    });
+  });
+
+  it('T-AG-MP3: default model follows the first non-empty group (zag empty → user group)', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+
+    const result = await writeDshConfig({ env: ENV, provision: MULTI, dshHome: home });
+
+    const patch = (await readYaml(result.patchPath)) as Array<Record<string, any>>;
+    expect(patch.find((entry) => entry.id === 'agent-default-model')!.config).toEqual({
+      provider: '65f0a1b2c3d4e5f60718293a',
+      model: 'gpt-5.1',
+    });
+    expect(patch.find((entry) => entry.id === 'acp')!.config).toEqual({
+      provider: '65f0a1b2c3d4e5f60718293a',
+      model: 'gpt-5.1',
+    });
+    // 其余受管条目与凭据口径不变
+    expect(patch.find((entry) => entry.id === 'llm-deepseek')).toEqual({
+      id: 'llm-deepseek',
+      disabled: true,
+    });
+    expect(patch.filter((entry) => entry.insert !== undefined)).toHaveLength(1);
+    const credentials = (await readYaml(result.credentialsPath)) as Record<string, any>;
+    expect(credentials).toEqual({ version: 1, refs: { ZAG_MODEL_API_KEY: API_KEY } });
+  });
+
+  it('T-AG-MP3: all groups empty keeps {provider:"zag"}', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+
+    const result = await writeDshConfig({
+      env: ENV,
+      provision: {
+        providers: [
+          { vendorId: 'zag', displayName: 'Agent Gear', models: [] },
+          { vendorId: 'p1', displayName: 'P1', models: [] },
+        ],
+      },
+      dshHome: home,
+    });
+
+    expect(result.modelCount).toBe(0);
+    const patch = (await readYaml(result.patchPath)) as Array<Record<string, any>>;
+    expect(patch.find((entry) => entry.id === 'agent-default-model')!.config).toEqual({
+      provider: 'zag',
+    });
+    expect(patch.find((entry) => entry.id === 'acp')!.config).toEqual({ provider: 'zag' });
+  });
+
+  it('T-AG-MP3: rewritten multi-vendor config preserves comments and unrelated entries', async () => {
+    const home = await makeHome();
+    dirs.push(home);
+    const profilesDir = join(home, 'profiles', 'acp');
+    await mkdir(profilesDir, { recursive: true });
+    const patchPath = join(profilesDir, 'cordis.patch.yml');
+    await writeFile(
+      patchPath,
+      ['# top comment', '- id: other', '  value: 1 # keep inline', ''].join('\n'),
+      'utf-8',
+    );
+
+    await writeDshConfig({ env: ENV, provision: MULTI, dshHome: home });
+
+    const text = await readFile(patchPath, 'utf-8');
+    expect(text).toContain('# top comment');
+    expect(text).toContain('value: 1 # keep inline');
+    const patch = parse(text) as Array<Record<string, any>>;
+    expect(patch.filter((entry) => entry.id === 'llm-pi-ai')).toHaveLength(1);
+    expect(patch.filter((entry) => entry.insert !== undefined)).toHaveLength(1);
   });
 });
 

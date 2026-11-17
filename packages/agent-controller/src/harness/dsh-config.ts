@@ -4,6 +4,14 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Document, isMap, isSeq, parseDocument, type YAMLMap, type YAMLSeq } from 'yaml';
 import type { HarnessEnv } from './env.js';
+import {
+  normalizeProvision,
+  resolveProvision,
+  ZAG_DISPLAY_NAME,
+  ZAG_VENDOR_ID,
+  type ModelProvision,
+  type ModelProvisionProvider,
+} from './model-providers.js';
 
 /** dsh 凭据 env 引用名（值只写 `.credentials.yaml` 的 `refs`）。 */
 export const ZAG_API_KEY_ENV = 'ZAG_MODEL_API_KEY';
@@ -39,14 +47,13 @@ export class DshConfigError extends Error {
   }
 }
 
-type DshConfigEnv = Pick<
-  HarnessEnv,
-  'modelBaseUrl' | 'modelApiKey' | 'modelIds'
-> &
-  Partial<Pick<HarnessEnv, 'modelContextLengths'>>;
+type DshConfigEnv = Pick<HarnessEnv, 'modelBaseUrl' | 'modelApiKey'> &
+  Partial<Pick<HarnessEnv, 'modelIds' | 'modelContextLengths' | 'modelProviders'>>;
 
 export interface WriteDshConfigOptions {
   env: DshConfigEnv;
+  /** 显式模型清单（运行期下发）；缺省由 env 投影（向后兼容）。 */
+  provision?: ModelProvision;
   /** 覆盖 dsh home（缺省 `$DSH_HOME` 或 `~/.dsh`）。 */
   dshHome?: string;
 }
@@ -81,16 +88,20 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-/** `llm-pi-ai.providers.zag`：模型清单整体替换，`contextWindow` 仅在正整数时写入。 */
-function buildZagProvider(env: DshConfigEnv): Record<string, unknown> {
-  const models = env.modelIds.map((id) => {
-    const context = env.modelContextLengths?.[id];
+/** 单个 vendor 的 `llm-pi-ai` provider 条目（模型清单整体替换，`contextWindow` 仅正整数写入）。 */
+function buildProvider(
+  provider: ModelProvisionProvider,
+  env: Pick<HarnessEnv, 'modelBaseUrl'>,
+): Record<string, unknown> {
+  const models = provider.models.map((model) => {
+    const id = model.id.trim();
+    const context = model.contextLength;
     return typeof context === 'number' && Number.isInteger(context) && context > 0
       ? { id, name: id, contextWindow: context }
       : { id, name: id };
   });
   return {
-    displayName: 'ZAG',
+    displayName: provider.displayName,
     apiKeyEnv: ZAG_API_KEY_ENV,
     api: 'openai-completions',
     baseURL: env.modelBaseUrl,
@@ -98,24 +109,57 @@ function buildZagProvider(env: DshConfigEnv): Record<string, unknown> {
   };
 }
 
-/** 我方 patch 条目（按 id；默认模型取 `modelIds[0]`，空清单不写 `model`）。 */
-function buildEntry(id: (typeof DSH_PATCH_ENTRY_IDS)[number], env: DshConfigEnv): Record<string, unknown> {
-  const defaultModel = env.modelIds[0];
+/**
+ * `llm-pi-ai.config.providers`：全量多 vendor（key = `vendorId`）。
+ *
+ * `zag` 组恒存在（可为空 `models: []`）；所有分组共用平台网关地址与凭据 env 引用
+ * （载荷不含凭据，`.credentials.yaml` 单点不变）。
+ */
+export function buildProviders(
+  provision: ModelProvision,
+  env: Pick<HarnessEnv, 'modelBaseUrl'>,
+): Record<string, Record<string, unknown>> {
+  const normalized = normalizeProvision(provision);
+  const providers: Record<string, Record<string, unknown>> = {};
+  for (const provider of normalized.providers) {
+    providers[provider.vendorId] = buildProvider(provider, env);
+  }
+  if (!providers[ZAG_VENDOR_ID]) {
+    providers[ZAG_VENDOR_ID] = buildProvider(
+      { vendorId: ZAG_VENDOR_ID, displayName: ZAG_DISPLAY_NAME, models: [] },
+      env,
+    );
+  }
+  return providers;
+}
+
+/** 默认模型：取「首个非空组」的第一个模型（全空 → 仅 `provider: 'zag'`，D13）。 */
+function buildDefaultModel(provision: ModelProvision): Record<string, unknown> {
+  for (const provider of normalizeProvision(provision).providers) {
+    const first = provider.models.find((model) => model.id.trim().length > 0);
+    if (first) return { provider: provider.vendorId, model: first.id.trim() };
+  }
+  return { provider: ZAG_VENDOR_ID };
+}
+
+/** 我方 patch 条目（按 id；默认模型取首个非空组的第一个模型）。 */
+function buildEntry(
+  id: (typeof DSH_PATCH_ENTRY_IDS)[number],
+  provision: ModelProvision,
+  env: Pick<HarnessEnv, 'modelBaseUrl'>,
+): Record<string, unknown> {
   switch (id) {
     case 'llm-deepseek':
       return { id, disabled: true };
     case 'llm-pi-ai':
-      return { id, config: { providers: { zag: buildZagProvider(env) } } };
+      return { id, config: { providers: buildProviders(provision, env) } };
     case 'agent-default-model':
-      return {
-        id,
-        config: defaultModel ? { provider: 'zag', model: defaultModel } : { provider: 'zag' },
-      };
+      return { id, config: buildDefaultModel(provision) };
     case 'acp':
       return {
         id,
         name: DSH_ACP_APP_NAME,
-        config: defaultModel ? { provider: 'zag', model: defaultModel } : { provider: 'zag' },
+        config: buildDefaultModel(provision),
       };
     default:
       throw new DshConfigError(`unsupported dsh patch entry: ${String(id)}`);
@@ -179,13 +223,17 @@ function parsePatchDocument(text: string, path: string): Document {
  * - 其余条目与注释逐字保留（新条目追加在末尾）；
  * - 解析失败抛错、不写文件（不静默丢数据）。
  */
-function mergePatchDocument(doc: Document, env: DshConfigEnv): { content: string; entryCount: number } {
+function mergePatchDocument(
+  doc: Document,
+  provision: ModelProvision,
+  env: Pick<HarnessEnv, 'modelBaseUrl'>,
+): { content: string; entryCount: number } {
   const seq = doc.contents as YAMLSeq;
   const findIndex = (id: string): number =>
     seq.items.findIndex((item) => isMap(item) && item.get('id') === id);
 
   for (const id of DSH_PATCH_ENTRY_IDS) {
-    const entry = buildEntry(id, env);
+    const entry = buildEntry(id, provision, env);
     const index = findIndex(id);
     if (index === -1) {
       seq.add(doc.createNode(entry));
@@ -299,6 +347,7 @@ export async function writeDshConfig(
   const envSource = options.env as DshConfigEnv & { DSH_HOME?: string };
   const dshHome =
     options.dshHome ?? defaultDshHome(envSource as unknown as NodeJS.ProcessEnv);
+  const provision = options.provision ?? resolveProvision(options.env);
   const profilesDir = join(dshHome, 'profiles', DSH_ACP_PROFILE);
   const patchPath = join(profilesDir, 'cordis.patch.yml');
   const credentialsPath = join(dshHome, '.credentials.yaml');
@@ -315,7 +364,7 @@ export async function writeDshConfig(
 
   const patchFile = await readText(patchPath, 'dsh patch');
   const patchDoc = parsePatchDocument(patchFile.text, patchPath);
-  const mergedPatch = mergePatchDocument(patchDoc, options.env);
+  const mergedPatch = mergePatchDocument(patchDoc, provision, options.env);
 
   const credentialsFile = await readText(credentialsPath, 'dsh credentials');
   const credentialsContent = mergeCredentialsDocument(
@@ -327,12 +376,17 @@ export async function writeDshConfig(
   await atomicWrite(patchPath, profilesDir, mergedPatch.content, 'cordis.patch');
   await atomicWrite(credentialsPath, dshHome, credentialsContent, 'dsh-credentials');
 
+  const modelCount = normalizeProvision(provision).providers.reduce(
+    (count, provider) => count + provider.models.filter((model) => model.id.trim()).length,
+    0,
+  );
+
   return {
     patchPath,
     credentialsPath,
     patchCreated: patchFile.created,
     credentialsCreated: credentialsFile.created,
-    modelCount: options.env.modelIds.length,
+    modelCount,
     entryCount: mergedPatch.entryCount,
   };
 }
