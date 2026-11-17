@@ -209,6 +209,37 @@ pnpm run preview  # Preview production build
 - **错误文案**：`lib/knowledge-base.ts` 集中映射契约 14 条白名单（未命中原样展示），创建/保存/权限变更失败均在对话框内展示或 toast。
 - **测试入口**：`lib/__tests__/knowledge-base-path.test.ts`（T-KBP1~6）、`knowledge-base-draft.test.ts`（T-KBD1~5）、`components/knowledge-base/__tests__/*`（T-KBW1~10）、`components/__tests__/Sidebar.test.tsx`（五分区默认态）、E2E `tests/e2e/src/knowledge-base.spec.ts`（E2E-KB1~7）与 `sidebar-phase4.spec.ts`（五分区）。
 
+## 仓库内建知识库（#545）
+
+> 需求 #545；契约 `contracts/knowledge-base.graphql`；计划 `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md` Phase 6。
+
+- **分组挂载**：`KnowledgeBaseSection` 平台库列表之后渲染 `<RepoKnowledgeBaseSection />`（D12），**不新增**
+  `SidebarSectionKey`；无候选云电脑时整个子分组不渲染（`repoKnowledgeBaseHosts` 为空 → return null）。
+- **折叠懒加载**：`RepoKnowledgeBaseSection` 数据源仅 `GET_REPO_KNOWLEDGE_BASE_HOSTS`（`cache-and-network`）——
+  初始加载**零扫描**；云电脑/知识库/目录全部默认折叠，点击展开才分别发
+  `GET_REPO_KNOWLEDGE_BASES(workspaceId)` / `GET_REPO_KNOWLEDGE_BASE_CHILDREN(id, path)`
+  （小组件挂载即查询，避免折叠态预取）。各节点独立 `loading && !data` / 失败 + 「重试」，失败不扩散兄弟节点。
+- **版本门禁**：`scanSupported=false` 展示「升级云电脑工作组件后可加载」且不发起 bases 查询；`scanSupported=true`
+  且列表为空展示「未检测到仓库知识库」。
+- **只读语义**：知识库/目录/文档条目无「+」、无设置齿轮、无编辑/删除/历史入口；不合法库灰显并展示
+  `errors[0]`；来源 Badge 显示 `zag`/`docs`（title 为完整目录标识），并展示 `documentCount`。
+- **重新检测（D10）**：云电脑级「重新检测」调用 `refetch({workspaceId, refresh:true})` 后
+  `client.cache.evict({fieldName:'repoKnowledgeBaseDocumentChildren'|'repoKnowledgeBaseDocument'})`，
+  使已展开子节点按新扫描结果重拉。
+- **预览页**：`KnowledgeBasePage` 的 `kbId` 命中 `repo:` 前缀走只读分支——`GET_REPO_KNOWLEDGE_BASE_DOCUMENT(id, path)`
+  取正文，直达链接额外经 `GET_REPO_KNOWLEDGE_BASES(workspaceId)` 回源库名（id 自 `repo:` 三段解码）；
+  平台 `knowledgeBaseTree`/文档查询在 repo 分支 `skip`。**只读**（无编辑/删除/历史按钮，`?edit=1` 忽略）；
+  `document === null` 展示「知识库不存在或不可访问」（不泄露内容）。
+- **front matter 表格**：`lib/front-matter.ts#splitFrontMatter`（`---\n` 开头 + 前 4KiB 内闭合、逐行
+  `key: value`、块非法按无）拆出**全部键值**；`RepoKnowledgeBaseContent` 用
+  `data-testid="repo-kb-front-matter-table"` 渲染键值表格（含三键以外的键），正文复用 `MarkdownContent`
+  （**不改动会话渲染管线**）；无 front matter 不渲染表格。
+- **纯函数层**：`lib/repo-knowledge-base.ts` 的 `isRepoKnowledgeBaseId` / `decodeRepoKnowledgeBaseId` /
+  `sourceLabel`（与服务端同口径）。
+- **测试入口**：`lib/__tests__/repo-knowledge-base.test.ts`、`lib/__tests__/front-matter.test.ts`、
+  `components/knowledge-base/__tests__/RepoKnowledgeBaseSection.test.tsx`、`RepoKnowledgeBaseContent.test.tsx`、
+  `pages/__tests__/KnowledgeBasePage.test.tsx`（repo 只读分支）；E2E `tests/e2e/src/repo-knowledge-base.spec.ts`。
+
 ## 会话内容预览子系统（#461）
 
 - **布局**：`SessionView` 根容器为纵向 flex——标题栏（`SessionHeader` / 协议与只读提示）独占一行，

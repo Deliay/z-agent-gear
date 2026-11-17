@@ -1136,6 +1136,8 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 | Controller → Server | `fs:read-file:result` | 返回文件内容 |
 | Server → Controller | `workflow-templates:scan` | 请求扫描项目工作流模板目录（`.zag/workflow/templates/`） |
 | Controller → Server | `workflow-templates:scan:result` | 返回模板文件列表与内容 |
+| Server → Controller | `knowledge-bases:scan` | 请求扫描项目仓库内建知识库目录（`.zag/knowledges/` 与 `docs/knowledges/`） |
+| Controller → Server | `knowledge-bases:scan:result` | 返回仓库知识库列表与文档内容 |
 
 ### 3.2 `fs:browse`（Server → Controller）
 
@@ -1872,6 +1874,86 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
 1. 查找 controller socket，发送 `workflow-templates:scan` Socket.IO 事件（含 `requestId`, `path`）
 2. 等待 `workflow-templates:scan:result`（约 15s 超时）
 3. 结果写入 Redis `workflow-templates:scan:{requestId}`（TTL 60s），agent-api 轮询消费（500ms × 30 ≈ 15s 上限）；`templates` 非数组时按 `{ success: false }` 兜底落键
+
+### 3.29 `knowledge-bases:scan`（Server → Controller）
+
+请求扫描项目工作区内两个固定子目录下的内建知识库：`.zag/knowledges/` 与 `docs/knowledges/`。用于「知识库支持在代码仓库中内建」：仓库为知识库唯一事实源，平台侧不落库、只读展示。
+
+**Payload:**
+
+```json
+{
+  "requestId": "string",
+  "path": "string"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
+| `path` | `string` | 是 | 项目工作区绝对路径；扫描固定子目录 `<path>/.zag/knowledges/` 与 `<path>/docs/knowledges/` |
+
+**约束：**
+
+- 仅直读两个约定子目录；知识库发现**不递归**（仅来源目录的直接子文件夹），子文件夹内存在常规文件 `knowledge-base.json` 才识别为一个知识库（`knowledge-base.json` 为目录或符号链接指向目录时不识别）。
+- 库内文档**递归**收集 `.md` 常规文件（扩展名按小写比较）；符号链接按 `stat` 判定为常规文件才读取，指向目录/设备或悬空的链接跳过；文档 `path` 为库内相对 POSIX 路径。
+- 目录不存在（ENOENT / ENOTDIR）视为空列表（`success: true`，对应来源空列表）；读取权限失败返回 `success: false, error: 'permission denied'`。
+- 数量与体积上限：每来源目录 ≤20 个知识库（文件夹名 `localeCompare` 排序后取前 20，超出该来源 `truncated: true`）；每库 ≤50 个文档（超出 `truncated: true`）；`knowledge-base.json` >64 KiB 该库标记 `error: 'file too large'`（不解析 schema、不读库内文档）；单文档 >128 KiB 该文档标记 `error: 'file too large'`（不读内容）；单库内容累计 >1 MiB 停止读取该库并 `truncated: true`；单来源内容累计 >2 MiB 停止读取该来源并 `truncated: true`。
+- 错误文案白名单：`file too large` / `not found` / `permission denied`。
+- 扫描事件**不**使用 `fs:browse`/`fs:read-file` 的会话路径白名单（检测可发生在会话启动前），路径由服务端按已登记工作区下发；仅读不写、不执行。
+
+### 3.30 `knowledge-bases:scan:result`（Controller → Server）
+
+返回两个来源目录下的知识库列表与文档内容。
+
+**Payload:**
+
+```json
+{
+  "requestId": "string",
+  "success": true,
+  "sources": [
+    {
+      "source": "zag",
+      "knowledgeBases": [
+        {
+          "folder": "team-rules",
+          "schema": "{ \"name\": \"团队规范\" }",
+          "documents": [
+            { "path": "guides/git.md", "content": "---\ntitle: Git 规范\n---\n# ..." }
+          ],
+          "truncated": false
+        },
+        { "folder": "broken", "error": "file too large" }
+      ],
+      "truncated": false
+    },
+    { "source": "docs", "knowledgeBases": [], "truncated": false }
+  ],
+  "truncated": false,
+  "error": "string"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `requestId` | `string` | 是 | 对应的请求 ID |
+| `success` | `boolean` | 是 | 两个来源目录读取整体是否成功 |
+| `sources` | `Array<{ source: 'zag' \| 'docs'; knowledgeBases: Array<KnowledgeBaseEntry>; truncated: boolean }>` | 成功时必填 | 逐来源结果；`source` 标识来源目录 |
+| `sources[].knowledgeBases[].folder` | `string` | 是 | 知识库文件夹名（来源目录的直接子目录） |
+| `sources[].knowledgeBases[].schema` | `string` | 否 | `knowledge-base.json` 原文（≤64 KiB） |
+| `sources[].knowledgeBases[].documents` | `Array<{ path: string; content?: string; error?: string }>` | 否 | 库内 `.md` 文件（递归）；`path` 为库内相对 POSIX 路径；读取失败该文档附 `error` |
+| `sources[].knowledgeBases[].truncated` | `boolean` | 否 | 该库是否因数量/体积上限截断 |
+| `sources[].knowledgeBases[].error` | `string` | 否 | 该库整体失败原因（白名单见 §3.29） |
+| `sources[].truncated` | `boolean` | 是 | 该来源是否因数量/体积上限截断 |
+| `truncated` | `boolean` | 是 | 是否有任一来源被截断 |
+| `error` | `string` | 失败时必填 | 整体失败原因（白名单见 §3.29） |
+
+**服务端行为：**
+
+1. 查找 controller socket，发送 `knowledge-bases:scan` Socket.IO 事件（含 `requestId`, `path`）
+2. 等待 `knowledge-bases:scan:result`（约 15s 超时）
+3. 结果写入 Redis `knowledge-bases:scan:{requestId}`（TTL 60s），agent-api 轮询消费（500ms × 30 ≈ 15s 上限）；`sources` 非数组时按 `{ success: false, sources: [], truncated: false, error: 'not found' }` 兜底落键
 
 ---
 

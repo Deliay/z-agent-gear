@@ -3,20 +3,27 @@ import { useMutation, useQuery } from '@apollo/client/react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import KnowledgeBaseEditor from '@/components/knowledge-base/KnowledgeBaseEditor';
 import KnowledgeBaseHistoryDrawer from '@/components/knowledge-base/KnowledgeBaseHistoryDrawer';
 import KnowledgeBasePreview from '@/components/knowledge-base/KnowledgeBasePreview';
+import RepoKnowledgeBaseContent from '@/components/knowledge-base/RepoKnowledgeBaseContent';
 import {
   DELETE_KNOWLEDGE_BASE_DOCUMENT,
   GET_KNOWLEDGE_BASE_DOCUMENT,
   GET_KNOWLEDGE_BASE_EVENTS,
   GET_KNOWLEDGE_BASE_TREE,
+  GET_REPO_KNOWLEDGE_BASES,
+  GET_REPO_KNOWLEDGE_BASE_DOCUMENT,
   type DeleteKnowledgeBaseDocumentMutation,
   type GetKnowledgeBaseDocumentQuery,
   type GetKnowledgeBaseTreeQuery,
+  type GetRepoKnowledgeBasesQuery,
+  type GetRepoKnowledgeBaseDocumentQuery,
 } from '@/graphql/knowledge-base';
-import { decodeDocumentPath, knowledgeBaseDocHref } from '@/lib/knowledge-base-path';
+import { breadcrumbOf, decodeDocumentPath, knowledgeBaseDocHref } from '@/lib/knowledge-base-path';
+import { decodeRepoKnowledgeBaseId, isRepoKnowledgeBaseId, sourceLabel } from '@/lib/repo-knowledge-base';
 import { knowledgeBaseErrorMessage } from '@/lib/knowledge-base';
 
 /**
@@ -33,13 +40,15 @@ export default function KnowledgeBasePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const edit = searchParams.get('edit') === '1';
   const navigate = useNavigate();
+  const isRepo = isRepoKnowledgeBaseId(kbId);
+  const decodedRepo = useMemo(() => decodeRepoKnowledgeBaseId(kbId), [kbId]);
 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
   const { data: treeData, loading: treeLoading } = useQuery<GetKnowledgeBaseTreeQuery>(
     GET_KNOWLEDGE_BASE_TREE,
-    { fetchPolicy: 'cache-and-network' },
+    { fetchPolicy: 'cache-and-network', skip: isRepo },
   );
   const treeItem = treeData?.knowledgeBaseTree.find(
     (item) => item.knowledgeBase.id === kbId,
@@ -50,11 +59,23 @@ export default function KnowledgeBasePage() {
     GET_KNOWLEDGE_BASE_DOCUMENT,
     {
       variables: { knowledgeBaseId: kbId, path },
-      skip: !knowledgeBase,
+      skip: isRepo || !knowledgeBase,
       fetchPolicy: 'cache-and-network',
     },
   );
   const document = documentData?.knowledgeBaseDocument ?? null;
+
+  const { data: repoDocumentData, loading: repoDocumentLoading } =
+    useQuery<GetRepoKnowledgeBaseDocumentQuery>(GET_REPO_KNOWLEDGE_BASE_DOCUMENT, {
+      variables: { id: kbId, path },
+      skip: !isRepo || !decodedRepo,
+      fetchPolicy: 'cache-and-network',
+    });
+  const { data: repoBasesData } = useQuery<GetRepoKnowledgeBasesQuery>(GET_REPO_KNOWLEDGE_BASES, {
+    variables: { workspaceId: decodedRepo?.workspaceId ?? '' },
+    skip: !isRepo || !decodedRepo,
+    fetchPolicy: 'cache-and-network',
+  });
 
   const [deleteDocument, { loading: deleting }] =
     useMutation<DeleteKnowledgeBaseDocumentMutation>(DELETE_KNOWLEDGE_BASE_DOCUMENT);
@@ -85,6 +106,84 @@ export default function KnowledgeBasePage() {
       setDeleteOpen(false);
     }
   };
+
+  if (isRepo) {
+    const repoDocument = repoDocumentData?.repoKnowledgeBaseDocument ?? null;
+    if (!decodedRepo) {
+      return (
+        <div className="flex h-full items-center justify-center p-6" data-testid="knowledge-base-page">
+          <div className="max-w-md space-y-2 text-center" role="alert">
+            <p className="text-sm font-medium" data-testid="repo-kb-unavailable">
+              知识库不存在或不可访问
+            </p>
+            <p className="text-xs text-muted-foreground">
+              仓库知识库可能已被移动或删除，或当前工作区无权访问。
+            </p>
+          </div>
+        </div>
+      );
+    }
+    if (repoDocumentLoading && !repoDocumentData) {
+      return (
+        <output
+          className="flex h-full items-center justify-center text-sm text-muted-foreground"
+          aria-label="加载中"
+        >
+          加载中…
+        </output>
+      );
+    }
+    if (!repoDocument) {
+      return (
+        <div className="flex h-full items-center justify-center p-6" data-testid="knowledge-base-page">
+          <div className="max-w-md space-y-2 text-center" role="alert">
+            <p className="text-sm font-medium" data-testid="repo-kb-unavailable">
+              知识库不存在或不可访问
+            </p>
+            <p className="text-xs text-muted-foreground">
+              仓库知识库可能已被移动或删除，或当前工作区无权访问。
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    const repoBase =
+      repoBasesData?.repoKnowledgeBases.find((item) => item.id === kbId) ?? null;
+    const crumbs = breadcrumbOf(repoDocument.path).slice(1);
+
+    return (
+      <div data-testid="knowledge-base-page" data-repo="true">
+        <article className="min-w-0" data-testid="repo-knowledge-base-preview">
+          <div className="w-full max-w-3xl min-w-0 px-4 py-6 sm:px-6">
+            <nav
+              aria-label="文档路径面包屑"
+              className="mb-4 flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground"
+              data-testid="repo-kb-breadcrumb"
+            >
+              <span className="min-w-0 truncate">{repoBase?.name ?? decodedRepo.folder}</span>
+              <Badge variant="outline" className="shrink-0 px-1 py-0 text-[9px]">
+                {sourceLabel(decodedRepo.source)}
+              </Badge>
+              {crumbs.map((crumb) => (
+                <span key={crumb.path} className="flex min-w-0 items-center gap-1">
+                  <span className="shrink-0">/</span>
+                  <span className="min-w-0 truncate">{crumb.label}</span>
+                </span>
+              ))}
+            </nav>
+            <h1
+              className="mb-4 min-w-0 wrap-anywhere text-2xl font-semibold tracking-tight"
+              data-testid="knowledge-base-title"
+            >
+              {repoDocument.title}
+            </h1>
+            <RepoKnowledgeBaseContent document={repoDocument} />
+          </div>
+        </article>
+      </div>
+    );
+  }
 
   if (treeLoading && !treeData) {
     return (

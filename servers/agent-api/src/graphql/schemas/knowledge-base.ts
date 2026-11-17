@@ -78,12 +78,61 @@ export const knowledgeBaseTypeDefs = `#graphql
     content: String!
   }
 
+  enum RepoKnowledgeBaseSource {
+    ZAG
+    DOCS
+  }
+
+  type RepoKnowledgeBaseHost {
+    cloudHostId: ID!
+    cloudHostName: String!
+    workspaceId: ID!
+    scanSupported: Boolean!
+  }
+
+  type RepoKnowledgeBase {
+    id: ID!
+    name: String!
+    description: String!
+    source: RepoKnowledgeBaseSource!
+    folder: String!
+    workspaceId: ID!
+    cloudHostId: ID!
+    cloudHostName: String!
+    valid: Boolean!
+    errors: [String!]!
+    documentCount: Int!
+    truncated: Boolean!
+  }
+
+  enum RepoKnowledgeBaseNodeKind {
+    FOLDER
+    DOCUMENT
+  }
+
+  type RepoKnowledgeBaseNode {
+    kind: RepoKnowledgeBaseNodeKind!
+    name: String!
+    path: String!
+  }
+
+  type RepoKnowledgeBaseDocument {
+    path: String!
+    title: String!
+    content: String!
+  }
+
   extend type Query {
     knowledgeBases: [KnowledgeBase!]!
     knowledgeBaseTree: [KnowledgeBaseTreeItem!]!
     knowledgeBaseDocuments(knowledgeBaseId: ID!, prefix: String): [KnowledgeBaseDocumentMeta!]!
     knowledgeBaseDocument(knowledgeBaseId: ID!, path: String!): KnowledgeBaseDocument
     knowledgeBaseEvents(knowledgeBaseId: ID!, path: String, limit: Int, before: String): [KnowledgeBaseEvent!]!
+
+    repoKnowledgeBaseHosts: [RepoKnowledgeBaseHost!]!
+    repoKnowledgeBases(workspaceId: ID!, refresh: Boolean): [RepoKnowledgeBase!]!
+    repoKnowledgeBaseDocumentChildren(id: ID!, path: String): [RepoKnowledgeBaseNode!]!
+    repoKnowledgeBaseDocument(id: ID!, path: String!): RepoKnowledgeBaseDocument
   }
 
   extend type Mutation {

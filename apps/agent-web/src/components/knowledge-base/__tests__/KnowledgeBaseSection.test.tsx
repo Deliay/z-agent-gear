@@ -91,7 +91,15 @@ function makeTreeItem(
 }
 
 function mockTree(items: KnowledgeBaseTreeItemData[]) {
-  mockUseQuery.mockReturnValue({ data: { knowledgeBaseTree: items }, loading: false, refetch: vi.fn() });
+  mockUseQuery.mockImplementation((query: unknown) => {
+    const name = (
+      query as { definitions?: Array<{ name?: { value?: string } }> }
+    )?.definitions?.[0]?.name?.value;
+    if (name === 'GetRepoKnowledgeBaseHosts') {
+      return { data: { repoKnowledgeBaseHosts: [] }, loading: false, refetch: vi.fn() };
+    }
+    return { data: { knowledgeBaseTree: items }, loading: false, refetch: vi.fn() };
+  });
 }
 
 function renderSection() {

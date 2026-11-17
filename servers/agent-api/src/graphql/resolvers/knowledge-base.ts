@@ -9,6 +9,13 @@ import {
   type KnowledgeBaseView,
 } from '../../services/knowledge-base-service.js';
 import type { KnowledgeBasePermissionMode } from '../../models/knowledge-base.js';
+import {
+  repoKnowledgeBaseService,
+  type RepoKnowledgeBaseDocumentView,
+  type RepoKnowledgeBaseHost,
+  type RepoKnowledgeBaseNode,
+  type RepoKnowledgeBaseView,
+} from '../../services/repo-knowledge-bases.js';
 import type { AuthContext } from './auth.js';
 
 /**
@@ -36,6 +43,8 @@ export const KNOWLEDGE_BASE_PUBLIC_ERRORS = new Set([
   'invalid document tags',
   'invalid document description',
   'invalid document content',
+  'Workspace not found',
+  'repo knowledge base scan failed',
 ]);
 
 async function wrap<T>(fn: () => Promise<T>): Promise<T> {
@@ -112,6 +121,42 @@ export const knowledgeBaseResolvers = {
           before: args.before ?? undefined,
         }),
       );
+    },
+    repoKnowledgeBaseHosts: async (
+      _parent: unknown,
+      _args: unknown,
+      context: AuthContext,
+    ): Promise<RepoKnowledgeBaseHost[]> => {
+      const userId = requireUser(context);
+      return wrap(() => repoKnowledgeBaseService.listHosts(userId));
+    },
+    repoKnowledgeBases: async (
+      _parent: unknown,
+      args: { workspaceId: string; refresh?: boolean | null },
+      context: AuthContext,
+    ): Promise<RepoKnowledgeBaseView[]> => {
+      const userId = requireUser(context);
+      return wrap(() =>
+        repoKnowledgeBaseService.listKnowledgeBases(userId, args.workspaceId, args.refresh === true),
+      );
+    },
+    repoKnowledgeBaseDocumentChildren: async (
+      _parent: unknown,
+      args: { id: string; path?: string | null },
+      context: AuthContext,
+    ): Promise<RepoKnowledgeBaseNode[]> => {
+      const userId = requireUser(context);
+      return wrap(() =>
+        repoKnowledgeBaseService.listChildren(userId, args.id, args.path ?? undefined),
+      );
+    },
+    repoKnowledgeBaseDocument: async (
+      _parent: unknown,
+      args: { id: string; path: string },
+      context: AuthContext,
+    ): Promise<RepoKnowledgeBaseDocumentView | null> => {
+      const userId = requireUser(context);
+      return wrap(() => repoKnowledgeBaseService.getDocument(userId, args.id, args.path));
     },
   },
   Mutation: {

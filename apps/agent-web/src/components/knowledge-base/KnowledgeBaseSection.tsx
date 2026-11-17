@@ -25,6 +25,7 @@ import { knowledgeBaseErrorMessage } from '@/lib/knowledge-base';
 import { useWorkspaceAccess } from '@/stores/workspace';
 import CreateKnowledgeBaseDialog from './CreateKnowledgeBaseDialog';
 import KnowledgeBaseSettingsDialog from './KnowledgeBaseSettingsDialog';
+import RepoKnowledgeBaseSection from './RepoKnowledgeBaseSection';
 
 /**
  * 侧边栏「知识库」分区（第五分区，位置「会话」之后、「网关」之前，D8）。
@@ -260,6 +261,8 @@ export default function KnowledgeBaseSection({ expanded, onToggle }: KnowledgeBa
             })}
           </div>
         )}
+
+        <RepoKnowledgeBaseSection />
       </SidebarSection>
 
       <CreateKnowledgeBaseDialog

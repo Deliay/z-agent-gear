@@ -22,7 +22,17 @@ vi.mock('../../services/knowledge-base-service.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../services/repo-knowledge-bases.js', () => ({
+  repoKnowledgeBaseService: {
+    listHosts: vi.fn(),
+    listKnowledgeBases: vi.fn(),
+    listChildren: vi.fn(),
+    getDocument: vi.fn(),
+  },
+}));
+
 import { knowledgeBaseService } from '../../services/knowledge-base-service.js';
+import { repoKnowledgeBaseService } from '../../services/repo-knowledge-bases.js';
 import { KNOWLEDGE_BASE_PUBLIC_ERRORS, knowledgeBaseResolvers } from './knowledge-base.js';
 import { typeDefs } from '../schemas/index.js';
 import { resolvers } from './index.js';
@@ -66,6 +76,34 @@ describe('Knowledge Base resolvers', () => {
           knowledgeBaseResolvers.Query.knowledgeBaseEvents(
             {},
             { knowledgeBaseId: 'k1' },
+            anonymous,
+          ),
+      ],
+      ['repoKnowledgeBaseHosts', () => knowledgeBaseResolvers.Query.repoKnowledgeBaseHosts({}, {}, anonymous)],
+      [
+        'repoKnowledgeBases',
+        () =>
+          knowledgeBaseResolvers.Query.repoKnowledgeBases(
+            {},
+            { workspaceId: 'ws-1' },
+            anonymous,
+          ),
+      ],
+      [
+        'repoKnowledgeBaseDocumentChildren',
+        () =>
+          knowledgeBaseResolvers.Query.repoKnowledgeBaseDocumentChildren(
+            {},
+            { id: 'repo:ws-1:zag:a' },
+            anonymous,
+          ),
+      ],
+      [
+        'repoKnowledgeBaseDocument',
+        () =>
+          knowledgeBaseResolvers.Query.repoKnowledgeBaseDocument(
+            {},
+            { id: 'repo:ws-1:zag:a', path: '/a' },
             anonymous,
           ),
       ],
@@ -129,9 +167,9 @@ describe('Knowledge Base resolvers', () => {
     });
   });
 
-  describe('白名单透传（契约 14 条逐字）', () => {
-    it('白名单集合恒为 14 条', () => {
-      expect(KNOWLEDGE_BASE_PUBLIC_ERRORS.size).toBe(14);
+  describe('白名单透传（契约 16 条逐字）', () => {
+    it('白名单集合恒为 16 条', () => {
+      expect(KNOWLEDGE_BASE_PUBLIC_ERRORS.size).toBe(16);
     });
 
     it.each([...KNOWLEDGE_BASE_PUBLIC_ERRORS])(
@@ -239,6 +277,75 @@ describe('Knowledge Base resolvers', () => {
         ),
       ).rejects.toThrow('invalid document path');
     });
+
+    it('仓库知识库四查询委托 repo 服务并归一 refresh===true', async () => {
+      vi.mocked(repoKnowledgeBaseService.listHosts).mockResolvedValue([]);
+      vi.mocked(repoKnowledgeBaseService.listKnowledgeBases).mockResolvedValue([]);
+      vi.mocked(repoKnowledgeBaseService.listChildren).mockResolvedValue([]);
+      vi.mocked(repoKnowledgeBaseService.getDocument).mockResolvedValue(null);
+
+      await knowledgeBaseResolvers.Query.repoKnowledgeBaseHosts({}, {}, authed);
+      await knowledgeBaseResolvers.Query.repoKnowledgeBases(
+        {},
+        { workspaceId: 'ws-1', refresh: true },
+        authed,
+      );
+      await knowledgeBaseResolvers.Query.repoKnowledgeBases(
+        {},
+        { workspaceId: 'ws-1', refresh: null },
+        authed,
+      );
+      await knowledgeBaseResolvers.Query.repoKnowledgeBaseDocumentChildren(
+        {},
+        { id: 'repo:ws-1:zag:a', path: '/dir' },
+        authed,
+      );
+      await knowledgeBaseResolvers.Query.repoKnowledgeBaseDocument(
+        {},
+        { id: 'repo:ws-1:zag:a', path: '/dir/a' },
+        authed,
+      );
+
+      expect(repoKnowledgeBaseService.listHosts).toHaveBeenCalledWith('user1');
+      expect(repoKnowledgeBaseService.listKnowledgeBases).toHaveBeenNthCalledWith(
+        1,
+        'user1',
+        'ws-1',
+        true,
+      );
+      expect(repoKnowledgeBaseService.listKnowledgeBases).toHaveBeenNthCalledWith(
+        2,
+        'user1',
+        'ws-1',
+        false,
+      );
+      expect(repoKnowledgeBaseService.listChildren).toHaveBeenCalledWith(
+        'user1',
+        'repo:ws-1:zag:a',
+        '/dir',
+      );
+      expect(repoKnowledgeBaseService.getDocument).toHaveBeenCalledWith(
+        'user1',
+        'repo:ws-1:zag:a',
+        '/dir/a',
+      );
+    });
+
+    it('仓库知识库扫描失败与 Workspace not found 逐字透传', async () => {
+      vi.mocked(repoKnowledgeBaseService.listKnowledgeBases).mockRejectedValue(
+        new Error('repo knowledge base scan failed'),
+      );
+      await expect(
+        knowledgeBaseResolvers.Query.repoKnowledgeBases({}, { workspaceId: 'ws-1' }, authed),
+      ).rejects.toThrow('repo knowledge base scan failed');
+
+      vi.mocked(repoKnowledgeBaseService.listKnowledgeBases).mockRejectedValue(
+        new Error('Workspace not found'),
+      );
+      await expect(
+        knowledgeBaseResolvers.Query.repoKnowledgeBases({}, { workspaceId: 'ws-1' }, authed),
+      ).rejects.toThrow('Workspace not found');
+    });
   });
 
   describe('登记守卫', () => {
@@ -246,7 +353,9 @@ describe('Knowledge Base resolvers', () => {
       const merged = (typeDefs as string[]).join('\n');
       expect(merged).toContain('knowledgeBases: [KnowledgeBase!]!');
       expect(merged).toContain('createKnowledgeBaseDocument');
+      expect(merged).toContain('repoKnowledgeBaseHosts');
       expect(resolvers.Query.knowledgeBases).toBeTypeOf('function');
+      expect(resolvers.Query.repoKnowledgeBaseHosts).toBeTypeOf('function');
       expect(resolvers.Mutation.createKnowledgeBase).toBeTypeOf('function');
       expect(resolvers.Mutation.deleteKnowledgeBaseDocument).toBeTypeOf('function');
     });
