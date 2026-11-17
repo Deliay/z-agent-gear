@@ -15,7 +15,7 @@ import { PLATFORM_SERVER_NAME } from './tool-handlers.js';
 import { ADMIN_PLATFORM_SERVER_NAME, ensureAdminToolsServer } from './admin-tools.js';
 import { initialModeModel, loadNodeConfig } from './node-config.js';
 import { scheduleInterruptionRetry } from './interrupt-retry.js';
-import { isCompactInFlight, runCompactPipeline } from './compact.js';
+import { consumeCompactInFlight, runCompactPipeline } from './compact.js';
 import { isReentrantLockError } from '../keyed-mutex.js';
 import { WORKFLOW_SYSTEM_PROMPT, FALLBACK_PROMPT, IDLE_NUDGE_PROMPT, RESUME_CONTINUE_PROMPT, buildReworkSection } from './prompts.js';
 
@@ -77,8 +77,9 @@ class WorkflowOrchestrator {
     if (!instance) return;
     const node = instance.nodes.find((n) => n.sessionId?.toString() === sessionId);
     if (!node || (node.status !== 'RUNNING' && node.status !== 'REWORK')) return;
-    // 压缩回合结束（promptCompleted→idling）不应误判为节点停滞而排期中断重试（提案 D1）
-    if (isCompactInFlight(sessionId)) return;
+    // 压缩回合结束（promptCompleted→idling）不应误判为节点停滞而排期中断重试（提案 D1）：
+    // 一次性消费压缩登记，后续回合的空闲通知恢复既有停滞检测行为。
+    if (consumeCompactInFlight(sessionId)) return;
 
     await scheduleInterruptionRetry({
       instanceId: instance._id.toString(),
@@ -279,23 +280,18 @@ class WorkflowOrchestrator {
     }
 
     if (configuredNode.reworkCompactOriginalContext && configuredNode.agentConfig) {
-      const compacted = await runCompactPipeline(sessionId, configuredNode.agentConfig.acpServerType);
-      if (!compacted) {
+      // 发送动作 1/2：压缩指令。不等待压缩回合空闲——harness 输入队列保证顺序执行，
+      // 等待压缩回合 idling 会在压缩迟迟不结束时把会话卡住。
+      const dispatched = await runCompactPipeline(sessionId, configuredNode.agentConfig.acpServerType);
+      if (!dispatched) {
         logger.warn(
           { event: 'rework-compact-degraded', workflowInstanceId: instance._id.toString(), nodeId: node.nodeId, sessionId },
-          'rework compact failed, sending rework prompt anyway',
+          'rework compact command dispatch failed, sending rework prompt anyway',
         );
-      }
-      // 发送前双校验：压缩期间节点可能已被人工推进/重启/实例删除
-      if (!(await this.canSendAfterWait(instance._id.toString(), node.nodeId, sessionId, 'REWORK'))) {
-        logger.info(
-          { event: 'rework-send-skipped', workflowInstanceId: instance._id.toString(), nodeId: node.nodeId, sessionId },
-          'rework prompt skipped after compact (state changed)',
-        );
-        return;
       }
     }
 
+    // 发送动作 2/2：返工指引（与压缩指令连续发送，两个独立输入消息）
     await sessionService.addMessage(sessionId, {
       direction: 'input',
       type: 'text',
@@ -330,21 +326,16 @@ class WorkflowOrchestrator {
           throw new Error(`resume failed: ${resumeResult.error ?? 'unknown'}`);
         }
         if (configuredNode.resumeCompactOriginalContext && configuredNode.agentConfig) {
-          const compacted = await runCompactPipeline(sessionId, configuredNode.agentConfig.acpServerType);
-          if (!compacted) {
+          // 发送动作 1/2：压缩指令（同返工链路，不等待压缩回合空闲）
+          const dispatched = await runCompactPipeline(sessionId, configuredNode.agentConfig.acpServerType);
+          if (!dispatched) {
             logger.warn(
               { event: 'resume-compact-degraded', workflowInstanceId: instance._id.toString(), nodeId: node.nodeId, sessionId },
-              'resume compact failed, sending continue prompt anyway',
+              'resume compact command dispatch failed, sending continue prompt anyway',
             );
-          }
-          if (!(await this.canSendAfterWait(instance._id.toString(), node.nodeId, sessionId, 'RUNNING'))) {
-            logger.info(
-              { event: 'resume-send-skipped', workflowInstanceId: instance._id.toString(), nodeId: node.nodeId, sessionId },
-              'resume prompt skipped after compact (state changed)',
-            );
-            return;
           }
         }
+        // 发送动作 2/2：继续提示词（与压缩指令连续发送，两个独立输入消息）
         await sessionService.addMessage(sessionId, {
           direction: 'input',
           type: 'text',
@@ -382,26 +373,6 @@ class WorkflowOrchestrator {
       reason,
     });
     node.sessionId = undefined;
-  }
-
-  /**
-   * 压缩等待后的发送前双校验（D7）：实例未删除 + 节点状态仍为预期 + sessionId 未变。
-   * 不满足说明人工 complete/restart/删除已介入，放弃发送过期提示词。
-   */
-  private async canSendAfterWait(
-    instanceId: string,
-    nodeId: string,
-    sessionId: string,
-    expectedStatus: 'RUNNING' | 'REWORK',
-  ): Promise<boolean> {
-    const current = (await WorkflowInstance.findOne({
-      _id: instanceId,
-      deletedAt: null,
-    }).lean()) as unknown as WorkflowInstanceDoc | null;
-    if (!current) return false;
-    const node = current.nodes.find((item) => item.nodeId === nodeId);
-    if (!node || node.status !== expectedStatus) return false;
-    return Boolean(node.sessionId) && node.sessionId!.toString() === sessionId;
   }
 
   /** 重启节点：关闭旧会话，以全新会话重启（可携带新 agentConfig 更新节点快照） */
