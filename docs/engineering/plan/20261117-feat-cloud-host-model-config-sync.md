@@ -217,7 +217,7 @@ sequenceDiagram
 
 | 文件 | 变更 |
 |------|------|
-| `servers/agent-api/src/services/cloud-host-model-push.ts`（新） | `pushModelProvisionForTenant(tenantId)` / `pushModelProvisionForAllRunning()` / `applyGlobalModelRefresh()`（推送 + 全量 ACP 失效，single-flight 合并）；内部 `resolveProvisionForHost(host)`：`host.resourceWorkspaceId` → `workspaceService.systemWorkspaceContext()`（F4/F33）→ `runWithWorkspace(ctx, findAll)` → `buildModelProvision`；`runWithLimit(5)`；逐台 `containerId` 缺失/非 RUNNING/上下文解析失败 → 跳过 + `logger.warn`（**绝不裸跑 find***，D2）；单台失败仅 warn（记录 `cloudHostId/containerId/delivered/reason`） |
+| `servers/agent-api/src/services/cloud-host-model-push.ts`（新） | `pushModelProvisionForTenant(tenantId)` / `pushModelProvisionForAllRunning()` / `applyGlobalModelRefresh()`（推送 + 全量 ACP 失效，single-flight 合并）；内部 `resolveProvisionForHost(host)`：`host.resourceWorkspaceId` → `workspaceService.systemWorkspaceContext(workspaceId)`（系统链路构造上下文，见 `services/workspace-service.ts:497-514`）→ `runWithWorkspace(ctx, findAll)` → `buildModelProvision`；`runWithLimit(5)`；逐台 `containerId` 缺失/非 RUNNING/上下文解析失败 → 跳过 + `logger.warn`（**绝不裸跑 find***，D2）；单台失败仅 warn（记录 `cloudHostId/containerId/delivered/reason`） |
 | `servers/agent-api/src/services/acp-options-cache.ts` | 新增 `invalidateAllAcpOptions()`：`deleteKeysByPattern('acp:options:*')`，失败仅告警 |
 | `servers/agent-api/src/routes/internal-model-config.ts`（新） | `POST /internal/model-config/refresh`：`timingSafeEqual(Bearer INTERNAL_API_TOKEN)`（复用 `internal-cloud-host.ts:19-25` 范式）；body `scope !== 'global'` → 400 `INVALID_SCOPE`；`res.status(202).json({accepted:true})` 后 `setImmediate` 执行 `applyGlobalModelRefresh()`；未配置 token → 401 |
 | `servers/agent-api/src/index.ts` | `app.use('/internal/model-config', internalModelConfigRouter)` |
