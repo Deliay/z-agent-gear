@@ -38,6 +38,14 @@ export const MIN_HARNESS_VERSION_BY_TYPE: Record<string, string> = {
   deepseek_harness: MIN_DEEPSEEK_HARNESS_WORKER_VERSION,
 };
 
+/**
+ * 运行期模型清单下发（`harness:models`）的最低 agent-gear 版本：能力自 2.20.0 起提供。
+ *
+ * **仅用于推送短路判断**（版本可得且低于该值 → 不 emit，直接 `delivered:false/worker_unsupported`），
+ * **不提升**注册门禁（契约 §3.4 / 计划 D9/D19）：旧 worker 静默忽略未知事件，配置保持创建快照。
+ */
+export const MIN_HARNESS_MODELS_WORKER_VERSION = '2.20.0';
+
 /** 本期支持的 worker major 版本。 */
 export const SUPPORTED_MAJOR = 2;
 
@@ -165,6 +173,20 @@ export function isSupportedHarnessWorkerVersion(
   supportedMajor: number = SUPPORTED_MAJOR,
 ): WorkerVersionSupport {
   return isSupportedWorkerVersion(raw, MIN_HARNESS_WORKER_VERSION, supportedMajor);
+}
+
+/**
+ * 运行期模型下发能力判定（计划 D9）：
+ * - 版本**可得**（可解析）→ `>= MIN_HARNESS_MODELS_WORKER_VERSION` 才支持；
+ * - 版本**不可得/非法** → `true`（视为「不短路」，正常 emit 由 ack 超时收敛，
+ *   避免因读取抖动把可用容器误判为不支持）。
+ *
+ * 仅作短路判断，不参与注册门禁（注册仍按 `agentGearMinVersion` / `MIN_HARNESS_WORKER_VERSION`）。
+ */
+export function supportsHarnessModelPush(raw: unknown): boolean {
+  const parsed = parseWorkerVersion(raw);
+  if (!parsed.ok) return true;
+  return isSupportedWorkerVersion(raw, MIN_HARNESS_MODELS_WORKER_VERSION).supported;
 }
 
 /**

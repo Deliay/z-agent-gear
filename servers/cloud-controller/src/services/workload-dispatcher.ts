@@ -245,6 +245,8 @@ export function buildHarnessEnv(
   env.ZAG_MODEL_IDS = secrets.modelIds;
   // 可选：模型 ID → 最长上下文（契约 §2.9）；缺失不下发，旧 worker 无感。
   if (secrets.modelContextLengths) env.ZAG_MODEL_CONTEXT_LENGTHS = secrets.modelContextLengths;
+  // 可选：多 vendor 模型清单（agent-gear ≥ 2.20.0；契约附录 B.2）。旧 worker 忽略未知变量。
+  if (secrets.modelProviders) env.ZAG_MODEL_PROVIDERS = secrets.modelProviders;
 
   return { ok: true, env };
 }

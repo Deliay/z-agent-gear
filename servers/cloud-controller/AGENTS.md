@@ -216,3 +216,23 @@ pnpm run test:coverage
 - **操作查询**：`GET /internal/storages/:id/operations/:operationId`（`operationId/type/status/usageBytes/startedAt/finishedAt/failureReason`）。
 - **巡检**：`StatusSyncService` 每轮在 `reconcileArchives` 后调用 `reconcileStorageOperations`：超 `ARCHIVE_TIMEOUT_MS` → failed + 回调；本进程无执行任务（重启）→ 重跑；终态未送达回调 → 重投一次（agent-api 幂等）。
 - **零回归**：`storageArchive` 缺省时 destroy 报文/落库/terminal 与改动前逐字段一致；未挂载存储不写 `storageArchiveSkipped`、不携带 `archiveSkipped`。
+
+## 运行期模型下发（harness-models，#533）
+
+> 契约 `contracts/cloud-controller-websocket.md` §2.11/§2.12、A.2.2、A.2.14、B.2；计划
+> `docs/engineering/plan/20261117-feat-cloud-host-model-config-sync.md` Phase 3。
+
+- **端点**：`POST /internal/containers/:containerId/harness-models`（Bearer `INTERNAL_API_TOKEN`）。状态矩阵：
+  非法 id/不存在 → 404 `NOT_FOUND`；终态（exited/failed/destroying）→ 409 `CONTAINER_NOT_ONLINE`；
+  中间态（creating/connecting/initializing）→ 200 `{delivered:false,reason:'offline'}`；payload 非法 → 400
+  `INVALID_MODEL_PROVISION`；`requestHarnessModels` 未注入 → 503 `UNAVAILABLE`。
+- **顺序硬约束**：先 `containerService.updateModelProvision`（SecretStore + `cloudcontainersecrets`：`modelProviders`
+  原样 + 旧字段投影）**再** emit；secret 已被清理（容器走完）→ 409，不把「容器已不存在」误报成保存失败。
+- **ack 网关**：`socketio-gateway.ts#requestHarnessModels` 生成 `requestId`、10s 超时；`harness:models:result` 只接受
+  同容器 pending；同容器并发新请求先以 `worker_error` 收敛旧请求；断连/重连/关停 → `offline`。`delivered=false`
+  一律不视为失败（best-effort）。
+- **版本短路**：`services/worker-version.ts#MIN_HARNESS_MODELS_WORKER_VERSION='2.20.0'` + `supportsHarnessModelPush`：
+  版本可得且更低 → 200 `worker_unsupported`（不 emit）；版本不可得 → 正常 emit 等 ack。**不提升注册门禁**（仍 2.17.1）。
+- **secrets/env**：`HarnessSecrets.modelProviders?: string`（ModelProvision JSON，可选、零迁移、读取侧回退旧字段）；
+  `buildHarnessJobEnv` 仅在携带时注入 `ZAG_MODEL_PROVIDERS`，init 与 runtime 两条路径同源。
+- **解析口径**：`services/model-provision.ts#parseModelProvisionPayload` 只做结构校验（不做业务语义），路由与服务共用。
