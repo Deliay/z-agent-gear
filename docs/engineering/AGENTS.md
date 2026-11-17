@@ -247,6 +247,7 @@ flowchart LR
 - [[proposals/20261116-feat-workflow-node-manual-fail.md]] — 工作流节点「立即失败」（契约新增 failNode 变更与 failInfo.source=MANUAL；agent-api failNode 服务编排「先引擎转移落库、后中断会话」避免误排期重试，复用中断重试既有 CAS 防护零新增取消机制；agent-web 节点详情抽屉「立即失败」按钮与二次确认）
 - [[proposals/20261116-feat-knowledge-base-optimization.md]] — 知识库优化（updateKnowledgeBaseDocument 扩展可选 newPath 原子「移动+更新」：KnowledgeBaseEventOp 新增 MOVE、事件新增 fromPath、移动时改写该路径全部历史事件 path 使历史随文档带入新路径、原路径释放后历史独立、移动权限=canUpdate、错误白名单零新增；MCP knowledge_base_document_update 同形扩展；agent-web 编辑器路径输入与保存编排含草稿键迁移、自足 TagBadgeInput 徽章编辑器、EVENT_OP_LABELS 增补 MOVE；零新集合零新索引零存量迁移）
 - [[proposals/20261116-feat-knowledge-base-repo-built-in.md]] — 仓库内建知识库（agent-gear 新增 knowledge-bases:scan 白名单扫描事件直读工作区 `.zag/knowledges/` 与 `docs/knowledges/`，controller-api 白名单中继写 Redis 结果键，agent-api 懒加载四级只读查询（候选云电脑骨架→单云电脑知识库列表→逐级子条目→单文档）；agent-web 侧边栏分组默认全部折叠点击展开才加载、front matter 渲染为表格；知识库 MCP 新增 prompts 能力提供编写指引；不落 MongoDB、不进知识库工具、无任何写入口）
+- [[proposals/20261117-feat-cloud-agent-gear-upgrade-optimization.md]] — 云电脑控制器包升级优化（entrypoint 两条安装路径改「pnpm info --json 取精确最新版 + 钉版安装」绕开 minimumReleaseAge；cloud-controller register 版本落库 cloudcontainers.agentGearVersion 与 agent-gear:upgrade 事件对 + A.2.14 端点；agent-api 最新版本服务（npm registry + Redis 10 分钟）与 CloudHost.agentGearVersion/upgradeCloudHostAgentGear；agent-gear 2.20.0 回执后优雅退出委托保活钉版重启；agent-web 设置页版本区块与「立即升级」）
 
 ### 实现计划（`plan/`）
 
