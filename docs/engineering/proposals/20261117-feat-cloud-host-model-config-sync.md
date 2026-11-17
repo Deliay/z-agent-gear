@@ -7,7 +7,7 @@ type: Permanent
 
 **功能名称**: 模型下发优化与云电脑配置实时下发
 **关联 PRD**: [`docs/product/draft/20261117-cloud-host-model-config-sync.md`](../../product/draft/20261117-cloud-host-model-config-sync.md)
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1（v1.0 评审返工修订：新增用户模型上下文长度编辑与服务商上下文元数据自动获取——实现点 8/9、决策 D11~D14、契约 3 扩展与测试/验收同步补充）
 **创建日期**: 2026-11-17
 **作者**: z-agent-bot
 **feat-branch**: `feat/cloud-host-model-config-sync`
@@ -26,19 +26,21 @@ flowchart LR
     C -->|一次性写入| E[dsh cordis.patch.yml<br/>llm-pi-ai.providers.zag]
 ```
 
-由此产生 Issue 中的四类问题：
+由此产生 Issue 中的四类问题（评审返工补充第 5 类上下文长度问题）：
 
 1. **运行期不更新**：模型/供应商在创建后没有任何下发通道，已运行的云电脑永远使用创建时快照；
 2. **vendor 前缀统一为 `zag`**：agent-gear `opencode-config.ts` / `dsh-config.ts` 把全部模型写入单一 `providers.zag`（`name/displayName: 'ZAG'`），用户自绑定模型丢失自有供应商标识；
 3. **`zag` 无显示名称**：平台内置模型的 vendor 直接展示 `zag`/`ZAG`；
-4. **模型修改的生效口径**：计费网关（admin-api `routes/billing-openai.ts`）`/v1/models` 与 `/chat/completions` 已**逐请求实时查库**（`isEnabled` 过滤 + provider 启用联查，禁用即 404 `model_not_found`，进行中请求不中断），需求点 4 在网关侧已满足，但云电脑内 harness 清单仍是旧快照，且该口径缺少契约固化与测试锁定。
+4. **模型修改的生效口径**：计费网关（admin-api `routes/billing-openai.ts`）`/v1/models` 与 `/chat/completions` 已**逐请求实时查库**（`isEnabled` 过滤 + provider 启用联查，禁用即 404 `model_not_found`，进行中请求不中断），需求点 4 在网关侧已满足，但云电脑内 harness 清单仍是旧快照，且该口径缺少契约固化与测试锁定；
+5. **上下文长度（评审返工新增）**：`Model.contextLength` 只有 admin-api 侧可写（`updateModelContextLength` / `CustomModelInput.contextLength` 仅存在于 `admin-llm.graphql`），agent-api 用户侧 `CustomModelInput` 只有 `providerId/name` 且无任何编辑 mutation——用户添加的模型无法维护上下文长度；同时 `llm-api.fetchModels` 只返回模型 id 字符串，服务商上游返回的上下文元数据被丢弃（`importGlobalModels` 导入后一律「未设置」），用户只能人工查填。
 
 ### 1.2 目标
 
 1. 用户前台、管理后台对模型/供应商的修改，秒级实时下发到全部 RUNNING 云电脑，云电脑内 harness 配置文件同步重写；
 2. 云电脑内模型按真实供应商分组：global 模型 → vendor id `zag`、显示名 `Agent Gear`；user 模型 → vendor id = 绑定的 providerId、显示名 = provider.name；
 3. 模型禁用等修改对网关调用立即生效（现状保持），并补齐契约口径与测试锁定；
-4. 前台保存模型/供应商时提醒用户「部分 Harness 运行时不会重载模型配置」（后台不提醒）。
+4. 前台保存模型/供应商时提醒用户「部分 Harness 运行时不会重载模型配置」（后台不提醒）；
+5. （评审返工新增）用户自己的模型支持上下文长度编辑（设置/修改/清空，口径与 admin 侧一致），并从服务商模型元数据中尽可能自动获取上下文长度——取不到则保持「未设置」由人工填写，人工值优先、不被后续同步覆盖。
 
 ### 1.3 范围
 
@@ -49,14 +51,18 @@ flowchart LR
 - agent-gear 2.20.0：`harness:models` 事件处理、多 vendor 配置重写（opencode / dsh）、`ZAG_MODEL_PROVIDERS` 支持；
 - 下发载荷构建口径与网关可调用口径对齐（供应商禁用/悬空不下发、同名 global 优先）；
 - 网关 `owned_by` 显示名口径（`Agent Gear` / 供应商名）；
-- agent-web 保存提醒；global 变更时 ACP 选项缓存全量失效。
+- agent-web 保存提醒；global 变更时 ACP 选项缓存全量失效；
+- （评审返工新增）llm-api 服务商模型元数据获取（`fetchModelCatalog`）与上下文长度自动补全（agent-api 同步/新增、admin-api 导入）；
+- （评审返工新增）agent-api 用户模型上下文长度编辑（`CustomModelInput.contextLength` + `updateModelContextLength`）与 agent-web 编辑/展示 UI。
 
 **不做**：
 
 - 进行中请求的中断处理（维持现状：不中断）；
 - 非 RUNNING 云电脑的补发与事件错过的补发队列（见 §6 决策 D9）；
 - kimi_code harness 的模型注入（其模型来自 kimi 登录态，平台本就不注入配置，仅受提醒文案覆盖）；
-- 本地控制器的模型下发（本地控制器模型来自各自 ACP 工具探测，不走本平台模型库）。
+- 本地控制器的模型下发（本地控制器模型来自各自 ACP 工具探测，不走本平台模型库）；
+- （评审返工新增）第三方模型目录（如 models.dev）兜底与「按模型名猜测上下文」——只采用服务商真实返回的元数据（决策 D12）；
+- （评审返工新增）用户侧批量编辑上下文长度、按供应商整体设置上下文默认值。
 
 ## 2. 技术架构
 
@@ -109,6 +115,10 @@ flowchart LR
 | agent-gear `harness/model-providers.ts`（新） | `ZAG_MODEL_PROVIDERS` / 事件载荷解析校验 | 缺省回退旧 `ZAG_MODEL_IDS` |
 | agent-gear `opencode-config.ts` / `dsh-config.ts` | 多 vendor 配置重写 | 差集清理（状态文件）、原子写、0600/0700 |
 | agent-web `ProviderSection` / `ModelSection` | 保存成功提醒 | 统一 toast |
+| agent-api / admin-api `services/llm-api.ts`（改） | `fetchModelCatalog`：模型清单 + 上下文元数据尽力获取 | 兼容返回旧 `string[]` 形态的调用点；多字段映射（D11） |
+| agent-api `services/model.ts`（改） | 用户模型上下文长度编辑与自动补全 | `updateContextLength` 用户侧口径（对齐 admin）、`createCustom` 补全 |
+| agent-api `services/provider.ts`（改） | 同步模型时补全上下文长度 | upsert 仅补「未设置」，人工值不覆盖（D13） |
+| agent-web `CustomModelDialog` / `ModelItem`（改） | 上下文长度编辑与自动带出 | 正整数校验、留空=未设置、保存提醒同口径 |
 
 ## 3. API 设计
 
@@ -178,9 +188,42 @@ Authorization: Bearer <INTERNAL_API_TOKEN>
 
 `/v1/models` 返回条目的 `owned_by`：`scope=global` → `Agent Gear`；`scope=user` → 该模型绑定的供应商名称（provider.name）。其余结构不变。
 
-#### 契约 3：`contracts/llm.graphql` / `contracts/admin-llm.graphql`（注释补注，零结构变更）
+#### 契约 3：`contracts/llm.graphql` / `contracts/admin-llm.graphql`（结构变更 + 注释补注）
 
-补注：provider/model 全部 mutation 成功后触发运行中云电脑的实时下发（best-effort，不阻断 mutation）；模型启停对网关调用逐请求立即生效。
+**`contracts/llm.graphql`（用户侧，评审返工新增结构变更）**：
+
+```graphql
+input CustomModelInput {
+  providerId: ID!
+  name: String!
+  contextLength: Int          # 新增：可选，新增时即设置最长上下文；缺省/传 null = 未设置
+}
+
+type ProviderModelOption {    # 新增类型
+  name: String!
+  contextLength: Int          # 可选；服务商元数据未提供时为 null
+}
+
+type Query {
+  # 新增：拉取供应商上游模型清单（含上下文元数据），供新增自定义模型时带出上下文长度
+  providerModelOptions(providerId: ID!): [ProviderModelOption!]!
+}
+
+type Mutation {
+  # 新增：编辑用户自有模型（isCustom 与同步模型均可）的最长上下文；缺省/传 null = 清空
+  updateModelContextLength(modelId: ID!, contextLength: Int): Model!
+}
+```
+
+- 校验口径与 admin 侧一致：`contextLength` 为 null/缺省表示「未设置」，否则必须为 ≥1 的整数，非法值报 `contextLength must be a positive integer`；
+- `updateModelContextLength` 仅作用于当前用户 `scope=user` 模型（自定义与同步模型）；global 模型或他人模型报 `Model not found`（不泄露存在性）；mutation 成功后触发实时下发（同契约补注口径）。
+
+**`contracts/admin-llm.graphql`（评审返工增强）**：
+
+- `type ProviderModelOption` 增加 `contextLength: Int`（上游提供时携带）；
+- `importGlobalModels` 在上游提供上下文元数据时，导入的模型带上 `contextLength`（原一律「未设置」）；结构签名不变。
+
+**补注（两份契约）**：provider/model 全部 mutation 成功后触发运行中云电脑的实时下发（best-effort，不阻断 mutation）；模型启停对网关调用逐请求立即生效。
 
 #### 契约 4：agent-api 内部端点（本提案登记，同 `internal-cloud-host.ts` 风格不入 contracts/）
 
@@ -215,7 +258,7 @@ Content-Type: application/json
 |------|------|------|
 | `modelProviders` | `String`（default `null`） | ModelProvision JSON 字符串；null = 旧版本创建，回退 `modelIds` 构建 |
 
-零迁移：存量行缺省 null，读取侧回退。agent-api / admin-api 不动模型层。
+零迁移：存量行缺省 null，读取侧回退。agent-api / admin-api 不动模型层 schema——`Model.contextLength` 字段两侧已存在，本提案仅扩展其读写口径（返工新增：用户侧编辑与自动补全，见实现点 9）。
 
 ### 4.2 缓存设计
 
@@ -275,7 +318,7 @@ sequenceDiagram
 
 #### 实现点 3：变更触发点
 
-- **agent-api**：`graphql/resolvers/model.ts`（createCustomModel / deleteCustomModel / toggleModel / updateModelSortOrder）与 `graphql/resolvers/provider.ts`（create / update / delete / toggle / batch×3）成功后触发 `pushForUserMutation`（fire-and-forget + catch warn）；
+- **agent-api**：`graphql/resolvers/model.ts`（createCustomModel / deleteCustomModel / toggleModel / updateModelSortOrder / **updateModelContextLength**，评审返工新增）与 `graphql/resolvers/provider.ts`（create / update / delete / toggle / batch×3）成功后触发 `pushForUserMutation`（fire-and-forget + catch warn）；
 - **admin-api**：`graphql/resolvers/model.ts` / `provider.ts` 的全部全局 mutation（含 `importGlobalModels`、`updateModelContextLength`）成功后经 `model-push-notifier` 调 `POST /internal/model-config/refresh`；
 - **单飞去抖**：agent-api 对 global refresh 做进程内 single-flight（进行中合并后续触发），避免批量操作（batch/import）产生风暴；
 - **ACP 缓存**：global refresh 同时全量 SCAN 失效（决策 D8）。
@@ -304,7 +347,28 @@ sequenceDiagram
 
 #### 实现点 7：前台提醒（agent-web）
 
-- `ProviderSection`（保存供应商）与 `ModelSection`（新增/启停/删除/排序模型）的成功路径统一展示 toast：「部分 Harness 运行时不会重载模型配置，已运行的会话可能需要重启后生效」；admin-web 零改动。
+- `ProviderSection`（保存供应商）与 `ModelSection`（新增/启停/删除/排序/**编辑上下文长度**，评审返工新增）的成功路径统一展示 toast：「部分 Harness 运行时不会重载模型配置，已运行的会话可能需要重启后生效」；admin-web 零改动。
+
+#### 实现点 8：服务商上下文元数据尽力获取（llm-api，评审返工新增）
+
+- **描述**: agent-api 与 admin-api 的 `services/llm-api.ts` 同步演进：`fetchModels` → `fetchModelCatalog(type, endpoint, apiKey): Promise<ProviderModelEntry[]>`（`{ name, contextLength? }`），保留 `fetchModels` 便捷方法（`map(e => e.name)`）以兼容既有调用点。
+- **技术细节**:
+  - OpenAI 兼容（`client.models.list()`）：对每个条目做**尽力字段映射**，命中即取正整数（D11）：`context_length` / `context_window` / `max_context_length` / `max_input_tokens` / `input_token_limit`；全部未命中或非正整数 → `contextLength: undefined`；
+  - Anthropic（`client.models.list()`）：上游条目无上下文元数据 → 恒 `undefined`（「尽可能」的天然边界，不猜测）；
+  - 元数据读取失败仅影响该条目取值，不影响清单获取本身；整体超时维持 `TIMEOUT_MS = 10s` 既有口径；
+  - 不引入第三方模型目录、不按模型名推断（决策 D12）。
+- **风险点**: 部分 OpenAI 兼容网关会在 `max_tokens`/`max_output_tokens` 里混装输出上限——这些字段**不在映射表内**，宁缺毋错（错了会污染 harness 端上下文窗口导致截断/浪费）。
+
+#### 实现点 9：用户模型上下文长度编辑与自动补全（agent-api + agent-web，评审返工新增）
+
+- **描述**: agent-api 服务/契约新增用户侧编辑能力；同步与新增路径接入自动补全；agent-web 增编辑 UI。
+- **技术细节**:
+  - `services/model.ts`：`createCustom` 接受可选 `contextLength`（`assertContextLength` 校验口径与 admin 一致：null/缺省=未设置，否则整数 ≥1）；新增 `updateContextLength(id, contextLength)`——仅 `scope=user` 模型（isCustom 与同步模型均可），global/他人模型报 `Model not found`，成功后由 resolver 触发 `pushForUserMutation`（并入实现点 3 触发清单）；
+  - `graphql/schemas/model.ts` + `contracts/llm.graphql`：`CustomModelInput.contextLength`、`updateModelContextLength` mutation、`providerModelOptions(providerId)` query（内部调 `fetchModelCatalog`，走用户凭据解密路径，与 `provider.ts` 既有 `effectiveApiKey` 口径一致）；
+  - 自动补全口径（决策 D13）：`provider.ts` 的 `syncSyncedModels` upsert 时**仅对 `contextLength` 为「未设置」的行**用上游值 `$set` 补全（`$set` 条件更新不做覆盖：已有值行不进 `$set` 列表，逐条比对后生成 ops）；`createCustom` 未显式传 `contextLength` 时调 `fetchModelCatalog` 尽力补全（失败/超时 → null，不阻塞创建）；
+  - agent-web `CustomModelDialog`：新增「最长上下文大小（token）」输入（`inputMode="numeric"`，正整数校验，留空=未设置），选定供应商+输入模型名后经 `providerModelOptions` 匹配带出可改预填值（请求失败静默忽略）；`ModelItem` 展示「最长上下文：N tokens / 未设置」与编辑入口；编辑走 `updateModelContextLength`，成功 toast 含重载提醒（实现点 7 口径）；
+  - admin-api `importModels` 同步接入 `fetchModelCatalog`：上游携带时写入 `contextLength`（原一律 null）。
+- **风险点**: `providerModelOptions` 每次调用都会打上游（10s 超时）——前端做请求去抖与失能重复触发；服务端不做缓存（清单新鲜度优先，调用频率低）。
 
 ## 6. 技术决策
 
@@ -322,6 +386,10 @@ sequenceDiagram
 | D8 global 变更 ACP 缓存 | 维持 300s TTL 兜底 | refresh 端点同步全量失效 | B | 消除 global 变更最长 300s 的漂移窗口 |
 | D9 事件错过补发 | 重连补发队列 | 不补发 | B | secret 已更新，下次任意模型变更自然收敛；避免新增可靠队列复杂度 |
 | D10 opencode 消失 vendor 清理 | 识别受管条目规则匹配 | 状态文件记录上次集合 | B | 显式状态可靠幂等，不误删用户手写 provider |
+| D11 上下文元数据字段映射（返工新增） | 只认单一 `context_length` 字段 | 多字段白名单尽力映射 | B | OpenAI 兼容生态字段不统一（`context_length`/`context_window`/`max_context_length`/`max_input_tokens`/`input_token_limit`）；白名单排除 `max_tokens` 等输出上限字段，宁缺毋错 |
+| D12 上下文取值来源（返工新增） | 第三方模型目录（models.dev）兜底 / 按模型名推断 | 只取服务商真实返回的元数据 | B | 目录/推断值与私有部署实际不符会误导截断策略；「尽可能」以真实元数据为界，取不到由人工编辑兜底 |
+| D13 自动值与人工值冲突（返工新增） | 每次同步以上游值刷新 | 人工值优先，仅补「未设置」 | B | 人工修正代表用户真实意图；自动刷新会反复覆盖人工修正造成回退 |
+| D14 用户侧 mutation 形态（返工新增） | 新命名 `updateCustomModelContextLength` | 与 admin 对齐 `updateModelContextLength` | B | 同语义同名降低前后端心智负担；作用域由服务层限定（scope=user，global/他人报 `Model not found`） |
 
 ### 6.2 依赖与约束
 
@@ -340,10 +408,16 @@ servers/agent-api/src/
 ├── services/cloud-host-model-push.ts      # 新：扇出推送服务
 ├── services/cloud-host-service.ts         # 改：secrets 双写 modelProviders（复用 model-provision）
 ├── services/cloud-controller-client.ts    # 改：pushHarnessModels 客户端方法
+├── services/llm-api.ts                    # 改（返工新增）：fetchModelCatalog 上下文元数据尽力获取
+├── services/model.ts                      # 改（返工新增）：createCustom.contextLength + updateContextLength
+├── services/provider.ts                   # 改：secrets 双写 + syncSyncedModels 补全 contextLength（返工新增）
 ├── routes/internal-model-config.ts        # 新：POST /internal/model-config/refresh
+├── graphql/schemas/model.ts               # 改（返工新增）：契约镜像（contextLength / updateModelContextLength / providerModelOptions）
 └── graphql/resolvers/{model,provider}.ts  # 改：mutation 成功后触发推送
 servers/admin-api/src/
 ├── services/model-push-notifier.ts        # 新：通知 agent-api
+├── services/llm-api.ts                    # 改（返工新增）：fetchModelCatalog（与 agent-api 同步演进）
+├── services/model.ts                      # 改：importModels 携带 contextLength（返工新增）
 ├── routes/billing-openai.ts               # 改：owned_by 口径
 └── graphql/resolvers/{model,provider}.ts  # 改：全局 mutation 后通知
 servers/cloud-controller/src/
@@ -357,11 +431,12 @@ packages/agent-controller/src/
 ├── cloud-host/supervisor.ts               # 改：harness:models 事件注册
 └── commands/harness.ts                    # 改：prepare 同源升级
 apps/agent-web/src/components/settings/
-└── {ProviderSection,ModelSection}.tsx     # 改：保存成功提醒
+├── {ProviderSection,ModelSection}.tsx     # 改：保存成功提醒（含上下文编辑路径）
+└── {CustomModelDialog,ModelItem}.tsx      # 改（返工新增）：上下文长度编辑/展示与自动带出
 contracts/
 ├── cloud-controller-websocket.md          # 改：事件 + A.2.14 + B.2
 ├── billing-openai.openapi.yaml            # 改：owned_by 口径
-└── {llm,admin-llm}.graphql                # 改：注释补注
+└── {llm,admin-llm}.graphql                # 改：结构变更（返工新增）+ 注释补注
 ```
 
 ## 8. 测试策略
@@ -369,15 +444,16 @@ contracts/
 ### 8.1 测试覆盖要求
 
 - 遵循 TDD 红-绿-重构；新增纯函数与服务 100% 分支覆盖关键路径；
-- API 测试覆盖：`POST /internal/model-config/refresh`（鉴权/202/400）、`POST /internal/containers/:id/harness-models`（404/409/delivered 两态）、网关 `/v1/models` 的 `owned_by` 与禁用即时生效回归。
+- API 测试覆盖：`POST /internal/model-config/refresh`（鉴权/202/400）、`POST /internal/containers/:id/harness-models`（404/409/delivered 两态）、网关 `/v1/models` 的 `owned_by` 与禁用即时生效回归；
+- （返工新增）上下文长度链路覆盖：`fetchModelCatalog` 字段映射（含 `max_tokens` 类输出上限字段不误取）、`updateModelContextLength` 用户侧作用域与校验、同步/新增自动补全「仅补未设置」不覆盖人工值、编辑后触发实时下发。
 
 ### 8.2 测试类型
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | Vitest（各包） | model-provision 纯函数（分组/去重/悬空 provider/同名优先）、push 服务（扇出/短路/失败继续/上下文重算）、cloud-controller 端点与 secrets、agent-gear 解析与双 config 重写（含差集清理、默认模型组归属）、admin-api notifier 与 owned_by |
-| API 测试 | tests/api（Vitest + MongoMemoryServer） | 内部端点全链路、mutation → fake cloud-controller 收到推送、网关禁用即时生效 |
-| E2E 测试 | tests/e2e（Playwright） | 前台保存提醒展示；fake 容器链路 `harness:models` 到达与配置重写断言 |
+| 单元测试 | Vitest（各包） | model-provision 纯函数（分组/去重/悬空 provider/同名优先）、push 服务（扇出/短路/失败继续/上下文重算）、cloud-controller 端点与 secrets、agent-gear 解析与双 config 重写（含差集清理、默认模型组归属）、admin-api notifier 与 owned_by、llm-api fetchModelCatalog 字段映射（返工新增）、agent-api model 服务上下文编辑与补全口径（返工新增） |
+| API 测试 | tests/api（Vitest + MongoMemoryServer） | 内部端点全链路、mutation → fake cloud-controller 收到推送、网关禁用即时生效、`updateModelContextLength` 作用域/校验/触发推送与 `providerModelOptions` 元数据带出（返工新增） |
+| E2E 测试 | tests/e2e（Playwright） | 前台保存提醒展示；fake 容器链路 `harness:models` 到达与配置重写断言；用户模型上下文编辑/清空/自动带出展示（返工新增） |
 
 ## 9. 部署方案
 
@@ -403,6 +479,8 @@ contracts/
 - [ ] 云电脑内平台组显示 `Agent Gear`，用户组显示供应商名称，vendor id 口径符合 §3.1
 - [ ] 禁用模型后网关新请求立即 404 `model_not_found`，进行中请求正常完成
 - [ ] 前台保存出现重载提醒，后台无提醒
+- [ ] （返工新增）用户自己的模型可在前台设置/修改/清空最长上下文并实时下发；非法输入被拒绝；global 模型前台不可编辑
+- [ ] （返工新增）服务商元数据携带上下文时同步/新增/导入自动补全，未携带或获取失败保持「未设置」；人工值不被后续同步覆盖
 - [ ] 旧 worker 云电脑静默降级、新建云电脑与既有流程零回归
 - [ ] 单元测试覆盖达标、API 测试通过、E2E 测试通过
 
