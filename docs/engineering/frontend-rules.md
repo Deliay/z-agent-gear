@@ -12,6 +12,10 @@
 - **Package Manager**: npm
 - **Formatter**: Prettier
 
+## 领域模型同步
+
+前端新增或修改领域概念（实体、状态、权限、工作流节点、交互类型等）时，必须在产品/技术方案阶段同步更新 `docs/knowledges/domain` 对应上下文文档与索引/上下文地图；前端规范只描述呈现与交互约束，不重复定义领域模型。权威口径见 `common-rules.md` 的「Domain Model Sync（领域模型同步）」。
+
 ## Project Structure
 
 ```

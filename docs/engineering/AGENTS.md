@@ -47,6 +47,7 @@ type: Permanent
 **创建日期**: YYYY-MM-DD
 **作者**: ...
 **feat-branch**: `feat/<slug>`
+**领域模型影响**: `docs/knowledges/domain/<上下文>/...`（无影响时写明理由）
 
 ## 1. 概述
 
@@ -91,12 +92,15 @@ type: Permanent
 
 技术提案中允许包含详细的技术细节（项目结构、API 设计、数据模型等），必须使用 Mermaid 图形描述流程和架构。
 
+编写或修改提案时，必须同步更新 `docs/knowledges/domain`：受影响的上下文文档、索引与上下文地图，口径见 `common-rules.md` 的「Domain Model Sync（领域模型同步）」。领域模型同步属于提案的一部分，Review 时一并检查。
+
 ## 工作流程
 
 ```mermaid
 flowchart LR
     P[产品 PRD Review 通过] --> T[编写技术提案]
-    T --> R[Review 技术提案]
+    T --> D[同步更新领域模型]
+    D --> R[Review 技术提案]
     R -->|通过| C[更新 API Contract]
     C --> I[编码实现]
     I --> E[编排 + 测试]
@@ -108,13 +112,15 @@ flowchart LR
 1. 加载 `z-coding` skill
 2. 加载产品文档，理解需求
 3. 创建文件到 `proposals/` 目录，以创建日期为 ID
-4. 完成后发起 Review
+4. 同步更新 `docs/knowledges/domain`：受影响上下文的 `00-上下文概览.md` / `01-聚合与实体.md`，以及索引与上下文地图
+5. 完成后发起 Review
 
 ### 修改提案
 
 1. 直接编辑对应文件
 2. 更新版本号
 3. 记录变更原因
+4. 若变更影响领域概念、聚合、字段、状态机、领域事件或权限，同步更新 `docs/knowledges/domain`
 
 ## Skill 参考
 
@@ -133,6 +139,7 @@ flowchart LR
 - [[common-rules.md]] — 通用开发规范
 - [[backend-rules.md]] — 后端开发规范
 - [[frontend-rules.md]] — 前端开发规范
+- [[../knowledges/domain/00-领域模型库-索引.md]] — 领域模型知识库（方案同步目标）
 
 ### 技术提案（`proposals/`）
 

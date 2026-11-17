@@ -12,6 +12,10 @@
 - **Formatter**: Prettier
 - **Dev Runner**: tsx (watch mode)
 
+## 领域模型同步
+
+后端改动通常直接改变领域模型（聚合、字段、索引、状态机、领域事件、权限）。编写或修改产品/技术方案时必须同步更新 `docs/knowledges/domain` 对应上下文文档；实现过程中发现代码与领域模型不一致时，以代码为准回写修正。权威口径见 `common-rules.md` 的「Domain Model Sync（领域模型同步）」。
+
 ## Project Structure
 
 ```

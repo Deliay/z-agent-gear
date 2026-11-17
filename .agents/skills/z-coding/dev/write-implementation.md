@@ -45,3 +45,7 @@ apps/web      - 使用@general 委托开发`proposals`关于 apps/web的变动
 ### 单元测试
 
 单元测试覆盖是必须的
+
+### 回写领域模型
+
+实现完成后，以代码为准核对并回写 `docs/knowledges/domain`：聚合、字段、索引、状态机、领域事件、权限与文档不一致时，修正对应上下文文档、索引与上下文地图。该步骤由主 agent 统一执行，避免多个 subagent 并发修改同一文档；口径见 `docs/engineering/common-rules.md` 的「Domain Model Sync（领域模型同步）」。

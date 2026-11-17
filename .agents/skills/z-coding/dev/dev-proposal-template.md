@@ -6,6 +6,7 @@
 **创建日期**: [YYYY-MM-DD]
 **作者**: [作者名称]
 **feat-branch**: `feat/<slug>` 参考[[../git.md]]
+**领域模型影响**: `docs/knowledges/domain/<上下文>/...`（无影响时写明理由）
 
 ## 1. 概述
 
@@ -171,6 +172,7 @@ sequenceDiagram
 
 - [ ] 技术方案评审通过
 - [ ] Contract 评审通过
+- [ ] 领域模型已同步更新（`docs/knowledges/domain`）
 - [ ] 代码实现完成
 - [ ] 单元测试覆盖达标
 - [ ] API 测试通过
@@ -181,4 +183,5 @@ sequenceDiagram
 - [关联 PRD]
 - [关联 Contract]
 - [开发规范]
+- [领域模型文档（`docs/knowledges/domain/...`）]
 - [其他参考资料]

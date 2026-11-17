@@ -71,6 +71,8 @@ type: Permanent
 
 产品文档中禁止提及技术细节，禁止提及项目结构、前端组件、后端 API 设计等内容。必须使用 Mermaid 图形描述流程。
 
+产品文档不承载领域模型细节；涉及领域概念、术语、上下文边界、聚合、状态机或权限变化时，必须在同一变更中同步更新 `docs/knowledges/domain`（规范见 `docs/engineering/common-rules.md` 的「Domain Model Sync（领域模型同步）」）。
+
 ## 工作流程
 
 ```mermaid
@@ -78,6 +80,7 @@ flowchart LR
     D[draft/] -->|Review 通过| R[reviewed/]
     R -->|开始实现| S[shipping/]
     S -->|上线验收| P[released/]
+    D -.->|同步更新| K[docs/knowledges/domain 领域模型]
 ```
 
 ### 创建文档
@@ -85,20 +88,23 @@ flowchart LR
 1. 加载 `z-product` skill
 2. 使用 `question` 工具澄清产品细节
 3. 创建文件到 `draft/` 目录，以创建日期为 ID
-4. 提交流程遵循项目 git 规范
+4. 同步更新 `docs/knowledges/domain`：概念、术语、边界、聚合、状态、权限有变化时回写对应上下文文档与索引/上下文地图
+5. 提交流程遵循项目 git 规范
 
 ### 修改文档
 
 1. 确认文档所在阶段目录
 2. 修改后保持文件名不变
 3. 更新 PRD 版本号
+4. 涉及领域概念变化时同步更新 `docs/knowledges/domain`
 
 ### Review 文档
 
 1. 确认内容无技术细节
 2. 确认满足文档结构模板要求
 3. 确认 YAML front matter 完整
-4. 通过后移入 `reviewed/` 目录
+4. 确认领域模型已同步更新（概念、术语、边界、状态、权限）
+5. 通过后移入 `reviewed/` 目录
 
 ## Skill 参考
 
@@ -108,6 +114,9 @@ flowchart LR
 | [[../../.agents/skills/z-document/SKILL.md\|z-document]] | 文档格式与命名规范 |
 
 ## 相关文档
+
+- [[../knowledges/domain/00-领域模型库-索引.md]] — 领域模型知识库（PRD 同步目标）
+- [[../engineering/common-rules.md]] — 通用开发规范（Domain Model Sync）
 
 ### 草稿文档（`draft/`）
 

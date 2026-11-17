@@ -28,9 +28,10 @@ z-agent-gear/
 │   │   ├── reviewed/
 │   │   ├── shipping/
 │   │   └── released/
-│   └── engineering/          # 开发规范
-│       ├── acceptance/       # 验收报告
-│       └── proposals/
+│   ├── engineering/          # 开发规范
+│   │   ├── acceptance/       # 验收报告
+│   │   └── proposals/
+│   └── knowledges/domain/    # 领域模型知识库（仓库内建知识库，编写方案时同步更新）
 ├── contracts/                # API 契约文件
 └── tests/                    # 集成/E2E 测试
 ```
@@ -54,6 +55,7 @@ docker compose -f aspire/manifest/docker-compose.yaml down
 2. Follow contract-based development: define contracts first, then implement.
 3. **采用TDD模式开发**：使用红-绿-重构循环，先写测试再写实现代码。
 4. Reference rules in `docs/engineering/` before writing code.
+5. **方案同步领域模型**：编写或修改产品方案（PRD）与技术方案（proposal / plan）时，必须同步更新 `docs/knowledges/domain` 领域模型（规范见 `docs/engineering/common-rules.md` 的 Domain Model Sync）。
 
 ## Skill References
 
