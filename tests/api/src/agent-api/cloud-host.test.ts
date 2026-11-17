@@ -1006,3 +1006,153 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// #551 云电脑工作组件版本与立即升级（T-UPG-API）
+// ---------------------------------------------------------------------------
+const AGENT_GEAR_VERSION = `
+  query AgentGearVersion($id: ID!) {
+    cloudHost(id: $id) {
+      id status containerId
+      agentGearVersion { currentVersion latestVersion upgradeAvailable autoUpdateIntervalMinutes }
+    }
+  }
+`;
+
+const UPGRADE_AGENT_GEAR = `
+  mutation UpgradeAgentGear($controllerId: ID!) {
+    upgradeCloudHostAgentGear(controllerId: $controllerId) { accepted }
+  }
+`;
+
+const LATEST_VERSION_KEY = 'agent-gear:latest-version';
+
+describe.skipIf(!HARNESS_ENABLED)('Cloud Host agent-gear version API（T-UPG-API1）', () => {
+  it('T-UPG-API1: agentGearVersion 与 upgradeCloudHostAgentGear 均要求认证', async () => {
+    const version = await gql(AGENT_GEAR_VERSION, { id: '507f1f77bcf86cd799439011' });
+    expect(version.errors?.[0].message).toBe('Not authenticated');
+    const upgrade = await gql(UPGRADE_AGENT_GEAR, { controllerId: '507f1f77bcf86cd799439012' });
+    expect(upgrade.errors?.[0].message).toBe('Not authenticated');
+  });
+});
+
+describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO || !process.env.REDIS_URL)(
+  'Cloud Host agent-gear version API（T-UPG-API2/3）',
+  () => {
+    async function setLatestVersion(value: unknown): Promise<void> {
+      const { Redis } = await import('ioredis');
+      const redis = new Redis(process.env.REDIS_URL as string, { lazyConnect: true });
+      await redis.connect();
+      if (value === null) await redis.del(LATEST_VERSION_KEY);
+      else await redis.set(LATEST_VERSION_KEY, JSON.stringify(value));
+      await redis.quit();
+    }
+
+    async function createHostWithContainer(): Promise<{
+      token: string;
+      hostId: string;
+      controllerId: string;
+      containerId: string;
+    }> {
+      const token = await fundedUserToken();
+      const created = await gql(
+        CREATE,
+        { input: { name: `upg-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+        token,
+      );
+      expect(created.errors).toBeUndefined();
+      const host = created.data.createCloudHost;
+      const detail = await gql(AGENT_GEAR_VERSION, { id: host.id }, token);
+      return {
+        token,
+        hostId: host.id,
+        controllerId: host.controllerId,
+        containerId: detail.data.cloudHost.containerId,
+      };
+    }
+
+    it('T-UPG-API2: Mongo 当前版本 + Redis 最新版本 → 四字段透出（含 upgradeAvailable 两态）', async () => {
+      const db = await mongoDb();
+      const { token, hostId, containerId } = await createHostWithContainer();
+      expect(containerId).toBeTruthy();
+
+      await db!
+        .collection('cloudcontainers')
+        .updateOne({ _id: new mongoose.Types.ObjectId(containerId) }, { $set: { agentGearVersion: '2.19.0' } });
+      await setLatestVersion({ version: '2.21.0', fetchedAt: new Date().toISOString() });
+
+      const version = await gql(AGENT_GEAR_VERSION, { id: hostId }, token);
+      expect(version.errors).toBeUndefined();
+      expect(version.data.cloudHost.agentGearVersion).toEqual({
+        currentVersion: '2.19.0',
+        latestVersion: '2.21.0',
+        upgradeAvailable: true,
+        autoUpdateIntervalMinutes: 10,
+      });
+
+      await db!
+        .collection('cloudcontainers')
+        .updateOne({ _id: new mongoose.Types.ObjectId(containerId) }, { $set: { agentGearVersion: '2.21.0' } });
+      const same = await gql(AGENT_GEAR_VERSION, { id: hostId }, token);
+      expect(same.data.cloudHost.agentGearVersion).toMatchObject({
+        currentVersion: '2.21.0',
+        latestVersion: '2.21.0',
+        upgradeAvailable: false,
+      });
+    });
+
+    it('T-UPG-API3: Redis 键缺失/非法 → latestVersion=null、upgradeAvailable=false，查询不报错', async () => {
+      const { token, hostId } = await createHostWithContainer();
+      for (const value of [null, { version: '' }]) {
+        await setLatestVersion(value);
+        const version = await gql(AGENT_GEAR_VERSION, { id: hostId }, token);
+        expect(version.errors).toBeUndefined();
+        expect(version.data.cloudHost.agentGearVersion).toMatchObject({
+          latestVersion: null,
+          upgradeAvailable: false,
+        });
+      }
+      await setLatestVersion(null);
+    });
+  },
+);
+
+describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)(
+  'Cloud Host upgrade mutation 全链路（T-UPG-API4/5）',
+  () => {
+    it('T-UPG-API4: RUNNING 云电脑容器非 online → container is not online（真实 agent-api → cloud-controller）', async () => {
+      const token = await fundedUserToken();
+      const created = await gql(
+        CREATE,
+        { input: { name: `upg4-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+        token,
+      );
+      expect(created.errors).toBeUndefined();
+      const host = created.data.createCloudHost;
+      const db = await mongoDb();
+      await db!
+        .collection('cloudhosts')
+        .updateOne({ _id: new mongoose.Types.ObjectId(host.id) }, { $set: { status: 'RUNNING' } });
+
+      const result = await gql(UPGRADE_AGENT_GEAR, { controllerId: host.controllerId }, token);
+      expect(result.errors?.[0].message).toBe('container is not online');
+    });
+
+    it('T-UPG-API5: 非 RUNNING → cloud host is not running；他人云电脑 → Cloud host not found', async () => {
+      const token = await fundedUserToken();
+      const created = await gql(
+        CREATE,
+        { input: { name: `upg5-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+        token,
+      );
+      const host = created.data.createCloudHost;
+
+      const notRunning = await gql(UPGRADE_AGENT_GEAR, { controllerId: host.controllerId }, token);
+      expect(notRunning.errors?.[0].message).toBe('cloud host is not running');
+
+      const other = await newUserToken();
+      const foreign = await gql(UPGRADE_AGENT_GEAR, { controllerId: host.controllerId }, other);
+      expect(foreign.errors?.[0].message).toBe('Cloud host not found');
+    });
+  },
+);

@@ -12,6 +12,15 @@ function toPositiveInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/**
+ * 非负整数解析（允许 `0`）：用于「0 = 关闭周期刷新」类开关（计划 D12）。
+ * 非法值返回 fallback，并由调用方按需 WARN（此处保持纯函数、零日志）。
+ */
+function toNonNegativeInt(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '4000', 10),
   mongodbUri: process.env.MONGODB_URI || process.env.MONGODB_CONNECTION_STRING || 'mongodb://localhost:27017/agent-gear',
@@ -58,6 +67,21 @@ export const config = {
   controllerApiPublicEndpoint: process.env.CONTROLLER_API_PUBLIC_WS_ENDPOINT || '',
   cloudHostModelBaseUrl: process.env.CLOUD_HOST_MODEL_BASE_URL || '',
   cloudHostDefaultWorkspace: process.env.CLOUD_HOST_DEFAULT_WORKSPACE || '/home/worker/workspace',
+  // agent-gear 最新版本（云电脑设置页版本展示 / 立即升级）：
+  // - registry 元数据来源（包级 URL，读取 dist-tags.latest；内网部署可指向 Nexus 代理）
+  // - 刷新周期（ms；0 = 关闭定时刷新，查询路径仍可 single-flight 触发单次抓取）
+  // - 透出给前端的自动升级检查周期（分钟，须与 worker ZAG_AGENT_GEAR_AUTO_UPDATE_INTERVAL_MS 一致）
+  agentGearRegistryUrl: (
+    process.env.AGENT_GEAR_REGISTRY_URL || 'https://registry.npmjs.org/agent-gear'
+  ).replace(/\/+$/, ''),
+  agentGearVersionRefreshIntervalMs: toNonNegativeInt(
+    process.env.AGENT_GEAR_VERSION_REFRESH_INTERVAL_MS,
+    600_000,
+  ),
+  agentGearAutoUpdateIntervalMinutes: toPositiveInt(
+    process.env.AGENT_GEAR_AUTO_UPDATE_INTERVAL_MINUTES,
+    10,
+  ),
   // 云主机操作单步超时（等待工作负载执行完成，默认 10 分钟）
   cloudHostSetupStepTimeoutMs: toPositiveInt(
     process.env.CLOUD_HOST_SETUP_STEP_TIMEOUT_MS,

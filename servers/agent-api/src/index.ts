@@ -60,6 +60,7 @@ import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
 import { scheduleTenantSelfCheck } from './services/tenant-self-check.js';
 import { scheduleCloudStorageReconcile } from './services/cloud-storage-service.js';
+import { startAgentGearVersionRefresh } from './services/agent-gear-version.js';
 import { valutService } from './services/valut-service.js';
 import { permissionSubscriberService } from './services/permission-subscriber.js';
 import { elicitationSubscriberService } from './services/elicitation-subscriber.js';
@@ -323,6 +324,8 @@ async function start() {
     scheduleTenantSelfCheck();
     // 云存储 ARCHIVING 对账（回调最终丢失兜底；定时器 unref，不阻塞退出）
     scheduleCloudStorageReconcile(config.cloudStorageReconcileMs);
+    // agent-gear 最新版本刷新（启动即抓一次 + 周期刷新；interval=0 时仅启动一次）
+    startAgentGearVersionRefresh();
   });
 }
 

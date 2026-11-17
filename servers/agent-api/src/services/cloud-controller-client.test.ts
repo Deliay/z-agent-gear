@@ -79,6 +79,25 @@ describe('CloudControllerClient', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('T-UPG-CL1: upgradeAgentGear POST A.2.14（可选 targetVersion）并返回 accepted', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ accepted: true, containerId: 'container-1', currentVersion: '2.20.0' }),
+    });
+    const client = new CloudControllerClient('http://cc:10004', 'internal-token');
+    await expect(
+      client.upgradeAgentGear('container-1', { targetVersion: '2.21.0' }),
+    ).resolves.toEqual({ accepted: true, containerId: 'container-1', currentVersion: '2.20.0' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://cc:10004/internal/containers/container-1/upgrade-agent-gear');
+    expect((init as RequestInit).method).toBe('POST');
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({ targetVersion: '2.21.0' });
+
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ accepted: true }) });
+    await client.upgradeAgentGear('container-1');
+    expect((fetchMock.mock.calls[1][1] as RequestInit).body).toBeUndefined();
+  });
+
   it('filters container list by hostId/userId', async () => {
     fetchMock.mockResolvedValue({ ok: true, json: async () => [] });
     const client = new CloudControllerClient('http://cc', 'token');
