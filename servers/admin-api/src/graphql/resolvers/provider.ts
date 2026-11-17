@@ -1,5 +1,6 @@
 import { GraphQLError } from 'graphql';
 import { providerService, PROVIDER_CONNECTIVITY_ERROR } from '../../services/provider.js';
+import { notifyModelConfigChanged } from '../../services/model-push-notifier.js';
 import { modelService } from '../../services/model.js';
 import { assertAdmin } from './guard.js';
 import type { AdminAuthContext } from './auth.js';
@@ -30,9 +31,12 @@ export const providerResolvers = {
     ) => {
       assertAdmin(context);
       try {
-        return await providerService.create(args.input as {
+        const result = await providerService.create(args.input as {
           name: string; type: 'OpenAI' | 'Anthropic'; endpoint: string; credentialType: string; credentialValue: string;
         });
+        // fire-and-forget：通知 agent-api 全量下发（内部吞错，不影响 mutation 成功语义）
+        void notifyModelConfigChanged();
+        return result;
       } catch (err) {
         mapProviderError(err);
       }
@@ -50,6 +54,7 @@ export const providerResolvers = {
         if (!result) {
           throw new GraphQLError('Provider not found');
         }
+        void notifyModelConfigChanged();
         return result;
       } catch (err) {
         if (err instanceof GraphQLError) throw err;
@@ -62,7 +67,10 @@ export const providerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      return providerService.delete(args.id);
+      const result = await providerService.delete(args.id);
+      // 未命中（非法/不存在）视为失败路径：零下发副作用
+      if (result) void notifyModelConfigChanged();
+      return result;
     },
     toggleGlobalProvider: async (
       _parent: unknown,
@@ -74,6 +82,7 @@ export const providerResolvers = {
       if (!result) {
         throw new GraphQLError('Provider not found');
       }
+      void notifyModelConfigChanged();
       return result;
     },
     batchEnableGlobalProviders: async (
@@ -82,7 +91,9 @@ export const providerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      return providerService.batchEnable(args.ids);
+      const result = await providerService.batchEnable(args.ids);
+      void notifyModelConfigChanged();
+      return result;
     },
     batchDisableGlobalProviders: async (
       _parent: unknown,
@@ -90,7 +101,9 @@ export const providerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      return providerService.batchDisable(args.ids);
+      const result = await providerService.batchDisable(args.ids);
+      void notifyModelConfigChanged();
+      return result;
     },
     batchDeleteGlobalProviders: async (
       _parent: unknown,
@@ -98,7 +111,9 @@ export const providerResolvers = {
       context: AdminAuthContext,
     ) => {
       assertAdmin(context);
-      return providerService.batchDelete(args.ids);
+      const result = await providerService.batchDelete(args.ids);
+      void notifyModelConfigChanged();
+      return result;
     },
   },
   Provider: {

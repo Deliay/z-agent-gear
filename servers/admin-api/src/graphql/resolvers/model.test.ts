@@ -27,8 +27,13 @@ vi.mock('../../services/provider.js', () => ({
   providerService: { findById: vi.fn() },
 }));
 
+vi.mock('../../services/model-push-notifier.js', () => ({
+  notifyModelConfigChanged: vi.fn(),
+}));
+
 import { modelService } from '../../services/model.js';
 import { modelRenameRecordService } from '../../services/model-rename-record.js';
+import { notifyModelConfigChanged } from '../../services/model-push-notifier.js';
 import { providerService } from '../../services/provider.js';
 import type { AdminAuthContext } from './auth.js';
 
@@ -195,6 +200,62 @@ describe('modelResolvers', () => {
       await expect(
         Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 1 }, anon),
       ).rejects.toThrow('Not authenticated');
+    });
+
+    it('T-NOTIFY2: every successful global model mutation notifies once', async () => {
+      (modelService.createCustom as any).mockResolvedValue({ id: 'm1' });
+      (modelService.importModels as any).mockResolvedValue([{ id: 'm1' }]);
+      (modelService.delete as any).mockResolvedValue({ id: 'm1' });
+      (modelService.toggle as any).mockResolvedValue({ id: 'm1' });
+      (modelService.updateSortOrder as any).mockResolvedValue([{ id: 'm1' }]);
+      (modelService.updateContextLength as any).mockResolvedValue({ id: 'm1' });
+
+      await Mutation.createGlobalCustomModel({}, { input: { providerId: 'p1', name: 'x' } }, good);
+      await Mutation.importGlobalModels({}, { providerId: 'p1', names: ['x'] }, good);
+      await Mutation.deleteGlobalModel({}, { id: 'm1' }, good);
+      await Mutation.toggleGlobalModel({}, { id: 'm1' }, good);
+      await Mutation.updateGlobalModelSortOrder({}, { ids: ['m1'] }, good);
+      await Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 128000 }, good);
+
+      expect(notifyModelConfigChanged).toHaveBeenCalledTimes(6);
+    });
+
+    it('T-NOTIFY2: failure paths never notify', async () => {
+      (modelService.createCustom as any).mockRejectedValue(new Error('Model name already exists: x'));
+      await expect(
+        Mutation.createGlobalCustomModel({}, { input: { providerId: 'p1', name: 'x' } }, good),
+      ).rejects.toThrow('Model name already exists: x');
+
+      (modelService.importModels as any).mockRejectedValue(
+        new Error('供应商连通性测试失败，请检查 API 地址和凭据是否正确'),
+      );
+      await expect(
+        Mutation.importGlobalModels({}, { providerId: 'p1', names: ['x'] }, good),
+      ).rejects.toThrow('供应商连通性测试失败');
+
+      (modelService.delete as any).mockResolvedValue(null);
+      await expect(Mutation.deleteGlobalModel({}, { id: 'missing' }, good)).rejects.toThrow(
+        'Model not found',
+      );
+
+      (modelService.toggle as any).mockResolvedValue(null);
+      await expect(Mutation.toggleGlobalModel({}, { id: 'missing' }, good)).rejects.toThrow(
+        'Model not found or its provider is disabled',
+      );
+
+      (modelService.updateSortOrder as any).mockRejectedValue(new Error('bulkWrite failed'));
+      await expect(
+        Mutation.updateGlobalModelSortOrder({}, { ids: ['m1'] }, good),
+      ).rejects.toThrow('bulkWrite failed');
+
+      (modelService.updateContextLength as any).mockRejectedValue(
+        new Error('contextLength must be a positive integer'),
+      );
+      await expect(
+        Mutation.updateModelContextLength({}, { modelId: 'm1', contextLength: 0 }, good),
+      ).rejects.toThrow('contextLength must be a positive integer');
+
+      expect(notifyModelConfigChanged).not.toHaveBeenCalled();
     });
   });
 

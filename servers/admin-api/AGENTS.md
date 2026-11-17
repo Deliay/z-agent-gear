@@ -84,3 +84,18 @@ LOG_PRETTY=1 pnpm run dev # 单独启动（tsx watch），pretty 人类可读日
 - **服务口径**：`DEFAULT_COMPACT_COMMAND = '/compact'`；`validateCompactCommand(raw)` trim 后长度 1~64 且以 `/` 开头，非法抛 `invalid compact command`；`validateHarnessType` 非法抛 `invalid harness type`；`listConfigs()` 恒返回三 Harness（未落库行以默认值归一，`updatedAt` 用稳定占位 `new Date(0).toISOString()`）；`upsertConfig()` = 校验 → `findOneAndUpdate` upsert（`returnDocument:'after'`，trim 后落库）→ 视图。
 - **GraphQL 登记点**：`graphql/schemas/harness-config.ts`（`extend type Query/Mutation`，字段与 `contracts/admin-harness.graphql` 逐字一致）+ `graphql/resolvers/harness-config.ts`（`Query.adminHarnessConfigs` / `Mutation.upsertHarnessConfig`，均 `assertAdmin`；错误经 `mapError` 同 auth-provider 形态：GraphQLError 直抛、E11000 → `配置已存在`、其余 message 逐字透传）。两处**必须**在 `schemas/index.ts` 与 `resolvers/index.ts` 登记，漏登记运行时无效。
 - **测试**：`services/harness-config.test.ts`（T-HCA1/2）、`graphql/resolvers/harness-config.test.ts`（T-HCA3 + index 守卫）、`migrations/023-harness-configs.test.ts`（T-MIG-HC1/2，MongoMemoryServer 真库）；API 全链路 `tests/api/src/admin-api/harness-config.test.ts`。
+
+## 模型变更全局下发与网关显示口径（#533）
+
+- **通知器**：`services/model-push-notifier.ts#notifyModelConfigChanged()`——未配置 `AGENT_API_URL`/`INTERNAL_API_TOKEN` 时
+  warn 返回；否则 `POST {AGENT_API_URL}/internal/model-config/refresh`（body `{scope:'global'}`、Bearer token、5s 超时、
+  fire-and-forget，异常只 warn）。调用点：所有 global 模型 mutation（创建/导入/删除/启停/排序/上下文）与全部 global
+  供应商 mutation 的**成功路径**；失败/未命中零调用。
+- **网关显示口径**：`routes/billing-openai.ts` 的 `toModelEntry(model, ownedBy)`——`scope=global` → `Agent Gear`，
+  `scope=user`（含存量无 scope）→ 绑定供应商名称；account Key 列表恒 `Agent Gear`；供应商映射一次查询
+  （`select({isEnabled:1,name:1})`），无 N+1；`/chat/completions` 仍是「global 优先 → user 回退 → 404
+  `model_not_found`」，禁用即时生效、进行中请求不中断（仅测试锁定）。
+- **上游上下文元数据**：`services/llm-api.ts#fetchModelCatalog` 与 agent-api 同口径白名单
+  （`context_length/context_window/max_context_length/max_input_tokens/input_token_limit` → 正整数；
+  `max_tokens`/`max_output_tokens` 不取；Anthropic 恒无；单条异常隔离）。`listProviderModels` 透出 `contextLength`；
+  `importModels` 单次拉取同时做连通性门禁与 `name→contextLength` 写入（未提供保持 null），既有去重/错误文案不变。

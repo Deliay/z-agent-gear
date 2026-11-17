@@ -20,6 +20,11 @@ vi.mock('../../services/model.js', () => ({
   modelService: { findByProviderId: vi.fn() },
 }));
 
+vi.mock('../../services/model-push-notifier.js', () => ({
+  notifyModelConfigChanged: vi.fn(),
+}));
+
+import { notifyModelConfigChanged } from '../../services/model-push-notifier.js';
 import { providerService } from '../../services/provider.js';
 import { modelService } from '../../services/model.js';
 import type { AdminAuthContext } from './auth.js';
@@ -129,6 +134,67 @@ describe('providerResolvers', () => {
       await expect(Mutation.batchEnableGlobalProviders({}, { ids: ['p1'] }, good)).resolves.toEqual({ successCount: 1 });
       await expect(Mutation.batchDisableGlobalProviders({}, { ids: ['p1'] }, good)).resolves.toEqual({ successCount: 2 });
       await expect(Mutation.batchDeleteGlobalProviders({}, { ids: ['p1'] }, good)).resolves.toEqual({ successCount: 3 });
+    });
+
+    it('T-NOTIFY2: every successful global provider mutation notifies once', async () => {
+      (providerService.create as any).mockResolvedValue({ id: 'p1' });
+      (providerService.update as any).mockResolvedValue({ id: 'p1' });
+      (providerService.delete as any).mockResolvedValue(true);
+      (providerService.toggle as any).mockResolvedValue({ id: 'p1' });
+      (providerService.batchEnable as any).mockResolvedValue({ successCount: 1 });
+      (providerService.batchDisable as any).mockResolvedValue({ successCount: 1 });
+      (providerService.batchDelete as any).mockResolvedValue({ successCount: 1 });
+
+      await Mutation.createGlobalProvider({}, { input }, good);
+      await Mutation.updateGlobalProvider({}, { id: 'p1', input }, good);
+      await Mutation.deleteGlobalProvider({}, { id: 'p1' }, good);
+      await Mutation.toggleGlobalProvider({}, { id: 'p1' }, good);
+      await Mutation.batchEnableGlobalProviders({}, { ids: ['p1'] }, good);
+      await Mutation.batchDisableGlobalProviders({}, { ids: ['p1'] }, good);
+      await Mutation.batchDeleteGlobalProviders({}, { ids: ['p1'] }, good);
+
+      expect(notifyModelConfigChanged).toHaveBeenCalledTimes(7);
+    });
+
+    it('T-NOTIFY2: failure paths never notify', async () => {
+      (providerService.create as any).mockRejectedValue(new Error('Provider name already exists'));
+      await expect(Mutation.createGlobalProvider({}, { input }, good)).rejects.toThrow(
+        'Provider name already exists',
+      );
+
+      (providerService.update as any).mockRejectedValue(new Error('boom'));
+      await expect(Mutation.updateGlobalProvider({}, { id: 'p1', input }, good)).rejects.toThrow('boom');
+
+      (providerService.update as any).mockResolvedValue(null);
+      await expect(Mutation.updateGlobalProvider({}, { id: 'p1', input }, good)).rejects.toThrow(
+        'Provider not found',
+      );
+
+      // 未命中（非法/不存在）视为失败路径
+      (providerService.delete as any).mockResolvedValue(false);
+      await expect(Mutation.deleteGlobalProvider({}, { id: 'missing' }, good)).resolves.toBe(false);
+
+      (providerService.toggle as any).mockResolvedValue(null);
+      await expect(Mutation.toggleGlobalProvider({}, { id: 'missing' }, good)).rejects.toThrow(
+        'Provider not found',
+      );
+
+      (providerService.batchEnable as any).mockRejectedValue(new Error('boom'));
+      await expect(
+        Mutation.batchEnableGlobalProviders({}, { ids: ['p1'] }, good),
+      ).rejects.toThrow('boom');
+
+      (providerService.batchDisable as any).mockRejectedValue(new Error('boom'));
+      await expect(
+        Mutation.batchDisableGlobalProviders({}, { ids: ['p1'] }, good),
+      ).rejects.toThrow('boom');
+
+      (providerService.batchDelete as any).mockRejectedValue(new Error('boom'));
+      await expect(
+        Mutation.batchDeleteGlobalProviders({}, { ids: ['p1'] }, good),
+      ).rejects.toThrow('boom');
+
+      expect(notifyModelConfigChanged).not.toHaveBeenCalled();
     });
   });
 

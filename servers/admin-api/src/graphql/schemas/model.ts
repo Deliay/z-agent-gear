@@ -43,6 +43,7 @@ export const modelTypeDefs = `#graphql
   # 上游模型清单条目（导入弹窗数据源）
   type ProviderModelOption {
     name: String! # 上游模型名（已 trim/去重，保持上游顺序）
+    contextLength: Int # 上游尽力提供的上下文长度（token）；取不到为 null
     isImported: Boolean! # 该供应商下已存在
     isDuplicate: Boolean! # 已被其他供应商的 global 模型占用（全局唯一冲突）
   }
