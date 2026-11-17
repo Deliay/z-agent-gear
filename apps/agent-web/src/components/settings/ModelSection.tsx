@@ -16,17 +16,20 @@ import {
   TOGGLE_MODEL,
   UPDATE_MODEL_SORT_ORDER,
   CREATE_CUSTOM_MODEL,
+  UPDATE_MODEL_CONTEXT_LENGTH,
   DELETE_CUSTOM_MODEL,
 } from '@/graphql/mutations'
 import type { GetModelsQuery, GetProvidersQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
+import { toast } from 'sonner'
 import ModelGroup from './ModelGroup'
 import ModelItem from './ModelItem'
-import CustomModelDialog from './CustomModelDialog'
+import CustomModelDialog, { type EditableModel } from './CustomModelDialog'
 import { ResourceSourceBadge } from './ResourceSourceBadge'
 import { useResourceSourceResolver } from '@/hooks/useResourceSource'
 import { useWorkspaceAccess } from '@/stores/workspace'
 import type { ResourceSource } from '@/lib/workspace-source'
+import { notifyModelConfigApplied } from '@/lib/model-config-notice'
 
 interface ModelData {
   id: string
@@ -42,6 +45,8 @@ interface ModelData {
   isCustom: boolean
   isEnabled: boolean
   sortOrder: number
+  /** 最长上下文大小（token）；null/缺省 = 未设置 */
+  contextLength?: number | null
   scope: 'user' | 'global'
   /** 所属租户工作区；scope=global 恒为 null（多租户二期） */
   workspaceId?: string | null
@@ -65,9 +70,12 @@ export default function ModelSection() {
   const [toggleModel] = useMutation(TOGGLE_MODEL)
   const [updateSortOrder] = useMutation(UPDATE_MODEL_SORT_ORDER)
   const [createCustom] = useMutation(CREATE_CUSTOM_MODEL)
+  const [updateContextLength] = useMutation(UPDATE_MODEL_CONTEXT_LENGTH)
   const [deleteCustomModel] = useMutation(DELETE_CUSTOM_MODEL)
 
   const [customDialogOpen, setCustomDialogOpen] = useState(false)
+  /** 非 null 时打开 CustomModelDialog 编辑模式（仅可改/清空最长上下文） */
+  const [editingModel, setEditingModel] = useState<EditableModel | null>(null)
   // 默认全部折叠；refetch 不重置（仅内存，不持久化）
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
@@ -138,6 +146,7 @@ export default function ModelSection() {
       variables: { id },
       refetchQueries: [GET_MODELS],
     })
+    notifyModelConfigApplied()
   }, [deleteCustomModel])
 
   const handleToggle = async (id: string) => {
@@ -145,6 +154,7 @@ export default function ModelSection() {
       variables: { id },
       refetchQueries: [GET_MODELS],
     })
+    notifyModelConfigApplied()
   }
 
   const handleDragEnd = async (event: DragEndEvent) => {
@@ -175,18 +185,61 @@ export default function ModelSection() {
       variables: { ids: userIds },
       refetchQueries: [GET_MODELS],
     })
+    notifyModelConfigApplied()
   }
 
-  const handleCustomSave = async (providerId: string, name: string) => {
+  const handleCustomSave = async (
+    providerId: string,
+    name: string,
+    contextLength: number | null,
+  ) => {
     await createCustom({
-      variables: { input: { providerId, name } },
+      variables: { input: { providerId, name, contextLength } },
       refetchQueries: [GET_MODELS],
     })
+    notifyModelConfigApplied()
   }
 
-  const enabledProviders = (providersData?.providers ?? [])
-    .filter((p: { isEnabled: boolean }) => p.isEnabled)
-    .map((p: { id: string; name: string }) => ({ id: p.id, name: p.name }))
+  const handleEditContextLength = async (
+    _providerId: string | null,
+    _name: string,
+    contextLength: number | null,
+  ) => {
+    if (!editingModel) return
+    try {
+      await updateContextLength({
+        variables: { modelId: editingModel.id, contextLength },
+        refetchQueries: [GET_MODELS],
+      })
+      notifyModelConfigApplied()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败，请重试')
+      // 抛出后对话框保持打开并展示错误
+      throw err
+    }
+  }
+
+  const handleOpenEditContextLength = useCallback((id: string) => {
+    const target = groupsRef.current
+      .flatMap((group) => group.models)
+      .find((model) => model.id === id)
+    if (!target) return
+    setEditingModel({
+      id: target.id,
+      providerId: target.providerId,
+      provider: target.provider ? { name: target.provider.name } : undefined,
+      name: target.name,
+      contextLength: target.contextLength ?? null,
+    })
+  }, [])
+
+  const enabledProviders = useMemo(
+    () =>
+      (providersData?.providers ?? [])
+        .filter((p: { isEnabled: boolean }) => p.isEnabled)
+        .map((p: { id: string; name: string }) => ({ id: p.id, name: p.name })),
+    [providersData],
+  )
 
   return (
     <section className="space-y-4">
@@ -240,6 +293,7 @@ export default function ModelSection() {
                         model={model}
                         onToggle={handleToggle}
                         onDelete={handleDelete}
+                        onEditContextLength={handleOpenEditContextLength}
                         sortable={group.sortable}
                         hideProviderName
                         readOnlyToggle={contextReadOnly || !modelSource.editable}
@@ -260,6 +314,16 @@ export default function ModelSection() {
         onOpenChange={setCustomDialogOpen}
         providers={enabledProviders}
         onSave={handleCustomSave}
+      />
+
+      <CustomModelDialog
+        open={editingModel !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditingModel(null)
+        }}
+        providers={enabledProviders}
+        model={editingModel}
+        onSave={handleEditContextLength}
       />
     </section>
   )

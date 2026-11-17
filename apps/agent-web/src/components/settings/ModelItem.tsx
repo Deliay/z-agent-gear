@@ -1,6 +1,6 @@
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVerticalIcon, Trash2Icon } from 'lucide-react'
+import { GripVerticalIcon, PencilLineIcon, Trash2Icon } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { ResourceSourceBadge } from './ResourceSourceBadge'
@@ -20,6 +20,8 @@ interface ModelData {
   isCustom: boolean
   isEnabled: boolean
   sortOrder: number
+  /** 最长上下文大小（token）；null/缺省 = 未设置 */
+  contextLength?: number | null
   scope: 'user' | 'global'
 }
 
@@ -27,6 +29,8 @@ interface ModelItemProps {
   model: ModelData
   onToggle: (id: string) => void
   onDelete: (id: string) => void
+  /** 编辑上下文长度（仅用户自有模型、非只读时提供入口） */
+  onEditContextLength?: (id: string) => void
   /** 是否渲染拖拽手柄（系统内置模型只读，不可拖拽） */
   sortable?: boolean
   /** 系统内置等场景不展示来源供应商 */
@@ -42,6 +46,7 @@ export default function ModelItem({
   model,
   onToggle,
   onDelete,
+  onEditContextLength,
   sortable = true,
   hideProviderName = false,
   readOnlyToggle = false,
@@ -106,7 +111,25 @@ export default function ModelItem({
         {!hideProviderName && model.provider && (
           <p className="mt-0.5 text-xs text-muted-foreground">{model.provider.name}</p>
         )}
+        <p className="mt-0.5 text-xs text-muted-foreground" data-testid="model-context-length">
+          最长上下文：
+          {typeof model.contextLength === 'number'
+            ? `${model.contextLength.toLocaleString('en-US')} tokens`
+            : '未设置'}
+        </p>
       </div>
+      {model.scope === 'user' && !readOnly && onEditContextLength && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-7 text-muted-foreground hover:text-foreground"
+          onClick={() => onEditContextLength(model.id)}
+          aria-label="编辑上下文"
+          title="编辑上下文"
+        >
+          <PencilLineIcon className="size-4" />
+        </Button>
+      )}
       {model.isCustom && model.scope !== 'global' && !readOnly && (
         <Button
           variant="ghost"

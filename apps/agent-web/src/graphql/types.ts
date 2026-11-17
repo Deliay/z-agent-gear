@@ -523,6 +523,8 @@ export interface ModelData {
   isCustom: boolean
   isEnabled: boolean
   sortOrder: number
+  /** 最长上下文大小（token）；null/缺省 = 未设置 */
+  contextLength?: number | null
   scope: 'user' | 'global'
   /** 所属租户工作区；scope=global 恒为 null（多租户二期） */
   workspaceId?: string | null
@@ -684,6 +686,17 @@ export interface GetProvidersQuery {
 
 export interface GetModelsQuery {
   models: ModelData[]
+}
+
+/** 供应商上游模型清单条目（providerModelOptions） */
+export interface ProviderModelOptionData {
+  name: string
+  /** 上游尽力提供的上下文长度（token）；取不到为 null */
+  contextLength: number | null
+}
+
+export interface GetProviderModelOptionsQuery {
+  providerModelOptions: ProviderModelOptionData[]
 }
 
 export interface GetSessionsQuery {
