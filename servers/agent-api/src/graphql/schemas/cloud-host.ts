@@ -20,6 +20,24 @@ export const cloudHostTypeDefs = `#graphql
     FAILED
   }
 
+  # 云电脑工作组件（agent-gear）版本信息
+  type CloudHostAgentGearVersion {
+    # 当前运行版本（worker register 上报并落库；未上报/离线前未上报过为 null）
+    currentVersion: String
+    # 发布源最新版本（agent-api 每 10 分钟刷新；尚未成功抓取时为 null）
+    latestVersion: String
+    # current 与 latest 均存在且不一致
+    upgradeAvailable: Boolean!
+    # 自动升级检查周期（分钟），与 worker 侧生效周期一致，默认 10
+    autoUpdateIntervalMinutes: Int!
+  }
+
+  # 云电脑工作组件立即升级结果
+  type CloudHostAgentGearUpgradeResult {
+    # 升级指令已被云电脑接受（随后自动重启生效）；false 不会出现在成功响应（失败走错误）
+    accepted: Boolean!
+  }
+
   type CloudHost {
     id: ID!
     name: String!
@@ -49,6 +67,8 @@ export const cloudHostTypeDefs = `#graphql
     storage: CloudStorageSummary
     # STARTING 且存储正在从归档恢复数据时为 true（仅字段级展示，不新增容器状态）
     storageRestoring: Boolean!
+    # 工作组件版本信息（字段级组装；单字段失败降级为 null，不拖垮查询）
+    agentGearVersion: CloudHostAgentGearVersion!
   }
 
   # 云电脑创建/运行报价（金额单位 credits，来自 admin-api 价目档）
@@ -213,6 +233,16 @@ export const cloudHostTypeDefs = `#graphql
     updateCloudHostIssuesLinkage(id: ID!, input: CloudHostIssuesLinkageInput!): CloudHostIssuesLinkage!
     deleteCloudHostIssuesLinkage(id: ID!): Boolean!
     cleanupCloudHostIssuesLabels(controllerId: ID!): CloudHostIssuesLabelCleanupResult!
+    # 立即升级云电脑工作组件：版本不一致且 RUNNING 时可用；
+    # 触发后云电脑短暂断连并以新版本恢复在线
+    # 错误白名单（逐字透传，未命中收敛 internal error）：
+    #   Not authenticated
+    #   Cloud host not found
+    #   cloud host is not running
+    #   container is not online
+    #   agent-gear upgrade is not supported by the current version
+    #   agent-gear upgrade already in progress
+    upgradeCloudHostAgentGear(controllerId: ID!): CloudHostAgentGearUpgradeResult!
   }
 
   extend type Controller {

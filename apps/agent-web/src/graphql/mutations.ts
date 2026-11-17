@@ -514,6 +514,14 @@ export const DELETE_CLOUD_HOST = gql`
   }
 `
 
+export const UPGRADE_CLOUD_HOST_AGENT_GEAR = gql`
+  mutation UpgradeCloudHostAgentGear($controllerId: ID!) {
+    upgradeCloudHostAgentGear(controllerId: $controllerId) {
+      accepted
+    }
+  }
+`
+
 export const INSTALL_CLOUD_HOST_WORKLOAD = gql`
   mutation InstallCloudHostWorkload($input: InstallCloudHostWorkloadInput!) {
     installCloudHostWorkload(input: $input) {

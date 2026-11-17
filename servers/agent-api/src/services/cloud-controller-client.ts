@@ -469,6 +469,25 @@ export class CloudControllerClient {
       { method: 'POST', body: JSON.stringify({ containerId: input.containerId }) },
     );
   }
+
+  /**
+   * 立即升级云电脑工作组件（契约 A.2.14）：cloud-controller 门禁通过后下发 `agent-gear:upgrade`
+   * 并等待 worker 回执；成功返回 `{accepted:true, currentVersion?}`，失败抛
+   * `CloudControllerRequestError`（code 表由服务层映射为 GraphQL 白名单文案）。
+   */
+  async upgradeAgentGear(
+    containerId: string,
+    input?: { targetVersion?: string },
+  ): Promise<{ accepted: boolean; currentVersion?: string }> {
+    const body =
+      input?.targetVersion && input.targetVersion.trim()
+        ? JSON.stringify({ targetVersion: input.targetVersion.trim() })
+        : undefined;
+    return this.requestWithError<{ accepted: boolean; currentVersion?: string }>(
+      `/internal/containers/${encodeURIComponent(containerId)}/upgrade-agent-gear`,
+      { method: 'POST', ...(body ? { body } : {}) },
+    );
+  }
 }
 
 export const cloudControllerClient = new CloudControllerClient();

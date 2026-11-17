@@ -20,6 +20,10 @@ import { InMemoryWorkloadLogRepository } from '../repositories/workload-log-repo
 /** 兼容版本基线：版本门禁上线后，存量注册用例统一使用该版本。 */
 const OK_VERSION = '2.2.0';
 
+/** 升级事件用例的缩短窗口（生产默认 60s 在飞 / 10s 回执超时）。 */
+const UPGRADE_INFLIGHT_MS = 400;
+const UPGRADE_RESULT_TIMEOUT_MS = 120;
+
 let httpServer: HttpServer;
 let io: SocketIOServer;
 let baseUrl: string;
@@ -235,6 +239,9 @@ beforeAll(async () => {
     heartbeatTracker,
     workloadDispatcher: dispatcher,
     logger: testLog.logger,
+    // 测试缩短升级在飞/回执窗口（生产默认 60s/10s），避免用例长时间等待。
+    upgradeInflightMs: UPGRADE_INFLIGHT_MS,
+    upgradeResultTimeoutMs: UPGRADE_RESULT_TIMEOUT_MS,
   });
   gatewayBridge.emitToContainer = gateway.emitToContainer;
   gatewayBridge.isConnected = gateway.isConnected;
@@ -1119,5 +1126,128 @@ describe('worker Socket.IO gateway', () => {
 
     // 不报错：握手链路无 error 级日志
     expect(testLog.records.filter((record) => record.level === 'error')).toEqual([]);
+  });
+});
+
+describe('agent-gear 升级事件与版本落库（T-UPG-G）', () => {
+  async function registerOnline(
+    version = '2.20.0',
+    overrides: Parameters<typeof newContainer>[1] = {},
+  ): Promise<{ container: { id: string }; socket: ClientSocket }> {
+    const { container, token } = await newContainer([], overrides);
+    const socket = await connectWith(token);
+    socket.emit('register', { hostname: 'worker-upgrade', version });
+    await waitFor(socket, 'registered');
+    return { container, socket };
+  }
+
+  it('T-UPG-G1: register 成功落库 agentGearVersion；重新 register 刷新（idle/harness 同口径）', async () => {
+    for (const overrides of [
+      {},
+      { purpose: 'harness' as const, harnessTypes: ['opencode'], agentGearMinVersion: '2.17.1' },
+    ]) {
+      const { container, token } = await newContainer([], overrides);
+      const first = await connectWith(token);
+      first.emit('register', { hostname: 'worker-a', version: '2.20.0' });
+      await waitFor(first, 'registered');
+      expect((await repo.findById(container.id))?.agentGearVersion).toBe('2.20.0');
+
+      // 升级重启后重新 register（新连接）→ 刷新为上报的新版本
+      first.close();
+      await waitForCondition(async () => (await repo.findById(container.id))?.agentGearVersion !== undefined);
+      const second = await connectWith(token);
+      second.emit('register', { hostname: 'worker-a', version: '2.21.0' });
+      await waitFor(second, 'registered');
+      expect((await repo.findById(container.id))?.agentGearVersion).toBe('2.21.0');
+      second.close();
+    }
+  });
+
+  it('T-UPG-G2: 落库失败仅 WARN，注册成功、registered 照发、online 不受影响', async () => {
+    testLog.reset();
+    const failPersist = vi
+      .spyOn(service, 'recordAgentGearVersion')
+      .mockRejectedValueOnce(new Error('mongo unavailable'));
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+    socket.emit('register', { hostname: 'worker-b', version: '2.20.0' });
+    const registered = await waitFor<{ controllerId: string }>(socket, 'registered');
+    expect(registered.controllerId).toBe(container.id);
+    expect((await repo.findById(container.id))?.status).toBe('online');
+    // 内存版本仍可用于 runtime 门禁
+    expect(gatewayHandle.getWorkerVersion(container.id)).toBe('2.20.0');
+    expect(
+      testLog.records.find((record) => record.event === 'agent_gear_version_persist_failed'),
+    ).toBeDefined();
+    failPersist.mockRestore();
+    socket.close();
+  });
+
+  it('T-UPG-G3: 版本门禁拒绝路径零副作用——agentGearVersion 不落库', async () => {
+    const { container, token } = await newContainer();
+    const socket = await connectWith(token);
+    socket.emit('register', { hostname: 'worker-c', version: '2.1.0' });
+    const error = await waitFor<{ code: string }>(socket, 'error');
+    expect(error.code).toBe('VERSION_MISMATCH');
+    const record = await repo.findById(container.id);
+    expect(record?.agentGearVersion).toBeNull();
+    expect(record?.status).toBe('connecting');
+    socket.close();
+  });
+
+  it('T-UPG-G4: requestAgentGearUpgrade 下发事件并携带 targetVersion，接受回执返回 ACCEPTED', async () => {
+    const { container, socket } = await registerOnline();
+    socket.on('agent-gear:upgrade', (payload: { targetVersion?: string }) => {
+      expect(payload.targetVersion).toBe('2.21.0');
+      socket.emit('agent-gear:upgrade:result', {
+        accepted: true,
+        currentVersion: '2.20.0',
+      });
+    });
+
+    const result = await gatewayHandle.requestAgentGearUpgrade(container.id, {
+      targetVersion: '2.21.0',
+    });
+    expect(result).toEqual({ code: 'ACCEPTED', currentVersion: '2.20.0' });
+    socket.close();
+  });
+
+  it('T-UPG-G5: 拒绝回执与超时均收敛 NOT_ACCEPTED', async () => {
+    const rejected = await registerOnline();
+    rejected.socket.on('agent-gear:upgrade', () => {
+      rejected.socket.emit('agent-gear:upgrade:result', {
+        accepted: false,
+        reason: 'shutting_down',
+      });
+    });
+    expect(await gatewayHandle.requestAgentGearUpgrade(rejected.container.id)).toEqual({
+      code: 'NOT_ACCEPTED',
+    });
+    rejected.socket.close();
+
+    const silent = await registerOnline();
+    const startedAt = Date.now();
+    expect(await gatewayHandle.requestAgentGearUpgrade(silent.container.id)).toEqual({
+      code: 'NOT_ACCEPTED',
+    });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(UPGRADE_RESULT_TIMEOUT_MS - 20);
+    silent.socket.close();
+  });
+
+  it('T-UPG-G6: 在飞互斥（窗口内第二次 IN_PROGRESS）；断连后清理可再次发起', async () => {
+    const { container, socket } = await registerOnline();
+    const first = gatewayHandle.requestAgentGearUpgrade(container.id);
+    // 首次未收敛时第二次 → IN_PROGRESS
+    expect(await gatewayHandle.requestAgentGearUpgrade(container.id)).toEqual({
+      code: 'IN_PROGRESS',
+    });
+    await expect(first).resolves.toEqual({ code: 'NOT_ACCEPTED' });
+
+    // worker 断连 → 在飞窗清理；离线期间请求 → NOT_ONLINE
+    socket.close();
+    await waitForCondition(async () => !gatewayHandle.isConnected(container.id));
+    expect(await gatewayHandle.requestAgentGearUpgrade(container.id)).toEqual({
+      code: 'NOT_ONLINE',
+    });
   });
 });

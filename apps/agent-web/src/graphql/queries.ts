@@ -286,6 +286,12 @@ export const CLOUD_HOST_FIELDS = gql`
       hourlyCredits
     }
     storageRestoring
+    agentGearVersion {
+      currentVersion
+      latestVersion
+      upgradeAvailable
+      autoUpdateIntervalMinutes
+    }
   }
 `
 

@@ -63,7 +63,8 @@ pnpm exec playwright test
 | `ADMIN_WEB_URL` | admin-web 地址（admin 套件使用） | 回落到 `BASE_URL` |
 | `API_URL` | agent-api GraphQL 地址 | `http://localhost:10001/graphql` |
 | `ADMIN_API_URL` | admin-api GraphQL 地址 | `http://localhost:10003/graphql` |
-| `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；缺省时该用例跳过） | -（可 `aspire describe mongodb` 获取） |
+| `MONGODB_URI` | 共享 MongoDB 连接串（T-E1 真实首登强制改密需据此重置种子管理员；#551 版本区块夹具直写 `cloudhosts`/`cloudcontainers`；缺省时相关用例跳过） | -（可 `aspire describe mongodb` 获取） |
+| `REDIS_URL` | 共享 Redis 连接串（#551 版本区块夹具直写 `agent-gear:latest-version`）；Aspire 编排下为 `rediss://`，测试进程需 `NODE_EXTRA_CA_CERTS` 指向 Aspire 签发的 `cert.pem` 或 `NODE_TLS_REJECT_UNAUTHORIZED=0` | -（可 `aspire describe redis` 获取） |
 | `ADMIN_INITIAL_PASSWORD` | admin-api 种子管理员初始密码。**无默认值**（问题 4/47）。E2E 通过 `MONGODB_URI` 直接改写 Mongo 口令哈希，故通常无需设置；如需固定值排查可注入 | -（`MONGODB_URI` 提供时自动重置） |
 | `INTERNAL_API_TOKEN` | agent-api 内部 Bearer token（前台账号开户 `POST /internal/users`、`E2E-1` 驱动 cloud host ready 回调；**缺省时开户回落 admin-api `adminCreateFrontUser`，E2E-1 显式 skip**） | -（与 Aspire 注入的 `internal-api-token` 一致） |
 | `CONTROLLER_API_URL` | controller-api Socket.IO 地址 | `http://localhost:35273` |
@@ -678,3 +679,15 @@ fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`�
 - E2E-WMF2：取消分支——打开确认框后「取消」→ 节点仍执行中、fake 零 stop；已完成的人类节点抽屉无「立即失败」按钮。
 - 依赖：agent-web / agent-api / controller-api 就绪 + `INTERNAL_API_TOKEN`（开户）；fake controller 应答
   `acp:check`/`git:check`/`acp:start`/`acp:resume`/`acp:stop`。
+
+## 云电脑工作组件版本与立即升级（E2E-UPG，需求 #551）
+
+- 文件：`src/settings-cloud-host-upgrade.spec.ts`；前置 `HARNESS_ENABLED=true` + `MONGODB_URI` + `REDIS_URL`。
+- 范围（计划 D8）：版本区块三态展示、按钮可见性、周期小字、点击后错误提示路径；
+  happy path（worker 收事件 → 钉版重启 → 版本收敛）不在 E2E（外部拿不到合法 worker 一次性 token），
+  由 cloud-controller 集成测试与 `tests/api` 错误映射覆盖。
+- 夹具：`cloudhosts.status=RUNNING`、`cloudcontainers.agentGearVersion`、Redis `agent-gear:latest-version`
+  直写；串行执行（全局 `workers: 1`）。
+- 用例：E2E-UPG1 一致态展示 + 无按钮 / E2E-UPG2 不一致 → 按钮、字段缺失 → `—` 且无按钮 /
+  E2E-UPG3 点击 → 升级中态 + `container is not online` 中文 toast + 按钮恢复 /
+  E2E-UPG4 非 RUNNING 无按钮 / E2E-UPG5 既有面板关键路径零回归。

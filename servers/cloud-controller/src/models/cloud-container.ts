@@ -110,6 +110,11 @@ const cloudContainerSchema = new mongoose.Schema(
     containerApiKeyId: { type: String, default: null },
     /** 云电脑最低 agent-gear 版本（max(服务端常量, 请求值)）；普通容器为 null。 */
     agentGearMinVersion: { type: String, default: null },
+    /**
+     * worker `register` 上报的 agent-gear 版本（每次成功注册在门禁通过后刷新；未注册过为 null）。
+     * 复制新增字段：零迁移、不建索引、历史行 null 容忍（契约 A.3 / 提案 §4.1）。
+     */
+    agentGearVersion: { type: String, default: null },
     /** 容器 TTL 到期时间（仅落库留存，供计费凭证到期等业务使用；不再映射 Job 硬截止）；历史记录为 null。 */
     expiresAt: { type: Date, default: null },
     tokenHash: { type: String, default: null },

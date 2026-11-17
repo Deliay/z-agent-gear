@@ -57,7 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.19.0`（major 保持 2；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.20.0`（major 保持 2；`agent-gear:upgrade` 升级事件自 2.20.0 起；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.17.1 起为当前基线；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -224,6 +224,23 @@ hook 抛错时本批每个 item 直接回报 `failed` + `Github 凭据申请失�
 - `SESSION_REPLACED`（服务端 2.16.0 起下发）：同一 Key 的新登录已接管本连接。客户端**不重连、不清除本地 Key/resumeToken**；本地模式直接 `exit(42)`，云电脑模式 `notifyShutdown({ reason: 'session_replaced' })` 由 supervisor 按服务端终止语义收尾（最终 42、入口不重启）。
 - 双连接只启动一个 `LocalMcpServer`：`/worker` 连接 `skipLocalMcpStart=true`，标准连接负责启动。
 - 未检测到云电脑模式时保持本地控制器单连接旧行为不变。
+
+## 云电脑升级事件（2.20.0）
+
+- **事件对**（契约 `contracts/cloud-controller-websocket.md` §2.11/§2.12）：`/worker` 连接接收
+  `agent-gear:upgrade { targetVersion? }`，回 `agent-gear:upgrade:result`：
+  `{ accepted:true, currentVersion }` 或 `{ accepted:false, reason:'shutting_down' }`。
+- **客户端行为**：**不自安装**。接受后延迟约 100ms（D5，保证回执 flush 出 socket 缓冲）再走既有优雅退出：
+  云电脑模式 `notifyShutdown({ reason:'agent-gear upgrade', exitCode:0 })` 由 supervisor 关闭双连接并以
+  退出码 0 退出（**委托入口保活链路**按「非 42」退避 → 钉版安装 → 以新版本重启）；不发送 `unregister`。
+- **幂等守卫**：已接受升级 / `shutdownStarted`（正在退出）时再次收到事件只回执
+  `{ accepted:false, reason:'shutting_down' }`，不重复停机；日志 `agent_gear_upgrade` 仅含
+  `targetVersion/currentVersion/accepted`（无凭据）。
+- **本地模式零变化**：本地连接同样注册监听，但 controller-api 从不下发该事件（死路径 `process.exit(0)`）；
+  `shutdown` / `unregistered` / `error` 既有退出码语义逐字不变。
+- `ShutdownPayload` 追加可选 `exitCode`（D6），supervisor worker 连接原样透传给 `shutdown()`；
+  缺省时仍按 reason 分类，既有路径零变化。回归：`agent-gear-upgrade.test.ts`（T-AGU1~T-AGU4）、
+  `cloud-host/supervisor.test.ts`（T-AGU5）。
 
 ## harness prepare（OpenCode）
 

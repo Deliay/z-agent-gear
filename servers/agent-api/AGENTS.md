@@ -778,3 +778,15 @@ pnpm run start   # Start production server
 - **租户隔离**：`externallogins` 带 `userId`/`tenantId`，必须双注册（`models/tenant-isolation.test.ts` + 迁移 013 `TENANT_ID_COLLECTIONS`，集合数 22）。
 - **GraphQL**：`authProviders` 免登录（仅 enabled + enableFrontLogin）；`pendingExternalLoginInfo` 免登录且不消费 ticket（仅两白名单字段）；`myExternalLogins` / `createFrontBindTicket` / `unbindExternalLogin` 需登录；`exchangeLoginTicket` GETDEL 兑换，失败 `BAD_USER_INPUT('invalid or expired ticket')`。`ExternalLoginInfo.providerType/providerDisplayName/providerEnabled` 为类型级 resolver，**必须登记 `graphql/resolvers/index.ts` 的 `ExternalLoginInfo` 键**。
 - **测试**：单测 `services/{oauth-flow,oidc-client,github-oauth,external-login,provisioning}.test.ts`、`routes/auth-oauth.test.ts`、`migrations/{026-external-logins,027-oidc-binding-optimization}.test.ts`、`graphql/{schemas,resolvers}/auth*.test.ts`；API 全链路 `tests/api/src/agent-api/auth-oauth.test.ts`（fake IdP/GitHub，T-OA-API1~20）；E2E `tests/e2e/src/auth-oidc-binding.spec.ts`（E2E-OBO1~7）。
+
+## 云电脑工作组件版本与立即升级（需求 #551）
+
+> 契约 `contracts/cloud-host.graphql`（`CloudHostAgentGearVersion` / `CloudHost.agentGearVersion` / `upgradeCloudHostAgentGear`）与 `contracts/cloud-controller-websocket.md` A.2.14。
+
+- **最新版本服务** `services/agent-gear-version.ts`：`AGENT_GEAR_REGISTRY_URL`（包级 URL，默认 `https://registry.npmjs.org/agent-gear`）抓取 `dist-tags.latest`，写 Redis **`agent-gear:latest-version`**（JSON `{version, fetchedAt}`，**无 TTL**）；启动即抓一次 + `AGENT_GEAR_VERSION_REFRESH_INTERVAL_MS`（默认 600000）周期刷新（timer unref），`0` = 关闭定时刷新（查询路径仍 single-flight 补抓一次）。`getLatestAgentGearVersion()` 命中缓存直接返回，miss 经进程内 single-flight 抓取；抓取/Redis 失败保留旧值、仅 WARN，查询降级 `null`。版本串校验：非空、≤64、去控制字符。调度器在 `index.ts` listen 回调与云存储对账同位登记。
+- **字段级 resolver** `CloudHost.agentGearVersion`（`resolvers/cloud-host.ts` 既有 `CloudHost` 键内）：`currentVersion` = 只读镜像 `cloudcontainers.agentGearVersion`（按 `host.containerId` 查询；失败/缺失 → null）、`latestVersion` = 最新版本服务、`upgradeAvailable` = 两者非空且不一致、`autoUpdateIntervalMinutes` = `AGENT_GEAR_AUTO_UPDATE_INTERVAL_MINUTES`（默认 10）。单字段失败降级 null，不拖垮 `CloudHost`/`controllers` 查询。
+- **立即升级编排** `cloudHostService.upgradeCloudHostAgentGear(controllerId, userId)`：`Controller.findOne` 归属 → `CloudHost` 未软删 → `status==='RUNNING'`（否则 `cloud host is not running`）→ `containerId` → `cloudControllerClient.upgradeAgentGear`（A.2.14）→ `CloudControllerRequestError` 码映射：`NOT_FOUND`→`Cloud host not found`、`CONTAINER_NOT_ONLINE`/`UPGRADE_NOT_ACCEPTED`→`container is not online`、`UPGRADE_UNSUPPORTED`/`UPGRADE_IN_PROGRESS` 各自专用文案。不建 setup operation 台账，完成状态由前端轮询版本收敛观测。
+- **白名单**：`CLOUD_HOST_PUBLIC_ERRORS` 追加 `container is not online` / `agent-gear upgrade is not supported by the current version` / `agent-gear upgrade already in progress`；未命中仍收敛 `internal error`。
+- **只读镜像**：`models/cloud-container.ts` 同步 `agentGearVersion`（写方仍 cloud-controller）。
+- **三 env 仅代码默认值**（计划 D4）：`AGENT_GEAR_REGISTRY_URL` / `AGENT_GEAR_VERSION_REFRESH_INTERVAL_MS` / `AGENT_GEAR_AUTO_UPDATE_INTERVAL_MINUTES` 不进 AppHost/compose/k8s；内网部署经 env 覆盖。
+- **双写守卫**：`schemas/cloud-host.test.ts` 以 `parse`/`print` 逐字段比对契约（`CloudHostAgentGearVersion` / `CloudHostAgentGearUpgradeResult` / `CloudHost` / `Query` / `Mutation`）。

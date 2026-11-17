@@ -39,6 +39,7 @@ import {
 import { StoragePvcConflictError } from '../services/k8s-storage-manager.js';
 import type { HarnessSecrets } from '../services/secret-store.js';
 import { resolveGlobalWorkspaceId } from '../services/workspace-resolver.js';
+import type { UpgradeRequestResult } from '../services/socketio-gateway.js';
 import {
   harnessMinVersion,
   isSupportedWorkerVersion,
@@ -46,6 +47,7 @@ import {
   sanitizeVersionForLog,
   MIN_HARNESS_VERSION_BY_TYPE,
   MIN_HARNESS_WORKER_VERSION,
+  MIN_UPGRADE_WORKER_VERSION,
 } from '../services/worker-version.js';
 import {
   WorkloadPlanError,
@@ -96,6 +98,7 @@ export interface CloudContainerJson {
   harnessTypes: string[];
   controllerKeyId: string | null;
   containerApiKeyId: string | null;
+  agentGearVersion: string | null;
   expiresAt: string | null;
   // ---- 云存储（契约 A.3；历史行 null 容忍） ----
   storageId: string | null;
@@ -150,6 +153,7 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
     harnessTypes: entity.harnessTypes ?? [],
     controllerKeyId: entity.controllerKeyId ?? null,
     containerApiKeyId: entity.containerApiKeyId ?? null,
+    agentGearVersion: entity.agentGearVersion ?? null,
     expiresAt: entity.expiresAt ? entity.expiresAt.toISOString() : null,
     storageId: entity.storageId ?? null,
     storagePvcName: entity.storagePvcName ?? null,
@@ -212,6 +216,14 @@ export interface InternalRouterDeps {
    * 逐类型版本门禁使用；不可得（未注入/未注册）时放行并告警留痕（契约 A.2.5）。
    */
   getWorkerVersion?: (containerId: string) => string | undefined;
+  /**
+   * 升级事件触发（gateway 句柄）：A.2.14 端点 emit `agent-gear:upgrade` 并等待回执；
+   * 缺省（单测/未注入）时端点按容器离线处理。
+   */
+  requestAgentGearUpgrade?: (
+    containerId: string,
+    payload?: { targetVersion?: string },
+  ) => Promise<UpgradeRequestResult>;
   /** 云存储编排（PVC / 归档 / 恢复 / 用量 / 清理）；缺省时存储端点返回 503。 */
   storageService?: StorageService;
 }
@@ -990,6 +1002,63 @@ export function createInternalRouter(
       res.status(200).json({ batchId: result.batchId, logId: result.items[0]?.logId ?? null });
     } catch (err) {
       respondRuntimeError(res, err);
+    }
+  });
+
+  // 立即升级云电脑工作组件（契约 A.2.14）：online/版本/在飞门禁 → gateway emit + 回执等待。
+  router.post('/containers/:id/upgrade-agent-gear', async (req: Request, res: Response) => {
+    const containerId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+    try {
+      const container = await containerService.getById(containerId);
+      if (!container) {
+        res.status(404).json({ error: 'NOT_FOUND', message: '容器不存在' });
+        return;
+      }
+      if (container.status !== 'online' || !deps.requestAgentGearUpgrade) {
+        res.status(409).json({ error: 'CONTAINER_NOT_ONLINE', message: '容器不在线' });
+        return;
+      }
+      const reportedVersion = deps.getWorkerVersion?.(containerId);
+      const support = isSupportedWorkerVersion(reportedVersion, MIN_UPGRADE_WORKER_VERSION);
+      if (!support.supported) {
+        res.status(400).json({
+          error: 'UPGRADE_UNSUPPORTED',
+          message: `agent-gear 版本不支持立即升级：需要 >= ${MIN_UPGRADE_WORKER_VERSION}，当前 ${sanitizeVersionForLog(reportedVersion)}`,
+        });
+        return;
+      }
+      const rawTarget = (req.body ?? {}).targetVersion;
+      if (rawTarget !== undefined && rawTarget !== null && typeof rawTarget !== 'string') {
+        res.status(400).json({ error: 'INVALID_BODY', message: 'targetVersion 必须为字符串' });
+        return;
+      }
+      const requestPayload =
+        typeof rawTarget === 'string' && rawTarget.trim().length > 0
+          ? { targetVersion: rawTarget.trim() }
+          : undefined;
+      const result = await deps.requestAgentGearUpgrade(containerId, requestPayload);
+      if (result.code === 'NOT_ONLINE') {
+        res.status(409).json({ error: 'CONTAINER_NOT_ONLINE', message: '容器不在线' });
+        return;
+      }
+      if (result.code === 'IN_PROGRESS') {
+        res.status(409).json({ error: 'UPGRADE_IN_PROGRESS', message: '升级已在进行中' });
+        return;
+      }
+      if (result.code === 'NOT_ACCEPTED') {
+        res.status(409).json({ error: 'UPGRADE_NOT_ACCEPTED', message: '云电脑未接受升级指令' });
+        return;
+      }
+      res.status(200).json({
+        accepted: true,
+        containerId,
+        currentVersion: result.currentVersion ?? reportedVersion ?? null,
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: 'INTERNAL_ERROR',
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   });
 

@@ -704,6 +704,15 @@ export class ContainerService {
   }
 
   /**
+   * 记录 worker `register` 上报的 agent-gear 版本（契约 A.3 `agentGearVersion`）：
+   * 仅在版本门禁通过后的注册副作用阶段调用；写失败由调用方降级为 WARN（不阻断注册）。
+   * 内存 `workerVersions`（gateway）继续服务 runtime harness 门禁，本方法是读侧展示的落库来源。
+   */
+  async recordAgentGearVersion(containerId: string, version: string): Promise<void> {
+    await this.repo.update(containerId, { agentGearVersion: version });
+  }
+
+  /**
    * 必须工作负载失败时的强制注销（工作负载三期，spi `WorkloadContainerStatePort.forceDestroy`）：
    * 复用既有 `destroy` 链路（CAS `destroying` → 清理批次 + `shutdown` → 删除 Job → `exited`），
    * `reason` 写入 `exitReason`（缺省「强制销毁」）。不新增独立删除路径。
