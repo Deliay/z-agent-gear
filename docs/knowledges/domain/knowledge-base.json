@@ -1,0 +1,4 @@
+{
+  "name": "领域模型库",
+  "description": "ZeroAsh's Agent Gear 平台领域模型知识库，按限界上下文（Bounded Context）组织，覆盖身份与租户、工作区、控制器、云资源与 Harness、会话与交互、工作流、模型网关、计费与计量、密钥与工具、GitHub 集成、知识库共 11 个上下文。内容来源为代码事实（Mongoose 模型、GraphQL/OpenAPI/AsyncAPI 契约、服务层状态机）。"
+}
