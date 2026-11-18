@@ -144,7 +144,8 @@ pnpm run test    # Run tests
 - **结果回写**：`socketio.ts` 监听 `knowledge-bases:scan:result` → `handleScanResult` 写
   Redis `knowledge-bases:scan:{requestId}`（`EX 60`）；`sources` 非数组时按
   `{success:false, sources:[], truncated:false, error:'not found'}` 兜底落键，防异常报文撑爆轮询端解析。
-- 下游 agent-api 以 500ms × 30 轮询消费（读后即删），并在工作区级 Redis 缓存解析结果 300s。
+- 下游 agent-api 以 500ms × 60（约 30s）轮询消费（读后即删），并在工作区级 Redis 缓存解析结果 300s。
+- 中继**无等待逻辑**（仅转发 + 结果回写）；轮询超时口径由 agent-api 单侧决定。
 
 ## 日志与可观测性
 

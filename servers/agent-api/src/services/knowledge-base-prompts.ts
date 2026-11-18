@@ -7,8 +7,7 @@
  *
  * 文本必须与实现同源，规则变更时同步修改：
  * - 扫描模块（跨包常量，不能 import）：`packages/agent-controller/src/knowledge-bases.ts`
- *   （`REPO_KNOWLEDGE_BASE_SOURCES` / `MAX_KNOWLEDGE_BASES_PER_SOURCE` / `MAX_DOCUMENTS_PER_BASE` /
- *   `MAX_SCHEMA_BYTES` / `MAX_DOCUMENT_BYTES` / `MAX_BASE_TOTAL_BYTES` / `MAX_SOURCE_TOTAL_BYTES`）；
+ *   （`REPO_KNOWLEDGE_BASE_SOURCES` / `MAX_FILE_BYTES` / `MAX_ENTRIES_PER_FOLDER`）；
  * - schema 解析：`servers/agent-api/src/services/repo-knowledge-bases.ts#parseRepoKnowledgeBaseSchema`；
  * - front matter 与标题回退链：`servers/agent-api/src/services/repo-knowledge-bases.ts#parseRepoDocument`。
  *
@@ -71,7 +70,7 @@ const REPO_KNOWLEDGE_BASE_AUTHORING_PROMPT = `## 仓库知识库编写指引
 
 - \`name\` 缺失、为空或超过 64 字符时该知识库标记为不合法，在界面上灰显并展示原因。
 - \`description\` 超过 1024 字符同样标记为不合法。
-- 文件超过 64KiB 时该知识库不读取（标记 \`file too large\`）。
+- 文件超过 1MiB 时该知识库不读取（标记 \`file too large\`）。
 
 ### 4. 文档组织
 
@@ -80,7 +79,7 @@ const REPO_KNOWLEDGE_BASE_AUTHORING_PROMPT = `## 仓库知识库编写指引
   - \`team-rules/guides/git.md\` → 文档路径 \`/guides/git\`。
   - \`team-rules/onboarding.md\` → 文档路径 \`/onboarding\`。
 - 路径大小写保留；归一后路径冲突（如 \`a.md\` 与 \`a.MD\`）会使整个知识库标记为不合法，冲突文档均不收录。
-- 单个文档超过 128KiB 时该文档标记 \`file too large\`，不影响其它文档。
+- 单个文档超过 1MiB 时该文档标记 \`file too large\`（不可打开），不影响其它文档。
 
 ### 5. Front matter（可选）
 
@@ -111,14 +110,11 @@ description: 提交信息格式与分支约定
 
 | 限制 | 上限 |
 | --- | --- |
-| 每个来源目录的知识库数 | 20 个（按文件夹名排序取前 20） |
-| 每个知识库的文档数 | 50 个 |
-| \`knowledge-base.json\` | 64KiB |
-| 单个文档 | 128KiB |
-| 单个知识库内容累计 | 1MiB |
-| 单个来源目录内容累计 | 2MiB |
+| 单个文件（文档与 \`knowledge-base.json\` 同值） | 1MiB |
+| 单个文件夹的直接子项（目录与文件合计） | 1000 个（按名称排序取前 1000，超出截断） |
+| 文档数、知识库数、内容累计 | 无上限 |
 
-超过上限时平台会截断读取并标记 \`truncated\`，请拆分知识库或精简文档。
+超过单文件或单文件夹上限时平台会截断并标记 \`truncated\`；请拆分目录或精简文件控制在限值内。
 
 ### 7. 只读语义
 
@@ -131,7 +127,7 @@ description: 提交信息格式与分支约定
 
 1. 知识库文件夹位于 \`.zag/knowledges/\` 或 \`docs/knowledges/\` 的**直接**子目录。
 2. 文件夹内存在合法的 \`knowledge-base.json\`（\`name\` 必填且 1~64 字符）。
-3. 文档均为 \`.md\`，路径无冲突、单篇 ≤128KiB。
+3. 文档均为 \`.md\`，路径无冲突、单篇 ≤1MiB。
 4. 需要自定义标题/标签时使用可选 front matter，且三键在限值内。
 5. 修改后提交到 Git；平台侧点击「重新检测」查看最新内容。
 `;
