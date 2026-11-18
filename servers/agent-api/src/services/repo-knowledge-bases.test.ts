@@ -38,6 +38,8 @@ import {
   repoKnowledgeBaseService,
   splitRepoFrontMatter,
   REPO_KB_CACHE_TTL_SECONDS,
+  REPO_KB_POLL_ATTEMPTS,
+  REPO_KB_POLL_INTERVAL_MS,
 } from './repo-knowledge-bases.js';
 import { CloudHost } from '../models/cloud-host.js';
 import { Controller } from '../models/controller.js';
@@ -210,6 +212,30 @@ describe('buildKnowledgeBaseChildren（T-RKB-SVC5）', () => {
     expect(buildKnowledgeBaseChildren(docs, '/dir/deep')).toEqual([
       { kind: 'DOCUMENT', name: 'C', path: '/dir/deep/c' },
     ]);
+  });
+
+  it('错误文档与正常文档同组排序，DOCUMENT 节点透传 error', () => {
+    expect(
+      buildKnowledgeBaseChildren(
+        [
+          { path: '/b', title: 'B' },
+          { path: '/big', title: 'big', error: 'file too large' },
+          { path: '/a', title: 'A' },
+        ],
+        '/',
+      ),
+    ).toEqual([
+      { kind: 'DOCUMENT', name: 'A', path: '/a' },
+      { kind: 'DOCUMENT', name: 'B', path: '/b' },
+      { kind: 'DOCUMENT', name: 'big', path: '/big', error: 'file too large' },
+    ]);
+  });
+});
+
+describe('扫描轮询口径', () => {
+  it('T-RKB2-POLL 500ms × 60 ≈ 30s', () => {
+    expect(REPO_KB_POLL_INTERVAL_MS).toBe(500);
+    expect(REPO_KB_POLL_ATTEMPTS).toBe(60);
   });
 });
 
@@ -439,7 +465,7 @@ describe('repoKnowledgeBaseService', () => {
     expect(illegal?.errors.some((error) => error.startsWith('文档路径不合法：'))).toBe(true);
   });
 
-  it('T-RKB-SVC4b 文档级错误仅剔除该文档（B1）；不合法库 children/document 收敛 []/null（R1）', async () => {
+  it('T-RKB-SVC4b 文档级错误保留不可打开节点（B1）；不合法库 children/document 收敛 []/null（R1）', async () => {
     redis.get.mockImplementation(async (key: string) =>
       key.startsWith('knowledge-bases:scan:')
         ? JSON.stringify({
@@ -479,9 +505,11 @@ describe('repoKnowledgeBaseService', () => {
 
     expect(good?.valid).toBe(true);
     expect(good?.errors).toEqual([]);
+    // 错误文档不计入可用文档数
     expect(good?.documentCount).toBe(1);
 
     expect(await repoKnowledgeBaseService.listChildren('u', good!.id)).toEqual([
+      { kind: 'DOCUMENT', name: 'big', path: '/big', error: 'file too large' },
       { kind: 'DOCUMENT', name: 'OK', path: '/ok' },
     ]);
     expect(await repoKnowledgeBaseService.getDocument('u', good!.id, '/big')).toBeNull();
@@ -489,6 +517,126 @@ describe('repoKnowledgeBaseService', () => {
     expect(bad?.valid).toBe(false);
     expect(await repoKnowledgeBaseService.listChildren('u', bad!.id)).toEqual([]);
     expect(await repoKnowledgeBaseService.getDocument('u', bad!.id, '/a')).toBeNull();
+  });
+
+  it('T-RKB2-SVC1 错误文档：documentCount 不计、children 带 error、getDocument 恒 null、库合法', async () => {
+    redis.get.mockImplementation(async (key: string) =>
+      key.startsWith('knowledge-bases:scan:')
+        ? JSON.stringify({
+            success: true,
+            sources: [
+              {
+                source: 'zag',
+                knowledgeBases: [
+                  {
+                    folder: 'mixed',
+                    schema: '{"name":"混合库"}',
+                    documents: [
+                      { path: 'a.md', content: '# A' },
+                      { path: 'big.md', error: 'file too large' },
+                      { path: 'b.md', content: '# B' },
+                    ],
+                  },
+                ],
+                truncated: false,
+              },
+            ],
+            truncated: false,
+          })
+        : null,
+    );
+
+    const list = await repoKnowledgeBaseService.listKnowledgeBases('u', 'ws-1');
+    const kb = list[0];
+
+    expect(kb.valid).toBe(true);
+    expect(kb.documentCount).toBe(2);
+    expect(await repoKnowledgeBaseService.listChildren('u', kb.id)).toEqual([
+      { kind: 'DOCUMENT', name: 'A', path: '/a' },
+      { kind: 'DOCUMENT', name: 'B', path: '/b' },
+      { kind: 'DOCUMENT', name: 'big', path: '/big', error: 'file too large' },
+    ]);
+    expect(await repoKnowledgeBaseService.getDocument('u', kb.id, '/big')).toBeNull();
+    expect((await repoKnowledgeBaseService.getDocument('u', kb.id, '/a'))?.title).toBe('A');
+  });
+
+  it('T-RKB2-SVC2 truncated 原样透传；文件夹在前、错误文档与正常文档同组按名排序', async () => {
+    redis.get.mockImplementation(async (key: string) =>
+      key.startsWith('knowledge-bases:scan:')
+        ? JSON.stringify({
+            success: true,
+            sources: [
+              {
+                source: 'zag',
+                knowledgeBases: [
+                  {
+                    folder: 'trunc',
+                    schema: '{"name":"截断库"}',
+                    documents: [
+                      { path: 'z.md', content: '# Z' },
+                      { path: 'big.md', error: 'file too large' },
+                      { path: 'a.md', content: '# A' },
+                      { path: 'dir/deep.md', content: '# Deep' },
+                    ],
+                    truncated: true,
+                  },
+                ],
+                truncated: true,
+              },
+            ],
+            truncated: true,
+          })
+        : null,
+    );
+
+    const list = await repoKnowledgeBaseService.listKnowledgeBases('u', 'ws-1');
+    const kb = list[0];
+    expect(kb.truncated).toBe(true);
+
+    expect(await repoKnowledgeBaseService.listChildren('u', kb.id)).toEqual([
+      { kind: 'FOLDER', name: 'dir', path: '/dir' },
+      { kind: 'DOCUMENT', name: 'A', path: '/a' },
+      { kind: 'DOCUMENT', name: 'big', path: '/big', error: 'file too large' },
+      { kind: 'DOCUMENT', name: 'Z', path: '/z' },
+    ]);
+  });
+
+  it('T-RKB2-SVC3 错误文档路径归一失败时丢弃该节点，不影响其余文档与库合法性', async () => {
+    const illegalPath = `${'a'.repeat(129)}.md`;
+    redis.get.mockImplementation(async (key: string) =>
+      key.startsWith('knowledge-bases:scan:')
+        ? JSON.stringify({
+            success: true,
+            sources: [
+              {
+                source: 'zag',
+                knowledgeBases: [
+                  {
+                    folder: 'dirty',
+                    schema: '{"name":"脏数据"}',
+                    documents: [
+                      { path: illegalPath, error: 'file too large' },
+                      { path: 'ok.md', content: '# OK' },
+                    ],
+                  },
+                ],
+                truncated: false,
+              },
+            ],
+            truncated: false,
+          })
+        : null,
+    );
+
+    const list = await repoKnowledgeBaseService.listKnowledgeBases('u', 'ws-1');
+    const kb = list[0];
+
+    expect(kb.valid).toBe(true);
+    expect(kb.errors).toEqual([]);
+    expect(kb.documentCount).toBe(1);
+    expect(await repoKnowledgeBaseService.listChildren('u', kb.id)).toEqual([
+      { kind: 'DOCUMENT', name: 'OK', path: '/ok' },
+    ]);
   });
 
   it('T-RKB-SVC12/13 children/getDocument 逐级派生；不可达收敛 []/null', async () => {

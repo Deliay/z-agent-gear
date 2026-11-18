@@ -9,8 +9,10 @@ import { Badge } from '@/components/ui/badge';
 import {
   CREATE_KNOWLEDGE_BASE_DOCUMENT,
   GET_KNOWLEDGE_BASE_TREE,
+  GET_REPO_KNOWLEDGE_BASE_HOSTS,
   type CreateKnowledgeBaseDocumentMutation,
   type GetKnowledgeBaseTreeQuery,
+  type GetRepoKnowledgeBaseHostsQuery,
   type KnowledgeBaseData,
   type KnowledgeBaseDocumentMetaData,
 } from '@/graphql/knowledge-base';
@@ -137,6 +139,15 @@ export default function KnowledgeBaseSection({ expanded, onToggle }: KnowledgeBa
   const { data, loading, refetch } = useQuery<GetKnowledgeBaseTreeQuery>(GET_KNOWLEDGE_BASE_TREE, {
     fetchPolicy: 'cache-and-network',
   });
+  // hosts 查询上提到分区层：用于「暂无知识库」双空判定与「重新检测」入口（D9/D10）
+  const {
+    data: hostsData,
+    loading: hostsLoading,
+    error: hostsError,
+    refetch: refetchHosts,
+  } = useQuery<GetRepoKnowledgeBaseHostsQuery>(GET_REPO_KNOWLEDGE_BASE_HOSTS, {
+    fetchPolicy: 'cache-and-network',
+  });
   const [createDocument] = useMutation<CreateKnowledgeBaseDocumentMutation>(
     CREATE_KNOWLEDGE_BASE_DOCUMENT,
   );
@@ -149,6 +160,11 @@ export default function KnowledgeBaseSection({ expanded, onToggle }: KnowledgeBa
       }),
     [data?.knowledgeBaseTree],
   );
+  const hosts = hostsData?.repoKnowledgeBaseHosts ?? [];
+  const hostsPending = hostsLoading && !hostsData;
+  // 空态口径（D9）：「暂无知识库」仅在平台库与仓库知识库都为空、hosts 已定态且查询成功时展示
+  const showEmptyState = items.length === 0 && !hostsError && !hostsPending && hosts.length === 0;
+  const showPlatformLoading = (loading && !data) || (items.length === 0 && hostsPending);
 
   const handleCreateChild = async (kb: KnowledgeBaseData, parentPath: string) => {
     const name = newDocumentName();
@@ -193,11 +209,11 @@ export default function KnowledgeBaseSection({ expanded, onToggle }: KnowledgeBa
           ) : undefined
         }
       >
-        {loading && !data ? (
+        {showPlatformLoading ? (
           <div className="px-2 py-1 text-xs text-muted-foreground/60">加载中…</div>
-        ) : items.length === 0 ? (
+        ) : showEmptyState ? (
           <div className="px-2 py-1 text-xs text-muted-foreground/60">暂无知识库</div>
-        ) : (
+        ) : items.length === 0 ? null : (
           <div className="space-y-0.5">
             {items.map(({ knowledgeBase, documents }) => {
               const tree = buildKnowledgeBaseTree(documents);
@@ -262,7 +278,14 @@ export default function KnowledgeBaseSection({ expanded, onToggle }: KnowledgeBa
           </div>
         )}
 
-        <RepoKnowledgeBaseSection />
+        {!(items.length === 0 && hostsPending) && (
+          <RepoKnowledgeBaseSection
+            hosts={hosts}
+            loading={hostsLoading}
+            error={hostsError}
+            onRetry={() => void refetchHosts()}
+          />
+        )}
       </SidebarSection>
 
       <CreateKnowledgeBaseDialog

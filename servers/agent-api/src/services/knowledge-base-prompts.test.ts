@@ -23,7 +23,7 @@ describe('knowledge-base prompts', () => {
     expect(listKnowledgeBasePromptNames()).toEqual([PROMPT_NAME]);
   });
 
-  it('T-RKB-P2 文本覆盖全部要点（路径/结构/schema/文档组织/front matter/上限/只读）', () => {
+  it('T-RKB2-P1 文本覆盖全部要点（路径/结构/schema/文档组织/front matter/上限/只读）', () => {
     const text = getKnowledgeBasePromptText(PROMPT_NAME) ?? '';
     for (const anchor of [
       '.zag/knowledges/',
@@ -42,17 +42,18 @@ describe('knowledge-base prompts', () => {
       'front matter',
       '首个一级标题',
       '文件名',
-      '20 个',
-      '50 个',
-      '64KiB',
-      '128KiB',
       '1MiB',
-      '2MiB',
+      '1000',
+      '无上限',
       '只读',
       '不会出现在知识库 MCP 工具中',
       '仓库提交流程',
     ]) {
       expect(text).toContain(anchor);
+    }
+    // 旧口径不得残留
+    for (const legacy of ['20 个', '50 个', '64KiB', '128KiB', '2MiB']) {
+      expect(text).not.toContain(legacy);
     }
   });
 
@@ -61,16 +62,19 @@ describe('knowledge-base prompts', () => {
     expect(getKnowledgeBasePromptText('unknown-prompt')).toBeNull();
   });
 
-  it('T-RKB-P4 防漂移守卫：两个子目录与扫描上限字面量必须与 agent-gear 扫描器一致', () => {
+  it('T-RKB2-P2 防漂移守卫：两个子目录与扫描上限字面量必须与 agent-gear 扫描器一致', () => {
     // 来源：packages/agent-controller/src/knowledge-bases.ts
     const text = getKnowledgeBasePromptText(PROMPT_NAME) ?? '';
     expect(text).toContain('.zag/knowledges');
     expect(text).toContain('docs/knowledges');
-    expect(text).toContain('20 个');
-    expect(text).toContain('50 个');
-    expect(text).toContain('64KiB');
-    expect(text).toContain('128KiB');
     expect(text).toContain('1MiB');
-    expect(text).toContain('2MiB');
+    expect(text).toContain('1000');
+    expect(text).toContain('无上限');
+    // 旧上限常量已删除：守卫必须能捕获回退
+    expect(text).not.toContain('20 个');
+    expect(text).not.toContain('50 个');
+    expect(text).not.toContain('64KiB');
+    expect(text).not.toContain('128KiB');
+    expect(text).not.toContain('2MiB');
   });
 });

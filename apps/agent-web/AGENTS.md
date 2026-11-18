@@ -209,23 +209,34 @@ pnpm run preview  # Preview production build
 - **错误文案**：`lib/knowledge-base.ts` 集中映射契约 14 条白名单（未命中原样展示），创建/保存/权限变更失败均在对话框内展示或 toast。
 - **测试入口**：`lib/__tests__/knowledge-base-path.test.ts`（T-KBP1~6）、`knowledge-base-draft.test.ts`（T-KBD1~5）、`components/knowledge-base/__tests__/*`（T-KBW1~10）、`components/__tests__/Sidebar.test.tsx`（五分区默认态）、E2E `tests/e2e/src/knowledge-base.spec.ts`（E2E-KB1~7）与 `sidebar-phase4.spec.ts`（五分区）。
 
-## 仓库内建知识库（#545）
+## 仓库内建知识库（#545；二期 #559）
 
-> 需求 #545；契约 `contracts/knowledge-base.graphql`；计划 `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md` Phase 6。
+> 需求 #545 / #559；契约 `contracts/knowledge-base.graphql`；计划
+> `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md` Phase 6、
+> `docs/engineering/plan/20261117-feat-knowledge-base-optimization-phase2.md` Phase 4。
 
-- **分组挂载**：`KnowledgeBaseSection` 平台库列表之后渲染 `<RepoKnowledgeBaseSection />`（D12），**不新增**
-  `SidebarSectionKey`；无候选云电脑时整个子分组不渲染（`repoKnowledgeBaseHosts` 为空 → return null）。
-- **折叠懒加载**：`RepoKnowledgeBaseSection` 数据源仅 `GET_REPO_KNOWLEDGE_BASE_HOSTS`（`cache-and-network`）——
-  初始加载**零扫描**；云电脑/知识库/目录全部默认折叠，点击展开才分别发
-  `GET_REPO_KNOWLEDGE_BASES(workspaceId)` / `GET_REPO_KNOWLEDGE_BASE_CHILDREN(id, path)`
-  （小组件挂载即查询，避免折叠态预取）。各节点独立 `loading && !data` / 失败 + 「重试」，失败不扩散兄弟节点。
-- **版本门禁**：`scanSupported=false` 展示「升级云电脑工作组件后可加载」且不发起 bases 查询；`scanSupported=true`
-  且列表为空展示「未检测到仓库知识库」。
+- **分组挂载与 hosts 上提**：`KnowledgeBaseSection` 平台库列表之后渲染 `<RepoKnowledgeBaseSection />`（D12），
+  **不新增** `SidebarSectionKey`。hosts 查询上提到 `KnowledgeBaseSection`（`GET_REPO_KNOWLEDGE_BASE_HOSTS`，
+  `cache-and-network`），以 props `{hosts, loading, error, onRetry}` 下发，避免二次请求；无候选云电脑时
+  整个子分组不渲染。
+- **「暂无知识库」双空口径（D9）**：仅当平台树为空、hosts 查询成功且已定态为空时才展示「暂无知识库」；
+  平台空 + hosts 在途展示「加载中…」；hosts 查询失败不展示空态，由仓库分组自渲染「加载失败 + 重试」。
+  平台非空行为不变。
+- **折叠懒加载**：云电脑/知识库/目录全部默认折叠，展开云电脑才发 `GET_REPO_KNOWLEDGE_BASES(workspaceId)`
+  （`skip: !expanded`），展开知识库/目录才发 `GET_REPO_KNOWLEDGE_BASE_CHILDREN(id, path)`；
+  各节点独立 `loading && !data` / 失败 + 「重试」，失败不扩散兄弟节点。
+- **版本门禁**：`scanSupported=false` 展示「升级云电脑工作组件后可加载」且不发起 bases 查询、不渲染刷新入口；
+  `scanSupported=true` 且列表为空展示「未检测到仓库知识库」。
 - **只读语义**：知识库/目录/文档条目无「+」、无设置齿轮、无编辑/删除/历史入口；不合法库灰显并展示
-  `errors[0]`；来源 Badge 显示 `zag`/`docs`（title 为完整目录标识），并展示 `documentCount`。
-- **重新检测（D10）**：云电脑级「重新检测」调用 `refetch({workspaceId, refresh:true})` 后
-  `client.cache.evict({fieldName:'repoKnowledgeBaseDocumentChildren'|'repoKnowledgeBaseDocument'})`，
-  使已展开子节点按新扫描结果重拉。
+  `errors[0]`；来源 Badge 显示 `zag`/`docs`（title 为完整目录标识），并展示 `documentCount`（不含错误文档）。
+- **「已截断」/「文件过大」标示（D11）**：库 `truncated=true` 渲染 `已截断` Badge
+  （`data-testid="repo-kb-truncated-badge"`，title 说明单文件夹子项超 1000）；文档节点 `error` 非空时
+  灰显不可点击并渲染「文件过大」Badge（`data-testid="repo-kb-document-error"`），正常文档仍可导航。
+- **重新检测（D10）**：入口位于云电脑条目标题行尾部、**仅图标**（`aria-label`/`title`「重新检测」，
+  `data-testid="repo-kb-refresh"`），与折叠切换按钮为兄弟节点（禁止按钮嵌套）；折叠态 `client.query`
+  `{workspaceId, refresh:true}` + `fetchPolicy:'network-only'`（结果写缓存，展开时自然取到）；展开态走
+  `refetch({workspaceId, refresh:true})`；随后 `client.cache.evict({fieldName:'repoKnowledgeBaseDocumentChildren'|'repoKnowledgeBaseDocument'})`；
+  刷新中禁用 + `RefreshCw` 旋转，失败 toast「重新检测失败，请重试」。
 - **预览页**：`KnowledgeBasePage` 的 `kbId` 命中 `repo:` 前缀走只读分支——`GET_REPO_KNOWLEDGE_BASE_DOCUMENT(id, path)`
   取正文，直达链接额外经 `GET_REPO_KNOWLEDGE_BASES(workspaceId)` 回源库名（id 自 `repo:` 三段解码）；
   平台 `knowledgeBaseTree`/文档查询在 repo 分支 `skip`。**只读**（无编辑/删除/历史按钮，`?edit=1` 忽略）；

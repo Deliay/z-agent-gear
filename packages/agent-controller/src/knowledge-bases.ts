@@ -9,9 +9,9 @@ import { join, resolve, sep } from 'node:path';
  * 含常规文件 `knowledge-base.json` 即识别），库内文档递归收集 `.md` 常规文件并读取内容。
  * 仅读不写、不执行；不使用会话路径白名单。
  *
- * 上限（与 agent-api 编写指引 `knowledge-base-prompts.ts` 同源）：
- * 每来源 20 个知识库 / 每库 50 个文档 / schema 64KiB / 单文档 128KiB /
- * 单库内容累计 1MiB / 单来源内容累计 2MiB。
+ * 上限（与 agent-api 编写指引 `knowledge-base-prompts.ts` 同源，二期口径）：
+ * 单文件（`knowledge-base.json` 与 `.md`）1MiB / 单文件夹直接子项（目录与文件合计）1000；
+ * 无知识库数、文档数与内容累计总量限制。truncated 按「文件夹 → 知识库 → 来源 → 整体」逐级上浮。
  */
 
 export const REPO_KNOWLEDGE_BASE_SOURCES = [
@@ -21,18 +21,10 @@ export const REPO_KNOWLEDGE_BASE_SOURCES = [
 
 export type RepoKnowledgeBaseSource = (typeof REPO_KNOWLEDGE_BASE_SOURCES)[number]['source'];
 
-/** 每个来源目录最多识别的知识库数 */
-export const MAX_KNOWLEDGE_BASES_PER_SOURCE = 20;
-/** 每个知识库最多收集的文档数 */
-export const MAX_DOCUMENTS_PER_BASE = 50;
-/** knowledge-base.json 读取上限（字节） */
-export const MAX_SCHEMA_BYTES = 64 * 1024;
-/** 单文档读取上限（字节） */
-export const MAX_DOCUMENT_BYTES = 128 * 1024;
-/** 单知识库内容累计上限（字节） */
-export const MAX_BASE_TOTAL_BYTES = 1024 * 1024;
-/** 单来源内容累计上限（字节） */
-export const MAX_SOURCE_TOTAL_BYTES = 2 * 1024 * 1024;
+/** 单文件读取上限（字节）：`knowledge-base.json` 与 `.md` 同值 */
+export const MAX_FILE_BYTES = 1024 * 1024;
+/** 每个文件夹直接子项上限（目录与文件合计） */
+export const MAX_ENTRIES_PER_FOLDER = 1000;
 
 export const KNOWLEDGE_BASE_IDENTIFIER_FILE = 'knowledge-base.json';
 
@@ -91,8 +83,11 @@ function toPosixPath(value: string): string {
 }
 
 /** 递归收集 `.md` 常规文件（符号链接仅接受指向常规文件的链接；目录链接不跟随）。 */
-async function collectMarkdownFiles(baseDir: string): Promise<DocCandidate[]> {
-  const result: DocCandidate[] = [];
+async function collectMarkdownFiles(
+  baseDir: string,
+): Promise<{ files: DocCandidate[]; truncated: boolean }> {
+  const files: DocCandidate[] = [];
+  let truncated = false;
 
   const walk = async (dir: string, prefix: string): Promise<void> => {
     let entries;
@@ -102,6 +97,12 @@ async function collectMarkdownFiles(baseDir: string): Promise<DocCandidate[]> {
       // 已知口径：子目录不可读按空目录处理（与「目录不存在」一致），不使整库不合法；
       // 单文档读取失败才逐条剔除。避免仓库权限细节放大为库级错误。
       return;
+    }
+    // 每层按名称排序后取前 1000（目录与文件合计），超出部分不遍历（二期 D3）
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    if (entries.length > MAX_ENTRIES_PER_FOLDER) {
+      entries = entries.slice(0, MAX_ENTRIES_PER_FOLDER);
+      truncated = true;
     }
     for (const entry of entries) {
       const fullPath = join(dir, entry.name);
@@ -114,31 +115,25 @@ async function collectMarkdownFiles(baseDir: string): Promise<DocCandidate[]> {
         if (!entry.name.toLowerCase().endsWith('.md')) continue;
         try {
           const target = await stat(fullPath);
-          if (target.isFile()) result.push({ fullPath, relPath });
+          if (target.isFile()) files.push({ fullPath, relPath });
         } catch {
           // 悬空/不可解析的符号链接：跳过
         }
         continue;
       }
       if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
-        result.push({ fullPath, relPath });
+        files.push({ fullPath, relPath });
       }
     }
   };
 
   await walk(baseDir, '');
-  return result;
-}
-
-interface SourceScanState {
-  sourceBytes: number;
-  truncated: boolean;
+  return { files, truncated };
 }
 
 async function scanKnowledgeBase(
   sourceDir: string,
   folder: string,
-  state: SourceScanState,
 ): Promise<KnowledgeBaseEntry> {
   const baseDir = join(sourceDir, folder);
   const schemaPath = join(baseDir, KNOWLEDGE_BASE_IDENTIFIER_FILE);
@@ -154,7 +149,7 @@ async function scanKnowledgeBase(
   // 仅常规文件（或指向常规文件的符号链接）才识别为知识库
   if (!schemaInfo.isFile()) return { folder };
 
-  if (schemaInfo.size > MAX_SCHEMA_BYTES) {
+  if (schemaInfo.size > MAX_FILE_BYTES) {
     return { folder, error: 'file too large' };
   }
 
@@ -165,59 +160,35 @@ async function scanKnowledgeBase(
     return { folder, error: mapFileError(err) };
   }
   const schemaBytes = Buffer.byteLength(schema, 'utf8');
-  if (schemaBytes > MAX_SCHEMA_BYTES) {
+  if (schemaBytes > MAX_FILE_BYTES) {
     return { folder, error: 'file too large' };
   }
 
-  const candidates = (await collectMarkdownFiles(baseDir)).sort((a, b) =>
-    a.relPath.localeCompare(b.relPath),
-  );
-
-  let truncated = false;
-  if (candidates.length > MAX_DOCUMENTS_PER_BASE) {
-    candidates.length = MAX_DOCUMENTS_PER_BASE;
-    truncated = true;
-  }
+  const collected = await collectMarkdownFiles(baseDir);
+  const candidates = collected.files.sort((a, b) => a.relPath.localeCompare(b.relPath));
 
   const documents: KnowledgeBaseDocumentFile[] = [];
-  let baseBytes = 0;
-
   for (const candidate of candidates) {
-    if (state.truncated) break;
     try {
       const info = await stat(candidate.fullPath);
-      if (info.size > MAX_DOCUMENT_BYTES) {
-        // 不读内容；单篇超限不影响后续文档
+      if (info.size > MAX_FILE_BYTES) {
+        // 不读内容；单篇超限不影响后续文档（保留条目并附白名单文案）
         documents.push({ path: candidate.relPath, error: 'file too large' });
         continue;
       }
-      if (baseBytes + info.size > MAX_BASE_TOTAL_BYTES) {
-        truncated = true;
-        break;
-      }
-      if (state.sourceBytes + info.size > MAX_SOURCE_TOTAL_BYTES) {
-        state.truncated = true;
-        break;
-      }
       const content = await readFile(candidate.fullPath, { encoding: 'utf8' });
-      const bytes = Buffer.byteLength(content, 'utf8');
-      if (baseBytes + bytes > MAX_BASE_TOTAL_BYTES) {
-        truncated = true;
-        break;
+      // 读后复核（防 stat 失真）；超限仍保留条目、不返回内容
+      if (Buffer.byteLength(content, 'utf8') > MAX_FILE_BYTES) {
+        documents.push({ path: candidate.relPath, error: 'file too large' });
+        continue;
       }
-      if (state.sourceBytes + bytes > MAX_SOURCE_TOTAL_BYTES) {
-        state.truncated = true;
-        break;
-      }
-      baseBytes += bytes;
-      state.sourceBytes += bytes;
       documents.push({ path: candidate.relPath, content });
     } catch (err) {
       documents.push({ path: candidate.relPath, error: mapFileError(err) });
     }
   }
 
-  return { folder, schema, documents, truncated };
+  return { folder, schema, documents, truncated: collected.truncated };
 }
 
 async function scanSource(
@@ -239,8 +210,17 @@ async function scanSource(
     return null;
   }
 
+  const ordered = [...entries].sort((a, b) => a.name.localeCompare(b.name));
+  // 来源目录层与库内目录层同构：直接子项（目录与文件合计）按名称取前 1000，
+  // 窗口外不遍历并置来源 truncated；再从窗口内筛选目录/目录符号链接作为知识库候选。
+  let truncated = false;
+  if (ordered.length > MAX_ENTRIES_PER_FOLDER) {
+    ordered.length = MAX_ENTRIES_PER_FOLDER;
+    truncated = true;
+  }
+
   const folders: string[] = [];
-  for (const entry of entries) {
+  for (const entry of ordered) {
     if (entry.isDirectory()) {
       folders.push(entry.name);
       continue;
@@ -254,29 +234,14 @@ async function scanSource(
     }
   }
 
-  folders.sort((a, b) => a.localeCompare(b));
-  let truncated = false;
-  if (folders.length > MAX_KNOWLEDGE_BASES_PER_SOURCE) {
-    folders.length = MAX_KNOWLEDGE_BASES_PER_SOURCE;
-    truncated = true;
-  }
-
-  const state: SourceScanState = { sourceBytes: 0, truncated: false };
   const knowledgeBases: KnowledgeBaseEntry[] = [];
   for (const folder of folders) {
-    if (state.truncated) {
-      truncated = true;
-      break;
-    }
-    const entry = await scanKnowledgeBase(sourceDir, folder, state);
+    const entry = await scanKnowledgeBase(sourceDir, folder);
     // 未识别为知识库（无 knowledge-base.json）的文件夹不输出
     if (entry.schema === undefined && entry.error === undefined) continue;
-    // 单来源 2MiB 截断发生在该库读取过程中时，同样置位条目级 truncated（与单库 1MiB 口径对称）
-    if (state.truncated) entry.truncated = true;
     if (entry.truncated) truncated = true;
     knowledgeBases.push(entry);
   }
-  if (state.truncated) truncated = true;
 
   return { source, knowledgeBases, truncated };
 }

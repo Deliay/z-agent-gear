@@ -25,9 +25,9 @@ import { normalizeDocumentPath } from './knowledge-base-service.js';
 
 /** agent-gear 2.19.0 起支持 knowledge-bases:scan */
 export const REPO_KNOWLEDGE_BASE_MIN_AGENT_GEAR_VERSION = '2.19.0';
-/** 扫描结果轮询口径（与 workflow-templates:scan 同参数：500ms × 30 ≈ 15s） */
+/** 扫描结果轮询口径（二期：500ms × 60 ≈ 30s；结果键 TTL 60s 仍安全） */
 export const REPO_KB_POLL_INTERVAL_MS = 500;
-export const REPO_KB_POLL_ATTEMPTS = 30;
+export const REPO_KB_POLL_ATTEMPTS = 60;
 /** 工作区级解析结果缓存 TTL */
 export const REPO_KB_CACHE_TTL_SECONDS = 300;
 /** 工作区级缓存键前缀 */
@@ -62,6 +62,8 @@ export interface RepoKnowledgeBaseNode {
   kind: RepoKnowledgeBaseNodeKind;
   name: string;
   path: string;
+  /** 文档级不可用原因（白名单文案）；非空时该文档不可打开 */
+  error?: string;
 }
 
 export interface RepoKnowledgeBaseDocumentView {
@@ -107,6 +109,13 @@ interface CachedRepoDocument {
   content: string;
 }
 
+/** 文档级不可用（如超限）条目：保留在树上但不可打开（D4） */
+interface CachedRepoErrorDocument {
+  path: string;
+  title: string;
+  error: string;
+}
+
 interface CachedRepoKnowledgeBase {
   id: string;
   name: string;
@@ -121,6 +130,7 @@ interface CachedRepoKnowledgeBase {
   documentCount: number;
   truncated: boolean;
   documents: CachedRepoDocument[];
+  errorDocuments: CachedRepoErrorDocument[];
 }
 
 interface RepoKnowledgeBaseCache {
@@ -355,9 +365,9 @@ export function parseRepoDocument(rawPath: string, content: string): ParsedRepoD
   return { rawPath, path, title, tags, description, content, errors };
 }
 
-/** 逐级派生子条目（纯函数）：文件夹在前、同组按名 localeCompare。 */
+/** 逐级派生子条目（纯函数）：文件夹在前、同组按名 localeCompare；DOCUMENT 透传 error。 */
 export function buildKnowledgeBaseChildren(
-  docs: Array<{ path: string; title: string }>,
+  docs: Array<{ path: string; title: string; error?: string }>,
   prefix: string,
 ): RepoKnowledgeBaseNode[] {
   let base = typeof prefix === 'string' ? prefix.trim() : '';
@@ -376,7 +386,9 @@ export function buildKnowledgeBaseChildren(
     if (rest === '') continue;
     const parts = rest.split('/');
     if (parts.length === 1) {
-      documents.push({ kind: 'DOCUMENT', name: doc.title, path: doc.path });
+      const node: RepoKnowledgeBaseNode = { kind: 'DOCUMENT', name: doc.title, path: doc.path };
+      if (typeof doc.error === 'string' && doc.error.trim() !== '') node.error = doc.error;
+      documents.push(node);
     } else {
       const folderPath = `${base}/${parts[0]}`;
       folders.set(parts[0], folderPath);
@@ -504,7 +516,14 @@ class RepoKnowledgeBaseService {
       if (!decoded) return [];
       const loaded = await this.loadCachedKnowledgeBase(userId, decoded);
       if (!loaded || !loaded.valid) return [];
-      const docs = loaded.documents.map((doc) => ({ path: doc.path, title: doc.title }));
+      const docs = [
+        ...loaded.documents.map((doc) => ({ path: doc.path, title: doc.title })),
+        ...(loaded.errorDocuments ?? []).map((doc) => ({
+          path: doc.path,
+          title: doc.title,
+          error: doc.error,
+        })),
+      ];
       return buildKnowledgeBaseChildren(docs, path ?? '/');
     } catch {
       return [];
@@ -700,6 +719,7 @@ class RepoKnowledgeBaseService {
       documentCount: 0,
       truncated: raw.truncated === true,
       documents: [],
+      errorDocuments: [],
     };
 
     if (typeof raw.error === 'string' && raw.error.trim() !== '') {
@@ -717,13 +737,19 @@ class RepoKnowledgeBaseService {
 
     const errors: string[] = [];
     const accepted = new Map<string, CachedRepoDocument>();
+    const errorDocuments: CachedRepoErrorDocument[] = [];
     const conflicted = new Set<string>();
     const rawDocuments = Array.isArray(raw.documents) ? (raw.documents as RawDocument[]) : [];
     for (const rawDoc of rawDocuments) {
       if (!isRecord(rawDoc) || typeof rawDoc.path !== 'string') continue;
-      // 文档级读取失败（如单文档 >128KiB）仅剔除该文档，不影响其余文档与整库合法性
-      // （与 knowledge-base-prompts.ts 编写指引「不影响其它文档」同口径；整库不合法仅限路径冲突/归一错误）。
-      if (typeof rawDoc.error === 'string' && rawDoc.error.trim() !== '') continue;
+      // 文档级读取失败（如单文档 >1MiB）保留为不可打开节点，不影响其余文档与整库合法性（D4）。
+      if (typeof rawDoc.error === 'string' && rawDoc.error.trim() !== '') {
+        const parsed = parseRepoDocument(rawDoc.path, '');
+        if (!parsed.path) continue; // 极端脏数据：路径归一失败则丢弃该节点
+        if (errorDocuments.some((doc) => doc.path === parsed.path)) continue;
+        errorDocuments.push({ path: parsed.path, title: parsed.title, error: rawDoc.error });
+        continue;
+      }
       const content = typeof rawDoc.content === 'string' ? rawDoc.content : '';
       const parsedDoc = parseRepoDocument(rawDoc.path, content);
       if (!parsedDoc.path || parsedDoc.errors.length > 0) {
@@ -747,12 +773,17 @@ class RepoKnowledgeBaseService {
     }
 
     const documents = [...accepted.values()].sort((a, b) => a.path.localeCompare(b.path));
+    // 与可用文档同路径的错误条目无意义（可用文档优先），丢弃避免树上重复节点
+    const dedupedErrorDocuments = errorDocuments
+      .filter((doc) => !accepted.has(doc.path) && !conflicted.has(doc.path))
+      .sort((a, b) => a.path.localeCompare(b.path));
     return {
       ...base,
       valid: errors.length === 0,
       errors,
       documentCount: errors.length === 0 ? documents.length : 0,
       documents,
+      errorDocuments: dedupedErrorDocuments,
     };
   }
 

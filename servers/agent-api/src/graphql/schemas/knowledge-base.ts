@@ -114,6 +114,7 @@ export const knowledgeBaseTypeDefs = `#graphql
     kind: RepoKnowledgeBaseNodeKind!
     name: String!
     path: String!
+    error: String
   }
 
   type RepoKnowledgeBaseDocument {

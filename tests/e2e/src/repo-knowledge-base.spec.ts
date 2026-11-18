@@ -47,12 +47,29 @@ const scanFixture: Record<string, any> = {
     },
     {
       source: 'docs',
-      knowledgeBases: [{ folder: 'product-docs', schema: '{"name":"产品文档"}', documents: [] }],
-      truncated: false,
+      knowledgeBases: [
+        { folder: 'product-docs', schema: '{"name":"产品文档"}', documents: [] },
+        {
+          folder: 'truncated-docs',
+          schema: '{"name":"截断展示库"}',
+          documents: [{ path: 'x.md', content: '# X' }],
+          truncated: true,
+        },
+        {
+          folder: 'error-docs',
+          schema: '{"name":"错误文档库"}',
+          documents: [{ path: 'big.md', error: 'file too large' }],
+        },
+      ],
+      truncated: true,
     },
   ],
-  truncated: false,
+  truncated: true,
 };
+
+function hostRow(page: Page, name: string) {
+  return page.locator('[data-testid^="repo-kb-host-"]').filter({ hasText: name });
+}
 
 async function mongoDb() {
   if (!MONGODB_URI) throw new Error('MONGODB_URI required');
@@ -186,7 +203,7 @@ test.describe('仓库内建知识库 E2E', () => {
     expect(emptyFake.scans).toHaveLength(0);
   });
 
-  test('E2E-RKB2 逐级展开与只读预览', async ({ page }) => {
+  test('E2E-RKB2 逐级展开与只读预览；已截断/文件过大标示', async ({ page }) => {
     await loginViaUI(page, user.username);
     await openRepoGroup(page);
     await page.getByRole('button', { name: /仓库云电脑/ }).click();
@@ -201,6 +218,18 @@ test.describe('仓库内建知识库 E2E', () => {
     await page.getByTestId('repo-kb-document-link').first().click();
     await expect(page).toHaveURL(/\/knowledge-bases\/repo:.*\/guides\/git$/);
     await expect(page.getByTestId('knowledge-base-title')).toHaveText('Git 规范');
+
+    // 已截断徽标与「文件过大」不可点击节点（二期 #559）
+    await openRepoGroup(page);
+    await page.getByRole('button', { name: /仓库云电脑/ }).click();
+    await expect(page.getByTestId('repo-kb-truncated-badge')).toHaveText('已截断');
+    await page.getByRole('button', { name: /错误文档库/ }).click();
+    await expect(page.getByTestId('repo-kb-document-error')).toHaveText('文件过大');
+    const errorNode = page
+      .locator('[data-testid="repo-kb-document-node"][data-unavailable="true"]')
+      .filter({ hasText: 'big' });
+    await expect(errorNode).toBeVisible();
+    await expect(errorNode.getByTestId('repo-kb-document-link')).toHaveCount(0);
   });
 
   test('E2E-RKB3 预览 front matter 表格与只读（?edit=1 忽略）', async ({ page }) => {
@@ -225,18 +254,22 @@ test.describe('仓库内建知识库 E2E', () => {
     await expect(page.getByTestId('repo-kb-front-matter-table')).toBeVisible();
   });
 
-  test('E2E-RKB4 修改 fixture 后「重新检测」按新内容呈现', async ({ page }) => {
+  test('E2E-RKB4 修改 fixture 后折叠态「重新检测」按新内容呈现', async ({ page }) => {
     await loginViaUI(page, user.username);
     await openRepoGroup(page);
-    await page.getByRole('button', { name: /仓库云电脑/ }).click();
-    await expect(page.getByText('团队规范')).toBeVisible();
+    // 折叠态即可刷新（D10）；不在展开区提供独立刷新行
+    const row = hostRow(page, '仓库云电脑');
+    await expect(row.getByTestId('repo-kb-refresh')).toBeVisible();
+    await expect(page.locator('[data-testid="repo-kb-refresh"]')).toHaveCount(1);
 
     scanFixture.sources[0].knowledgeBases[0].documents.push({
       path: 'new-doc.md',
       content: '# 新增文档',
     });
     try {
-      await page.getByTestId('repo-kb-refresh').click();
+      await row.getByTestId('repo-kb-refresh').click();
+      await page.getByRole('button', { name: /仓库云电脑/ }).click();
+      await expect(page.getByText('团队规范')).toBeVisible();
       await page.getByRole('button', { name: /团队规范/ }).click();
       await expect(page.getByText('新增文档')).toBeVisible();
     } finally {
@@ -273,5 +306,104 @@ test.describe('仓库内建知识库 E2E', () => {
     await page.getByRole('button', { name: new RegExp(emptyHostName) }).click();
     await expect(page.getByText('未检测到仓库知识库')).toBeVisible();
     expect(emptyFake.scans.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('E2E-RKB7 空态三态：平台空+仓库有内容 / 两者皆空 / 平台非空（独立用户隔离）', async ({
+    browser,
+  }) => {
+    // A：平台库空 + 仓库有内容 → 不出现「暂无知识库」
+    const pageA = await browser.newPage();
+    try {
+      const userA = await createFrontUser(pageA);
+      const keyA = await createControllerKey(pageA, userA.token);
+      const fakeA = await registerController(keyA.rawKey, {
+        version: '2.19.0',
+        repoKnowledgeBases: scanFixture,
+      });
+      try {
+        const wsA = await createWorkspace(
+          pageA,
+          fakeA.controllerId,
+          `/tmp/rkb-e2e-iso-a-${Date.now()}`,
+          userA.token,
+        );
+        await insertCloudHost({
+          userId: userA.userId,
+          tenantId: userA.userId,
+          controllerId: fakeA.controllerId,
+          workspaceId: wsA.id,
+          name: '隔离云电脑A',
+        });
+
+        await loginViaUI(pageA, userA.username);
+        await openRepoGroup(pageA);
+        await expect(pageA.getByText('暂无知识库')).toHaveCount(0);
+        await expect(pageA.locator('[data-testid="repo-knowledge-base-section"]')).toBeVisible();
+      } finally {
+        fakeA.disconnect();
+      }
+    } finally {
+      await pageA.close();
+    }
+
+    // B：平台空 + 无仓库知识库（无候选云电脑）→ 出现「暂无知识库」
+    const pageB = await browser.newPage();
+    try {
+      const userB = await createFrontUser(pageB);
+      await loginViaUI(pageB, userB.username);
+      await openRepoGroup(pageB);
+      await expect(pageB.getByText('暂无知识库')).toBeVisible();
+    } finally {
+      await pageB.close();
+    }
+
+    // C：平台非空 → 不出现「暂无知识库」
+    const pageC = await browser.newPage();
+    try {
+      const userC = await createFrontUser(pageC);
+      const res = await gqlRequest(
+        pageC,
+        `mutation CreateKbIso($name: String!) { createKnowledgeBase(name: $name) { id name } }`,
+        { name: `隔离平台库C-${Date.now()}` },
+        userC.token,
+      );
+      const body = await res.json();
+      expect(body.errors).toBeUndefined();
+      const name = body.data.createKnowledgeBase.name as string;
+
+      await loginViaUI(pageC, userC.username);
+      await openRepoGroup(pageC);
+      await expect(pageC.getByText('暂无知识库')).toHaveCount(0);
+      await expect(pageC.locator(KB_SECTION)).toContainText(name);
+    } finally {
+      await pageC.close();
+    }
+  });
+
+  test('E2E-RKB8 刷新图标在云电脑条目标题行尾部、无文字、折叠态点击生效、重复点击不异常', async ({
+    page,
+  }) => {
+    await loginViaUI(page, user.username);
+    await openRepoGroup(page);
+
+    const row = hostRow(page, '仓库云电脑');
+    const toggle = row.getByRole('button', { name: /仓库云电脑/ });
+    const refresh = row.getByTestId('repo-kb-refresh');
+    await expect(refresh).toBeVisible();
+    await expect(refresh).toHaveAttribute('aria-label', '重新检测');
+    await expect(refresh).toHaveAttribute('title', '重新检测');
+    await expect(refresh).toHaveText('');
+    // 与折叠切换按钮是兄弟节点（禁止按钮嵌套）
+    await expect(toggle.getByTestId('repo-kb-refresh')).toHaveCount(0);
+
+    const before = fake.scans.length;
+    await refresh.click();
+    await expect.poll(() => fake.scans.length).toBeGreaterThan(before);
+    await expect(refresh).toBeEnabled();
+
+    // 重复点击不异常，且仍能正常展开看到结果
+    await refresh.click();
+    await toggle.click();
+    await expect(page.getByText('团队规范')).toBeVisible();
   });
 });

@@ -5,7 +5,7 @@ import { sessionService } from './session.js';
 import type { Server as SocketIOServer } from 'socket.io';
 import { logger as rootLogger, type ObservationLogger } from '../observability/logger.js';
 
-/** knowledge-bases:scan 扫描结果缓存 TTL（与 workflow-templates:scan 同口径：轮询窗口 15s，取 60s） */
+/** knowledge-bases:scan 扫描结果缓存 TTL（二期：下游轮询窗口 30s，取 60s） */
 export const KNOWLEDGE_BASES_RESULT_TTL_SECONDS = 60;
 
 export class KnowledgeBasesService {
