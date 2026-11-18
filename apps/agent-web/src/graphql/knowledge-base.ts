@@ -335,6 +335,8 @@ export interface RepoKnowledgeBaseNodeData {
   kind: RepoKnowledgeBaseNodeKindData;
   name: string;
   path: string;
+  /** 文档级不可用原因（白名单文案）；非空时该文档不可打开 */
+  error?: string | null;
 }
 
 export interface RepoKnowledgeBaseDocumentData {
@@ -379,6 +381,7 @@ export const GET_REPO_KNOWLEDGE_BASE_CHILDREN = gql`
       kind
       name
       path
+      error
     }
   }
 `;

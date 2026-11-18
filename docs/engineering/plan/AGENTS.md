@@ -31,6 +31,7 @@ Plan 文件从已通过的 proposal 中拆解出具体的实现步骤，包含�
 
 - **实现顺序**：子项目间的依赖关系，明确先做什么后做什么
 - **子项目任务**：每个子项目（agent-api / controller-api / agent-controller / agent-web）的精确文件修改列表
+- **领域模型同步**：列出本次实现需更新/新增的 `docs/knowledges/domain` 文档（无影响时写明理由）；实现中发现代码事实与领域模型不一致时回写修正
 - **命令参考**：启动、测试、lint 等命令
 - **验收 checklist**：分阶段验证点
 

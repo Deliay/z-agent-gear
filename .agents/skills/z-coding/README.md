@@ -18,7 +18,7 @@ z-coding/
 
 1. **阅读产品文档** - 从 `docs/product/reviewed` 选择最新的产品文档
 2. **创建需求分支** - 基于产品文档创建 `feat/<slug>` 分支
-3. **编写技术方案** - 编写提案并提交 PR 进行 review
+3. **编写技术方案** - 编写提案并同步更新 `docs/knowledges/domain` 领域模型，提交 PR 进行 review
 4. **更新 Contract** - 定义 API 契约并提交 PR 进行 review
 5. **创建开发分支** - 基于 `feat-branch` 创建开发分支
 6. **编写实现** - 并行委托 subagent 实现各子项目
@@ -29,4 +29,5 @@ z-coding/
 
 - 契约式开发：API 契约放置在 `contracts/` 目录
 - 代码编写前加载 `docs/engineering/common-rules.md`
+- 方案阶段必须同步更新 `docs/knowledges/domain` 领域模型（见 `docs/engineering/common-rules.md` 的「Domain Model Sync」）
 - 遵循 `frontend-rules.md` / `backend-rules.md` 规范

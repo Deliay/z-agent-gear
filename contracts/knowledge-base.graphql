@@ -157,9 +157,9 @@ type RepoKnowledgeBase {
   cloudHostName: String!
   valid: Boolean!
   errors: [String!]!
-  # 合法库的文档总数（不合法库为 0）
+  # 合法库的可用文档数（不含 error 文档；不合法库为 0）
   documentCount: Int!
-  # 该库是否因上限截断
+  # 该库是否因单文件夹直接子项超 1000 截断
   truncated: Boolean!
 }
 
@@ -175,6 +175,8 @@ type RepoKnowledgeBaseNode {
   name: String!
   # 归一路径（/ 开头；文档用于打开预览）
   path: String!
+  # 文档级不可用原因（白名单文案，如 file too large）；非空时该文档不可打开
+  error: String
 }
 
 type RepoKnowledgeBaseDocument {

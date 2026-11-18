@@ -15,6 +15,10 @@ const mockToastError = vi.fn();
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+  useApolloClient: () => ({
+    cache: { evict: vi.fn() },
+    query: vi.fn().mockResolvedValue({}),
+  }),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -96,10 +100,27 @@ function mockTree(items: KnowledgeBaseTreeItemData[]) {
       query as { definitions?: Array<{ name?: { value?: string } }> }
     )?.definitions?.[0]?.name?.value;
     if (name === 'GetRepoKnowledgeBaseHosts') {
-      return { data: { repoKnowledgeBaseHosts: [] }, loading: false, refetch: vi.fn() };
+      return { ...hostsResult, refetch: mockHostsRefetch };
     }
     return { data: { knowledgeBaseTree: items }, loading: false, refetch: vi.fn() };
   });
+}
+
+let hostsResult: { data?: unknown; loading?: boolean; error?: unknown } = {
+  data: { repoKnowledgeBaseHosts: [] },
+  loading: false,
+};
+const mockHostsRefetch = vi.fn();
+
+function mockHosts(
+  hosts: Array<{ cloudHostId: string; cloudHostName: string; workspaceId: string; scanSupported: boolean }>,
+  extra: { loading?: boolean; error?: unknown; withData?: boolean } = {},
+) {
+  hostsResult = {
+    data: extra.withData === false ? undefined : { repoKnowledgeBaseHosts: hosts },
+    loading: extra.loading ?? false,
+    error: extra.error,
+  };
 }
 
 function renderSection() {
@@ -113,6 +134,7 @@ describe('KnowledgeBaseSection（T-KBW1~4）', () => {
     resetWorkspaceStore();
     mockUseMutation.mockReturnValue([mockMutate, { loading: false }]);
     mockMutate.mockResolvedValue({ data: {} });
+    mockHosts([]);
     mockTree([makeTreeItem()]);
   });
 
@@ -182,5 +204,45 @@ describe('KnowledgeBaseSection（T-KBW1~4）', () => {
       expect(mockToastError).toHaveBeenCalledWith('没有执行该操作的权限');
     });
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('T-RKB2-WEB1 平台库空 + hosts 非空 → 不出现「暂无知识库」，仓库分组正常展示', () => {
+    setupWorkspace('admin');
+    mockHosts([
+      { cloudHostId: 'h1', cloudHostName: '云电脑一', workspaceId: 'ws-1', scanSupported: true },
+    ]);
+    mockTree([]);
+    renderSection();
+
+    expect(screen.queryByText('暂无知识库')).not.toBeInTheDocument();
+    expect(screen.getByTestId('repo-knowledge-base-section')).toBeInTheDocument();
+    expect(screen.getByText('云电脑一')).toBeInTheDocument();
+  });
+
+  it('T-RKB2-WEB2 平台库空 + hosts 已定态为空 → 出现「暂无知识库」', () => {
+    setupWorkspace('admin');
+    mockHosts([]);
+    mockTree([]);
+    renderSection();
+
+    expect(screen.getAllByText('暂无知识库').length).toBeGreaterThan(0);
+  });
+
+  it('T-RKB2-WEB3 hosts 在途 → 不出现空态（展示加载中）；hosts 失败 → 不出现空态、展示失败与重试', () => {
+    setupWorkspace('admin');
+    mockHosts([], { loading: true, withData: false });
+    mockTree([]);
+    const { rerender } = renderSection();
+
+    expect(screen.queryByText('暂无知识库')).not.toBeInTheDocument();
+    expect(screen.getByText('加载中…')).toBeInTheDocument();
+
+    hostsResult = { data: undefined, loading: false, error: new Error('boom') };
+    rerender(<KnowledgeBaseSection expanded onToggle={() => {}} />);
+    expect(screen.queryByText('暂无知识库')).not.toBeInTheDocument();
+    expect(screen.getByText('加载失败')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('repo-kb-retry'));
+    expect(mockHostsRefetch).toHaveBeenCalled();
   });
 });

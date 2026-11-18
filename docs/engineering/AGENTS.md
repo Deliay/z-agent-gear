@@ -47,6 +47,7 @@ type: Permanent
 **创建日期**: YYYY-MM-DD
 **作者**: ...
 **feat-branch**: `feat/<slug>`
+**领域模型影响**: `docs/knowledges/domain/<上下文>/...`（无影响时写明理由）
 
 ## 1. 概述
 
@@ -91,12 +92,15 @@ type: Permanent
 
 技术提案中允许包含详细的技术细节（项目结构、API 设计、数据模型等），必须使用 Mermaid 图形描述流程和架构。
 
+编写或修改提案时，必须同步更新 `docs/knowledges/domain`：受影响的上下文文档、索引与上下文地图，口径见 `common-rules.md` 的「Domain Model Sync（领域模型同步）」。领域模型同步属于提案的一部分，Review 时一并检查。
+
 ## 工作流程
 
 ```mermaid
 flowchart LR
     P[产品 PRD Review 通过] --> T[编写技术提案]
-    T --> R[Review 技术提案]
+    T --> D[同步更新领域模型]
+    D --> R[Review 技术提案]
     R -->|通过| C[更新 API Contract]
     C --> I[编码实现]
     I --> E[编排 + 测试]
@@ -108,13 +112,15 @@ flowchart LR
 1. 加载 `z-coding` skill
 2. 加载产品文档，理解需求
 3. 创建文件到 `proposals/` 目录，以创建日期为 ID
-4. 完成后发起 Review
+4. 同步更新 `docs/knowledges/domain`：受影响上下文的 `00-上下文概览.md` / `01-聚合与实体.md`，以及索引与上下文地图
+5. 完成后发起 Review
 
 ### 修改提案
 
 1. 直接编辑对应文件
 2. 更新版本号
 3. 记录变更原因
+4. 若变更影响领域概念、聚合、字段、状态机、领域事件或权限，同步更新 `docs/knowledges/domain`
 
 ## Skill 参考
 
@@ -133,6 +139,7 @@ flowchart LR
 - [[common-rules.md]] — 通用开发规范
 - [[backend-rules.md]] — 后端开发规范
 - [[frontend-rules.md]] — 前端开发规范
+- [[../knowledges/domain/00-领域模型库-索引.md]] — 领域模型知识库（方案同步目标）
 
 ### 技术提案（`proposals/`）
 
@@ -249,6 +256,7 @@ flowchart LR
 - [[proposals/20261116-feat-knowledge-base-repo-built-in.md]] — 仓库内建知识库（agent-gear 新增 knowledge-bases:scan 白名单扫描事件直读工作区 `.zag/knowledges/` 与 `docs/knowledges/`，controller-api 白名单中继写 Redis 结果键，agent-api 懒加载四级只读查询（候选云电脑骨架→单云电脑知识库列表→逐级子条目→单文档）；agent-web 侧边栏分组默认全部折叠点击展开才加载、front matter 渲染为表格；知识库 MCP 新增 prompts 能力提供编写指引；不落 MongoDB、不进知识库工具、无任何写入口）
 - [[proposals/20261117-feat-cloud-host-model-config-sync.md]] — 模型下发优化与云电脑配置实时下发（ModelProvision 多 vendor 下发载荷唯一构建口径、agent-api 推送服务扇出 + admin-api 经内部端点通知、cloud-controller harness-models 端点与 /worker harness:models 事件、agent-gear 2.20.0 多 vendor 重写 opencode/dsh 配置、vendor id=providerId 与平台组 Agent Gear 显示名、网关逐请求实时口径锁定与 owned_by、前台保存重载提醒、global 变更 ACP 缓存全量失效、用户模型上下文长度编辑与服务商上下文元数据尽力获取）
 - [[proposals/20261117-feat-cloud-agent-gear-upgrade-optimization.md]] — 云电脑控制器包升级优化（entrypoint 两条安装路径改「pnpm info --json 取精确最新版 + 钉版安装」绕开 minimumReleaseAge；cloud-controller register 版本落库 cloudcontainers.agentGearVersion 与 agent-gear:upgrade 事件对 + A.2.14 端点；agent-api 最新版本服务（npm registry + Redis 10 分钟）与 CloudHost.agentGearVersion/upgradeCloudHostAgentGear；agent-gear 2.20.0 回执后优雅退出委托保活钉版重启；agent-web 设置页版本区块与「立即升级」）
+- [[proposals/20261117-feat-knowledge-base-optimization-phase2.md]] — 知识库优化二期（agent-gear 2.21.0 扫描上限重构：取消每来源 20 库/每库 50 文档/单库 1MiB/单来源 2MiB 总额限制、新增单文件夹直接子项 ≤1000、单文件统一 1MiB；契约 §3.29/§3.30 与 knowledge-base.graphql 注释口径同步、MCP 编写指引与防漂移守卫字面量更新；中继/轮询超时 15s→30s；agent-web 空态收敛（「暂无知识库」双空才展示、hosts 查询上提）与「重新检测」迁移至云电脑条目尾部仅图标折叠可点、truncated/文件过大标示；领域模型 B0-知识库与 common-rules 仓库知识库约束同步）
 
 ### 实现计划（`plan/`）
 
@@ -354,3 +362,4 @@ flowchart LR
 - [[plan/20261116-feat-knowledge-base-repo-built-in.md]] — 仓库内建知识库实现计划（契约先行：agent-session-websocket §3.29/§3.30 + knowledge-base.graphql 四级只读查询扩展 + mcp-server.graphql 注释；agent-gear 2.19.0 新增 knowledge-bases:scan 双约定目录扫描（knowledge-base.json 标识 + 递归 .md + 分级上限），controller-api 白名单中继（Redis 结果键 EX 60），agent-api repo-knowledge-bases 分层服务（候选骨架纯 DB / 工作区级缓存 300s / 解析校验纯函数）与 GraphQL 四查询、知识库 MCP prompts 能力（knowledge-base-prompts.ts 单一来源 + 防漂移守卫）；agent-web 侧边栏「仓库知识库」分组默认全部折叠逐级懒加载、front matter 渲染为键值表格、只读预览；T-RKB-SCAN/T-RKB-RELAY/T-RKB-SVC/T-RKB-GQL/T-RKB-P/T-RKB-WEB/T-RKB-API/E2E-RKB 测试矩阵；含 F1~F22 代码事实核对、D1~D14 计划期裁决与回归清单）
 - [[plan/20261117-feat-cloud-host-model-config-sync.md]] — 模型下发优化与云电脑配置实时下发实现计划（Phase 0~8：契约先行 cloud-controller-websocket 事件 harness:models/harness:models:result + A.2.15 端点 + A.2.2/B.2 字段、billing-openai owned_by、llm×2 GraphQL 增量；agent-api `model-provision.ts` 唯一构建口径（zag 组恒首位/Agent Gear、用户组 vendorId=providerId、同名 global 优先、按主机 resourceWorkspaceId 重算）+ `cloud-host-model-push` 扇出（并发≤5、single-flight）+ `/internal/model-config/refresh` + resolver 触发；cloud-controller `harness-models` 端点、`secrets.modelProviders`/`ZAG_MODEL_PROVIDERS`、socket 网关 pending-ack（10s）与 2.20.0 版本短路；admin-api notifier/owned_by/导入上下文；agent-gear 2.20.0 多 vendor 重写（状态文件差集清理、dsh 默认模型取首个非空组）；agent-web 上下文编辑/服务商预填/统一重载提醒；含 F1~F32 代码事实、D1~D20 裁决与 T-MP/T-CP/T-CC-MP/T-AG-MP/T-CAT/T-UMC/T-OWN/T-NOTIFY/T-MCWEB/API/E2E 测试矩阵）
 - [[plan/20261117-feat-cloud-agent-gear-upgrade-optimization.md]] — 云电脑控制器包升级优化实现计划（契约先行：cloud-host.graphql 版本信息/立即升级 + cloud-controller-websocket §2.11/§2.12 升级事件对/A.2.14/A.3 字段与 2.12.0→2.17.1 漂移同修；worker 镜像 entrypoint 两条安装路径改「pnpm info --json 取精确最新版 + 钉版安装」绕开 minimumReleaseAge（T-EP30~36，T-EP28/29 已占用顺延）；agent-gear 2.20.0 升级事件回执后优雅退出 0 委托保活钉版重启（安装通道唯一）；cloud-controller register 版本落库 cloudcontainers.agentGearVersion 与 A.2.14 端点（版本门禁 ≥2.20.0 + 60s 在飞互斥 + 10s 回执）；agent-api 最新版本服务（npm registry + Redis 10 分钟、single-flight 兜底）与 CloudHost.agentGearVersion/upgradeCloudHostAgentGear；agent-web 版本区块三态与升级轮询；含 F1~F20 代码事实、D1~D14 计划期裁决与 T-EP/T-UPG/T-AGV/T-AGU/API/E2E 测试矩阵）
+- [[plan/20261117-feat-knowledge-base-optimization-phase2.md]] — 知识库优化二期实现计划（契约先行：agent-session-websocket §3.29/§3.30 上限口径 + knowledge-base.graphql 新增 `RepoKnowledgeBaseNode.error` 可空字段；Phase 1 agent-gear 2.21.0 扫描上限重构——删每来源 20 库/每库 50 文档/单库 1MiB/单来源 2MiB 总额限制，新增单文件夹直接子项 ≤1000（目录与文件合计、逐层 `readdir` 排序截断）、单文件统一 1MiB（schema 与文档，stat 预检 + 读后复核），`truncated` 按文件夹→库→来源→整体上浮；Phase 2 agent-api 轮询 500ms×30→×60、错误文档保留为带 `error` 的不可打开节点（不计 `documentCount`、`getDocument` 恒 null）、编写指引与防漂移守卫同步；Phase 3 controller-api 仅注释口径；Phase 4 agent-web hosts 查询上提实现「暂无知识库」双空才展示、`HostNode` 行尾图标「重新检测」（折叠态 `client.query` refresh:true、展开态 refetch、evict 子查询）、已截断/文件过大标示；Phase 5~8 tests/api、tests/e2e E2E-RKB7~8、B0-知识库与 AGENTS 收口；含 F1~F20 代码事实、D1~D13 计划期裁决（D2 契约最小增量、D7 超时落点修正）与体量/回滚风险）

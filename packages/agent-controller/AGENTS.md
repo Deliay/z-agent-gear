@@ -57,8 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.20.0`（major 保持 2；运行期模型下发 `harness:models` / 多 vendor 重写与 `ZAG_MODEL_PROVIDERS` 自 2.20.0 起；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
-- 版本：包版本 `2.20.0`（major 保持 2；`agent-gear:upgrade` 升级事件自 2.20.0 起；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.21.0`（major 保持 2；仓库内建知识库扫描上限二期口径（单文件夹直接子项 1000 / 单文件 1MiB / 无总额限制）自 2.21.0 起；`agent-gear:upgrade` 升级事件与运行期模型下发 `harness:models` / 多 vendor 重写与 `ZAG_MODEL_PROVIDERS` 自 2.20.0 起；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.17.1 起为当前基线；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -93,19 +92,21 @@ src/
   只含 `requestId/path`，不记录文件内容。该事件**不复用** `fs:read-file` 白名单（检测发生在会话启动前），
   仅直读约定子目录，不回写、不执行。
 
-## 仓库内建知识库扫描（2.19.0）
+## 仓库内建知识库扫描（2.19.0；上限二期口径 2.21.0）
 
 - **`knowledge-bases:scan`（契约 §3.29/§3.30）**：`knowledge-bases.scanKnowledgeBases(workspacePath)`
   直读 `<workspacePath>/.zag/knowledges/` 与 `<workspacePath>/docs/knowledges/` 两个固定子目录。
   知识库发现**不递归**（仅来源目录的直接子文件夹，含常规文件 `knowledge-base.json` 才识别）；
   库内文档**递归**收集 `.md` 常规文件（扩展名小写比较；符号链接按 `stat` 判定为常规文件才读取，
   目录/设备/悬空链接跳过），`path` 为库内相对 POSIX 路径并读取内容。
-- **上限**：每来源 20 个知识库（文件夹名 `localeCompare` 取前 20）/ 每库 50 个文档 / `knowledge-base.json`
-  64KiB / 单文档 128KiB / 单库内容累计 1MiB / 单来源内容累计 2MiB；超限按级 `truncated:true` 或条目级
-  `error:'file too large'`。单来源截断发生在某库读取过程中时，该库也同步置 `truncated:true`（与单库口径对称）。
-  目录不存在（ENOENT/ENOTDIR）视为空列表，读取权限失败整体 `permission denied`。
-  已知口径：库内子目录 `readdir` 失败按空目录处理（不使整库不合法）；`knowledge-base.json` `stat` 失败
-  无法区分不存在/不可访问，统一视为非知识库文件夹。
+- **上限（2.21.0 起）**：单文件（`knowledge-base.json` 与 `.md` 同值）1MiB；每个文件夹的直接子项
+  （目录与文件合计，来源目录层与库内每层同样生效）按名称 `localeCompare` 排序取前 1000，超出不遍历并置位截断；
+  **无**知识库数、文档数与内容累计总量限制。`truncated` 按「文件夹 → 知识库 → 来源 → 整体」逐级上浮；
+  来源目录层截断只置来源与整体，不绑定到任一知识库条目。
+  单文档超限保留条目并附 `error:'file too large'`（不读内容）；`knowledge-base.json` 超限整库
+  `error:'file too large'`（不解析 schema、不读文档）。目录不存在（ENOENT/ENOTDIR）视为空列表，
+  读取权限失败整体 `permission denied`。已知口径：库内子目录 `readdir` 失败按空目录处理（不使整库不合法）；
+  `knowledge-base.json` `stat` 失败无法区分不存在/不可访问，统一视为非知识库文件夹。
 - **front matter 闭合**：`\n---` 必须是独立行（+ 可选行尾空白，后接换行/窗口末尾），`----` / `---x`
   不视为闭合（与 agent-web `lib/front-matter.ts` 同规则）。
 - **事件注册**：`socketio-client` 注册 `knowledge-bases:scan` → 回 `knowledge-bases:scan:result`

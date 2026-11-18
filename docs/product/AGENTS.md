@@ -71,6 +71,8 @@ type: Permanent
 
 产品文档中禁止提及技术细节，禁止提及项目结构、前端组件、后端 API 设计等内容。必须使用 Mermaid 图形描述流程。
 
+产品文档不承载领域模型细节；涉及领域概念、术语、上下文边界、聚合、状态机或权限变化时，必须在同一变更中同步更新 `docs/knowledges/domain`（规范见 `docs/engineering/common-rules.md` 的「Domain Model Sync（领域模型同步）」）。
+
 ## 工作流程
 
 ```mermaid
@@ -78,6 +80,7 @@ flowchart LR
     D[draft/] -->|Review 通过| R[reviewed/]
     R -->|开始实现| S[shipping/]
     S -->|上线验收| P[released/]
+    D -.->|同步更新| K[docs/knowledges/domain 领域模型]
 ```
 
 ### 创建文档
@@ -85,20 +88,23 @@ flowchart LR
 1. 加载 `z-product` skill
 2. 使用 `question` 工具澄清产品细节
 3. 创建文件到 `draft/` 目录，以创建日期为 ID
-4. 提交流程遵循项目 git 规范
+4. 同步更新 `docs/knowledges/domain`：概念、术语、边界、聚合、状态、权限有变化时回写对应上下文文档与索引/上下文地图
+5. 提交流程遵循项目 git 规范
 
 ### 修改文档
 
 1. 确认文档所在阶段目录
 2. 修改后保持文件名不变
 3. 更新 PRD 版本号
+4. 涉及领域概念变化时同步更新 `docs/knowledges/domain`
 
 ### Review 文档
 
 1. 确认内容无技术细节
 2. 确认满足文档结构模板要求
 3. 确认 YAML front matter 完整
-4. 通过后移入 `reviewed/` 目录
+4. 确认领域模型已同步更新（概念、术语、边界、状态、权限）
+5. 通过后移入 `reviewed/` 目录
 
 ## Skill 参考
 
@@ -108,6 +114,9 @@ flowchart LR
 | [[../../.agents/skills/z-document/SKILL.md\|z-document]] | 文档格式与命名规范 |
 
 ## 相关文档
+
+- [[../knowledges/domain/00-领域模型库-索引.md]] — 领域模型知识库（PRD 同步目标）
+- [[../engineering/common-rules.md]] — 通用开发规范（Domain Model Sync）
 
 ### 草稿文档（`draft/`）
 
@@ -178,6 +187,7 @@ flowchart LR
 - [[draft/20261116-knowledge-base-optimization.md]] — 知识库优化（文档路径创建后仍可修改：移动时全部历史版本随文档带入新路径并留「移动」记录、原路径释放后重建历史独立；标签改为 badge 徽章编辑器：回车/逗号/失焦成 badge、逐枚删除、空输退格删末枚、粘贴拆分去重，展示侧 badge 零回归）
 - [[draft/20261116-knowledge-base-repo-built-in.md]] — 仓库内建知识库（知识库支持在代码仓库中内建：仓库 `.zag/knowledges/` 与 `docs/knowledges/` 下含 knowledge-base.json 的文件夹即知识库、库内 Markdown 为文档；前端侧边栏「仓库知识库」分组默认全部折叠、点击展开逐级懒加载，文档 front matter 渲染为表格，只读、不进入知识库 MCP 工具；知识库 MCP 提供仓库知识库编写指引提示词）
 - [[draft/20261117-cloud-host-model-config-sync.md]] — 模型下发优化与云电脑配置实时下发（前后台模型/供应商修改实时下发运行中云电脑、前台保存提醒部分 Harness 不重载、用户自绑定模型按自有供应商前缀与显示名、平台模型显示名 Agent Gear、模型修改对 API 立即生效且进行中请求不处理、用户模型上下文长度可编辑且尽可能从服务商自动获取）
+- [[draft/20261117-knowledge-base-optimization-phase2.md]] — 知识库优化二期（「暂无知识库」仅在平台知识库与仓库知识库都为空时展示、任一侧有内容即隐藏空态文案；仓库知识库取消数量与体积总量限制、单文件夹子项最大 1000、单文件上限 1MB；「重新检测」移至云电脑折叠条目尾部与条目同行、仅图标省略文字且折叠可点）
 - [[draft/20261117-cloud-agent-gear-upgrade-optimization.md]] — 云电脑控制器包升级优化（自动升级绕开发布源新版本保护期直达最新版；设置页展示当前/最新版本，版本不一致出现「立即升级」；小字标注自动升级检查周期）
 
 ### 实现中文档（`shipping/`）
