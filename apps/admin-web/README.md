@@ -28,15 +28,16 @@ pnpm test           # vitest run
 `src/lib/api-base.ts` 按以下优先级解析 admin-api 地址（高优先在前）：
 
 1. `localStorage['zag:admin-api-base']`：登录页「服务器地址」设置，保存前先 `GET <endpoint>/health` 探测，通过才落盘。
-2. `window.__ADMIN_CONFIG__.apiUrl`：nginx 容器启动脚本按环境变量 `ADMIN_API_URL` 生成 `config.js` 注入。
+2. `window.__ADMIN_CONFIG__.apiUrl`：Caddy 容器启动脚本按环境变量 `ADMIN_API_URL` 生成 `config.js` 注入。
 3. `import.meta.env.VITE_ADMIN_API_URL`：构建期默认值。
 4. 同源兜底 `''`：GraphQL 请求走相对路径 `/graphql`，由部署侧反代。
 
 ## 容器部署
 
-- `Dockerfile`：多阶段构建（`node:24-alpine` 构建 → `nginx:1.27-alpine` 托管），构建参数 `VITE_ADMIN_API_URL` 透传给 `pnpm run build`。
-- `nginx.conf`：SPA history fallback（`try_files $uri $uri/ /index.html`）+ `/assets/` 长缓存，不硬编码 `/graphql` 上游。
-- `docker-entrypoint.d/40-generate-config-js.sh`：容器启动时按 `ADMIN_API_URL` 生成 `/usr/share/nginx/html/config.js`；未设置时生成空配置。
+- `Dockerfile`：多阶段构建（`node:24-alpine` 构建 → `caddy:2-alpine` 托管），构建参数 `VITE_ADMIN_API_URL` 透传给 `pnpm run build`。
+- `Caddyfile`：SPA history fallback（`try_files {path} {path}/ /index.html`）+ `/assets/` 长缓存，不硬编码 `/graphql` 上游。
+- `docker-entrypoint.sh`：执行 `docker-entrypoint.d/*.sh` 后启动 Caddy（Caddy 镜像无 nginx 的入口钩子）。
+- `docker-entrypoint.d/40-generate-config-js.sh`：容器启动时按 `ADMIN_API_URL` 生成 `/srv/config.js`；未设置时生成空配置。
 
 ## 相关文档
 

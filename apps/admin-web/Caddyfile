@@ -1,0 +1,43 @@
+# admin-web 静态站点（替代原 nginx.conf）。
+# 构建产物由 Dockerfile 复制到 /srv；运行时 config.js 由 docker-entrypoint.d 生成。
+{
+	# 容器内只需 80 端口明文服务，无需 ACME / 自动 HTTPS。
+	auto_https off
+}
+
+:80 {
+	root * /srv
+	encode zstd gzip
+
+	# 安全响应头。Caddy 的 header 在 handle 分支外定义，对所有响应生效。
+	header {
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' http: https: ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+	}
+
+	# 静态资源：长缓存（Vite 产物文件名带内容哈希）；缺失资源返回 404，不回退入口页。
+	handle /assets/* {
+		header Cache-Control "public, max-age=604800, immutable"
+		file_server
+	}
+
+	# 入口页与运行时配置禁止缓存，避免发版后旧入口驻留。
+	handle /index.html {
+		header Cache-Control "no-cache, no-store, must-revalidate"
+		file_server
+	}
+
+	handle /config.js {
+		header Cache-Control "no-cache, no-store, must-revalidate"
+		file_server
+	}
+
+	# SPA 深链回退到 index.html；入口不做强缓存。
+	handle {
+		header Cache-Control "no-cache"
+		try_files {path} {path}/ /index.html
+		file_server
+	}
+}
