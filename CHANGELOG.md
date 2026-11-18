@@ -4,6 +4,9 @@
 
 ### 修复
 
+- 修复「与 bot 共同提交」始终不生效（Issue #567）：GitHub App bot 身份解析对公开端点
+  `GET /users/{slug}[bot]` 误用 App JWT 认证，GitHub 返回 401 导致 bot 身份恒为 null、
+  共同作者被静默降级；改为匿名公开读取，Worktree 提交恢复 `Co-authored-by` 署名
 - 修复云电脑运行期补装 harness 后仍无法创建该类型会话（Issue #498）：会话 A-11 门改按
   「创建时选定 ∪ 运行期成功安装」判定（`cloudhosts.harnessTypes` 快照 ∪ `cloudcontainers.harnessTypes`
   读模型），并在 harness 安装成功后同步失效 controller-api 的 ACP 能力进程内缓存，新装 harness 立即出现在

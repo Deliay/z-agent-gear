@@ -793,7 +793,7 @@ export class GitHubService {
   /**
    * 解析 GitHub App bot 身份（提交身份来源）。
    *
-   * `createAppJwt()` → `GET /app` 取 `slug` → `GET /users/{slug}[bot]` 取 `id`；
+   * `createAppJwt()` → `GET /app` 取 `slug` → `GET /users/{slug}[bot]`（**匿名**公开读取）取 `id`；
    * 组装 `{ slug, botUserId, name, email }`，邮箱固定为 GitHub noreply 形式。
    *
    * 缓存：Redis `github:app-bot-identity` 成功 TTL 24h、失败 sentinel 60s（防击穿），
@@ -852,9 +852,13 @@ export class GitHubService {
     if (!slug) throw new Error('GET /app response missing slug');
 
     const botLogin = `${slug}[bot]`;
+    // `GET /users/{login}` 是公开端点，**不支持 App JWT 认证**（GitHub 只允许 JWT 访问
+    // `/app`、`/app/installations/*` 等少数端点）。携带 JWT 时 GitHub 返回
+    // `401 Bad credentials`（公开数据也拒绝非该端点凭据），导致 bot 身份永远解析失败、
+    // Worktree 共同作者静默降级（#567）。这里只带 Accept，匿名读取公开用户。
     const userResponse = await fetchWithTimeout(
       `${base}/users/${encodeURIComponent(botLogin)}`,
-      headers,
+      { Accept: 'application/vnd.github+json' },
     );
     if (!userResponse.ok) {
       throw new Error(`GET /users/${botLogin} failed: ${userResponse.status}`);

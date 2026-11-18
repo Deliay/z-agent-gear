@@ -223,7 +223,8 @@ pnpm run start   # Start production server
   落 `triggerSenderId/triggerSenderLogin/triggerUserId`（`GitHubAccount.githubUserId` 匹配）；
   `IssuesTriggerRunner.createInstance` 身份优先级「触发人提交人 → sender 的 GitHub 身份
   （login + noreply）→ bot」。
-- bot 身份：`githubService.resolveAppBotIdentity()`（`GET /app` → `GET /users/{slug}[bot]`，裸 fetch），
+- bot 身份：`githubService.resolveAppBotIdentity()`（App JWT `GET /app` 取 slug →
+  **匿名** `GET /users/{slug}[bot]` 取 id；该公开端点不支持 App JWT，携带会 401 导致共同作者静默失效，回归 #567），
   Redis `github:app-bot-identity` 成功 24h、失败 sentinel 60s，进程内 Map 兜底。
 - 仅云容器生效；本地控制器链路零改动；agent-gear ≥2.12.0 提供 worktree 身份能力（门禁见 cloud-controller）。
 
