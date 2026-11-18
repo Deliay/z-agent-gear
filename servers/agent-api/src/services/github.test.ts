@@ -558,6 +558,48 @@ describe('GitHubService', () => {
       expect(logged).toContain('GET /app failed: 500');
       vi.unstubAllGlobals();
     });
+
+    /**
+     * T-GB4（#567 回归）：`GET /users/{slug}[bot]` 是公开端点，不支持 App JWT 认证；
+     * 携带 JWT 时 GitHub 返回 401 Bad credentials，导致 bot 身份永远解析为 null
+     *（co-author 静默降级）。这里按真实 GitHub 行为模拟凭据门禁。
+     */
+    it('T-GB4: /users 公开端点不得携带 App JWT，凭据不支持时仍能解析 bot 身份', async () => {
+      const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+      const fetchMock = vi.fn(async (url: unknown, init?: { headers?: Record<string, string> }) => {
+        const headers = init?.headers ?? {};
+        seen.push({ url: String(url), headers });
+        if (String(url).endsWith('/app')) {
+          return { ok: true, status: 200, json: async () => appPayload };
+        }
+        // 真实 GitHub：公开端点收到不支持的凭据 → 401 Bad credentials
+        if (headers.Authorization) {
+          return {
+            ok: false,
+            status: 401,
+            json: async () => ({ message: 'Bad credentials' }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => botPayload };
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const identity = await githubService.resolveAppBotIdentity();
+
+      expect(identity).toEqual({
+        slug: 'zag-bot',
+        botUserId: 123456,
+        name: 'zag-bot[bot]',
+        email: '123456+zag-bot[bot]@users.noreply.github.com',
+      });
+      const userCall = seen.find((call) => call.url.includes('/users/'));
+      expect(userCall).toBeDefined();
+      expect(userCall!.headers.Authorization).toBeUndefined();
+      // `/app` 仍需 App JWT
+      const appCall = seen.find((call) => call.url.endsWith('/app'));
+      expect(appCall?.headers.Authorization).toBe('Bearer fake-jwt');
+      vi.unstubAllGlobals();
+    });
   });
 
   describe('getRepoDefaultBranch', () => {
