@@ -1,6 +1,6 @@
 // admin-api endpoint 解析（四级优先级，最高优先级在前）：
 //   ① localStorage['zag:admin-api-base']（登录页「服务器地址」设置，`/health` 探测通过才保存）
-//   ② window.__ADMIN_CONFIG__.apiUrl（nginx 容器启动脚本按 ADMIN_API_URL 注入的 config.js）
+//   ② window.__ADMIN_CONFIG__.apiUrl（Caddy 容器启动脚本按 ADMIN_API_URL 注入的 config.js）
 //   ③ import.meta.env.VITE_ADMIN_API_URL（构建期默认值，本地由 Aspire 注入）
 //   ④ 同源兜底：''（GraphQL 请求走相对路径 /graphql，由部署侧反代）
 //

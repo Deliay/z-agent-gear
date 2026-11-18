@@ -17,11 +17,15 @@ ARG VITE_AGENT_API_URL
 ENV VITE_AGENT_API_URL=$VITE_AGENT_API_URL
 RUN pnpm run build
 
-FROM nginx:1.27-alpine AS runtime
+FROM caddy:2-alpine AS runtime
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/dist /srv
 COPY docker-entrypoint.d/ /docker-entrypoint.d/
-RUN chmod +x /docker-entrypoint.d/*.sh
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh /docker-entrypoint.d/*.sh
+
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
 
 EXPOSE 80

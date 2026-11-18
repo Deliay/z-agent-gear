@@ -1,5 +1,5 @@
 #!/bin/sh
-# 容器启动时按 ADMIN_API_URL 生成 /usr/share/nginx/html/config.js，
+# 容器启动时按 ADMIN_API_URL 生成 /srv/config.js（Caddy 站点根目录），
 # 供前端 window.__ADMIN_CONFIG__.apiUrl 运行时读取（见 src/lib/api-base.ts）。
 # 同时按 AGENT_API_URL 注入 window.__ADMIN_CONFIG__.agentApiUrl（第三方登录跳转）。
 # 未设置时前端回落到构建期 VITE_ADMIN_API_URL / VITE_AGENT_API_URL / 同源兜底。
@@ -9,8 +9,8 @@
 # 再对写入值做 JSON 转义作为纵深防御。
 set -eu
 
-# 允许通过 CONFIG_FILE 覆盖输出路径（便于测试；容器内使用 nginx 站点目录）。
-CONFIG_FILE="${CONFIG_FILE:-/usr/share/nginx/html/config.js}"
+# 允许通过 CONFIG_FILE 覆盖输出路径（便于测试；容器内使用 Caddy 站点目录）。
+CONFIG_FILE="${CONFIG_FILE:-/srv/config.js}"
 
 validate_url() {
   name="$1"

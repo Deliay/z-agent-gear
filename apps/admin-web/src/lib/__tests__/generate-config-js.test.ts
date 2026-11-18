@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// 仅在 POSIX shell 可用时运行（脚本面向 nginx:alpine 的 /bin/sh）。
+// 仅在 POSIX shell 可用时运行（脚本面向 alpine 的 /bin/sh）。
 // vitest 的 cwd 即 apps/admin-web，脚本随包一起移植。
 const scriptPath = join(process.cwd(), 'docker-entrypoint.d', '40-generate-config-js.sh');
 

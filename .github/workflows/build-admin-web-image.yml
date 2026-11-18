@@ -61,7 +61,7 @@ jobs:
           provenance: false
           sbom: false
 
-      # 镜像启动冒烟：验证 nginx 起来且运行时 config.js 可生成
+      # 镜像启动冒烟：验证 Caddy 起来且运行时 config.js 可生成
       - name: Smoke test image
         run: |
           set -e
