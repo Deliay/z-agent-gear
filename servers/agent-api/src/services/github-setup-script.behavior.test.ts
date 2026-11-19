@@ -26,6 +26,8 @@ interface ScriptResult {
 interface GhStub {
   binDir: string;
   logFile: string;
+  envLogFile: string;
+  agentGearLogFile: string;
 }
 
 describe.skipIf(process.platform === 'win32')('Github 项目设置脚本行为（T-GHS1~14）', () => {
@@ -46,6 +48,8 @@ describe.skipIf(process.platform === 'win32')('Github 项目设置脚本行为�
   function makeGhStub(base: string): GhStub {
     const binDir = join(base, 'bin');
     const logFile = join(base, 'gh.log');
+    const envLogFile = join(base, 'gh.env.log');
+    const agentGearLogFile = join(base, 'agent-gear.log');
     mkdirSync(binDir, { recursive: true });
     const stub = join(binDir, 'gh');
     writeFileSync(
@@ -54,13 +58,22 @@ describe.skipIf(process.platform === 'win32')('Github 项目设置脚本行为�
         '#!/usr/bin/env bash',
         'set -euo pipefail',
         'printf \'%s\\n\' "$*" >> "$GH_STUB_LOG"',
+        // R7 行为断言：Git 设置批次必须带 SKIP 旁路，gh 收到的是原生调用环境。
+        'printf \'%s\\n\' "${ZAG_GH_WRAPPER_SKIP_TOKEN:-<unset>}" >> "$GH_ENV_LOG"',
         'mkdir -p "$4"',
         'printf \'cloned\\n\' > "$4/marker.txt"',
         '',
       ].join('\n'),
     );
     chmodSync(stub, 0o755);
-    return { binDir, logFile };
+    // wrapper 项目识别桩：本批次不应调用 agent-gear（跳过通道须在 gh 调用前生效）。
+    const agentGearStub = join(binDir, 'agent-gear');
+    writeFileSync(
+      agentGearStub,
+      ['#!/usr/bin/env bash', 'printf \'called\\n\' >> "$AGENT_GEAR_STUB_LOG"', ''].join('\n'),
+    );
+    chmodSync(agentGearStub, 0o755);
+    return { binDir, logFile, envLogFile, agentGearLogFile };
   }
 
   function runScript(pathOverride?: string): ScriptResult {
@@ -70,6 +83,8 @@ describe.skipIf(process.platform === 'win32')('Github 项目设置脚本行为�
       WORKLOAD_PARAM_REPOFULLNAME: REPO,
       PATH: pathOverride ?? `${gh.binDir}:${process.env.PATH ?? ''}`,
       GH_STUB_LOG: gh.logFile,
+      GH_ENV_LOG: gh.envLogFile,
+      AGENT_GEAR_STUB_LOG: gh.agentGearLogFile,
       GIT_TERMINAL_PROMPT: '0',
       GIT_ASKPASS: '/bin/true',
     };
@@ -109,6 +124,22 @@ describe.skipIf(process.platform === 'win32')('Github 项目设置脚本行为�
       '-qm',
       'init',
     ]);
+  }
+
+  function ghEnvCalls(): string[] {
+    if (!existsSync(gh.envLogFile)) return [];
+    return readFileSync(gh.envLogFile, 'utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+  }
+
+  function agentGearCalls(): string[] {
+    if (!existsSync(gh.agentGearLogFile)) return [];
+    return readFileSync(gh.agentGearLogFile, 'utf8')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
   }
 
   function ghCalls(): string[] {
@@ -287,6 +318,19 @@ describe.skipIf(process.platform === 'win32')('Github 项目设置脚本行为�
       'gitdir: /somewhere/.git/worktrees/repo',
     );
     expect(readFileSync(join(target, 'marker.txt'), 'utf8')).toBe('keep-me');
+  });
+
+  it('T-GHS15: clone 走原生 gh（SKIP 旁路生效，不触发 wrapper 项目识别）', () => {
+    // R7 / 计划 §4.5 行为断言：目标目录尚未成形，cwd 不一定是目标项目，
+    // 必须强制绕过 gh wrapper（带 ZAG_GH_WRAPPER_SKIP_TOKEN=1），
+    // 使用批次预取的 hosts.yml 凭据克隆，而不是按 cwd 申请项目级 token。
+    const result = runScript();
+
+    expect(result.status).toBe(0);
+    expect(ghCalls()).toEqual([`repo clone ${REPO} ${target}`]);
+    expect(ghEnvCalls()).toEqual(['1']);
+    expect(agentGearCalls()).toEqual([]);
+    expect(readFileSync(join(target, 'marker.txt'), 'utf8')).toBe('cloned\n');
   });
 
   it('T-GHS14: 目标为指向空目录的符号链接 → 非零退出，链接与目标目录均保留', () => {
