@@ -26,7 +26,7 @@
 > `agent-api` 注入 `ADMIN_API_URL`（admin-api 内部 REST）与 `INTERNAL_API_TOKEN`（`/internal/billing/*` Bearer），用于前台「我的费用」转发；另注入云电脑 env：`CLOUD_CONTROLLER_URL`、`CONTROLLER_API_PUBLIC_WS_ENDPOINT`、`CLOUD_HOST_MODEL_BASE_URL`（容器内可达 admin-api `/v1`）、`CLOUD_HOST_DEFAULT_WORKSPACE=/home/worker/workspace`、`HARNESS_CONTAINER_TTL_SECONDS=86400`、`HARNESS_ENABLED`（dev `true` / publish `false`）。
 > `cloud-controller` 另注入 `AGENT_API_URL` / `AGENT_API_TIMEOUT_MS` / `ADMIN_API_URL`（harness ready/terminal 回调与按宿主撤销模型 Key；均可空，缺失时只告警不阻断生命周期）。
 > `agent-api` 云电脑模型 Key 的 `CLOUD_HOST_MODEL_BASE_URL` 必须指向容器内可达的 admin-api（`http://admin-api:8002/v1` 或 Aspire endpoint）。
-> `admin-web` dev 模式为 Vite dev server（`AddViteApp`，注入 `VITE_ADMIN_API_URL`）；publish 模式注册为 nginx 容器（`${ADMIN_WEB_IMAGE}`，端口 80，SPA history fallback），并注入 `ADMIN_API_URL`（容器运行时生成 `config.js`）。
+> `admin-web` dev 模式为 Vite dev server（`AddViteApp`，注入 `VITE_ADMIN_API_URL`）；publish 模式注册为 Caddy 容器（`${ADMIN_WEB_IMAGE}`，端口 80，SPA history fallback），并注入 `ADMIN_API_URL`（容器运行时生成 `config.js`）。
 >
 > 安全（问题 4/47）：`admin-jwt-secret` / `internal-api-token` / `admin-initial-password` 等敏感参数**不提交任何字面量默认值**，每次启动随机生成（或经配置 `Parameters:<name>` / 环境变量 `Parameters__<name>` 注入）；admin-api 首次种子时会把管理员初始密码一次性打印到日志。
 >

@@ -317,7 +317,7 @@ else
         .WithHttpEndpoint(port: 8003, env: "PORT")
         .WithExternalHttpEndpoints();
 
-    // admin-web 使用自身 Dockerfile 构建镜像（node 构建 + nginx 托管），
+    // admin-web 使用自身 Dockerfile 构建镜像（node 构建 + Caddy 托管），
     // publish 时镜像名参数化为 ${ADMIN_WEB_IMAGE}，与 AGENT_API_IMAGE/CONTROLLER_API_IMAGE 一致
     builder.AddDockerfile("admin-web", "../../apps/admin-web")
         .WithEnvironment("ADMIN_API_URL", adminApiUrl)
