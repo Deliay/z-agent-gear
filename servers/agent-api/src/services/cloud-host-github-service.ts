@@ -41,6 +41,9 @@ interface GithubSetupServiceDeps {
  * 同仓库复用零改动（不拉取）/ 空目录清理后克隆 / 被其他项目占用时统一提示且不改动内容。
  */
 export const GITHUB_SETUP_SCRIPT = `set -euo pipefail
+# clone 目标目录在脚本执行前尚不存在，cwd 不一定是目标项目：
+# 强制绕过 gh wrapper（不申请项目级 token），改用批次预取的 hosts.yml 凭据。
+export ZAG_GH_WRAPPER_SKIP_TOKEN=1
 TARGET="\${WORKLOAD_PARAM_TARGETPATH:?missing targetPath}"
 REPO="\${WORKLOAD_PARAM_REPOFULLNAME:?missing repoFullName}"
 command -v gh >/dev/null || { echo "gh 不可用，请先安装 Github 工作负载"; exit 1; }
@@ -348,11 +351,17 @@ export class CloudHostGithubService {
   private async runGitSetupStep(opId: string, op: Doc): Promise<void> {
     const repoFullName = String(op.repoFullName ?? '');
     const targetPath = String(op.targetPath ?? '');
+    // 一机多项目：按 {controllerId, repoFullName} upsert，并显式写 tenantId（D9）。
     await CloudHostGithubBinding.findOneAndUpdate(
-      { controllerId: op.controllerId } as any,
+      {
+        controllerId: op.controllerId,
+        tenantId: op.tenantId,
+        repoFullName,
+      } as any,
       {
         $set: {
           userId: op.userId,
+          tenantId: op.tenantId,
           accountId: op.accountId,
           repoFullName,
           targetPath,
@@ -375,6 +384,7 @@ export class CloudHostGithubService {
       params: { repoFullName, targetPath },
       source: 'system',
       githubAuth: true,
+      githubRepoFullName: repoFullName,
     });
     await this.workloadService.pollBatch(opId, String(op.containerId), [result.logId], 'gitSetup');
     // Issue #304-1：clone 成功后无条件初始化项目工作区（与 createSession 开关无关）。

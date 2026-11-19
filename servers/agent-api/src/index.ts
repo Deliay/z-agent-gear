@@ -56,6 +56,7 @@ import * as migration026CustomTools from './migrations/026-custom-tools.js';
 import * as migration026ExternalLogins from './migrations/026-external-logins.js';
 import * as migration027OidcBindingOptimization from './migrations/027-oidc-binding-optimization.js';
 import * as migration028KnowledgeBase from './migrations/028-knowledge-base.js';
+import * as migration029GithubBindingPerRepo from './migrations/029-github-binding-per-repo.js';
 import { internalUsersRouter } from './routes/internal-users.js';
 import { internalTenantsRouter } from './routes/internal-tenants.js';
 import { enterWithWorkspace, getRequestAuth, runWithRequestAuth } from './services/workspace-context.js';
@@ -230,6 +231,7 @@ async function start() {
       migration026ExternalLogins,
       migration027OidcBindingOptimization,
       migration028KnowledgeBase,
+      migration029GithubBindingPerRepo,
     ]);
   } catch (err) {
     logger.warn({ component: 'migration', err }, 'migration runner failed');

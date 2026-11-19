@@ -101,3 +101,28 @@ describe('writeGhAuth', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe('writeGhAuth wrapper bypass (T-GHC-SKIP)', () => {
+  it('passes ZAG_GH_WRAPPER_SKIP_TOKEN=1 on both gh calls while keeping process.env', async () => {
+    const login = new FakeChild();
+    const setup = new FakeChild();
+    const { spawnFn, calls } = scriptedSpawn([login, setup]);
+    const previous = process.env.ZAG_TEST_MARKER;
+    process.env.ZAG_TEST_MARKER = 'kept';
+
+    try {
+      await writeGhAuth(TOKEN, { spawn: spawnFn });
+    } finally {
+      if (previous === undefined) delete process.env.ZAG_TEST_MARKER;
+      else process.env.ZAG_TEST_MARKER = previous;
+    }
+
+    for (const call of calls) {
+      const env = (call.options as { env?: NodeJS.ProcessEnv }).env;
+      expect(env?.ZAG_GH_WRAPPER_SKIP_TOKEN).toBe('1');
+      expect(env?.ZAG_TEST_MARKER).toBe('kept');
+      // token 不进入 env
+      expect(JSON.stringify(env)).not.toContain(TOKEN);
+    }
+  });
+});

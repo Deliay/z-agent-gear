@@ -352,6 +352,11 @@ aspire --version
 playwright --version
 ls "$HOME/.cache/ms-playwright" | grep '^chromium-'   # 默认仅 Chromium（Firefox/WebKit 按需补装）
 echo "$PLAYWRIGHT_DOWNLOAD_HOST"                      # 安装时已持久化到用户环境
+
+# Github（迁移 024：脚本 V3 安装 /usr/local/bin/gh wrapper，按当前项目申请项目级 token）
+command -v gh                             # 期望 /usr/local/bin/gh（wrapper 遮蔽镜像预装的 /usr/bin/gh）
+head -n 2 "$(command -v gh)" | tail -n 1  # 期望 # zag-gh-wrapper:v1
+ZAG_GH_WRAPPER_SKIP_TOKEN=1 gh --version  # SKIP 旁路可用（不触发项目识别/网络）
 ```
 
 pnpm 预装与工作负载安装口径（entrypoint `ensure_pnpm` + 迁移 017/018 脚本）：

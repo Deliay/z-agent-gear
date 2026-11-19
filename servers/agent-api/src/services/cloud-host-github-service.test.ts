@@ -85,9 +85,11 @@ function makeService(overrides: Record<string, unknown> = {}) {
   return { service, workloadService, controllerClient, createSession, ensureWorkspace };
 }
 
+const TENANT_ID = '507f1f77bcf86cd7994390aa';
 const operation = {
   _id: 'op1',
   userId: USER_ID,
+  tenantId: TENANT_ID,
   controllerId: CONTROLLER_ID,
   hostId: HOST_ID,
   containerId: CONTAINER_ID,
@@ -130,11 +132,24 @@ describe('CloudHostGithubService', () => {
         workloadId: WORKLOAD_ID,
         workloadName: 'Git 项目设置',
         githubAuth: true,
+        githubRepoFullName: 'owner/repo',
         source: 'system',
         params: { repoFullName: 'owner/repo', targetPath: '/home/worker/workspace/repo' },
       }),
     );
-    expect(CloudHostGithubBinding.findOneAndUpdate).toHaveBeenCalled();
+    expect(CloudHostGithubBinding.findOneAndUpdate).toHaveBeenCalledWith(
+      { controllerId: CONTROLLER_ID, tenantId: TENANT_ID, repoFullName: 'owner/repo' },
+      {
+        $set: {
+          userId: USER_ID,
+          tenantId: TENANT_ID,
+          accountId: ACCOUNT_ID,
+          repoFullName: 'owner/repo',
+          targetPath: '/home/worker/workspace/repo',
+        },
+      },
+      { upsert: true, returnDocument: 'after' },
+    );
     expect(ensureWorkspace).toHaveBeenCalledWith(
       CONTROLLER_ID,
       USER_ID,
@@ -390,8 +405,11 @@ describe('CloudHostGithubService', () => {
     expect(message).not.toContain('Bearer abc');
   });
 
-  it('T-CHG8: 幂等脚本不含 token 且校验目标目录', () => {
-    expect(GITHUB_SETUP_SCRIPT).not.toContain('TOKEN');
+  it('T-CHG8: 幂等脚本不含凭据明文且校验目标目录', () => {
+    expect(GITHUB_SETUP_SCRIPT).not.toContain('GITHUB_TOKEN=');
+    expect(GITHUB_SETUP_SCRIPT).not.toContain('ghp_');
+    // clone 前置批次必须绕过 gh wrapper（cwd 不是目标项目）
+    expect(GITHUB_SETUP_SCRIPT).toContain('export ZAG_GH_WRAPPER_SKIP_TOKEN=1');
     expect(GITHUB_SETUP_SCRIPT).toContain('gh repo clone "$REPO" "$TARGET"');
     expect(GITHUB_SETUP_SCRIPT).toContain('目标目录已存在其他项目');
     expect(GITHUB_SETUP_SCRIPT).toContain('rmdir "$TARGET"');
@@ -500,6 +518,7 @@ describe('CloudHostGithubService', () => {
         lean({
           _id: 'op1',
           userId: USER_ID,
+          tenantId: TENANT_ID,
           controllerId: CONTROLLER_ID,
           hostId: HOST_ID,
           containerId: CONTAINER_ID,
@@ -519,9 +538,12 @@ describe('CloudHostGithubService', () => {
       await (service as any).run('op1');
 
       expect(CloudHostGithubBinding.findOneAndUpdate).toHaveBeenCalledWith(
-        { controllerId: CONTROLLER_ID },
+        { controllerId: CONTROLLER_ID, tenantId: TENANT_ID, repoFullName: 'User/Repo' },
         expect.objectContaining({
-          $set: expect.objectContaining({ targetPath: '/home/worker/workspace/User/Repo' }),
+          $set: expect.objectContaining({
+            tenantId: TENANT_ID,
+            targetPath: '/home/worker/workspace/User/Repo',
+          }),
         }),
         { upsert: true, returnDocument: 'after' },
       );

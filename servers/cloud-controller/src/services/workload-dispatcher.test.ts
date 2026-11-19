@@ -1424,6 +1424,58 @@ describe('WorkloadDispatcher - harness env', () => {
   });
 
   describe('runtime batch', () => {
+    it('T-WD-R5: githubRepoFullName 仅在 githubAuth=true 时写入 payload', async () => {
+      const { repo, dispatcher, runs } = setup();
+      const container = await repo.create({
+        name: 'zag-worker-runtime2',
+        namespace: 'zag-workers',
+        purpose: 'idle',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'online',
+      });
+      const entries = [
+        {
+          workloadId: 'w-github',
+          workloadName: 'Git 项目设置',
+          script: 'echo setup',
+          params: {},
+        },
+      ];
+
+      await dispatcher.startRuntimeBatch(container.id, {
+        entries,
+        source: 'system',
+        githubAuth: true,
+        githubRepoFullName: 'owner/repo',
+      });
+      expect(runs('init').at(-1)!.payload.githubRepoFullName).toBe('owner/repo');
+
+      const other = await repo.create({
+        name: 'zag-worker-runtime3',
+        namespace: 'zag-workers',
+        purpose: 'idle',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'online',
+      });
+      await dispatcher.startRuntimeBatch(other.id, {
+        entries,
+        source: 'system',
+        githubAuth: false,
+        githubRepoFullName: 'owner/repo',
+      });
+      expect('githubRepoFullName' in runs('init').at(-1)!.payload).toBe(false);
+
+      const third = await repo.create({
+        name: 'zag-worker-runtime4',
+        namespace: 'zag-workers',
+        purpose: 'idle',
+        image: 'zero-tools/zag-worker:latest',
+        status: 'online',
+      });
+      await dispatcher.startRuntimeBatch(third.id, { entries, source: 'system' });
+      expect('githubRepoFullName' in runs('init').at(-1)!.payload).toBe(false);
+    });
+
     it('T-WD-R1/R2/R4: 在线容器 runtime 批次 → githubAuth 透传、成功回填已安装并直接 online', async () => {
       const { repo, dispatcher, workloadLogRepository, runs } = setup();
       const container = await repo.create({
