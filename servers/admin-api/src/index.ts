@@ -71,6 +71,8 @@ import * as migration021DockerRegistryMirrors from './migrations/021-docker-regi
 import * as migration022AuthProviders from './migrations/022-auth-providers.js';
 // 023：Harness 平台配置（harnessconfigs）唯一索引 + 三种 Harness 默认压缩指令种子（幂等、不覆盖用户配置）
 import * as migration023HarnessConfigs from './migrations/023-harness-configs.js';
+// 024：Github 预制脚本 V3（/usr/local/bin/gh wrapper，按项目申请 token；幂等收敛 + SKIP 旁路）
+import * as migration024GithubGhWrapper from './migrations/024-github-gh-wrapper.js';
 import { CloudHost } from './models/cloud-host.js';
 import { StorageBillingCursor } from './models/storage-billing-cursor.js';
 import { storageTickService } from './services/billing/storage-tick.js';
@@ -173,6 +175,8 @@ async function start() {
   //   /etc/docker/daemon.json 的 registry-mirrors（配置变更重启 dockerd 并 docker info 硬校验）+ 补齐参数
   // 023-harness-configs——Harness 平台配置索引 + 三种 Harness 默认压缩指令 `/compact` 种子
   //   （唯一写方 admin-api；`$setOnInsert` 幂等，已存在不覆盖用户配置）
+  // 024-github-gh-wrapper——Github 预制脚本 V3：安装 /usr/local/bin/gh wrapper（项目级 token），
+  //   任意状态重复执行收敛到同一份脚本；019 的 github 目标同步 V3
   try {
     await runMigrations([
       migration001,
@@ -200,6 +204,7 @@ async function start() {
       migration021DockerRegistryMirrors,
       migration022AuthProviders,
       migration023HarnessConfigs,
+      migration024GithubGhWrapper,
     ]);
   } catch (err) {
     logger.error({ err }, 'runMigrations failed (non-fatal)');

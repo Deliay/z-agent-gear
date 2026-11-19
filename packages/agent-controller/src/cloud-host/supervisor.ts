@@ -213,9 +213,13 @@ export async function startCloudHostSupervisor(
 
   const beforeWorkloadBatch = async (payload: WorkloadRunPayload): Promise<void> => {
     if (payload.githubAuth !== true) return;
-    const result = await credentialManager.refreshNow();
+    const repoFullName =
+      typeof payload.githubRepoFullName === 'string' ? payload.githubRepoFullName : undefined;
+    const result = await credentialManager.refreshNow(repoFullName);
     if (result.ok) return;
     if (result.error === 'no-binding') throw new Error('未设置 Github 项目');
+    if (result.error === 'project-not-bound') throw new Error('该项目尚未在平台初始化');
+    if (result.error === 'repo-not-authorized') throw new Error('当前账号无该项目权限');
     if (result.error === 'disabled') throw new Error('云主机未配置 Github 凭据申请环境');
     throw new Error(result.error || 'Github 凭据申请失败');
   };

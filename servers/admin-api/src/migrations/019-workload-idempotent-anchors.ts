@@ -29,6 +29,7 @@ import {
   HARNESS_OPENCODE_SCRIPT_V2,
 } from './012-worker-user-scripts.js';
 import { HARNESS_DEEPSEEK_SCRIPT_V3 } from './013-preset-harness-deepseek-header-masq.js';
+import { GITHUB_INIT_SCRIPT_V3 } from './024-github-gh-wrapper.js';
 import { PLAYWRIGHT_SCRIPT_V1 } from './015-preset-playwright.js';
 import { MONGODB_INIT_SCRIPT } from './016-preset-mongodb.js';
 import {
@@ -162,8 +163,10 @@ export const WORKLOAD_IDEMPOTENCY_TARGETS: WorkloadIdempotencyTarget[] = [
   {
     presetKey: 'github',
     name: 'Github',
-    oldScripts: [GITHUB_INIT_SCRIPT],
-    newScript: GITHUB_SCRIPT_V2,
+    // 024 把 Github 脚本升级到 V3（gh wrapper）：本迁移同步「最新标准版本」，
+    // 避免 DB 已是 V3 时每次启动误报「script modified by admin」。
+    oldScripts: [GITHUB_INIT_SCRIPT, GITHUB_SCRIPT_V2],
+    newScript: GITHUB_INIT_SCRIPT_V3,
   },
   {
     presetKey: 'harness-opencode',

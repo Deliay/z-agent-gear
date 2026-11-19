@@ -59,6 +59,31 @@ describe('CloudControllerClient', () => {
     expect(body.secrets.hostKey).toBe('zag_k_1_x');
   });
 
+  it('startRuntimeScript 可选 githubRepoFullName：有值才附加，缺省保持旧报文形状', async () => {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ batchId: 'b1', logId: 'l1' }),
+    });
+    const client = new CloudControllerClient('http://cc:10004', 'internal-token');
+    const base = {
+      containerId: 'c1',
+      workloadId: 'w1',
+      workloadName: 'Git 项目设置',
+      script: 'echo setup',
+      params: {},
+      source: 'system' as const,
+      githubAuth: true,
+    };
+
+    await client.startRuntimeScript({ ...base, githubRepoFullName: 'owner/repo' });
+    let body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    expect(body.githubRepoFullName).toBe('owner/repo');
+
+    await client.startRuntimeScript(base);
+    body = JSON.parse(String((fetchMock.mock.calls[1]![1] as RequestInit).body));
+    expect('githubRepoFullName' in body).toBe(false);
+  });
+
   it('maps network/HTTP failures to control plane unavailable', async () => {
     const client = new CloudControllerClient('http://cc', 'token');
     fetchMock.mockRejectedValueOnce(new Error('ECONNREFUSED'));

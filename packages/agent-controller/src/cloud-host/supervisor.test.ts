@@ -570,3 +570,46 @@ describe('cloud host commit identity manager (T-SUP-CI)', () => {
     expect(JSON.stringify(context.testLog.records)).not.toContain(BASE_ENV.ZAG_HOST_KEY);
   });
 });
+
+describe('cloud host project-scoped credentials (T-SUP-G2b)', () => {
+  it('forwards githubRepoFullName to refreshNow and maps project-level errors', async () => {
+    const credentials = fakeCredentialManager();
+    const context = setup({ credentialManager: credentials });
+    await startCloudHostSupervisor(context.deps);
+    const options = context.connect.mock.calls[0][2] as ConnectToServerOptions;
+
+    await options.onBeforeWorkloadBatch?.({
+      phase: 'init',
+      githubAuth: true,
+      githubRepoFullName: 'owner/repo',
+      items: [{ logId: 'x', workloadName: 'Git 项目设置', script: 'echo', timeoutMs: 1000 }],
+    });
+    expect(credentials.refreshNow).toHaveBeenCalledWith('owner/repo');
+
+    const notBound = fakeCredentialManager({ ok: false, error: 'project-not-bound' });
+    const context2 = setup({ credentialManager: notBound });
+    await startCloudHostSupervisor(context2.deps);
+    const options2 = context2.connect.mock.calls[0][2] as ConnectToServerOptions;
+    await expect(
+      options2.onBeforeWorkloadBatch?.({
+        phase: 'init',
+        githubAuth: true,
+        githubRepoFullName: 'owner/repo',
+        items: [{ logId: 'x', workloadName: 'Git 项目设置', script: 'echo', timeoutMs: 1000 }],
+      }),
+    ).rejects.toThrow('该项目尚未在平台初始化');
+
+    const unauthorized = fakeCredentialManager({ ok: false, error: 'repo-not-authorized' });
+    const context3 = setup({ credentialManager: unauthorized });
+    await startCloudHostSupervisor(context3.deps);
+    const options3 = context3.connect.mock.calls[0][2] as ConnectToServerOptions;
+    await expect(
+      options3.onBeforeWorkloadBatch?.({
+        phase: 'init',
+        githubAuth: true,
+        githubRepoFullName: 'owner/repo',
+        items: [{ logId: 'x', workloadName: 'Git 项目设置', script: 'echo', timeoutMs: 1000 }],
+      }),
+    ).rejects.toThrow('当前账号无该项目权限');
+  });
+});

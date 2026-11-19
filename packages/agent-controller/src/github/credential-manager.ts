@@ -71,7 +71,8 @@ export class GithubCredentialManager {
   private started = false;
   private stopped = false;
   private expiresAt: Date | null = null;
-  private activeRefresh: Promise<GithubCredentialRefreshResult> | null = null;
+  /** 按仓库键单飞：`repoFullName.toLowerCase()`；空键为主项目口径（旧语义）。 */
+  private readonly activeRefresh = new Map<string, Promise<GithubCredentialRefreshResult>>();
   /** 近过期区「立即重试」是否已被消费（防止服务端持续返回近过期 token 时热循环）。 */
   private nearExpiryImmediateTaken = false;
 
@@ -125,18 +126,22 @@ export class GithubCredentialManager {
   /**
    * 立即申请并写入 gh 配置。
    *
-   * 并发调用共享同一个 in-flight Promise（只发一次请求），从而串行化「申请 → 写入」。
+   * - 无参（主项目口径）：保持旧语义，无 body、写主项目凭据；
+   * - 传 `repoFullName`：body `{repoFullName}` 申请项目级 token，并校验响应回显；
+   * - 并发调用按仓库键单飞（不同项目不共享同一次请求结果）。
    */
-  refreshNow(): Promise<GithubCredentialRefreshResult> {
-    if (this.activeRefresh) return this.activeRefresh;
-    const refresh = this.doRefresh().finally(() => {
-      if (this.activeRefresh === refresh) this.activeRefresh = null;
+  refreshNow(repoFullName?: string): Promise<GithubCredentialRefreshResult> {
+    const key = typeof repoFullName === 'string' ? repoFullName.trim().toLowerCase() : '';
+    const inFlight = this.activeRefresh.get(key);
+    if (inFlight) return inFlight;
+    const refresh = this.doRefresh(repoFullName).finally(() => {
+      if (this.activeRefresh.get(key) === refresh) this.activeRefresh.delete(key);
     });
-    this.activeRefresh = refresh;
+    this.activeRefresh.set(key, refresh);
     return refresh;
   }
 
-  private async doRefresh(): Promise<GithubCredentialRefreshResult> {
+  private async doRefresh(repoFullName?: string): Promise<GithubCredentialRefreshResult> {
     if (!this.isEnabled()) {
       return { ok: false, error: 'disabled' };
     }
@@ -147,7 +152,7 @@ export class GithubCredentialManager {
     const url = `${endpoint}/internal/cloud-hosts/${encodeURIComponent(controllerId)}/github-credential`;
 
     for (let attempt = 0; ; attempt += 1) {
-      const result = await this.request(url, hostKey);
+      const result = await this.request(url, hostKey, repoFullName);
       if (result.kind === 'retryable' && attempt < BACKOFF_MS.length) {
         const delay = BACKOFF_MS[attempt]!;
         this.log.warn(
@@ -165,12 +170,18 @@ export class GithubCredentialManager {
       }
       if (result.kind === 'retryable') {
         // 退避耗尽：每次尝试已在上方记录告警，不重复输出。
-        return { ok: false, error: `Github 凭据无效（HTTP ${result.status}）` };
+        return { ok: false, error: result.finalError ?? `Github 凭据无效（HTTP ${result.status}）` };
       }
       const value = result.value;
       // 非 401/403/404 的失败（5xx / 超时 / 非法 JSON / 写 gh 失败）必须留痕，
-      // 否则线上只能看到「凭据没更新」而无任何线索；`disabled`/`no-binding` 属正常态不告警。
-      if (!value.ok && value.error && value.error !== 'no-binding' && value.error !== 'disabled') {
+      // 否则线上只能看到「凭据没更新」而无任何线索；正常态（disabled/no-binding/project-not-bound）不告警。
+      if (
+        !value.ok &&
+        value.error &&
+        value.error !== 'no-binding' &&
+        value.error !== 'project-not-bound' &&
+        value.error !== 'disabled'
+      ) {
         this.log.error({ event: 'renew_failed', error: value.error }, '凭据续期失败');
       }
       return value;
@@ -180,8 +191,9 @@ export class GithubCredentialManager {
   private async request(
     url: string,
     hostKey: string,
+    repoFullName?: string,
   ): Promise<
-    | { kind: 'retryable'; status: number }
+    | { kind: 'retryable'; status: number; finalError?: string }
     | { kind: 'result'; value: GithubCredentialRefreshResult }
   > {
     const controller = new AbortController();
@@ -190,16 +202,32 @@ export class GithubCredentialManager {
     try {
       const response = await this.fetchFn(url, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${hostKey}` },
+        headers: {
+          Authorization: `Bearer ${hostKey}`,
+          // 无 body 请求保持报文形状逐字不变（旧服务端兼容）。
+          ...(repoFullName ? { 'Content-Type': 'application/json' } : {}),
+        },
+        ...(repoFullName ? { body: JSON.stringify({ repoFullName }) } : {}),
         signal: controller.signal,
       });
 
       if (response.status === 404) {
-        // 未设置 Git 项目：正常跳过，不告警、不重试。
-        return { kind: 'result', value: { ok: false, error: 'no-binding' } };
+        // 未设置 Git 项目 / 该项目未初始化：正常跳过，不告警、不重试。
+        const error = await this.readErrorCode(response);
+        return {
+          kind: 'result',
+          value: {
+            ok: false,
+            error: error === 'PROJECT_NOT_BOUND' ? 'project-not-bound' : 'no-binding',
+          },
+        };
       }
       if (response.status === 401 || response.status === 403) {
-        return { kind: 'retryable', status: response.status };
+        return {
+          kind: 'retryable',
+          status: response.status,
+          ...(response.status === 403 ? { finalError: 'repo-not-authorized' } : {}),
+        };
       }
       if (!response.ok) {
         return {
@@ -217,6 +245,16 @@ export class GithubCredentialManager {
       const token = (payload as { token?: unknown } | null)?.token;
       if (typeof token !== 'string' || token.length === 0) {
         return { kind: 'result', value: { ok: false, error: 'Github 凭据响应缺少 token' } };
+      }
+      if (repoFullName) {
+        const echoed = (payload as { repoFullName?: unknown } | null)?.repoFullName;
+        if (
+          typeof echoed !== 'string' ||
+          echoed.trim().toLowerCase() !== repoFullName.trim().toLowerCase()
+        ) {
+          // 新客户端 + 旧服务端（忽略 body）会拿到主项目 token：必须拒绝写入。
+          return { kind: 'result', value: { ok: false, error: 'repo-mismatch' } };
+        }
       }
       const rawExpiresAt = (payload as { expiresAt?: unknown } | null)?.expiresAt;
       const expiresAt =
@@ -248,6 +286,19 @@ export class GithubCredentialManager {
       return { kind: 'result', value: { ok: false, error: message } };
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /**
+   * 读取 404/403 响应体里的 `error` 枚举；不可读时返回空串。
+   * 只用于区分错误码，响应原文不会进入日志/错误信息。
+   */
+  private async readErrorCode(response: Response): Promise<string> {
+    try {
+      const payload = (await response.json()) as { error?: unknown } | null;
+      return typeof payload?.error === 'string' ? payload.error : '';
+    } catch {
+      return '';
     }
   }
 

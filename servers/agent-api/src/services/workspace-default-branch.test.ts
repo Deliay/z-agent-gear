@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   workspaceFindOne: vi.fn(),
   workspaceFindByIdAndUpdate: vi.fn(),
-  bindingFindOne: vi.fn(),
+  bindingFind: vi.fn(),
   getRepoDefaultBranch: vi.fn(),
   detectGitRepo: vi.fn(),
 }));
@@ -15,7 +15,7 @@ vi.mock('../models/controller-workspace.js', () => ({
   },
 }));
 vi.mock('../models/cloud-host-github-binding.js', () => ({
-  CloudHostGithubBinding: { findOne: h.bindingFindOne },
+  CloudHostGithubBinding: { find: h.bindingFind },
 }));
 vi.mock('./github.js', () => ({
   githubService: { getRepoDefaultBranch: h.getRepoDefaultBranch },
@@ -55,7 +55,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.workspaceFindOne.mockReturnValue(lean(workspaceDoc()));
   h.workspaceFindByIdAndUpdate.mockResolvedValue({});
-  h.bindingFindOne.mockReturnValue(lean(null));
+  h.bindingFind.mockReturnValue(lean([]));
   h.getRepoDefaultBranch.mockResolvedValue(null);
   h.detectGitRepo.mockResolvedValue({ isGitRepo: true, branches: [] });
 });
@@ -102,7 +102,7 @@ describe('resolveWorkspaceDefaultBranch', () => {
 
     vi.clearAllMocks();
     h.workspaceFindOne.mockReturnValue(lean(workspaceDoc()));
-    h.bindingFindOne.mockReturnValue(lean(null));
+    h.bindingFind.mockReturnValue(lean([]));
     h.detectGitRepo.mockResolvedValue({ isGitRepo: true, branches: ['develop'] });
 
     await expect(resolveWorkspaceDefaultBranch(resolveInput())).resolves.toBeNull();
@@ -122,21 +122,21 @@ describe('resolveWorkspaceDefaultBranch', () => {
   });
 
   it('WDB6: binding 路径严格匹配 → GitHub API 优先并回填', async () => {
-    h.bindingFindOne.mockReturnValue(
-      lean({ repoFullName: 'owner/repo', targetPath: '/home/worker/workspace' }),
+    h.bindingFind.mockReturnValue(
+      lean([{ repoFullName: 'owner/repo', targetPath: '/home/worker/workspace' }]),
     );
     h.getRepoDefaultBranch.mockResolvedValue('trunk');
 
     await expect(resolveWorkspaceDefaultBranch(resolveInput())).resolves.toBe('trunk');
 
-    expect(h.bindingFindOne).toHaveBeenCalledWith({ controllerId: CONTROLLER_ID });
+    expect(h.bindingFind).toHaveBeenCalledWith({ controllerId: CONTROLLER_ID });
     expect(h.getRepoDefaultBranch).toHaveBeenCalledWith(USER_ID, 'owner/repo');
     expect(h.detectGitRepo).not.toHaveBeenCalled();
   });
 
   it('WDB7: binding 路径不匹配 / detectGitRepo 抛错 → null 且不抛出', async () => {
-    h.bindingFindOne.mockReturnValue(
-      lean({ repoFullName: 'owner/repo', targetPath: '/home/worker/other' }),
+    h.bindingFind.mockReturnValue(
+      lean([{ repoFullName: 'owner/repo', targetPath: '/home/worker/other' }]),
     );
     h.detectGitRepo.mockRejectedValue(new Error('Controller is offline'));
 
@@ -144,6 +144,28 @@ describe('resolveWorkspaceDefaultBranch', () => {
 
     expect(h.getRepoDefaultBranch).not.toHaveBeenCalled();
     expect(h.workspaceFindByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('T-WDB-M1/M2: 同机多条绑定时按 clone 路径命中正确仓库（不得取首条）', async () => {
+    h.bindingFind.mockReturnValue(
+      lean([
+        { repoFullName: 'owner/other', targetPath: '/home/worker/workspace' },
+        { repoFullName: 'owner/repo', targetPath: '/home/worker/workspace' },
+      ]),
+    );
+    h.getRepoDefaultBranch.mockResolvedValue('trunk');
+
+    await expect(resolveWorkspaceDefaultBranch(resolveInput())).resolves.toBe('trunk');
+    expect(h.getRepoDefaultBranch).toHaveBeenCalledWith(USER_ID, 'owner/repo');
+
+    // 单条绑定的存量场景行为不变
+    vi.clearAllMocks();
+    h.workspaceFindOne.mockReturnValue(lean(workspaceDoc()));
+    h.bindingFind.mockReturnValue(
+      lean([{ repoFullName: 'owner/repo', targetPath: '/home/worker/workspace' }]),
+    );
+    h.getRepoDefaultBranch.mockResolvedValue('main');
+    await expect(resolveWorkspaceDefaultBranch(resolveInput())).resolves.toBe('main');
   });
 
   it('候选清单顺序为 main → master → release', () => {

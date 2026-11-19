@@ -1188,6 +1188,49 @@ describe('internal management API', () => {
     expect(standardInput.entries[0]!.requiresHarnessEnv).toBe(false);
   });
 
+  it('T-CC-RS1~3: runtime-scripts 透传可选 githubRepoFullName 且非法 400', async () => {
+    const id = '507f1f77bcf86cd7994390b1';
+    const endpoint = `${baseUrl}/gate/containers/${id}/runtime-scripts`;
+    const body = (overrides: Record<string, unknown> = {}) => ({
+      workloadId: '507f1f77bcf86cd7994390c1',
+      workloadName: 'Git 项目设置',
+      script: 'echo setup',
+      params: { repoFullName: 'owner/repo' },
+      source: 'system',
+      githubAuth: true,
+      ...overrides,
+    });
+    const post = (payload: Record<string, unknown>) =>
+      fetch(endpoint, {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+
+    // T-CC-RS1：合法值透传
+    runtimeDispatcher.startRuntimeBatch.mockClear();
+    expect((await post(body({ githubRepoFullName: ' owner/repo ' }))).status).toBe(200);
+    const input = runtimeDispatcher.startRuntimeBatch.mock.calls[0]![1] as {
+      githubRepoFullName?: string;
+    };
+    expect(input.githubRepoFullName).toBe('owner/repo');
+
+    // T-CC-RS2：缺省不出现该键
+    runtimeDispatcher.startRuntimeBatch.mockClear();
+    expect((await post(body())).status).toBe(200);
+    const absent = runtimeDispatcher.startRuntimeBatch.mock.calls[0]![1] as Record<string, unknown>;
+    expect('githubRepoFullName' in absent).toBe(false);
+
+    // T-CC-RS3：非法值 400 INVALID_SCRIPT
+    for (const invalid of ['bad', 'a/b/c', 'own er/repo', `${'a'.repeat(100)}/${'b'.repeat(100)}`]) {
+      runtimeDispatcher.startRuntimeBatch.mockClear();
+      const res = await post(body({ githubRepoFullName: invalid }));
+      expect(res.status, invalid).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe('INVALID_SCRIPT');
+      expect(runtimeDispatcher.startRuntimeBatch).not.toHaveBeenCalled();
+    }
+  });
+
   it('T-CC-MP2: parseHarnessRequest 可选 modelProviders（携带透传 / 缺失不写 / 非法 400）', async () => {
     const modelProviders = JSON.stringify({
       providers: [

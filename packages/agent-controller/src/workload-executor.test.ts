@@ -818,3 +818,51 @@ describe('WorkloadExecutor githubAuth prefetch (T-WE-G)', () => {
     expect(results[0].log).not.toContain(secret);
   });
 });
+
+describe('WorkloadExecutor githubRepoFullName passthrough (T-WE-G5)', () => {
+  it('T-WE-G5: passes githubRepoFullName to the hook payload', async () => {
+    const executor = new WorkloadExecutor();
+    const { results, sink } = collect();
+    const seen: Array<string | undefined> = [];
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        githubAuth: true,
+        githubRepoFullName: 'owner/repo',
+        items: [{ logId: 'g1', workloadName: 'One', script: 'echo ok', timeoutMs: 5000 }],
+      },
+      sink,
+      {
+        beforeGithubAuth: async (payload) => {
+          seen.push(payload.githubRepoFullName);
+        },
+      },
+    );
+
+    expect(seen).toEqual(['owner/repo']);
+    expect(results.map((result) => result.status)).toEqual(['success']);
+  });
+
+  it('T-WE-G6: absent githubRepoFullName keeps the legacy payload', async () => {
+    const executor = new WorkloadExecutor();
+    const { sink } = collect();
+    const seen: Array<string | undefined> = [];
+
+    await executor.runBatch(
+      {
+        phase: 'init',
+        githubAuth: true,
+        items: [{ logId: 'g1', workloadName: 'One', script: 'echo ok', timeoutMs: 5000 }],
+      },
+      sink,
+      {
+        beforeGithubAuth: async (payload) => {
+          seen.push(payload.githubRepoFullName);
+        },
+      },
+    );
+
+    expect(seen).toEqual([undefined]);
+  });
+});

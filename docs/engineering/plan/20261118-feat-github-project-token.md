@@ -91,6 +91,7 @@ flowchart TD
 | D11 | API 测试层次 | 真库确定性覆盖：双鉴权、`PROJECT_NOT_BOUND`、`REPO_NOT_AUTHORIZED`、非法 body、无 body 主项目选择（用「无绑定」路径断言 404 语义）；200 签发与回显在 `GITHUB_APP_PRIVATE_KEY`+`GITHUB_API_BASE` 齐备时执行（mock GitHub），否则跳过 | F15：App JWT 依赖私钥，CI 不可假设存在 |
 | D12 | 版本与门禁 | `agent-gear` → `2.22.0`；不提升 `MIN_WORKER_VERSION` / `MIN_HARNESS_WORKER_VERSION`；worker 镜像无需重建（`gh` 已预装，agent-gear 走保活自升级） | 旧版 agent-gear + 新 wrapper 已定义降级路径（PRD 功能点 3） |
 | D13 | GitHub Events 之外的契约面 | 仅改 `contracts/cloud-controller-websocket.md`（`workload:run` 载荷 + A.2.6）；**不改** GraphQL/OpenAPI/MCP 工具清单 | 项目级凭据是容器内部链路，无用户面新增能力 |
+| D14 | 升级门禁「防漂移」断言的语义（返工期补记） | `worker-version.test.ts` 的 T-UPG-V2 由「`MIN_UPGRADE_WORKER_VERSION` == `packages/agent-controller/package.json` 版本」放宽为「当前包版本 **≥** 门禁常量」（`isSupportedWorkerVersion` 判定）；门禁常量只在能力语义变化时上调 | 需求总分支上该断言在 agent-gear 2.21.0 时已红灯（常量仍 2.20.0）；且「发版必须同步提升门禁」会无谓收紧旧容器接受 `agent-gear:upgrade` 事件的能力，与 D12「不提升任何注册门禁」一致。`servers/cloud-controller/AGENTS.md` 同步该口径 |
 
 ## 4. 变更清单
 
