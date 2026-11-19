@@ -108,6 +108,24 @@ async function authenticateCredentialRequest(
  */
 export const CONTAINER_CREDENTIAL_MIN_REMAINING_MS = 55 * 60 * 1000;
 
+const REPO_FULL_NAME_PATTERN = /^[\w.-]+\/[\w.-]+$/;
+
+/**
+ * 解析请求体的可选 `repoFullName`：
+ * - 缺省 / `null` / 空白 → `undefined`（主项目口径）；
+ * - 非字符串 / 超长 / 非 `owner/repo` 形态 → `'invalid'`（调用方返回 400 INVALID_REPO）。
+ */
+function parseRequestedRepo(body: unknown): string | undefined | 'invalid' {
+  if (!body || typeof body !== 'object') return undefined;
+  const raw = (body as { repoFullName?: unknown }).repoFullName;
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'string') return 'invalid';
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length > 200 || !REPO_FULL_NAME_PATTERN.test(trimmed)) return 'invalid';
+  return trimmed;
+}
+
 /**
  * 容器凭据管理器申请本机绑定仓库的最小化 Github token。
  * 不做任何日志输出；错误只返回枚举码。
@@ -145,22 +163,68 @@ internalCloudHostRouter.post(
         return;
       }
 
-      // 绑定以云主机为边界（controllerId 唯一索引）+ 显式租户隔离。
-      const binding = await CloudHostGithubBinding.findOne({
+      // 绑定以云主机为边界 + 显式租户隔离。一机多项目：`{controllerId, repoFullName}` 唯一。
+      const bindingFilter = {
         controllerId,
         ...(tenantId ? { tenantId } : {}),
-      }).lean();
-      if (!binding) {
-        res.status(404).json({ error: 'NO_BINDING' });
+      };
+      const requestedRepo = parseRequestedRepo(req.body);
+      if (requestedRepo === 'invalid') {
+        res.status(400).json({ error: 'INVALID_REPO' });
         return;
       }
 
-      const { token, expiresAt } = await githubService.createRepoScopedToken(
-        String(binding.accountId),
-        binding.repoFullName,
-        { minRemainingMs: CONTAINER_CREDENTIAL_MIN_REMAINING_MS },
+      if (!requestedRepo) {
+        // 主项目口径（旧 agent-gear / 周期续期）：保持 55 分钟余量语义，取最早建立的绑定。
+        const bindings = await CloudHostGithubBinding.find(bindingFilter)
+          .sort({ createdAt: 1 })
+          .limit(1)
+          .lean();
+        const binding = bindings[0];
+        if (!binding) {
+          res.status(404).json({ error: 'NO_BINDING' });
+          return;
+        }
+        const { token, expiresAt } = await githubService.createRepoScopedToken(
+          String(binding.accountId),
+          binding.repoFullName,
+          { minRemainingMs: CONTAINER_CREDENTIAL_MIN_REMAINING_MS },
+        );
+        res.json({
+          token,
+          expiresAt: expiresAt.toISOString(),
+          repoFullName: binding.repoFullName,
+        });
+        return;
+      }
+
+      // 项目级口径：大小写不敏感精确匹配（不用 $regex，免注入与索引失效，D9）。
+      const bindings = await CloudHostGithubBinding.find(bindingFilter).lean();
+      const wanted = requestedRepo.toLowerCase();
+      const binding = bindings.find(
+        (item) => String(item.repoFullName).trim().toLowerCase() === wanted,
       );
-      res.json({ token, expiresAt: expiresAt.toISOString() });
+      if (!binding) {
+        res.status(404).json({ error: 'PROJECT_NOT_BOUND' });
+        return;
+      }
+      try {
+        const { token, expiresAt } = await githubService.createRepoScopedToken(
+          String(binding.accountId),
+          binding.repoFullName,
+        );
+        res.json({
+          token,
+          expiresAt: expiresAt.toISOString(),
+          repoFullName: binding.repoFullName,
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message === 'repository is not authorized') {
+          res.status(403).json({ error: 'REPO_NOT_AUTHORIZED' });
+          return;
+        }
+        throw err;
+      }
     } catch {
       res.status(502).json({ error: 'GITHUB_UNAVAILABLE' });
     }

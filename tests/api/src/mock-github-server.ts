@@ -174,6 +174,14 @@ export async function startMockGitHubServer(options?: {
     const decodedUrl = decodeURIComponent(url);
     const botMatch = /^\/users\/([^/]+)\[bot\]$/.exec(decodedUrl);
     if (method === 'GET' && botMatch) {
+      // 与真实 GitHub 对齐：`GET /users/{login}` 是公开端点，不接受 App JWT（三段式 JWT 凭据 → 401）。
+      // 回归 #567：bot 身份解析对公开用户端点必须匿名读取。
+      const auth = String(req.headers.authorization ?? '');
+      const bearer = auth.startsWith('Bearer ') ? auth.slice('Bearer '.length).trim() : '';
+      if (bearer.split('.').length === 3) {
+        json(res, 401, { message: 'Bad credentials' });
+        return;
+      }
       json(res, 200, { id: options?.botUserId ?? 424242, login: botMatch[1] });
       return;
     }

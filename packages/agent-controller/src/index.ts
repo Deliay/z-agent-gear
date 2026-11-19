@@ -9,6 +9,7 @@ import { writePid, removePid, isRunning } from './daemon.js';
 import { startMcpRegistration } from './commands/mcp-proxy.js';
 import { startMcpProxy } from './commands/mcp.js';
 import { registerHarnessCommands } from './commands/harness.js';
+import { registerGithubCommands } from './commands/github.js';
 import { isCloudHostMode, startCloudHostSupervisor } from './cloud-host/supervisor.js';
 import { processRegistry, isProcessAlive } from './acp/process-registry.js';
 import { logger as rootLogger } from './observability/logger.js';
@@ -154,5 +155,8 @@ program
 
 // 云电脑 harness 初始化子命令：`agent-gear harness prepare`（init 脚本调用）。
 registerHarnessCommands(program);
+
+// 云电脑 Github 项目级凭据：`agent-gear github-token`（gh wrapper 调用）。
+registerGithubCommands(program);
 
 program.parse();

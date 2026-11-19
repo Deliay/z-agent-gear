@@ -409,3 +409,116 @@ describe('GithubCredentialManager', () => {
     expect(JSON.stringify(result)).not.toContain(TOKEN);
   });
 });
+
+describe('GithubCredentialManager project-scoped credentials (T-CM-P)', () => {
+  it('T-CM-P1: refreshNow(repo) sends a JSON body and validates the echo', async () => {
+    const fetchFn = fakeFetch(async () =>
+      jsonResponse({ token: TOKEN, repoFullName: 'Owner/Repo', expiresAt: EXPIRES_AT }),
+    );
+    const writeGhAuth = vi.fn(async () => {});
+    const manager = new GithubCredentialManager({
+      env: BASE_ENV,
+      fetch: fetchFn,
+      writeGhAuth,
+      log: createTestLogger().logger,
+    });
+
+    const result = await manager.refreshNow('owner/repo');
+
+    expect(result.ok).toBe(true);
+    expect(writeGhAuth).toHaveBeenCalledWith(TOKEN);
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBe(JSON.stringify({ repoFullName: 'owner/repo' }));
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+  });
+
+  it('T-CM-P2: refreshNow() keeps the legacy bodyless request shape', async () => {
+    const fetchFn = fakeFetch(async () => jsonResponse({ token: TOKEN, expiresAt: EXPIRES_AT }));
+    const manager = new GithubCredentialManager({
+      env: BASE_ENV,
+      fetch: fetchFn,
+      writeGhAuth: async () => {},
+      log: createTestLogger().logger,
+    });
+
+    await manager.refreshNow();
+
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBeUndefined();
+    expect((init.headers as Record<string, string>)['Content-Type']).toBeUndefined();
+  });
+
+  it('T-CM-P3: a mismatched echo is rejected and gh config is not written', async () => {
+    const fetchFn = fakeFetch(async () =>
+      jsonResponse({ token: TOKEN, repoFullName: 'other/repo', expiresAt: EXPIRES_AT }),
+    );
+    const writeGhAuth = vi.fn(async () => {});
+    const manager = new GithubCredentialManager({
+      env: BASE_ENV,
+      fetch: fetchFn,
+      writeGhAuth,
+      log: createTestLogger().logger,
+    });
+
+    const result = await manager.refreshNow('owner/repo');
+
+    expect(result).toEqual({ ok: false, error: 'repo-mismatch' });
+    expect(writeGhAuth).not.toHaveBeenCalled();
+  });
+
+  it('T-CM-P4: 404 PROJECT_NOT_BOUND maps to project-not-bound without retrying', async () => {
+    const fetchFn = fakeFetch(async () => jsonResponse({ error: 'PROJECT_NOT_BOUND' }, 404));
+    const manager = new GithubCredentialManager({
+      env: BASE_ENV,
+      fetch: fetchFn,
+      writeGhAuth: async () => {},
+      log: createTestLogger().logger,
+    });
+
+    const result = await manager.refreshNow('owner/repo');
+
+    expect(result).toEqual({ ok: false, error: 'project-not-bound' });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('T-CM-P5: concurrent refreshes for different repos do not share a result', async () => {
+    const fetchFn = fakeFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { repoFullName?: string };
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return jsonResponse({ token: `token-${body.repoFullName}`, repoFullName: body.repoFullName });
+    });
+    const writeGhAuth = vi.fn(async (_token: string) => {});
+    const manager = new GithubCredentialManager({
+      env: BASE_ENV,
+      fetch: fetchFn,
+      writeGhAuth,
+      log: createTestLogger().logger,
+    });
+
+    const [a, b] = await Promise.all([manager.refreshNow('owner/a'), manager.refreshNow('owner/b')]);
+
+    expect(a.ok).toBe(true);
+    expect(b.ok).toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(writeGhAuth.mock.calls.map((call) => call[0]).sort()).toEqual([
+      'token-owner/a',
+      'token-owner/b',
+    ]);
+  });
+
+  it('T-CM-P6: the same repo key still coalesces into one request', async () => {
+    const fetchFn = fakeFetch(async () =>
+      jsonResponse({ token: TOKEN, repoFullName: 'owner/repo', expiresAt: EXPIRES_AT }),
+    );
+    const manager = new GithubCredentialManager({
+      env: BASE_ENV,
+      fetch: fetchFn,
+      writeGhAuth: async () => {},
+      log: createTestLogger().logger,
+    });
+
+    await Promise.all([manager.refreshNow('owner/repo'), manager.refreshNow('OWNER/REPO')]);
+
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+});

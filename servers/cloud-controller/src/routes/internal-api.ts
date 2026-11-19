@@ -1004,6 +1004,15 @@ export function createInternalRouter(
       res.status(400).json({ error: 'INVALID_SCRIPT', message: 'githubAuth 非法' });
       return;
     }
+    let githubRepoFullName: string | undefined;
+    if (body.githubRepoFullName !== undefined && body.githubRepoFullName !== null) {
+      const value = typeof body.githubRepoFullName === 'string' ? body.githubRepoFullName.trim() : '';
+      if (!value || value.length > 200 || !/^[\w.-]+\/[\w.-]+$/.test(value)) {
+        res.status(400).json({ error: 'INVALID_SCRIPT', message: 'githubRepoFullName 非法' });
+        return;
+      }
+      githubRepoFullName = value;
+    }
     const source = parseSource(body.source);
     if (!source) {
       res.status(400).json({ error: 'INVALID_SCRIPT', message: 'source 非法' });
@@ -1025,6 +1034,7 @@ export function createInternalRouter(
         ],
         source,
         githubAuth: body.githubAuth === true,
+        ...(githubRepoFullName ? { githubRepoFullName } : {}),
       });
       res.status(200).json({ batchId: result.batchId, logId: result.items[0]?.logId ?? null });
     } catch (err) {

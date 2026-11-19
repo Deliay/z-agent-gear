@@ -22,6 +22,7 @@ function normalizeRepoFullName(value: string | null | undefined): string | null 
 
 /**
  * 反查 GitHub 项目绑定：仅当 clone 路径与工作区路径严格相等时采用其仓库。
+ * 一机多项目：必须遍历该主机的全部绑定逐条匹配（不能取首条）。
  * 任何异常（路径非法等）按「未命中」处理。
  */
 async function findBoundRepoFullName(
@@ -29,13 +30,15 @@ async function findBoundRepoFullName(
   workspacePath: string,
 ): Promise<string | null> {
   try {
-    const binding = await CloudHostGithubBinding.findOne({ controllerId }).lean();
-    if (!binding) return null;
-    const clonePath = resolveClonePath(
-      normalizeWorkspacePrefix(String(binding.targetPath)),
-      String(binding.repoFullName),
-    );
-    return clonePath === workspacePath ? String(binding.repoFullName) : null;
+    const bindings = await CloudHostGithubBinding.find({ controllerId }).lean();
+    for (const binding of bindings) {
+      const clonePath = resolveClonePath(
+        normalizeWorkspacePrefix(String(binding.targetPath)),
+        String(binding.repoFullName),
+      );
+      if (clonePath === workspacePath) return String(binding.repoFullName);
+    }
+    return null;
   } catch {
     return null;
   }

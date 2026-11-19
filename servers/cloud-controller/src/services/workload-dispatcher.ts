@@ -107,6 +107,11 @@ export interface RuntimeBatchInput {
   source: 'user' | 'mcp' | 'system';
   /** 仅 Git 设置脚本批次为 true：worker 在执行前申请并写入 gh 凭据。 */
   githubAuth?: boolean;
+  /**
+   * 本批针对的仓库 `owner/repo`（仅 `githubAuth === true` 时有意义）。
+   * 提供时 worker 按该项目预取项目级 token；缺省保持主项目语义。
+   */
+  githubRepoFullName?: string;
 }
 
 export interface RuntimeBatchResult {
@@ -527,6 +532,7 @@ export class WorkloadDispatcher {
         logs,
         runEnv.ok ? runEnv.env : undefined,
         input.githubAuth === true,
+        input.githubRepoFullName,
       );
 
       const batchId = `runtime-${Date.now()}-${logs[0]!.id}`;
@@ -1099,6 +1105,7 @@ export class WorkloadDispatcher {
     logs: CloudWorkloadLogEntity[],
     env?: Record<string, string>,
     githubAuth?: boolean,
+    githubRepoFullName?: string,
   ): void {
     const payload: Record<string, unknown> = {
       phase,
@@ -1116,6 +1123,8 @@ export class WorkloadDispatcher {
     if (phase === 'post') payload.budgetMs = this.deps.postBudgetMs;
     // 仅 Git 设置批次携带 githubAuth，普通批次保持报文形状零变化。
     if (githubAuth === true) payload.githubAuth = true;
+    // 项目级凭据只在 Git 设置批次且显式提供仓库时下发（旧服务端无此字段 → 客户端走主项目）。
+    if (githubAuth === true && githubRepoFullName) payload.githubRepoFullName = githubRepoFullName;
     // 仅 harness 携带 env；普通容器保持报文形状不变（无 env 键）。
     if (env) payload.env = env;
     // 每次 `workload:run` 批次下发一个 span（高频通道不逐条开 span，F11）。

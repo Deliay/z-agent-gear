@@ -244,4 +244,10 @@ pnpm run test:coverage
 - **升级事件对（§2.11/§2.12）**：`Server → Worker agent-gear:upgrade { targetVersion? }`；worker 回执 `agent-gear:upgrade:result { accepted, currentVersion?, reason? }`。worker **不自安装**：`accepted:true` 后优雅退出（退出码 0），由入口保活链路钉版安装并以新版本重启。
 - **A.2.14**：`POST /internal/containers/:id/upgrade-agent-gear`。门禁顺序：`getById` 缺失 → 404 `NOT_FOUND`；`status!=='online'` 或无活跃 socket → 409 `CONTAINER_NOT_ONLINE`；上报版本 < `MIN_UPGRADE_WORKER_VERSION`（2.20.0，含未上报）→ 400 `UPGRADE_UNSUPPORTED`；在飞（60s 窗）→ 409 `UPGRADE_IN_PROGRESS`；worker 拒绝/10s 回执超时 → 409 `UPGRADE_NOT_ACCEPTED`；接受 → 200 `{accepted:true, containerId, currentVersion}`。
 - **在飞互斥与回执**：收敛在 gateway 句柄 `requestAgentGearUpgrade(containerId, {targetVersion?})`——进程内 `Map<containerId, deadline>`（60s）+ `Map<containerId, {resolve, timer}>`（10s 超时，timer unref）；连接处理器注册 `agent-gear:upgrade:result` 解析待回执；worker 断连清理两份 Map（在飞窗随之释放）。单实例部署前提与既有 KeyedMutex/调度器一致。路由层只做门禁与错误码薄映射。
-- **常量**：`MIN_UPGRADE_WORKER_VERSION='2.20.0'`（`services/worker-version.ts`，代码常量、不 env 化）；`worker-version.test.ts` T-UPG-V2 读 `packages/agent-controller/package.json` 版本字面量防漂移（agent-gear 发版须同步提升）。
+- **常量**：`MIN_UPGRADE_WORKER_VERSION='2.20.0'`（`services/worker-version.ts`，代码常量、不 env 化）；`worker-version.test.ts` T-UPG-V2 读 `packages/agent-controller/package.json` 版本字面量做防漂移断言：**当前包版本必须 ≥ 门禁常量**（`isSupportedWorkerVersion` 判定），门禁常量只在能力语义变化时上调，不随每次发版收紧。
+
+## 项目级 Github 凭据批次字段（A.2.6，Issue #566）
+
+- `POST /internal/containers/:id/runtime-scripts` 新增可选 `githubRepoFullName`：trim 后必须匹配 `^[\w.-]+/[\w.-]+$` 且长度 ≤200，否则 `400 INVALID_SCRIPT`；缺省不出现该键（旧报文形状不变）。
+- `WorkloadDispatcher.startRuntimeBatch` 接受 `githubRepoFullName?`，`emitRun` **仅**在 `githubAuth === true && githubRepoFullName` 时写入 `workload:run` 载荷；旧服务端不下发该字段时客户端走主项目语义。
+- 回归：`internal-api.test.ts`（T-CC-RS1~3）、`workload-dispatcher.test.ts`（T-WD-R5）。

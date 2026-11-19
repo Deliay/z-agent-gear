@@ -26,7 +26,7 @@ vi.mock('../models/cloud-host.js', () => ({
 }));
 
 vi.mock('../models/cloud-host-github-binding.js', () => ({
-  CloudHostGithubBinding: { findOne: vi.fn() },
+  CloudHostGithubBinding: { findOne: vi.fn(), find: vi.fn() },
 }));
 
 vi.mock('../services/github.js', () => ({
@@ -165,6 +165,23 @@ describe('internal cloud host routes', () => {
       return { lean: vi.fn().mockResolvedValue(value) } as never;
     }
 
+    /** 链式查询替身：`find(...).sort().limit().lean()` 与 `find(...).lean()` 共用。 */
+    function chain<T>(value: T) {
+      const node = {
+        sort: vi.fn(() => node),
+        limit: vi.fn(() => node),
+        lean: vi.fn().mockResolvedValue(value),
+      };
+      return node as never;
+    }
+
+    function mockRunningHost() {
+      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
+        userId: USER_ID,
+      } as never);
+      vi.mocked(CloudHost.findOne).mockReturnValue(lean({ status: 'RUNNING' }));
+    }
+
     it('T-ICG1: 无凭据 401', async () => {
       const response = await fetch(`${baseUrl}/internal/cloud-hosts/${CONTROLLER_ID}/github-credential`, {
         method: 'POST',
@@ -172,16 +189,10 @@ describe('internal cloud host routes', () => {
       expect(response.status).toBe(401);
     });
 
-    it('T-ICG2: 服务间 INTERNAL_API_TOKEN + 合法绑定返回 token/expiresAt', async () => {
-      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
-        userId: USER_ID,
-      } as never);
-      vi.mocked(CloudHost.findOne).mockReturnValue(
-        lean({ status: 'RUNNING' }),
-      );
-      vi.mocked(CloudHostGithubBinding.findOne).mockReturnValue(
-        lean({ accountId: 'acc1', repoFullName: 'owner/repo' }),
-      );
+    it('T-ICG2: 无 body（主项目口径）取最早绑定、55 分钟余量并回显 repoFullName', async () => {
+      mockRunningHost();
+      const query = chain([{ accountId: 'acc1', repoFullName: 'owner/repo' }]);
+      vi.mocked(CloudHostGithubBinding.find).mockReturnValue(query);
       vi.mocked(githubService.createRepoScopedToken).mockResolvedValue({
         token: 'ghs_scoped',
         expiresAt: new Date('2026-10-22T01:00:00.000Z'),
@@ -193,11 +204,89 @@ describe('internal cloud host routes', () => {
       expect(body).toEqual({
         token: 'ghs_scoped',
         expiresAt: '2026-10-22T01:00:00.000Z',
+        repoFullName: 'owner/repo',
+      });
+      expect((query as unknown as { sort: ReturnType<typeof vi.fn> }).sort).toHaveBeenCalledWith({
+        createdAt: 1,
       });
       expect(githubService.createRepoScopedToken).toHaveBeenCalledWith('acc1', 'owner/repo', {
         // 容器凭据契约：50min 续期间隔 + 10min 到期余量，取 55min 作为安全下限
         minRemainingMs: 55 * 60 * 1000,
       });
+    });
+
+    it('T-ICG-P1: 带 body 按项目签发（大小写不敏感命中）并回显绑定仓库名', async () => {
+      mockRunningHost();
+      vi.mocked(CloudHostGithubBinding.find).mockReturnValue(
+        chain([
+          { accountId: 'accA', repoFullName: 'owner/a' },
+          { accountId: 'accB', repoFullName: 'owner/b' },
+        ]),
+      );
+      vi.mocked(githubService.createRepoScopedToken).mockResolvedValue({
+        token: 'ghs_b',
+        expiresAt: new Date('2026-10-22T01:00:00.000Z'),
+      });
+
+      const response = await post(
+        `/internal/cloud-hosts/${CONTROLLER_ID}/github-credential`,
+        undefined,
+        { repoFullName: 'OWNER/B' },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        token: 'ghs_b',
+        expiresAt: '2026-10-22T01:00:00.000Z',
+        repoFullName: 'owner/b',
+      });
+      // 项目级口径使用默认 5 分钟余量（不传 options）
+      expect(githubService.createRepoScopedToken).toHaveBeenCalledWith('accB', 'owner/b');
+    });
+
+    it('T-ICG-P2: 绑定不存在 → 404 PROJECT_NOT_BOUND', async () => {
+      mockRunningHost();
+      vi.mocked(CloudHostGithubBinding.find).mockReturnValue(
+        chain([{ accountId: 'accA', repoFullName: 'owner/a' }]),
+      );
+      const response = await post(
+        `/internal/cloud-hosts/${CONTROLLER_ID}/github-credential`,
+        undefined,
+        { repoFullName: 'owner/unknown' },
+      );
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: 'PROJECT_NOT_BOUND' });
+      expect(githubService.createRepoScopedToken).not.toHaveBeenCalled();
+    });
+
+    it('T-ICG-P3: 账号无该项目权限 → 403 REPO_NOT_AUTHORIZED', async () => {
+      mockRunningHost();
+      vi.mocked(CloudHostGithubBinding.find).mockReturnValue(
+        chain([{ accountId: 'accB', repoFullName: 'owner/b' }]),
+      );
+      vi.mocked(githubService.createRepoScopedToken).mockRejectedValue(
+        new Error('repository is not authorized'),
+      );
+      const response = await post(
+        `/internal/cloud-hosts/${CONTROLLER_ID}/github-credential`,
+        undefined,
+        { repoFullName: 'owner/b' },
+      );
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: 'REPO_NOT_AUTHORIZED' });
+    });
+
+    it('T-ICG-P4: 非法 repoFullName → 400 INVALID_REPO（不查询绑定）', async () => {
+      mockRunningHost();
+      for (const repoFullName of ['bad', 'a/b/c', 'own er/repo', 123, `${'a'.repeat(100)}/${'b'.repeat(100)}`]) {
+        const response = await post(
+          `/internal/cloud-hosts/${CONTROLLER_ID}/github-credential`,
+          undefined,
+          { repoFullName },
+        );
+        expect(response.status, String(repoFullName)).toBe(400);
+        expect(await response.json()).toEqual({ error: 'INVALID_REPO' });
+      }
+      expect(CloudHostGithubBinding.find).not.toHaveBeenCalled();
     });
 
     it('T-ICG4/T-ICG5: controller key 与 controllerId 不匹配 / 非 cloud 403', async () => {
@@ -236,12 +325,9 @@ describe('internal cloud host routes', () => {
       compare.mockRestore();
     });
 
-    it('T-ICG6: 无绑定 404 NO_BINDING', async () => {
-      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
-        userId: USER_ID,
-      } as never);
-      vi.mocked(CloudHost.findOne).mockReturnValue(lean({ status: 'RUNNING' }));
-      vi.mocked(CloudHostGithubBinding.findOne).mockReturnValue(lean(null));
+    it('T-ICG6: 无绑定（无 body）404 NO_BINDING', async () => {
+      mockRunningHost();
+      vi.mocked(CloudHostGithubBinding.find).mockReturnValue(chain([]));
 
       const response = await post(`/internal/cloud-hosts/${CONTROLLER_ID}/github-credential`);
       expect(response.status).toBe(404);
@@ -259,12 +345,9 @@ describe('internal cloud host routes', () => {
     });
 
     it('T-ICG8: GitHub 失败 502 且响应不含上游细节', async () => {
-      vi.mocked(cloudHostService.findRawHostByController).mockResolvedValue({
-        userId: USER_ID,
-      } as never);
-      vi.mocked(CloudHost.findOne).mockReturnValue(lean({ status: 'RUNNING' }));
-      vi.mocked(CloudHostGithubBinding.findOne).mockReturnValue(
-        lean({ accountId: 'acc1', repoFullName: 'owner/repo' }),
+      mockRunningHost();
+      vi.mocked(CloudHostGithubBinding.find).mockReturnValue(
+        chain([{ accountId: 'acc1', repoFullName: 'owner/repo' }]),
       );
       vi.mocked(githubService.createRepoScopedToken).mockRejectedValue(
         new Error('failed to issue github token: secret-body'),

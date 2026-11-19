@@ -98,6 +98,7 @@ describe('POST /internal/cloud-hosts/:controllerId/github-credential（团队租
     expect(await response.json()).toEqual({
       token: 'ghs_team_scoped',
       expiresAt: '2026-10-30T01:00:00.000Z',
+      repoFullName: 'owner/team-repo',
     });
   });
 

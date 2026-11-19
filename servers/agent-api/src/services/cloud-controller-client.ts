@@ -95,6 +95,8 @@ export interface StartRuntimeScriptInput {
   params?: Record<string, unknown>;
   source?: 'user' | 'mcp' | 'system';
   githubAuth?: boolean;
+  /** 本批针对的仓库 `owner/repo`（仅 `githubAuth === true` 时有意义）。 */
+  githubRepoFullName?: string;
 }
 
 export interface RuntimeBatchResponse {
@@ -367,6 +369,10 @@ export class CloudControllerClient {
           params: input.params ?? {},
           source: input.source ?? 'system',
           githubAuth: input.githubAuth === true,
+          // 仅在显式提供时附加：旧报文形状（无该键）逐字保持。
+          ...(input.githubRepoFullName
+            ? { githubRepoFullName: input.githubRepoFullName }
+            : {}),
         }),
       },
     );
