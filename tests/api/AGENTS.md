@@ -912,6 +912,7 @@ pnpm test
 |------|------|
 | `tests/api/src/agent-api/mcp-tenant-upsert.test.ts` | T-MCP-API1：个人租户 ensure 内置 `agent-workflow-admin-tools` → 加入团队租户 → 团队全局工作区再 ensure；断言不再触发 `userId_1_name_1` E11000、两条不同 tenantId 行并存、旧索引不存在（需 agent-api + admin-api + `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
 | `tests/api/src/agent-api/github-setup-upsert.test.ts` | T-GHS-API1~3：`githubAppUrl` 取 state → `GET /api/github/setup` 首次/重复绑定均 302 success；断言只落一行（不触发 tenantId code 40）、token 密文落库、installation 仓库清单正确（需 `GITHUB_API_BASE` 指向进程内 mock + `INTERNAL_API_TOKEN` + `MONGODB_URI`） |
+| `tests/api/src/agent-api/github-project-token.test.ts` | T-GPT-API1~6：项目级凭据端点（带 `repoFullName` 签发与回显、大小写不敏感、`PROJECT_NOT_BOUND`、`REPO_NOT_AUTHORIZED`、`INVALID_REPO`、无 body 主项目取最早绑定）；需 `INTERNAL_API_TOKEN` + `MONGODB_URI`（缺一显式失败），200 签发路径另需 `GITHUB_APP_PRIVATE_KEY` + `GITHUB_API_BASE`（缺失按 D11 跳过） |
 | `tests/api/src/agent-api/schema-index-invariants.test.ts` | T-IDX-API1~3：`user_commit_settings` 固定名 workspace 唯一索引存在且默认名/旧索引不残留；`mcpservers` / `githubaccounts` 无无租户维度唯一索引；`githubaccounts` / `user_commit_settings.workspaceId` 无 BSON ObjectId 行（需 `MONGODB_URI`） |
 
 > `GITHUB_API_BASE` 同时用于 `agent-api/github.test.ts`（Check Runs）与本套件；agent-api 的 GitHub App 安装信息/仓库清单/卸载调用均走该 base（生产默认 `https://api.github.com`）。

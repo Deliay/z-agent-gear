@@ -185,6 +185,10 @@ cloud-controller 下发一组工作负载脚本，由容器按 `items` 顺序依
 | `budgetMs` | `number` | 否 | `post` 批次共享总预算（默认 `WORKLOAD_POST_BUDGET_MS=90000`）；`init` 不携带 |
 | `env` | `object` | 否 | 容器级环境变量（仅 `purpose=harness` 下发）；见下方「云电脑初始化 env」 |
 | `githubAuth` | `boolean` | 否 | `true` 时客户端必须在执行本批第一条脚本前完成 gh 凭据申请与写入；缺省/false 行为不变 |
+| `githubRepoFullName` | `string` | 否 | 本批针对的仓库 `owner/repo`；仅在 `githubAuth=true` 时有意义。提供时客户端按该项目预取凭据（项目级 token），缺省保持主项目语义 |
+
+> 示例（项目级凭据批次）：`{ "phase": "init", "githubAuth": true, "githubRepoFullName": "owner/repo", "items": [...] }`。
+> 旧服务端不下发 `githubRepoFullName` → 客户端走主项目语义（向后兼容）。
 
 **云电脑初始化 env（仅 `purpose=harness`）：**
 
@@ -651,11 +655,13 @@ Content-Type: application/json
   "script": "set -euo pipefail\n...",
   "params": { "repoFullName": "owner/repo", "targetPath": "/home/worker/workspace" },
   "source": "system",
-  "githubAuth": true
+  "githubAuth": true,
+  "githubRepoFullName": "owner/repo"
 }
 ```
 
 - `workloadId` 必须为合法 ObjectId（用于日志关联，不要求工作负载存在）；`script` 非空且 ≤16 KiB；`source ∈ user|mcp|system`；`githubAuth` 仅允许布尔。
+- `githubRepoFullName` 可缺省；存在时必须匹配 `^[\w.-]+/[\w.-]+$` 且长度 ≤200，否则 `400 INVALID_SCRIPT`。缺省时客户端走主项目口径；旧服务端不下发该字段时客户端同样走主项目（向后兼容）。
 - 不写 `installedWorkloads`（Git 设置不是工作负载安装）；日志 `workloadName` 取请求值，`trigger='runtime'`、`source` 取请求值。
 
 **响应 200：** `{ "batchId": "...", "logId": "..." }`

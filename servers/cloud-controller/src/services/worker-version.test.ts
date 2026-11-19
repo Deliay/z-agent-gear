@@ -230,10 +230,11 @@ describe('MIN_UPGRADE_WORKER_VERSION（T-UPG-V，契约 §3.4 / A.2.14）', () =
     expect(isSupportedWorkerVersion(undefined, MIN_UPGRADE_WORKER_VERSION).supported).toBe(false);
   });
 
-  it('T-UPG-V2: 防漂移——常量与 packages/agent-controller/package.json version 字面量一致（D13）', () => {
-    // 跨包不可 import：读同仓 package.json 字面量比对，随 agent-gear 发版同步提升。
+  it('T-UPG-V2: 防漂移——当前 agent-gear 版本必须满足升级门禁常量（不得低于常量）', () => {
+    // 跨包不可 import：读同仓 package.json 字面量比对。门禁常量是「可接收升级事件」的下限，
+    // 发版后当前包版本只会 >= 该常量（不强制常量随每次补丁发版提升，避免无谓收紧门禁）。
     const pkgPath = new URL('../../../../packages/agent-controller/package.json', import.meta.url);
     const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version: string };
-    expect(pkg.version).toBe(MIN_UPGRADE_WORKER_VERSION);
+    expect(isSupportedWorkerVersion(pkg.version, MIN_UPGRADE_WORKER_VERSION).supported).toBe(true);
   });
 });

@@ -57,7 +57,7 @@ src/
 - `post` 批次不参与必须判定（`required` 固定 `false`，即使携带 `true` 也不短路）。
 - 无 `required` 字段时行为与旧版完全一致（非必须项失败后继续执行后续条目）。
 
-- 版本：包版本 `2.21.0`（major 保持 2；仓库内建知识库扫描上限二期口径（单文件夹直接子项 1000 / 单文件 1MiB / 无总额限制）自 2.21.0 起；`agent-gear:upgrade` 升级事件与运行期模型下发 `harness:models` / 多 vendor 重写与 `ZAG_MODEL_PROVIDERS` 自 2.20.0 起；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
+- 版本：包版本 `2.22.0`（major 保持 2；项目级 Github 凭据 `github-token` 子命令 / `workload:run.githubRepoFullName` 自 2.22.0 起；仓库内建知识库扫描上限二期口径（单文件夹直接子项 1000 / 单文件 1MiB / 无总额限制）自 2.21.0 起；`agent-gear:upgrade` 升级事件与运行期模型下发 `harness:models` / 多 vendor 重写与 `ZAG_MODEL_PROVIDERS` 自 2.20.0 起；仓库内建知识库扫描 `knowledge-bases:scan` 自 2.19.0 起；项目工作流模板扫描 `workflow-templates:scan` 自 2.18.0 起；`fs:read-file` 白名单读取 / `acp:message` 有序 `parts` / MCP 按 serverName 超时表 / 已有 Worktree 共同作者同步 `git:worktree:coauthor` 自 2.17.0 起——**注意：npm 上 `2.17.0` 的发布产物缺失 `fs:read-file`（撞版本导致流水线跳过发布），改用 `2.17.1`**；`SESSION_REPLACED` 接管语义自 2.16.0 起；`deepseek_harness` 平台渠道模型注入与 `harness prepare` 按
   `ZAG_HARNESS_TYPES` 分流自 2.9.0 起；`cordis.patch.yml` 的 insert 形态第 5 受管条目
   `header-masq`（dsh-header-masq 会话标识请求头注入）自 2.11.0 起——含 `deepseek_harness` 的云电脑
   注册门禁自 2.17.1 起为当前基线；opencode 配置模型上下文长度 `limit.context` 自 2.7.0 起，2.7.1 修正为
@@ -432,3 +432,30 @@ ZAG_CONTROLLER_KEY=zag_k_1_abc123... ZAG_SERVER_ENDPOINT=http://localhost:4001 p
   `success:false`（避免服务端空等）；`appliedTypes` 为实际重写成功类型，任一类失败 → `success:false` + 脱敏 `error`。
   运行期凭据优先取进程 env，缺失项由 `src/harness/model-credentials.ts` 从已写入的 opencode/dsh 配置回读。
 - **版本**：`package.json` 2.20.0；服务端仅以该版本做推送短路判断，**不提升注册门禁**（旧 worker 静默忽略事件）。
+
+## Github 项目级凭据（2.22.0，Issue #566）
+
+云容器内的 `/usr/local/bin/gh` 由 admin-api 迁移 024 安装为 wrapper：每次 `gh` 调用前按当前目录 git
+origin 申请**该项目**的 installation token，并以 `GITHUB_TOKEN=<token>` 环境变量执行原生 gh。
+
+- **`agent-gear github-token [--cwd <dir>]`**：`commands/github.ts` 注册；实现 `src/github/project-token.ts`。
+  - 项目解析：`git rev-parse --show-toplevel` → `git remote get-url origin` → 归一为 `owner/repo`
+    （支持 https/ssh/git/`git@host:owner/repo`/凭据 URL/`.git`/尾斜杠；仅 `github.com` 两段路径视为项目）。
+  - 申请：`POST {ZAG_AGENT_API_ENDPOINT}/internal/cloud-hosts/{ZAG_CONTROLLER_ID}/github-credential`，
+    Bearer `ZAG_HOST_KEY`，body `{repoFullName}`，10s 超时；响应必须回显同仓库（大小写不敏感）且
+    token 单行、非空、无空白、≤4096。
+  - **stdout 纪律（D5）**：成功时 stdout **只有一行 token**；失败只写 stderr 一行；全程**零 logger**
+    （pino 同步写 fd 1 会污染 token 通道）。
+  - 退出码：`0` 已输出 token；`3` 非 Github 项目（wrapper 静默）；`4` 项目未初始化/主机无绑定；
+    `5` 账号无仓库权限；`6` 其它（env 缺失/平台不可达/超时/回显不符/非法响应）。
+- **gh wrapper 旁路**：`gh-config.ts` 的内部调用（`gh auth login --with-token` / `gh auth setup-git`）
+  显式注入 `ZAG_GH_WRAPPER_SKIP_TOKEN=1`，wrapper 见该变量直接 `exec` 原生 gh，避免自指递归。
+- **`credential-manager.refreshNow(repoFullName?)`**：带参时 body `{repoFullName}` 并校验回显
+  （不符 → `repo-mismatch` 且不写 gh 配置）；404 `PROJECT_NOT_BOUND` → `project-not-bound`；
+  403 → `repo-not-authorized`（保留 1/2/4 分钟退避）。单飞按 `repoFullName.toLowerCase()` 键分流
+  （空键 = 主项目口径，旧无 body 报文逐字不变）。
+- **批次载荷**：`workload:run.githubRepoFullName`（仅 `githubAuth === true` 有意义）；supervisor
+  接到 `beforeWorkloadBatch` 后透传，错误文案新增「该项目尚未在平台初始化」「当前账号无该项目权限」。
+- 回归：`project-token.test.ts`（T-GPT1~3/T-GPTC1）、`commands/github.test.ts`、
+  `credential-manager.test.ts`（T-CM-P1~6）、`gh-config.test.ts`（T-GHC-SKIP）、
+  `workload-executor.test.ts`（T-WE-G5/G6）、`cloud-host/supervisor.test.ts`（T-SUP-G2b）。

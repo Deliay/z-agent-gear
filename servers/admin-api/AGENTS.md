@@ -99,3 +99,10 @@ LOG_PRETTY=1 pnpm run dev # 单独启动（tsx watch），pretty 人类可读日
   （`context_length/context_window/max_context_length/max_input_tokens/input_token_limit` → 正整数；
   `max_tokens`/`max_output_tokens` 不取；Anthropic 恒无；单条异常隔离）。`listProviderModels` 透出 `contextLength`；
   `importModels` 单次拉取同时做连通性门禁与 `name→contextLength` 写入（未提供保持 null），既有去重/错误文案不变。
+
+## Github 预制脚本 V3（024，Issue #566）
+
+- **迁移 024**：`migrations/024-github-gh-wrapper.ts`（`name = '024-github-gh-wrapper'`，已登记 `src/index.ts` 的 `runMigrations([...])`）把 Github 预制工作负载脚本从 V1/V2 收敛到 V3：安装 `/usr/local/bin/gh` wrapper（marker `# zag-gh-wrapper:v1` 位于第 2 行），按当前目录 git origin 经 `agent-gear github-token` 申请项目级 `GITHUB_TOKEN` 后 `exec` 原生 gh。
+- **幂等口径**：真实 gh + 已是最新 wrapper → 锚点早退；安装脚本对「镜像预装 gh / 无 wrapper 旧容器 / 已是 V3」重复执行均收敛到同一份 wrapper；管理员定制脚本 `warn` 跳过不覆盖；安装期一律 `ZAG_GH_WRAPPER_SKIP_TOKEN=1 gh --version`（不触发项目识别/网络）。wrapper 自身的仅一非零退出场景是找不到真实 gh（127），token 获取失败只打一行 stderr 并照常执行原生 gh。
+- **019 同步**：`019-workload-idempotent-anchors` 的 github 目标改为 `oldScripts:[V1,V2] / newScript:V3`，避免 DB 已是 V3 时每次启动误报「script modified by admin」。
+- **测试**：`migrations/024-github-gh-wrapper.test.ts`（T-MIG-GW1~6）、`024-github-gh-wrapper.behavior.test.ts`（T-WRP1~10，真跑 bash + stub agent-gear/原生 gh）。

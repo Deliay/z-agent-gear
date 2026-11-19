@@ -49,6 +49,11 @@ export interface WorkloadRunPayload {
    * 缺省/false 行为与旧版完全一致。
    */
   githubAuth?: boolean;
+  /**
+   * 本批针对的仓库 `owner/repo`（仅 `githubAuth === true` 时有意义）。
+   * 提供时客户端按该项目预取凭据；缺省保持主项目语义。
+   */
+  githubRepoFullName?: string;
 }
 
 /** `runBatch` 的可选行为注入（默认空实现，保证旧调用方零变化）。 */
