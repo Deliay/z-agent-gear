@@ -587,7 +587,7 @@ pnpm run start   # Start production server
 > `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md`、
 > `docs/engineering/plan/20261117-feat-knowledge-base-optimization-phase2.md`。
 
-- **链路**：agent-gear `knowledge-bases:scan` 扫描 `.zag/knowledges/` 与 `docs/knowledges/`（含文档内容）
+- **链路**：agent-gear `knowledge-bases:scan` 扫描 `.zag/knowledges/`、`docs/knowledges/` 与 `docs/` 一层文件夹（来源 `docs-root`，跳过 `knowledges` 容器；含文档内容）
   → controller-api 白名单中继写 Redis `knowledge-bases:scan:{requestId}`（EX 60）→ agent-api
   `services/repo-knowledge-bases.ts` 轮询消费（500ms × 60 ≈ 30s，读后即删）并解析校验 → 工作区级缓存
   `repo-knowledge-bases:ws:{workspaceId}`（EX 300，缓存**解析后的知识库全集含文档内容**）→ GraphQL 四个只读查询。
@@ -611,8 +611,10 @@ pnpm run start   # Start production server
   错误文档路径归一失败则丢弃该节点。整库不合法仅限 schema 非法、路径冲突/路径归一错误。
   `valid:false` 的 `children`/`getDocument` 统一 `[]`/`null`（R1）。
   缓存 miss 扫描有进程内 single-flight（同一工作区并发首次展开只触发一次扫描，S4）。
-- **id 编解码（D6）**：`repo:<workspaceId>:<source(zag|docs)>:<encodeURIComponent(folder)>`；`source` 在 GraphQL
-  透出为 `ZAG|DOCS`，列表顺序 zag 先于 docs、同来源 `folder.localeCompare`。
+- **id 编解码（D6）**：`repo:<workspaceId>:<source(zag|docs|docs-root)>:<encodeURIComponent(folder)>`；`source` 在 GraphQL
+  透出为 `ZAG|DOCS|DOCS_ROOT`，列表顺序 zag → docs → docs-root、同来源 `folder.localeCompare`。
+- **来源扩展（2.23.0，Issue #572）**：第三来源 `docs-root` = 仓库 `docs/` 的一层文件夹（跳过 `docs/knowledges` 容器）；
+  与 `ZAG`/`DOCS` 同构解析与展示，同名文件夹因来源不同互不覆盖；旧版 agent-gear 仅返回两项时 `DOCS_ROOT` 自然为空。
 - **知识库 MCP prompts（D14）**：`services/knowledge-base-prompts.ts` 单一来源提供
   `repo-knowledge-base-authoring`（编写指引）；`knowledge-base-tools.ts` 的 `initialize` 声明
   `capabilities: { tools: {}, prompts: {} }`，新增 `prompts/list` / `prompts/get`（未知/缺 name →

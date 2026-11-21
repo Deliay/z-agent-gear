@@ -63,6 +63,18 @@ const scanFixture: Record<string, any> = {
       ],
       truncated: true,
     },
+    {
+      source: 'docs-root',
+      knowledgeBases: [
+        {
+          folder: 'guides',
+          schema: '{"name":"仓库指南"}',
+          documents: [{ path: 'api/rest.md', content: '# REST 指南' }],
+          truncated: false,
+        },
+      ],
+      truncated: false,
+    },
   ],
   truncated: true,
 };
@@ -378,6 +390,27 @@ test.describe('仓库内建知识库 E2E', () => {
     } finally {
       await pageC.close();
     }
+  });
+
+  test('E2E-RKB9 docs 一层文件夹来源：独立徽标、可展开并阅读文档', async ({ page }) => {
+    await loginViaUI(page, user.username);
+    await openRepoGroup(page);
+    await page.getByRole('button', { name: /仓库云电脑/ }).click();
+
+    const badge = page
+      .locator('[data-testid="repo-kb-item-"]')
+      .filter({ hasText: '仓库指南' })
+      .getByTestId('repo-kb-source-badge');
+    await expect(badge).toHaveText('docs/');
+    await expect(badge).toHaveAttribute('title', 'docs（一层文件夹）');
+
+    await page.getByRole('button', { name: /仓库指南/ }).click();
+    await page.getByRole('button', { name: 'api' }).click();
+    await expect(page.getByText('rest')).toBeVisible();
+    await page.getByTestId('repo-kb-document-link').first().click();
+    await expect(page).toHaveURL(/\/knowledge-bases\/repo:.*docs-root.*\/api\/rest$/);
+    await expect(page.getByTestId('knowledge-base-title')).toHaveText('rest');
+    await expect(page.getByTestId('repo-knowledge-base-content')).toContainText('REST 指南');
   });
 
   test('E2E-RKB8 刷新图标在云电脑条目标题行尾部、无文字、折叠态点击生效、重复点击不异常', async ({

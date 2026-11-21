@@ -12,6 +12,7 @@ import {
 let root: string;
 let zagDir: string;
 let docsDir: string;
+let docsRoot: string;
 
 async function makeKb(sourceDir: string, folder: string, schema = '{"name":"kb"}') {
   const dir = join(sourceDir, folder);
@@ -24,6 +25,7 @@ beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'rkb-scan-'));
   zagDir = join(root, '.zag', 'knowledges');
   docsDir = join(root, 'docs', 'knowledges');
+  docsRoot = join(root, 'docs');
   await mkdir(zagDir, { recursive: true });
   await mkdir(docsDir, { recursive: true });
 });
@@ -43,7 +45,7 @@ describe('scanKnowledgeBases', () => {
     const result = await scanKnowledgeBases(root);
 
     expect(result.success).toBe(true);
-    expect(result.sources.map((item) => item.source)).toEqual(['zag', 'docs']);
+    expect(result.sources.map((item) => item.source)).toEqual(['zag', 'docs', 'docs-root']);
     expect(result.sources[0].knowledgeBases.map((item) => item.folder)).toEqual(['a']);
     expect(result.sources[1].knowledgeBases.map((item) => item.folder)).toEqual(['b']);
     expect(result.sources[0].knowledgeBases[0].schema).toBe('{"name":"A"}');
@@ -100,6 +102,7 @@ describe('scanKnowledgeBases', () => {
       sources: [
         { source: 'zag', knowledgeBases: [], truncated: false },
         { source: 'docs', knowledgeBases: [], truncated: false },
+        { source: 'docs-root', knowledgeBases: [], truncated: false },
       ],
       truncated: false,
     });
@@ -234,6 +237,104 @@ describe('scanKnowledgeBases', () => {
     expect(result.truncated).toBe(true);
   });
 
+  it('T-RKB3-SCAN1 docs 一层文件夹含 knowledge-base.json → 第三来源识别，文档路径正确', async () => {
+    const kb = await makeKb(docsRoot, 'guides', '{"name":"指南"}');
+    await writeFile(join(kb, 'intro.md'), '# 简介');
+    await mkdir(join(kb, 'api'), { recursive: true });
+    await writeFile(join(kb, 'api', 'rest.md'), '# REST');
+
+    const result = await scanKnowledgeBases(root);
+    const source = result.sources.find((item) => item.source === 'docs-root');
+
+    expect(source?.knowledgeBases.map((item) => item.folder)).toEqual(['guides']);
+    expect(source?.knowledgeBases[0].schema).toBe('{"name":"指南"}');
+    expect(source?.knowledgeBases[0].documents?.map((doc) => doc.path)).toEqual([
+      'api/rest.md',
+      'intro.md',
+    ]);
+  });
+
+  it('T-RKB3-SCAN2 三来源同名文件夹互不覆盖，来源顺序固定', async () => {
+    await makeKb(zagDir, 'same', '{"name":"ZAG 库"}');
+    await makeKb(docsDir, 'same', '{"name":"DOCS 库"}');
+    await makeKb(docsRoot, 'same', '{"name":"DOCS_ROOT 库"}');
+
+    const result = await scanKnowledgeBases(root);
+
+    expect(result.sources.map((item) => item.source)).toEqual(['zag', 'docs', 'docs-root']);
+    expect(result.sources.map((item) => item.knowledgeBases[0]?.schema)).toEqual([
+      '{"name":"ZAG 库"}',
+      '{"name":"DOCS 库"}',
+      '{"name":"DOCS_ROOT 库"}',
+    ]);
+  });
+
+  it('T-RKB3-SCAN3 docs/knowledges 容器本身不被识别；其子文件夹仍属 docs 来源', async () => {
+    // 容器目录直接含 knowledge-base.json：docs-root 必须跳过
+    await writeFile(join(docsRoot, 'knowledges', 'knowledge-base.json'), '{"name":"容器"}', 'utf8');
+    await makeKb(docsDir, 'child', '{"name":"子库"}');
+    await makeKb(docsRoot, 'guides', '{"name":"指南"}');
+
+    const result = await scanKnowledgeBases(root);
+    const docsSource = result.sources.find((item) => item.source === 'docs');
+    const docsRootSource = result.sources.find((item) => item.source === 'docs-root');
+
+    expect(docsSource?.knowledgeBases.map((item) => item.folder)).toEqual(['child']);
+    expect(docsRootSource?.knowledgeBases.map((item) => item.folder)).toEqual(['guides']);
+  });
+
+  it('T-RKB3-SCAN4 docs 深层嵌套 knowledge-base.json 不识别（发现不递归）', async () => {
+    const nested = join(docsRoot, 'outer', 'inner');
+    await mkdir(nested, { recursive: true });
+    await writeFile(join(nested, 'knowledge-base.json'), '{"name":"inner"}', 'utf8');
+
+    const result = await scanKnowledgeBases(root);
+    const source = result.sources.find((item) => item.source === 'docs-root');
+
+    expect(source?.knowledgeBases).toEqual([]);
+  });
+
+  it('T-RKB3-SCAN5 docs 目录不存在 → 第三来源空列表；子项 >1000 → 来源截断', async () => {
+    const emptyRoot = await mkdtemp(join(tmpdir(), 'rkb-docs-root-empty-'));
+    const empty = await scanKnowledgeBases(emptyRoot);
+    expect(empty.sources.find((item) => item.source === 'docs-root')).toEqual({
+      source: 'docs-root',
+      knowledgeBases: [],
+      truncated: false,
+    });
+    await rm(emptyRoot, { recursive: true, force: true });
+
+    for (let i = 0; i <= MAX_ENTRIES_PER_FOLDER; i += 1) {
+      await makeKb(docsRoot, `kb${String(i).padStart(4, '0')}`);
+    }
+    const result = await scanKnowledgeBases(root);
+    const source = result.sources.find((item) => item.source === 'docs-root');
+    expect(source?.knowledgeBases).toHaveLength(MAX_ENTRIES_PER_FOLDER);
+    expect(source?.truncated).toBe(true);
+    expect(result.truncated).toBe(true);
+  });
+
+  it('T-RKB3-SCAN6 docs-root 单文件上限：schema 超限整库 error、单文档超限逐条 error', async () => {
+    const badSchema = join(docsRoot, 'bad-schema');
+    await mkdir(badSchema, { recursive: true });
+    await writeFile(join(badSchema, 'knowledge-base.json'), 'x'.repeat(MAX_FILE_BYTES + 1));
+    const mixed = await makeKb(docsRoot, 'mixed', '{"name":"混合"}');
+    await writeFile(join(mixed, 'big.md'), 'x'.repeat(MAX_FILE_BYTES + 1));
+    await writeFile(join(mixed, 'ok.md'), '# ok');
+
+    const result = await scanKnowledgeBases(root);
+    const source = result.sources.find((item) => item.source === 'docs-root');
+    const bad = source?.knowledgeBases.find((item) => item.folder === 'bad-schema');
+    const entry = source?.knowledgeBases.find((item) => item.folder === 'mixed');
+
+    expect(bad).toEqual({ folder: 'bad-schema', error: 'file too large' });
+    expect(entry?.documents?.find((doc) => doc.path === 'big.md')).toEqual({
+      path: 'big.md',
+      error: 'file too large',
+    });
+    expect(entry?.documents?.find((doc) => doc.path === 'ok.md')?.content).toBe('# ok');
+  });
+
   it('T-RKB-SCAN8 符号链接：指向常规 .md 文件读取；指向目录/悬空跳过', async () => {
     const kb = await makeKb(zagDir, 'kb');
     await writeFile(join(kb, 'real.md'), '# real');
@@ -254,10 +355,11 @@ describe('scanKnowledgeBases', () => {
 });
 
 describe('REPO_KNOWLEDGE_BASE_SOURCES', () => {
-  it('两个固定约定目录', () => {
+  it('三个来源（zag / docs / docs-root，docs-root 跳过 knowledges 容器）', () => {
     expect(REPO_KNOWLEDGE_BASE_SOURCES).toEqual([
       { source: 'zag', subdir: '.zag/knowledges' },
       { source: 'docs', subdir: 'docs/knowledges' },
+      { source: 'docs-root', subdir: 'docs', excludeFolders: ['knowledges'] },
     ]);
   });
 });

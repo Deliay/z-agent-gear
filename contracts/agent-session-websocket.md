@@ -1136,7 +1136,7 @@ Controller 在执行使用动作（探测/拉起/恢复）前检查 harness 登�
 | Controller → Server | `fs:read-file:result` | 返回文件内容 |
 | Server → Controller | `workflow-templates:scan` | 请求扫描项目工作流模板目录（`.zag/workflow/templates/`） |
 | Controller → Server | `workflow-templates:scan:result` | 返回模板文件列表与内容 |
-| Server → Controller | `knowledge-bases:scan` | 请求扫描项目仓库内建知识库目录（`.zag/knowledges/` 与 `docs/knowledges/`） |
+| Server → Controller | `knowledge-bases:scan` | 请求扫描项目仓库内建知识库目录（`.zag/knowledges/`、`docs/knowledges/` 与 `docs/` 一层文件夹） |
 | Controller → Server | `knowledge-bases:scan:result` | 返回仓库知识库列表与文档内容 |
 
 ### 3.2 `fs:browse`（Server → Controller）
@@ -1877,7 +1877,7 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
 
 ### 3.29 `knowledge-bases:scan`（Server → Controller）
 
-请求扫描项目工作区内两个固定子目录下的内建知识库：`.zag/knowledges/` 与 `docs/knowledges/`。用于「知识库支持在代码仓库中内建」：仓库为知识库唯一事实源，平台侧不落库、只读展示。
+请求扫描项目工作区内三个来源的内建知识库：`.zag/knowledges/`、`docs/knowledges/` 与 `docs/` 的一层文件夹（来源 `docs-root`，跳过 `docs/knowledges` 容器目录）。用于「知识库支持在代码仓库中内建」：仓库为知识库唯一事实源，平台侧不落库、只读展示。
 
 **Payload:**
 
@@ -1891,11 +1891,11 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `requestId` | `string` | 是 | 请求 ID，用于匹配响应 |
-| `path` | `string` | 是 | 项目工作区绝对路径；扫描固定子目录 `<path>/.zag/knowledges/` 与 `<path>/docs/knowledges/` |
+| `path` | `string` | 是 | 项目工作区绝对路径；扫描 `<path>/.zag/knowledges/`、`<path>/docs/knowledges/` 与 `<path>/docs/` 的一层文件夹 |
 
 **约束：**
 
-- 仅直读两个约定子目录；知识库发现**不递归**（仅来源目录的直接子文件夹），子文件夹内存在常规文件 `knowledge-base.json` 才识别为一个知识库（`knowledge-base.json` 为目录或符号链接指向目录时不识别）。
+- 仅直读三个约定来源；知识库发现**不递归**（仅来源目录的直接子文件夹），子文件夹内存在常规文件 `knowledge-base.json` 才识别为一个知识库（`knowledge-base.json` 为目录或符号链接指向目录时不识别）。`docs-root` 来源扫描 `<path>/docs/` 的直接子文件夹，跳过 `knowledges` 目录（该目录是 `docs` 来源的容器）；三个来源的同名知识库文件夹互不覆盖。
 - 库内文档**递归**收集 `.md` 常规文件（扩展名按小写比较）；符号链接按 `stat` 判定为常规文件才读取，指向目录/设备或悬空的链接跳过；文档 `path` 为库内相对 POSIX 路径。
 - 目录不存在（ENOENT / ENOTDIR）视为空列表（`success: true`，对应来源空列表）；读取权限失败返回 `success: false, error: 'permission denied'`。
 - 数量与体积上限：每个文件夹的直接子项（目录与文件合计，来源目录层与库内每一目录层同样生效）按名称 `localeCompare` 排序取前 1000，超出部分不遍历并置位截断（库内截断上浮到知识库 `truncated:true`，来源目录层截断置来源 `truncated:true`，整体 `truncated` 为任一来源截断）；`knowledge-base.json` >1 MiB 该库标记 `error: 'file too large'`（不解析 schema、不读库内文档）；单文档 >1 MiB 该文档标记 `error: 'file too large'`（不读内容，仍返回该文档条目）；**无**每库文档数、每来源知识库数与内容累计总量限制。
@@ -1904,7 +1904,7 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
 
 ### 3.30 `knowledge-bases:scan:result`（Controller → Server）
 
-返回两个来源目录下的知识库列表与文档内容。
+返回三个来源目录下的知识库列表与文档内容。旧版控制器可能只返回 `zag` / `docs` 两项；消费方对缺失来源按空列表处理。
 
 **Payload:**
 
@@ -1928,7 +1928,8 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
       ],
       "truncated": false
     },
-    { "source": "docs", "knowledgeBases": [], "truncated": false }
+    { "source": "docs", "knowledgeBases": [], "truncated": false },
+    { "source": "docs-root", "knowledgeBases": [], "truncated": false }
   ],
   "truncated": false,
   "error": "string"
@@ -1938,9 +1939,9 @@ agent-api 收到前端 GraphQL 请求后，按下述流程将事件转发给 Con
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `requestId` | `string` | 是 | 对应的请求 ID |
-| `success` | `boolean` | 是 | 两个来源目录读取整体是否成功 |
-| `sources` | `Array<{ source: 'zag' \| 'docs'; knowledgeBases: Array<KnowledgeBaseEntry>; truncated: boolean }>` | 成功时必填 | 逐来源结果；`source` 标识来源目录 |
-| `sources[].knowledgeBases[].folder` | `string` | 是 | 知识库文件夹名（来源目录的直接子目录） |
+| `success` | `boolean` | 是 | 三个来源目录读取整体是否成功 |
+| `sources` | `Array<{ source: 'zag' \| 'docs' \| 'docs-root'; knowledgeBases: Array<KnowledgeBaseEntry>; truncated: boolean }>` | 成功时必填 | 逐来源结果；`source` 标识来源（`zag`=`.zag/knowledges/`、`docs`=`docs/knowledges/`、`docs-root`=`docs/` 一层文件夹）；旧版控制器可只返回前两项 |
+| `sources[].knowledgeBases[].folder` | `string` | 是 | 知识库文件夹名（来源目录的直接子目录；`docs-root` 为 `docs/` 的直接子目录，不含 `knowledges`） |
 | `sources[].knowledgeBases[].schema` | `string` | 否 | `knowledge-base.json` 原文（≤1 MiB） |
 | `sources[].knowledgeBases[].documents` | `Array<{ path: string; content?: string; error?: string }>` | 否 | 库内 `.md` 文件（递归）；`path` 为库内相对 POSIX 路径；读取失败或超限该文档附 `error` 并保留条目（不读内容） |
 | `sources[].knowledgeBases[].truncated` | `boolean` | 否 | 该库是否因单文件夹直接子项超 1000 截断 |

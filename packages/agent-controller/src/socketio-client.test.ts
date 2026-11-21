@@ -683,6 +683,7 @@ describe('knowledge-bases:scan 事件注册（契约 §3.29/§3.30）', () => {
             truncated: false,
           },
           { source: 'docs', knowledgeBases: [], truncated: false },
+          { source: 'docs-root', knowledgeBases: [], truncated: false },
         ],
         truncated: false,
       });
