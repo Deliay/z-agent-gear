@@ -155,6 +155,12 @@ describe('RepoKnowledgeBaseSection（T-RKB-WEB1~6 / T-RKB2-WEB4~5）', () => {
             errors: ['knowledge-base.json 不是合法的 JSON 文件'],
             documentCount: 0,
           }),
+          kb({
+            id: 'repo:ws-1:docs-root:guides',
+            name: '指南库',
+            folder: 'guides',
+            source: 'DOCS_ROOT',
+          }),
         ],
       },
       refetch: mockRefetchBases,
@@ -168,6 +174,7 @@ describe('RepoKnowledgeBaseSection（T-RKB-WEB1~6 / T-RKB2-WEB4~5）', () => {
     expect(screen.getAllByTestId('repo-kb-source-badge').map((item) => item.textContent)).toEqual([
       'zag',
       'docs',
+      'docs/',
     ]);
     expect(screen.getByTestId('repo-kb-error')).toHaveTextContent('不是合法的 JSON 文件');
     expect(screen.getByRole('button', { name: /b-bad/ })).toBeDisabled();

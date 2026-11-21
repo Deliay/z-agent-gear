@@ -89,6 +89,17 @@ const SCAN_RESULT = {
       ],
       truncated: false,
     },
+    {
+      source: 'docs-root',
+      knowledgeBases: [
+        {
+          folder: 'd-docs-root',
+          schema: '{"name":"丁库"}',
+          documents: [{ path: 'y.md', content: '# Y' }],
+        },
+      ],
+      truncated: false,
+    },
   ],
   truncated: false,
 };
@@ -248,6 +259,13 @@ describe('id 编解码（T-RKB-SVC6）', () => {
       source: 'ZAG',
       folder: '团队 规范/核心',
     });
+    const docsRootId = encodeRepoKnowledgeBaseId('ws-1', 'DOCS_ROOT', 'guides');
+    expect(docsRootId).toBe('repo:ws-1:docs-root:guides');
+    expect(decodeRepoKnowledgeBaseId(docsRootId)).toEqual({
+      workspaceId: 'ws-1',
+      source: 'DOCS_ROOT',
+      folder: 'guides',
+    });
   });
 
   it('非法 id 返回 null', () => {
@@ -329,6 +347,22 @@ describe('repoKnowledgeBaseService', () => {
     );
   });
 
+  it('T-RKB3-SVC1 旧版扫描结果仅两来源 → DOCS_ROOT 缺省为空、零报错', async () => {
+    redis.get.mockImplementation(async (key: string) =>
+      key.startsWith('knowledge-bases:scan:')
+        ? JSON.stringify({
+            success: true,
+            sources: SCAN_RESULT.sources.filter((item) => item.source !== 'docs-root'),
+            truncated: false,
+          })
+        : null,
+    );
+
+    const list = await repoKnowledgeBaseService.listKnowledgeBases('u', 'ws-1');
+
+    expect(list.map((item) => item.source)).toEqual(['ZAG', 'ZAG', 'DOCS']);
+  });
+
   it('T-RKB-SVC9/11 首次扫描：一次 publish、缓存 EX 300、来源顺序与不合法库扁平化', async () => {
     redis.get.mockImplementation(async (key: string) =>
       key.startsWith('knowledge-bases:scan:') ? JSON.stringify(SCAN_RESULT) : null,
@@ -355,6 +389,7 @@ describe('repoKnowledgeBaseService', () => {
       ['ZAG', 'a-base', true],
       ['ZAG', 'b-bad', false],
       ['DOCS', 'c-docs', true],
+      ['DOCS_ROOT', 'd-docs-root', true],
     ]);
     expect(list[0]).toMatchObject({ name: '甲库', description: '甲描述', documentCount: 2 });
     expect(list[1]).toMatchObject({ name: '', documentCount: 0 });
@@ -370,7 +405,7 @@ describe('repoKnowledgeBaseService', () => {
 
     redis.get.mockResolvedValue(cachedPayload);
     const cachedList = await repoKnowledgeBaseService.listKnowledgeBases('u', 'ws-1');
-    expect(cachedList).toHaveLength(3);
+    expect(cachedList).toHaveLength(4);
     expect(publish).toHaveBeenCalledTimes(1);
 
     redis.get.mockImplementation(async (key: string) =>

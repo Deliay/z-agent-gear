@@ -4,8 +4,9 @@ import { join, resolve, sep } from 'node:path';
 /**
  * 项目仓库内建知识库扫描（契约 agent-session-websocket.md §3.29/§3.30）。
  *
- * 仓库为知识库唯一事实源：仅直读 `<workspacePath>/.zag/knowledges/` 与
- * `<workspacePath>/docs/knowledges/` 两个固定子目录。知识库发现不递归（仅直接子文件夹，
+ * 仓库为知识库唯一事实源：仅直读 `<workspacePath>/.zag/knowledges/`、
+ * `<workspacePath>/docs/knowledges/` 与 `<workspacePath>/docs/` 的一层文件夹（来源 `docs-root`，
+ * 跳过 `docs/knowledges` 容器）。知识库发现不递归（仅直接子文件夹，
  * 含常规文件 `knowledge-base.json` 即识别），库内文档递归收集 `.md` 常规文件并读取内容。
  * 仅读不写、不执行；不使用会话路径白名单。
  *
@@ -17,6 +18,8 @@ import { join, resolve, sep } from 'node:path';
 export const REPO_KNOWLEDGE_BASE_SOURCES = [
   { source: 'zag', subdir: '.zag/knowledges' },
   { source: 'docs', subdir: 'docs/knowledges' },
+  // 仓库 docs/ 的一层文件夹（跳过既有 docs/knowledges 容器目录）
+  { source: 'docs-root', subdir: 'docs', excludeFolders: ['knowledges'] },
 ] as const;
 
 export type RepoKnowledgeBaseSource = (typeof REPO_KNOWLEDGE_BASE_SOURCES)[number]['source'];
@@ -195,6 +198,7 @@ async function scanSource(
   workspacePath: string,
   source: RepoKnowledgeBaseSource,
   subdir: string,
+  excludeFolders: readonly string[] = [],
 ): Promise<KnowledgeBaseSourceResult | null> {
   const sourceDir = resolve(workspacePath, subdir);
 
@@ -221,6 +225,8 @@ async function scanSource(
 
   const folders: string[] = [];
   for (const entry of ordered) {
+    // 已知容器目录（docs-root 的 docs/knowledges）：不参与知识库发现
+    if (excludeFolders.includes(entry.name)) continue;
     if (entry.isDirectory()) {
       folders.push(entry.name);
       continue;
@@ -258,7 +264,12 @@ export async function scanKnowledgeBases(
 ): Promise<KnowledgeBaseScanResult> {
   const sources: KnowledgeBaseSourceResult[] = [];
   for (const item of REPO_KNOWLEDGE_BASE_SOURCES) {
-    const result = await scanSource(workspacePath, item.source, item.subdir);
+    const result = await scanSource(
+      workspacePath,
+      item.source,
+      item.subdir,
+      'excludeFolders' in item ? item.excludeFolders : [],
+    );
     if (!result) {
       return { success: false, sources: [], truncated: false, error: 'permission denied' };
     }

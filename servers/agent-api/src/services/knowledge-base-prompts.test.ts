@@ -28,6 +28,9 @@ describe('knowledge-base prompts', () => {
     for (const anchor of [
       '.zag/knowledges/',
       'docs/knowledges/',
+      '一层文件夹',
+      'docs/guides/',
+      '跳过 `docs/knowledges`',
       'knowledge-base.json',
       '直接子文件夹',
       'name',
@@ -62,11 +65,14 @@ describe('knowledge-base prompts', () => {
     expect(getKnowledgeBasePromptText('unknown-prompt')).toBeNull();
   });
 
-  it('T-RKB2-P2 防漂移守卫：两个子目录与扫描上限字面量必须与 agent-gear 扫描器一致', () => {
-    // 来源：packages/agent-controller/src/knowledge-bases.ts
+  it('T-RKB3-P2 防漂移守卫：三个来源（含 docs 一层文件夹与容器跳过）必须与扫描器一致', () => {
+    // 来源：packages/agent-controller/src/knowledge-bases.ts（docs-root 跳过 knowledges）
     const text = getKnowledgeBasePromptText(PROMPT_NAME) ?? '';
     expect(text).toContain('.zag/knowledges');
     expect(text).toContain('docs/knowledges');
+    expect(text).toContain('一层文件夹');
+    expect(text).toContain('docs/guides/');
+    expect(text).toContain('跳过 `docs/knowledges`');
     expect(text).toContain('1MiB');
     expect(text).toContain('1000');
     expect(text).toContain('无上限');

@@ -31,6 +31,7 @@ import { logger as rootLogger, type ObservationLogger } from './observability/lo
 import { injectTraceparent, withSpan } from './observability/trace.js';
 
 // 版本号唯一事实源为 package.json（register 上报的完整版本；服务端按 MIN_WORKER_VERSION=2.2.0 门禁）。
+// 2.23.0 起仓库知识库扫描新增第三来源 `docs-root`（docs 一层文件夹，跳过 knowledges 容器）；
 // 2.8.0 起 `kimi_code` 使用前登录闸门（`kimi login` stdio 判定 + `harness:login:*` 事件族）；
 // 2.6.0 起支持 `workload:run.githubAuth` 与云电脑 Github 凭据管理器（该能力自 2.10.0 起，当前 harness 基线 MIN_HARNESS_WORKER_VERSION=2.12.0）；
 // 2.5.0 起支持云电脑双连接（`/worker` + controller-api）与 `harness prepare`。
@@ -1621,7 +1622,7 @@ export function connectToServer(
     socket.emit('workflow-templates:scan:result', { requestId: data.requestId, ...result });
   });
 
-  // 仓库内建知识库扫描（契约 §3.29/§3.30：两个约定子目录 + knowledge-base.json + 分级上限）
+  // 仓库内建知识库扫描（契约 §3.29/§3.30：三个来源 + knowledge-base.json + 分级上限）
   socket.on('knowledge-bases:scan', async (data: { requestId: string; path: string }) => {
     log.info(
       { event: 'knowledge_bases_scan', requestId: data.requestId, path: data.path },

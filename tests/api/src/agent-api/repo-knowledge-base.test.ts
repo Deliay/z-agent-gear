@@ -153,8 +153,27 @@ const SCAN_FIXTURE = {
       ],
       truncated: true,
     },
+    {
+      source: 'docs-root',
+      knowledgeBases: [
+        {
+          folder: 'guides',
+          schema: '{"name":"指南"}',
+          documents: [{ path: 'api/rest.md', content: '# REST' }],
+          truncated: false,
+        },
+      ],
+      truncated: false,
+    },
   ],
   truncated: true,
+};
+
+/** 旧版 agent-gear 回包形状（仅 zag / docs 两来源） */
+const LEGACY_SCAN_FIXTURE = {
+  success: true,
+  sources: SCAN_FIXTURE.sources.slice(0, 2),
+  truncated: false,
 };
 
 interface FakeController {
@@ -169,6 +188,7 @@ async function registerFakeController(
   tag: string,
   version = '2.19.0',
   withScan = true,
+  scanResult: Record<string, unknown> = SCAN_FIXTURE,
 ): Promise<FakeController> {
   const data = await gql(
     CREATE_KEY,
@@ -193,7 +213,7 @@ async function registerFakeController(
       scans.push(payload);
       client.emit('knowledge-bases:scan:result', {
         requestId: payload.requestId,
-        ...SCAN_FIXTURE,
+        ...scanResult,
       });
     });
   }
@@ -260,10 +280,13 @@ describe.skipIf(!HAS_MONGO)('仓库内建知识库 API（T-RKB-API1~5/8）', () 
   let user: FrontUser;
   let fake: FakeController;
   let oldFake: FakeController;
+  let legacyFake: FakeController;
   let workspaceId = '';
   let oldWorkspaceId = '';
+  let legacyWorkspaceId = '';
   let hostId = '';
   let oldHostId = '';
+  let legacyHostId = '';
 
   beforeAll(async () => {
     user = await createFrontUser();
@@ -284,11 +307,27 @@ describe.skipIf(!HAS_MONGO)('仓库内建知识库 API（T-RKB-API1~5/8）', () 
       workspaceId: oldWorkspaceId,
       name: '云电脑乙',
     });
+
+    legacyFake = await registerFakeController(
+      user.token,
+      'legacy',
+      '2.19.0',
+      true,
+      LEGACY_SCAN_FIXTURE,
+    );
+    legacyWorkspaceId = await createWorkspace(user.token, legacyFake.controllerId);
+    legacyHostId = await insertRunningCloudHost({
+      user,
+      controllerId: legacyFake.controllerId,
+      workspaceId: legacyWorkspaceId,
+      name: '旧版两来源云电脑',
+    });
   }, 60_000);
 
   afterAll(async () => {
     fake?.client.disconnect();
     oldFake?.client.disconnect();
+    legacyFake?.client.disconnect();
     if (HAS_MONGO && mongoose.connection.readyState !== 0) await mongoose.disconnect();
   }, 60_000);
 
@@ -326,7 +365,7 @@ describe.skipIf(!HAS_MONGO)('仓库内建知识库 API（T-RKB-API1~5/8）', () 
     expect(fake.scans.length + oldFake.scans.length).toBe(before);
   });
 
-  it('T-RKB-API3 首次展开触发一次扫描并缓存；refresh 强制重扫；两来源形状', async () => {
+  it('T-RKB-API3 首次展开触发一次扫描并缓存；refresh 强制重扫；三来源形状', async () => {
     const first = await gql(REPO_KNOWLEDGE_BASES, { workspaceId }, user.token);
     const afterFirst = fake.scans.length;
     expect(afterFirst).toBeGreaterThanOrEqual(1);
@@ -337,18 +376,51 @@ describe.skipIf(!HAS_MONGO)('仓库内建知识库 API（T-RKB-API1~5/8）', () 
       ['ZAG', 'team-rules', true],
       ['DOCS', 'product-docs', true],
       ['DOCS', 'truncated-docs', true],
+      ['DOCS_ROOT', 'guides', true],
     ]);
     expect(list.find((item) => item.folder === 'team-rules')).toMatchObject({
       name: '团队规范',
       description: '规范库',
       documentCount: 2,
     });
+    const docsRoot = list.find((item) => item.folder === 'guides') as { id: string; source: string };
+    expect(docsRoot.source).toBe('DOCS_ROOT');
+    expect(docsRoot.id).toContain(':docs-root:');
 
     await gql(REPO_KNOWLEDGE_BASES, { workspaceId }, user.token);
     expect(fake.scans.length).toBe(afterFirst);
 
     await gql(REPO_KNOWLEDGE_BASES, { workspaceId, refresh: true }, user.token);
     expect(fake.scans.length).toBeGreaterThan(afterFirst);
+  });
+
+  it('T-RKB3-API1 docs-root 知识库 children/document 正常派生', async () => {
+    const listData = await gql(REPO_KNOWLEDGE_BASES, { workspaceId }, user.token);
+    const kb = (listData.repoKnowledgeBases as Array<Record<string, unknown>>).find(
+      (item) => item.folder === 'guides',
+    ) as { id: string };
+
+    const root = await gql(REPO_KB_CHILDREN, { id: kb.id }, user.token);
+    expect(root.repoKnowledgeBaseDocumentChildren).toEqual([
+      { kind: 'FOLDER', name: 'api', path: '/api', error: null },
+    ]);
+
+    const deep = await gql(REPO_KB_CHILDREN, { id: kb.id, path: '/api' }, user.token);
+    expect(deep.repoKnowledgeBaseDocumentChildren).toEqual([
+      { kind: 'DOCUMENT', name: 'rest', path: '/api/rest', error: null },
+    ]);
+
+    const doc = await gql(REPO_KB_DOCUMENT, { id: kb.id, path: '/api/rest' }, user.token);
+    expect(doc.repoKnowledgeBaseDocument).toMatchObject({ path: '/api/rest', content: '# REST' });
+  });
+
+  it('T-RKB3-API2 旧版组件仅两来源回包 → DOCS_ROOT 不出现、零报错', async () => {
+    const data = await gql(REPO_KNOWLEDGE_BASES, { workspaceId: legacyWorkspaceId }, user.token);
+    const list = data.repoKnowledgeBases as Array<{ source: string }>;
+    expect(list.map((item) => item.source)).toEqual(['ZAG', 'ZAG', 'ZAG', 'DOCS', 'DOCS']);
+    expect(list.some((item) => item.source === 'DOCS_ROOT')).toBe(false);
+    expect(legacyFake.scans.length).toBe(1);
+    expect(legacyHostId).not.toBe('');
   });
 
   it('T-RKB-API4 children 逐级派生（FOLDER 在前）；document 返回含 front matter 原文；不可达收敛', async () => {

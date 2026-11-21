@@ -2,10 +2,10 @@
  * 仓库内建知识库 id 编解码（与服务端 `repo-knowledge-bases.ts` 同口径）。
  *
  * id 形态：`repo:<workspaceId>:<source>:<encodeURIComponent(folder)>`，
- * source ∈ `zag | docs`；仅以 `repo:` 前缀与平台知识库 ObjectId 区分。
+ * source ∈ `zag | docs | docs-root`；仅以 `repo:` 前缀与平台知识库 ObjectId 区分。
  */
 
-export type RepoKnowledgeBaseSource = 'ZAG' | 'DOCS';
+export type RepoKnowledgeBaseSource = 'ZAG' | 'DOCS' | 'DOCS_ROOT';
 
 export interface DecodedRepoKnowledgeBaseId {
   workspaceId: string;
@@ -16,6 +16,7 @@ export interface DecodedRepoKnowledgeBaseId {
 const SOURCE_BY_RAW: Record<string, RepoKnowledgeBaseSource> = {
   zag: 'ZAG',
   docs: 'DOCS',
+  'docs-root': 'DOCS_ROOT',
 };
 
 export function isRepoKnowledgeBaseId(id: string): boolean {
@@ -45,5 +46,12 @@ export function decodeRepoKnowledgeBaseId(id: string): DecodedRepoKnowledgeBaseI
 
 /** 来源目录展示标识 */
 export function sourceLabel(source: RepoKnowledgeBaseSource): string {
-  return source === 'ZAG' ? '.zag/knowledges' : 'docs/knowledges';
+  switch (source) {
+    case 'ZAG':
+      return '.zag/knowledges';
+    case 'DOCS':
+      return 'docs/knowledges';
+    case 'DOCS_ROOT':
+      return 'docs（一层文件夹）';
+  }
 }

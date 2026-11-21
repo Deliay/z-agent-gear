@@ -33,7 +33,8 @@
 # 写操作对不可见库抛 `knowledge base not found`、对可见但越权抛 `knowledge base permission denied`。
 #
 # 仓库内建知识库（需求 #545）：
-#   - 仓库 `.zag/knowledges/` 与 `docs/knowledges/` 两个约定目录下，每个含 `knowledge-base.json`
+#   - 仓库 `.zag/knowledges/`、`docs/knowledges/` 两个约定目录，以及 `docs/` 的一层文件夹
+#     （跳过 `docs/knowledges` 容器目录）下，每个含 `knowledge-base.json`
 #     标识文件的子文件夹即一个知识库，库内（含子目录）Markdown 文件为文档；
 #   - **只读**：无任何 mutation/写入口，仓库为唯一事实源，平台不落 MongoDB（仅 Redis 短缓存）；
 #   - **不进知识库 MCP 工具**：`agent-knowledge-base-tools` 的六个工具与结果均不包含仓库知识库
@@ -129,10 +130,13 @@ input KnowledgeBaseDocumentInput {
   content: String!
 }
 
-# 仓库知识库来源目录：ZAG = `.zag/knowledges/`，DOCS = `docs/knowledges/`
+# 仓库知识库来源目录：
+#   ZAG = `.zag/knowledges/`，DOCS = `docs/knowledges/`，
+#   DOCS_ROOT = `docs/` 的一层文件夹（跳过 `docs/knowledges` 容器目录）
 enum RepoKnowledgeBaseSource {
   ZAG
   DOCS
+  DOCS_ROOT
 }
 
 # 候选云电脑骨架（纯 DB 读，不触发仓库扫描）
