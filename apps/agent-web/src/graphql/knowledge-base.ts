@@ -306,7 +306,7 @@ export interface DeleteKnowledgeBaseDocumentMutation {
 /* 仓库内建知识库（需求 #545，四级只读查询 + 懒加载）                   */
 /* ------------------------------------------------------------------ */
 
-export type RepoKnowledgeBaseSourceData = 'ZAG' | 'DOCS';
+export type RepoKnowledgeBaseSourceData = 'ZAG' | 'DOCS' | 'DOCS_ROOT';
 export type RepoKnowledgeBaseNodeKindData = 'FOLDER' | 'DOCUMENT';
 
 export interface RepoKnowledgeBaseHostData {

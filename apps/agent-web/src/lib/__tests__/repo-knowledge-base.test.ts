@@ -21,6 +21,11 @@ describe('repo-knowledge-base id（T-RKB-WEB-L1）', () => {
       source: 'ZAG',
       folder: 'a',
     });
+    expect(decodeRepoKnowledgeBaseId('repo:ws-1:docs-root:guides')).toEqual({
+      workspaceId: 'ws-1',
+      source: 'DOCS_ROOT',
+      folder: 'guides',
+    });
   });
 
   it('非法形态返回 null', () => {
@@ -31,8 +36,9 @@ describe('repo-knowledge-base id（T-RKB-WEB-L1）', () => {
     expect(decodeRepoKnowledgeBaseId('abc')).toBeNull();
   });
 
-  it('sourceLabel 两个来源', () => {
+  it('sourceLabel 三个来源', () => {
     expect(sourceLabel('ZAG')).toBe('.zag/knowledges');
     expect(sourceLabel('DOCS')).toBe('docs/knowledges');
+    expect(sourceLabel('DOCS_ROOT')).toBe('docs（一层文件夹）');
   });
 });

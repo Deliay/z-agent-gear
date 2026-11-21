@@ -28,10 +28,14 @@ const REPO_KNOWLEDGE_BASE_AUTHORING_PROMPT = `## 仓库知识库编写指引
 
 ### 1. 放置约定
 
-- 仓库根目录下有两个约定目录：\`.zag/knowledges/\` 与 \`docs/knowledges/\`。
-- 两个目录下，每个**直接子文件夹**只要包含一个 \`knowledge-base.json\` 标识文件，就是一个知识库。
+- 仓库中支持三个仓库知识库来源：
+  1. \`.zag/knowledges/\`；
+  2. \`docs/knowledges/\`；
+  3. \`docs/\` 的**一层文件夹**（如 \`docs/guides/\`）。
+- 每个来源目录下，每个**直接子文件夹**只要包含一个 \`knowledge-base.json\` 标识文件，就是一个知识库。
 - 知识库发现**不递归**：只有来源目录的直接子文件夹会被识别，深层嵌套文件夹中的 \`knowledge-base.json\` 不生效。
-- 两个来源目录都支持，建议团队规范放在 \`.zag/knowledges/\`，面向开发者的文档放在 \`docs/knowledges/\`。
+- \`docs/\` 来源会跳过 \`docs/knowledges\` 这个容器目录本身（它属于第 2 个来源），避免重复识别。
+- 三个来源的同名知识库文件夹互不覆盖；建议团队规范放在 \`.zag/knowledges/\`，面向开发者的文档放在 \`docs/knowledges/\`，已有 \`docs/<主题>/\` 结构可直接作为第 3 个来源。
 
 ### 2. 目录结构示例
 
@@ -43,11 +47,15 @@ const REPO_KNOWLEDGE_BASE_AUTHORING_PROMPT = `## 仓库知识库编写指引
 │       ├── onboarding.md
 │       └── guides/
 │           └── git.md
-└── docs/knowledges/
-    └── product-docs/
-        ├── knowledge-base.json
-        └── specs/
-            └── overview.md
+├── docs/
+│   ├── guides/
+│   │   ├── knowledge-base.json      # docs 一层文件夹来源
+│   │   └── api.md
+│   └── knowledges/
+│       └── product-docs/
+│           ├── knowledge-base.json
+│           └── specs/
+│               └── overview.md
 \`\`\`
 
 ### 3. knowledge-base.json
@@ -125,7 +133,7 @@ description: 提交信息格式与分支约定
 
 ### 8. 自检清单
 
-1. 知识库文件夹位于 \`.zag/knowledges/\` 或 \`docs/knowledges/\` 的**直接**子目录。
+1. 知识库文件夹位于 \`.zag/knowledges/\`、\`docs/knowledges/\` 或 \`docs/\` 的**直接**子目录（\`docs/\` 来源跳过 \`docs/knowledges\` 容器）。
 2. 文件夹内存在合法的 \`knowledge-base.json\`（\`name\` 必填且 1~64 字符）。
 3. 文档均为 \`.md\`，路径无冲突、单篇 ≤1MiB。
 4. 需要自定义标题/标签时使用可选 front matter，且三键在限值内。
@@ -141,7 +149,7 @@ export const REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS: readonly KnowledgeBasePromp
   {
     name: 'repo-knowledge-base-authoring',
     description:
-      '仓库知识库编写指引：.zag/knowledges/ 与 docs/knowledges/ 放置约定、knowledge-base.json、文档组织、front matter、上限与只读语义。',
+      '仓库知识库编写指引：.zag/knowledges/、docs/knowledges/ 与 docs/ 一层文件夹的放置约定、knowledge-base.json、文档组织、front matter、上限与只读语义。',
   },
 ];
 

@@ -1020,7 +1020,7 @@ pnpm test
 |------|------|
 | T-RKB-API1 | 四个新查询未认证一律 `Not authenticated` |
 | T-RKB-API2 | `repoKnowledgeBaseHosts` 只列 RUNNING + 默认工作区云电脑；调用前后 `scans[]` 不增长；2.18.0 → `scanSupported=false` |
-| T-RKB-API3 | 首次展开触发一次扫描并缓存；二次调用不增长；`refresh:true` 强制重扫；两来源顺序/合法与不合法形状/`documentCount` |
+| T-RKB-API3 | 首次展开触发一次扫描并缓存；二次调用不增长；`refresh:true` 强制重扫；三来源顺序/合法与不合法形状/`documentCount` |
 | T-RKB-API4 | children 逐级派生（FOLDER 在前）；document 返回含 front matter 原文全文；不可达 `[]`/`null` |
 | T-RKB-API5 | 不可见/非默认工作区 → `Workspace not found`（逐字）；版本不足/控制器离线 → `repo knowledge base scan failed`（逐字，且零扫描）；轮询超时分支由服务层单测 T-RKB-SVC10 覆盖 |
 | T-RKB-API6 | MCP relay：`initialize.capabilities.prompts`、`prompts/list` 单片段、`prompts/get` 指引文本、六工具不含仓库知识库 |
@@ -1028,6 +1028,8 @@ pnpm test
 | T-RKB2-API1 | 超过旧总额上限 fixture（55 篇 / 累计 >1MiB）全量返回、`truncated:false`；正文可读取 |
 | T-RKB2-API2 | `children` 返回 `error` 字段；`documentCount` 不含错误文档；错误文档 `repoKnowledgeBaseDocument` 为 `null` |
 | T-RKB2-API3 | 截断 fixture（`truncated:true`）在列表与 children 上口径一致、不报错 |
+| T-RKB3-API1 | `docs-root` fixture → 列表 `source: DOCS_ROOT`、id 含 `:docs-root:`；children/document 正常派生 |
+| T-RKB3-API2 | 旧版组件仅两来源回包（新 fake 控制器）→ 列表无 `DOCS_ROOT` 条目、零报错、仅一次扫描 |
 
 ## 知识库 API（`src/agent-api/knowledge-base.test.ts`）
 

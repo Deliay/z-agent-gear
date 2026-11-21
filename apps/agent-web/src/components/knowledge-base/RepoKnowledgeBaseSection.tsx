@@ -162,7 +162,12 @@ function RepoChildren({
 
 function KnowledgeBaseItem({ knowledgeBase }: { knowledgeBase: RepoKnowledgeBaseData }) {
   const [expanded, setExpanded] = useState(false);
-  const sourceBadge = knowledgeBase.source === 'ZAG' ? 'zag' : 'docs';
+  const sourceBadge =
+    knowledgeBase.source === 'ZAG'
+      ? 'zag'
+      : knowledgeBase.source === 'DOCS'
+        ? 'docs'
+        : 'docs/';
 
   return (
     <li data-testid={`repo-kb-item-${knowledgeBase.id}`}>

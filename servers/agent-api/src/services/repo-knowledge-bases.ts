@@ -11,7 +11,8 @@ import { normalizeDocumentPath } from './knowledge-base-service.js';
  * 仓库内建知识库分层只读服务（需求 #545 / 技术提案 v1.1）。
  *
  * 契约：
- * - `packages/agent-controller/src/knowledge-bases.ts` 扫描两个约定目录（跨包同源常量见注释）；
+ * - `packages/agent-controller/src/knowledge-bases.ts` 扫描三个来源（`.zag/knowledges/`、
+ *   `docs/knowledges/`、`docs/` 一层文件夹；跨包同源常量见注释）；
  * - Redis `knowledge-bases:scan:{requestId}`（中继写，EX 60，读后即删）；
  * - 工作区级缓存 `repo-knowledge-bases:ws:{workspaceId}`（EX 300，解析后的知识库全集）；
  * - 仓库为唯一事实源：不落 MongoDB、不进知识库 MCP 工具、无任何写入口。
@@ -33,7 +34,7 @@ export const REPO_KB_CACHE_TTL_SECONDS = 300;
 /** 工作区级缓存键前缀 */
 export const REPO_KB_CACHE_KEY_PREFIX = 'repo-knowledge-bases:ws:';
 
-export type RepoKnowledgeBaseSource = 'ZAG' | 'DOCS';
+export type RepoKnowledgeBaseSource = 'ZAG' | 'DOCS' | 'DOCS_ROOT';
 export type RepoKnowledgeBaseNodeKind = 'FOLDER' | 'DOCUMENT';
 
 export interface RepoKnowledgeBaseHost {
@@ -169,13 +170,15 @@ interface RawSource {
 const SOURCE_BY_RAW: Record<string, RepoKnowledgeBaseSource> = {
   zag: 'ZAG',
   docs: 'DOCS',
+  'docs-root': 'DOCS_ROOT',
 };
-const RAW_BY_SOURCE: Record<RepoKnowledgeBaseSource, 'zag' | 'docs'> = {
+const RAW_BY_SOURCE: Record<RepoKnowledgeBaseSource, 'zag' | 'docs' | 'docs-root'> = {
   ZAG: 'zag',
   DOCS: 'docs',
+  DOCS_ROOT: 'docs-root',
 };
-/** 来源声明序（zag 先于 docs，D7） */
-const SOURCE_ORDER: RepoKnowledgeBaseSource[] = ['ZAG', 'DOCS'];
+/** 来源声明序（zag → docs → docs-root，D6/D7） */
+const SOURCE_ORDER: RepoKnowledgeBaseSource[] = ['ZAG', 'DOCS', 'DOCS_ROOT'];
 
 const DOC_TITLE_MAX = 200;
 const DOC_TAGS_MAX = 16;

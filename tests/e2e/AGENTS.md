@@ -340,7 +340,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-UI4S5 主机树层级 | 下级缩进为 8px（0.5rem）；设置按钮可点击进入配置页 |
 | E2E-UI4S6 移动端不回归 | 移动视口无 Resizer，且 `scrollWidth - clientWidth ≤ 1` |
 
-### 仓库内建知识库 E2E (`repo-knowledge-base.spec.ts` E2E-RKB1~8)
+### 仓库内建知识库 E2E (`repo-knowledge-base.spec.ts` E2E-RKB1~9)
 
 > 需求 #545 / #559；契约 `contracts/knowledge-base.graphql`；计划
 > `docs/engineering/plan/20261116-feat-knowledge-base-repo-built-in.md` Phase 8、
@@ -353,6 +353,7 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 |------|------|
 | E2E-RKB1 | 「知识库」分区内出现「仓库知识库」分组并列出候选云电脑；全部层级默认折叠（fake controller `scans[]` 为空，零扫描、无知识库条目） |
 | E2E-RKB2 | 展开云电脑 → 两来源标识/不合法灰显原因；展开知识库/目录逐级展示；点击文档进入只读预览；「已截断」徽标与「文件过大」节点不可点击 |
+| E2E-RKB9 | `docs-root` 来源：独立徽标 `docs/`（title「docs（一层文件夹）」）；展开知识库/目录并阅读文档，URL 含 `docs-root` |
 | E2E-RKB3 | 预览 front matter 渲染为键值表格（含自定义键），正文紧随其后；无编辑/删除/历史入口；`?edit=1` 仍为只读 |
 | E2E-RKB4 | 折叠态点云电脑条目尾部「重新检测」→ 修改 fixture 后展开即看到新文档（缓存刷新） |
 | E2E-RKB5 | 版本 2.18.0 云电脑展示「升级云电脑工作组件后可加载」提示且 `scans[]` 保持为空 |

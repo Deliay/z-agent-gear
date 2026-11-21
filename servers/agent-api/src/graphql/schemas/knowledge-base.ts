@@ -81,6 +81,7 @@ export const knowledgeBaseTypeDefs = `#graphql
   enum RepoKnowledgeBaseSource {
     ZAG
     DOCS
+    DOCS_ROOT
   }
 
   type RepoKnowledgeBaseHost {
