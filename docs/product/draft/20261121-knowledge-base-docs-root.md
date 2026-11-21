@@ -18,7 +18,7 @@ type: Permanent
 
 实际项目中，大量文档已经按 `docs/<主题>/` 的方式组织（例如 `docs/guides/`、`docs/architecture/`），这些目录里往往已经有 `knowledge-base.json` 标识文件，但因为不在两个约定目录内，平台无法识别，用户需要把内容复制或移动到 `docs/knowledges/` 下，破坏了仓库原有的文档结构。
 
-需求来源：[GitHub Issue Deliay/z-agent-gear#572](https://github.com/Deliay/z-agent-gear/issues/572)。
+需求来源：用户提出——现有两个约定目录无法覆盖仓库既有的 `docs/<主题>/` 文档结构。
 
 ### 1.2 目标
 

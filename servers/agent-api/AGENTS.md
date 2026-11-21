@@ -613,7 +613,7 @@ pnpm run start   # Start production server
   缓存 miss 扫描有进程内 single-flight（同一工作区并发首次展开只触发一次扫描，S4）。
 - **id 编解码（D6）**：`repo:<workspaceId>:<source(zag|docs|docs-root)>:<encodeURIComponent(folder)>`；`source` 在 GraphQL
   透出为 `ZAG|DOCS|DOCS_ROOT`，列表顺序 zag → docs → docs-root、同来源 `folder.localeCompare`。
-- **来源扩展（2.23.0，Issue #572）**：第三来源 `docs-root` = 仓库 `docs/` 的一层文件夹（跳过 `docs/knowledges` 容器）；
+- **来源扩展（2.23.0）**：第三来源 `docs-root` = 仓库 `docs/` 的一层文件夹（跳过 `docs/knowledges` 容器）；
   与 `ZAG`/`DOCS` 同构解析与展示，同名文件夹因来源不同互不覆盖；旧版 agent-gear 仅返回两项时 `DOCS_ROOT` 自然为空。
 - **知识库 MCP prompts（D14）**：`services/knowledge-base-prompts.ts` 单一来源提供
   `repo-knowledge-base-authoring`（编写指引）；`knowledge-base-tools.ts` 的 `initialize` 声明
