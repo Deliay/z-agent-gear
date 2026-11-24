@@ -73,9 +73,13 @@ import * as migration022AuthProviders from './migrations/022-auth-providers.js';
 import * as migration023HarnessConfigs from './migrations/023-harness-configs.js';
 // 024：Github 预制脚本 V3（/usr/local/bin/gh wrapper，按项目申请 token；幂等收敛 + SKIP 旁路）
 import * as migration024GithubGhWrapper from './migrations/024-github-gh-wrapper.js';
+// 025：容器规格预制 6 款播种（幂等，不覆盖管理员修改）+ cloudbillingcursors 索引兜底
+import * as migration025PresetCloudHostSpecs from './migrations/025-preset-cloud-host-specs.js';
 import { CloudHost } from './models/cloud-host.js';
+import { CloudBillingCursor } from './models/cloud-billing-cursor.js';
 import { StorageBillingCursor } from './models/storage-billing-cursor.js';
 import { storageTickService } from './services/billing/storage-tick.js';
+import { specTickService } from './services/billing/spec-tick.js';
 
 const logger = rootLogger.child({ component: 'admin-api' });
 
@@ -205,6 +209,7 @@ async function start() {
       migration022AuthProviders,
       migration023HarnessConfigs,
       migration024GithubGhWrapper,
+      migration025PresetCloudHostSpecs,
     ]);
   } catch (err) {
     logger.error({ err }, 'runMigrations failed (non-fatal)');
@@ -233,6 +238,7 @@ async function start() {
     BillingDeadLetter,
     BillingAppliedLedger,
     StorageBillingCursor,
+    CloudBillingCursor,
   ];
   try {
     await Promise.all(billingModels.map((model) => model.syncIndexes()));
@@ -273,6 +279,7 @@ async function start() {
     reconciliation: reconciliationRuntime,
     logger: logger.child({ component: 'billing-scheduler' }),
     storageTick: storageTickService,
+    specTick: specTickService,
   });
   scheduler.start();
 

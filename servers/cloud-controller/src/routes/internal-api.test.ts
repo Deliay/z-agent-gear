@@ -1271,6 +1271,60 @@ describe('internal management API', () => {
     expect(((await res.json()) as { error: string }).error).toBe('INVALID_HARNESS');
   });
 
+  it('T-PRS1~3: spec 载荷解析（合法透传/缺省 null/非法组合 400）与快照落库', async () => {
+    const base = harnessPayload() as Record<string, unknown>;
+    const deps = { resolveGlobalWorkspaceId: async () => null };
+    const spec = { id: 'spec-1', name: '8C 16G 20G', cpu: 8, memoryGi: 16, ephemeralStorageGi: 20 };
+
+    const carried = await parseHarnessRequest({ ...base, spec }, deps);
+    expect(carried?.spec).toEqual(spec);
+
+    const missing = await parseHarnessRequest({ ...base }, deps);
+    expect(missing).not.toBeNull();
+    expect(missing?.spec).toBeNull();
+
+    const unlimited = await parseHarnessRequest(
+      { ...base, spec: { ...spec, name: '0C 0G 0G', cpu: 0, memoryGi: 0, ephemeralStorageGi: 0 } },
+      deps,
+    );
+    expect(unlimited?.spec?.cpu).toBe(0);
+
+    for (const invalid of [
+      { ...spec, cpu: 0 },
+      { ...spec, memoryGi: 0 },
+      { ...spec, ephemeralStorageGi: 0 },
+      { ...spec, cpu: 65 },
+      { ...spec, memoryGi: 257 },
+      { ...spec, ephemeralStorageGi: 513 },
+      { ...spec, cpu: 1.5 },
+      { ...spec, id: '' },
+      { ...spec, name: '' },
+      'bad',
+      [],
+    ]) {
+      expect(await parseHarnessRequest({ ...base, spec: invalid }, deps), JSON.stringify(invalid)).toBeNull();
+    }
+
+    // 路由层口径：非法 spec → 400 INVALID_HARNESS，不创建容器
+    const res = await createContainer({ ...base, spec: { ...spec, cpu: 0 } });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe('INVALID_HARNESS');
+  });
+
+  it('T-PRS3: cloudcontainers 落规格快照五字段', async () => {
+    const base = harnessPayload() as Record<string, unknown>;
+    const spec = { id: '507f1f77bcf86cd7994390b1', name: '8C 16G 20G', cpu: 8, memoryGi: 16, ephemeralStorageGi: 20 };
+    const res = await createContainer({ ...base, spec });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: string };
+    const created = await repo.findById(body.id);
+    expect(created?.specId).toBe(spec.id);
+    expect(created?.specName).toBe(spec.name);
+    expect(created?.specCpu).toBe(8);
+    expect(created?.specMemoryGi).toBe(16);
+    expect(created?.specEphemeralStorageGi).toBe(20);
+  });
+
   it('T-CC-MP3: harness-models 端点四态矩阵（404/409/offline/worker_unsupported/400/503/ack）', async () => {
     const provision = {
       providers: [

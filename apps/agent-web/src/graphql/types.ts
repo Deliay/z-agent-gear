@@ -328,6 +328,43 @@ export interface CloudHostBillingQuoteQuery {
   cloudHostBillingQuote: CloudHostBillingQuoteData
 }
 
+/** 容器规格（contracts/cloud-host.graphql；服务端已按可见性与算力降序过滤） */
+export interface CloudHostSpecData {
+  id: string
+  name: string
+  /** CPU 核数；不限制规格恒 0 */
+  cpu: number
+  /** 内存 GiB；不限制规格恒 0 */
+  memoryGi: number
+  /** 临时存储 GiB；不限制规格恒 0 */
+  ephemeralStorageGi: number
+  /** 三项全 0；前端渲染「不限制容器，随时可能会被系统销毁」 */
+  unlimited: boolean
+  /** 按当前价目算出的每小时运行费用（credits） */
+  hourlyCredits: number
+}
+
+/** 规格分段计费分档明细 */
+export interface CloudHostSpecQuoteTierData {
+  label: string
+  amountCredits: number
+}
+
+/** 规格分段计费报价 */
+export interface CloudHostSpecBillingQuoteData {
+  hourlyCredits: number
+  tiers: CloudHostSpecQuoteTierData[]
+  availableBalance: number | null
+}
+
+export interface CloudHostSpecsQuery {
+  cloudHostSpecs: CloudHostSpecData[]
+}
+
+export interface CloudHostSpecBillingQuoteQuery {
+  cloudHostSpecBillingQuote: CloudHostSpecBillingQuoteData
+}
+
 export type CloudHostSetupKind = 'INSTALL_WORKLOAD' | 'GITHUB_SETUP'
 
 export type CloudHostSetupStatus = 'RUNNING' | 'SUCCEEDED' | 'FAILED'

@@ -828,3 +828,11 @@ pnpm run start   # Start production server
 - **只读镜像**：`models/cloud-container.ts` 同步 `agentGearVersion`（写方仍 cloud-controller）。
 - **三 env 仅代码默认值**（计划 D4）：`AGENT_GEAR_REGISTRY_URL` / `AGENT_GEAR_VERSION_REFRESH_INTERVAL_MS` / `AGENT_GEAR_AUTO_UPDATE_INTERVAL_MINUTES` 不进 AppHost/compose/k8s；内网部署经 env 覆盖。
 - **双写守卫**：`schemas/cloud-host.test.ts` 以 `parse`/`print` 逐字段比对契约（`CloudHostAgentGearVersion` / `CloudHostAgentGearUpgradeResult` / `CloudHost` / `Query` / `Mutation`）。
+
+## 容器规格（#574）
+
+- **只读镜像**：`models/cloud-host-spec.ts`（集合 `cloudhostspecs`，`autoIndex:false`、不声明索引、`strict:false`，同 harness-config/auth-provider 纪律）；写方仅 admin-api。
+- **可见性唯一口径**：`services/cloud-host-spec-service.ts#listVisible` 查询 `{ $or: [{whitelistEnabled:false},{allowedTenantIds:String(tenantId)}] }`，排序 `cpu desc, memoryGi desc, ephemeralStorageGi desc`；租户取 `getWorkspaceContext()?.tenantId`（无上下文返回空集，安全默认）；不挂工作区/租户作用域插件（规格是平台目录）。`findVisibleById` 对不可见/不存在统一 null（不泄露存在性）。
+- **创建链路**：`CreateCloudHostInput.specId` 必填；`cloud-host-service.create` 在扣费/落库前 `findVisibleById`，不可见/不存在抛 `spec not found`（已列 resolver 白名单）；落 `cloudhosts.specId/specName/specCpu/specMemoryGi/specEphemeralStorageGi` 快照并随 `startHarness` 下发 `spec`（旧链路无该字段）。规格删除/修改只影响后续创建（计费与展示均以快照为准，不回查规格表）。
+- **GraphQL**：`cloudHostSpecs`（每档 `hourlyCredits` 经 `/internal/billing/spec-quote` 填充；失败降级 `fallbackSpecHourlyCredits` 本地默认价并 warn，常量与 admin-api `pricing.ts` 同步）、`cloudHostSpecBillingQuote(specId)`（实时报价 + 余额）、`CloudHost.spec` 字段级 resolver（按快照装配，不回查规格表）。
+- **测试**：`cloud-host-spec-service.test.ts`（T-SPVIS/快照/降级）、`cloud-host-service.test.ts`（T-CHS1/2）；API 见 `tests/api/src/agent-api/cloud-host-spec.test.ts`。

@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Boxes, Building2, Cloud, CreditCard, KeyRound, LogOut, Package, Scale, Server, ShieldCheck, Wrench } from 'lucide-react'
+import { Boxes, Building2, Cloud, Cpu, CreditCard, KeyRound, LogOut, Package, Scale, Server, ShieldCheck, Wrench } from 'lucide-react'
 import { useAuth } from '@/stores/auth'
 import { Button } from '@/components/ui/button'
 
@@ -8,6 +8,7 @@ const NAV_ITEMS = [
   { to: '/base-images', label: '基础镜像', icon: Boxes },
   { to: '/cloud-containers', label: '云端容器', icon: Cloud },
   { to: '/cloud-workloads', label: '工作负载', icon: Package },
+  { to: '/cloud-host-specs', label: '容器规格', icon: Cpu },
   { to: '/harness-configs', label: 'Harness 配置', icon: Wrench },
   { to: '/tenants', label: '租户管理', icon: Building2 },
   { to: '/billing', label: '费用中心', icon: CreditCard },

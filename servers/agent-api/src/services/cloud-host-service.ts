@@ -38,6 +38,7 @@ import {
 import { cloudStorageService, type CloudStorageService } from './cloud-storage-service.js';
 import { compareVersions } from './version.js';
 import { getLatestAgentGearVersion } from './agent-gear-version.js';
+import { cloudHostSpecService } from './cloud-host-spec-service.js';
 
 export const CLOUD_HOST_AGENT_GEAR_MIN_VERSION = '2.17.1';
 
@@ -79,6 +80,8 @@ export interface CreateCloudHostInput {
   githubAccountId?: string | null;
   /** 可选：挂载当前工作区 IDLE/ARCHIVED 云存储（缺省 = 不挂载，报文与历史一致）。 */
   storageId?: string | null;
+  /** 必填：容器规格 ID（必须对当前租户可见；不可见/不存在抛 `spec not found`）。 */
+  specId: string;
 }
 
 export interface CloudHostStopImpact {
@@ -228,6 +231,7 @@ export class CloudHostService {
     createDefaultSession: boolean;
     githubAccountId: string | null;
     storageId: string | null;
+    specId: string;
   } {
     const name = (input.name ?? '').trim();
     if (!name) throw new Error('name is required');
@@ -246,6 +250,10 @@ export class CloudHostService {
     if (rawStorageId && !mongoose.isValidObjectId(rawStorageId)) {
       throw new Error('storage not found');
     }
+    const rawSpecId =
+      input.specId === undefined || input.specId === null ? '' : String(input.specId).trim();
+    if (!rawSpecId) throw new Error('spec not found');
+    if (!mongoose.isValidObjectId(rawSpecId)) throw new Error('spec not found');
     return {
       name,
       harnessTypes: parseHarnessTypes(input.harnessTypes),
@@ -253,13 +261,30 @@ export class CloudHostService {
       createDefaultSession: input.createDefaultSession !== false,
       githubAccountId: rawAccountId || null,
       storageId: rawStorageId || null,
+      specId: rawSpecId,
+    };
+  }
+
+  private buildSpecSnapshot(specDoc: Record<string, unknown>): {
+    specId: string;
+    specName: string;
+    specCpu: number;
+    specMemoryGi: number;
+    specEphemeralStorageGi: number;
+  } {
+    return {
+      specId: String(specDoc._id ?? ''),
+      specName: String(specDoc.name ?? ''),
+      specCpu: Number(specDoc.cpu ?? 0),
+      specMemoryGi: Number(specDoc.memoryGi ?? 0),
+      specEphemeralStorageGi: Number(specDoc.ephemeralStorageGi ?? 0),
     };
   }
 
   async create(userId: string, input: CreateCloudHostInput): Promise<Doc> {
     this.assertFeature();
     this.assertConfigured();
-    const { name, harnessTypes, workloadIds, createDefaultSession, githubAccountId, storageId } =
+    const { name, harnessTypes, workloadIds, createDefaultSession, githubAccountId, storageId, specId } =
       this.validateInput(input);
     if (githubAccountId) {
       const account = await GitHubAccount.findOne({
@@ -302,6 +327,18 @@ export class CloudHostService {
       const controllerId = new mongoose.Types.ObjectId().toString();
       const expiresAt = new Date(Date.now() + this.ttlSeconds * 1000);
       const chargeKey = `cloud_host.create:${cloudHostId}`;
+
+      // 规格必须对当前租户可见（隐藏不作为安全边界；快照落库后不回查规格表）。
+      const specDoc = await cloudHostSpecService.findVisibleById(specId, ownerTenantId);
+      if (!specDoc) throw new Error('spec not found');
+      const specSnapshot = this.buildSpecSnapshot(specDoc);
+      const specPayload = {
+        id: String(specDoc._id ?? specId),
+        name: String(specDoc.name ?? ''),
+        cpu: specSnapshot.specCpu,
+        memoryGi: specSnapshot.specMemoryGi,
+        ephemeralStorageGi: specSnapshot.specEphemeralStorageGi,
+      };
 
       // 存储占用先于扣费（计划期裁决 11）：校验/余额 → CAS IDLE/ARCHIVED→ATTACHING。
       // 失败不扣费、不落库；成功后的扣费失败在下方逆序释放。
@@ -372,6 +409,7 @@ export class CloudHostService {
           githubAccountId,
           storageId,
           startedAt: new Date(),
+          ...specSnapshot,
         });
 
         const models = await modelService.findAll();
@@ -403,6 +441,7 @@ export class CloudHostService {
             billingAccountId: account.id,
             agentGearMinVersion: resolveAgentGearMinVersion(harnessTypes),
             workloadPlan,
+            spec: specPayload,
             ...(attachment
               ? { storage: this.buildStoragePayload(attachment.storage, attachment.fromStatus) }
               : {}),
@@ -1197,6 +1236,7 @@ export function mapAgentGearUpgradeError(err: unknown): string {
   'storage not found',
   'storage is not attachable',
   'storage size must be between 1 and 30 Gi',
+  'spec not found',
   'global workspace is read-only',
   // Issues 联动配置
   'cloud host not found',

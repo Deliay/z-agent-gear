@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import mongoose from 'mongoose';
 import { createFrontUser } from '../support/front-users.js';
 import { fundFrontUser } from './funding.js';
@@ -24,6 +24,19 @@ function gql(query: string, variables?: Record<string, unknown>, token?: string)
       res.json() as Promise<{ data?: any; errors?: Array<{ message: string }> }>,
   );
 }
+
+const CLOUD_HOST_SPECS = `query { cloudHostSpecs { id } }`;
+
+/** 创建云电脑必填规格：取当前租户可见的第一款规格。 */
+let defaultSpecId = '';
+
+beforeAll(async () => {
+  if (!HARNESS_ENABLED) return;
+  const { token } = await createFrontUser();
+  const result = await gql(CLOUD_HOST_SPECS, undefined, token);
+  defaultSpecId = (result.data?.cloudHostSpecs?.[0]?.id as string | undefined) ?? '';
+  expect(defaultSpecId).toBeTruthy();
+}, 30_000);
 
 const CREATE_STORAGE = `
   mutation Create($input: CreateCloudStorageInput!) {
@@ -121,6 +134,7 @@ describe.skipIf(!STORAGE_ENABLED || !INTERNAL_TOKEN || !MONGO_URI)(
             input: {
               name: `host-${Date.now().toString(36)}`,
               harnessTypes: ['OPENCODE'],
+              specId: defaultSpecId,
               storageId: storage.id,
             },
           },

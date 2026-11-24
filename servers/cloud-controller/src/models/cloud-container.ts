@@ -135,6 +135,13 @@ const cloudContainerSchema = new mongoose.Schema(
     currentWorkloadName: { type: String, default: null },
     // 容器内已安装工作负载（runtime 安装/起始 init 成功回填）；历史容器为空
     installedWorkloads: { type: [installedWorkloadSchema], default: [] },
+    // 云电脑规格快照（零迁移、可缺省）：仅在 harness 请求携带 spec 时写入；
+    // 历史容器/旧链路全 null = 现状资源口径。
+    specId: { type: String, default: null },
+    specName: { type: String, default: null },
+    specCpu: { type: Number, default: null },
+    specMemoryGi: { type: Number, default: null },
+    specEphemeralStorageGi: { type: Number, default: null },
     // 当前初始化批次来源：start（创建启动）/ runtime（在线安装）；用于收口判定与重连防重放
     initTrigger: { type: String, enum: ['start', 'runtime', null], default: null },
     // 起始初始化已收口（首次 online）时间：非空后断线重连不得再次执行 init 批次（工作流只初始化一次）

@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
+  fetchDefaultCloudSpecId,
   loginViaUI,
   registerFundedUser,
   createControllerKey,
@@ -20,7 +21,9 @@ async function createHost(page: import('@playwright/test').Page, token: string, 
       query: `mutation Create($input: CreateCloudHostInput!) {
         createCloudHost(input: $input) { id controllerId name status }
       }`,
-      variables: { input: { name, harnessTypes: ['OPENCODE'] } },
+      variables: {
+        input: { name, harnessTypes: ['OPENCODE'], specId: await fetchDefaultCloudSpecId(page, token) },
+      },
     },
   });
   const body = (await response.json()) as any;

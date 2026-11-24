@@ -18,6 +18,11 @@ const LOGIN_CODE = 'ABCD-1234';
 
 let authToken = '';
 
+const CLOUD_HOST_SPECS = `query { cloudHostSpecs { id } }`;
+
+/** 创建云电脑必填规格：取当前租户可见的第一款规格。 */
+let defaultSpecId = '';
+
 function gqlRequest(query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -249,6 +254,9 @@ async function openUserStream(token: string): Promise<UserStream> {
 
 beforeAll(async () => {
   authToken = (await newFrontUser()).token;
+  if (!HARNESS_ENABLED) return;
+  const result = await gqlRequest(CLOUD_HOST_SPECS, undefined, authToken).then((res) => res.json());
+  defaultSpecId = (result.data?.cloudHostSpecs?.[0]?.id as string | undefined) ?? '';
 });
 
 describe('Harness Login API', () => {
@@ -498,7 +506,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Harness Login API: version gate
     const name = `hl-kimi-${Date.now().toString(36)}`;
     const created = await gqlRequest(
       CREATE_CLOUD_HOST,
-      { input: { name, harnessTypes: ['KIMI_CODE'] } },
+      { input: { name, harnessTypes: ['KIMI_CODE'], specId: defaultSpecId } },
       token,
     );
     const body = await created.json();

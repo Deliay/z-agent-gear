@@ -46,6 +46,29 @@ export const CLOUD_STORAGE_BASE_PRODUCT_ID = 'cloud_storage.base.hour';
 export const CLOUD_STORAGE_TIER1_PRODUCT_ID = 'cloud_storage.tier1.gib_hour';
 export const CLOUD_STORAGE_TIER2_PRODUCT_ID = 'cloud_storage.tier2.gib_hour';
 
+/** 云电脑规格分段价目（分/单位/小时）：CPU ≤4 部分。 */
+export const DEFAULT_CLOUD_SPEC_CPU_TIER1_CENTS = 1500;
+/** 云电脑规格分段价目（分）：CPU >4 部分。 */
+export const DEFAULT_CLOUD_SPEC_CPU_TIER2_CENTS = 3000;
+/** 云电脑规格分段价目（分）：内存 ≤4GiB 部分。 */
+export const DEFAULT_CLOUD_SPEC_MEM_TIER1_CENTS = 1500;
+/** 云电脑规格分段价目（分）：内存 4~8GiB 部分。 */
+export const DEFAULT_CLOUD_SPEC_MEM_TIER2_CENTS = 3000;
+/** 云电脑规格分段价目（分）：内存 8~16GiB 部分。 */
+export const DEFAULT_CLOUD_SPEC_MEM_TIER3_CENTS = 4500;
+/** 云电脑规格分段价目（分）：内存 >16GiB 部分。 */
+export const DEFAULT_CLOUD_SPEC_MEM_TIER4_CENTS = 6000;
+/** 云电脑规格分段价目（分）：临时存储 >10GiB 部分。 */
+export const DEFAULT_CLOUD_SPEC_EPHEMERAL_TIER_CENTS = 1000;
+
+export const CLOUD_SPEC_CPU_TIER1_PRODUCT_ID = 'cloud_spec.cpu.tier1';
+export const CLOUD_SPEC_CPU_TIER2_PRODUCT_ID = 'cloud_spec.cpu.tier2';
+export const CLOUD_SPEC_MEM_TIER1_PRODUCT_ID = 'cloud_spec.mem.tier1';
+export const CLOUD_SPEC_MEM_TIER2_PRODUCT_ID = 'cloud_spec.mem.tier2';
+export const CLOUD_SPEC_MEM_TIER3_PRODUCT_ID = 'cloud_spec.mem.tier3';
+export const CLOUD_SPEC_MEM_TIER4_PRODUCT_ID = 'cloud_spec.mem.tier4';
+export const CLOUD_SPEC_EPHEMERAL_TIER_PRODUCT_ID = 'cloud_spec.ephemeral.tier';
+
 /** 定价：按消费时段取生效价目（effectiveFrom <= at 的最新档），产出单价快照。 */
 export class PricingService {
   async ensureDefaultPrices(): Promise<void> {
@@ -98,6 +121,61 @@ export class PricingService {
       },
     ];
     for (const price of storagePrices) {
+      await ProductPrice.updateOne(
+        { productId: price.productId },
+        {
+          $setOnInsert: {
+            productId: price.productId,
+            productName: price.productName,
+            pricingModel: 'per_unit',
+            unitPrice: price.unitPrice,
+            rates: { inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0 },
+            isBillable: true,
+            effectiveFrom: new Date(0),
+          },
+        },
+        { upsert: true },
+      );
+    }
+    // 云电脑规格七档分段价目：`$setOnInsert` 不覆盖管理员调价（PRD 验收「后台可调价」）。
+    const specPrices: Array<{ productId: string; productName: string; unitPrice: number }> = [
+      {
+        productId: CLOUD_SPEC_CPU_TIER1_PRODUCT_ID,
+        productName: '云电脑规格 CPU（≤4 核部分/小时）',
+        unitPrice: DEFAULT_CLOUD_SPEC_CPU_TIER1_CENTS,
+      },
+      {
+        productId: CLOUD_SPEC_CPU_TIER2_PRODUCT_ID,
+        productName: '云电脑规格 CPU（>4 核部分/小时）',
+        unitPrice: DEFAULT_CLOUD_SPEC_CPU_TIER2_CENTS,
+      },
+      {
+        productId: CLOUD_SPEC_MEM_TIER1_PRODUCT_ID,
+        productName: '云电脑规格内存（≤4GiB 部分/小时）',
+        unitPrice: DEFAULT_CLOUD_SPEC_MEM_TIER1_CENTS,
+      },
+      {
+        productId: CLOUD_SPEC_MEM_TIER2_PRODUCT_ID,
+        productName: '云电脑规格内存（4~8GiB 部分/小时）',
+        unitPrice: DEFAULT_CLOUD_SPEC_MEM_TIER2_CENTS,
+      },
+      {
+        productId: CLOUD_SPEC_MEM_TIER3_PRODUCT_ID,
+        productName: '云电脑规格内存（8~16GiB 部分/小时）',
+        unitPrice: DEFAULT_CLOUD_SPEC_MEM_TIER3_CENTS,
+      },
+      {
+        productId: CLOUD_SPEC_MEM_TIER4_PRODUCT_ID,
+        productName: '云电脑规格内存（>16GiB 部分/小时）',
+        unitPrice: DEFAULT_CLOUD_SPEC_MEM_TIER4_CENTS,
+      },
+      {
+        productId: CLOUD_SPEC_EPHEMERAL_TIER_PRODUCT_ID,
+        productName: '云电脑规格临时存储（>10GiB 部分/小时）',
+        unitPrice: DEFAULT_CLOUD_SPEC_EPHEMERAL_TIER_CENTS,
+      },
+    ];
+    for (const price of specPrices) {
       await ProductPrice.updateOne(
         { productId: price.productId },
         {

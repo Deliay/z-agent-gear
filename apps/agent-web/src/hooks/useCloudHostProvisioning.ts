@@ -19,6 +19,8 @@ export interface CloudHostProjectSelection {
 export interface StartCloudHostProvisioningInput {
   name: string
   harnessTypes: HarnessType[]
+  /** 容器规格（必填；服务端校验对当前租户可见） */
+  specId: string
   workloadIds?: string[]
   /** 勾选 Github 项目时锁定帐号（未勾选保持旧报文形状） */
   githubAccountId?: string
@@ -69,6 +71,7 @@ export function useCloudHostProvisioning() {
           input: {
             name: input.name,
             harnessTypes: input.harnessTypes,
+            specId: input.specId,
             ...(input.workloadIds && input.workloadIds.length > 0
               ? { workloadIds: input.workloadIds }
               : {}),

@@ -146,6 +146,18 @@ vi.mock('./cloud-storage-service.js', () => ({
   },
 }));
 
+const specServiceMock = vi.hoisted(() => ({
+  findVisibleById: vi.fn(),
+  listVisible: vi.fn(),
+  quoteById: vi.fn(),
+  quoteHourlyCredits: vi.fn(),
+}));
+vi.mock('./cloud-host-spec-service.js', () => ({
+  cloudHostSpecService: specServiceMock,
+  buildCloudHostSpecSnapshot: vi.fn(),
+  fallbackSpecHourlyCredits: vi.fn(),
+}));
+
 const agentGearVersionMock = vi.hoisted(() => ({
   getLatestAgentGearVersion: vi.fn(),
 }));
@@ -184,6 +196,7 @@ const HOST_ID = '507f1f77bcf86cd799439011';
 const STORAGE_ID = '507f1f77bcf86cd7994390a9';
 const CONTROLLER_ID = '507f1f77bcf86cd799439012';
 const WORKSPACE_ID = '507f1f77bcf86cd799439013';
+const SPEC_ID = '507f1f77bcf86cd7994390b1';
 
 function oid(id: string) {
   return { toString: () => id };
@@ -270,6 +283,13 @@ function setupCreateSuccess() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  specServiceMock.findVisibleById.mockResolvedValue({
+    _id: SPEC_ID,
+    name: '8C 16G 20G',
+    cpu: 8,
+    memoryGi: 16,
+    ephemeralStorageGi: 20,
+  });
   h.config.harnessEnabled = true;
   vi.mocked(CloudHost.findByIdAndUpdate).mockReset();
   vi.mocked(CloudHost.findOneAndUpdate).mockReset();
@@ -336,31 +356,67 @@ describe('CloudHostService', () => {
     it('rejects when feature disabled', async () => {
       h.config.harnessEnabled = false;
       await expect(
-        service.create('user-1', { name: 'x', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'x', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('harness feature is disabled');
     });
 
     it('rejects missing configuration without writing records', async () => {
       h.config.cloudHostModelBaseUrl = '';
       await expect(
-        service.create('user-1', { name: 'x', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'x', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('cloud host is not configured');
       expect(CloudHost.create).not.toHaveBeenCalled();
       h.config.cloudHostModelBaseUrl = 'http://admin-api:8002/v1';
+    });
+
+    it('T-CHS1: 规格不存在/不可见时拒绝创建且不扣费不落库', async () => {
+      setupCreateSuccess();
+      specServiceMock.findVisibleById.mockResolvedValueOnce(null);
+      await expect(
+        service.create('user-1', { specId: SPEC_ID, name: 'x', harnessTypes: ['OPENCODE'] }),
+      ).rejects.toThrow('spec not found');
+      expect(billingClient.createCharge).not.toHaveBeenCalled();
+      expect(CloudHost.create).not.toHaveBeenCalled();
+      expect(cloudControllerClient.startHarness).not.toHaveBeenCalled();
+    });
+
+    it('T-CHS2: 规格快照落库并随 startHarness 下发', async () => {
+      setupCreateSuccess();
+      await service.create('user-1', { specId: SPEC_ID, name: 'x', harnessTypes: ['OPENCODE'] });
+      expect(CloudHost.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          specId: SPEC_ID,
+          specName: '8C 16G 20G',
+          specCpu: 8,
+          specMemoryGi: 16,
+          specEphemeralStorageGi: 20,
+        }),
+      );
+      expect(cloudControllerClient.startHarness).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spec: {
+            id: SPEC_ID,
+            name: '8C 16G 20G',
+            cpu: 8,
+            memoryGi: 16,
+            ephemeralStorageGi: 20,
+          },
+        }),
+      );
     });
 
     it.each([
       ['   ', 'name is required'],
       ['x'.repeat(65), 'name is too long'],
     ])('validates name %s', async (name, message) => {
-      await expect(service.create('user-1', { name, harnessTypes: ['OPENCODE'] })).rejects.toThrow(
+      await expect(service.create('user-1', { specId: SPEC_ID, name, harnessTypes: ['OPENCODE'] })).rejects.toThrow(
         message,
       );
     });
 
     it('T-AH3: harnessTypes 允许 0 个；白名单外仍报错、去重保序不变', async () => {
       setupCreateSuccess();
-      await service.create('user-1', { name: 'x', harnessTypes: [] });
+      await service.create('user-1', { specId: SPEC_ID, name: 'x', harnessTypes: [] });
       expect(cloudWorkloadReader.findHarnessPreset).not.toHaveBeenCalled();
       expect(CloudHost.create).toHaveBeenCalledWith(
         expect.objectContaining({ harnessTypes: [] }),
@@ -370,10 +426,10 @@ describe('CloudHostService', () => {
       );
 
       await expect(
-        service.create('user-1', { name: 'x', harnessTypes: ['UNKNOWN'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'x', harnessTypes: ['UNKNOWN'] }),
       ).rejects.toThrow('unsupported harness type: UNKNOWN');
       await expect(
-        service.create('user-1', {
+        service.create('user-1', { specId: SPEC_ID,
           name: 'x',
           harnessTypes: ['OPENCODE' as never, 'OPENCODE' as never],
         }),
@@ -382,7 +438,7 @@ describe('CloudHostService', () => {
 
     it('T-CH-GH1: 非法/非本人 githubAccountId 拒绝，合法则落库透传', async () => {
       await expect(
-        service.create('user-1', {
+        service.create('user-1', { specId: SPEC_ID,
           name: 'x',
           harnessTypes: ['OPENCODE'],
           githubAccountId: 'not-an-object-id',
@@ -391,7 +447,7 @@ describe('CloudHostService', () => {
 
       vi.mocked(GitHubAccount.findOne).mockReturnValue(chain(null) as never);
       await expect(
-        service.create('user-1', {
+        service.create('user-1', { specId: SPEC_ID,
           name: 'x',
           harnessTypes: ['OPENCODE'],
           githubAccountId: '507f1f77bcf86cd799439099',
@@ -403,7 +459,7 @@ describe('CloudHostService', () => {
       vi.mocked(GitHubAccount.findOne).mockReturnValue(
         chain({ _id: '507f1f77bcf86cd799439099' }) as never,
       );
-      await service.create('user-1', {
+      await service.create('user-1', { specId: SPEC_ID,
         name: 'owned',
         harnessTypes: ['OPENCODE'],
         githubAccountId: '507f1f77bcf86cd799439099',
@@ -433,7 +489,7 @@ describe('CloudHostService', () => {
           globalWorkspaceId: 'ws-global',
         },
         () =>
-          service.create('user-1', {
+          service.create('user-1', { specId: SPEC_ID,
             name: 'shared-gh',
             harnessTypes: ['OPENCODE'],
             githubAccountId: '507f1f77bcf86cd799439099',
@@ -449,10 +505,10 @@ describe('CloudHostService', () => {
       setupCreateSuccess();
       vi.mocked(cloudWorkloadReader.findHarnessPreset).mockResolvedValue({} as never);
       await expect(
-        service.create('user-1', { name: 'first', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'first', harnessTypes: ['OPENCODE'] }),
       ).resolves.toMatchObject({ name: 'my-cloud' });
       await expect(
-        service.create('user-1', { name: 'second', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'second', harnessTypes: ['OPENCODE'] }),
       ).resolves.toMatchObject({ name: 'my-cloud' });
       expect(CloudHost.create).toHaveBeenCalledTimes(2);
       expect(CloudHost.countDocuments).not.toHaveBeenCalled();
@@ -462,7 +518,7 @@ describe('CloudHostService', () => {
   describe('create orchestration', () => {
     it('creates controller/key/host and starts harness container (no default workspace)', async () => {
       setupCreateSuccess();
-      const result = await service.create('user-1', {
+      const result = await service.create('user-1', { specId: SPEC_ID,
         name: ' my-cloud ',
         harnessTypes: ['OPENCODE'],
       });
@@ -542,7 +598,7 @@ describe('CloudHostService', () => {
           globalWorkspaceId: 'ws-global',
         },
         async () => {
-          await service.create('user-1', { name: 'team-host', harnessTypes: ['OPENCODE'] });
+          await service.create('user-1', { specId: SPEC_ID, name: 'team-host', harnessTypes: ['OPENCODE'] });
         },
       );
       expect(billingClient.getAccount).toHaveBeenCalledWith('tenant', 'tenant-team');
@@ -559,7 +615,7 @@ describe('CloudHostService', () => {
 
     it('T-CH-B1: 扣费发生在落库/拉起之前且键位正确', async () => {
       setupCreateSuccess();
-      const result = await service.create('user-1', {
+      const result = await service.create('user-1', { specId: SPEC_ID,
         name: 'my-cloud',
         harnessTypes: ['OPENCODE'],
       });
@@ -588,7 +644,7 @@ describe('CloudHostService', () => {
       err.message = 'insufficient balance';
       vi.mocked(billingClient.createCharge).mockRejectedValue(err as never);
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('insufficient balance');
       expect(CloudHost.create).not.toHaveBeenCalled();
       expect(controllerKeyService.createForCloudHost).not.toHaveBeenCalled();
@@ -599,7 +655,7 @@ describe('CloudHostService', () => {
       setupCreateSuccess();
       vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('control plane unavailable');
       expect(billingClient.refundCharge).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -611,7 +667,7 @@ describe('CloudHostService', () => {
 
     it('T-HL-API9: 仅 KIMI_CODE 时 agentGearMinVersion=2.17.1', async () => {
       setupCreateSuccess();
-      await service.create('user-1', { name: 'kimi-cloud', harnessTypes: ['KIMI_CODE'] });
+      await service.create('user-1', { specId: SPEC_ID, name: 'kimi-cloud', harnessTypes: ['KIMI_CODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.harnessTypes).toEqual(['kimi_code']);
@@ -620,7 +676,7 @@ describe('CloudHostService', () => {
 
     it('T-HL-API9b: 多选取按类型最大值（opencode+kimi_code → 2.17.1）', async () => {
       setupCreateSuccess();
-      await service.create('user-1', { name: 'multi', harnessTypes: ['OPENCODE', 'KIMI_CODE'] });
+      await service.create('user-1', { specId: SPEC_ID, name: 'multi', harnessTypes: ['OPENCODE', 'KIMI_CODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.agentGearMinVersion).toBe('2.17.1');
@@ -628,13 +684,13 @@ describe('CloudHostService', () => {
 
     it('T-DS-API3: 仅 DEEPSEEK_HARNESS 时 agentGearMinVersion=2.17.1，混合取最大', async () => {
       setupCreateSuccess();
-      await service.create('user-1', { name: 'deepseek-cloud', harnessTypes: ['DEEPSEEK_HARNESS'] });
+      await service.create('user-1', { specId: SPEC_ID, name: 'deepseek-cloud', harnessTypes: ['DEEPSEEK_HARNESS'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.harnessTypes).toEqual(['deepseek_harness']);
       expect(payload.agentGearMinVersion).toBe('2.17.1');
 
-      await service.create('user-1', {
+      await service.create('user-1', { specId: SPEC_ID,
         name: 'deepseek-mixed',
         harnessTypes: ['OPENCODE', 'KIMI_CODE', 'DEEPSEEK_HARNESS'],
       });
@@ -644,7 +700,7 @@ describe('CloudHostService', () => {
 
     it('T-CW1: never creates a default workspace at create time', async () => {
       setupCreateSuccess();
-      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
+      await service.create('user-1', { specId: SPEC_ID, name: 'my-cloud', harnessTypes: ['OPENCODE'] });
 
       // 默认工作区只在「Git 项目设置」初始化 Github 项目时按 targetPath 创建
       expect(controllerWorkspaceService.ensureCloudHostWorkspace).not.toHaveBeenCalled();
@@ -670,7 +726,7 @@ describe('CloudHostService', () => {
 
     it('persists createDefaultSession=false so ready skips the default session (D1)', async () => {
       setupCreateSuccess();
-      await service.create('user-1', {
+      await service.create('user-1', { specId: SPEC_ID,
         name: 'with-project',
         harnessTypes: ['OPENCODE'],
         createDefaultSession: false,
@@ -683,7 +739,7 @@ describe('CloudHostService', () => {
 
     it('defaults createDefaultSession to true when omitted', async () => {
       setupCreateSuccess();
-      await service.create('user-1', { name: 'legacy-shape', harnessTypes: ['OPENCODE'] });
+      await service.create('user-1', { specId: SPEC_ID, name: 'legacy-shape', harnessTypes: ['OPENCODE'] });
 
       expect(CloudHost.create).toHaveBeenCalledWith(
         expect.objectContaining({ createDefaultSession: true }),
@@ -694,7 +750,7 @@ describe('CloudHostService', () => {
       setupCreateSuccess();      vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
 
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('control plane unavailable');
 
       expect(billingClient.revokeApiKeysByHost).toHaveBeenCalled();
@@ -714,7 +770,7 @@ describe('CloudHostService', () => {
       );
 
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('billing service unavailable');
       expect(cloudControllerClient.startHarness).not.toHaveBeenCalled();
       expect(CloudHost.deleteOne).toHaveBeenCalled();
@@ -728,7 +784,7 @@ describe('CloudHostService', () => {
         chain(hostDoc({ status: 'STOPPED', containerId: null })) as never,
       );
 
-      const result = await service.create('user-1', {
+      const result = await service.create('user-1', { specId: SPEC_ID,
         name: 'my-cloud',
         harnessTypes: ['OPENCODE'],
       });
@@ -747,7 +803,7 @@ describe('CloudHostService', () => {
         }),
       );
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('uniq_active_cloud_host_per_user');
       expect(billingClient.refundCharge).toHaveBeenCalled();
     });
@@ -760,7 +816,7 @@ describe('CloudHostService', () => {
         }),
       );
       await expect(
-        service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'my-cloud', harnessTypes: ['OPENCODE'] }),
       ).rejects.toThrow('controllerkeys.keyHash_1');
     });
 
@@ -768,8 +824,8 @@ describe('CloudHostService', () => {
       setupCreateSuccess();
 
       const results = await Promise.allSettled([
-        service.create('user-1', { name: 'first', harnessTypes: ['OPENCODE'] }),
-        service.create('user-1', { name: 'second', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'first', harnessTypes: ['OPENCODE'] }),
+        service.create('user-1', { specId: SPEC_ID, name: 'second', harnessTypes: ['OPENCODE'] }),
       ]);
 
       expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(2);
@@ -815,7 +871,7 @@ describe('CloudHostService', () => {
     it('T-CH-C1: 不带 workloadIds 时 plan 与今天一致', async () => {
       setupCreateSuccess();
 
-      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
+      await service.create('user-1', { specId: SPEC_ID, name: 'my-cloud', harnessTypes: ['OPENCODE'] });
 
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload.workloadPlan).toEqual([
@@ -827,7 +883,7 @@ describe('CloudHostService', () => {
     it('T-CH-C2: 带 Docker 时 plan 含 harness + Docker（standard 非必须）', async () => {
       setupCreateSuccess();
 
-      await service.create('user-1', {
+      await service.create('user-1', { specId: SPEC_ID,
         name: 'my-cloud',
         harnessTypes: ['OPENCODE'],
         workloadIds: [DOCKER_ID],
@@ -843,7 +899,7 @@ describe('CloudHostService', () => {
     it('T-CH-C3: 带 Aspire 时依赖先行（Docker → .NET → Aspire）', async () => {
       setupCreateSuccess();
 
-      await service.create('user-1', {
+      await service.create('user-1', { specId: SPEC_ID,
         name: 'my-cloud',
         harnessTypes: ['OPENCODE'],
         workloadIds: [ASPIRE_ID],
@@ -864,7 +920,7 @@ describe('CloudHostService', () => {
       setupCreateSuccess();
 
       await expect(
-        service.create('user-1', {
+        service.create('user-1', { specId: SPEC_ID,
           name: 'my-cloud',
           harnessTypes: ['OPENCODE'],
           workloadIds: [HARNESS_ID],
@@ -872,7 +928,7 @@ describe('CloudHostService', () => {
       ).rejects.toThrow('workload is not installable: OpenCode');
 
       await expect(
-        service.create('user-1', {
+        service.create('user-1', { specId: SPEC_ID,
           name: 'my-cloud',
           harnessTypes: ['OPENCODE'],
           workloadIds: ['507f1f77bcf86cd7994390ff'],
@@ -880,7 +936,7 @@ describe('CloudHostService', () => {
       ).rejects.toThrow('invalid workload: 507f1f77bcf86cd7994390ff');
 
       await expect(
-        service.create('user-1', {
+        service.create('user-1', { specId: SPEC_ID,
           name: 'my-cloud',
           harnessTypes: ['OPENCODE'],
           workloadIds: ['a', 'b', 'c', 'd', 'e', 'f'],
@@ -894,7 +950,7 @@ describe('CloudHostService', () => {
     it('T-CH-C5: 重复 ID 去重后只出现一次', async () => {
       setupCreateSuccess();
 
-      await service.create('user-1', {
+      await service.create('user-1', { specId: SPEC_ID,
         name: 'my-cloud',
         harnessTypes: ['OPENCODE'],
         workloadIds: [DOCKER_ID, DOCKER_ID],
@@ -1399,7 +1455,7 @@ describe('CloudHostService', () => {
 
     it('T-CS-A0: 未传 storageId 时请求体不含 storage（零回归）', async () => {
       setupCreateSuccess();
-      await service.create('user-1', { name: 'my-cloud', harnessTypes: ['OPENCODE'] });
+      await service.create('user-1', { specId: SPEC_ID, name: 'my-cloud', harnessTypes: ['OPENCODE'] });
       const payload = vi.mocked(cloudControllerClient.startHarness).mock.calls[0][0];
       expect(payload).not.toHaveProperty('storage');
       expect(cloudStorageService.attachStorage).not.toHaveBeenCalled();
@@ -1412,7 +1468,7 @@ describe('CloudHostService', () => {
         fromStatus: 'IDLE',
       } as never);
 
-      await service.create('user-1', {
+      await service.create('user-1', { specId: SPEC_ID,
         name: 'my-cloud',
         harnessTypes: ['OPENCODE'],
         storageId: STORAGE_ID,
@@ -1459,7 +1515,7 @@ describe('CloudHostService', () => {
         fromStatus: 'ARCHIVED',
       } as never);
 
-      await service.create('user-1', {
+      await service.create('user-1', { specId: SPEC_ID,
         name: 'my-cloud',
         harnessTypes: ['OPENCODE'],
         storageId: STORAGE_ID,
@@ -1481,7 +1537,7 @@ describe('CloudHostService', () => {
       );
 
       await expect(
-        service.create('user-1', {
+        service.create('user-1', { specId: SPEC_ID,
           name: 'my-cloud',
           harnessTypes: ['OPENCODE'],
           storageId: STORAGE_ID,
@@ -1501,7 +1557,7 @@ describe('CloudHostService', () => {
       vi.mocked(cloudControllerClient.startHarness).mockRejectedValue(new Error('boom'));
 
       await expect(
-        service.create('user-1', {
+        service.create('user-1', { specId: SPEC_ID,
           name: 'my-cloud',
           harnessTypes: ['OPENCODE'],
           storageId: STORAGE_ID,
@@ -1526,7 +1582,7 @@ describe('CloudHostService', () => {
       vi.mocked(billingClient.createCharge).mockRejectedValue(err as never);
 
       await expect(
-        service.create('user-1', {
+        service.create('user-1', { specId: SPEC_ID,
           name: 'my-cloud',
           harnessTypes: ['OPENCODE'],
           storageId: STORAGE_ID,

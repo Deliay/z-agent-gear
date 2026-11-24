@@ -8,6 +8,7 @@ import { billingTypeDefs } from './billing.js';
 import { tenantTypeDefs } from './tenant.js';
 import { authProviderTypeDefs } from './auth-provider.js';
 import { harnessConfigTypeDefs } from './harness-config.js';
+import { cloudHostSpecTypeDefs } from './cloud-host-spec.js';
 
 const baseTypeDefs = `#graphql
   type Query
@@ -15,4 +16,4 @@ const baseTypeDefs = `#graphql
   type Mutation
 `;
 
-export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, baseImageTypeDefs, cloudContainerTypeDefs, cloudWorkloadTypeDefs, billingTypeDefs, tenantTypeDefs, authProviderTypeDefs, harnessConfigTypeDefs];
+export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, baseImageTypeDefs, cloudContainerTypeDefs, cloudWorkloadTypeDefs, billingTypeDefs, tenantTypeDefs, authProviderTypeDefs, harnessConfigTypeDefs, cloudHostSpecTypeDefs];

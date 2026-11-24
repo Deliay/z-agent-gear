@@ -120,6 +120,19 @@ export interface StorageQuoteWire {
   archived: StorageRateQuoteWire;
 }
 
+/** 规格分段报价（admin-api `/internal/billing/spec-quote`，金额单位 credits）。 */
+export interface SpecQuoteWire {
+  specId?: string | null;
+  name?: string | null;
+  cpu: number;
+  memoryGi: number;
+  ephemeralStorageGi: number;
+  unlimited: boolean;
+  hourlyCredits: number;
+  tiers: Array<{ label: string; amountCredits: number }>;
+  prices: Record<string, number>;
+}
+
 const TIMEOUT_MS = 10_000;
 
 export class BillingServiceUnavailableError extends Error {
@@ -449,6 +462,31 @@ export class BillingClient {
     const params = new URLSearchParams({ sizeGi: String(sizeGi) });
     return this.request<StorageQuoteWire>(
       `/internal/billing/storage-quote?${params.toString()}`,
+    );
+  }
+
+  /**
+   * 云电脑规格分段报价（每小时费用 + 分档明细）。
+   * 支持 specId 或资源三元组；实时报价不缓存。
+   */
+  async getSpecQuote(
+    spec: { specId?: string } | { cpu: number; memoryGi: number; ephemeralStorageGi: number },
+  ): Promise<SpecQuoteWire> {
+    const params = new URLSearchParams();
+    if ('specId' in spec && spec.specId) {
+      params.set('specId', spec.specId);
+    } else {
+      const resources = spec as {
+        cpu: number;
+        memoryGi: number;
+        ephemeralStorageGi: number;
+      };
+      params.set('cpu', String(resources.cpu));
+      params.set('memoryGi', String(resources.memoryGi));
+      params.set('ephemeralStorageGi', String(resources.ephemeralStorageGi));
+    }
+    return this.request<SpecQuoteWire>(
+      `/internal/billing/spec-quote?${params.toString()}`,
     );
   }
 

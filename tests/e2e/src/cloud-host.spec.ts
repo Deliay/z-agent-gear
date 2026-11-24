@@ -65,8 +65,13 @@ test.describe('Cloud Host E2E', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByText('收费详情')).toBeVisible();
     await expect(dialog.getByText(/创建花费：/)).toBeVisible();
-    await expect(dialog.getByText(/运行消费：/)).toBeVisible();
+    await expect(dialog.getByText(/运行费用：/)).toBeVisible();
     await expect(dialog.getByText('余额不足持续 10 分钟云电脑将被强制销毁')).toBeVisible();
+    // 规格选择（服务端按算力降序；默认选中第一款 8C 16G 20G，820 credits/小时）
+    const specs = dialog.getByRole('radiogroup', { name: '规格' });
+    await expect(specs.getByRole('radio', { name: '8C 16G 20G' })).toBeChecked();
+    await expect(specs.getByText('820 credits/小时')).toBeVisible();
+    await expect(dialog.getByText(/运行费用：820 credits\/小时/)).toBeVisible();
 
     await dialog.locator('#cloud-host-name').fill(`e2e-quote-${Date.now().toString(36)}`);
     await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();

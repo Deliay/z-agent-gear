@@ -38,6 +38,31 @@ export const cloudHostTypeDefs = `#graphql
     accepted: Boolean!
   }
 
+  # 云电脑规格（前台可见性过滤后的只读视图）
+  type CloudHostSpec {
+    id: ID!
+    name: String!
+    cpu: Int!
+    memoryGi: Int!
+    ephemeralStorageGi: Int!
+    # 三项全 0；前端渲染「不限制容器，随时可能会被系统销毁」
+    unlimited: Boolean!
+    hourlyCredits: Float!
+  }
+
+  # 规格分段计费分档明细
+  type CloudHostSpecQuoteTier {
+    label: String!
+    amountCredits: Float!
+  }
+
+  # 规格分段计费报价（创建对话框实时总价）
+  type CloudHostSpecBillingQuote {
+    hourlyCredits: Float!
+    tiers: [CloudHostSpecQuoteTier!]!
+    availableBalance: Float
+  }
+
   type CloudHost {
     id: ID!
     name: String!
@@ -69,6 +94,8 @@ export const cloudHostTypeDefs = `#graphql
     storageRestoring: Boolean!
     # 工作组件版本信息（字段级组装；单字段失败降级为 null，不拖垮查询）
     agentGearVersion: CloudHostAgentGearVersion!
+    # 创建时规格快照（不回查规格表：规格删除后仍可展示）；旧版云电脑为 null
+    spec: CloudHostSpec
   }
 
   # 云电脑创建/运行报价（金额单位 credits，来自 admin-api 价目档）
@@ -180,6 +207,8 @@ export const cloudHostTypeDefs = `#graphql
     githubAccountId: ID
     # 可选：创建时挂载当前工作区 IDLE/ARCHIVED 云存储；缺省 = 不挂载（报文与现状一致）
     storageId: ID
+    # 必填：容器规格 ID（必须对当前租户可见；不可见/不存在抛 spec not found）
+    specId: ID!
   }
 
   input InstallCloudHostWorkloadInput {
@@ -216,6 +245,10 @@ export const cloudHostTypeDefs = `#graphql
     cloudHostIssuesLinkages(controllerId: ID!): [CloudHostIssuesLinkage!]!
     # 云电脑创建/运行报价（计费不可用时 availableBalance=null、价格回退默认值）
     cloudHostBillingQuote: CloudHostBillingQuote!
+    # 当前租户可见的规格列表（白名单过滤）
+    cloudHostSpecs: [CloudHostSpec!]!
+    # 按规格计算每小时运行费用与分档明细（规格须对当前租户可见）
+    cloudHostSpecBillingQuote(specId: ID!): CloudHostSpecBillingQuote!
   }
 
   extend type Mutation {

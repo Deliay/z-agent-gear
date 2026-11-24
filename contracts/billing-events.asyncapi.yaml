@@ -192,6 +192,23 @@ components:
                 billingStartedAt:
                   type: string
                   format: date-time
+                # 可选：云电脑规格快照（新增）。携带 → admin-api 创建 cloudbillingcursors 游标走
+                # 规格分段小时计费（全零规格同样走该路径、仅不出账）；缺省 → 既有 container.minute
+                # 预留路径逐字不变（旧版零改动，分流判据唯一）。
+                spec:
+                  type: object
+                  properties:
+                    specId:
+                      type: string
+                      nullable: true
+                    name:
+                      type: string
+                    cpu:
+                      type: integer
+                    memoryGi:
+                      type: integer
+                    ephemeralStorageGi:
+                      type: integer
     ContainerDestroyedEvent:
       allOf:
         - $ref: '#/components/schemas/BillingEvent'

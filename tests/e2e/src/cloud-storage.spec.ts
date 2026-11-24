@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import mongoose from 'mongoose';
-import { gqlRequest, loginViaUI, registerFundedUser } from './helpers';
+import { fetchDefaultCloudSpecId, gqlRequest, loginViaUI, registerFundedUser } from './helpers';
 
 // 云存储 E2E：设置页创建 → 新建云电脑挂载 → 停止归档（半价）→ 销毁 → 已销毁折叠区。
 // K8S_ENABLED=false 下归档由 InMemory 实现完成；CLOUD_STORAGE_ENABLED=false 时整套跳过。
@@ -87,10 +87,11 @@ test.describe('Cloud Storage E2E', () => {
 
       // 挂载到云电脑
       const hostName = `e2e-cs-host-${Date.now().toString(36)}`;
+      const specId = await fetchDefaultCloudSpecId(page, token);
       const hostRes = await gqlRequest(
         page,
         CREATE_HOST,
-        { input: { name: hostName, harnessTypes: ['OPENCODE'], storageId } },
+        { input: { name: hostName, harnessTypes: ['OPENCODE'], storageId, specId } },
         token,
       );
       const hostBody = await hostRes.json();

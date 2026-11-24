@@ -1,0 +1,70 @@
+# 容器规格（Cloud Host Spec）契约 —— admin-api 唯一写方
+#
+# 鉴权要求：所有 Query/Mutation 需要 `Authorization: Bearer <admin JWT>`；
+# 未认证返回 `UNAUTHENTICATED`（错误信息 `Not authenticated`）。
+#
+# 数据归属：`cloudhostspecs` 由 admin-api 唯一写入（本契约 CRUD），agent-api 只读镜像
+# （前台 `cloudHostSpecs` 按租户白名单过滤，见 contracts/cloud-host.graphql）。
+#
+# 组合规则（服务端强制）：
+# - `cpu = memoryGi = ephemeralStorageGi = 0` 为唯一允许含 0 的组合（不限制规格）；
+# - 其余组合三项均须 ≥ 1，且不超过上限 cpu ≤ 64 / memoryGi ≤ 256 / ephemeralStorageGi ≤ 512。
+#
+# 可见性口径（服务端判定，隐藏不是安全边界）：
+# - `whitelistEnabled=false` → 全部租户可见；
+# - `whitelistEnabled=true` → 仅 `allowedTenantIds` 内租户可见；空名单 = 无租户可见。
+# - `whitelistEnabled=false` 保存时服务端将 `allowedTenantIds` 置空（口径唯一，避免「隐藏的白名单」）。
+#
+# 校验错误文案（逐字）：
+# - `name is required` / `name is too long` / `spec name already exists`
+# - `invalid spec resources`（三项非全零且存在 <1 或超上限；除全零外任何含 0 组合一律拒绝）
+# - `invalid tenant in whitelist`（allowedTenantIds 含不存在租户）
+# - 白名单上限：`allowedTenantIds` ≤ 200（超出同报 `invalid tenant in whitelist`）
+#
+# 规格修改/删除只影响后续创建：已创建云电脑以 `cloudhosts` 快照为准（不回查本集合）。
+
+"""容器规格（admin-api 唯一写方）"""
+type AdminCloudSpec {
+  id: ID!
+  """展示名，trim 后 1..64，全局唯一"""
+  name: String!
+  """CPU 核数；普通规格 1..64，不限制规格恒 0"""
+  cpu: Int!
+  """内存 GiB；普通规格 1..256，不限制规格恒 0"""
+  memoryGi: Int!
+  """临时存储 GiB；普通规格 1..512，不限制规格恒 0"""
+  ephemeralStorageGi: Int!
+  """派生：三项全 0（不限制容器）"""
+  unlimited: Boolean!
+  """true 时仅 allowedTenantIds 内租户可见"""
+  whitelistEnabled: Boolean!
+  """白名单租户 ID；whitelistEnabled=false 时恒为空"""
+  allowedTenantIds: [ID!]!
+  """预制规格标识"""
+  isPreset: Boolean!
+  """预制播种键；非预制为 null"""
+  presetKey: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+input AdminCloudSpecInput {
+  name: String!
+  cpu: Int!
+  memoryGi: Int!
+  ephemeralStorageGi: Int!
+  whitelistEnabled: Boolean!
+  """whitelistEnabled=false 时服务端置空"""
+  allowedTenantIds: [ID!]!
+}
+
+extend type Query {
+  adminCloudSpecs: [AdminCloudSpec!]!
+  adminCloudSpec(id: ID!): AdminCloudSpec
+}
+
+extend type Mutation {
+  adminCreateCloudSpec(input: AdminCloudSpecInput!): AdminCloudSpec!
+  adminUpdateCloudSpec(id: ID!, input: AdminCloudSpecInput!): AdminCloudSpec!
+  adminDeleteCloudSpec(id: ID!): Boolean!
+}

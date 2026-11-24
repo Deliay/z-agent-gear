@@ -125,6 +125,29 @@ export async function gqlRequest(page: import('@playwright/test').Page, query: s
 /** 前台账号统一初始密码（开户 / 登录 / UI 登录共用）。 */
 export const FRONT_USER_PASSWORD = 'testpass123';
 
+/**
+ * 取当前租户可见的第一款容器规格（创建云电脑必填 specId）。
+ * 迁移 025 预制的公开规格对全部租户可见。
+ */
+export async function fetchDefaultCloudSpecId(
+  page: import('@playwright/test').Page,
+  token: string,
+): Promise<string> {
+  const response = await gqlRequest(
+    page,
+    `query { cloudHostSpecs { id name unlimited } }`,
+    undefined,
+    token,
+  );
+  const body = (await response.json()) as {
+    data?: { cloudHostSpecs?: Array<{ id: string }> };
+    errors?: Array<{ message: string }>;
+  };
+  const id = body.data?.cloudHostSpecs?.[0]?.id;
+  if (!id) throw new Error('no visible cloud host spec');
+  return id;
+}
+
 const INTERNAL_API_TOKEN = process.env.INTERNAL_API_TOKEN || '';
 /** agent-api REST 根地址：由 GraphQL 地址去掉 `/graphql` 推导（`POST /internal/users` 开户）。 */
 const AGENT_API_BASE = API_URL.replace(/\/graphql\/?$/, '');

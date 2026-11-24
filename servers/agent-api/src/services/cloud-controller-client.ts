@@ -35,6 +35,14 @@ export interface StartHarnessInput {
   }>;
   /** 可选：挂载云存储（缺省不发送该字段，报文与历史逐字段一致）。 */
   storage?: StartHarnessStorageInput | null;
+  /** 容器规格快照（可选；缺省发送时不带该字段，旧链路行为不变）。 */
+  spec?: {
+    id: string;
+    name: string;
+    cpu: number;
+    memoryGi: number;
+    ephemeralStorageGi: number;
+  } | null;
   secrets: {
     hostEndpoint: string;
     hostKey: string;
@@ -238,6 +246,7 @@ export class CloudControllerClient {
       secrets: input.secrets,
       workloadPlan: input.workloadPlan,
       ...(storage ? { storage } : {}),
+      ...(input.spec ? { spec: input.spec } : {}),
     };
     const result = await this.request<{ id?: string; status?: string }>('/internal/containers', {
       method: 'POST',

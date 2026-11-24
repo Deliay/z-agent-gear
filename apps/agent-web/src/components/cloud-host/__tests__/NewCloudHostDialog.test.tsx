@@ -1,8 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import NewCloudHostDialog from '../NewCloudHostDialog';
-import { GET_GITHUB_ACCOUNTS, CLOUD_STORAGE_CAPABILITIES, CLOUD_STORAGES } from '../../../graphql/queries';
-import type { CloudHostCapabilitiesData, CloudStorageData, HarnessType } from '../../../graphql/types';
+import {
+  CLOUD_HOST_SPECS,
+  CLOUD_HOST_SPEC_BILLING_QUOTE,
+  CLOUD_STORAGE_BILLING_QUOTE,
+  CLOUD_STORAGE_CAPABILITIES,
+  CLOUD_STORAGES,
+  GET_GITHUB_ACCOUNTS,
+} from '../../../graphql/queries';
+import type {
+  CloudHostCapabilitiesData,
+  CloudHostSpecData,
+  CloudHostSpecQuoteTierData,
+  CloudStorageData,
+  HarnessType,
+} from '../../../graphql/types';
 const mockCreateCloudHost = vi.fn();
 const mockSetupGithubProject = vi.fn();
 const mockUseQuery = vi.fn();
@@ -88,68 +101,213 @@ const defaultProps = {
   onCreated: vi.fn(),
 };
 
+const defaultCatalog = [
+  {
+    workloadId: 'wl-docker',
+    name: 'Docker',
+    workloadKind: 'STANDARD',
+    paramSchema: [],
+    dependsOnWorkloadIds: [],
+    isPreset: false,
+    installed: false,
+  },
+  {
+    workloadId: 'wl-dotnet',
+    name: '.NET',
+    workloadKind: 'STANDARD',
+    paramSchema: [],
+    dependsOnWorkloadIds: [],
+    isPreset: false,
+    installed: false,
+  },
+  {
+    workloadId: 'wl-aspire',
+    name: 'Aspire',
+    workloadKind: 'STANDARD',
+    paramSchema: [],
+    dependsOnWorkloadIds: ['wl-docker', 'wl-dotnet'],
+    isPreset: false,
+    installed: false,
+  },
+];
+
+const defaultSpecs: CloudHostSpecData[] = [
+  {
+    id: 'spec-8c',
+    name: '8C 16G 20G',
+    cpu: 8,
+    memoryGi: 16,
+    ephemeralStorageGi: 20,
+    unlimited: false,
+    hourlyCredits: 820,
+  },
+  {
+    id: 'spec-2c',
+    name: '2C 4G 10G',
+    cpu: 2,
+    memoryGi: 4,
+    ephemeralStorageGi: 10,
+    unlimited: false,
+    hourlyCredits: 90,
+  },
+];
+
+const unlimitedSpec: CloudHostSpecData = {
+  id: 'spec-0c',
+  name: '0C 0G 0G',
+  cpu: 0,
+  memoryGi: 0,
+  ephemeralStorageGi: 0,
+  unlimited: true,
+  hourlyCredits: 0,
+};
+
+const defaultTiers: CloudHostSpecQuoteTierData[] = [
+  { label: 'CPU 8 核 × 15 credits/核/小时', amountCredits: 120 },
+  { label: '内存 16 GiB × 30 credits/GiB/小时', amountCredits: 540 },
+  { label: '临时存储 10 GiB × 10 credits/GiB/小时', amountCredits: 100 },
+];
+
+function specQuoteFor(specId: string) {
+  if (specId === 'spec-8c') {
+    return { hourlyCredits: 820, tiers: defaultTiers, availableBalance: 20 };
+  }
+  if (specId === 'spec-2c') {
+    return {
+      hourlyCredits: 90,
+      tiers: [{ label: 'CPU 2 核 × 15 credits/核/小时', amountCredits: 30 }],
+      availableBalance: 20,
+    };
+  }
+  return { hourlyCredits: 0, tiers: [], availableBalance: 20 };
+}
+
+interface QueryOverrides {
+  /** null = 查询失败 */
+  specs?: CloudHostSpecData[] | null;
+  workloadCatalog?: unknown[];
+  storages?: CloudStorageData[];
+  storageEnabled?: boolean;
+  /** null = 未绑定任何 Github 帐号 */
+  githubAccounts?: unknown[] | null;
+  storageQuoteHourly?: number;
+  createCredits?: number;
+  availableBalance?: number | null;
+  /** 一次性创建费报价查询失败 */
+  hostQuoteError?: boolean;
+}
+
+/** 按查询文档分派 Apollo mock，覆盖对话框全部 useQuery */
+function installQueryMocks(overrides: QueryOverrides = {}) {
+  const specs = overrides.specs === undefined ? defaultSpecs : overrides.specs;
+  const catalog = overrides.workloadCatalog ?? defaultCatalog;
+  mockUseQuery.mockImplementation(
+    (query: unknown, options?: { variables?: Record<string, unknown> }) => {
+      if (query === CLOUD_HOST_SPECS) {
+        if (specs === null) {
+          return { data: null, loading: false, error: new Error('specs down') };
+        }
+        return { data: { cloudHostSpecs: specs }, loading: false, error: null };
+      }
+      if (query === CLOUD_HOST_SPEC_BILLING_QUOTE) {
+        const specId = String(options?.variables?.specId ?? '');
+        return {
+          data: { cloudHostSpecBillingQuote: specQuoteFor(specId) },
+          loading: false,
+          error: null,
+        };
+      }
+      if (query === CLOUD_STORAGE_BILLING_QUOTE) {
+        const sizeGi = Number(options?.variables?.sizeGi ?? 0);
+        const hourlyCredits = overrides.storageQuoteHourly ?? 15;
+        return {
+          data: {
+            cloudStorageBillingQuote: {
+              sizeGi,
+              full: { hourlyCredits, tiers: [] },
+              archived: { hourlyCredits: hourlyCredits / 2, tiers: [] },
+              availableBalance: 20,
+            },
+          },
+          loading: false,
+          error: null,
+        };
+      }
+      if (query === CLOUD_STORAGE_CAPABILITIES) {
+        return {
+          data: { cloudStorageCapabilities: { enabled: overrides.storageEnabled === true } },
+          loading: false,
+          error: null,
+        };
+      }
+      if (query === CLOUD_STORAGES) {
+        const storages = overrides.storages ?? [];
+        return {
+          data: { cloudStorages: storages },
+          loading: false,
+          error: null,
+          refetch: vi.fn().mockResolvedValue({ data: { cloudStorages: storages } }),
+        };
+      }
+      if (query === GET_GITHUB_ACCOUNTS) {
+        const accounts = overrides.githubAccounts === undefined ? [] : overrides.githubAccounts;
+        if (accounts === null) {
+          return { data: { githubAccounts: [] }, loading: false, error: null };
+        }
+        return { data: { githubAccounts: accounts }, loading: false, error: null };
+      }
+      if (overrides.hostQuoteError) {
+        return {
+          data: null,
+          loading: false,
+          error: new Error('quote down'),
+          refetch: mockRefetchQuote,
+        };
+      }
+      return {
+        data: {
+          cloudHostWorkloadCatalog: catalog,
+          cloudHostBillingQuote: {
+            createCredits: overrides.createCredits ?? 5,
+            perMinuteCredits: 1,
+            availableBalance: overrides.availableBalance === undefined ? 20 : overrides.availableBalance,
+          },
+        },
+        loading: false,
+        error: null,
+        refetch: mockRefetchQuote,
+      };
+    },
+  );
+}
+
 function submitButton() {
   return screen.getByRole('button', { name: '创建云电脑' });
+}
+
+function mockCreatedHost() {
+  mockCreateCloudHost.mockResolvedValue({
+    data: {
+      createCloudHost: {
+        id: 'cloud-1',
+        name: '云电脑 A',
+        controllerId: 'ctrl-cloud',
+        status: 'STARTING',
+        harnessTypes: ['OPENCODE'],
+        defaultSessionId: null,
+        activeSessionCount: 0,
+        failureReason: null,
+        deletedAt: null,
+      },
+    },
+  });
 }
 
 describe('NewCloudHostDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockUseQuery.mockReturnValue({
-      data: {
-        cloudHostWorkloadCatalog: [
-          {
-            workloadId: 'wl-docker',
-            name: 'Docker',
-            workloadKind: 'STANDARD',
-            paramSchema: [],
-            dependsOnWorkloadIds: [],
-            isPreset: false,
-            installed: false,
-          },
-          {
-            workloadId: 'wl-dotnet',
-            name: '.NET',
-            workloadKind: 'STANDARD',
-            paramSchema: [],
-            dependsOnWorkloadIds: [],
-            isPreset: false,
-            installed: false,
-          },
-          {
-            workloadId: 'wl-aspire',
-            name: 'Aspire',
-            workloadKind: 'STANDARD',
-            paramSchema: [],
-            dependsOnWorkloadIds: ['wl-docker', 'wl-dotnet'],
-            isPreset: false,
-            installed: false,
-          },
-        ],
-        cloudHostBillingQuote: {
-          createCredits: 5,
-          perMinuteCredits: 1,
-          availableBalance: 20,
-        },
-      },
-      loading: false,
-      refetch: mockRefetchQuote,
-    });
-    mockCreateCloudHost.mockResolvedValue({
-      data: {
-        createCloudHost: {
-          id: 'cloud-1',
-          name: '云电脑 A',
-          controllerId: 'ctrl-cloud',
-          status: 'STARTING',
-          harnessTypes: ['OPENCODE'],
-          defaultSessionId: null,
-          activeSessionCount: 0,
-          failureReason: null,
-          deletedAt: null,
-        },
-      },
-    });
+    installQueryMocks();
+    mockCreatedHost();
   });
 
   it('T-AW3 名称为空时禁用提交并提示', () => {
@@ -182,7 +340,7 @@ describe('NewCloudHostDialog', () => {
 
     await waitFor(() => {
       expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: { input: { name: '云电脑 A', harnessTypes: [] } },
+        variables: { input: { name: '云电脑 A', harnessTypes: [], specId: 'spec-8c' } },
       });
     });
   });
@@ -212,7 +370,9 @@ describe('NewCloudHostDialog', () => {
 
     await waitFor(() => {
       expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'] } },
+        variables: {
+          input: { name: '云电脑 A', harnessTypes: ['OPENCODE'], specId: 'spec-8c' },
+        },
       });
     });
     await waitFor(() => {
@@ -275,23 +435,26 @@ describe('NewCloudHostDialog', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(message);
   });
 
-  it('T-AW16: 收费详情区块展示创建/运行/欠费提示', () => {
+  it('T-AW16: 收费详情区块展示一次性创建费用与每小时运行费用（不再展示每分钟）', () => {
     render(<NewCloudHostDialog {...defaultProps} />);
 
     expect(screen.getByText('收费详情')).toBeInTheDocument();
     expect(
       screen.getByText('创建花费：5 credits（一次性，确认创建即扣费）'),
     ).toBeInTheDocument();
-    expect(screen.getByText(/运行消费：1 credit\/分钟/)).toBeInTheDocument();
+    expect(screen.getByText('运行费用：820 credits/小时（按小时结算）')).toBeInTheDocument();
+    expect(
+      screen.getByText('CPU 8 核 × 15 credits/核/小时：120 credits/小时'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-host-hourly-total')).toHaveTextContent(
+      '合计运行费用：820 credits/小时',
+    );
+    expect(screen.queryByText(/credit\/分钟/)).not.toBeInTheDocument();
     expect(screen.getByText('余额不足持续 10 分钟云电脑将被强制销毁')).toBeInTheDocument();
   });
 
   it('T-AW17: 报价查询失败时降级提示且不阻断提交', () => {
-    mockUseQuery.mockReturnValue({
-      data: null,
-      loading: false,
-      error: new Error('quote down'),
-    });
+    installQueryMocks({ hostQuoteError: true });
 
     render(<NewCloudHostDialog {...defaultProps} />);
 
@@ -302,17 +465,7 @@ describe('NewCloudHostDialog', () => {
   });
 
   it('T-AW18: 余额不足提示充值但不前置禁用提交', () => {
-    mockUseQuery.mockReturnValue({
-      data: {
-        cloudHostWorkloadCatalog: [],
-        cloudHostBillingQuote: {
-          createCredits: 5,
-          perMinuteCredits: 1,
-          availableBalance: 1,
-        },
-      },
-      loading: false,
-    });
+    installQueryMocks({ availableBalance: 1 });
 
     render(<NewCloudHostDialog {...defaultProps} />);
 
@@ -357,6 +510,7 @@ describe('NewCloudHostDialog', () => {
           input: {
             name: '云电脑 A',
             harnessTypes: ['OPENCODE'],
+            specId: 'spec-8c',
             workloadIds: ['wl-docker'],
           },
         },
@@ -373,23 +527,21 @@ describe('NewCloudHostDialog', () => {
 
     await waitFor(() => {
       expect(mockCreateCloudHost).toHaveBeenCalledWith({
-        variables: { input: { name: '云电脑 A', harnessTypes: ['OPENCODE'] } },
+        variables: {
+          input: { name: '云电脑 A', harnessTypes: ['OPENCODE'], specId: 'spec-8c' },
+        },
       });
     });
     expect(mockCreateCloudHost.mock.calls[0][0].variables.input).not.toHaveProperty('workloadIds');
   });
 
   it('T-WEB-N4: catalog 失败时提示但仍可提交基础创建', async () => {
-    mockUseQuery.mockReturnValue({
-      data: null,
-      loading: false,
-      error: new Error('boom'),
-    });
+    installQueryMocks({ workloadCatalog: [] });
 
     render(<NewCloudHostDialog {...defaultProps} />);
 
-    expect(screen.getByText('负载列表加载失败，可仅创建基础云电脑')).toBeInTheDocument();
     expect(screen.queryByLabelText('Docker')).not.toBeInTheDocument();
+    expect(screen.getByText('暂无可预装工作负载')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
     fireEvent.click(screen.getByLabelText('OpenCode'));
@@ -417,29 +569,97 @@ describe('NewCloudHostDialog', () => {
   });
 });
 
-function mockGithubProjectQueries(accounts: unknown[] = [githubAccount()]) {
-  mockUseQuery.mockImplementation((query: unknown) => {
-    if (query === GET_GITHUB_ACCOUNTS) {
-      return { data: { githubAccounts: accounts }, loading: false };
-    }
-    return {
-      data: {
-        cloudHostWorkloadCatalog: [
-          {
-            workloadId: 'wl-docker',
-            name: 'Docker',
-            workloadKind: 'STANDARD',
-            paramSchema: [],
-            dependsOnWorkloadIds: [],
-            isPreset: false,
-            installed: false,
-          },
-        ],
-      },
-      loading: false,
-    };
+describe('NewCloudHostDialog 规格选择与总价', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCreatedHost();
   });
-}
+
+  it('T-SPEC1: 渲染规格列表并默认选中第一款为资源明细与每小时费用', () => {
+    installQueryMocks();
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    expect(screen.getByText('规格')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '8C 16G 20G' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '2C 4G 10G' })).not.toBeChecked();
+    expect(
+      screen.getByText('CPU 8 核 · 内存 16 GiB · 临时存储 20 GiB'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('CPU 2 核 · 内存 4 GiB · 临时存储 10 GiB')).toBeInTheDocument();
+    expect(screen.getByText('820 credits/小时')).toBeInTheDocument();
+    expect(screen.getByText('90 credits/小时')).toBeInTheDocument();
+  });
+
+  it('T-SPEC2: 0C 0G 不限制规格展示风险文案与 0 费用', () => {
+    installQueryMocks({ specs: [unlimitedSpec] });
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    expect(screen.getByRole('radio', { name: '0C 0G 0G' })).toBeChecked();
+    expect(
+      screen.getByText('不限制容器，随时可能会被系统销毁'),
+    ).toBeInTheDocument();
+    expect(screen.getByText('0 credits/小时')).toBeInTheDocument();
+    expect(screen.getByText('运行费用：0 credits/小时（按小时结算）')).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-host-hourly-total')).toHaveTextContent(
+      '合计运行费用：0 credits/小时',
+    );
+  });
+
+  it('T-SPEC3: 默认按首款规格报价，切换规格后重新调用报价并刷新分档明细', () => {
+    installQueryMocks();
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    const firstCalls = mockUseQuery.mock.calls.filter(
+      ([query]) => query === CLOUD_HOST_SPEC_BILLING_QUOTE,
+    );
+    expect(firstCalls.at(-1)?.[1]).toMatchObject({ variables: { specId: 'spec-8c' } });
+
+    fireEvent.click(screen.getByRole('radio', { name: '2C 4G 10G' }));
+
+    const calls = mockUseQuery.mock.calls.filter(
+      ([query]) => query === CLOUD_HOST_SPEC_BILLING_QUOTE,
+    );
+    expect(calls.at(-1)?.[1]).toMatchObject({ variables: { specId: 'spec-2c' } });
+    expect(screen.getByText('运行费用：90 credits/小时（按小时结算）')).toBeInTheDocument();
+    expect(screen.getByText('CPU 2 核 × 15 credits/核/小时：30 credits/小时')).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-host-hourly-total')).toHaveTextContent(
+      '合计运行费用：90 credits/小时',
+    );
+  });
+
+  it('T-SPEC4: 无可用规格时提示并禁用创建', () => {
+    installQueryMocks({ specs: [] });
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    expect(screen.getByText('暂无可用规格，请联系管理员')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    expect(submitButton()).toBeDisabled();
+  });
+
+  it('T-SPEC5: 规格列表查询失败时同样提示并禁用创建', () => {
+    installQueryMocks({ specs: null });
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    expect(screen.getByText('暂无可用规格，请联系管理员')).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    expect(submitButton()).toBeDisabled();
+  });
+
+  it('T-SPEC6: 提交携带所选 specId', async () => {
+    installQueryMocks();
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
+    fireEvent.click(screen.getByRole('radio', { name: '2C 4G 10G' }));
+    fireEvent.click(submitButton());
+
+    await waitFor(() => {
+      expect(mockCreateCloudHost).toHaveBeenCalledWith({
+        variables: { input: { name: '云电脑 A', harnessTypes: [], specId: 'spec-2c' } },
+      });
+    });
+  });
+});
 
 function githubAccount() {
   return {
@@ -471,26 +691,12 @@ function githubAccount() {
 describe('NewCloudHostDialog Github 项目编排', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCreateCloudHost.mockResolvedValue({
-      data: {
-        createCloudHost: {
-          id: 'cloud-1',
-          name: '云电脑 A',
-          controllerId: 'ctrl-cloud',
-          status: 'STARTING',
-          harnessTypes: ['OPENCODE'],
-          defaultSessionId: null,
-          activeSessionCount: 0,
-          failureReason: null,
-          deletedAt: null,
-        },
-      },
-    });
-    mockGithubProjectQueries();
+    mockCreatedHost();
+    installQueryMocks({ githubAccounts: [githubAccount()] });
   });
 
   it('未绑定账号时提示且禁用提交', () => {
-    mockGithubProjectQueries([]);
+    installQueryMocks({ githubAccounts: [] });
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
@@ -523,6 +729,7 @@ describe('NewCloudHostDialog Github 项目编排', () => {
           input: {
             name: '云电脑 A',
             harnessTypes: ['OPENCODE'],
+            specId: 'spec-8c',
             githubAccountId: 'acc-1',
             createDefaultSession: false,
           },
@@ -613,74 +820,26 @@ function makeStorage(overrides: Partial<CloudStorageData> = {}): CloudStorageDat
   };
 }
 
-function mockStorageQueries(
-  storages: CloudStorageData[] = [makeStorage()],
-  enabled = true,
-) {
-  mockUseQuery.mockImplementation((query: unknown) => {
-    if (query === CLOUD_STORAGE_CAPABILITIES) {
-      return {
-        data: { cloudStorageCapabilities: { enabled } },
-        loading: false,
-        error: null,
-      };
-    }
-    if (query === CLOUD_STORAGES) {
-      return {
-        data: { cloudStorages: storages },
-        loading: false,
-        error: null,
-        refetch: vi.fn().mockResolvedValue({ data: { cloudStorages: storages } }),
-      };
-    }
-    return {
-      data: {
-        githubAccounts: [],
-        cloudHostWorkloadCatalog: [],
-        cloudHostBillingQuote: {
-          createCredits: 5,
-          perMinuteCredits: 1,
-          availableBalance: 20,
-        },
-      },
-      loading: false,
-      error: null,
-      refetch: mockRefetchQuote,
-    };
-  });
-}
-
 describe('NewCloudHostDialog 云存储区块', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCreateCloudHost.mockResolvedValue({
-      data: {
-        createCloudHost: {
-          id: 'cloud-1',
-          name: '云电脑 A',
-          controllerId: 'ctrl-cloud',
-          status: 'STARTING',
-          harnessTypes: ['OPENCODE'],
-          defaultSessionId: null,
-          activeSessionCount: 0,
-          failureReason: null,
-          deletedAt: null,
-        },
-      },
-    });
+    mockCreatedHost();
   });
 
   it('T-WEB3 勾选后下拉仅含 IDLE/ARCHIVED，并展示名称/容量/状态/费用/创建人', () => {
-    mockStorageQueries([
-      makeStorage(),
-      makeStorage({
-        id: 'st-archived',
-        name: '已归档存储',
-        status: 'ARCHIVED',
-        hourlyCredits: 7.5,
-      }),
-      makeStorage({ id: 'st-attached', name: '已挂载存储', status: 'ATTACHED' }),
-    ]);
+    installQueryMocks({
+      storageEnabled: true,
+      storages: [
+        makeStorage(),
+        makeStorage({
+          id: 'st-archived',
+          name: '已归档存储',
+          status: 'ARCHIVED',
+          hourlyCredits: 7.5,
+        }),
+        makeStorage({ id: 'st-attached', name: '已挂载存储', status: 'ATTACHED' }),
+      ],
+    });
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
@@ -692,14 +851,17 @@ describe('NewCloudHostDialog 云存储区块', () => {
   })
 
   it('T-WEB3 选择已归档存储展示恢复提示，提交携带 storageId 与存储费用', async () => {
-    mockStorageQueries([
-      makeStorage({
-        id: 'st-archived',
-        name: '已归档存储',
-        status: 'ARCHIVED',
-        hourlyCredits: 7.5,
-      }),
-    ]);
+    installQueryMocks({
+      storageEnabled: true,
+      storages: [
+        makeStorage({
+          id: 'st-archived',
+          name: '已归档存储',
+          status: 'ARCHIVED',
+          hourlyCredits: 7.5,
+        }),
+      ],
+    });
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
@@ -715,6 +877,11 @@ describe('NewCloudHostDialog 云存储区块', () => {
     expect(
       screen.getByText('该存储已归档，启动时先恢复数据，恢复完成后挂载期间按全价计费'),
     ).toBeInTheDocument();
+    // 并列列示云存储小时费用并计入合计
+    expect(screen.getByText('云存储：15 credits/小时')).toBeInTheDocument();
+    expect(screen.getByTestId('cloud-host-hourly-total')).toHaveTextContent(
+      '合计运行费用：835 credits/小时',
+    );
 
     fireEvent.click(submitButton());
     await waitFor(() => {
@@ -723,6 +890,7 @@ describe('NewCloudHostDialog 云存储区块', () => {
           input: {
             name: '云电脑 A',
             harnessTypes: [],
+            specId: 'spec-8c',
             storageId: 'st-archived',
           },
         },
@@ -731,7 +899,7 @@ describe('NewCloudHostDialog 云存储区块', () => {
   })
 
   it('T-WEB4 新建…创建成功后自动选中新存储', async () => {
-    mockStorageQueries([]);
+    installQueryMocks({ storageEnabled: true, storages: [] });
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
@@ -751,6 +919,7 @@ describe('NewCloudHostDialog 云存储区块', () => {
           input: {
             name: '云电脑 A',
             harnessTypes: [],
+            specId: 'spec-8c',
             storageId: 'st-new',
           },
         },
@@ -759,7 +928,7 @@ describe('NewCloudHostDialog 云存储区块', () => {
   })
 
   it('T-WEB5 未勾选云存储时请求体不含 storageId（报文形状不变）', async () => {
-    mockStorageQueries([makeStorage()]);
+    installQueryMocks({ storageEnabled: true, storages: [makeStorage()] });
     render(<NewCloudHostDialog {...defaultProps} />);
 
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: '云电脑 A' } });
@@ -769,12 +938,12 @@ describe('NewCloudHostDialog 云存储区块', () => {
       expect(mockCreateCloudHost).toHaveBeenCalled();
     });
     const input = mockCreateCloudHost.mock.calls[0][0].variables.input;
-    expect(input).toEqual({ name: '云电脑 A', harnessTypes: [] });
-    expect(Object.keys(input).sort()).toEqual(['harnessTypes', 'name']);
+    expect(input).toEqual({ name: '云电脑 A', harnessTypes: [], specId: 'spec-8c' });
+    expect(Object.keys(input).sort()).toEqual(['harnessTypes', 'name', 'specId']);
   })
 
   it('云存储能力关闭时隐藏整个区块', () => {
-    mockStorageQueries([makeStorage()], false);
+    installQueryMocks({ storageEnabled: false, storages: [makeStorage()] });
     render(<NewCloudHostDialog {...defaultProps} />);
 
     expect(screen.queryByLabelText('挂载云存储')).not.toBeInTheDocument();
