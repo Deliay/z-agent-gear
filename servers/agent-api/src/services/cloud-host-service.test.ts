@@ -1930,3 +1930,33 @@ describe('云电脑工作组件版本与立即升级（T-UPG-S）', () => {
     );
   });
 });
+
+describe('mapCloudHost 规格快照透传（P1-12）', () => {
+  const service = new CloudHostService();
+
+  it('保留 spec* 字段（resolver → buildCloudHostSpecSnapshot 可装配）', () => {
+    const mapped = service.mapCloudHost(
+      hostDoc({
+        specId: SPEC_ID,
+        specName: '8C 16G 20G',
+        specCpu: 8,
+        specMemoryGi: 16,
+        specEphemeralStorageGi: 20,
+      }),
+    );
+    expect(mapped).toMatchObject({
+      specId: SPEC_ID,
+      specName: '8C 16G 20G',
+      specCpu: 8,
+      specMemoryGi: 16,
+      specEphemeralStorageGi: 20,
+    });
+  });
+
+  it('旧版云电脑 spec* 透传 null（不回查规格表）', () => {
+    const mapped = service.mapCloudHost(hostDoc());
+    expect(mapped.specId).toBeNull();
+    expect(mapped.specName).toBeNull();
+    expect(mapped.specCpu).toBeNull();
+  });
+});

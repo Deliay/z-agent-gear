@@ -1188,6 +1188,12 @@ export class CloudHostService {
       hasDefaultWorkspace: Boolean(host.workspaceId),
       // CloudHost.storage / storageRestoring 的字段级 resolver 数据源
       storageId: host.storageId ? String(host.storageId) : null,
+      // CloudHost.spec 字段级 resolver 数据源（创建时快照；旧版云电脑全 null）
+      specId: host.specId ? String(host.specId) : null,
+      specName: host.specName ?? null,
+      specCpu: host.specCpu ?? null,
+      specMemoryGi: host.specMemoryGi ?? null,
+      specEphemeralStorageGi: host.specEphemeralStorageGi ?? null,
     };
   }
 }

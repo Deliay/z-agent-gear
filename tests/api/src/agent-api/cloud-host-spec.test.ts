@@ -173,6 +173,56 @@ describe('Cloud Host Spec API (T-SP-API2/3/4)', () => {
     expect(created.data.createCloudHost.status).toBe('STARTING');
   }, 60_000);
 
+  it.skipIf(!HARNESS_ENABLED)(
+    'P1-12: cloudHost(id) 返回规格快照，规格删除后仍可展示',
+    async () => {
+      const user = await createFrontUser();
+      await fundFrontUser(user.userId, user.username, 10_000);
+      const specName = `snapshot-${Date.now().toString(36)}`;
+      const specId = await createSpec({
+        name: specName,
+        cpu: 2,
+        memoryGi: 4,
+        ephemeralStorageGi: 10,
+        whitelistEnabled: false,
+        allowedTenantIds: [],
+      });
+      const created = await gql(
+        CREATE_HOST,
+        { input: { name: `spec-snap-${Date.now().toString(36)}`, harnessTypes: [], specId } },
+        user.token,
+      );
+      expect(created.errors, JSON.stringify(created.errors)).toBeUndefined();
+      const hostId = created.data.createCloudHost.id as string;
+
+      const detail = `
+        query Host($id: ID!) {
+          cloudHost(id: $id) {
+            id
+            spec { id name cpu memoryGi ephemeralStorageGi unlimited hourlyCredits }
+          }
+        }
+      `;
+      const before = await gql(detail, { id: hostId }, user.token);
+      expect(before.errors).toBeUndefined();
+      expect(before.data.cloudHost.spec).toMatchObject({
+        id: specId,
+        name: specName,
+        cpu: 2,
+        memoryGi: 4,
+        ephemeralStorageGi: 10,
+      });
+      expect(before.data.cloudHost.spec.hourlyCredits).toBeGreaterThan(0);
+
+      // 删除规格后仍按 cloudhosts 快照展示（不回查规格表）
+      await adminGql(ADMIN_DELETE, { id: specId }, adminToken);
+      const after = await gql(detail, { id: hostId }, user.token);
+      expect(after.errors).toBeUndefined();
+      expect(after.data.cloudHost.spec).toMatchObject({ id: specId, name: specName, cpu: 2 });
+    },
+    60_000,
+  );
+
   // 清理本套件创建的自定义规格（best-effort；预制规格不删除）
   afterAll(async () => {
     for (const id of createdSpecIds) {
