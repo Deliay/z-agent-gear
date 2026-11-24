@@ -76,11 +76,6 @@ describe('CloudControllerClient', () => {
           currentWorkloadName: null,
           billingAccountId: null,
           billingStartedAt: null,
-        specId: null,
-        specName: null,
-        specCpu: null,
-        specMemoryGi: null,
-        specEphemeralStorageGi: null,
           specId: null,
           specName: null,
           specCpu: null,
@@ -284,7 +279,7 @@ describe('CloudControllerClient', () => {
         specCpu: null,
         specMemoryGi: null,
         specEphemeralStorageGi: null,
-          installedWorkloads: [],
+        installedWorkloads: [],
       });
 
       expect(mapped).toEqual({
@@ -306,7 +301,7 @@ describe('CloudControllerClient', () => {
         specCpu: null,
         specMemoryGi: null,
         specEphemeralStorageGi: null,
-          installedWorkloads: [],
+        installedWorkloads: [],
       });
     });
 

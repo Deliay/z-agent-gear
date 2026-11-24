@@ -100,7 +100,7 @@ test.describe('Cloud Host E2E', () => {
           memoryGi: 0,
           ephemeralStorageGi: 0,
           whitelistEnabled: true,
-          allowedTenantIds: [user.tenantId],
+          allowedTenantIds: [user.userId],
         },
       },
       adminToken,

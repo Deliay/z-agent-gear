@@ -32,6 +32,11 @@ export interface ContainerLister {
       billingAccountId?: string | null;
       billingStartedAt?: string | null;
       exitedAt?: string | null;
+      specId?: string | null;
+      specName?: string | null;
+      specCpu?: number | null;
+      specMemoryGi?: number | null;
+      specEphemeralStorageGi?: number | null;
     }>
   >;
 }
@@ -716,6 +721,8 @@ export class ReconciliationService {
       return ['SETTLED', 'SETTLING', 'RELEASE_PENDING', 'FAILED'].includes(reservation.status);
     }
     if (legacyCharged) return true;
+    // 规格计费游标已收口（closedAt 非空）即 destroyed 已生效；游标仍 open 时继续补投以重试尾段结算。
+    if (await CloudBillingCursor.exists({ resourceId, closedAt: { $ne: null } })) return true;
     if (this.isZeroBillingWindow(window)) return true;
     return this.deliveryInFlight(eventId);
   }

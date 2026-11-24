@@ -196,6 +196,54 @@ describe('对账补投 ready payload 携带 spec 快照（P0-2）', () => {
     await clearTestDb();
   });
 
+  it('已收口的规格容器 destroyed 不再误报（P2-9）', async () => {
+    const { ReconciliationService } = await import('../reconciliation.js');
+    const account = await BillingAccount.create({
+      ownerType: 'tenant',
+      ownerId: 'tenant-1',
+      ownerName: 'tenant',
+      cashBalance: 10_000_000,
+    });
+    const resourceId = '507f1f77bcf86cd7994390e4';
+    await CloudBillingCursor.create({
+      resourceId,
+      hostId: HOST_ID,
+      accountId: new mongoose.Types.ObjectId(String(account._id)),
+      specId: 'spec-8c',
+      specName: '8C 16G 20G',
+      specCpu: 8,
+      specMemoryGi: 16,
+      specEphemeralStorageGi: 20,
+      billingStartedAt: T0,
+      chargedMinutes: 60,
+      destroyedAt: new Date(T0.getTime() + HOUR),
+      closedAt: new Date(T0.getTime() + HOUR),
+    });
+    const recon = new ReconciliationService(
+      billing as never,
+      { findByResource: async () => null } as never,
+      {
+        logger,
+        listContainers: async () => [
+          {
+            id: resourceId,
+            status: 'exited',
+            billingAccountId: String(account._id),
+            billingStartedAt: T0.toISOString(),
+            exitedAt: new Date(T0.getTime() + HOUR).toISOString(),
+            specId: 'spec-8c',
+            specName: '8C 16G 20G',
+            specCpu: 8,
+            specMemoryGi: 16,
+            specEphemeralStorageGi: 20,
+          },
+        ],
+      },
+    );
+    const [report] = await recon.run('events');
+    expect(report?.errorCount).toBe(0);
+  });
+
   it('无游标/无预留时补投 ready，payload.spec 来自容器快照', async () => {
     const { ReconciliationService } = await import('../reconciliation.js');
     const { BillingOutbox } = await import('../../../models/billing-outbox.js');
