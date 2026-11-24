@@ -403,8 +403,8 @@ export const ADMIN_TENANT = gql`
 // ---------- 容器规格（contracts/admin-cloud-spec.graphql） ----------
 
 export const ADMIN_CLOUD_SPECS = gql`
-  query AdminCloudSpecs {
-    adminCloudSpecs {
+  query AdminCloudSpecs($keyword: String, $page: Int, $pageSize: Int) {
+    adminCloudSpecs(keyword: $keyword, page: $page, pageSize: $pageSize) {
       id
       name
       cpu

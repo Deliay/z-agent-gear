@@ -101,6 +101,12 @@ export interface CloudContainerJson {
   }>;
   billingAccountId: string | null;
   billingStartedAt: string | null;
+  // ---- 云电脑规格快照（契约 A.3；历史行 null 容忍） ----
+  specId: string | null;
+  specName: string | null;
+  specCpu: number | null;
+  specMemoryGi: number | null;
+  specEphemeralStorageGi: number | null;
   hostId: string | null;
   hostName: string | null;
   harnessTypes: string[];
@@ -155,6 +161,11 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
     })),
     billingAccountId: entity.billingAccountId ?? null,
     billingStartedAt: entity.billingStartedAt ? entity.billingStartedAt.toISOString() : null,
+    specId: entity.specId ?? null,
+    specName: entity.specName ?? null,
+    specCpu: entity.specCpu ?? null,
+    specMemoryGi: entity.specMemoryGi ?? null,
+    specEphemeralStorageGi: entity.specEphemeralStorageGi ?? null,
     // 云电脑字段（secrets 永不返回）
     hostId: entity.hostId ?? null,
     hostName: entity.hostName ?? null,

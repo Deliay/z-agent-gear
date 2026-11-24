@@ -25,7 +25,7 @@ function gql(query: string, variables?: Record<string, unknown>, token?: string)
 
 const SPECS = `
   query {
-    cloudHostSpecs { id name cpu memoryGi ephemeralStorageGi unlimited hourlyCredits }
+    cloudHostSpecs { id name cpu memoryGi ephemeralStorageGi unlimited isPreset hourlyCredits }
   }
 `;
 
@@ -89,7 +89,7 @@ describe('Cloud Host Spec API (T-SP-API2/3/4)', () => {
     // 预制公开规格（8C 16G 20G）对任意租户可见
     expect(ownerList.data.cloudHostSpecs).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ name: '8C 16G 20G', hourlyCredits: 820 }),
+        expect.objectContaining({ name: '8C 16G 20G', hourlyCredits: 820, isPreset: true }),
       ]),
     );
 

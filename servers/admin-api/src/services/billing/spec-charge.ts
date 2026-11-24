@@ -17,11 +17,13 @@ import {
 import { PaymentService, paymentService } from './payment.js';
 import { ReceiptService, receiptService } from './receipt.js';
 import {
+  quoteSpecHourly,
   SpecPricingService,
   specPricingService,
   type SpecQuoteItem,
   type SpecRateQuote,
   type SpecResources,
+  type SpecUnitPrices,
 } from './spec-pricing.js';
 
 const logger = rootLogger.child({ component: 'billing-spec-charge' });
@@ -38,6 +40,8 @@ export interface SpecChargeInput {
   spec: SpecResources;
   /** 本次结算分钟数（整桶 60；尾段 ceil 后 1..60）。 */
   minutes: number;
+  /** 计价时点的七档单价（由 tick 按桶末/尾段末时刻解析后下传；缺省按 now() 取价）。 */
+  unitPrices?: SpecUnitPrices;
   periodStart: Date;
   periodEnd: Date;
   idempotentKey: string;
@@ -133,7 +137,10 @@ export class SpecChargeService {
     periodEnd: Date,
   ): Promise<SpecChargeResult> {
     const at = new Date(this.now());
-    const quote = await this.prices.quote(input.spec, at);
+    // P1-3：桶末时刻的价目由 tick 下传，禁止在出账时用执行时刻重取价（调价不得反向改写已结束桶）。
+    const quote = input.unitPrices
+      ? quoteSpecHourly(input.spec, input.unitPrices)
+      : await this.prices.quote(input.spec, at);
     const itemCents = allocateSpecItemCents(quote.items, minutes);
     const amountCents = itemCents.reduce((acc, value) => acc + value, 0);
     const ref = { type: 'cloud_host' as const, id: input.hostId };
@@ -248,7 +255,9 @@ export class SpecChargeService {
 
     const account = await BillingAccount.findById(input.accountId).lean();
     const at = new Date(this.now());
-    const quote = await this.prices.quote(input.spec, at);
+    const quote = input.unitPrices
+      ? quoteSpecHourly(input.spec, input.unitPrices)
+      : await this.prices.quote(input.spec, at);
     const itemCents = allocateSpecItemCents(quote.items, input.minutes);
     return this.finalizeCharge({
       input,

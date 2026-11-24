@@ -99,6 +99,20 @@ describe('CloudHostSpecService（T-SPV 规格校验）', () => {
     ).rejects.toThrow('invalid tenant in whitelist');
   });
 
+  it('列表关键字搜索与分页', async () => {
+    await service.create(input({ name: '8C 16G 20G' }));
+    await service.create(input({ name: '4C 8G 20G' }));
+    await service.create(input({ name: '2C 4G 10G' }));
+    const filtered = await service.list({ keyword: '8c', page: 1, pageSize: 20 });
+    expect(filtered.map((spec) => spec.name)).toEqual(['8C 16G 20G']);
+    const byStorage = await service.list({ keyword: '20g', page: 1, pageSize: 20 });
+    expect(byStorage.map((spec) => spec.name)).toEqual(['8C 16G 20G', '4C 8G 20G']);
+    const first = await service.list({ page: 1, pageSize: 2 });
+    const second = await service.list({ page: 2, pageSize: 2 });
+    expect(first).toHaveLength(2);
+    expect(first.map((spec) => spec.id)).not.toEqual(second.map((spec) => spec.id));
+  });
+
   it('更新：改名冲突/不存在/删除', async () => {
     const first = await service.create(input({ name: 'A' }));
     const second = await service.create(input({ name: 'B' }));

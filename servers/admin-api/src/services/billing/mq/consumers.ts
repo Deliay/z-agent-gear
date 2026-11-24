@@ -220,6 +220,8 @@ export async function startMeteringConsumer(
                 accountId: event.accountId,
                 resourceId: event.resourceId,
                 occurredAt: startedAt,
+                // P0-1：必须透传 payload（spec 分流唯一判据；缺失会静默落回旧版分钟计费）。
+                payload: event.payload,
               });
               // 门控副作用（阻断项 3）：仅「本次真正建了预留/首期」才投递下一期延迟消息，
               // 避免重复投递的 container.ready 反复投 settlement 造成链路放大。

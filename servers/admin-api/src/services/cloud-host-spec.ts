@@ -126,8 +126,24 @@ function mapSpec(doc: Record<string, unknown>): AdminCloudSpecDTO {
 }
 
 export class CloudHostSpecService {
-  async list(): Promise<AdminCloudSpecDTO[]> {
-    const docs = await CloudHostSpec.find().sort({ createdAt: 1 }).lean();
+  async list(
+    options: { keyword?: string | null; page?: number | null; pageSize?: number | null } = {},
+  ): Promise<AdminCloudSpecDTO[]> {
+    const filter: Record<string, unknown> = {};
+    const keyword = (options.keyword ?? '').trim();
+    if (keyword) {
+      filter.name = { $regex: keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    }
+    const page = Number.isInteger(options.page) && (options.page as number) > 0 ? (options.page as number) : 1;
+    const pageSize =
+      Number.isInteger(options.pageSize) && (options.pageSize as number) > 0
+        ? Math.min(100, options.pageSize as number)
+        : 20;
+    const docs = await CloudHostSpec.find(filter)
+      .sort({ createdAt: 1 })
+      .skip((page - 1) * pageSize)
+      .limit(pageSize)
+      .lean();
     return docs.map((doc) => mapSpec(doc as unknown as Record<string, unknown>));
   }
 

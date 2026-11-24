@@ -171,7 +171,8 @@ export class K8sJobManager {
     };
   }
 
-  buildManifest(input: CreateJobInput): K8sJobManifest {    const labels: Record<string, string> = {
+  buildManifest(input: CreateJobInput): K8sJobManifest {
+    const labels: Record<string, string> = {
       [WORKER_LABEL_KEY]: WORKER_LABEL_VALUE,
       [CONTAINER_ID_LABEL]: input.containerId,
     };

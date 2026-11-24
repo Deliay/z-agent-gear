@@ -26,21 +26,15 @@ import { MeteringService, meteringService } from './metering.js';
 import { PaymentService, paymentService } from './payment.js';
 import { PricingService, pricingService } from './pricing.js';
 import { ReceiptService, receiptService } from './receipt.js';
-import {
-  ReservationService,
-  reservationService,
-  escapeRegExp,
-  reservationBizPrefix,
-} from './reservation.js';
+import { ReservationService, reservationService, escapeRegExp, reservationBizPrefix } from './reservation.js';
+import { CONTAINER_FORCE_DESTROY_REASON } from './constants.js';
+export { CONTAINER_FORCE_DESTROY_REASON };
 import { assertSpecResources } from './spec-pricing.js';
 import { specTickService } from './spec-tick.js';
 
 const logger = rootLogger.child({ component: 'billing-service' });
 
 export type DestroyContainer = (resourceId: string, reason: string) => Promise<void>;
-
-/** 容器强制销毁原因（与 cloud-controller 契约约定一致，可审计）。 */
-export const CONTAINER_FORCE_DESTROY_REASON = '余额不足超过 10 分钟，强制销毁';
 
 export interface InvoiceResult {
   invoiceId: string;
@@ -141,8 +135,23 @@ export class BillingService {
       if (!account) throw new Error(`billing account not found: ${event.accountId}`);
 
       const spec = parseReadySpec(event.payload);
+      const cursorExists = Boolean(
+        await CloudBillingCursor.exists({ resourceId: event.resourceId }),
+      );
       if (spec) {
-        return this.startSpecBilling(event, spec);
+        return this.startSpecBilling(
+          event,
+          spec,
+          account.ownerType === 'tenant' ? account.ownerId : null,
+        );
+      }
+      // P0-2 防御：同一资源已有规格计费游标时，任何 legacy ready（乱序/对账补投/旧事件）一律 skip。
+      if (cursorExists) {
+        logger.warn(
+          { resourceId: event.resourceId, accountId: event.accountId },
+          '[billing] legacy container.ready ignored: spec billing cursor already exists',
+        );
+        return { reservationId: '', insufficient: false, nextCycleSeq: 0, created: false, skipped: true };
       }
       await this.warnSpecSnapshotMismatch(event.resourceId);
 
@@ -257,6 +266,7 @@ export class BillingService {
       payload?: Record<string, unknown>;
     },
     spec: { specId: string | null; name: string | null; cpu: number; memoryGi: number; ephemeralStorageGi: number },
+    ownerTenantId: string | null,
   ): Promise<{
     reservationId: string;
     insufficient: boolean;
@@ -272,10 +282,17 @@ export class BillingService {
     const legacyCharged = await BillingLedger.exists({
       idempotentKey: `charge:container:${event.resourceId}:final`,
     });
-    if (destroyed || legacyCharged) {
+    // P0-2 防御：同资源已有旧版预留（含 ACTIVE）时不再建立规格游标，避免双路径并行计费。
+    const existingReservation = await this.reservations.findByResource(event.resourceId);
+    if (destroyed || legacyCharged || existingReservation) {
       logger.warn(
-        { resourceId: event.resourceId, destroyed: Boolean(destroyed), legacyCharged: Boolean(legacyCharged) },
-        '[billing] spec ready arrived after terminal facts; spec cursor skipped',
+        {
+          resourceId: event.resourceId,
+          destroyed: Boolean(destroyed),
+          legacyCharged: Boolean(legacyCharged),
+          reservation: Boolean(existingReservation),
+        },
+        '[billing] spec ready ignored: another billing path already exists',
       );
       return { reservationId: '', insufficient: false, nextCycleSeq: 0, created: false, skipped: true };
     }
@@ -301,6 +318,7 @@ export class BillingService {
       hostId: container?.hostId ?? null,
       hostName: container?.hostName ?? null,
       accountId: event.accountId,
+      tenantId: ownerTenantId,
       specId: spec.specId,
       specName: spec.name,
       specCpu: spec.cpu,

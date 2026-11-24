@@ -47,6 +47,8 @@ export const cloudHostTypeDefs = `#graphql
     ephemeralStorageGi: Int!
     # 三项全 0；前端渲染「不限制容器，随时可能会被系统销毁」
     unlimited: Boolean!
+    # 是否为预制规格
+    isPreset: Boolean!
     hourlyCredits: Float!
   }
 

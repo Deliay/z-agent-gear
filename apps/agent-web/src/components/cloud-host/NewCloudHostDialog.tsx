@@ -493,6 +493,11 @@ export default function NewCloudHostDialog({
                           <span className="truncate text-sm font-medium text-foreground">
                             {spec.name}
                           </span>
+                          {spec.isPreset && (
+                            <Badge variant="secondary" className="shrink-0">
+                              预制
+                            </Badge>
+                          )}
                           {spec.unlimited && (
                             <Badge variant="outline" className="shrink-0 whitespace-normal text-left">
                               不限制容器，随时可能会被系统销毁

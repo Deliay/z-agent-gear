@@ -212,6 +212,8 @@ describe('CloudHostSpecsPage', () => {
     fireEvent.change(screen.getByLabelText('CPU（核）'), { target: { value: '4' } });
     fireEvent.change(screen.getByLabelText('内存（GiB）'), { target: { value: '8' } });
     fireEvent.change(screen.getByLabelText('临时存储（GiB）'), { target: { value: '20' } });
+    // 非全零组合默认关闭白名单；显式勾选后再选择租户
+    fireEvent.click(whitelistToggle());
     fireEvent.click(screen.getByRole('checkbox', { name: '团队A' }));
 
     expect(screen.getByLabelText('移除租户 团队A')).toBeDefined();
@@ -247,7 +249,7 @@ describe('CloudHostSpecsPage', () => {
     fireEvent.change(screen.getByLabelText('CPU（核）'), { target: { value: '2' } });
     fireEvent.change(screen.getByLabelText('内存（GiB）'), { target: { value: '4' } });
     fireEvent.change(screen.getByLabelText('临时存储（GiB）'), { target: { value: '10' } });
-    fireEvent.click(whitelistToggle());
+    // 非全零组合默认关闭白名单（无需额外取消勾选）
 
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 

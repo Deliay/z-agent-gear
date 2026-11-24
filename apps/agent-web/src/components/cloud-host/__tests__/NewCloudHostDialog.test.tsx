@@ -139,6 +139,7 @@ const defaultSpecs: CloudHostSpecData[] = [
     memoryGi: 16,
     ephemeralStorageGi: 20,
     unlimited: false,
+    isPreset: true,
     hourlyCredits: 820,
   },
   {
@@ -148,6 +149,7 @@ const defaultSpecs: CloudHostSpecData[] = [
     memoryGi: 4,
     ephemeralStorageGi: 10,
     unlimited: false,
+    isPreset: true,
     hourlyCredits: 90,
   },
 ];
@@ -159,6 +161,7 @@ const unlimitedSpec: CloudHostSpecData = {
   memoryGi: 0,
   ephemeralStorageGi: 0,
   unlimited: true,
+  isPreset: false,
   hourlyCredits: 0,
 };
 
@@ -588,6 +591,7 @@ describe('NewCloudHostDialog 规格选择与总价', () => {
     expect(screen.getByText('CPU 2 核 · 内存 4 GiB · 临时存储 10 GiB')).toBeInTheDocument();
     expect(screen.getByText('820 credits/小时')).toBeInTheDocument();
     expect(screen.getByText('90 credits/小时')).toBeInTheDocument();
+    expect(screen.getAllByText('预制')).toHaveLength(2);
   });
 
   it('T-SPEC2: 0C 0G 不限制规格展示风险文案与 0 费用', () => {

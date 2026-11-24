@@ -40,6 +40,7 @@ export default function SpecFormDialog({
   const [memoryGi, setMemoryGi] = useState('0');
   const [ephemeralStorageGi, setEphemeralStorageGi] = useState('0');
   const [whitelistEnabled, setWhitelistEnabled] = useState(true);
+  const [whitelistTouched, setWhitelistTouched] = useState(false);
   const [allowedTenantIds, setAllowedTenantIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,7 +64,15 @@ export default function SpecFormDialog({
     setEphemeralStorageGi('0');
     setWhitelistEnabled(true);
     setAllowedTenantIds([]);
+    setWhitelistTouched(false);
   }, [open, initialData]);
+
+  // 新建时仅「全 0（不限制）」默认开启白名单；改成普通组合后自动关闭（用户手动切换后不再自动改）。
+  useEffect(() => {
+    if (!open || initialData || whitelistTouched) return;
+    const allZero = Number(cpu) === 0 && Number(memoryGi) === 0 && Number(ephemeralStorageGi) === 0;
+    setWhitelistEnabled(allZero);
+  }, [open, initialData, whitelistTouched, cpu, memoryGi, ephemeralStorageGi]);
 
   const errors = validateSpecForm({ name, cpu, memoryGi, ephemeralStorageGi });
   const whitelistTooLarge = allowedTenantIds.length > SPEC_WHITELIST_MAX_TENANTS;
@@ -174,7 +183,10 @@ export default function SpecFormDialog({
                 id="spec-whitelist-enabled"
                 aria-label="开启白名单"
                 checked={whitelistEnabled}
-                onCheckedChange={(value) => setWhitelistEnabled(value === true)}
+                onCheckedChange={(value) => {
+                  setWhitelistTouched(true);
+                  setWhitelistEnabled(value === true);
+                }}
               />
               <Label htmlFor="spec-whitelist-enabled" className="cursor-pointer">
                 开启白名单

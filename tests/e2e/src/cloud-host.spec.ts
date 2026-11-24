@@ -1,5 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { createWorkspace, loginViaUI, registerFundedUser } from './helpers';
+import {
+  adminGqlRequest,
+  adminLoginApi,
+  createWorkspace,
+  loginViaUI,
+  registerFundedUser,
+} from './helpers';
 
 // 云电脑 E2E：K8S_ENABLED=false 下只能覆盖 STARTING → 停止 → 已销毁 → 删除。
 // 在线/默认会话/只读消息由 tests/api 回调用例与真实集群手工验收覆盖。
@@ -76,6 +82,52 @@ test.describe('Cloud Host E2E', () => {
     await dialog.locator('#cloud-host-name').fill(`e2e-quote-${Date.now().toString(36)}`);
     await dialog.getByRole('checkbox', { name: 'OpenCode' }).check();
     await expect(dialog.getByRole('button', { name: '创建云电脑' })).toBeEnabled();
+  });
+
+  test('E2E-SP2: 0C 0G 白名单可见时展示不限制文案与 0 费用', async ({ page }) => {
+    const user = await registerFundedUser(page);
+    const adminToken = await adminLoginApi(page);
+    const specName = `e2e-unlimited-${Date.now().toString(36)}`;
+    const createdSpec = await adminGqlRequest(
+      page,
+      `mutation Create($input: AdminCloudSpecInput!) {
+        adminCreateCloudSpec(input: $input) { id name }
+      }`,
+      {
+        input: {
+          name: specName,
+          cpu: 0,
+          memoryGi: 0,
+          ephemeralStorageGi: 0,
+          whitelistEnabled: true,
+          allowedTenantIds: [user.tenantId],
+        },
+      },
+      adminToken,
+    );
+    const specBody = (await createdSpec.json()) as { data?: { adminCreateCloudSpec: { id: string } } };
+    const specId = specBody.data!.adminCreateCloudSpec.id;
+
+    try {
+      await loginViaUI(page, user.username);
+      await expect(page.locator(sidebar())).toBeVisible();
+      await expandHosts(page);
+      await page.getByRole('button', { name: '新建云电脑' }).click();
+      const dialog = page.getByRole('dialog');
+      const specs = dialog.getByRole('radiogroup', { name: '规格' });
+      await expect(specs.getByRole('radio', { name: specName })).toBeVisible({ timeout: 15000 });
+      await specs.getByRole('radio', { name: specName }).check();
+      await expect(specs.getByText('不限制容器，随时可能会被系统销毁')).toBeVisible();
+      await expect(specs.getByText('0 credits/小时')).toBeVisible();
+      await expect(dialog.getByText(/运行费用：0 credits\/小时/)).toBeVisible();
+    } finally {
+      await adminGqlRequest(
+        page,
+        `mutation Delete($id: ID!) { adminDeleteCloudSpec(id: $id) }`,
+        { id: specId },
+        adminToken,
+      ).catch(() => undefined);
+    }
   });
 
   test('T-AW2..T-AW9: create → starting → stop → stopped → delete', async ({ page }) => {

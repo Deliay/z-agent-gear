@@ -297,6 +297,16 @@ export const CLOUD_HOST_FIELDS = gql`
       hourlyCredits
     }
     storageRestoring
+    spec {
+      id
+      name
+      cpu
+      memoryGi
+      ephemeralStorageGi
+      unlimited
+      isPreset
+      hourlyCredits
+    }
     agentGearVersion {
       currentVersion
       latestVersion
@@ -361,6 +371,7 @@ export const CLOUD_HOST_SPECS = gql`
       memoryGi
       ephemeralStorageGi
       unlimited
+      isPreset
       hourlyCredits
     }
   }

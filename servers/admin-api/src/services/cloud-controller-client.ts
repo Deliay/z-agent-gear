@@ -19,6 +19,12 @@ export interface CloudContainerDTO {
   billingAccountId: string | null;
   /** 就绪计费起点；未就绪/不计费为 null */
   billingStartedAt: string | null;
+  /** 容器规格快照（旧容器/旧链路为 null） */
+  specId: string | null;
+  specName: string | null;
+  specCpu: number | null;
+  specMemoryGi: number | null;
+  specEphemeralStorageGi: number | null;
   /** 容器内已安装工作负载（只增不删）；历史容器为空数组 */
   installedWorkloads: Array<{
     workloadId: string;
@@ -82,6 +88,12 @@ function toIso(value: unknown): string | null {
   return String(value);
 }
 
+function toNullableNumber(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /** 归一 `workloadIds`：非数组/缺失 → []，元素一律转字符串 */
 function normalizeWorkloadIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -133,6 +145,11 @@ export function mapCloudContainer(raw: Record<string, unknown>): CloudContainerD
     currentWorkloadName: (raw.currentWorkloadName as string | null | undefined) ?? null,
     billingAccountId: (raw.billingAccountId as string | null | undefined) ?? null,
     billingStartedAt: toIso(raw.billingStartedAt),
+    specId: typeof raw.specId === 'string' && raw.specId ? raw.specId : null,
+    specName: typeof raw.specName === 'string' && raw.specName ? raw.specName : null,
+    specCpu: toNullableNumber(raw.specCpu),
+    specMemoryGi: toNullableNumber(raw.specMemoryGi),
+    specEphemeralStorageGi: toNullableNumber(raw.specEphemeralStorageGi),
     installedWorkloads: normalizeInstalledWorkloads(raw.installedWorkloads),
   };
 }

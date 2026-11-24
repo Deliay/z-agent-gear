@@ -32,6 +32,11 @@ const UPDATE = `
 
 const DELETE = `mutation Delete($id: ID!) { adminDeleteCloudSpec(id: $id) }`;
 const DETAIL = `query Detail($id: ID!) { adminCloudSpec(id: $id) { id name } }`;
+const SEARCH = `
+  query Search($keyword: String, $page: Int, $pageSize: Int) {
+    adminCloudSpecs(keyword: $keyword, page: $page, pageSize: $pageSize) { id name }
+  }
+`;
 
 interface AdminSpec {
   id: string;
@@ -74,6 +79,35 @@ describe('Admin Cloud Spec API (T-SP-API1)', () => {
     });
     const preset8 = specs.find((spec) => spec.presetKey === '8c16g-20g');
     expect(preset8).toMatchObject({ name: '8C 16G 20G', cpu: 8, memoryGi: 16, ephemeralStorageGi: 20 });
+    expect(preset8?.isPreset).toBe(true);
+  }, 30_000);
+
+  it('规格列表关键字搜索与分页', async () => {
+    const byKeyword = await adminGql<{ adminCloudSpecs: AdminSpec[] }>(
+      SEARCH,
+      { keyword: '8C', page: 1, pageSize: 20 },
+      token,
+    );
+    expect(byKeyword.errors).toBeUndefined();
+    expect(byKeyword.data!.adminCloudSpecs.length).toBeGreaterThan(0);
+    expect(
+      byKeyword.data!.adminCloudSpecs.every((spec) => spec.name.toLowerCase().includes('8c')),
+    ).toBe(true);
+
+    const firstPage = await adminGql<{ adminCloudSpecs: AdminSpec[] }>(
+      SEARCH,
+      { page: 1, pageSize: 2 },
+      token,
+    );
+    const secondPage = await adminGql<{ adminCloudSpecs: AdminSpec[] }>(
+      SEARCH,
+      { page: 2, pageSize: 2 },
+      token,
+    );
+    expect(firstPage.data!.adminCloudSpecs).toHaveLength(2);
+    expect(firstPage.data!.adminCloudSpecs.map((spec) => spec.id)).not.toEqual(
+      secondPage.data!.adminCloudSpecs.map((spec) => spec.id),
+    );
   }, 30_000);
 
   it('创建/更新/删除全流程与错误文案逐字', async () => {

@@ -25,7 +25,8 @@ export const cloudHostSpecTypeDefs = `#graphql
   }
 
   extend type Query {
-    adminCloudSpecs: [AdminCloudSpec!]!
+    # keyword 名称模糊检索（trim 后空 = 不过滤）；page/pageSize 分页（pageSize 上限 100，缺省 20）
+    adminCloudSpecs(keyword: String, page: Int, pageSize: Int): [AdminCloudSpec!]!
     adminCloudSpec(id: ID!): AdminCloudSpec
   }
 

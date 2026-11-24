@@ -12,6 +12,7 @@ export interface CloudHostSpecDTO {
   memoryGi: number;
   ephemeralStorageGi: number;
   unlimited: boolean;
+  isPreset: boolean;
   hourlyCredits: number;
 }
 
@@ -77,6 +78,8 @@ export function buildCloudHostSpecSnapshot(parent: Record<string, unknown>): Clo
     memoryGi,
     ephemeralStorageGi,
     unlimited: isUnlimitedSpecValues({ cpu, memoryGi, ephemeralStorageGi }),
+    // 快照不回查规格表：isPreset 恒 false（已删除规格仍可展示）。
+    isPreset: false,
     // 快照不保存价目；每小时费用由调用方（详情按需查询）补充，默认 0。
     hourlyCredits: 0,
   };
@@ -103,6 +106,7 @@ function mapSpec(
     memoryGi,
     ephemeralStorageGi,
     unlimited: isUnlimitedSpecValues({ cpu, memoryGi, ephemeralStorageGi }),
+    isPreset: doc.isPreset === true,
     hourlyCredits,
   };
 }

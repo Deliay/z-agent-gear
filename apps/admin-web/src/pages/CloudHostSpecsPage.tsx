@@ -15,12 +15,18 @@ import type {
 import { mapSpecError } from '@/lib/cloud-host-spec';
 import { Button } from '@/components/ui/button';
 import { QueryError } from '@/components/ui/query-error';
+import { Input } from '@/components/ui/input';
 import SpecTable from '@/components/cloud-host-specs/SpecTable';
 import SpecFormDialog from '@/components/cloud-host-specs/SpecFormDialog';
 import DeleteSpecDialog from '@/components/cloud-host-specs/DeleteSpecDialog';
 
 export default function CloudHostSpecsPage() {
-  const { data, loading, error, refetch } = useQuery<GetAdminCloudSpecsQuery>(ADMIN_CLOUD_SPECS);
+  const [keyword, setKeyword] = useState('');
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+  const { data, loading, error, refetch } = useQuery<GetAdminCloudSpecsQuery>(ADMIN_CLOUD_SPECS, {
+    variables: { keyword: keyword.trim() || null, page, pageSize },
+  });
   const [createSpec] = useMutation(CREATE_CLOUD_SPEC);
   const [updateSpec] = useMutation(UPDATE_CLOUD_SPEC);
   const [deleteSpec] = useMutation(DELETE_CLOUD_SPEC);
@@ -31,6 +37,10 @@ export default function CloudHostSpecsPage() {
   const [deletingBusy, setDeletingBusy] = useState(false);
 
   const specs = data?.adminCloudSpecs ?? [];
+
+  useEffect(() => {
+    setPage(1);
+  }, [keyword]);
 
   // 初始加载失败走整页错误态；已有数据后的刷新失败不替换内容，改用 toast 显式提示
   useEffect(() => {
@@ -97,6 +107,16 @@ export default function CloudHostSpecsPage() {
         </Button>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          aria-label="搜索规格"
+          placeholder="按名称搜索"
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+          className="max-w-xs"
+        />
+      </div>
+
       {loading && !data ? (
         <div className="text-sm text-muted-foreground">加载中...</div>
       ) : error && !data ? (
@@ -108,6 +128,26 @@ export default function CloudHostSpecsPage() {
           onDelete={(spec) => setDeleting(spec)}
         />
       )}
+
+      <div className="flex items-center justify-end gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={page <= 1}
+          onClick={() => setPage((current) => Math.max(1, current - 1))}
+        >
+          上一页
+        </Button>
+        <span className="text-xs text-muted-foreground">第 {page} 页</span>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={specs.length < pageSize}
+          onClick={() => setPage((current) => current + 1)}
+        >
+          下一页
+        </Button>
+      </div>
 
       <SpecFormDialog
         open={formOpen}

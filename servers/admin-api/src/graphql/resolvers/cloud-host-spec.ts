@@ -26,10 +26,18 @@ function toSpecGraphQLError(err: unknown): never {
 
 export const cloudHostSpecResolvers = {
   Query: {
-    adminCloudSpecs: async (_parent: unknown, _args: unknown, context: AdminAuthContext) => {
+    adminCloudSpecs: async (
+      _parent: unknown,
+      args: { keyword?: string | null; page?: number | null; pageSize?: number | null },
+      context: AdminAuthContext,
+    ) => {
       assertAdmin(context);
       return runWithLogContext({ userId: context.currentAdmin!.id }, () =>
-        cloudHostSpecService.list(),
+        cloudHostSpecService.list({
+          keyword: args.keyword ?? null,
+          page: args.page ?? null,
+          pageSize: args.pageSize ?? null,
+        }),
       );
     },
     adminCloudSpec: async (

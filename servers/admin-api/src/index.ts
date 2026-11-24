@@ -80,6 +80,7 @@ import { CloudBillingCursor } from './models/cloud-billing-cursor.js';
 import { StorageBillingCursor } from './models/storage-billing-cursor.js';
 import { storageTickService } from './services/billing/storage-tick.js';
 import { specTickService } from './services/billing/spec-tick.js';
+import { cloudControllerClient } from './services/cloud-controller-client.js';
 
 const logger = rootLogger.child({ component: 'admin-api' });
 
@@ -268,6 +269,11 @@ async function start() {
     logger: logger.child({ component: 'billing-mq' }),
   });
   await mqRuntime.start();
+
+  // P1-4：规格计费容器欠费宽限到期强拆（复用 cloud-controller destroy + 统一原因）。
+  specTickService.setDestroyer(async (resourceId, reason) => {
+    await cloudControllerClient.destroy(resourceId, reason);
+  });
 
   const scheduler = new BillingScheduler({
     publisher: outboxPublisher,

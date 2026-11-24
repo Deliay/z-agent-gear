@@ -28,6 +28,8 @@ const cloudBillingCursorSchema = new mongoose.Schema(
     destroyedAt: { type: Date, default: null },
     // 销毁尾段结算完成（之后不再扫描）
     closedAt: { type: Date, default: null },
+    // 欠费宽限到期后的强拆发起时间（幂等标记，避免每个 tick 重复下发强拆）
+    arrearsDestroyedAt: { type: Date, default: null },
     lastError: { type: String, default: null },
   },
   { collection: 'cloudbillingcursors', timestamps: true },

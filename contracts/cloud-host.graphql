@@ -94,6 +94,8 @@ type CloudHostSpec {
   ephemeralStorageGi: Int!
   # 三项全 0；前端渲染「不限制容器，随时可能会被系统销毁」
   unlimited: Boolean!
+  # 是否为预制规格（前端展示「预制」徽标）
+  isPreset: Boolean!
   # 按当前价目算出的每小时运行费用（credits）；不限制规格为 0
   hourlyCredits: Float!
 }

@@ -1,6 +1,10 @@
 import { logger as rootLogger } from '../../observability/logger.js';
+import { config } from '../../config/index.js';
+import { BillingAccount } from '../../models/billing-account.js';
 import { CloudBillingCursor } from '../../models/cloud-billing-cursor.js';
 import { accountService, type AccountService } from './account-service.js';
+import { CONTAINER_FORCE_DESTROY_REASON } from './constants.js';
+import { InsufficientBalanceError } from './one-time-charge.js';
 import {
   SpecChargeService,
   specChargeService,
@@ -24,6 +28,8 @@ export interface SpecTickResult {
   chargedHours: number;
   chargedTails: number;
   closed: number;
+  /** 欠费宽限到期后下发强拆的容器数（本次 tick）。 */
+  destroyed: number;
 }
 
 interface CursorRow {
@@ -50,6 +56,8 @@ export interface SpecTickOptions {
   prices?: Pick<SpecPricingService, 'unitPrices'>;
   accounts?: Pick<AccountService, 'markInsufficient'>;
   maxHoursPerTick?: number;
+  /** 欠费强拆执行器（缺省不执行，由 index 注入 cloud-controller destroy）。 */
+  destroy?: (resourceId: string, reason: string) => Promise<void>;
 }
 
 /**
@@ -68,6 +76,7 @@ export class SpecTickService {
   private readonly prices: Pick<SpecPricingService, 'unitPrices'>;
   private readonly accounts: Pick<AccountService, 'markInsufficient'>;
   private readonly maxHoursPerTick: number;
+  private destroy?: (resourceId: string, reason: string) => Promise<void>;
 
   constructor(options: SpecTickOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -75,6 +84,12 @@ export class SpecTickService {
     this.prices = options.prices ?? specPricingService;
     this.accounts = options.accounts ?? accountService;
     this.maxHoursPerTick = options.maxHoursPerTick ?? SPEC_BILLING_MAX_HOURS_PER_TICK;
+    this.destroy = options.destroy;
+  }
+
+  /** 生产入口注入强拆执行器（避免 spec-tick → instances → billing-service 的循环依赖）。 */
+  setDestroyer(destroy: (resourceId: string, reason: string) => Promise<void>): void {
+    this.destroy = destroy;
   }
 
   private resourceSpec(cursor: CursorRow): {
@@ -92,7 +107,7 @@ export class SpecTickService {
   async tick(): Promise<SpecTickResult> {
     const now = new Date(this.now());
     const rows = await CloudBillingCursor.find({ closedAt: null }).lean<CursorRow[]>();
-    const result: SpecTickResult = { scanned: rows.length, chargedHours: 0, chargedTails: 0, closed: 0 };
+    const result: SpecTickResult = { scanned: rows.length, chargedHours: 0, chargedTails: 0, closed: 0, destroyed: 0 };
     for (const row of rows) {
       try {
         await this.tickCursor(row, now, result);
@@ -103,7 +118,69 @@ export class SpecTickService {
         );
       }
     }
+    await this.enforceArrears(now, result).catch((err) => {
+      logger.warn({ err }, '[billing] spec arrears enforcement failed');
+    });
     return result;
+  }
+
+  /**
+   * P1-4：规格计费容器欠费宽限到期强拆。
+   *
+   * `markFailure` 只记录 `insufficientSince`；本方法对「存在出账失败游标 + 账户 insufficientSince
+   * 已超 `BILLING_ARREARS_GRACE_MS`」的容器下发强拆（复用 cloud-controller destroy + 统一原因），
+   * 与旧版预留链路的欠费处置口径一致；强拆成功写 `arrearsDestroyedAt` 幂等标记（失败下个 tick 重试）。
+   * 强拆后由 `container.destroyed` 事件触发尾段结算收口。
+   */
+  private async enforceArrears(now: Date, result: SpecTickResult): Promise<void> {
+    const rows = await CloudBillingCursor.find({
+      closedAt: null,
+      lastError: { $ne: null },
+      arrearsDestroyedAt: null,
+    }).lean<CursorRow[]>();
+    if (rows.length === 0) return;
+
+    const byAccount = new Map<string, CursorRow[]>();
+    for (const row of rows) {
+      const accountId = String(row.accountId);
+      const bucket = byAccount.get(accountId) ?? [];
+      bucket.push(row);
+      byAccount.set(accountId, bucket);
+    }
+
+    for (const [accountId, cursors] of byAccount) {
+      const account = await BillingAccount.findById(accountId)
+        .select({ insufficientSince: 1 })
+        .lean<{ insufficientSince?: Date | null } | null>();
+      const insufficientSince = account?.insufficientSince;
+      if (!insufficientSince) continue;
+      if (now.getTime() - new Date(insufficientSince).getTime() < config.billingArrearsGraceMs) {
+        continue;
+      }
+      for (const cursor of cursors) {
+        try {
+          if (this.destroy) {
+            await this.destroy(cursor.resourceId, CONTAINER_FORCE_DESTROY_REASON);
+          }
+          await CloudBillingCursor.updateOne(
+            { resourceId: cursor.resourceId, arrearsDestroyedAt: null },
+            { $set: { arrearsDestroyedAt: now } },
+          );
+          if (this.destroy) {
+            result.destroyed += 1;
+            logger.info(
+              { resourceId: cursor.resourceId, hostId: cursor.hostId, accountId },
+              '[billing] spec container force destroyed for arrears',
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            { err, resourceId: cursor.resourceId, accountId },
+            '[billing] spec arrears force destroy failed',
+          );
+        }
+      }
+    }
   }
 
   /**
@@ -120,7 +197,7 @@ export class SpecTickService {
       { $set: { destroyedAt } },
     );
     row.destroyedAt = destroyedAt;
-    const result: SpecTickResult = { scanned: 1, chargedHours: 0, chargedTails: 0, closed: 0 };
+    const result: SpecTickResult = { scanned: 1, chargedHours: 0, chargedTails: 0, closed: 0, destroyed: 0 };
     await this.tickCursor(row, now, result);
     const after = await CloudBillingCursor.findOne({ resourceId })
       .select({ closedAt: 1 })
@@ -150,9 +227,11 @@ export class SpecTickService {
       { resourceId: cursor.resourceId },
       { $set: { lastError: message } },
     ).catch(() => undefined);
-    await this.accounts
-      .markInsufficient(String(cursor.accountId), new Date(this.now()))
-      .catch(() => undefined);
+    if (err instanceof InsufficientBalanceError) {
+      await this.accounts
+        .markInsufficient(String(cursor.accountId), new Date(this.now()))
+        .catch(() => undefined);
+    }
     logger.warn(
       { err, resourceId: cursor.resourceId, hostId: cursor.hostId },
       '[billing] spec charge failed; stopping this tick',
@@ -181,6 +260,7 @@ export class SpecTickService {
         specName: cursor.specName ?? null,
         spec: this.resourceSpec(cursor),
         minutes: SPEC_BILLING_MINUTES_PER_HOUR,
+        unitPrices: prices,
         periodStart: bucketStart,
         periodEnd: bucketEnd,
         idempotentKey: `cloud_host.spec.hour:${cursor.resourceId}:${bucketEndEpochHour}`,
@@ -255,6 +335,7 @@ export class SpecTickService {
             specName: cursor.specName ?? null,
             spec: this.resourceSpec(cursor),
             minutes: tailMinutes,
+            unitPrices: tailPrices,
             periodStart: tailStart,
             periodEnd: tailEnd,
             idempotentKey: `cloud_host.spec.tail:${cursor.resourceId}`,

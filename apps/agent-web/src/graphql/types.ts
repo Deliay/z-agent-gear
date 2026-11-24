@@ -313,6 +313,8 @@ export interface CloudHostData {
   storage?: CloudStorageSummaryData | null
   /** STARTING 且存储正在从归档恢复数据 */
   storageRestoring?: boolean
+  /** 创建时的规格快照（规格删除后仍可展示）；旧版云电脑为 null */
+  spec?: CloudHostSpecData | null
   /** 工作组件版本信息；旧服务端未返回时为 undefined */
   agentGearVersion?: CloudHostAgentGearVersionData | null
 }
@@ -340,6 +342,8 @@ export interface CloudHostSpecData {
   ephemeralStorageGi: number
   /** 三项全 0；前端渲染「不限制容器，随时可能会被系统销毁」 */
   unlimited: boolean
+  /** 是否为预制规格 */
+  isPreset: boolean
   /** 按当前价目算出的每小时运行费用（credits） */
   hourlyCredits: number
 }
