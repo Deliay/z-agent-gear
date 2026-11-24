@@ -220,19 +220,23 @@ describe('SpecTickService（T-SPT 小时桶结算）', () => {
     expect(result.destroyed).toBe(0);
   });
 
-  it('T-SPT13: 强拆后 destroyed 事件尾段收口（closedAt）', async () => {
-    const accountId = await account(0);
-    await cursor(accountId, { lastError: 'insufficient balance' });
-    await BillingAccount.updateOne(
-      { _id: accountId },
-      { $set: { insufficientSince: new Date(T0.getTime() - 11 * 60 * 1000) } },
+  it('T-SPT14: 销毁事件晚于整桶边界到达时不重复计费（尾段按已覆盖时长）', async () => {
+    const accountId = await account();
+    await cursor(accountId);
+    // 先在 T0+1h 结算第 1 个整桶（chargedMinutes=60）
+    await tickAt(T0.getTime() + HOUR).tick();
+    expect(await BillingInvoice.countDocuments({ refId: HOST_ID })).toBe(1);
+
+    // 销毁事件延迟到达，exitedAt 早于已结算桶末（T0+55min）
+    const closed = await tickAt(T0.getTime() + 2 * HOUR).settleTail(
+      RESOURCE_ID,
+      new Date(T0.getTime() + 55 * MINUTE),
     );
-    const service = new SpecTickService({
-      now: () => T0.getTime(),
-      destroy: async () => undefined,
-    });
-    await service.tick();
-    const closed = await tickAt(T0.getTime() + 30 * 60 * 1000).settleTail(RESOURCE_ID, T0);
     expect(closed.closed).toBe(true);
+    expect(await BillingInvoice.countDocuments({ refId: HOST_ID })).toBe(1);
+    expect(await BillingInvoice.countDocuments({ description: /尾段折算/ })).toBe(0);
+    const row = await CloudBillingCursor.findOne({ resourceId: RESOURCE_ID }).lean();
+    expect(row?.closedAt).not.toBeNull();
   });
+
 });

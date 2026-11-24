@@ -314,13 +314,19 @@ export class SpecTickService {
     // 尚有待结整桶（含单次 24 桶上限截断）：留待下个 tick，不提前关账。
     if (chargedBuckets < dueWholeBuckets) return;
 
-    const remainderMs = totalMs - dueWholeBuckets * SPEC_BILLING_HOUR_MS;
+    // 尾段以「已覆盖时长」为基准：已结算整桶可能晚于 destroyedAt（销毁事件延迟消费），
+    // 此时不得再按 dueWholeBuckets 重算尾段（否则同一段运行时间被整桶 + 尾段重复计费）。
+    const coveredMinutes = Math.max(
+      chargedMinutes,
+      dueWholeBuckets * SPEC_BILLING_MINUTES_PER_HOUR,
+    );
+    const remainderMs = Math.max(0, totalMs - coveredMinutes * 60_000);
     if (remainderMs > 0) {
       const tailMinutes = Math.min(
         SPEC_BILLING_MINUTES_PER_HOUR,
         Math.ceil(remainderMs / 60_000),
       );
-      const tailStart = new Date(start.getTime() + dueWholeBuckets * SPEC_BILLING_HOUR_MS);
+      const tailStart = new Date(start.getTime() + coveredMinutes * 60_000);
       const tailEnd = new Date(tailStart.getTime() + tailMinutes * 60_000);
       const tailPrices = await this.prices.unitPrices(tailEnd);
       const quote = quoteSpecHourly(this.resourceSpec(cursor), tailPrices);
@@ -343,7 +349,7 @@ export class SpecTickService {
           });
           result.chargedTails += 1;
         }
-        chargedMinutes = dueWholeBuckets * SPEC_BILLING_MINUTES_PER_HOUR + tailMinutes;
+        chargedMinutes = coveredMinutes + tailMinutes;
         await this.advance(cursor, chargedMinutes, now);
       } catch (err) {
         await this.markFailure(cursor, err);

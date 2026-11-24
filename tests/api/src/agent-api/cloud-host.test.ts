@@ -914,7 +914,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       const result = await gql(
         SETUP_GITHUB,
         {
-          input: { specId: defaultSpecId,
+          input: {
             controllerId: seeded.controllerId,
             accountId: github.accountId,
             repoFullName: 'phase9-owner/repo',
@@ -948,7 +948,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       const result = await gql(
         SETUP_GITHUB,
         {
-          input: { specId: defaultSpecId,
+          input: {
             controllerId: seeded.controllerId,
             accountId: github.accountId,
             repoFullName: 'phase9-owner/repo',
@@ -997,7 +997,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       const result = await gql(
         SETUP_GITHUB,
         {
-          input: { specId: defaultSpecId,
+          input: {
             controllerId: seeded.controllerId,
             accountId: github.accountId,
             repoFullName: 'phase9-owner/repo',
