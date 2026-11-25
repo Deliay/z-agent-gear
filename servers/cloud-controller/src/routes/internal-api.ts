@@ -23,6 +23,7 @@ import {
   dedupeWorkloadIds,
   type ContainerService,
   type StartHarnessOptions,
+  type StartSpecInput,
 } from '../services/container-service.js';
 import {
   ContainerActiveError,
@@ -100,6 +101,12 @@ export interface CloudContainerJson {
   }>;
   billingAccountId: string | null;
   billingStartedAt: string | null;
+  // ---- 云电脑规格快照（契约 A.3；历史行 null 容忍） ----
+  specId: string | null;
+  specName: string | null;
+  specCpu: number | null;
+  specMemoryGi: number | null;
+  specEphemeralStorageGi: number | null;
   hostId: string | null;
   hostName: string | null;
   harnessTypes: string[];
@@ -154,6 +161,11 @@ export function toCloudContainerJson(entity: CloudContainerEntity): CloudContain
     })),
     billingAccountId: entity.billingAccountId ?? null,
     billingStartedAt: entity.billingStartedAt ? entity.billingStartedAt.toISOString() : null,
+    specId: entity.specId ?? null,
+    specName: entity.specName ?? null,
+    specCpu: entity.specCpu ?? null,
+    specMemoryGi: entity.specMemoryGi ?? null,
+    specEphemeralStorageGi: entity.specEphemeralStorageGi ?? null,
     // 云电脑字段（secrets 永不返回）
     hostId: entity.hostId ?? null,
     hostName: entity.hostName ?? null,
@@ -330,6 +342,8 @@ interface ParsedHarnessRequest {
   secrets: HarnessSecrets;
   /** 云存储挂载（可选；缺省 null 表示不挂载）。 */
   storage: StartStorageInput | null;
+  /** 容器规格快照（可选；缺省 null 表示现状资源常量）。 */
+  spec: StartSpecInput | null;
 }
 
 /** `parseHarnessRequest` 的可注入依赖（单测免真库）。 */
@@ -441,6 +455,44 @@ export function parseStorageRequest(raw: unknown): StartStorageInput | null | un
     workspaceId,
     storageClass,
     restore,
+  };
+}
+
+/**
+ * 解析/校验 harness 启动请求的 `spec`（契约 A.2.2）：
+ * - 缺省/`null` → `null`（不指定规格，资源维持现状）；
+ * - 合法 → 快照（三项整数 0..上限，全零或全正；部分为 0 拒绝）；
+ * - 非法 → `undefined`（调用方 400 INVALID_HARNESS，不创建 Job）。
+ */
+export function parseSpecRequest(raw: unknown): StartSpecInput | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  const id = nonEmptyString(record.id);
+  const name = nonEmptyString(record.name);
+  const cpu = record.cpu;
+  const memoryGi = record.memoryGi;
+  const ephemeralStorageGi = record.ephemeralStorageGi;
+  if (!id || !name) return undefined;
+  const values = [cpu, memoryGi, ephemeralStorageGi];
+  if (
+    values.some(
+      (value) => typeof value !== 'number' || !Number.isInteger(value) || value < 0,
+    )
+  ) {
+    return undefined;
+  }
+  const [cpuValue, memoryValue, ephemeralValue] = values as [number, number, number];
+  if (cpuValue > 64 || memoryValue > 256 || ephemeralValue > 512) return undefined;
+  const allZero = cpuValue === 0 && memoryValue === 0 && ephemeralValue === 0;
+  const allPositive = cpuValue > 0 && memoryValue > 0 && ephemeralValue > 0;
+  if (!allZero && !allPositive) return undefined;
+  return {
+    id,
+    name,
+    cpu: cpuValue,
+    memoryGi: memoryValue,
+    ephemeralStorageGi: ephemeralValue,
   };
 }
 
@@ -566,6 +618,10 @@ export async function parseHarnessRequest(
   const storage = parseStorageRequest(body.storage);
   if (storage === undefined) return null;
 
+  // 容器规格（可选）：非法 spec 直接 400 INVALID_HARNESS（不创建 Job）。
+  const spec = parseSpecRequest(body.spec);
+  if (spec === undefined) return null;
+
   return {
     hostId,
     refId,
@@ -586,6 +642,7 @@ export async function parseHarnessRequest(
     expiresAt,
     secrets,
     storage,
+    spec,
   };
 }
 
@@ -800,6 +857,7 @@ export function createInternalRouter(
           controllerId: harness.controllerId,
           secrets: harness.secrets,
           storage: harness.storage,
+          spec: harness.spec,
         }
       : {};
 

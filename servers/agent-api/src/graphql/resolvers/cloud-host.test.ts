@@ -77,7 +77,7 @@ describe('cloudHostResolvers authentication', () => {
       () =>
         cloudHostResolvers.Mutation.createCloudHost(
           {},
-          { input: { name: 'x', harnessTypes: ['OPENCODE'] } },
+          { input: { name: 'x', harnessTypes: ['OPENCODE'], specId: '507f1f77bcf86cd7994390b1' } },
           context,
         ),
     ],
@@ -158,19 +158,20 @@ describe('cloudHostResolvers.Query.cloudHost', () => {
 
     await cloudHostResolvers.Mutation.createCloudHost(
       {},
-      { input: { name: 'x', harnessTypes: ['OPENCODE'], createDefaultSession: false } },
+      { input: { name: 'x', harnessTypes: ['OPENCODE'], createDefaultSession: false, specId: '507f1f77bcf86cd7994390b1' } },
       authContext,
     );
     expect(cloudHostService.create).toHaveBeenCalledWith('user-1', {
       name: 'x',
       harnessTypes: ['OPENCODE'],
       workloadIds: undefined,
+      specId: '507f1f77bcf86cd7994390b1',
       createDefaultSession: false,
     });
 
     await cloudHostResolvers.Mutation.createCloudHost(
       {},
-      { input: { name: 'y', harnessTypes: ['OPENCODE'] } },
+      { input: { name: 'y', harnessTypes: ['OPENCODE'], specId: '507f1f77bcf86cd7994390b1' } },
       authContext,
     );
     expect(vi.mocked(cloudHostService.create).mock.calls[1][1]).not.toHaveProperty(
@@ -182,7 +183,7 @@ describe('cloudHostResolvers.Query.cloudHost', () => {
     vi.mocked(cloudHostService.create).mockResolvedValue({ id: HOST_ID } as never);
     await cloudHostResolvers.Mutation.createCloudHost(
       {},
-      { input: { name: 'x', harnessTypes: ['OPENCODE'], githubAccountId: '507f1f77bcf86cd799439099' } },
+      { input: { name: 'x', harnessTypes: ['OPENCODE'], githubAccountId: '507f1f77bcf86cd799439099', specId: '507f1f77bcf86cd7994390b1' } },
       authContext,
     );
     expect(vi.mocked(cloudHostService.create).mock.calls[0][1]).toMatchObject({

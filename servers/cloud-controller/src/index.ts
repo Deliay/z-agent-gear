@@ -224,7 +224,20 @@ export function createCloudControllerApp(options: { logger?: PinoLogger } = {}):
               occurredAt: startedAt,
               accountId: container.billingAccountId,
               resourceId: container.id,
-              payload: { billingStartedAt: startedAt },
+              payload: {
+                billingStartedAt: startedAt,
+                ...(container.specCpu === null || container.specCpu === undefined
+                  ? {}
+                  : {
+                      spec: {
+                        specId: container.specId ?? null,
+                        name: container.specName ?? '',
+                        cpu: container.specCpu,
+                        memoryGi: container.specMemoryGi ?? 0,
+                        ephemeralStorageGi: container.specEphemeralStorageGi ?? 0,
+                      },
+                    }),
+              },
             });
           }
         } catch (err) {

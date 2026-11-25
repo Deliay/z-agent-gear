@@ -93,6 +93,13 @@ const cloudHostSchema = new mongoose.Schema(
     stoppedAt: { type: Date, default: null },
     failureReason: { type: String, default: null },
     deletedAt: { type: Date, default: null },
+    // 创建时规格快照（零迁移，可缺省）：旧数据全 null = 旧版云电脑（分钟计费）。
+    // 规格修改/删除只影响后续创建；展示与计费均以本快照为准，不回查规格表。
+    specId: { type: String, default: null },
+    specName: { type: String, default: null },
+    specCpu: { type: Number, default: null },
+    specMemoryGi: { type: Number, default: null },
+    specEphemeralStorageGi: { type: Number, default: null },
   },
   { collection: 'cloudhosts', timestamps: true },
 );

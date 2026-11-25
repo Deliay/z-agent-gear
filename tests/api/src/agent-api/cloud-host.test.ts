@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import mongoose from 'mongoose';
 import { fundFrontUser } from './funding.js';
 import { createFrontUser } from '../support/front-users.js';
@@ -28,6 +28,18 @@ function gql(query: string, variables?: Record<string, unknown>, token?: string)
 }
 
 const CAPABILITIES = `query { cloudHostCapabilities { enabled supportedHarnesses } }`;
+const SPECS = `query { cloudHostSpecs { id name unlimited } }`;
+
+/** 规格为创建必填项：从当前租户可见规格中取一款（迁移 025 预制的公开规格）。 */
+let defaultSpecId = '';
+
+beforeAll(async () => {
+  if (!HARNESS_ENABLED) return;
+  const token = await createFrontUser().then((created) => created.token);
+  const result = await gql(SPECS, undefined, token);
+  defaultSpecId = (result.data?.cloudHostSpecs?.[0]?.id as string | undefined) ?? '';
+  expect(defaultSpecId).toBeTruthy();
+}, 30_000);
 
 const MY_HOSTS = `
   query {
@@ -90,7 +102,7 @@ describe.skipIf(HARNESS_ENABLED)('Cloud Host API (feature disabled)', () => {
 
     const created = await gql(
       CREATE,
-      { input: { name: 'cloud', harnessTypes: ['OPENCODE'] } },
+      { input: { specId: defaultSpecId, name: 'cloud', harnessTypes: ['OPENCODE'] } },
       token,
     );
     expect(created.errors?.[0].message).toBe('harness feature is disabled');
@@ -121,19 +133,19 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
 
   it('T-CH3/T-CH4: validates name and harnessTypes', async () => {
     const token = await newUserToken();
-    const emptyName = await gql(CREATE, { input: { name: '   ', harnessTypes: ['OPENCODE'] } }, token);
+    const emptyName = await gql(CREATE, { input: { specId: defaultSpecId, name: '   ', harnessTypes: ['OPENCODE'] } }, token);
     expect(emptyName.errors?.[0].message).toBe('name is required');
 
     const longName = await gql(
       CREATE,
-      { input: { name: 'x'.repeat(65), harnessTypes: ['OPENCODE'] } },
+      { input: { specId: defaultSpecId, name: 'x'.repeat(65), harnessTypes: ['OPENCODE'] } },
       token,
     );
     expect(longName.errors?.[0].message).toBe('name is too long');
 
     const unsupported = await gql(
       CREATE,
-      { input: { name: 'cloud', harnessTypes: ['UNKNOWN'] } },
+      { input: { specId: defaultSpecId, name: 'cloud', harnessTypes: ['UNKNOWN'] } },
       token,
     );
     // GraphQL 枚举校验会在 resolver 前拒绝非法 HarnessType（服务层文案仅在枚举外类型可达时出现）
@@ -145,7 +157,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
   it('T-AH-CREATE: harness 可选——0 个 harness 创建成功并先扣费', async () => {
     const token = await fundedUserToken();
     const name = `cloud-noharness-${Date.now().toString(36)}`;
-    const created = await gql(CREATE, { input: { name, harnessTypes: [] } }, token);
+    const created = await gql(CREATE, { input: { specId: defaultSpecId, name, harnessTypes: [] } }, token);
     expect(created.errors).toBeUndefined();
     expect(created.data.createCloudHost).toMatchObject({
       name,
@@ -166,7 +178,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     const created = await gql(
       CREATE,
       {
-        input: {
+        input: { specId: defaultSpecId,
           name: `cloud-${Date.now().toString(36)}`,
           harnessTypes: ['OPENCODE'],
         },
@@ -204,7 +216,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       false,
     );
 
-    const second = await gql(CREATE, { input: { name: 'another', harnessTypes: ['OPENCODE'] } }, token);
+    const second = await gql(CREATE, { input: { specId: defaultSpecId, name: 'another', harnessTypes: ['OPENCODE'] } }, token);
     expect(second.errors).toBeUndefined();
     expect(second.data.createCloudHost.status).toBe('STARTING');
 
@@ -267,7 +279,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     const token = await fundedUserToken();
     const created = await gql(
       CREATE,
-      { input: { name: `bill-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+      { input: { specId: defaultSpecId, name: `bill-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
       token,
     );
     expect(created.errors).toBeUndefined();
@@ -292,7 +304,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     const token = await newUserToken();
     const created = await gql(
       CREATE,
-      { input: { name: `poor-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+      { input: { specId: defaultSpecId, name: `poor-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
       token,
     );
     expect(created.errors?.[0].message).toBe('insufficient balance');
@@ -312,7 +324,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     for (const name of ['multi-a', 'multi-b']) {
       const result = await gql(
         CREATE,
-        { input: { name: `${name}-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+        { input: { specId: defaultSpecId, name: `${name}-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
         token,
       );
       expect(result.errors).toBeUndefined();
@@ -332,7 +344,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       const token = await fundedUserToken();
       const created = await gql(
         CREATE,
-        { input: { name: `dw-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], ...input } },
+        { input: { specId: defaultSpecId, name: `dw-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], ...input } },
         token,
       );
       expect(created.errors).toBeUndefined();
@@ -370,7 +382,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     const token = await fundedUserToken();
     const created = await gql(
       CREATE,
-      { input: { name: `del-db-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+      { input: { specId: defaultSpecId, name: `del-db-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
       token,
     );
     const host = created.data.createCloudHost;
@@ -400,7 +412,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
     const token = await fundedUserToken();
     const created = await gql(
       CREATE,
-      { input: { name: `del-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+      { input: { specId: defaultSpecId, name: `del-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
       token,
     );
     const host = created.data.createCloudHost;
@@ -513,7 +525,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       [CAPABILITIES, undefined],
       [MY_HOSTS, undefined],
       [STOP_IMPACT, { id: '000000000000000000000000' }],
-      [CREATE, { input: { name: 'x', harnessTypes: ['OPENCODE'] } }],
+      [CREATE, { input: { specId: defaultSpecId, name: 'x', harnessTypes: ['OPENCODE'] } }],
       [DELETE, { id: '000000000000000000000000' }],
     ] as Array<[string, Record<string, unknown> | undefined]>) {
       const result = await gql(query, variables);
@@ -530,7 +542,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       );
       const result = await gql(
         CREATE,
-        { input: { name: 'wl-too-many', harnessTypes: ['OPENCODE'], workloadIds: ids } },
+        { input: { specId: defaultSpecId, name: 'wl-too-many', harnessTypes: ['OPENCODE'], workloadIds: ids } },
         token,
       );
       expect(result.errors?.[0].message).toBe('too many workloads (max 5)');
@@ -541,7 +553,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       const missing = new mongoose.Types.ObjectId().toString();
       const result = await gql(
         CREATE,
-        { input: { name: 'wl-missing', harnessTypes: ['OPENCODE'], workloadIds: [missing] } },
+        { input: { specId: defaultSpecId, name: 'wl-missing', harnessTypes: ['OPENCODE'], workloadIds: [missing] } },
         token,
       );
       expect(result.errors?.[0].message).toBe(`invalid workload: ${missing}`);
@@ -562,7 +574,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       const harnessResult = await gql(
         CREATE,
         {
-          input: {
+          input: { specId: defaultSpecId,
             name: 'wl-harness',
             harnessTypes: ['OPENCODE'],
             workloadIds: [String(harness!._id)],
@@ -578,7 +590,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API', () => {
       const created = await gql(
         CREATE,
         {
-          input: {
+          input: { specId: defaultSpecId,
             name: `wl-docker-${Date.now().toString(36)}`,
             harnessTypes: ['OPENCODE'],
             workloadIds: [String(standard!._id)],
@@ -605,7 +617,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: KIMI_CODE harness', () => {
     const created = await gql(
       CREATE,
       {
-        input: {
+        input: { specId: defaultSpecId,
           name: `kimi-${Date.now().toString(36)}`,
           harnessTypes: ['OPENCODE', 'KIMI_CODE'],
         },
@@ -642,7 +654,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', ()
     const created = await gql(
       CREATE,
       {
-        input: {
+        input: { specId: defaultSpecId,
           name: `deepseek-${Date.now().toString(36)}`,
           harnessTypes: ['OPENCODE', 'DEEPSEEK_HARNESS'],
         },
@@ -675,7 +687,7 @@ describe.skipIf(!HARNESS_ENABLED)('Cloud Host API: DEEPSEEK_HARNESS harness', ()
     const token = await newUserToken();
     const result = await gql(
       CREATE,
-      { input: { name: `bad-${Date.now().toString(36)}`, harnessTypes: ['FOO'] } },
+      { input: { specId: defaultSpecId, name: `bad-${Date.now().toString(36)}`, harnessTypes: ['FOO'] } },
       token,
     );
     // GraphQL 枚举校验会在 resolver 前拒绝非法 HarnessType（服务层文案仅在枚举外类型可达时出现）
@@ -819,7 +831,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
     const created = await gql(
       CREATE,
       {
-        input: {
+        input: { specId: defaultSpecId,
           name: `cds-${Date.now().toString(36)}`,
           harnessTypes: ['OPENCODE'],
           createDefaultSession: false,
@@ -839,7 +851,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)('Cloud Host API: createDefaultSe
       const legacy = await gql(
         CREATE,
         {
-          input: {
+          input: { specId: defaultSpecId,
             name: `cds-default-${Date.now().toString(36)}`,
             harnessTypes: ['OPENCODE'],
           },
@@ -1057,7 +1069,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO || !process.env.REDIS_URL)(
       const token = await fundedUserToken();
       const created = await gql(
         CREATE,
-        { input: { name: `upg-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+        { input: { specId: defaultSpecId, name: `upg-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
         token,
       );
       expect(created.errors).toBeUndefined();
@@ -1124,7 +1136,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)(
       const token = await fundedUserToken();
       const created = await gql(
         CREATE,
-        { input: { name: `upg4-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+        { input: { specId: defaultSpecId, name: `upg4-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
         token,
       );
       expect(created.errors).toBeUndefined();
@@ -1142,7 +1154,7 @@ describe.skipIf(!HARNESS_ENABLED || !HAS_MONGO)(
       const token = await fundedUserToken();
       const created = await gql(
         CREATE,
-        { input: { name: `upg5-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
+        { input: { specId: defaultSpecId, name: `upg5-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'] } },
         token,
       );
       const host = created.data.createCloudHost;

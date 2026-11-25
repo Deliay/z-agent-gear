@@ -115,6 +115,63 @@ describe('K8sJobManager', () => {
     expect(resources.limits['ephemeral-storage']).toBe('10Gi');
   });
 
+  it('T-KSP1: 普通规格 limits 按规格映射，requests 保持现状小值', () => {
+    const { manager } = setup();
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-spec',
+      containerId: 'container-spec',
+      token: 't',
+      resources: { cpu: 8, memoryGi: 16, ephemeralStorageGi: 20 },
+    });
+    const resources = manifest.spec.template.spec.containers[0]!.resources!;
+    expect(resources.requests).toEqual({ cpu: '0.1', memory: '256Mi' });
+    expect(resources.limits).toEqual({
+      cpu: '8',
+      memory: '16Gi',
+      'ephemeral-storage': '20Gi',
+    });
+  });
+
+  it('T-KSP2: 全零规格（不限制）省略 resources', () => {
+    const { manager } = setup();
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-unlimited',
+      containerId: 'container-unlimited',
+      token: 't',
+      resources: null,
+    });
+    expect(manifest.spec.template.spec.containers[0]).not.toHaveProperty('resources');
+  });
+
+  it('T-KSP3: 无 spec 回退现状常量（含 ephemeralStorage override）', () => {
+    const { manager } = setup(undefined, { ephemeralStorage: '12Gi' });
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-legacy',
+      containerId: 'container-legacy',
+      token: 't',
+    });
+    const resources = manifest.spec.template.spec.containers[0]!.resources!;
+    expect(resources.requests).toEqual({ cpu: '0.1', memory: '256Mi' });
+    expect(resources.limits).toEqual({ cpu: '4', memory: '8Gi', 'ephemeral-storage': '12Gi' });
+  });
+
+  it('T-KSP4: 规格不影响既有 env/manifest 其它字段', () => {
+    const { manager } = setup();
+    const manifest = manager.buildManifest({
+      jobName: 'zag-worker-spec',
+      containerId: 'container-spec',
+      token: 't',
+      env: { ZAG_HOST_NAME: 'my-cloud' },
+      resources: { cpu: 2, memoryGi: 4, ephemeralStorageGi: 10 },
+    });
+    const container = manifest.spec.template.spec.containers[0]!;
+    expect(container.env).toEqual(
+      expect.arrayContaining([{ name: 'ZAG_HOST_NAME', value: 'my-cloud' }]),
+    );
+    expect(manifest.spec.ttlSecondsAfterFinished).toBe(600);
+    expect(manifest.metadata.labels?.['zag.cloud/container-id']).toBe('container-spec');
+  });
+
   it('T-K2: env injects token via ZAG_CONTROLLER_KEY and a token-free endpoint', () => {
     const { manager } = setup('wss://cloud.example.com');
     const token = 'container-1.a+b/c=d';

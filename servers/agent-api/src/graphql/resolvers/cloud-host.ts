@@ -11,6 +11,11 @@ import {
   toCloudHostGraphQLError,
 } from '../../services/cloud-host-service.js';
 import {
+  buildCloudHostSpecSnapshot,
+  cloudHostSpecService,
+  fallbackSpecHourlyCredits,
+} from '../../services/cloud-host-spec-service.js';
+import {
   cloudHostWorkloadService,
   mapOperation,
   toCloudHostSetupGraphQLError,
@@ -88,6 +93,22 @@ export const cloudHostResolvers = {
         );
       }
       return { createCredits, perMinuteCredits, availableBalance };
+    },
+    cloudHostSpecs: async (_parent: unknown, _args: unknown, context: AuthContext) => {
+      requireUser(context);
+      return cloudHostSpecService.listVisible();
+    },
+    cloudHostSpecBillingQuote: async (
+      _parent: unknown,
+      args: { specId: string },
+      context: AuthContext,
+    ) => {
+      requireUser(context);
+      try {
+        return await cloudHostSpecService.quoteById(args.specId);
+      } catch (err) {
+        toCloudHostGraphQLError(err);
+      }
     },
     cloudHost: async (
       _parent: unknown,
@@ -191,7 +212,7 @@ export const cloudHostResolvers = {
   Mutation: {
     createCloudHost: async (
       _parent: unknown,
-      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[]; createDefaultSession?: boolean | null; githubAccountId?: string | null; storageId?: string | null } },
+      args: { input: { name: string; harnessTypes: string[]; workloadIds?: string[]; createDefaultSession?: boolean | null; githubAccountId?: string | null; storageId?: string | null; specId: string } },
       context: AuthContext,
     ) => {
       const userId = requireUser(context);
@@ -202,6 +223,7 @@ export const cloudHostResolvers = {
           workloadIds: args.input.workloadIds,
           githubAccountId: args.input.githubAccountId,
           storageId: args.input.storageId,
+          specId: args.input.specId,
           ...(args.input.createDefaultSession === undefined || args.input.createDefaultSession === null
             ? {}
             : { createDefaultSession: args.input.createDefaultSession }),
@@ -395,6 +417,22 @@ export const cloudHostResolvers = {
       }
     },
     storage: async (parent: Doc) => loadHostStorage(parent),
+    spec: async (parent: Doc) => {
+      const snapshot = buildCloudHostSpecSnapshot(parent);
+      if (!snapshot) return null;
+      try {
+        return {
+          ...snapshot,
+          hourlyCredits: await cloudHostSpecService.quoteHourlyCredits({
+            cpu: snapshot.cpu,
+            memoryGi: snapshot.memoryGi,
+            ephemeralStorageGi: snapshot.ephemeralStorageGi,
+          }),
+        };
+      } catch {
+        return { ...snapshot, hourlyCredits: fallbackSpecHourlyCredits(snapshot) };
+      }
+    },
     storageRestoring: async (parent: Doc) => {
       if (parent.status !== 'STARTING') return false;
       const storage = await loadHostStorage(parent);

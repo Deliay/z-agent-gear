@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { createFrontUser } from '../support/front-users.js';
 import { fundFrontUser } from './funding.js';
 
@@ -24,6 +24,18 @@ function gql(query: string, variables?: Record<string, unknown>, token?: string)
 }
 
 const CAPABILITIES = `query { cloudStorageCapabilities { enabled } }`;
+const CLOUD_HOST_SPECS = `query { cloudHostSpecs { id } }`;
+
+/** 创建云电脑必填规格：取当前租户可见的第一款规格。 */
+let defaultSpecId = '';
+
+beforeAll(async () => {
+  if (!HARNESS_ENABLED) return;
+  const { token } = await createFrontUser();
+  const result = await gql(CLOUD_HOST_SPECS, undefined, token);
+  defaultSpecId = (result.data?.cloudHostSpecs?.[0]?.id as string | undefined) ?? '';
+  expect(defaultSpecId).toBeTruthy();
+}, 30_000);
 
 const LIST = `
   query Storages($onlyAttachable: Boolean, $includeDestroyed: Boolean) {
@@ -218,7 +230,7 @@ function testMounting(): void {
 
       const first = await gql(
         CREATE_HOST,
-        { input: { name: `host-${Date.now().toString(36)}`, harnessTypes: [], storageId: storage.id } },
+        { input: { name: `host-${Date.now().toString(36)}`, harnessTypes: [], specId: defaultSpecId, storageId: storage.id } },
         token,
       );
       expect(first.errors).toBeUndefined();
@@ -237,7 +249,7 @@ function testMounting(): void {
       // 并发/重复挂载被拒绝
       const second = await gql(
         CREATE_HOST,
-        { input: { name: `host2-${Date.now().toString(36)}`, harnessTypes: [], storageId: storage.id } },
+        { input: { name: `host2-${Date.now().toString(36)}`, harnessTypes: [], specId: defaultSpecId, storageId: storage.id } },
         token,
       );
       expect(second.errors?.[0].message).toBe('storage is not attachable');
@@ -256,7 +268,7 @@ function testMounting(): void {
       const storage = await newStorage(token, `archive-${Date.now().toString(36)}`, 6);
       const created = await gql(
         CREATE_HOST,
-        { input: { name: `host-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], storageId: storage.id } },
+        { input: { name: `host-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], specId: defaultSpecId, storageId: storage.id } },
         token,
       );
       expect(created.errors).toBeUndefined();
@@ -314,7 +326,7 @@ function testMounting(): void {
       // 第二轮：已归档 → 再挂载（费率回 FULL）→ 再归档（新 archiveId 不被旧 SUCCEEDED 阻断）
       const second = await gql(
         CREATE_HOST,
-        { input: { name: `host2-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], storageId: storage.id } },
+        { input: { name: `host2-${Date.now().toString(36)}`, harnessTypes: ['OPENCODE'], specId: defaultSpecId, storageId: storage.id } },
         token,
       );
       expect(second.errors).toBeUndefined();

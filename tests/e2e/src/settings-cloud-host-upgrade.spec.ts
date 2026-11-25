@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import mongoose from 'mongoose';
-import { createFrontUser, fundFrontUser, gqlRequest, loginViaUI } from './helpers';
+import { createFrontUser, fetchDefaultCloudSpecId, fundFrontUser, gqlRequest, loginViaUI } from './helpers';
 
 /**
  * 云电脑工作组件版本与「立即升级」E2E（需求 #551 / 计划 §5.3）。
@@ -61,7 +61,13 @@ async function createHost(
   token: string,
 ): Promise<SeededHost> {
   const name = `e2e-upg-${Date.now().toString(36)}`;
-  const created = await gqlRequest(page, CREATE, { input: { name, harnessTypes: ['OPENCODE'] } }, token);
+  const specId = await fetchDefaultCloudSpecId(page, token);
+  const created = await gqlRequest(
+    page,
+    CREATE,
+    { input: { name, harnessTypes: ['OPENCODE'], specId } },
+    token,
+  );
   const body = await created.json();
   if (body.errors) throw new Error(body.errors[0].message);
   const host = body.data.createCloudHost;

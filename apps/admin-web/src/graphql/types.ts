@@ -577,3 +577,53 @@ export interface AdminAddTenantMemberMutation {
 export interface AdminRemoveTenantMemberMutation {
   adminRemoveTenantMember: boolean;
 }
+
+// ---------- 容器规格（contracts/admin-cloud-spec.graphql） ----------
+
+/** 后台容器规格视图（AdminCloudSpec）。 */
+export interface AdminCloudSpecData {
+  id: string;
+  /** trim 后 1..64，全局唯一 */
+  name: string;
+  /** CPU 核数；不限制规格恒 0 */
+  cpu: number;
+  /** 内存 GiB；不限制规格恒 0 */
+  memoryGi: number;
+  /** 临时存储 GiB；不限制规格恒 0 */
+  ephemeralStorageGi: number;
+  /** 派生：三项全 0（不限制容器） */
+  unlimited: boolean;
+  /** true 时仅 allowedTenantIds 内租户可见；空名单 = 无租户可见 */
+  whitelistEnabled: boolean;
+  /** 白名单租户 ID；whitelistEnabled=false 时恒为空 */
+  allowedTenantIds: string[];
+  isPreset: boolean;
+  presetKey: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminCloudSpecInputData {
+  name: string;
+  cpu: number;
+  memoryGi: number;
+  ephemeralStorageGi: number;
+  whitelistEnabled: boolean;
+  allowedTenantIds: string[];
+}
+
+export interface GetAdminCloudSpecsQuery {
+  adminCloudSpecs: AdminCloudSpecData[];
+}
+
+export interface AdminCreateCloudSpecMutation {
+  adminCreateCloudSpec: AdminCloudSpecData;
+}
+
+export interface AdminUpdateCloudSpecMutation {
+  adminUpdateCloudSpec: AdminCloudSpecData;
+}
+
+export interface AdminDeleteCloudSpecMutation {
+  adminDeleteCloudSpec: boolean;
+}

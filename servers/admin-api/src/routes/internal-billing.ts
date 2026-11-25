@@ -8,6 +8,7 @@ import { BillingLedger } from '../models/billing-ledger.js';
 import { BillingReceipt } from '../models/billing-receipt.js';
 import { BillingApiCall } from '../models/billing-api-call.js';
 import { CloudHost } from '../models/cloud-host.js';
+import { CloudHostSpec } from '../models/cloud-host-spec.js';
 import { accountService } from '../services/billing/account-service.js';
 import { type BillingOwnerType } from '../models/billing-account.js';
 import { apiKeyService, ApiKeyNotFoundError } from '../services/billing/api-key-service.js';
@@ -27,6 +28,10 @@ import {
   oneTimeChargeService,
 } from '../services/billing/one-time-charge.js';
 import { centsToCredits } from '../services/billing/money.js';
+import {
+  isUnlimitedSpec,
+  specPricingService,
+} from '../services/billing/spec-pricing.js';
 import {
   storagePricingService,
   type StorageRateQuote,
@@ -257,6 +262,70 @@ export function createInternalBillingRouter(): Router {
       });
     } catch (err) {
       logger.error({ err }, '[internal-billing] GET /storage-quote failed');
+      res.status(500).json({ error: 'INTERNAL_ERROR' });
+    }
+  });
+
+  /** 云电脑规格分段报价：specId（快照）优先，或 cpu/memoryGi/ephemeralStorageGi 三元组直接报价。 */
+  router.get('/spec-quote', async (req: Request, res: Response) => {
+    const rawSpecId = req.query.specId;
+    let specId: string | null = null;
+    let name: string | null = null;
+    let cpu: number;
+    let memoryGi: number;
+    let ephemeralStorageGi: number;
+
+    if (typeof rawSpecId === 'string' && rawSpecId.trim() !== '') {
+      if (!mongoose.isValidObjectId(rawSpecId.trim())) {
+        res.status(400).json({ error: 'INVALID_BODY' });
+        return;
+      }
+      const spec = await CloudHostSpec.findById(rawSpecId.trim()).lean();
+      if (!spec) {
+        res.status(404).json({ error: 'SPEC_NOT_FOUND' });
+        return;
+      }
+      specId = String(spec._id);
+      name = spec.name ?? null;
+      cpu = Number(spec.cpu ?? 0);
+      memoryGi = Number(spec.memoryGi ?? 0);
+      ephemeralStorageGi = Number(spec.ephemeralStorageGi ?? 0);
+    } else {
+      const toInt = (value: unknown): number =>
+        typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN;
+      cpu = toInt(req.query.cpu);
+      memoryGi = toInt(req.query.memoryGi);
+      ephemeralStorageGi = toInt(req.query.ephemeralStorageGi);
+    }
+
+    try {
+      const quote = await specPricingService.quote({ cpu, memoryGi, ephemeralStorageGi });
+      const prices = await specPricingService.unitPrices();
+      res.json({
+        specId,
+        name,
+        cpu,
+        memoryGi,
+        ephemeralStorageGi,
+        unlimited: isUnlimitedSpec({ cpu, memoryGi, ephemeralStorageGi }),
+        hourlyCredits: quote.hourlyCredits,
+        tiers: quote.tiers,
+        prices: {
+          cpuTier1: centsToCredits(prices.cpuTier1Cents),
+          cpuTier2: centsToCredits(prices.cpuTier2Cents),
+          memTier1: centsToCredits(prices.memTier1Cents),
+          memTier2: centsToCredits(prices.memTier2Cents),
+          memTier3: centsToCredits(prices.memTier3Cents),
+          memTier4: centsToCredits(prices.memTier4Cents),
+          ephemeralTier: centsToCredits(prices.ephemeralTierCents),
+        },
+      });
+    } catch (err) {
+      if (err instanceof RangeError) {
+        res.status(400).json({ error: 'INVALID_BODY' });
+        return;
+      }
+      logger.error({ err }, '[internal-billing] GET /spec-quote failed');
       res.status(500).json({ error: 'INTERNAL_ERROR' });
     }
   });

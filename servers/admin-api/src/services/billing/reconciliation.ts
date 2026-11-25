@@ -9,6 +9,7 @@ import { BillingOutbox } from '../../models/billing-outbox.js';
 import { BillingReceipt } from '../../models/billing-receipt.js';
 import { BillingRollup } from '../../models/billing-rollup.js';
 import { CloudHost } from '../../models/cloud-host.js';
+import { CloudBillingCursor } from '../../models/cloud-billing-cursor.js';
 import { accountService, type AccountService } from './account-service.js';
 import type { BillingService } from './billing-service.js';
 import type { ReservationService } from './reservation.js';
@@ -31,6 +32,11 @@ export interface ContainerLister {
       billingAccountId?: string | null;
       billingStartedAt?: string | null;
       exitedAt?: string | null;
+      specId?: string | null;
+      specName?: string | null;
+      specCpu?: number | null;
+      specMemoryGi?: number | null;
+      specEphemeralStorageGi?: number | null;
     }>
   >;
 }
@@ -223,6 +229,11 @@ export class ReconciliationService {
       billingAccountId?: string | null;
       billingStartedAt?: string | null;
       exitedAt?: string | null;
+      specId?: string | null;
+      specName?: string | null;
+      specCpu?: number | null;
+      specMemoryGi?: number | null;
+      specEphemeralStorageGi?: number | null;
     }>;
     try {
       containers = await this.options.listContainers();
@@ -250,7 +261,21 @@ export class ReconciliationService {
           occurredAt: startedAt,
           accountId: container.billingAccountId,
           resourceId: container.id,
-          payload: { billingStartedAt: startedAt },
+          // P0-2：补投必须携带规格快照，否则会误落旧版分钟计费（与规格小时计费并行重复扣费）。
+          payload: {
+            billingStartedAt: startedAt,
+            ...(container.specCpu !== null && container.specCpu !== undefined
+              ? {
+                  spec: {
+                    specId: container.specId ?? null,
+                    name: container.specName ?? '',
+                    cpu: container.specCpu,
+                    memoryGi: container.specMemoryGi ?? 0,
+                    ephemeralStorageGi: container.specEphemeralStorageGi ?? 0,
+                  },
+                }
+              : {}),
+          },
         });
         errors.push({ resourceId: container.id, eventType: 'container.ready', action });
       }
@@ -685,6 +710,8 @@ export class ReconciliationService {
     });
     if (eventType === 'container.ready') {
       if (reservation || legacyCharged) return true;
+      // 规格计费游标存在即视为 ready 已生效（P0-2：否则会补投 legacy ready 造成双计费）。
+      if (await CloudBillingCursor.exists({ resourceId })) return true;
       if (await BillingEvent.exists({ resourceId, eventType: 'container.destroyed' })) return true;
       return this.deliveryInFlight(eventId);
     }
@@ -694,6 +721,8 @@ export class ReconciliationService {
       return ['SETTLED', 'SETTLING', 'RELEASE_PENDING', 'FAILED'].includes(reservation.status);
     }
     if (legacyCharged) return true;
+    // 规格计费游标已收口（closedAt 非空）即 destroyed 已生效；游标仍 open 时继续补投以重试尾段结算。
+    if (await CloudBillingCursor.exists({ resourceId, closedAt: { $ne: null } })) return true;
     if (this.isZeroBillingWindow(window)) return true;
     return this.deliveryInFlight(eventId);
   }
