@@ -81,6 +81,39 @@ type CloudHostAgentGearUpgradeResult {
   accepted: Boolean!
 }
 
+# 云电脑规格（前台可见性过滤后的只读视图）
+# 可见性口径：whitelistEnabled=false 或当前租户 ∈ allowedTenantIds；空名单且开启白名单 = 无租户可见。
+type CloudHostSpec {
+  id: ID!
+  name: String!
+  # CPU 核数；不限制规格恒 0
+  cpu: Int!
+  # 内存 GiB；不限制规格恒 0
+  memoryGi: Int!
+  # 临时存储 GiB；不限制规格恒 0
+  ephemeralStorageGi: Int!
+  # 三项全 0；前端渲染「不限制容器，随时可能会被系统销毁」
+  unlimited: Boolean!
+  # 是否为预制规格（前端展示「预制」徽标）
+  isPreset: Boolean!
+  # 按当前价目算出的每小时运行费用（credits）；不限制规格为 0
+  hourlyCredits: Float!
+}
+
+# 规格分段计费分档明细（结构对齐 CloudStorageBillingQuote 的 tiers 口径）
+type CloudHostSpecQuoteTier {
+  # 如「CPU 4 核 × 15 credits/核/小时」
+  label: String!
+  amountCredits: Float!
+}
+
+# 规格分段计费报价（创建对话框实时总价）
+type CloudHostSpecBillingQuote {
+  hourlyCredits: Float!
+  tiers: [CloudHostSpecQuoteTier!]!
+  availableBalance: Float
+}
+
 type CloudHost {
   id: ID!
   name: String!
@@ -114,6 +147,9 @@ type CloudHost {
   storageRestoring: Boolean!
   # 工作组件版本信息（字段级组装；单字段失败降级为 null，不拖垮查询）
   agentGearVersion: CloudHostAgentGearVersion!
+  # 创建时的规格快照（依据 cloudhosts.spec* 字段装配，不回查规格表：规格删除后仍可展示）；
+  # 旧版云电脑（无规格快照）返回 null
+  spec: CloudHostSpec
 }
 
 # 云电脑创建/运行报价（金额单位 credits，来自 admin-api 价目档）
@@ -121,8 +157,8 @@ type CloudHost {
 type CloudHostBillingQuote {
   # 一次性创建费（credits）；创建确认即扣费
   createCredits: Float!
-  # 运行期每分钟费用（credits）
-  perMinuteCredits: Float!
+  # 运行期每分钟费用（credits）；仅旧版云电脑展示语义（新版按规格小时计费），deprecated
+  perMinuteCredits: Float! @deprecated(reason: "新版云电脑按规格小时计费，仅旧版云电脑详情保留展示")
   # 当前可用余额（credits）；计费不可用/查询失败为 null（前端仅提示，不阻断创建）
   availableBalance: Float
 }
@@ -242,6 +278,9 @@ input CreateCloudHostInput {
   # 缺省 = 不挂载，报文与现状完全一致。挂载失败（被抢占/状态变化）抛 `storage is not attachable`，
   # 已扣的创建费按既有「拉起失败自动退款」路径退回。
   storageId: ID
+  # 必填：容器规格 ID，必须对当前租户可见（不可见/不存在抛 `spec not found`）。
+  # 规格以快照方式随云电脑落库并贯通到容器资源下发与分段计费（旧版云电脑无该字段）。
+  specId: ID!
 }
 
 # 支持 `workloadKind=HARNESS` 负载（可选工作负载；幂等：已安装返回 SKIPPED；不提供卸载入口）
@@ -283,6 +322,10 @@ extend type Query {
   cloudHostIssuesLinkages(controllerId: ID!): [CloudHostIssuesLinkage!]!
   # 云电脑创建/运行报价（服务端权威价目；计费不可用时 availableBalance=null、价格回退默认值）
   cloudHostBillingQuote: CloudHostBillingQuote!
+  # 当前租户可见的规格列表（白名单过滤），按 cpu/memoryGi/ephemeralStorageGi 降序
+  cloudHostSpecs: [CloudHostSpec!]!
+  # 按规格计算每小时运行费用与分档明细（规格须对当前租户可见）
+  cloudHostSpecBillingQuote(specId: ID!): CloudHostSpecBillingQuote!
 }
 
 extend type Mutation {

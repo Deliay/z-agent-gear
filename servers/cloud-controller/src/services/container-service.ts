@@ -121,6 +121,15 @@ export interface DestroyResult {
   deletedJob: boolean;
 }
 
+/** 容器规格快照（契约 A.2.2；缺省 = 现状资源常量）。 */
+export interface StartSpecInput {
+  id: string;
+  name: string;
+  cpu: number;
+  memoryGi: number;
+  ephemeralStorageGi: number;
+}
+
 export interface StartHarnessOptions {
   /**
    * 是否由 `workloadPlan` 派生容器 `workloadIds`（契约 A.2.2）。
@@ -158,6 +167,8 @@ export interface StartHarnessOptions {
   secrets?: HarnessSecrets | null;
   /** 云存储挂载（可选；缺省时 Job manifest 与现状逐字节一致）。 */
   storage?: StartStorageInput | null;
+  /** 容器规格快照（可选；缺省时 Job 资源维持现状常量）。 */
+  spec?: StartSpecInput | null;
 }
 
 /** 兼容既有调用方命名。 */
@@ -387,6 +398,11 @@ export class ContainerService {
       workloadIds: effectiveWorkloadIds,
       workloadPlan: plan,
       billingAccountId: options.billingAccountId ?? null,
+      specId: options.spec?.id ?? null,
+      specName: options.spec?.name ?? null,
+      specCpu: options.spec?.cpu ?? null,
+      specMemoryGi: options.spec?.memoryGi ?? null,
+      specEphemeralStorageGi: options.spec?.ephemeralStorageGi ?? null,
       storageId: options.storage?.id ?? null,
       storagePvcName: options.storage?.pvcName ?? null,
       storageSizeGi: options.storage?.sizeGi ?? null,
@@ -453,6 +469,20 @@ export class ContainerService {
                 // 最长运行时间无限制（不设置 activeDeadlineSeconds）；expiresAt 仅落库留存。
                 ...(purpose === 'harness'
                   ? { env: this.buildHarnessJobEnv(options, created.id, carrier.traceparent) }
+                  : {}),
+                ...(purpose === 'harness' && options.spec
+                  ? {
+                      resources:
+                        options.spec.cpu === 0 &&
+                        options.spec.memoryGi === 0 &&
+                        options.spec.ephemeralStorageGi === 0
+                          ? null
+                          : {
+                              cpu: options.spec.cpu,
+                              memoryGi: options.spec.memoryGi,
+                              ephemeralStorageGi: options.spec.ephemeralStorageGi,
+                            },
+                    }
                   : {}),
                 ...(storage
                   ? {

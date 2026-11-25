@@ -534,9 +534,24 @@ Content-Type: application/json
     "workspaceId": "<tenantWorkspaceId>",
     "storageClass": "ceph-rbd",
     "restore": { "archivePath": "/archive/<workspaceId>/<storageId>/<fileName>" }
+  },
+  "spec": {
+    "id": "<specId>",
+    "name": "8C 16G 20G",
+    "cpu": 8,
+    "memoryGi": 16,
+    "ephemeralStorageGi": 20
   }
 }
 ```
+
+- `spec`（harness，可选）：容器规格快照，落库到 `cloudcontainers.specId/specName/specCpu/specMemoryGi/specEphemeralStorageGi`，并据以下发 Job 资源；缺省时行为与现状逐字一致。
+  - 三项 `cpu`/`memoryGi`/`ephemeralStorageGi` 均为整数且分别在 0..64 / 0..256 / 0..512；**全零**或**全正**合法，部分为 0 → `400 INVALID_HARNESS`（`invalid spec`），不创建 Job；
+  - `id`/`name` 非空字符串（快照，仅展示/审计，不用于回查规格表）；
+  - **全零 spec** → Job 不设置 `resources`（requests/limits 均省略，即「不限制容器」）；
+  - **普通 spec** → `limits = {cpu, memory: "<memoryGi>Gi", "ephemeral-storage": "<ephemeralStorageGi>Gi"}`，`requests` 保持现状小值（cpu 0.1 / memory 256Mi）；
+  - 缺省 `spec` → 现状 `JOB_RESOURCES`（requests 0.1/256Mi、limits 4/8Gi）+ `cfg.ephemeralStorage ?? "10Gi"` 逐字不变；
+  - `container.ready` 计费事件 payload 携带 `spec` 快照（`{specId,name,cpu,memoryGi,ephemeralStorageGi}`），admin-api 据此走规格分段小时计费。
 
 - `storage`（harness，可选）：挂载云存储为 worker 主目录 `/home/worker`。
   - 缺省/`null` → 不挂载，行为与现状完全一致（Job manifest 无 `volumes`/`volumeMounts`/`securityContext`/`initContainers`）；

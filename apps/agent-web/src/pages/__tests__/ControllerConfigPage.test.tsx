@@ -332,6 +332,35 @@ describe('ControllerConfigPage', () => {
       expect(onOpenStorage).toHaveBeenCalledOnce();
     });
 
+    it('展示创建时规格快照（规格已删除仍可展示）', () => {
+      mockControllers([
+        makeController({
+          type: 'cloud',
+          cloudHost: makeCloudHost({
+            status: 'RUNNING',
+            spec: {
+              id: 'spec-8c',
+              name: '8C 16G 20G',
+              cpu: 8,
+              memoryGi: 16,
+              ephemeralStorageGi: 20,
+              unlimited: false,
+              isPreset: true,
+              hourlyCredits: 820,
+            },
+          }),
+        }),
+      ]);
+
+      render(<ControllerConfigPage {...defaultProps} />);
+      const block = screen.getByTestId('cloud-host-spec');
+      expect(block).toHaveTextContent('8C 16G 20G');
+      expect(block).toHaveTextContent('CPU 8 核');
+      expect(block).toHaveTextContent('内存 16 GiB');
+      expect(block).toHaveTextContent('临时存储 20 GiB');
+      expect(block).toHaveTextContent('820 credits/小时');
+    });
+
     it('STARTING 云电脑不展示已挂载云存储', () => {
       mockControllers([
         makeController({

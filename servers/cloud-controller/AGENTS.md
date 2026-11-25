@@ -251,3 +251,10 @@ pnpm run test:coverage
 - `POST /internal/containers/:id/runtime-scripts` 新增可选 `githubRepoFullName`：trim 后必须匹配 `^[\w.-]+/[\w.-]+$` 且长度 ≤200，否则 `400 INVALID_SCRIPT`；缺省不出现该键（旧报文形状不变）。
 - `WorkloadDispatcher.startRuntimeBatch` 接受 `githubRepoFullName?`，`emitRun` **仅**在 `githubAuth === true && githubRepoFullName` 时写入 `workload:run` 载荷；旧服务端不下发该字段时客户端走主项目语义。
 - 回归：`internal-api.test.ts`（T-CC-RS1~3）、`workload-dispatcher.test.ts`（T-WD-R5）。
+
+## 容器规格资源下发（#574）
+
+- **载荷**：`POST /internal/containers` 可选 `spec { id,name,cpu,memoryGi,ephemeralStorageGi }`；`parseSpecRequest` 校验三项整数 0..64/256/512、全零或全正（部分为 0 → `400 INVALID_HARNESS`）。`cloudcontainers` 落 `specId/specName/specCpu/specMemoryGi/specEphemeralStorageGi`（零迁移，历史 null）。
+- **Job 资源**：`CreateJobInput.resources` 三态——缺省 `undefined` → 现状 `JOB_RESOURCES` + `cfg.ephemeralStorage ?? '10Gi'`（逐字不变）；`null` → 不设置 `resources`（全零「不限制」）；对象 → limits `{cpu, memory:'<n>Gi', 'ephemeral-storage':'<n>Gi'}`，requests 保持现状 0.1/256Mi。
+- **计费事件**：`container.ready` payload 在容器有规格快照时追加 `spec`（`{specId,name,cpu,memoryGi,ephemeralStorageGi}`），admin-api 据此走规格分段计费；无快照时 payload 与历史逐字段一致。
+- **回归锚点**：`k8s-job-manager.test.ts` 旧 T-K5/T-K5b 保留，新 T-KSP1~4 并列；`internal-api.test.ts` T-PRS1~3。

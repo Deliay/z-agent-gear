@@ -297,6 +297,16 @@ export const CLOUD_HOST_FIELDS = gql`
       hourlyCredits
     }
     storageRestoring
+    spec {
+      id
+      name
+      cpu
+      memoryGi
+      ephemeralStorageGi
+      unlimited
+      isPreset
+      hourlyCredits
+    }
     agentGearVersion {
       currentVersion
       latestVersion
@@ -346,6 +356,36 @@ export const CLOUD_HOST_BILLING_QUOTE = gql`
     cloudHostBillingQuote {
       createCredits
       perMinuteCredits
+      availableBalance
+    }
+  }
+`
+
+/** 当前租户可见的容器规格（服务端按 cpu/内存/临时存储降序，已按白名单过滤） */
+export const CLOUD_HOST_SPECS = gql`
+  query CloudHostSpecs {
+    cloudHostSpecs {
+      id
+      name
+      cpu
+      memoryGi
+      ephemeralStorageGi
+      unlimited
+      isPreset
+      hourlyCredits
+    }
+  }
+`
+
+/** 选中规格的分段计费报价（创建对话框实时总价；按 CPU/内存/临时存储分档） */
+export const CLOUD_HOST_SPEC_BILLING_QUOTE = gql`
+  query CloudHostSpecBillingQuote($specId: ID!) {
+    cloudHostSpecBillingQuote(specId: $specId) {
+      hourlyCredits
+      tiers {
+        label
+        amountCredits
+      }
       availableBalance
     }
   }

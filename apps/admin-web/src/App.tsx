@@ -10,6 +10,7 @@ import ModelConfigPage from './pages/ModelConfigPage'
 import BaseImagePage from './pages/BaseImagePage'
 import CloudContainersPage from './pages/CloudContainersPage'
 import CloudWorkloadsPage from './pages/CloudWorkloadsPage'
+import CloudHostSpecsPage from './pages/CloudHostSpecsPage'
 import BillingPage from './pages/BillingPage'
 import ReconciliationPage from './pages/ReconciliationPage'
 import TenantsPage from './pages/TenantsPage'
@@ -37,6 +38,7 @@ function App() {
               <Route path="base-images" element={<BaseImagePage />} />
               <Route path="cloud-containers" element={<CloudContainersPage />} />
               <Route path="cloud-workloads" element={<CloudWorkloadsPage />} />
+              <Route path="cloud-host-specs" element={<CloudHostSpecsPage />} />
               <Route path="harness-configs" element={<HarnessConfigsPage />} />
               <Route path="tenants" element={<TenantsPage />} />
               <Route path="tenants/:id" element={<TenantDetailPage />} />

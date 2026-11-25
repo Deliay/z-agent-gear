@@ -313,6 +313,8 @@ export interface CloudHostData {
   storage?: CloudStorageSummaryData | null
   /** STARTING 且存储正在从归档恢复数据 */
   storageRestoring?: boolean
+  /** 创建时的规格快照（规格删除后仍可展示）；旧版云电脑为 null */
+  spec?: CloudHostSpecData | null
   /** 工作组件版本信息；旧服务端未返回时为 undefined */
   agentGearVersion?: CloudHostAgentGearVersionData | null
 }
@@ -326,6 +328,45 @@ export interface CloudHostBillingQuoteData {
 
 export interface CloudHostBillingQuoteQuery {
   cloudHostBillingQuote: CloudHostBillingQuoteData
+}
+
+/** 容器规格（contracts/cloud-host.graphql；服务端已按可见性与算力降序过滤） */
+export interface CloudHostSpecData {
+  id: string
+  name: string
+  /** CPU 核数；不限制规格恒 0 */
+  cpu: number
+  /** 内存 GiB；不限制规格恒 0 */
+  memoryGi: number
+  /** 临时存储 GiB；不限制规格恒 0 */
+  ephemeralStorageGi: number
+  /** 三项全 0；前端渲染「不限制容器，随时可能会被系统销毁」 */
+  unlimited: boolean
+  /** 是否为预制规格 */
+  isPreset: boolean
+  /** 按当前价目算出的每小时运行费用（credits） */
+  hourlyCredits: number
+}
+
+/** 规格分段计费分档明细 */
+export interface CloudHostSpecQuoteTierData {
+  label: string
+  amountCredits: number
+}
+
+/** 规格分段计费报价 */
+export interface CloudHostSpecBillingQuoteData {
+  hourlyCredits: number
+  tiers: CloudHostSpecQuoteTierData[]
+  availableBalance: number | null
+}
+
+export interface CloudHostSpecsQuery {
+  cloudHostSpecs: CloudHostSpecData[]
+}
+
+export interface CloudHostSpecBillingQuoteQuery {
+  cloudHostSpecBillingQuote: CloudHostSpecBillingQuoteData
 }
 
 export type CloudHostSetupKind = 'INSTALL_WORKLOAD' | 'GITHUB_SETUP'

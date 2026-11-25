@@ -1,4 +1,3 @@
-import crypto from 'node:crypto';
 import mongoose from 'mongoose';
 import { config } from '../../config/index.js';
 import { logger as rootLogger } from '../../observability/logger.js';
@@ -10,6 +9,8 @@ import { BillingLedger } from '../../models/billing-ledger.js';
 import { BillingReceipt } from '../../models/billing-receipt.js';
 import { BillingReservationCycle } from '../../models/billing-reservation.js';
 import { MeteringRecord, type IMeteringRecord } from '../../models/metering-record.js';
+import { CloudBillingCursor } from '../../models/cloud-billing-cursor.js';
+import { CloudContainer } from '../../models/cloud-container.js';
 import { accountService, type AccountService } from './account-service.js';
 import {
   creditCheckService,
@@ -19,25 +20,21 @@ import {
 } from './credit-check.js';
 import { billingMutex } from './keyed-mutex.js';
 import { InvoicingService, invoicingService } from './invoicing.js';
-import { documentId } from './id.js';
+import { documentId, deterministicObjectId } from './id.js';
 import { availableCents, ceilMinutes, parseRechargeCents } from './money.js';
 import { MeteringService, meteringService } from './metering.js';
 import { PaymentService, paymentService } from './payment.js';
 import { PricingService, pricingService } from './pricing.js';
 import { ReceiptService, receiptService } from './receipt.js';
-import {
-  ReservationService,
-  reservationService,
-  escapeRegExp,
-  reservationBizPrefix,
-} from './reservation.js';
+import { ReservationService, reservationService, escapeRegExp, reservationBizPrefix } from './reservation.js';
+import { CONTAINER_FORCE_DESTROY_REASON } from './constants.js';
+export { CONTAINER_FORCE_DESTROY_REASON };
+import { assertSpecResources } from './spec-pricing.js';
+import { specTickService } from './spec-tick.js';
 
 const logger = rootLogger.child({ component: 'billing-service' });
 
 export type DestroyContainer = (resourceId: string, reason: string) => Promise<void>;
-
-/** 容器强制销毁原因（与 cloud-controller 契约约定一致，可审计）。 */
-export const CONTAINER_FORCE_DESTROY_REASON = '余额不足超过 10 分钟，强制销毁';
 
 export interface InvoiceResult {
   invoiceId: string;
@@ -61,8 +58,33 @@ export interface BillingServiceOptions {
 }
 
 /** 由业务键派生确定性 ObjectId：重放/并发写入同一账单，唯一索引兜底。 */
-export function deterministicObjectId(seed: string): string {
-  return crypto.createHash('md5').update(seed).digest('hex').slice(0, 24);
+export { deterministicObjectId };
+
+interface ReadySpecSnapshot {
+  specId: string | null;
+  name: string | null;
+  cpu: number;
+  memoryGi: number;
+  ephemeralStorageGi: number;
+}
+
+/** 解析 `container.ready` payload.spec；缺失/非法返回 null（回落既有预留路径）。 */
+function parseReadySpec(payload: Record<string, unknown> | undefined): ReadySpecSnapshot | null {
+  const raw = payload?.spec;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const cpu = Number(record.cpu);
+  const memoryGi = Number(record.memoryGi);
+  const ephemeralStorageGi = Number(record.ephemeralStorageGi);
+  try {
+    assertSpecResources({ cpu, memoryGi, ephemeralStorageGi });
+  } catch {
+    logger.warn({ cpu, memoryGi, ephemeralStorageGi }, '[billing] invalid container.ready spec ignored');
+    return null;
+  }
+  const specId = typeof record.specId === 'string' && record.specId.trim() ? record.specId : null;
+  const name = typeof record.name === 'string' && record.name.trim() ? record.name : null;
+  return { specId, name, cpu, memoryGi, ephemeralStorageGi };
 }
 
 /**
@@ -94,11 +116,12 @@ export class BillingService {
     this.destroyContainer = options.destroyContainer;
   }
 
-  /** 容器就绪：统一预扣费检查 → 建预留（保证金+首期）。 */
+  /** 容器就绪：携带 `spec` → 建规格计费游标（不进预留路径）；缺省 → 既有预留路径逐字不变。 */
   async handleContainerReady(event: {
     accountId: string;
     resourceId: string;
     occurredAt: Date;
+    payload?: Record<string, unknown>;
   }): Promise<{
     reservationId: string;
     insufficient: boolean;
@@ -110,6 +133,27 @@ export class BillingService {
     return billingMutex.runExclusive(`container:${event.resourceId}`, async () => {
       const account = await this.accounts.getById(event.accountId);
       if (!account) throw new Error(`billing account not found: ${event.accountId}`);
+
+      const spec = parseReadySpec(event.payload);
+      const cursorExists = Boolean(
+        await CloudBillingCursor.exists({ resourceId: event.resourceId }),
+      );
+      if (spec) {
+        return this.startSpecBilling(
+          event,
+          spec,
+          account.ownerType === 'tenant' ? account.ownerId : null,
+        );
+      }
+      // P0-2 防御：同一资源已有规格计费游标时，任何 legacy ready（乱序/对账补投/旧事件）一律 skip。
+      if (cursorExists) {
+        logger.warn(
+          { resourceId: event.resourceId, accountId: event.accountId },
+          '[billing] legacy container.ready ignored: spec billing cursor already exists',
+        );
+        return { reservationId: '', insufficient: false, nextCycleSeq: 0, created: false, skipped: true };
+      }
+      await this.warnSpecSnapshotMismatch(event.resourceId);
 
       // 门控重复投递（阻塞项 3）：同一 resourceId 已有预留行时为重复就绪事件，
       // `created=false` 时消费端不再重复投递首期延迟消息，避免结算链放大。
@@ -188,12 +232,136 @@ export class BillingService {
     // R-1：ready/destroyed 用同一把 `container:{resourceId}` 锁串行化，并在锁内**重新读取**预留。
     // 若只在锁外读一次，会出现「ready 正在建预留、destroyed 读到空 → legacy 全额开票」的竞态。
     return billingMutex.runExclusive(`container:${event.resourceId}`, async () => {
+      const cursor = await CloudBillingCursor.findOne({ resourceId: event.resourceId })
+        .select({ closedAt: 1 })
+        .lean<{ closedAt?: Date | null } | null>();
+      if (cursor) {
+        if (cursor.closedAt) return null;
+        const payload = (event.payload ?? {}) as Record<string, unknown>;
+        const exitedAtRaw = payload.exitedAt ? new Date(String(payload.exitedAt)) : null;
+        const exitedAt =
+          exitedAtRaw && !Number.isNaN(exitedAtRaw.getTime()) ? exitedAtRaw : event.occurredAt;
+        await specTickService.settleTail(event.resourceId, exitedAt);
+        return null;
+      }
       const reservation = await this.reservations.findByResource(event.resourceId);
       if (!reservation) {
         return this.billLegacyContainer(event);
       }
       return this.finalizeReservation(reservation, event);
     });
+  }
+
+  /**
+   * 规格计费分流（实现点 4 / D11）：`container.ready` 携带 `spec` 时建 `cloudbillingcursors` 游标，
+   * **不进预留路径**；全零规格同样走此路径（0 费用，由 tick 仅推进不出账）。
+   *
+   * 乱序安全：destroyed 事件先到（已被 legacy 路径全额出账）时跳过，避免同一资源双路径计费。
+   */
+  private async startSpecBilling(
+    event: {
+      accountId: string;
+      resourceId: string;
+      occurredAt: Date;
+      payload?: Record<string, unknown>;
+    },
+    spec: { specId: string | null; name: string | null; cpu: number; memoryGi: number; ephemeralStorageGi: number },
+    ownerTenantId: string | null,
+  ): Promise<{
+    reservationId: string;
+    insufficient: boolean;
+    nextCycleSeq: number;
+    created: boolean;
+    skipped?: boolean;
+  }> {
+    const payload = (event.payload ?? {}) as Record<string, unknown>;
+    const destroyed = await BillingEvent.exists({
+      resourceId: event.resourceId,
+      eventType: 'container.destroyed',
+    });
+    const legacyCharged = await BillingLedger.exists({
+      idempotentKey: `charge:container:${event.resourceId}:final`,
+    });
+    // P0-2 防御：同资源已有旧版预留（含 ACTIVE）时不再建立规格游标，避免双路径并行计费。
+    const existingReservation = await this.reservations.findByResource(event.resourceId);
+    if (destroyed || legacyCharged || existingReservation) {
+      logger.warn(
+        {
+          resourceId: event.resourceId,
+          destroyed: Boolean(destroyed),
+          legacyCharged: Boolean(legacyCharged),
+          reservation: Boolean(existingReservation),
+        },
+        '[billing] spec ready ignored: another billing path already exists',
+      );
+      return { reservationId: '', insufficient: false, nextCycleSeq: 0, created: false, skipped: true };
+    }
+
+    const existing = await CloudBillingCursor.findOne({ resourceId: event.resourceId })
+      .select({ _id: 1 })
+      .lean();
+    if (existing) {
+      return { reservationId: '', insufficient: false, nextCycleSeq: 0, created: false };
+    }
+
+    const startedAtRaw = payload.billingStartedAt
+      ? new Date(String(payload.billingStartedAt))
+      : null;
+    const billingStartedAt =
+      startedAtRaw && !Number.isNaN(startedAtRaw.getTime()) ? startedAtRaw : event.occurredAt;
+    const container = await CloudContainer.findOne({ _id: event.resourceId })
+      .select({ hostId: 1, hostName: 1 })
+      .lean<{ hostId?: string | null; hostName?: string | null } | null>();
+
+    await CloudBillingCursor.create({
+      resourceId: event.resourceId,
+      hostId: container?.hostId ?? null,
+      hostName: container?.hostName ?? null,
+      accountId: event.accountId,
+      tenantId: ownerTenantId,
+      specId: spec.specId,
+      specName: spec.name,
+      specCpu: spec.cpu,
+      specMemoryGi: spec.memoryGi,
+      specEphemeralStorageGi: spec.ephemeralStorageGi,
+      billingStartedAt,
+      chargedMinutes: 0,
+      destroyedAt: null,
+      closedAt: null,
+      lastError: null,
+    });
+    logger.info(
+      {
+        resourceId: event.resourceId,
+        hostId: container?.hostId ?? null,
+        specId: spec.specId,
+        cpu: spec.cpu,
+        memoryGi: spec.memoryGi,
+        ephemeralStorageGi: spec.ephemeralStorageGi,
+      },
+      '[billing] spec billing cursor created',
+    );
+    return { reservationId: '', insufficient: false, nextCycleSeq: 0, created: true };
+  }
+
+  /**
+   * 防御日志（发布顺序竞态）：host 快照含规格而事件无 spec → 可能误入旧版分钟计费。
+   * 发布顺序保证下不应出现；此处只告警不改行为（旧路径逐字不变）。
+   */
+  private async warnSpecSnapshotMismatch(resourceId: string): Promise<void> {
+    try {
+      const container = await CloudContainer.findOne({ _id: resourceId })
+        .select({ specId: 1, hostId: 1 })
+        .lean<{ specId?: string | null; hostId?: string | null } | null>();
+      if (container?.specId) {
+        logger.warn(
+          { resourceId, hostId: container.hostId ?? null, specId: container.specId },
+          '[billing] container.ready without spec while container snapshot has spec; billing falls back to legacy path',
+        );
+      }
+    } catch (err) {
+      logger.warn({ err, resourceId }, '[billing] spec snapshot check failed');
+    }
   }
 
   /** 预留维度终结（与周期结算共用 `reservation:{id}` 锁）。 */

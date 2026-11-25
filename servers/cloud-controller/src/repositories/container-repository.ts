@@ -65,6 +65,12 @@ export interface CloudContainerEntity {
   billingAccountId: string | null;
   /** 就绪计费起点（首次进入 online）；null 表示未就绪/不计费。 */
   billingStartedAt: Date | null;
+  // ---- 云电脑规格快照（历史行 null 容忍） ----
+  specId: string | null;
+  specName: string | null;
+  specCpu: number | null;
+  specMemoryGi: number | null;
+  specEphemeralStorageGi: number | null;
   // ---- 云存储（历史行 null 容忍） ----
   storageId: string | null;
   storagePvcName: string | null;
@@ -116,6 +122,11 @@ export interface CreateContainerInput {
   initCompletedAt?: Date | null;
   billingAccountId?: string | null;
   billingStartedAt?: Date | null;
+  specId?: string | null;
+  specName?: string | null;
+  specCpu?: number | null;
+  specMemoryGi?: number | null;
+  specEphemeralStorageGi?: number | null;
   storageId?: string | null;
   storagePvcName?: string | null;
   storageSizeGi?: number | null;
@@ -205,6 +216,11 @@ interface RawDoc {
   initCompletedAt?: Date | null;
   billingAccountId?: string | null;
   billingStartedAt?: Date | null;
+  specId?: string | null;
+  specName?: string | null;
+  specCpu?: number | null;
+  specMemoryGi?: number | null;
+  specEphemeralStorageGi?: number | null;
   storageId?: string | null;
   storagePvcName?: string | null;
   storageSizeGi?: number | null;
@@ -307,6 +323,11 @@ function toEntity(doc: RawDoc): CloudContainerEntity {
     initCompletedAt: doc.initCompletedAt ?? null,
     billingAccountId: doc.billingAccountId ?? null,
     billingStartedAt: doc.billingStartedAt ?? null,
+    specId: doc.specId ?? null,
+    specName: doc.specName ?? null,
+    specCpu: doc.specCpu ?? null,
+    specMemoryGi: doc.specMemoryGi ?? null,
+    specEphemeralStorageGi: doc.specEphemeralStorageGi ?? null,
     storageId: doc.storageId ?? null,
     storagePvcName: doc.storagePvcName ?? null,
     storageSizeGi: doc.storageSizeGi ?? null,
@@ -375,6 +396,11 @@ export class MongoContainerRepository implements ContainerRepository {
       initCompletedAt: input.initCompletedAt ?? null,
       billingAccountId: input.billingAccountId ?? null,
       billingStartedAt: input.billingStartedAt ?? null,
+      specId: input.specId ?? null,
+      specName: input.specName ?? null,
+      specCpu: input.specCpu ?? null,
+      specMemoryGi: input.specMemoryGi ?? null,
+      specEphemeralStorageGi: input.specEphemeralStorageGi ?? null,
       storageId: input.storageId ?? null,
       storagePvcName: input.storagePvcName ?? null,
       storageSizeGi: input.storageSizeGi ?? null,
@@ -482,6 +508,11 @@ export class InMemoryContainerRepository implements ContainerRepository {
       initCompletedAt: input.initCompletedAt ?? null,
       billingAccountId: input.billingAccountId ?? null,
       billingStartedAt: input.billingStartedAt ?? null,
+      specId: input.specId ?? null,
+      specName: input.specName ?? null,
+      specCpu: input.specCpu ?? null,
+      specMemoryGi: input.specMemoryGi ?? null,
+      specEphemeralStorageGi: input.specEphemeralStorageGi ?? null,
       storageId: input.storageId ?? null,
       storagePvcName: input.storagePvcName ?? null,
       storageSizeGi: input.storageSizeGi ?? null,

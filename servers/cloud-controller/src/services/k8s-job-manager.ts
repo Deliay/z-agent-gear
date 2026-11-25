@@ -5,6 +5,7 @@ import {
   type K8sJobEvent,
   type K8sJobInfo,
   type K8sJobManifest,
+  type K8sResourceRequirements,
 } from './k8s-client.js';
 
 export const WORKER_LABEL_KEY = 'app';
@@ -99,6 +100,20 @@ export interface CreateJobInput {
   env?: Record<string, string>;
   /** 云存储挂载（可选；缺省不改变 manifest）。 */
   storage?: JobStorageSpec | null;
+  /**
+   * 容器规格资源（可选）：
+   * - `undefined`（缺省）→ 现状 `JOB_RESOURCES` + `cfg.ephemeralStorage ?? '10Gi'`（逐字不变）；
+   * - `null` → 全零规格，Job 不设置 `resources`（requests/limits 均省略）；
+   * - 对象 → CPU/内存/临时存储按规格下发 limits，requests 保持现状小值。
+   */
+  resources?: JobSpecResources | null;
+}
+
+/** 规格资源（由容器服务按规格快照计算）。 */
+export interface JobSpecResources {
+  cpu: number;
+  memoryGi: number;
+  ephemeralStorageGi: number;
 }
 
 /** 云电脑主目录固定挂载点（整块存储即 worker 主目录；提案实现点 3）。 */
@@ -121,6 +136,39 @@ export class K8sJobManager {
     private readonly cfg: JobManagerConfig,
   ) {
     this.serverEndpoint = buildServerEndpoint(cfg.publicWsEndpoint);
+  }
+
+  /**
+   * 资源段选择（契约 A.2.2）：
+   * - `undefined` → 现状常量 + `cfg.ephemeralStorage ?? '10Gi'`（逐字不变）；
+   * - `null` → 不设置 resources（全零「不限制」规格）；
+   * - 普通 → limits 按规格、requests 保持现状小值（D1/D2）。
+   */
+  private buildResources(
+    resources: JobSpecResources | null | undefined,
+  ): { resources?: K8sResourceRequirements } {
+    if (resources === undefined) {
+      return {
+        resources: {
+          requests: { ...JOB_RESOURCES.requests },
+          limits: {
+            ...JOB_RESOURCES.limits,
+            'ephemeral-storage': this.cfg.ephemeralStorage ?? '10Gi',
+          },
+        },
+      };
+    }
+    if (resources === null) return {};
+    return {
+      resources: {
+        requests: { ...JOB_RESOURCES.requests },
+        limits: {
+          cpu: String(resources.cpu),
+          memory: `${resources.memoryGi}Gi`,
+          'ephemeral-storage': `${resources.ephemeralStorageGi}Gi`,
+        },
+      },
+    };
   }
 
   buildManifest(input: CreateJobInput): K8sJobManifest {
@@ -150,13 +198,7 @@ export class K8sJobManager {
                 { name: 'ZAG_CONTROLLER_KEY', value: input.token },
                 ...Object.entries(input.env ?? {}).map(([name, value]) => ({ name, value })),
               ],
-              resources: {
-                requests: { ...JOB_RESOURCES.requests },
-                limits: {
-                  ...JOB_RESOURCES.limits,
-                  'ephemeral-storage': this.cfg.ephemeralStorage ?? '10Gi',
-                },
-              },
+              ...this.buildResources(input.resources),
             },
           ],
         },

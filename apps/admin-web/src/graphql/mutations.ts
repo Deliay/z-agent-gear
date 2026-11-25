@@ -420,3 +420,42 @@ export const ADMIN_REMOVE_TENANT_MEMBER = gql`
     adminRemoveTenantMember(tenantId: $tenantId, userId: $userId)
   }
 `
+
+// ---------- 容器规格（contracts/admin-cloud-spec.graphql） ----------
+
+const CLOUD_SPEC_FIELDS = `
+  id
+  name
+  cpu
+  memoryGi
+  ephemeralStorageGi
+  unlimited
+  whitelistEnabled
+  allowedTenantIds
+  isPreset
+  presetKey
+  createdAt
+  updatedAt
+`
+
+export const CREATE_CLOUD_SPEC = gql`
+  mutation AdminCreateCloudSpec($input: AdminCloudSpecInput!) {
+    adminCreateCloudSpec(input: $input) {
+      ${CLOUD_SPEC_FIELDS}
+    }
+  }
+`
+
+export const UPDATE_CLOUD_SPEC = gql`
+  mutation AdminUpdateCloudSpec($id: ID!, $input: AdminCloudSpecInput!) {
+    adminUpdateCloudSpec(id: $id, input: $input) {
+      ${CLOUD_SPEC_FIELDS}
+    }
+  }
+`
+
+export const DELETE_CLOUD_SPEC = gql`
+  mutation AdminDeleteCloudSpec($id: ID!) {
+    adminDeleteCloudSpec(id: $id)
+  }
+`

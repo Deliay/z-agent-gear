@@ -19,6 +19,8 @@ const project = {
   targetPath: '/root/workspace',
 }
 
+const specId = 'spec-8c'
+
 describe('useCloudHostProvisioning', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -49,6 +51,7 @@ describe('useCloudHostProvisioning', () => {
       await result.current.start({
         name: '云电脑 A',
         harnessTypes: ['OPENCODE'],
+        specId,
         project,
         workloadIds: ['wl-docker'],
       })
@@ -59,6 +62,7 @@ describe('useCloudHostProvisioning', () => {
         input: {
           name: '云电脑 A',
           harnessTypes: ['OPENCODE'],
+          specId,
           workloadIds: ['wl-docker'],
           createDefaultSession: false,
         },
@@ -75,6 +79,7 @@ describe('useCloudHostProvisioning', () => {
       await result.current.start({
         name: '云电脑 A',
         harnessTypes: ['OPENCODE'],
+        specId,
         project,
         githubAccountId: 'acc-1',
       })
@@ -88,7 +93,7 @@ describe('useCloudHostProvisioning', () => {
   it('单 Harness 时 setup 传 createSession=true 并记录 operationId', async () => {
     const { result } = renderHook(() => useCloudHostProvisioning())
     await act(async () => {
-      await result.current.start({ name: '云电脑 A', harnessTypes: ['OPENCODE'], project })
+      await result.current.start({ name: '云电脑 A', harnessTypes: ['OPENCODE'], specId, project })
     })
 
     await act(async () => {
@@ -132,7 +137,7 @@ describe('useCloudHostProvisioning', () => {
   it('reset 清空编排状态', async () => {
     const { result } = renderHook(() => useCloudHostProvisioning())
     await act(async () => {
-      await result.current.start({ name: '云电脑 A', harnessTypes: ['OPENCODE'], project })
+      await result.current.start({ name: '云电脑 A', harnessTypes: ['OPENCODE'], specId, project })
     })
 
     act(() => result.current.reset())

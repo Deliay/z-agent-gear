@@ -25,6 +25,22 @@
 #                   404 ACCOUNT_NOT_FOUND / 409 {error:'INSUFFICIENT_BALANCE', available(credits)}
 #   POST /refunds   退款（幂等）：body {idempotentKey, refundKey, reason}；成功 {invoice, receipt}（原扣费不存在时均可空）
 #   GET  /price-quote?productIds=a,b  报价：[{productId, unitPrice(credits), currency:'credits'}]；缺档回落默认价目
+#   GET  /storage-quote?sizeGi=...    云存储阶梯报价 {sizeGi, full{hourlyCredits,items[]}, archived{...}}
+#   GET  /spec-quote?specId=...       按规格（admin-api cloudhostspecs 快照/当前可见规格）计算每小时运行费用：
+#                                     {hourlyCredits, tiers:[{label, amountCredits}], prices:{...}}
+#                                     （亦可传 cpu/memoryGi/ephemeralStorageGi 三元组直接报价，供后台预览）
+#
+# 规格分段计费价目（productprices.productId，pricingModel=per_unit，unitPrice 为整数分，
+# 1 credit = 100 分；后台可调价，adjust 只影响生效后的桶）：
+#   cloud_spec.cpu.tier1      规格 CPU ≤4 部分        1500 分/核/小时
+#   cloud_spec.cpu.tier2      规格 CPU >4 部分        3000 分/核/小时
+#   cloud_spec.mem.tier1      规格内存 ≤4GiB 部分     1500 分/GiB/小时
+#   cloud_spec.mem.tier2      规格内存 4~8GiB 部分    3000 分/GiB/小时
+#   cloud_spec.mem.tier3      规格内存 8~16GiB 部分   4500 分/GiB/小时
+#   cloud_spec.mem.tier4      规格内存 >16GiB 部分    6000 分/GiB/小时
+#   cloud_spec.ephemeral.tier 规格临时存储 >10GiB 部分 1000 分/GiB/小时（≤10GiB 不收费）
+# 账单归属：category=container（沿用）、refType=cloud_host、refId=<hostId>；
+# 小时桶结算（每桶 60 分钟）+ 销毁尾段按分钟折算，幂等键 cloud_host.spec.hour/tail。
 
 scalar JSON
 

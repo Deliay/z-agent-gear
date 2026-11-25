@@ -11,6 +11,8 @@ export interface BillingSchedulerOptions {
   logger: MqLogger;
   /** 云存储整点结算 tick（可选，缺省不注册，兼容既有单测构造）。 */
   storageTick?: { tick(): Promise<unknown> };
+  /** 云电脑规格小时桶结算 tick（可选，缺省不注册）。 */
+  specTick?: { tick(): Promise<unknown> };
 }
 
 /** 统一注册周期任务：outbox relay、reservation 兜底扫描、每日对账 cron。 */
@@ -71,6 +73,17 @@ export class BillingScheduler {
       }, Math.max(5000, config.storageBillingTickMs));
       storageTimer.unref?.();
       this.timers.push(storageTimer);
+    }
+
+    // 云电脑规格小时桶结算：默认 5 分钟扫描一次（SPEC_BILLING_TICK_MS），失败不阻断后续 tick。
+    if (this.options.specTick) {
+      const specTimer = setInterval(() => {
+        void this.options.specTick!.tick().catch((err) => {
+          this.logger.warn({ err }, '[billing-scheduler] spec billing tick failed');
+        });
+      }, Math.max(5000, config.specBillingTickMs));
+      specTimer.unref?.();
+      this.timers.push(specTimer);
     }
   }
 

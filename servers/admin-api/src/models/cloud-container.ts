@@ -30,9 +30,12 @@ const cloudContainerSchema = new mongoose.Schema(
     },
     purpose: {
       type: String,
-      enum: ['idle', 'admin-task', 'workflow', 'session'],
+      enum: ['idle', 'harness', 'admin-task', 'workflow', 'session'],
     },
     refId: { type: String },
+    // 云电脑关联字段（规格计费出账 refId 解析用；与 cloud-controller schema 对齐）
+    hostId: { type: String, default: null },
+    hostName: { type: String, default: null },
     // 与 cloud-controller schema 对齐（userId 为 String，避免同一集合 schema 漂移）
     userId: { type: String },
     image: { type: String },
@@ -48,6 +51,13 @@ const cloudContainerSchema = new mongoose.Schema(
     // 计费归属（费用中心）：与 cloud-controller schema 对齐（只读模型）
     billingAccountId: { type: String, default: null },
     billingStartedAt: { type: Date, default: null },
+    // 容器规格快照（与 cloud-controller schema 对齐；只读）
+    specId: { type: String, default: null },
+    specName: { type: String, default: null },
+    specCpu: { type: Number, default: null },
+    specMemoryGi: { type: Number, default: null },
+    specEphemeralStorageGi: { type: Number, default: null },
+    tenantId: { type: String, default: null },
     // 容器内已安装工作负载（只增不删；只读模型）
     installedWorkloads: { type: [mongoose.Schema.Types.Mixed], default: [] },
   },

@@ -194,6 +194,22 @@ function CloudHostPanel({
           <dd className="break-words">{cloudHost.harnessTypes.join(', ') || '—'}</dd>
         </div>
       </dl>
+      {cloudHost.spec && (
+        <div
+          className="mt-3 flex min-w-0 flex-wrap items-center gap-2 rounded-md border border-border p-3 text-sm"
+          data-testid="cloud-host-spec"
+        >
+          <Cpu className="size-4 shrink-0" />
+          <span className="font-medium">规格</span>
+          <span className="min-w-0 break-words text-muted-foreground">
+            {cloudHost.spec.name}
+            {cloudHost.spec.unlimited
+              ? ' · 不限制容器，随时可能会被系统销毁'
+              : ` · CPU ${cloudHost.spec.cpu} 核 · 内存 ${cloudHost.spec.memoryGi} GiB · 临时存储 ${cloudHost.spec.ephemeralStorageGi} GiB`}
+            {` · ${cloudHost.spec.hourlyCredits} credits/小时`}
+          </span>
+        </div>
+      )}
       <div
         className="mt-3 rounded-md border border-border p-3 text-sm"
         data-testid="cloud-host-agent-gear-version"

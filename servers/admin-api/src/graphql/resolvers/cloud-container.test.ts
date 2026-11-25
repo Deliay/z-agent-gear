@@ -148,6 +148,11 @@ describe('cloudContainerResolvers', () => {
           currentWorkloadName: null,
           billingAccountId: null,
           billingStartedAt: null,
+          specId: null,
+          specName: null,
+          specCpu: null,
+          specMemoryGi: null,
+          specEphemeralStorageGi: null,
           installedWorkloads: [],
         },
       ]);

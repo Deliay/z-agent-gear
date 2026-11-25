@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import mongoose from 'mongoose';
-import { gqlRequest, loginViaUI, registerFundedUser } from './helpers';
+import { fetchDefaultCloudSpecId, gqlRequest, loginViaUI, registerFundedUser } from './helpers';
 
 // 云存储归档优化 E2E（Issue #434）：
 // E2E-CSO1 停止对话框归档勾选（默认勾选/不勾选 → 待挂载）；
@@ -101,6 +101,7 @@ test.describe('Cloud Storage Archive Optimization E2E', () => {
       expect(createdStorage.errors).toBeUndefined();
       storageId = createdStorage.data.createCloudStorage.id;
 
+      const specId = await fetchDefaultCloudSpecId(page, token);
       const createdHost = await (
         await gqlRequest(
           page,
@@ -110,6 +111,7 @@ test.describe('Cloud Storage Archive Optimization E2E', () => {
               name: `e2e-cso1-host-${Date.now().toString(36)}`,
               harnessTypes: ['OPENCODE'],
               storageId,
+              specId,
             },
           },
           token,

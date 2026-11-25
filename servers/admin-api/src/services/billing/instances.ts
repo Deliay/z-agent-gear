@@ -12,6 +12,11 @@ export async function listCloudContainers(): Promise<
     billingAccountId: string | null;
     billingStartedAt: string | null;
     exitedAt: string | null;
+    specId: string | null;
+    specName: string | null;
+    specCpu: number | null;
+    specMemoryGi: number | null;
+    specEphemeralStorageGi: number | null;
   }>
 > {
   const containers = await cloudControllerClient.list();
@@ -21,6 +26,11 @@ export async function listCloudContainers(): Promise<
     billingAccountId: container.billingAccountId,
     billingStartedAt: container.billingStartedAt,
     exitedAt: container.exitedAt,
+    specId: container.specId ?? null,
+    specName: container.specName ?? null,
+    specCpu: container.specCpu ?? null,
+    specMemoryGi: container.specMemoryGi ?? null,
+    specEphemeralStorageGi: container.specEphemeralStorageGi ?? null,
   }));
 }
 

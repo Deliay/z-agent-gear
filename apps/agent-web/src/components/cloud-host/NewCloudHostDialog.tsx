@@ -3,7 +3,10 @@ import { useMutation, useQuery } from '@apollo/client/react'
 import { CREATE_CLOUD_HOST } from '../../graphql/mutations'
 import {
   CLOUD_HOST_BILLING_QUOTE,
+  CLOUD_HOST_SPEC_BILLING_QUOTE,
+  CLOUD_HOST_SPECS,
   CLOUD_HOST_WORKLOAD_CATALOG,
+  CLOUD_STORAGE_BILLING_QUOTE,
   CLOUD_STORAGE_CAPABILITIES,
   CLOUD_STORAGES,
 } from '../../graphql/queries'
@@ -11,8 +14,12 @@ import type {
   CloudHostBillingQuoteQuery,
   CloudHostCapabilitiesData,
   CloudHostData,
+  CloudHostSpecBillingQuoteQuery,
+  CloudHostSpecData,
+  CloudHostSpecsQuery,
   CloudHostWorkloadCatalogQuery,
   CloudHostWorkloadItemData,
+  CloudStorageBillingQuoteQuery,
   CloudStorageCapabilitiesQuery,
   CloudStorageData,
   CreateCloudHostMutation,
@@ -56,6 +63,11 @@ function harnessLabel(harness: HarnessType): string {
   return HARNESS_LABELS[harness] ?? harness
 }
 
+/** 金额展示收敛浮点误差（credits 最多两位小数） */
+function roundCredits(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
 /** 服务端契约错误 → 前台中文文案；未登记的契约错误仍原样展示 */
 const SERVER_ERROR_MESSAGES: Record<string, string> = {
   'insufficient balance': '账户余额不足，请联系管理员充值后重试',
@@ -93,6 +105,7 @@ export default function NewCloudHostDialog({
   onCreated,
 }: NewCloudHostDialogProps) {
   const [name, setName] = useState('')
+  const [selectedSpecId, setSelectedSpecId] = useState('')
   const [selectedHarnesses, setSelectedHarnesses] = useState<HarnessType[]>([])
   const [selectedWorkloadIds, setSelectedWorkloadIds] = useState<string[]>([])
   const [projectEnabled, setProjectEnabled] = useState(false)
@@ -125,6 +138,19 @@ export default function NewCloudHostDialog({
     fetchPolicy: 'cache-and-network',
   })
 
+  // 当前租户可见规格：服务端已按 cpu/内存/临时存储降序返回
+  const { data: specsData, loading: specsLoading } = useQuery<CloudHostSpecsQuery>(
+    CLOUD_HOST_SPECS,
+    { skip: !open, fetchPolicy: 'cache-and-network' },
+  )
+  const specs = useMemo<CloudHostSpecData[]>(
+    () => specsData?.cloudHostSpecs ?? [],
+    [specsData],
+  )
+  const selectedSpec = specs.find((spec) => spec.id === selectedSpecId) ?? null
+  // 无可用规格（加载完成后列表为空/查询失败）时明确提示并禁止创建
+  const specsUnavailable = !specsLoading && specs.length === 0
+
   const {
     data: quoteData,
     loading: quoteLoading,
@@ -139,6 +165,15 @@ export default function NewCloudHostDialog({
     quote?.availableBalance !== null &&
     quote?.availableBalance !== undefined &&
     quote.availableBalance < quote.createCredits
+
+  // 选中规格后刷新运行费用与分段明细
+  const { data: specQuoteData, loading: specQuoteLoading } =
+    useQuery<CloudHostSpecBillingQuoteQuery>(CLOUD_HOST_SPEC_BILLING_QUOTE, {
+      variables: { specId: selectedSpecId },
+      skip: !open || !selectedSpecId,
+      fetchPolicy: 'cache-and-network',
+    })
+  const specQuote = specQuoteData?.cloudHostSpecBillingQuote
 
   const { data: storageCapabilitiesData } = useQuery<CloudStorageCapabilitiesQuery>(
     CLOUD_STORAGE_CAPABILITIES,
@@ -168,9 +203,24 @@ export default function NewCloudHostDialog({
   const selectedStorage =
     attachableStorages.find((storage) => storage.id === selectedStorageId) ?? null
 
+  // 挂载云存储时并列展示其小时费用（与规格运行费用分开列示）
+  const { data: storageQuoteData } = useQuery<CloudStorageBillingQuoteQuery>(
+    CLOUD_STORAGE_BILLING_QUOTE,
+    {
+      variables: { sizeGi: selectedStorage?.sizeGi },
+      skip: !open || !storageAttachEnabled || !selectedStorage,
+      fetchPolicy: 'cache-and-network',
+    },
+  )
+  const storageHourlyCredits = storageQuoteData?.cloudStorageBillingQuote.full.hourlyCredits
+  // 仅在实际勾选并选中云存储时计入合计（skip 状态下残留的缓存不得计费）
+  const attachedStorageHourlyCredits =
+    storageAttachEnabled && selectedStorage ? (storageHourlyCredits ?? 0) : 0
+
   useEffect(() => {
     if (open) {
       setName('')
+      setSelectedSpecId('')
       setSelectedHarnesses([])
       setSelectedWorkloadIds([])
       setProjectEnabled(false)
@@ -186,6 +236,14 @@ export default function NewCloudHostDialog({
     // 仅在打开/关闭时重置，避免编排状态变化导致表单被清空
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  // 默认自动选中第一款可见规格（用户已选且仍可见时保留）
+  useEffect(() => {
+    if (!open) return
+    setSelectedSpecId((prev) =>
+      prev && specs.some((spec) => spec.id === prev) ? prev : (specs[0]?.id ?? ''),
+    )
+  }, [open, specs])
 
   const workloads = useMemo(
     () => catalogData?.cloudHostWorkloadCatalog ?? [],
@@ -206,8 +264,15 @@ export default function NewCloudHostDialog({
   const projectIncomplete = projectEnabled && !projectForm.isValid
   const storageIncomplete = storageAttachEnabled && !selectedStorageId
   // harness 为可选工作负载：不选（0 个）也可提交，就绪后可在「设置-工作负载」补装。
+  // 规格为新增必选项：无可用规格或未选中时禁止创建。
   const submitDisabled =
-    submitting || featureDisabled || Boolean(nameError) || projectIncomplete || storageIncomplete
+    submitting ||
+    featureDisabled ||
+    Boolean(nameError) ||
+    projectIncomplete ||
+    storageIncomplete ||
+    specsUnavailable ||
+    !selectedSpecId
 
   const handleCreateError = (err: unknown) => {
     setError(getErrorMessage(err));
@@ -292,6 +357,7 @@ export default function NewCloudHostDialog({
         await provisioning.start({
           name: trimmedName,
           harnessTypes: selectedHarnesses,
+          specId: selectedSpecId,
           githubAccountId: projectForm.accountId,
           ...(selectedWorkloadIds.length > 0 ? { workloadIds: selectedWorkloadIds } : {}),
           ...(storageAttachEnabled && selectedStorageId
@@ -317,6 +383,7 @@ export default function NewCloudHostDialog({
           input: {
             name: trimmedName,
             harnessTypes: selectedHarnesses,
+            specId: selectedSpecId,
             // 未勾选时不传 workloadIds / storageId，保持旧报文形状
             ...(selectedWorkloadIds.length > 0 ? { workloadIds: selectedWorkloadIds } : {}),
             ...(storageAttachEnabled && selectedStorageId
@@ -389,6 +456,68 @@ export default function NewCloudHostDialog({
             />
             {nameError && (
               <p className="mt-1 text-xs text-destructive">{nameError}</p>
+            )}
+          </div>
+
+          <div className="min-w-0">
+            <span className="mb-1 block text-sm font-medium">规格</span>
+            {specsLoading && specs.length === 0 ? (
+              <p className="text-sm text-muted-foreground">正在加载规格...</p>
+            ) : specs.length === 0 ? (
+              <p className="text-sm text-destructive">暂无可用规格，请联系管理员</p>
+            ) : (
+              <div
+                role="radiogroup"
+                aria-label="规格"
+                className="space-y-2 rounded-md border border-border p-3"
+              >
+                {specs.map((spec) => {
+                  const checked = spec.id === selectedSpecId
+                  return (
+                    <label
+                      key={spec.id}
+                      className={`flex min-w-0 cursor-pointer items-start gap-2 rounded-md border p-2 ${
+                        checked ? 'border-ring bg-muted/40' : 'border-border'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="cloud-host-spec"
+                        aria-label={spec.name}
+                        checked={checked}
+                        onChange={() => setSelectedSpecId(spec.id)}
+                        className="mt-0.5 h-4 w-4 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex min-w-0 flex-wrap items-center gap-2">
+                          <span className="truncate text-sm font-medium text-foreground">
+                            {spec.name}
+                          </span>
+                          {spec.isPreset && (
+                            <Badge variant="secondary" className="shrink-0">
+                              预制
+                            </Badge>
+                          )}
+                          {spec.unlimited && (
+                            <Badge variant="outline" className="shrink-0 whitespace-normal text-left">
+                              不限制容器，随时可能会被系统销毁
+                            </Badge>
+                          )}
+                        </span>
+                        {!spec.unlimited && (
+                          <span className="mt-0.5 block break-words text-xs text-muted-foreground">
+                            CPU {spec.cpu} 核 · 内存 {spec.memoryGi} GiB · 临时存储{' '}
+                            {spec.ephemeralStorageGi} GiB
+                          </span>
+                        )}
+                        <span className="mt-0.5 block text-xs text-muted-foreground">
+                          {spec.hourlyCredits} credits/小时
+                        </span>
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
             )}
           </div>
 
@@ -654,10 +783,34 @@ export default function NewCloudHostDialog({
             ) : quote ? (
               <div className="space-y-1 text-xs text-muted-foreground">
                 <p>创建花费：{quote.createCredits} credits（一次性，确认创建即扣费）</p>
-                <p>
-                  运行消费：{quote.perMinuteCredits} credit/分钟（自云电脑就绪起按分钟计费，不足
-                  1 分钟按 1 分钟计）
-                </p>
+                {!selectedSpec ? (
+                  <p>请选择规格以查看运行费用</p>
+                ) : specQuoteLoading && !specQuote ? (
+                  <p>正在计算运行费用...</p>
+                ) : specQuote ? (
+                  <div className="space-y-1">
+                    <p>运行费用：{specQuote.hourlyCredits} credits/小时（按小时结算）</p>
+                    {specQuote.tiers.length > 0 && (
+                      <ul className="space-y-0.5 pl-3">
+                        {specQuote.tiers.map((tier) => (
+                          <li key={tier.label} className="break-words">
+                            {tier.label}：{tier.amountCredits} credits/小时
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ) : (
+                  <p>运行费用将按所选规格计费，详见账单</p>
+                )}
+                {storageAttachEnabled && selectedStorage && storageHourlyCredits !== undefined && (
+                  <p className="break-words">云存储：{storageHourlyCredits} credits/小时</p>
+                )}
+                {selectedSpec && specQuote && (
+                  <p className="font-medium text-foreground" data-testid="cloud-host-hourly-total">
+                    {`合计运行费用：${roundCredits(specQuote.hourlyCredits + attachedStorageHourlyCredits)} credits/小时`}
+                  </p>
+                )}
                 <p>余额不足持续 10 分钟云电脑将被强制销毁</p>
                 {balanceInsufficient && (
                   <p className="text-destructive">
