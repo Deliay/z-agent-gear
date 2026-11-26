@@ -635,29 +635,35 @@ describe('知识库 MCP prompts API（T-RKB-API6）', () => {
     fake?.client.disconnect();
   }, 60_000);
 
-  it('T-RKB-API6 initialize 含 prompts；prompts/list 单片段；六工具不含仓库知识库', async () => {
+  it('T-RKB-API6 initialize 含 resources；resources/list 单片段；六工具不含仓库知识库', async () => {
     const init = await relayMcpRequest('rkb_init', {
       jsonrpc: '2.0',
       id: 1,
       method: 'initialize',
     });
-    expect(init.body.result.capabilities.prompts).toBeDefined();
+    expect(init.body.result.capabilities.resources).toBeDefined();
+    expect(init.body.result.capabilities).not.toHaveProperty('prompts');
 
     const list = await relayMcpRequest('rkb_list', {
       jsonrpc: '2.0',
       id: 2,
-      method: 'prompts/list',
+      method: 'resources/list',
     });
-    expect(list.body.result.prompts).toHaveLength(1);
-    expect(list.body.result.prompts[0].name).toBe('repo-knowledge-base-authoring');
+    expect(list.body.result.resources).toHaveLength(1);
+    expect(list.body.result.resources[0].name).toBe('repo-knowledge-base-authoring');
+    expect(list.body.result.resources[0].uri).toBe(
+      'zag://agent-knowledge-base-tools/prompt/repo-knowledge-base-authoring',
+    );
 
     const got = await relayMcpRequest('rkb_get', {
       jsonrpc: '2.0',
       id: 3,
-      method: 'prompts/get',
-      params: { name: 'repo-knowledge-base-authoring' },
+      method: 'resources/read',
+      params: {
+        uri: 'zag://agent-knowledge-base-tools/prompt/repo-knowledge-base-authoring',
+      },
     });
-    expect(got.body.result.messages[0].content.text).toContain('.zag/knowledges/');
+    expect(got.body.result.contents[0].text).toContain('.zag/knowledges/');
 
     const tools = await relayMcpRequest('rkb_tools', {
       jsonrpc: '2.0',

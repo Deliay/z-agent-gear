@@ -4,9 +4,8 @@ import { workflowTemplateService } from './template.js';
 import { configuredWorkflowService } from './configured.js';
 import { workflowInstanceService, type InstantiateSource } from './instance.js';
 import {
-  ADMIN_PROMPT_DEFINITIONS,
-  getAdminPromptText,
-  listAdminPromptNames,
+  ADMIN_PROMPT_RESOURCES,
+  getAdminPromptResource,
 } from './admin-prompts.js';
 
 /** 工作流管理平台服务名（transport/source: platform） */
@@ -477,14 +476,17 @@ async function instantiateFromSource(
  */
 export async function handleAdminPlatformMcpRequest(
   caller: AdminCaller,
-  request: { method?: string; params?: { name?: string; arguments?: Record<string, unknown> } },
+  request: {
+    method?: string;
+    params?: { name?: string; uri?: string; arguments?: Record<string, unknown> };
+  },
 ): Promise<{ result?: unknown; error?: { code: string; message: string } }> {
   switch (request.method) {
     case 'initialize':
       return {
         result: {
           protocolVersion: '2025-03-26',
-          capabilities: { tools: {}, prompts: {} },
+          capabilities: { tools: {}, resources: {} },
           serverInfo: { name: ADMIN_PLATFORM_SERVER_NAME, version: '1.0.0' },
         },
       };
@@ -495,33 +497,37 @@ export async function handleAdminPlatformMcpRequest(
       return { result: {} };
     case 'tools/list':
       return { result: { tools: getAdminToolDefinitions() } };
-    case 'prompts/list':
-      return { result: { prompts: ADMIN_PROMPT_DEFINITIONS } };
-    case 'prompts/get': {
-      const promptName = request.params?.name;
-      const available = listAdminPromptNames().join('、');
-      if (typeof promptName !== 'string' || promptName.trim().length === 0) {
+    case 'resources/list':
+      return { result: { resources: ADMIN_PROMPT_RESOURCES } };
+    case 'resources/read': {
+      const available = ADMIN_PROMPT_RESOURCES.map((item) => item.uri).join('、');
+      const uri = request.params?.uri;
+      if (typeof uri !== 'string' || uri.trim().length === 0) {
         return {
           error: {
             code: 'INVALID_PARAMS',
-            message: `prompts/get 缺少 params.name。可用片段：${available}。`,
+            message: `resources/read 缺少 params.uri。可用资源：${available}。`,
           },
         };
       }
-      const text = getAdminPromptText(promptName);
-      const definition = ADMIN_PROMPT_DEFINITIONS.find((item) => item.name === promptName);
-      if (!text || !definition) {
+      const found = getAdminPromptResource(uri);
+      if (!found) {
         return {
           error: {
             code: 'INVALID_PARAMS',
-            message: `未知提示词片段「${promptName}」。可用片段：${available}。`,
+            message: `未知资源「${uri}」。可用资源：${available}。`,
           },
         };
       }
       return {
         result: {
-          description: definition.description,
-          messages: [{ role: 'user', content: { type: 'text', text } }],
+          contents: [
+            {
+              uri: found.definition.uri,
+              mimeType: found.definition.mimeType,
+              text: found.text,
+            },
+          ],
         },
       };
     }
