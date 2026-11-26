@@ -16,6 +16,11 @@ MCP `prompts` 是**客户端能力**：harness（opencode）会用 `prompts/list
 `list_mcp_resources` / `read_mcp_resource`），连接期不会主动 `resources/list`；MCP **没有 skills
 原语**，Skill 只能由 harness 从文件系统 / HTTP catalog 发现，不能经 MCP 提供。详见调查报告 §九。
 
+> **定稿口径（人类评审裁决）**：#580 的修复为 **resources-only**——片段唯一由 MCP resources 投递，
+> **移除** prompts（`capabilities.prompts` / `prompts/list` / `prompts/get`），**不做** tools 兜底。
+> 本用例的场景 1 保留为「harness 基线」（证明 prompts 只到客户端、正文不进模型上下文），
+> 场景 3 为 resources 通道基线；修复落地后需补「平台服务不再声明 prompts、resources 可读片段正文」的断言。
+
 ## 运行
 
 前置：本机可执行 `opencode`（平台锁定版本 `2.1.1`，见

@@ -1,5 +1,5 @@
 ---
-description: MCP 提示词（prompts）对 Agent 不可见的问题调查报告：以 ACP 级最小复现（opencode 2.1.1 + MCP 服务桩）证明 MCP prompts 只被 harness 转成客户端斜杠命令、正文从不进入模型上下文；据此定位「平台把权威提示词片段寄托在 MCP prompts 上」的原语选型错误，并专项调研 MCP 是否支持 Skill、resources 的定位与「原 prompt 是否应为 resource」，给出「同一注册表 resources + tools 双面暴露（prompts 保留人工）」的修复方案与回归计划
+description: MCP 提示词（prompts）对 Agent 不可见的问题调查报告：以 ACP 级最小复现（opencode 2.1.1 + MCP 服务桩）证明 MCP prompts 只被 harness 转成客户端斜杠命令、正文从不进入模型上下文；据此定位「平台把权威提示词片段寄托在 MCP prompts 上」的原语选型错误，并专项调研 MCP 是否支持 Skill、resources 的定位与「原 prompt 是否应为 resource」；最终按人类裁决定稿为「片段唯一由 MCP resources 投递，移除 prompts，不做 tools 兜底」的修复方案与回归计划
 type: Permanent
 ---
 
@@ -9,7 +9,9 @@ type: Permanent
 >
 > **返工补充（2026-11-26，评审意见「调研一下，MCP支持提供skill吗？」）**：已在 **§九** 给出专项调研结论——MCP **没有任何 skills 原语**（服务端只有 tools / resources / prompts），skill 是 harness 侧的文件/HTTP 目录机制；MCP 服务只能通过 tools（模型可调）或 resources（opencode 下模型可读）投递「skill 形态的内容」，或由平台把 `SKILL.md` 物化到会话工作区（不经过 MCP）。据此把修复方案调整为「**tools 为主修、resources 为补充、skills 为中长期**」，见 §六/§九。
 >
-> **返工补充二（2026-11-26，评审意见「MCP 的 resources 是做什么的？之前的 prompt 应该是 resource 吗？」）**：已在 **§十** 专项答复——resources 是「URI 可寻址的只读上下文/数据、应用控制」原语；**原来的片段语义上确实更该是 resources**（当初做成 resources，opencode 下 AI 本来就能读到，就不会有 #580）；但 resources 属应用控制（跨 harness 支持不一），最稳做法是「**同一注册表 resources + tools 双面暴露**，prompts 保留给人工，短指引走 `initialize.instructions`」，详见 §10.5。
+> **返工补充二（2026-11-26，评审意见「MCP 的 resources 是做什么的？之前的 prompt 应该是 resource 吗？」）**：已在 **§十** 专项答复——resources 是「URI 可寻址的只读上下文/数据、应用控制」原语；**原来的片段语义上确实更该是 resources**（当初做成 resources，opencode 下 AI 本来就能读到，就不会有 #580）；但 resources 属应用控制（跨 harness 支持不一），最稳做法是「**同一注册表 resources + tools 双面暴露**，prompts 保留给人工，短指引走 `initialize.instructions`」，详见 §10.5。**（该建议已被返工补充三的裁决取代：最终 resources-only，不做 tools、移除 prompts。）**
+>
+> **返工补充三（2026-11-26 11:49，评审裁决）**：**「只做成 resources 即可，不需要做 tools 兜底，同时也移除 prompt」**。§六 已按此重写为**定稿方案**——片段**唯一通道 = MCP resources**（`resources/list` + `resources/read`，URI `zag://<server>/prompt/<name>`）；**移除** `capabilities.prompts` 与 `prompts/list`/`prompts/get`；**不新增** tools 兜底。§九/§十 的调研保留为论证依据，其中「tools 兜底」「保留 prompts」两项已按裁决否决。
 
 ## 关联文档
 
@@ -204,106 +206,131 @@ graph TD
 
 ## 五、影响范围
 
-| 维度 | 影响 |
-|---|---|
-| 工作流管理提示词片段（`workflow-schema` / `workflow-project-persistence`） | ❌ AI 拿不到：AI 创建/修改工作流模板仍靠试错，Issue #523 的成功标准未真正达成 |
-| 知识库编写指引（`repo-knowledge-base-authoring`） | ❌ 同上（`docs-root` 后的知识库编写规范 AI 同样读不到） |
-| 工作流 AI 节点会话 | ❌ 全自动、无人值守 → 斜杠命令通道形同不存在 |
-| 普通手动会话（有人操作） | 🟡 理论上可人工输入 `/agent-workflow-admin-tools:workflow-schema` 使用；但产品 UI 未把 MCP 提示词显式呈现（仅混在斜杠命令列表里），可发现性差 |
-| MCP 工具调用（tools） | ✅ 不受影响（`tools/list` / `tools/call` 全链路正常，本次会话即为在跑证据） |
-| 工作流推进 / 黑板 / 产物 / PR 联动 | ✅ 不受影响 |
-| 其他 harness（kimi / dsh） | 🟡 未实测；机制上同样只能由各自客户端消费 prompts，模型侧无通道 |
-| 数据修复需求 | 无（纯行为/设计问题，无脏数据） |
+> 表内「现状」指本报告调查时的行为；「定稿后」指按 §六 裁决改造后的预期。
+
+| 维度 | 现状（#580 时的行为） | 定稿后（resources-only） |
+|---|---|---|
+| 工作流管理片段（`workflow-schema` / `workflow-project-persistence`） | ❌ AI 拿不到：AI 创建/修改模板仍靠试错，Issue #523 的成功标准未真正达成 | ✅ AI 经 `list_mcp_resources`/`read_mcp_resource` 按需读取 |
+| 知识库编写指引（`repo-knowledge-base-authoring`） | ❌ 同上 | ✅ 同上 |
+| 工作流 AI 节点会话（无人值守） | ❌ 斜杠命令通道形同不存在 | ✅ 无需人工介入（模型自己读资源） |
+| 普通手动会话（有人操作） | 🟡 理论上可敲 `/agent-workflow-admin-tools:workflow-schema`，可发现性差 | 🟡 斜杠命令消失；改由模型按需读取资源（人工不再需要手动触发） |
+| 外部 MCP 客户端依赖 prompts | 🟡 可用（但仅人工） | ⚠️ **破坏性移除**：`prompts/*` 变 `METHOD_NOT_FOUND`，需在实现 PR/CHANGELOG 说明 |
+| MCP 工具调用（tools） | ✅ 正常（本次会话即在跑证据） | ✅ 零变化（不新增片段工具） |
+| 工作流推进 / 黑板 / 产物 / PR 联动 | ✅ 正常 | ✅ 零回归 |
+| 其他 harness（kimi / dsh） | 🟡 未实测（prompts 只到客户端） | 🟡 resources 支持未实测；opencode 已确认 |
+| 数据修复需求 | 无（纯行为/设计问题，无脏数据） | 无 |
 
 ## 六、修复方案与风险
 
-### 6.1 方案 A（推荐，主修）：prompts + tools 双通道，工具成为模型可读通道
+> **定稿口径（人类评审第三轮裁决，2026-11-26 11:49）**：「只做成 resources 即可，不需要做 tools 兜底，
+> 同时也移除 prompt」。本节按此裁决重写；§九/§十 的调研结论保留为论证依据，其中「tools 兜底」
+> 与「保留 prompts」两项均**已否决**。
 
-在**同一份片段注册表**上新增工具通道，prompts 保留给人工：
+### 6.1 定稿方案：片段唯一由 MCP resources 投递
 
-- `agent-workflow-admin-tools` 新增：
-  - `listPromptSnippets`：返回 `[{ name, description }]`（复用 `ADMIN_PROMPT_DEFINITIONS`）
-  - `getPromptSnippet({ name })`：返回片段正文（复用 `getAdminPromptText`）
-- `agent-knowledge-base-tools` 同理（`REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS` / `getKnowledgeBasePromptText`）
-- `prompts/list` / `prompts/get` 保持不变（人工斜杠命令、外部 MCP 客户端仍可用）
+| 项 | 现状 | 定稿改为 |
+|---|---|---|
+| `initialize.capabilities` | `{ tools: {}, prompts: {} }` | `{ tools: {}, resources: {} }` |
+| `prompts/list` / `prompts/get` | 已实现 | **删除**（两个平台服务都删） |
+| `resources/list` | 未实现 | **新增**：返回片段清单（URI + name + description + `mimeType: text/markdown`） |
+| `resources/read` | 未实现 | **新增**：按 URI 返回片段正文（text/markdown） |
+| 片段正文的其它出口 | prompts 正文 | **唯一出口 = `resources/read`** |
+| 片段工具 | 无 | **不新增**（明确不做 tools 兜底） |
 
-优点：单一内容来源、零数据模型变更、任意 harness 通用、AI 真正可「按需获取」。
-补充说明：MCP **resources** 也是模型可读通道（opencode 下经 `list_mcp_resources`/`read_mcp_resource`
-按需拉取），且**语义上比 prompts 更贴合**本类只读片段——因此最终口径见 **§10.5：同一注册表
-resources + tools 双面暴露**（prompts 保留给人工，短指引可放 `initialize.instructions`）。
-MCP 没有 skills 原语，Skill 不能经 MCP 提供（详见 §九 专项调研）。
-风险：
-- 工具数量 +2，工具描述需明确「仅在需要时调用」以免模型滥用；
-- `workflow-schema` 片段较长，`getPromptSnippet` 返回体进入上下文会占用 token——按 name 精确取用可控；
-- 与既有防漂移测试（片段文本与校验规则同源）需保持同一断言口径。
+URI 约定（唯一口径，两个服务共用形态）：
 
-### 6.2 方案 B（建议同步做）：节点提示词里声明「片段可用」
+```text
+zag://agent-workflow-admin-tools/prompt/workflow-schema
+zag://agent-workflow-admin-tools/prompt/workflow-project-persistence
+zag://agent-knowledge-base-tools/prompt/repo-knowledge-base-authoring
+```
 
-在 `orchestrator.assemblePrompt` 的节点系统提示中加一句固定指引（或复用 `additionalPrompts`）：
-「如需工作流 Schema / 持久化 / 知识库编写规范，先调用 getPromptSnippet 获取权威说明」。
-风险：每条节点提示词 +1 行，成本可忽略；需与提示词片段清单同步（防漂移）。
+实现落点（供下游修复节点，纯 agent-api）：
 
-### 6.3 方案 C（产品体验，可选）：UI 呈现 MCP 提示词
+| 文件 | 改动 |
+|---|---|
+| `servers/agent-api/src/services/workflow/admin-tools.ts` | `initialize` 声明 `resources`、移除 `prompts`；删 `prompts/list`、`prompts/get`；新增 `resources/list`、`resources/read`（URI → 片段注册表） |
+| `servers/agent-api/src/services/knowledge-base-tools.ts` | 同上（单片段 `repo-knowledge-base-authoring`） |
+| `servers/agent-api/src/services/workflow/admin-prompts.ts` / `knowledge-base-prompts.ts` | 片段注册表保留为**单一内容来源**，导出形态从「prompt definition」改为「resource definition（uri/name/description/mimeType）」；内容防漂移守卫不变 |
+| `contracts/mcp-server.graphql` | `McpServerSource.platform` 注释：prompts 口径改为 resources 口径（含 URI 约定与片段清单） |
+| `servers/agent-api/src/services/mcp-dispatch.ts` | 可选（§6.4）：错误码数值化 |
+| 测试 | `admin-tools.test.ts` / `knowledge-base-tools.test.ts` / `tests/api/.../mcp-server.test.ts` 的 prompts 断言改写为 resources |
 
-agent-web 对 `available_commands_update` 中 `<server>:<prompt>` 形态的命令分组标注（如「MCP 提示词」
-分组、展示 description、一键插入）。风险：纯前端改动，需注意命令名含 `:` 的展示与 fuzzy 匹配。
+行为保证：
 
-### 6.4 方案 D（次要缺陷，建议顺手修）：错误码合规
+- 片段正文**仍只有一份**（同源注册表），`resources/read` 直接返回它，杜绝多通道文本漂移；
+- `tools/list` 完全不变（不新增片段工具）；
+- 任何名字里带 `Prompt` 的对外协议面（capabilities / 方法 / 工具）全部消失。
+
+### 6.2 兼容性与破坏性影响（需随实现 PR 说明）
+
+| 影响面 | 说明 | 处置 |
+|---|---|---|
+| 依赖 `prompts/list` / `prompts/get` 的外部 MCP 客户端 | 会失败（`METHOD_NOT_FOUND`） | 属**有意移除**；实现 PR 与 CHANGELOG 注明「平台片段自 X 版本起仅以 resources 提供」；当前仓库内无已知外部消费者 |
+| 人工斜杠命令 `<server>:<prompt>` | 消失（opencode 不再生成） | 无自动化依赖；agent-web 无需改动（本来只做展示） |
+| 模型获取片段 | 由 prompts（不可用）→ resources（opencode 下可读，懒加载） | 正向修复 #580 |
+| 既有测试 | T-AP-API1/2/3（prompts）会失效 | 同 PR 改写为 resources 断言（见 §七） |
+| 旧版组件（agent-gear / 老控制器） | 与 `prompts` 无关；resources 属标准 MCP | 无版本门禁需求 |
+
+### 6.3 可选（不属本次修复，待人类确认）：`initialize.instructions` 一行发现指引
+
+若担心模型不知道「有资源可读」，可在 `initialize.instructions` 放**一行指引**（不放正文），
+如「工作流 Schema/持久化、知识库编写规范以 MCP resources 提供，URI 形如 `zag://…/prompt/<name>`」。
+opencode 会把它注入系统提示。**本轮裁决只要求 resources，故该项默认不做**，列入 §八 待确认。
+
+### 6.4 次要缺陷（可选，独立修复）：JSON-RPC 错误码合规
 
 `mcp-dispatch.jsonRpcError` 改为数值 code（`-32601` METHOD_NOT_FOUND、`-32602` INVALID_PARAMS、
-自定义范围如 `-32001` SERVER_NOT_FOUND/SERVER_OFFLINE），message 保留人可读语义，避免破坏既有
-测试断言（需同步调整 `tests/api` 与单测中断言 code 的位置）。
+自定义范围如 `-32001` SERVER_NOT_FOUND/SERVER_OFFLINE），message 保留人可读语义；需同步调整单元/API
+测试中断言 code 的位置。与 resources 改造无耦合，可同 PR 或独立 PR。
 
-### 6.5 方案 E（中长期，本次不做）：平台化下发 Skill
+### 6.5 中长期（本轮不做）：平台化下发 Skill
 
-若目标升级为「给 AI 可复用的完整能力（说明 + 脚本 + 参考资料）」，则 **Skill 通道**比片段更好：
-harness 在每一步只列出 skill 的 id/name/description，模型按需 `skill` 工具加载正文，可按目录携带
-`scripts/`、`references/`，token 成本最优。
-
-但 **Skill 不能经 MCP 提供**（见 §九），必须由平台**把 `SKILL.md` 物化到会话工作区**（如
-`.opencode/skills/<id>/SKILL.md`、`.agents/skills/<id>/SKILL.md`），或**发布 HTTP skill catalog** 并让
-agent-gear 在 `opencode.jsonc` 的 `skills` 数组中登记（opencode 2.1.1 已支持 `skills.paths` /
-`skills.urls`）。这是跨服务（agent-api + agent-controller + 工作区准备）的改造，且各 harness 目录约定
-不同（opencode / kimi / dsh 需分别适配），不建议并入 #580 的修复。
+若目标升级为「给 AI 可复用的完整能力（说明 + 脚本 + 参考资料）」，Skill 通道更好（harness 每步只列
+id/name/description，按需 `skill` 工具加载正文，可携带 `scripts/`、`references/`）。但 **Skill 不能经
+MCP 提供**（§九），必须由平台把 `SKILL.md` 物化到会话工作区（`.opencode/skills/<id>/`、
+`.agents/skills/<id>/`）或发布 HTTP skill catalog 并写入 agent-gear 下发的 `opencode.jsonc`
+（opencode 2.1.1 已支持 `skills.paths` / `skills.urls`）。跨服务改造，另立需求。
 
 ### 6.6 明确不做
 
+- **不做 tools 兜底**（不新增 `listPromptSnippets` / `getPromptSnippet`）；
+- **不移除后保留 prompts**（不保留斜杠命令兼容层）；
 - 不改 harness/opencode（上游能力边界）；
 - 不引入新数据模型/迁移；
-- 不把片段正文硬塞进每个会话的系统提示（避免上下文膨胀，与 PRD「按需获取」冲突）；
-- 不在本问题内做 Skill 平台化下发（见 §6.5，独立需求评估）。
+- 不把片段正文硬塞进系统提示；
+- 不在本问题内做 Skill 平台化下发（§6.5）。
 
 ## 七、回归测试计划
 
+> 口径：**唯一通道 = resources；prompts 被移除；不新增 tools**。
+
 | 层级 | 用例 | 断言 |
 |---|---|---|
-| 单测（agent-api） | `admin-tools.test.ts` 新增 | `listPromptSnippets` 返回 2 段、`getPromptSnippet` 返回与 `prompts/get` **同一文本**（防漂移）、未知 name 返回明确错误 |
-| 单测（agent-api） | `knowledge-base-tools.test.ts` 新增 | 同上（`repo-knowledge-base-authoring`） |
-| 单测（agent-api） | resources 三面同源 | `resources/list` 的 URI/描述与 `tools/list` 片段清单一致；`resources/read` 正文与 `prompts/get`、`getPromptSnippet` **同一文本**（防漂移） |
-| API 测试 | `tests/api/src/agent-api/mcp-server.test.ts` 扩展（resources） | 经会话 MCP 端点：`resources/list` 返回片段 URI 清单；`resources/read` 返回 markdown 正文；未知 URI 返回协议级错误 |
-| API 测试 | `tests/api/src/agent-api/mcp-server.test.ts` 扩展（tools） | 经会话 MCP 端点：`tools/list` 含新工具；`tools/call getPromptSnippet` 返回正文；既有 T-AP-API1/2/3（`prompts/list`、`prompts/get`、未知名称）不回归 |
-| 复现用例升级 | `tests/e2e/mcp-prompts/run.mjs` | 新增「模型可经 tools/call 获取片段正文」断言；扩展场景 3 为「resources 可被模型侧工具按需读取（`resources/read` 返回正文）」；保留「prompts → 斜杠命令、正文不进模型上下文」现状断言，防 harness 行为漂移 |
-| 手工 e2e | 工作流实例化一个 AI 节点会话，要求 AI 创建模板 | AI 先调用 `getPromptSnippet('workflow-schema')`，按片段生成的定义一次性通过 `validateTemplateGraph` |
-| 次要缺陷 | `mcp-dispatch` 错误码 | 单测断言 `error.code` 为数值且与原语义一一对应；API 测试断言客户端可解析 |
+| 单测（agent-api） | `admin-tools.test.ts` 改写 | `initialize` 声明 `resources` 且**不含** `prompts`；`prompts/list`、`prompts/get` 返回 `METHOD_NOT_FOUND`；`resources/list` 返回 2 段（URI/name/description/mimeType）；`resources/read` 返回正文与注册表**同一文本**（防漂移）；未知 URI 返回明确错误 |
+| 单测（agent-api） | `knowledge-base-tools.test.ts` 改写 | 同上（`repo-knowledge-base-authoring`，1 段） |
+| 单测（agent-api） | 工具面无变化 | `tools/list` 与改造前**完全一致**（不新增 `listPromptSnippets`/`getPromptSnippet`） |
+| API 测试 | `tests/api/src/agent-api/mcp-server.test.ts` 改写 | 经会话 MCP 端点（relay 全链路）：`initialize.capabilities.resources` 为真、无 `prompts`；`resources/list` 片段清单；`resources/read` 返回 markdown 正文；原 T-AP-API1/2/3（prompts）**改写为 resources 版本**，不再断言 prompts |
+| 复现用例 | `tests/e2e/mcp-prompts/run.mjs` | 保留场景 1 作为 **harness 基线**（MCP prompts 只变斜杠命令、正文不进模型上下文）；场景 3 保留（resources 懒加载）；**新增**：resources 型桩 `resources/read` 返回正文，并在修复落地后补「平台服务不再声明 prompts」的 API 断言 |
+| 手工 e2e | 工作流实例化一个 AI 节点会话，要求 AI 创建模板 | AI 通过 `list_mcp_resources` / `read_mcp_resource` 读取 `zag://agent-workflow-admin-tools/prompt/workflow-schema`，按片段生成的定义一次性通过 `validateTemplateGraph` |
+| 回归 | 工具与既有能力 | 工作流节点推进、知识库六工具、`getBlackboardValue` 等既有 tools 全部零回归 |
+| 次要缺陷（若采纳） | `mcp-dispatch` 错误码 | 单测断言 `error.code` 为数值且与原语义一一对应 |
 
 ## 八、待确认问题（需人类补充）
 
-> 调查过程中已就以下几点向人类发起追问，但提问被 dismiss；因此按最可能解释推进并在此登记。
+> 调查过程中已就以下问题向人类发起追问，但提问被 dismiss；因此按最可能解释推进并在此登记。
+> 其中「通道选型」已在第三轮评审中裁决为 **resources-only（移除 prompts、不做 tools 兜底）**，不再是待确认项。
 
 1. **观察位置**：是在「会话输入框斜杠命令列表」看不到？还是「直接问 AI，AI 说没有」？还是检查
-   ACP 报文 / 直接 curl MCP 端点？——不同观察位置会改变「用户可见面」的修复优先级，但不影响本报告
-   的机制结论。
+   ACP 报文 / 直接 curl MCP 端点？——不影响本报告的机制结论，只影响用户可见面的说明口径。
 2. **会话类型**：工作流 AI 节点会话 / 普通手动会话 / 两者都有？
-3. **期望效果**：希望 **AI 自主读取**提示词（→ 必须走方案 A/B），还是希望 **人工在 UI 里看到并选用**
-   （→ 方案 C 即可）？还是两者都要？
-4. **是否接受主修方向**：保留 MCP `prompts`（人工/外部客户端可用）+ 新增 MCP **工具**通道
-   （AI 可读），即方案 A？
-5. **harness 范围**：是否要求 kimi / dsh 会话同样可用？本机仅实测 opencode 2.1.1。
-6. **次要缺陷是否本期一并修**：`mcp-dispatch` 的 JSON-RPC 字符串错误码（§4.3-1）。
-7. **Skill 方向取舍**：是否接受「本期用 tools 闭环（方案 A），Skill 平台化下发另立需求（方案 E）」？
-   详见 §九 专项调研（MCP 无 skills 原语，Skill 无法经 MCP 提供）。
-8. **通道选型确认**：是否接受 §10.5 的「同一注册表 resources + tools 双面暴露（prompts 保留人工作为兼容）」
-   作为落地口径？若只允许一条通道，倾向 tools（跨 harness 稳定）还是 resources（语义更正确、opencode 下可读）？
+3. **harness 范围**：是否要求 kimi / dsh 会话同样可读 resources？本机仅实测 opencode 2.1.1（resources 由
+   opencode 内置 `list_mcp_resources`/`read_mcp_resource` 读取；kimi/dsh 未验证）。
+4. **移除 prompts 的破坏性影响**：是否需要公告/过渡期/版本说明？（当前仓库内无已知外部消费者，实现 PR
+   会同步改写 prompts 相关测试与契约注释。）
+5. **是否要加 `initialize.instructions` 一行发现指引**（§6.3）：默认不做（本轮裁决只要求 resources）。
+6. **次要缺陷是否本期一并修**：`mcp-dispatch` 的 JSON-RPC 字符串错误码（§4.3-1、§6.4）。
+7. **Skill 方向取舍**：Skill 平台化下发是否另立需求（§九：MCP 无 skills 原语，Skill 无法经 MCP 提供）。
 
 ## 九、专项调研：MCP 支持提供 Skill 吗？（评审意见 2026-11-26）
 
@@ -344,12 +371,16 @@ agent-gear 在 `opencode.jsonc` 的 `skills` 数组中登记（opencode 2.1.1 �
 | harness 兼容性 | ✅ 全 harness 通用 | 🟡 取决于 harness 是否给模型暴露资源 | 🟡 目录/配置约定因 harness 而异（本机仅实测 opencode） |
 | 适合承载 | 短-中等权威说明（本问题） | 中-长文档（可版本化/URI 化） | 完整可复用能力包（说明 + 脚本 + 参考资料） |
 
-### 9.4 对 #580 修复方案的修订
+### 9.4 对 #580 修复方案的修订（已按第三轮评审裁决更新）
 
-1. **主修仍是方案 A（tools）**：它是唯一「任意 harness + 模型自主 + 改动最小」的通道，能直接闭环本 Issue。
-2. **resources 作为可选补充**：若后续片段变长/需要 URI 版本化，可在同一注册表上再暴露 resources（`zag://workflow/prompt/workflow-schema` 之类），保持内容单一来源；本期不做可不影响闭环。
-3. **skills 作为中长期方向（方案 E）**：若产品目标是「让 AI 具备平台级可复用能力」，应另立需求，按「平台下发 skill（写 `.agents/skills/<id>/SKILL.md` 或 HTTP catalog + config）」设计，顺带解决仓库无该文件时的通用性问题。
-4. **明确不采用的做法**：❌ 继续只依赖 MCP `prompts` 投递给 AI；❌ 试图让 MCP 服务「注册 skill」（协议不支持）。
+1. **投递通道：resources-only**（最终裁决）——片段唯一由 MCP `resources/list` + `resources/read` 投递，
+   模型在 opencode 下经内置工具按需读取。**不做 tools 兜底，并移除 prompts**（原「方案 A：tools 主修」
+   已否决）。
+2. ~~resources 作为可选补充~~ → 已升级为**唯一通道**。
+3. **skills 作为中长期方向（方案 E）**：若产品目标是「让 AI 具备平台级可复用能力」，应另立需求，按
+   「平台下发 skill（写 `.agents/skills/<id>/SKILL.md` 或 HTTP catalog + config）」设计。
+4. **明确不采用的做法**：❌ 继续只依赖 MCP `prompts` 投递给 AI；❌ 试图让 MCP 服务「注册 skill」
+   （协议不支持）；❌ 用 MCP tools 承载片段正文（裁决不做 tools 兜底）。
 
 ### 9.5 本节未验证项
 
@@ -370,7 +401,7 @@ agent-gear 在 `opencode.jsonc` 的 `skills` 数组中登记（opencode 2.1.1 �
 - **我们之前的 prompt 应该做成 resource 吗**：**语义上是——是**。那两段片段是平台自有的、静态只读的
   参考文档，正属于 resources 的形态；如果当初做成 resources，opencode 下 AI **本来就能读到**
   （agent 有内置 `list_mcp_resources` / `read_mcp_resource` 工具），也就不会出现 #580。
-  但**跨 harness 可靠性不如 tools**，所以最终建议「同一份注册表，resources + tools 双面暴露」。
+  但**跨 harness 可靠性不如 tools**。人类裁决最终选择 **resources-only**（见 §6.1），本轮不做 tools 兜底。
 - **补充**：如果诉求是「不用模型主动调用也必须知道的短规则」，还有第四条通道——
   MCP `initialize` 的 **`instructions`** 字段，opencode 会把它注入系统提示（`<mcp_instructions>`）。
 
@@ -410,26 +441,29 @@ MCP 服务端只有这三类原语（**没有 skills**，见 §九）；客户�
 | 是否适合「必须生效的短规则」 | ❌ 不适合（模型可能不主动读）；这类应走 `initialize.instructions`（opencode 自动注入系统提示）或直接写进节点提示词（方案 B） |
 
 **结论**：原实现选错了原语（选了模型唯一读不到的 prompts），**resources 才是语义正解**；但从「保证 AI
-一定拿得到」的工程目标看，**resources + tools 双面暴露**最稳；短规则另走 instructions/节点提示词。
+一定拿得到」的工程目标看，双通道最稳；但**人类裁决选择 resources-only**（§6.1），即接受「依赖 harness 的 resources 支持」这一取舍。
 
-### 10.5 修复方案修订（替代 §6.1 的通道口径）
+### 10.5 修复方案修订（经第三轮评审裁决定稿）
 
-单一片段注册表（`ADMIN_PROMPT_DEFINITIONS` / `REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS`）派生**三面**：
+> **裁决（2026-11-26 11:49）**：「只做成 resources 即可，不需要做 tools 兜底，同时也移除 prompt」。
+> 本小节原提出的「三面一源」据此收敛为 **resources 单通道**；最终实现口径以 **§6.1** 为准。
 
-| 面 | 面向 | 具体形态 | 何时用 |
-|---|---|---|---|
-| **resources** | 规范对齐的客户端 / 模型按需读 | `resources/list` 返回 `zag://<server>/prompt/<name>`（含 name/description/mimeType）；`resources/read` 返回片段正文（text/markdown） | 主通道之一（opencode 下模型可读、可按 URI 版本化、懒加载） |
-| **tools** | 全 harness 兜底 | `listPromptSnippets` / `getPromptSnippet({name})` | 主通道之二（模型控制、跨 harness 稳定） |
-| **prompts** | 人工 / 外部 MCP 客户端 | 保持不变（斜杠命令） | 兼容既有能力，不删 |
-| （可选）`initialize.instructions` | 常驻系统提示 | 一行：「需要工作流 Schema/持久化/知识库编写规范时，读取 zag://… 或调用 getPromptSnippet」 | 解决「模型不知道有这些片段」 |
+单一片段注册表（原 `ADMIN_PROMPT_DEFINITIONS` / `REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS`，改造后为
+resource definition）**只派生 resources 一面**：
+
+| 面 | 结论 | 说明 |
+|---|---|---|
+| **resources** | ✅ **唯一通道** | `resources/list` 返回 `zag://<server>/prompt/<name>`（name/description/mimeType）；`resources/read` 返回片段正文（text/markdown） |
+| tools | ❌ **否决**（不做兜底） | 不新增 `listPromptSnippets` / `getPromptSnippet`；`tools/list` 保持改造前形态 |
+| prompts | ❌ **移除** | 删除 `capabilities.prompts`、`prompts/list`、`prompts/get`；不再有 `<server>:<prompt>` 斜杠命令 |
+| `initialize.instructions` | 🟡 未采纳（列为待确认 §八-5） | 若需要「模型不知道有资源」的引导，可后续加一行指引；本轮不做 |
 
 风险与取舍：
 
-- 三面同源必须由**同一注册表**生成，避免文本漂移（沿用现有防漂移测试口径）；
+- 单一出口 = 单一内容来源，**天然无多通道文本漂移**；仍保留「片段文本 ↔ 平台校验规则」的防漂移测试；
 - resources 需要客户端支持与权限放行（opencode：`opencode_read_mcp_resource` 允许 `server:*`）；
   agent-web 当前不展示资源，不影响模型读取；
-- instructions 会常驻上下文，只放「指引」不放正文；
-- 三面全开会让服务方法面变大，建议 resources + tools 同源实现、prompts 保持存量。
+- 移除 prompts 属**破坏性变更**（外部 MCP 客户端 `prompts/*` 调用会失败），需在实现 PR/CHANGELOG 说明。
 
 ### 10.6 本节未验证项
 
@@ -437,4 +471,4 @@ MCP 服务端只有这三类原语（**没有 skills**，见 §九）；客户�
 |---|---|---|
 | kimi / dsh 是否把 MCP resources 暴露给模型（及其权限模型） | 本机仅 opencode 2.1.1 | 各 harness 跑探针：连接 resources 型服务桩后观察模型侧是否出现资源读取工具 |
 | opencode `resources/subscribe` / `notifications/resources/list_changed` 的刷新行为 | 与本期「静态片段」无关 | 若片段需热更新再评估 |
-| agent-web 是否要展示资源目录 | 属产品体验（方案 C 范畴） | 若采纳三面方案，再评估 UI |
+| agent-web 是否要展示资源目录 | 属产品体验（原方案 C 范畴） | resources 已定稿为唯一通道，是否在 UI 展示另评估 |
