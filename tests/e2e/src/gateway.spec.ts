@@ -112,6 +112,32 @@ test.describe('Gateway E2E', () => {
     disconnect();
   });
 
+  test('should show gateway address from server-derived endpoint', async ({ page }) => {
+    const { token, username, controllerId, disconnect } = await setupGatewayTest(page);
+
+    const gwName = `addr-svc-${Date.now().toString(36)}`;
+    const gwRes = await gqlRequest(page, `
+      mutation CreateGw($controllerId: ID!, $name: String!, $port: Int!) {
+        createGateway(controllerId: $controllerId, name: $name, port: $port) { endpoint }
+      }
+    `, { controllerId, name: gwName, port: 3007 }, token);
+    const gwBody = await gwRes.json();
+    expect(gwBody.errors).toBeUndefined();
+    const endpoint = gwBody.data.createGateway.endpoint as string;
+    expect(endpoint).toContain(`/api/gateway/${controllerId}/${gwName}/`);
+    // 地址唯一来源：服务端派生字段（不硬编码域名，D10）
+    expect(endpoint.startsWith('http')).toBe(true);
+
+    await loginViaUI(page, username);
+    const sidebar = await openGateways(page);
+    const item = sidebar.locator('li', { hasText: gwName });
+    await expect(item).toBeAttached({ timeout: 15000 });
+    // UI 复制按钮 title 与 GraphQL 返回的 endpoint 逐字一致
+    await expect(item.getByTitle(endpoint)).toBeVisible();
+
+    disconnect();
+  });
+
   test('should show empty state when expanding gateways', async ({ page }) => {
     const { username, disconnect } = await setupGatewayTest(page);
 

@@ -57,6 +57,7 @@ const GATEWAYS_QUERY = `
         port
         status
         createdAt
+        endpoint
       }
       total
       limit
@@ -73,6 +74,7 @@ const CREATE_GATEWAY = `
       port
       status
       createdAt
+      endpoint
     }
   }
 `;
@@ -194,6 +196,9 @@ describe('Gateway API', () => {
       expect(body.data.createGateway.controllerId).toBe(controllerId);
       expect(body.data.createGateway.id).toBeDefined();
       expect(body.data.createGateway.createdAt).toBeDefined();
+      expect(body.data.createGateway.endpoint).toMatch(
+        new RegExp(`/api/gateway/${controllerId}/my-api/$`),
+      );
 
       client.disconnect();
     });
@@ -255,6 +260,7 @@ describe('Gateway API', () => {
       expect(gw).toBeDefined();
       expect(gw.controllerId).toBe(controllerId);
       expect(gw.status).toBe('active');
+      expect(gw.endpoint).toMatch(new RegExp(`/api/gateway/${controllerId}/list-svc/$`));
 
       client.disconnect();
     });

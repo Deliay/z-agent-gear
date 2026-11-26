@@ -282,6 +282,7 @@ describe('ControllerService', () => {
             'agent-valut-tools',
             'agent-custom-tools',
             'agent-knowledge-base-tools',
+            'agent-gateway-tools',
           ],
         },
       });

@@ -197,3 +197,18 @@ cd tests/e2e && BASE_URL=<agent-web> API_URL=<agent-api>/graphql \
 - [ ] 单元测试覆盖达标（≥ 80%，含 RED 种子 `T-GMCP-REPRO-1/2` 转绿）。
 - [ ] API 测试通过（MCP relay 全链路 + 安全回归）；E2E 测试通过（地址一致性 + 网关既有行为零回归）。
 - [ ] 回归清单全勾（§8）。
+
+## 10. 实现记录（代码实现节点）
+
+- **契约**：`contracts/gateway.graphql` 增 `Gateway.endpoint: String!`；`contracts/mcp-server.graphql` 增
+  `agent-gateway-tools` 平台服务注解；`contracts/agent-session-websocket.md` §2.12.1 路由表增一行。
+- **agent-api**：新增 `services/gateway-endpoint.ts`（纯函数单一来源）、`services/gateway-prompts.ts`
+  （暴露指引资源）、`services/gateway-tools.ts`（三工具 handler）；`gateway.ts` 的 `mapGateway` 注入 `endpoint`；
+  `graphql/schemas/gateway.ts` 双写字段；`session.ts` / `controller.ts` 两处 `$nin` 六名 + 公共路径恒装配；
+  `mcp-dispatch.ts` platform 链尾分支。
+- **agent-web**：`HOME_OVERVIEW` / `GET_GATEWAYS` 选择集追加 `endpoint`；`GatewayItem` 改读
+  `gateway.endpoint`（缺失禁用复制、不拼假地址），删除 `window.location.origin` 拼接。
+- **测试**：`gateway-endpoint.test.ts`（T-GWE1~6）、`gateway.test.ts`（T-GWS1~4 + `T-GMCP-REPRO-1`）、
+  `gateway-tools.test.ts`（T-GT1~8 + `T-GMCP-REPRO-2`）、`gateway-prompts.test.ts`（T-GP1~4），
+  `session/controller/mcp-dispatch` 单测增量；`tests/api` GraphQL + MCP relay（T-GMCP-API1~6）；
+  `tests/e2e` 地址一致性（E2E-GMCP1）。全量单测：agent-api 2567 通过、agent-web 1531 通过。

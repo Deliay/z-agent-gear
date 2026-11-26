@@ -953,6 +953,17 @@ pnpm test
 - 工作区隔离：跨工作区 id → `Not found`；不存在 id → `custom tool not found`。
 - 前提：`INTERNAL_API_TOKEN`（开户）；MCP 动态目录与 tools/call wire 行为由 agent-api 单测覆盖。
 
+## 网关 MCP（`src/agent-api/gateway.test.ts` / `src/agent-api/mcp-server.test.ts` T-GMCP-API*，#565）
+
+- `gateway.test.ts`：GraphQL `Gateway.endpoint` 随 `createGateway` / `gateways` 返回，断言路径口径
+  `/api/gateway/{controllerId}/{name}/`（不硬编码域名，D10）；既有 CRUD/隧道端到端零回归。
+- `mcp-server.test.ts`「网关 MCP 工具 API」：fake controller relay 创建会话（`mcpServerIds: []` 仍恒装配），
+  断言 `acp:start.mcpEndpoint.serverNames` 含 `agent-gateway-tools`；`gateway_create_endpoint` 返回
+  `{name,port,status,endpoint,basePath}` 且与 GraphQL `Gateway.endpoint` **逐字一致**；`gateway_list` /
+  `gateway_delete_endpoint` 全链路；`resources/read` 正文含 Vite 示例、未知 URI `INVALID_PARAMS`；
+  重名 / 删除未命中错误文案逐字；匿名访问 endpoint 仍 401、他人网关列表为空。
+- 前置：`aspire start`（agent-api + controller-api）+ `INTERNAL_API_TOKEN`（开户）；无需 `MONGODB_URI`。
+
 ## 第三方登录 OAuth/OIDC（#503）
 
 | 文件 | 说明 |

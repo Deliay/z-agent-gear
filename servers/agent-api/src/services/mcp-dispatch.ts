@@ -35,6 +35,10 @@ import {
   handleKnowledgeBaseToolsMcpRequest,
   KNOWLEDGE_BASE_TOOLS_SERVER_NAME,
 } from './knowledge-base-tools.js';
+import {
+  handleGatewayToolsMcpRequest,
+  GATEWAY_TOOLS_SERVER_NAME,
+} from './gateway-tools.js';
 import { workspaceService } from './workspace-service.js';
 import { runWithWorkspace, type WorkspaceContext } from './workspace-context.js';
 
@@ -221,7 +225,12 @@ export const dispatch = async (input: DispatchInput): Promise<DispatchResult> =>
                         { userId: payload.userId ?? '', sessionId: payload.sessionId ?? '' },
                         request,
                       )
-                    : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } },
+                    : serverName === GATEWAY_TOOLS_SERVER_NAME
+                      ? await handleGatewayToolsMcpRequest(
+                          { userId: payload.userId ?? '', sessionId: payload.sessionId ?? '' },
+                          request,
+                        )
+                      : { error: { code: 'SERVER_NOT_FOUND', message: 'Unsupported platform server' } },
     );
     if (isPlatformNotification) {
       return { status: 202, body: undefined };
