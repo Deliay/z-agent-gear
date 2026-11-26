@@ -12,6 +12,10 @@ MCP `prompts` 是**客户端能力**：harness（opencode）会用 `prompts/list
 任何让模型自己读取提示词的工具。因此「实际传递给 Agent 的 MCP 里看不到提示词正文」是协议+harness
 的既定行为，而不是平台 MCP 端点漏实现。
 
+补充结论（场景 3）：MCP **resources** 在 opencode 下是模型可读的懒加载通道（模型侧工具
+`list_mcp_resources` / `read_mcp_resource`），连接期不会主动 `resources/list`；MCP **没有 skills
+原语**，Skill 只能由 harness 从文件系统 / HTTP catalog 发现，不能经 MCP 提供。详见调查报告 §九。
+
 ## 运行
 
 前置：本机可执行 `opencode`（平台锁定版本 `2.1.1`，见
@@ -27,9 +31,9 @@ OPENCODE_BIN=/path/to/opencode node tests/e2e/mcp-prompts/run.mjs
 
 脚本零依赖（Node 内置模块），会自动：
 
-1. 起两个 MCP 服务桩（`:7811` 提供 prompts，`:7812` 只有 tools）；
-2. 拉起 `opencode acp`，`session/new` 时把两个服务作为 `http` MCP 传入（带 `Authorization`）；
-3. 断言 4 件事（场景 1），并追加 1 条补充观察（场景 2）。
+1. 起三个 MCP 服务桩（`:7811` 提供 prompts，`:7812` 只有 tools，`:7815` 提供 resources）；
+2. 拉起 `opencode acp`，`session/new` 时把服务作为 `http` MCP 传入（带 `Authorization`）；
+3. 断言场景 1 的 4 件事，并追加场景 2（无 headers 被静默忽略）与场景 3（resources 懒加载）的观察。
 
 ## 期望输出
 
@@ -44,11 +48,15 @@ PASS  提示词正文从未进入 model-visible 的 session/update（模型看�
 === 场景 2（补充观察）：ACP http MCP 条目不带 headers ===
 PASS  不带 headers 的 http MCP 条目被 harness 静默忽略（无任何入站请求）  — requests=0
 
-=== 结果：5/5 PASS （工作目录 /tmp/zag-mcp-prompts-repro） ===
+=== 场景 3（调研观察）：resources 型 MCP 服务的发现时机 ===
+PASS  resources 型服务在连接期被 initialize 并做 tools/list  — methods=initialize,notifications/initialized,,tools/list
+PASS  连接期不主动 resources/list（资源由模型侧按需拉取，懒加载）  — methods=initialize,notifications/initialized,,tools/list
+
+=== 结果：7/7 PASS （工作目录 /tmp/zag-mcp-prompts-repro） ===
 ```
 
 工作目录（`/tmp/zag-mcp-prompts-repro`）下保留 `prompts-server.log` / `tools-server.log` /
-`noheaders-server.log`，逐条记录 harness 实际发出的 JSON-RPC 方法，便于对照。
+`noheaders-server.log` / `resources-server.log`，逐条记录 harness 实际发出的 JSON-RPC 方法，便于对照。
 
 ## 备注
 

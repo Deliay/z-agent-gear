@@ -172,9 +172,44 @@ async function scenarioWithoutHeaders() {
   }
 }
 
+async function scenarioResources() {
+  console.log('\n=== 场景 3（调研观察）：resources 型 MCP 服务的发现时机 ===');
+  const logFile = path.join(WORK, 'resources-server.log');
+  const svc = startStub({ variant: 'resources', port: 7815, name: 'res-svc', logFile });
+  await new Promise((r) => setTimeout(r, 600));
+  try {
+    await runProbe({
+      servers: [
+        {
+          type: 'http',
+          name: 'res-svc',
+          url: 'http://127.0.0.1:7815/mcp',
+          headers: [{ name: 'Authorization', value: 'Bearer repro-token' }],
+        },
+      ],
+      waitMs: 6000,
+    });
+    const calls = readLog(logFile).filter((e) => e.event === 'request');
+    const methods = calls.map((e) => e.method);
+    check(
+      'resources 型服务在连接期被 initialize 并做 tools/list',
+      methods.includes('initialize') && methods.includes('tools/list'),
+      `methods=${methods.join(',')}`,
+    );
+    check(
+      '连接期不主动 resources/list（资源由模型侧按需拉取，懒加载）',
+      !methods.includes('resources/list'),
+      `methods=${methods.join(',')}`,
+    );
+  } finally {
+    svc.kill('SIGKILL');
+  }
+}
+
 resetWorkdir();
 await scenarioWithServers();
 await scenarioWithoutHeaders();
+await scenarioResources();
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n=== 结果：${results.length - failed.length}/${results.length} PASS （工作目录 ${WORK}） ===`);

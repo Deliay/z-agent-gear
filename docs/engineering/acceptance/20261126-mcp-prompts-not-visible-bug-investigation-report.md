@@ -5,7 +5,9 @@ type: Permanent
 
 # MCP 中无法看到「提示词」· 问题调查报告（2026-11-26）
 
-> **状态**: 🟡 **已复现机制、已定位根因（REPRODUCED & ROOT-CAUSED）**——复现对象是「MCP 提示词能否到达 Agent」这一机制本身：ACP 级最小复现 **2/2 轮稳定，5/5 断言全绿**，证明 harness（opencode 2.1.1）会把 MCP prompts 变成客户端斜杠命令 `<server>:<prompt>`，而提示词正文**从不进入 model-visible 的会话上下文**，模型侧也没有等价的读取工具。平台服务端 prompts 能力本身实现完好（有 API 测试），因此问题**不是端点漏实现，而是投递通道选错了**。修复方案与回归计划见 §六/§七；尚未确认的人类上下文见 §八。
+> **状态**: 🟡 **已复现机制、已定位根因（REPRODUCED & ROOT-CAUSED）**——复现对象是「MCP 提示词能否到达 Agent」这一机制本身：ACP 级最小复现 **2/2 轮稳定，7/7 断言全绿（3 场景）**，证明 harness（opencode 2.1.1）会把 MCP prompts 变成客户端斜杠命令 `<server>:<prompt>`，而提示词正文**从不进入 model-visible 的会话上下文**，模型侧也没有等价的读取工具。平台服务端 prompts 能力本身实现完好（有 API 测试），因此问题**不是端点漏实现，而是投递通道选错了**。
+>
+> **返工补充（2026-11-26，评审意见「调研一下，MCP支持提供skill吗？」）**：已在 **§九** 给出专项调研结论——MCP **没有任何 skills 原语**（服务端只有 tools / resources / prompts），skill 是 harness 侧的文件/HTTP 目录机制；MCP 服务只能通过 tools（模型可调）或 resources（opencode 下模型可读）投递「skill 形态的内容」，或由平台把 `SKILL.md` 物化到会话工作区（不经过 MCP）。据此把修复方案调整为「**tools 为主修、resources 为补充、skills 为中长期**」，见 §六/§九。
 
 ## 关联文档
 
@@ -68,7 +70,7 @@ type: Permanent
 实测 `list_mcp_resources()` 返回 `{ "resources": [], "templates": [] }`（平台服务未暴露 resources），
 即：模型侧对 MCP prompts 的可见性为 **0**。
 
-### 3.2 最小复现（ACP 级，稳定 2/2，5/5 断言通过）
+### 3.2 最小复现（ACP 级，稳定 2/2，7/7 断言通过）
 
 新增复现用例 `tests/e2e/mcp-prompts/`（零依赖，Node 内置模块）：
 
@@ -76,8 +78,9 @@ type: Permanent
 node tests/e2e/mcp-prompts/run.mjs
 ```
 
-用例做的事：起两个 MCP 服务桩（`:7811` 声明 prompts，`:7812` 只有 tools）→ 拉起 `opencode acp`
-→ `session/new` 传入两个 `http` MCP（带 `Authorization`）→ 断言 harness 侧与 ACP 侧行为。
+用例做的事：起三个 MCP 服务桩（`:7811` 声明 prompts，`:7812` 只有 tools，`:7815` 声明 resources）
+→ 拉起 `opencode acp` → `session/new` 传入 `http` MCP（带 `Authorization`）→ 断言 harness 侧与
+ACP 侧行为。场景 1 是主证据，场景 2/3 是返工期间补充的机制观察。
 
 实际输出（连续两轮一致）：
 
@@ -92,7 +95,11 @@ PASS  提示词正文从未进入 model-visible 的 session/update（模型看�
 === 场景 2（补充观察）：ACP http MCP 条目不带 headers ===
 PASS  不带 headers 的 http MCP 条目被 harness 静默忽略（无任何入站请求）  — requests=0
 
-=== 结果：5/5 PASS （工作目录 /tmp/zag-mcp-prompts-repro） ===
+=== 场景 3（调研观察）：resources 型 MCP 服务的发现时机 ===
+PASS  resources 型服务在连接期被 initialize 并做 tools/list  — methods=initialize,notifications/initialized,,tools/list
+PASS  连接期不主动 resources/list（资源由模型侧按需拉取，懒加载）  — methods=initialize,notifications/initialized,,tools/list
+
+=== 结果：7/7 PASS （工作目录 /tmp/zag-mcp-prompts-repro） ===
 ```
 
 服务桩日志（`/tmp/zag-mcp-prompts-repro/prompts-server.log`）证明 harness 的真实调用序列：
@@ -111,6 +118,9 @@ prompts-tools:prompts/list
 即模型上下文里没有提示词正文。
 **关键结果 3**：harness 按每个服务 `initialize` 的能力声明门控 prompts 发现——tools-only 服务
 **从未**收到 `prompts/list`（`calls=0`），与平台侧「5 个平台服务只声明 tools」的现状一致。
+**关键结果 4**（返工补充）：resources 型服务连接期**只**被 `initialize` + `tools/list`，**不**主动
+`resources/list`；即资源是「模型侧按需拉取」的懒加载通道（模型侧工具
+`list_mcp_resources` / `read_mcp_resource` 在本节点会话实测存在且可调用），详见 §九。
 
 ### 3.3 平台服务端 prompts 是否真的可用
 
@@ -129,8 +139,8 @@ prompts-tools:prompts/list
 
 ### 3.4 稳定性
 
-- ACP 级复现：**2/2 轮稳定复现**（5/5 断言通过，命令列表、`prompts/list` 调用次数、模型侧可见文本长度均一致）。
-- 一手观察：本次调查所在的真实工作流节点会话中，模型侧 MCP 面只有工具；`list_mcp_resources()` 返回空，且工具目录中没有任何 prompts 读取工具，属稳定现状。
+- ACP 级复现：**2/2 轮稳定复现**（7/7 断言通过，命令列表、`prompts/list` 调用次数、模型侧可见文本长度均一致）。
+- 一手观察：本次调查所在的真实工作流节点会话中，模型侧 MCP 面只有工具；`list_mcp_resources()` 返回空，且工具目录中没有任何 prompts 读取工具，属稳定现状（`skill` 工具同时可用，为 §九 Skill 调研的一手证据）。
 
 ### 3.5 未能复现/未能验证的部分（不伪造结论）
 
@@ -216,6 +226,8 @@ graph TD
 - `prompts/list` / `prompts/get` 保持不变（人工斜杠命令、外部 MCP 客户端仍可用）
 
 优点：单一内容来源、零数据模型变更、任意 harness 通用、AI 真正可「按需获取」。
+补充说明：MCP **resources** 是另一条模型可读通道（opencode 下经 `list_mcp_resources`/`read_mcp_resource`
+按需拉取），但兼容性与改造成本需评估；MCP 没有 skills 原语，Skill 不能经 MCP 提供（详见 §九 专项调研）。
 风险：
 - 工具数量 +2，工具描述需明确「仅在需要时调用」以免模型滥用；
 - `workflow-schema` 片段较长，`getPromptSnippet` 返回体进入上下文会占用 token——按 name 精确取用可控；
@@ -238,11 +250,24 @@ agent-web 对 `available_commands_update` 中 `<server>:<prompt>` 形态的命�
 自定义范围如 `-32001` SERVER_NOT_FOUND/SERVER_OFFLINE），message 保留人可读语义，避免破坏既有
 测试断言（需同步调整 `tests/api` 与单测中断言 code 的位置）。
 
-### 6.5 明确不做
+### 6.5 方案 E（中长期，本次不做）：平台化下发 Skill
+
+若目标升级为「给 AI 可复用的完整能力（说明 + 脚本 + 参考资料）」，则 **Skill 通道**比片段更好：
+harness 在每一步只列出 skill 的 id/name/description，模型按需 `skill` 工具加载正文，可按目录携带
+`scripts/`、`references/`，token 成本最优。
+
+但 **Skill 不能经 MCP 提供**（见 §九），必须由平台**把 `SKILL.md` 物化到会话工作区**（如
+`.opencode/skills/<id>/SKILL.md`、`.agents/skills/<id>/SKILL.md`），或**发布 HTTP skill catalog** 并让
+agent-gear 在 `opencode.jsonc` 的 `skills` 数组中登记（opencode 2.1.1 已支持 `skills.paths` /
+`skills.urls`）。这是跨服务（agent-api + agent-controller + 工作区准备）的改造，且各 harness 目录约定
+不同（opencode / kimi / dsh 需分别适配），不建议并入 #580 的修复。
+
+### 6.6 明确不做
 
 - 不改 harness/opencode（上游能力边界）；
 - 不引入新数据模型/迁移；
-- 不把片段正文硬塞进每个会话的系统提示（避免上下文膨胀，与 PRD「按需获取」冲突）。
+- 不把片段正文硬塞进每个会话的系统提示（避免上下文膨胀，与 PRD「按需获取」冲突）；
+- 不在本问题内做 Skill 平台化下发（见 §6.5，独立需求评估）。
 
 ## 七、回归测试计划
 
@@ -269,3 +294,58 @@ agent-web 对 `available_commands_update` 中 `<server>:<prompt>` 形态的命�
    （AI 可读），即方案 A？
 5. **harness 范围**：是否要求 kimi / dsh 会话同样可用？本机仅实测 opencode 2.1.1。
 6. **次要缺陷是否本期一并修**：`mcp-dispatch` 的 JSON-RPC 字符串错误码（§4.3-1）。
+7. **Skill 方向取舍**：是否接受「本期用 tools 闭环（方案 A），Skill 平台化下发另立需求（方案 E）」？
+   详见 §九 专项调研（MCP 无 skills 原语，Skill 无法经 MCP 提供）。
+
+## 九、专项调研：MCP 支持提供 Skill 吗？（评审意见 2026-11-26）
+
+> 评审意见原文：**「调研一下，MCP支持提供skill吗？」**（Deliay，`CHANGES_REQUESTED`，无 inline comment）
+> 本节为对该意见的专项调研答复，结论已回写到 §六（方案修订）与 PR 评论。
+
+### 9.1 结论（TL;DR）
+
+| 问题 | 结论 |
+|---|---|
+| MCP 有「skills」这个协议原语吗？ | ❌ **没有**。MCP 服务端原语只有 **tools / resources / prompts** 三类（客户端侧另有 roots / sampling / elicitation）；从 `2025-03-26` 到 `2026-07-28` 的历次修订都没有 skills |
+| MCP 服务能「注册/提供」一个 harness Skill 吗？ | ❌ **不能直接提供**。Skill 是 harness 自己的能力，来源是**文件系统目录**或**config `skills` 数组（本地路径 / HTTP catalog）**，MCP 连接不在 skill 发现源里 |
+| 那 MCP 服务怎么把 skill 形态的内容给到 AI？ | ✅ 只能借用三类原语：**tools**（模型可调用）、**resources**（opencode 下模型可读）、**prompts**（仅客户端/人可见，即本 Issue 的坑）。业界通行做法就是「把 skill 暴露成 tool」（如第三方项目 `skillz`） |
+| 平台想真正用 Skill，应该怎么做？ | 由平台**把 `SKILL.md` 物化到会话工作区**，或**发布 HTTP skill catalog** 并写进 agent-gear 下发的 `opencode.jsonc` 的 `skills` 数组；**不经过 MCP**。属于跨服务中长期改造（§6.5 方案 E） |
+
+### 9.2 证据
+
+| # | 证据 | 说明 |
+|---|---|---|
+| S1 | MCP 规范（`modelcontextprotocol.io/specification/2025-11-25` 与 `2026-07-28`）：*「Servers offer any of the following features to clients: Resources、Prompts、Tools」*；客户端特性为 Sampling / Roots / Elicitation | 协议层**不存在 skills 原语**，只有三原语 |
+| S2 | opencode 官方文档 `opencode.ai/docs/skills`：技能发现源为 `~/.config/opencode/skills`、`~/.claude/skills`、`~/.agents/skills`、`.opencode/skills`、`.claude/skills`、`.agents/skills`，外加 config `skills` 数组（相对/`~/`/绝对路径/`http(s)` catalog） | **Skill 来源不含 MCP** |
+| S3 | 同文档 Loading 一节：每个模型步只列出**有 description 的 skill 的 id/name/description**，模型调用 `skill` 工具后才把正文加入会话，并给出 base dir 与最多 10 个附带文件路径 | Skill 是「渐进披露」通道，正适合替代「把长提示词塞进上下文」 |
+| S4 | opencode 2.1.1 二进制：config 规范化函数把 `skills` 归一为数组或 `{ paths, urls }`；存在 `Skill.prepare`（读 `SKILL.md` + 采样附带文件）与 `prompt.skills`（斜杠 `/skills`、`@skill-id` 提及） | 平台锁定的 2.1.1 **已支持** skill 目录与 HTTP catalog |
+| S5 | **本节点会话一手实测**：模型侧存在 `skill` 工具，且成功加载了仓库内 `.agents/skills/z-debugging`、`z-git`（`skill` 工具返回 `skill_content`）；这些 skill 全部来自**工作区文件**，与 MCP 无关 | 平台当前链路里 Skill 通道**本来就是通的**，只是内容来自仓库而非 MCP |
+| S6 | 第三方项目 `opencode-agent-skills` README 的 Alternatives 明确列出 `skillz`——*「an MCP server that exposes skills as tools to any MCP client」* | 社区的标准做法：**MCP + skills ⇒ 转成 tools**（反向印证 MCP 无 skills 原语） |
+| S7 | 本次复现用例扩展实验：给 MCP 服务桩声明 `capabilities.resources` 后，opencode 在 `session/new` 阶段**不**主动调 `resources/list`（只调 `tools/list`）；资源由模型侧工具 `list_mcp_resources` / `read_mcp_resource` 按需拉取 | resources 是「懒加载 + 模型可读」，成本可控；本节点会话里 `list_mcp_resources()` 实测可调用（返回空，因平台服务未声明 resources） |
+
+### 9.3 三条投递通道对比（面向本问题的修复选择）
+
+| 维度 | tools（MCP 工具） | resources（MCP 资源） | skills（harness Skill） |
+|---|---|---|---|
+| 谁消费 | **模型** | 模型（opencode 暴露为 `list_mcp_resources`/`read_mcp_resource` 工具） | 模型（`skill` 工具按需加载正文） |
+| 能否经 MCP 提供 | ✅ 原生 | ✅ 原生 | ❌ **不能**（需写文件 / HTTP catalog + config） |
+| 模型能否自主获取 | ✅ | ✅（opencode 实测可调；其他 harness 需核实） | ✅（`skill` 工具 / `@skill-id`） |
+| 上下文成本 | 按 name 精确取用可控 | 最低（懒加载，URI 寻址） | 最优（常驻仅 id+name+description） |
+| 可携带脚本/附件 | ❌（只能返回文本） | 🟡（多资源 URI，需自行组织） | ✅（`scripts/`、`references/`、`assets/`） |
+| 平台改造成本 | 低（agent-api 单服务，复用片段注册表） | 低-中（新增 resources 能力 + 保险的 URI 方案） | **高**（agent-api + agent-controller + 工作区准备 + 各 harness 目录约定） |
+| harness 兼容性 | ✅ 全 harness 通用 | 🟡 取决于 harness 是否给模型暴露资源 | 🟡 目录/配置约定因 harness 而异（本机仅实测 opencode） |
+| 适合承载 | 短-中等权威说明（本问题） | 中-长文档（可版本化/URI 化） | 完整可复用能力包（说明 + 脚本 + 参考资料） |
+
+### 9.4 对 #580 修复方案的修订
+
+1. **主修仍是方案 A（tools）**：它是唯一「任意 harness + 模型自主 + 改动最小」的通道，能直接闭环本 Issue。
+2. **resources 作为可选补充**：若后续片段变长/需要 URI 版本化，可在同一注册表上再暴露 resources（`zag://workflow/prompt/workflow-schema` 之类），保持内容单一来源；本期不做可不影响闭环。
+3. **skills 作为中长期方向（方案 E）**：若产品目标是「让 AI 具备平台级可复用能力」，应另立需求，按「平台下发 skill（写 `.agents/skills/<id>/SKILL.md` 或 HTTP catalog + config）」设计，顺带解决仓库无该文件时的通用性问题。
+4. **明确不采用的做法**：❌ 继续只依赖 MCP `prompts` 投递给 AI；❌ 试图让 MCP 服务「注册 skill」（协议不支持）。
+
+### 9.5 本节未验证项
+
+| 项 | 原因 | 建议 |
+|---|---|---|
+| kimi / dsh 是否把 MCP **resources** 暴露给模型、是否支持 skill 目录/HTTP catalog | 本机仅安装 opencode 2.1.1 | 各自 harness 上跑 `tests/e2e/mcp-prompts/` 的探针变体后再定 resources 通道优先级 |
+| opencode 2.1.1 的 HTTP skill catalog 端到端可用性 | 需要平台侧提供 catalog 且改 agent-gear 配置，超出调查范围 | 若采纳方案 E，先在测试控制器上手工验证 `skills.urls` 生效 |

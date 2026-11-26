@@ -55,7 +55,12 @@ const server = http.createServer((req, res) => {
       case 'initialize':
         return reply({
           protocolVersion: '2025-03-26',
-          capabilities: VARIANT === 'prompts' ? { tools: {}, prompts: {} } : { tools: {} },
+          capabilities:
+            VARIANT === 'resources'
+              ? { tools: {}, resources: {} }
+              : VARIANT === 'prompts'
+                ? { tools: {}, prompts: {} }
+                : { tools: {} },
           serverInfo: { name: NAME, version: '1.0.0' },
         });
       case 'notifications/initialized':
@@ -85,6 +90,23 @@ const server = http.createServer((req, res) => {
         return reply({
           description: '用于验证的提示词片段',
           messages: [{ role: 'user', content: { type: 'text', text: PROMPT_TEXT } }],
+        });
+      case 'resources/list':
+        if (VARIANT !== 'resources') return error('METHOD_NOT_FOUND', `不支持的方法：${body.method}`);
+        return reply({
+          resources: [
+            {
+              uri: 'zag://demo/snippet',
+              name: 'demo-snippet',
+              description: '用于验证的资源片段',
+              mimeType: 'text/markdown',
+            },
+          ],
+        });
+      case 'resources/read':
+        if (VARIANT !== 'resources') return error('METHOD_NOT_FOUND', `不支持的方法：${body.method}`);
+        return reply({
+          contents: [{ uri: 'zag://demo/snippet', mimeType: 'text/markdown', text: PROMPT_TEXT }],
         });
       default:
         return error('METHOD_NOT_FOUND', `不支持的方法：${body.method}`);
