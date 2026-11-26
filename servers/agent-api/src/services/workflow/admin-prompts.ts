@@ -1,10 +1,12 @@
 /**
- * 工作流 MCP 提示词片段注册表（单一来源）。
+ * 工作流 MCP 片段注册表（单一来源，以 MCP resources 投递）。
  *
- * 平台内置 MCP 服务 `agent-workflow-admin-tools` 通过 MCP prompts 能力
- * （`prompts/list` / `prompts/get`）向 AI 提供两段权威说明：
+ * 平台内置 MCP 服务 `agent-workflow-admin-tools` 通过 MCP resources 能力
+ * （`resources/list` / `resources/read`）向 AI 提供两段权威说明：
  * - `workflow-schema`：工作流 Schema 说明（顶层结构 / 节点类型 / 节点字段 / 图校验规则 / AI 节点 Agent 配置）；
  * - `workflow-project-persistence`：工作流项目持久化指引（`.zag/workflow/templates/` 放置约定 / 文件格式 / 约束 / 生效方式）。
+ *
+ * 片段正文唯一出口是 `resources/read`（URI 形如 `zag://<server>/prompt/<name>`），不再通过 prompts 提供。
  *
  * 片段文本必须与实现同源，规则变更时同步修改：
  * - 图规则：`servers/agent-api/src/services/workflow/template.ts#validateTemplateGraph`；
@@ -17,12 +19,19 @@
  * 防漂移守卫见 `admin-prompts.test.ts`（T-AP4 / T-AP5）。
  */
 
-export interface AdminPromptDefinition {
+export interface AdminPromptResourceDefinition {
+  /** 资源 URI（稳定，`zag://<server>/prompt/<name>`） */
+  uri: string;
   /** 片段名（kebab-case，稳定） */
   name: string;
-  /** 一句话简介（prompts/list 与 prompts/get 的 description 共用） */
+  /** 一句话简介（resources/list 与错误信息共用） */
   description: string;
+  /** 资源 MIME 类型（片段正文为 Markdown） */
+  mimeType: string;
 }
+
+/** 平台 MCP 资源 URI 前缀（两个平台服务的共同形态） */
+export const ADMIN_PROMPT_RESOURCE_URI_PREFIX = 'zag://agent-workflow-admin-tools/prompt/';
 
 /** 工作流 Schema 说明片段 */
 const WORKFLOW_SCHEMA_PROMPT = `## 工作流 Schema 说明
@@ -145,26 +154,41 @@ const PROMPT_TEXTS: Record<string, string> = {
   'workflow-project-persistence': WORKFLOW_PROJECT_PERSISTENCE_PROMPT,
 };
 
-/** 片段注册表（声明序即 prompts/list 顺序） */
-export const ADMIN_PROMPT_DEFINITIONS: readonly AdminPromptDefinition[] = [
+/** 片段注册表（声明序即 resources/list 顺序） */
+export const ADMIN_PROMPT_RESOURCES: readonly AdminPromptResourceDefinition[] = [
   {
+    uri: `${ADMIN_PROMPT_RESOURCE_URI_PREFIX}workflow-schema`,
     name: 'workflow-schema',
     description: '工作流 Schema 说明：顶层结构、节点类型与字段、图校验规则、AI 节点 Agent 配置。',
+    mimeType: 'text/markdown',
   },
   {
+    uri: `${ADMIN_PROMPT_RESOURCE_URI_PREFIX}workflow-project-persistence`,
     name: 'workflow-project-persistence',
     description:
       '工作流项目持久化指引：.zag/workflow/templates/ 放置约定、JSON 文件格式、文件约束与检测配置生效方式。',
+    mimeType: 'text/markdown',
   },
 ];
 
 /** 可用片段名列表（声明序；错误信息复用，保证「所列即所得」） */
 export function listAdminPromptNames(): string[] {
-  return ADMIN_PROMPT_DEFINITIONS.map((definition) => definition.name);
+  return ADMIN_PROMPT_RESOURCES.map((definition) => definition.name);
 }
 
 /** 按名称取片段完整文本；未知名称返回 null */
 export function getAdminPromptText(name: string): string | null {
   if (!name) return null;
   return Object.prototype.hasOwnProperty.call(PROMPT_TEXTS, name) ? PROMPT_TEXTS[name] : null;
+}
+
+/** 按 URI 取资源定义与正文；未知 URI 返回 null（供 resources/read 转 INVALID_PARAMS） */
+export function getAdminPromptResource(
+  uri: string,
+): { definition: AdminPromptResourceDefinition; text: string } | null {
+  if (!uri) return null;
+  const definition = ADMIN_PROMPT_RESOURCES.find((item) => item.uri === uri);
+  if (!definition) return null;
+  const text = getAdminPromptText(definition.name);
+  return text ? { definition, text } : null;
 }

@@ -1,28 +1,39 @@
 import { describe, it, expect } from 'vitest';
 import {
-  ADMIN_PROMPT_DEFINITIONS,
+  ADMIN_PROMPT_RESOURCES,
+  ADMIN_PROMPT_RESOURCE_URI_PREFIX,
+  getAdminPromptResource,
   listAdminPromptNames,
   getAdminPromptText,
 } from './admin-prompts.js';
 
-describe('admin-prompts 注册表', () => {
+const EXPECTED_URIS = [
+  'zag://agent-workflow-admin-tools/prompt/workflow-schema',
+  'zag://agent-workflow-admin-tools/prompt/workflow-project-persistence',
+];
+
+describe('admin-prompts 片段注册表（resources）', () => {
   it('T-AP1: 注册表恰 2 项且声明序稳定（workflow-schema 在前）', () => {
-    expect(ADMIN_PROMPT_DEFINITIONS).toHaveLength(2);
-    expect(ADMIN_PROMPT_DEFINITIONS.map((item) => item.name)).toEqual([
+    expect(ADMIN_PROMPT_RESOURCES).toHaveLength(2);
+    expect(ADMIN_PROMPT_RESOURCES.map((item) => item.name)).toEqual([
       'workflow-schema',
       'workflow-project-persistence',
     ]);
+    expect(ADMIN_PROMPT_RESOURCES.map((item) => item.uri)).toEqual(EXPECTED_URIS);
   });
 
-  it('T-AP1: 每项 name 为 kebab-case 非空、description 非空', () => {
-    for (const item of ADMIN_PROMPT_DEFINITIONS) {
+  it('T-AP1: 每项 name/description/uri/mimeType 形态合法', () => {
+    expect(ADMIN_PROMPT_RESOURCE_URI_PREFIX).toBe('zag://agent-workflow-admin-tools/prompt/');
+    for (const item of ADMIN_PROMPT_RESOURCES) {
       expect(item.name).toMatch(/^[a-z0-9]+(-[a-z0-9]+)*$/);
       expect(item.description.trim().length).toBeGreaterThan(0);
+      expect(item.uri).toBe(`${ADMIN_PROMPT_RESOURCE_URI_PREFIX}${item.name}`);
+      expect(item.mimeType).toBe('text/markdown');
     }
   });
 
   it('T-AP2: listAdminPromptNames 与注册表同序一致', () => {
-    expect(listAdminPromptNames()).toEqual(ADMIN_PROMPT_DEFINITIONS.map((item) => item.name));
+    expect(listAdminPromptNames()).toEqual(ADMIN_PROMPT_RESOURCES.map((item) => item.name));
   });
 
   it('T-AP3: getAdminPromptText 命中返回非空且互不相同；未知/空串返回 null', () => {
@@ -33,6 +44,18 @@ describe('admin-prompts 注册表', () => {
     expect(schema).not.toBe(persistence);
     expect(getAdminPromptText('unknown')).toBeNull();
     expect(getAdminPromptText('')).toBeNull();
+  });
+
+  it('T-AP-R1: getAdminPromptResource 按 URI 命中并返回同源正文；未知 URI 返回 null', () => {
+    for (const expected of EXPECTED_URIS) {
+      const found = getAdminPromptResource(expected);
+      expect(found).toBeTruthy();
+      expect(found!.definition.uri).toBe(expected);
+      expect(found!.text).toBe(getAdminPromptText(found!.definition.name));
+    }
+    expect(getAdminPromptResource('zag://agent-workflow-admin-tools/prompt/unknown')).toBeNull();
+    expect(getAdminPromptResource('workflow-schema')).toBeNull();
+    expect(getAdminPromptResource('')).toBeNull();
   });
 
   it('T-AP4: workflow-schema 文本与 validateTemplateGraph 口径对齐（防漂移守卫）', () => {

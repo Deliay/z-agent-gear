@@ -6,6 +6,9 @@
 //   - 期望提示词正文（HELLO FROM MCP PROMPT）从未出现在任何 model-visible 的 session/update 里
 // 场景 2（--no-headers）：同一 prompts 型服务但 ACP http 条目不带 headers
 //   - 记录 harness 对该服务的请求数（用于记录「静默忽略」行为）
+// 场景 3（resources）：resources 型服务
+//   - 期望连接期只 initialize + tools/list（资源懒加载）
+//   - 直接调用 resources/list / resources/read，验证资源通道可承载并返回片段正文（修复方向回归）
 //
 // 用法：
 //   node tests/e2e/mcp-prompts/run.mjs            # 需要本机可执行 `opencode`
@@ -200,6 +203,34 @@ async function scenarioResources() {
       '连接期不主动 resources/list（资源由模型侧按需拉取，懒加载）',
       !methods.includes('resources/list'),
       `methods=${methods.join(',')}`,
+    );
+
+    // 修复方向回归：resources 通道确实能返回片段正文（模型侧按需读取的等价断言）
+    const callStub = async (body) => {
+      const response = await fetch('http://127.0.0.1:7815/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return await response.json();
+    };
+    const list = await callStub({ jsonrpc: '2.0', id: 101, method: 'resources/list' });
+    const resource = list?.result?.resources?.[0];
+    check(
+      'resources/list 返回 URI/name/mimeType 形态的片段清单',
+      Boolean(resource?.uri) && Boolean(resource?.name) && resource?.mimeType === 'text/markdown',
+      `uri=${resource?.uri ?? 'none'}`,
+    );
+    const read = await callStub({
+      jsonrpc: '2.0',
+      id: 102,
+      method: 'resources/read',
+      params: { uri: resource?.uri },
+    });
+    check(
+      'resources/read 返回片段正文（resources 可承载提示词内容）',
+      read?.result?.contents?.[0]?.text === PROMPT_TEXT,
+      `text=${read?.result?.contents?.[0]?.text ?? 'none'}`,
     );
   } finally {
     svc.kill('SIGKILL');

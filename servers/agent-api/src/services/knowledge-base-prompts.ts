@@ -1,9 +1,11 @@
 /**
- * 知识库 MCP 提示词片段注册表（单一来源）。
+ * 知识库 MCP 片段注册表（单一来源，以 MCP resources 投递）。
  *
- * 平台内置 MCP 服务 `agent-knowledge-base-tools` 通过 MCP prompts 能力
- * （`prompts/list` / `prompts/get`）向 AI 提供「仓库知识库编写指引」：
+ * 平台内置 MCP 服务 `agent-knowledge-base-tools` 通过 MCP resources 能力
+ * （`resources/list` / `resources/read`）向 AI 提供「仓库知识库编写指引」：
  * `repo-knowledge-base-authoring`（存储路径 / 目录结构 / knowledge-base.json / 文档组织 / front matter / 上限 / 只读语义）。
+ *
+ * 片段正文唯一出口是 `resources/read`（URI `zag://agent-knowledge-base-tools/prompt/<name>`），不再通过 prompts 提供。
  *
  * 文本必须与实现同源，规则变更时同步修改：
  * - 扫描模块（跨包常量，不能 import）：`packages/agent-controller/src/knowledge-bases.ts`
@@ -14,12 +16,20 @@
  * 防漂移守卫见 `knowledge-base-prompts.test.ts`（T-RKB-P4）。
  */
 
-export interface KnowledgeBasePromptDefinition {
+export interface KnowledgeBasePromptResourceDefinition {
+  /** 资源 URI（稳定，`zag://<server>/prompt/<name>`） */
+  uri: string;
   /** 片段名（kebab-case，稳定） */
   name: string;
-  /** 一句话简介（prompts/list 与 prompts/get 的 description 共用） */
+  /** 一句话简介（resources/list 与错误信息共用） */
   description: string;
+  /** 资源 MIME 类型（片段正文为 Markdown） */
+  mimeType: string;
 }
+
+/** 平台 MCP 资源 URI 前缀（与工作流管理服务同一形态） */
+export const REPO_KNOWLEDGE_BASE_PROMPT_RESOURCE_URI_PREFIX =
+  'zag://agent-knowledge-base-tools/prompt/';
 
 /** 仓库知识库编写指引 */
 const REPO_KNOWLEDGE_BASE_AUTHORING_PROMPT = `## 仓库知识库编写指引
@@ -144,22 +154,35 @@ const PROMPT_TEXTS: Record<string, string> = {
   'repo-knowledge-base-authoring': REPO_KNOWLEDGE_BASE_AUTHORING_PROMPT,
 };
 
-/** 片段注册表（声明序即 prompts/list 顺序） */
-export const REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS: readonly KnowledgeBasePromptDefinition[] = [
+/** 片段注册表（声明序即 resources/list 顺序） */
+export const REPO_KNOWLEDGE_BASE_PROMPT_RESOURCES: readonly KnowledgeBasePromptResourceDefinition[] = [
   {
+    uri: `${REPO_KNOWLEDGE_BASE_PROMPT_RESOURCE_URI_PREFIX}repo-knowledge-base-authoring`,
     name: 'repo-knowledge-base-authoring',
     description:
       '仓库知识库编写指引：.zag/knowledges/、docs/knowledges/ 与 docs/ 一层文件夹的放置约定、knowledge-base.json、文档组织、front matter、上限与只读语义。',
+    mimeType: 'text/markdown',
   },
 ];
 
 /** 可用片段名列表（声明序；错误信息复用，保证「所列即所得」） */
 export function listKnowledgeBasePromptNames(): string[] {
-  return REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS.map((definition) => definition.name);
+  return REPO_KNOWLEDGE_BASE_PROMPT_RESOURCES.map((definition) => definition.name);
 }
 
 /** 按名称取片段完整文本；未知名称返回 null */
 export function getKnowledgeBasePromptText(name: string): string | null {
   if (!name) return null;
   return Object.prototype.hasOwnProperty.call(PROMPT_TEXTS, name) ? PROMPT_TEXTS[name] : null;
+}
+
+/** 按 URI 取资源定义与正文；未知 URI 返回 null（供 resources/read 转 INVALID_PARAMS） */
+export function getKnowledgeBasePromptResource(
+  uri: string,
+): { definition: KnowledgeBasePromptResourceDefinition; text: string } | null {
+  if (!uri) return null;
+  const definition = REPO_KNOWLEDGE_BASE_PROMPT_RESOURCES.find((item) => item.uri === uri);
+  if (!definition) return null;
+  const text = getKnowledgeBasePromptText(definition.name);
+  return text ? { definition, text } : null;
 }

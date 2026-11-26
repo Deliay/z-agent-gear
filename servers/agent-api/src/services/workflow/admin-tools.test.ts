@@ -61,7 +61,8 @@ import { configuredWorkflowService } from './configured.js';
 import { workflowInstanceService } from './instance.js';
 import { Controller } from '../../models/controller.js';
 import {
-  ADMIN_PROMPT_DEFINITIONS,
+  ADMIN_PROMPT_RESOURCES,
+  ADMIN_PROMPT_RESOURCE_URI_PREFIX,
   getAdminPromptText,
   listAdminPromptNames,
 } from './admin-prompts.js';
@@ -289,60 +290,86 @@ describe('handleAdminPlatformMcpRequest', () => {
     expect(out.result).toMatchObject({ isError: true });
   });
 
-  it('T-AP6: initialize 声明 tools 与 prompts 能力，协议版本与服务信息不变', async () => {
+  it('T-AP6: initialize 声明 tools 与 resources 能力（不含 prompts），协议版本与服务信息不变', async () => {
     const out = await handleAdminPlatformMcpRequest(caller, { method: 'initialize' });
     expect(out.result).toMatchObject({
       protocolVersion: '2025-03-26',
-      capabilities: { tools: {}, prompts: {} },
+      capabilities: { tools: {}, resources: {} },
       serverInfo: { name: ADMIN_PLATFORM_SERVER_NAME, version: '1.0.0' },
     });
+    expect((out.result as { capabilities: Record<string, unknown> }).capabilities).not.toHaveProperty(
+      'prompts',
+    );
   });
 
-  it('T-AP7: prompts/list 输出与注册表逐项一致（长度 2、声明序稳定）', async () => {
-    const out = await handleAdminPlatformMcpRequest(caller, { method: 'prompts/list' });
-    const prompts = (out.result as { prompts: Array<{ name: string; description: string }> }).prompts;
-    expect(prompts).toHaveLength(2);
-    expect(prompts.map((item) => item.name)).toEqual(listAdminPromptNames());
-    expect(prompts).toEqual(ADMIN_PROMPT_DEFINITIONS);
-    for (const item of prompts) expect(item.description.trim().length).toBeGreaterThan(0);
-  });
-
-  it('T-AP8: prompts/get 命中返回 messages 形态且文本与注册表一致', async () => {
-    const out = await handleAdminPlatformMcpRequest(caller, {
-      method: 'prompts/get',
-      params: { name: 'workflow-schema' },
-    });
-    const result = out.result as {
-      description: string;
-      messages: Array<{ role: string; content: { type: string; text: string } }>;
-    };
-    expect(result.description).toBe(ADMIN_PROMPT_DEFINITIONS[0].description);
-    expect(result.messages).toHaveLength(1);
-    expect(result.messages[0]).toEqual({
-      role: 'user',
-      content: { type: 'text', text: getAdminPromptText('workflow-schema') },
-    });
-    expect(result).not.toHaveProperty('content');
-    expect(result).not.toHaveProperty('isError');
-  });
-
-  it('T-AP9: prompts/get 缺 name 或空串返回 INVALID_PARAMS 并列出可用片段', async () => {
-    for (const params of [undefined, { name: '' }]) {
-      const out = await handleAdminPlatformMcpRequest(caller, { method: 'prompts/get', params });
-      expect(out.error?.code).toBe('INVALID_PARAMS');
-      expect(out.error?.message).toContain('缺少 params.name');
-      for (const name of listAdminPromptNames()) expect(out.error?.message).toContain(name);
+  it('T-AP7: resources/list 输出与注册表逐项一致（长度 2、声明序稳定）', async () => {
+    const out = await handleAdminPlatformMcpRequest(caller, { method: 'resources/list' });
+    const resources = (
+      out.result as {
+        resources: Array<{ uri: string; name: string; description: string; mimeType: string }>;
+      }
+    ).resources;
+    expect(resources).toHaveLength(2);
+    expect(resources.map((item) => item.name)).toEqual(listAdminPromptNames());
+    expect(resources).toEqual(ADMIN_PROMPT_RESOURCES);
+    for (const item of resources) {
+      expect(item.uri.startsWith(ADMIN_PROMPT_RESOURCE_URI_PREFIX)).toBe(true);
+      expect(item.description.trim().length).toBeGreaterThan(0);
+      expect(item.mimeType).toBe('text/markdown');
     }
   });
 
-  it('T-AP10: prompts/get 未知名称返回 INVALID_PARAMS 并列出可用片段', async () => {
+  it('T-AP8: resources/read 命中返回 text/markdown 且文本与注册表同源', async () => {
+    for (const definition of ADMIN_PROMPT_RESOURCES) {
+      const out = await handleAdminPlatformMcpRequest(caller, {
+        method: 'resources/read',
+        params: { uri: definition.uri },
+      });
+      const result = out.result as {
+        contents: Array<{ uri: string; mimeType: string; text: string }>;
+      };
+      expect(result.contents).toHaveLength(1);
+      expect(result.contents[0]).toEqual({
+        uri: definition.uri,
+        mimeType: definition.mimeType,
+        text: getAdminPromptText(definition.name),
+      });
+    }
+  });
+
+  it('T-AP9: resources/read 缺 uri 或空串返回 INVALID_PARAMS 并列出可用 URI', async () => {
+    for (const params of [undefined, { uri: '' }]) {
+      const out = await handleAdminPlatformMcpRequest(caller, { method: 'resources/read', params });
+      expect(out.error?.code).toBe('INVALID_PARAMS');
+      expect(out.error?.message).toContain('缺少 params.uri');
+      for (const definition of ADMIN_PROMPT_RESOURCES) {
+        expect(out.error?.message).toContain(definition.uri);
+      }
+    }
+  });
+
+  it('T-AP10: resources/read 未知 URI 返回 INVALID_PARAMS 并列出可用 URI', async () => {
     const out = await handleAdminPlatformMcpRequest(caller, {
-      method: 'prompts/get',
-      params: { name: 'foo' },
+      method: 'resources/read',
+      params: { uri: 'zag://agent-workflow-admin-tools/prompt/foo' },
     });
     expect(out.error?.code).toBe('INVALID_PARAMS');
-    expect(out.error?.message).toContain('未知提示词片段');
-    expect(out.error?.message).toContain('foo');
-    for (const name of listAdminPromptNames()) expect(out.error?.message).toContain(name);
+    expect(out.error?.message).toContain('未知资源');
+    expect(out.error?.message).toContain('zag://agent-workflow-admin-tools/prompt/foo');
+    for (const definition of ADMIN_PROMPT_RESOURCES) {
+      expect(out.error?.message).toContain(definition.uri);
+    }
+  });
+
+  it('T-AP11: prompts/list 与 prompts/get 已移除（METHOD_NOT_FOUND）', async () => {
+    await expect(
+      handleAdminPlatformMcpRequest(caller, { method: 'prompts/list' }),
+    ).resolves.toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } });
+    await expect(
+      handleAdminPlatformMcpRequest(caller, {
+        method: 'prompts/get',
+        params: { name: 'workflow-schema' },
+      }),
+    ).resolves.toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } });
   });
 });

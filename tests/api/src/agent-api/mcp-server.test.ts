@@ -298,52 +298,62 @@ describe('MCP prompts API（工作流提示词片段）', () => {
     client?.disconnect();
   }, 60_000);
 
-  it('T-AP-API1: prompts/list 返回两段片段（name 集合与 description 非空）', async () => {
-    const response = await relayMcpRequest('prompts_list_1', {
+  it('T-AP-API1: resources/list 返回两段片段（URI/name/description/mimeType）', async () => {
+    const response = await relayMcpRequest('resources_list_1', {
       jsonrpc: '2.0',
       id: 1,
-      method: 'prompts/list',
+      method: 'resources/list',
     });
     expect(response.status).toBe(200);
     expect(response.body.error).toBeUndefined();
-    const prompts = response.body.result.prompts as Array<{ name: string; description?: string }>;
-    expect(prompts).toHaveLength(2);
-    expect(new Set(prompts.map((item) => item.name))).toEqual(
+    const resources = response.body.result.resources as Array<{
+      uri: string;
+      name: string;
+      description?: string;
+      mimeType?: string;
+    }>;
+    expect(resources).toHaveLength(2);
+    expect(new Set(resources.map((item) => item.name))).toEqual(
       new Set(['workflow-schema', 'workflow-project-persistence']),
     );
-    for (const item of prompts) expect((item.description ?? '').trim().length).toBeGreaterThan(0);
+    for (const item of resources) {
+      expect(item.uri).toBe(
+        `zag://agent-workflow-admin-tools/prompt/${item.name}`,
+      );
+      expect((item.description ?? '').trim().length).toBeGreaterThan(0);
+      expect(item.mimeType).toBe('text/markdown');
+    }
   });
 
-  it('T-AP-API2: prompts/get 返回 messages 形态文本（首节点 / 模板目录口径）', async () => {
-    const schema = await relayMcpRequest('prompts_get_schema', {
+  it('T-AP-API2: resources/read 返回 text/markdown 正文（首节点 / 模板目录口径）', async () => {
+    const schema = await relayMcpRequest('resources_read_schema', {
       jsonrpc: '2.0',
       id: 2,
-      method: 'prompts/get',
-      params: { name: 'workflow-schema' },
+      method: 'resources/read',
+      params: { uri: 'zag://agent-workflow-admin-tools/prompt/workflow-schema' },
     });
     expect(schema.status).toBe(200);
     expect(schema.body.error).toBeUndefined();
-    expect((schema.body.result.description ?? '').trim().length).toBeGreaterThan(0);
-    expect(schema.body.result.messages[0].content.type).toBe('text');
-    expect(schema.body.result.messages[0].content.text).toContain('首节点');
+    expect(schema.body.result.contents[0].mimeType).toBe('text/markdown');
+    expect(schema.body.result.contents[0].text).toContain('首节点');
 
-    const persistence = await relayMcpRequest('prompts_get_persistence', {
+    const persistence = await relayMcpRequest('resources_read_persistence', {
       jsonrpc: '2.0',
       id: 3,
-      method: 'prompts/get',
-      params: { name: 'workflow-project-persistence' },
+      method: 'resources/read',
+      params: { uri: 'zag://agent-workflow-admin-tools/prompt/workflow-project-persistence' },
     });
     expect(persistence.status).toBe(200);
     expect(persistence.body.error).toBeUndefined();
-    expect(persistence.body.result.messages[0].content.text).toContain('.zag/workflow/templates');
+    expect(persistence.body.result.contents[0].text).toContain('.zag/workflow/templates');
   });
 
-  it('T-AP-API3: 未知片段返回 INVALID_PARAMS；同会话 initialize 声明 prompts 能力', async () => {
-    const unknown = await relayMcpRequest('prompts_get_unknown', {
+  it('T-AP-API3: 未知 URI 返回 INVALID_PARAMS；同会话 initialize 声明 resources 能力且 prompts 已移除', async () => {
+    const unknown = await relayMcpRequest('resources_read_unknown', {
       jsonrpc: '2.0',
       id: 4,
-      method: 'prompts/get',
-      params: { name: 'nope' },
+      method: 'resources/read',
+      params: { uri: 'zag://agent-workflow-admin-tools/prompt/nope' },
     });
     expect(unknown.status).toBe(200);
     expect(unknown.body.result).toBeUndefined();
@@ -352,14 +362,23 @@ describe('MCP prompts API（工作流提示词片段）', () => {
     expect(unknown.body.error.message).toContain('workflow-schema');
     expect(unknown.body.error.message).toContain('workflow-project-persistence');
 
-    const initialized = await relayMcpRequest('prompts_initialize', {
+    const initialized = await relayMcpRequest('resources_initialize', {
       jsonrpc: '2.0',
       id: 5,
       method: 'initialize',
     });
     expect(initialized.status).toBe(200);
     expect(initialized.body.error).toBeUndefined();
-    expect(initialized.body.result.capabilities).toHaveProperty('prompts');
+    expect(initialized.body.result.capabilities).toHaveProperty('resources');
     expect(initialized.body.result.capabilities).toHaveProperty('tools');
+    expect(initialized.body.result.capabilities).not.toHaveProperty('prompts');
+
+    const promptsList = await relayMcpRequest('prompts_list_removed', {
+      jsonrpc: '2.0',
+      id: 6,
+      method: 'prompts/list',
+    });
+    expect(promptsList.status).toBe(200);
+    expect(promptsList.body.error.code).toBe('METHOD_NOT_FOUND');
   });
 });

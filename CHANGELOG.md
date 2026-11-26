@@ -4,6 +4,12 @@
 
 ### 修复
 
+- 修复 MCP 提示词对 Agent 不可见（Issue #580）：平台片段此前仅通过 MCP `prompts` 提供，而 prompts
+  的消费方是客户端斜杠命令，模型无法读取；`agent-workflow-admin-tools` 与 `agent-knowledge-base-tools`
+  改为仅通过 MCP `resources` 投递（`resources/list` + `resources/read`，URI 形如
+  `zag://<server>/prompt/<name>`，`text/markdown`），模型可经 `list_mcp_resources` / `read_mcp_resource`
+  按需读取。**破坏性变更**：移除 `capabilities.prompts` 与 `prompts/list`、`prompts/get`（依赖外部客户端
+  调用 prompts 将返回 `METHOD_NOT_FOUND`；仓库内无已知外部消费者），不新增片段工具兜底
 - 修复「与 bot 共同提交」始终不生效（Issue #567）：GitHub App bot 身份解析对公开端点
   `GET /users/{slug}[bot]` 误用 App JWT 认证，GitHub 返回 401 导致 bot 身份恒为 null、
   共同作者被静默降级；改为匿名公开读取，Worktree 提交恢复 `Co-authored-by` 署名

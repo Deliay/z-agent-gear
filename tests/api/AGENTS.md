@@ -977,22 +977,22 @@ pnpm test
 - T-WFC6：未完成节点 `sessionId` 清空、DONE 节点 `sessionId` 保留，黑板产物零改动（直读 `workflowinstances`）。
 - 前置：`aspire start`（agent-api + controller-api）+ `MONGODB_URI` + `INTERNAL_API_TOKEN`；fake controller 应答 `acp:check`（opencode/kimi_code）、`git:check`/`git:worktree:add|remove`、`acp:start/resume/stop`。
 
-## 工作流 MCP 提示词片段（`src/agent-api/mcp-server.test.ts` T-AP-API1~3）
+## 工作流 MCP 资源片段（`src/agent-api/mcp-server.test.ts` T-AP-API1~3）
 
 > 需求 #523；契约 `contracts/mcp-server.graphql`（`McpServerSource.platform` 注释）；计划
-> `docs/engineering/plan/20261115-feat-workflow-mcp-prompt-snippets.md`。平台 MCP 提示词片段经
-> fake controller relay 验证（与服务端单测 T-AP1~T-AP10 互补）。
+> `docs/engineering/plan/20261115-feat-workflow-mcp-prompt-snippets.md`。平台 MCP 片段以 **resources**
+> 投递（prompts 已移除），经 fake controller relay 验证（与服务端单测 T-AP1~T-AP11 互补）。
 
 - 前置：`aspire start`（agent-api + controller-api）+ `INTERNAL_API_TOKEN`（开户）；fake controller 应答
   `acp:start` 并回传 `mcpEndpoint.token`，会话以 `mcpServerIds=[agent-workflow-admin-tools]` 创建。
 - 调用形态：fake controller 主连接 `emit('mcp:request', {requestId, sessionId, serverName:'agent-workflow-admin-tools', token, body})`，
-  body 为 JSON-RPC `prompts/list` / `prompts/get` / `initialize`，按 `requestId` 匹配 `mcp:response`。
+  body 为 JSON-RPC `resources/list` / `resources/read` / `prompts/list` / `initialize`，按 `requestId` 匹配 `mcp:response`。
 
 | 测试 | 描述 |
 |------|------|
-| T-AP-API1 | `prompts/list` → 200，`result.prompts` 恰 2 项且 name 集合为 `{workflow-schema, workflow-project-persistence}`、description 非空 |
-| T-AP-API2 | `prompts/get {name:'workflow-schema'}` → `messages[0].content.type='text'` 且文本含「首节点」；`workflow-project-persistence` 文本含 `.zag/workflow/templates` |
-| T-AP-API3 | `prompts/get {name:'nope'}` → 200 + JSON-RPC `error.code='INVALID_PARAMS'`，message 含 `nope` 与两个可用片段名；同会话 `initialize` 返回 `capabilities.prompts` 与 `capabilities.tools` |
+| T-AP-API1 | `resources/list` → 200，`result.resources` 恰 2 项且 name 集合为 `{workflow-schema, workflow-project-persistence}`、URI 为 `zag://agent-workflow-admin-tools/prompt/<name>`、`mimeType=text/markdown` |
+| T-AP-API2 | `resources/read {uri:'.../workflow-schema'}` → `contents[0].mimeType='text/markdown'` 且文本含「首节点」；`workflow-project-persistence` 文本含 `.zag/workflow/templates` |
+| T-AP-API3 | `resources/read {uri:'.../nope'}` → 200 + JSON-RPC `error.code='INVALID_PARAMS'`，message 含 `nope` 与两个可用 URI；同会话 `initialize` 返回 `capabilities.resources` 与 `capabilities.tools`（无 `prompts`）；`prompts/list` → `METHOD_NOT_FOUND` |
 
 ## 工作流节点「立即失败」（`src/agent-api/workflow-manual-fail.test.ts` T-MNF-API1~3）
 
@@ -1023,7 +1023,7 @@ pnpm test
 | T-RKB-API3 | 首次展开触发一次扫描并缓存；二次调用不增长；`refresh:true` 强制重扫；三来源顺序/合法与不合法形状/`documentCount` |
 | T-RKB-API4 | children 逐级派生（FOLDER 在前）；document 返回含 front matter 原文全文；不可达 `[]`/`null` |
 | T-RKB-API5 | 不可见/非默认工作区 → `Workspace not found`（逐字）；版本不足/控制器离线 → `repo knowledge base scan failed`（逐字，且零扫描）；轮询超时分支由服务层单测 T-RKB-SVC10 覆盖 |
-| T-RKB-API6 | MCP relay：`initialize.capabilities.prompts`、`prompts/list` 单片段、`prompts/get` 指引文本、六工具不含仓库知识库 |
+| T-RKB-API6 | MCP relay：`initialize.capabilities.resources`、`resources/list` 单片段、`resources/read` 指引文本、六工具不含仓库知识库 |
 | T-RKB-API8 | 云电脑转 STOPPED → hosts 不再列出；children/document 收敛 `[]`/`null`（另一 RUNNING 主机不受影响） |
 | T-RKB2-API1 | 超过旧总额上限 fixture（55 篇 / 累计 >1MiB）全量返回、`truncated:false`；正文可读取 |
 | T-RKB2-API2 | `children` 返回 `error` 字段；`documentCount` 不含错误文档；错误文档 `repoKnowledgeBaseDocument` 为 `null` |

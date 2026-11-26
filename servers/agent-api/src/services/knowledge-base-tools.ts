@@ -1,9 +1,8 @@
 import { McpServer } from '../models/mcp-server.js';
 import { knowledgeBaseService } from './knowledge-base-service.js';
 import {
-  REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS,
-  getKnowledgeBasePromptText,
-  listKnowledgeBasePromptNames,
+  REPO_KNOWLEDGE_BASE_PROMPT_RESOURCES,
+  getKnowledgeBasePromptResource,
 } from './knowledge-base-prompts.js';
 import { getWorkspaceContext } from './workspace-context.js';
 
@@ -231,7 +230,7 @@ export async function handleKnowledgeBaseToolsMcpRequest(
   caller: KnowledgeBaseToolCaller,
   request: {
     method?: string;
-    params?: { name?: string; arguments?: Record<string, unknown> };
+    params?: { name?: string; uri?: string; arguments?: Record<string, unknown> };
   },
 ): Promise<KnowledgeBaseToolResult> {
   switch (request.method) {
@@ -239,7 +238,7 @@ export async function handleKnowledgeBaseToolsMcpRequest(
       return {
         result: {
           protocolVersion: '2025-03-26',
-          capabilities: { tools: {}, prompts: {} },
+          capabilities: { tools: {}, resources: {} },
           serverInfo: { name: KNOWLEDGE_BASE_TOOLS_SERVER_NAME, version: '1.0.0' },
         },
       };
@@ -248,35 +247,37 @@ export async function handleKnowledgeBaseToolsMcpRequest(
       return { result: {} };
     case 'ping':
       return { result: {} };
-    case 'prompts/list':
-      return { result: { prompts: REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS } };
-    case 'prompts/get': {
-      const promptName = request.params?.name;
-      const available = listKnowledgeBasePromptNames().join('、');
-      if (typeof promptName !== 'string' || promptName.trim().length === 0) {
+    case 'resources/list':
+      return { result: { resources: REPO_KNOWLEDGE_BASE_PROMPT_RESOURCES } };
+    case 'resources/read': {
+      const available = REPO_KNOWLEDGE_BASE_PROMPT_RESOURCES.map((item) => item.uri).join('、');
+      const uri = request.params?.uri;
+      if (typeof uri !== 'string' || uri.trim().length === 0) {
         return {
           error: {
             code: 'INVALID_PARAMS',
-            message: `prompts/get 缺少 params.name。可用片段：${available}。`,
+            message: `resources/read 缺少 params.uri。可用资源：${available}。`,
           },
         };
       }
-      const text = getKnowledgeBasePromptText(promptName);
-      const definition = REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS.find(
-        (item) => item.name === promptName,
-      );
-      if (!text || !definition) {
+      const found = getKnowledgeBasePromptResource(uri);
+      if (!found) {
         return {
           error: {
             code: 'INVALID_PARAMS',
-            message: `未知提示词片段「${promptName}」。可用片段：${available}。`,
+            message: `未知资源「${uri}」。可用资源：${available}。`,
           },
         };
       }
       return {
         result: {
-          description: definition.description,
-          messages: [{ role: 'user', content: { type: 'text', text } }],
+          contents: [
+            {
+              uri: found.definition.uri,
+              mimeType: found.definition.mimeType,
+              text: found.text,
+            },
+          ],
         },
       };
     }
