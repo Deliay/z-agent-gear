@@ -212,3 +212,6 @@ cd tests/e2e && BASE_URL=<agent-web> API_URL=<agent-api>/graphql \
   `gateway-tools.test.ts`（T-GT1~8 + `T-GMCP-REPRO-2`）、`gateway-prompts.test.ts`（T-GP1~4），
   `session/controller/mcp-dispatch` 单测增量；`tests/api` GraphQL + MCP relay（T-GMCP-API1~6）；
   `tests/e2e` 地址一致性（E2E-GMCP1）。全量单测：agent-api 2567 通过、agent-web 1531 通过。
+- **集成/E2E 执行状态**：`tests/api` 与 `tests/e2e` 用例已编写，但本实现环境 Aspire 编排下 Redis（`rediss://localhost:37563`）
+  连接超时（`connect ETIMEDOUT`），导致开户/会话链路不可用，API/E2E 未能实际执行；需在可用环境完成
+  T-GMCP-API1~6 与 E2E-GMCP1 回归。代码级校验：`tests/api` 套件可加载、`agent-api` 全量单测与构建通过。
