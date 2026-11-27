@@ -25,6 +25,17 @@ enum McpServerSource {
   # （contents[].mimeType=text/markdown），URI 为 zag://agent-knowledge-base-tools/prompt/repo-knowledge-base-authoring；
   # 未知 URI/缺 uri → INVALID_PARAMS 附可用资源 URI。
   # 仓库内建知识库仍不出现在任何工具结果中（六工具清单与行为不变；AI 可直接读会话工作目录中的仓库文件）。
+  # 网关工具集（agent-gateway-tools）全部会话恒装配：`gateway_list` /
+  # `gateway_create_endpoint` / `gateway_delete_endpoint`；操作对象为**会话所在控制器**
+  # （`caller.sessionId → Session.controllerId`，不接受外部 controllerId）。创建端点成功后返回
+  # `{name, port, status, endpoint, basePath}`，endpoint 为服务端单一来源派生的完整外网地址
+  # （`{PUBLIC_BASE_URL}/api/gateway/{controllerId}/{name}/`），与 GraphQL `Gateway.endpoint` 及界面同源。
+  # 该服务支持 MCP resources 能力（initialize 声明 capabilities.resources，不声明 prompts）：
+  # resources/list 返回单个内置资源 `gateway-exposure-guidance`（服务暴露指引），resources/read
+  # 按 uri 返回正文（contents[].mimeType=text/markdown），URI 为
+  # zag://agent-gateway-tools/prompt/gateway-exposure-guidance；未知 URI/缺 uri → INVALID_PARAMS 附可用资源 URI。
+  # tools/call 错误统一 `content[0].text = JSON.stringify({code,message}) + isError:true`，服务层
+  # 白名单文案逐字透传（名称/长度/重名/上限/控制器不存在或离线/删除未命中）；未知工具 → METHOD_NOT_FOUND。
   platform
 }
 

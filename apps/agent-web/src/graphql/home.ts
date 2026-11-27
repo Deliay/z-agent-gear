@@ -59,6 +59,7 @@ export const HOME_OVERVIEW = gql`
             port
             status
             createdAt
+            endpoint
           }
           total
           limit

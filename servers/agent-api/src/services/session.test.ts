@@ -100,6 +100,11 @@ vi.mock('./knowledge-base-tools.js', () => ({
   ensureKnowledgeBaseToolsServer: vi.fn(async () => 'mcp-kb-tools'),
 }));
 
+vi.mock('./gateway-tools.js', () => ({
+  GATEWAY_TOOLS_SERVER_NAME: 'agent-gateway-tools',
+  ensureGatewayToolsServer: vi.fn(async () => 'mcp-gateway-tools'),
+}));
+
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
 }));
@@ -725,7 +730,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
+        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools', 'mcp-gateway-tools'],
         undefined,
         [],
       );
@@ -762,7 +767,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
+        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools', 'mcp-gateway-tools'],
         undefined,
         [],
       );
@@ -896,7 +901,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
+        ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools', 'mcp-gateway-tools'],
         undefined,
         [{ id: customId, name: 'custom-a' }],
       );
@@ -927,7 +932,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
+        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools', 'mcp-gateway-tools'],
         undefined,
         [{ id: customId, name: 'custom-a' }],
       );
@@ -2306,7 +2311,7 @@ describe('SessionService', () => {
       expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
         'sess-1',
         'user-1',
-        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
+        ['server-1', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools', 'mcp-gateway-tools'],
         {
           instanceId: 'inst-1',
           nodeId: 'node-1',
@@ -2769,13 +2774,22 @@ describe('SessionService.create default MCP injection', () => {
           'agent-valut-tools',
           'agent-custom-tools',
           'agent-knowledge-base-tools',
+          'agent-gateway-tools',
         ],
       },
     });
     expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
       'sess-1',
       'user-1',
-      ['srv-a', 'srv-b', 'mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
+      [
+        'srv-a',
+        'srv-b',
+        'mcp-preview-tools',
+        'mcp-valut-tools',
+        'mcp-custom-tools',
+        'mcp-kb-tools',
+        'mcp-gateway-tools',
+      ],
       undefined,
       [],
     );
@@ -2799,7 +2813,13 @@ describe('SessionService.create default MCP injection', () => {
     expect(mcpEndpointService.createEndpoint).toHaveBeenCalledWith(
       'sess-1',
       'user-1',
-      ['mcp-preview-tools', 'mcp-valut-tools', 'mcp-custom-tools', 'mcp-kb-tools'],
+      [
+        'mcp-preview-tools',
+        'mcp-valut-tools',
+        'mcp-custom-tools',
+        'mcp-kb-tools',
+        'mcp-gateway-tools',
+      ],
       undefined,
       [],
     );

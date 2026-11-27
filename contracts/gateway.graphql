@@ -5,6 +5,10 @@ type Gateway {
   port: Int!
   status: String!
   createdAt: String!
+  # 对外访问地址（派生只读，不落库）：服务端单一来源由 PUBLIC_BASE_URL 派生，恒含尾斜杠，
+  # 形如 `https://host/api/gateway/{controllerId}/{name}/`；与平台 MCP agent-gateway-tools
+  # 返回的 endpoint、前端展示地址逐字一致。
+  endpoint: String!
 }
 
 type GatewayList {

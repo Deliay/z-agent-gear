@@ -77,6 +77,11 @@ vi.mock('./knowledge-base-tools.js', () => ({
   KNOWLEDGE_BASE_TOOLS_SERVER_NAME: 'agent-knowledge-base-tools',
 }));
 
+vi.mock('./gateway-tools.js', () => ({
+  handleGatewayToolsMcpRequest: vi.fn(),
+  GATEWAY_TOOLS_SERVER_NAME: 'agent-gateway-tools',
+}));
+
 vi.mock('./workspace-service.js', () => ({
   workspaceService: {
     buildSessionWorkspaceContext: vi.fn(),
@@ -94,6 +99,7 @@ import { handlePlatformMcpRequest } from './workflow/tool-handlers.js';
 import { handleValutToolsMcpRequest } from './valut-tools.js';
 import { handleCustomToolsMcpRequest } from './custom-tools-mcp.js';
 import { handleKnowledgeBaseToolsMcpRequest } from './knowledge-base-tools.js';
+import { handleGatewayToolsMcpRequest } from './gateway-tools.js';
 import { workspaceService } from './workspace-service.js';
 import { logger as rootLogger } from '../observability/logger.js';
 import { dispatch } from './mcp-dispatch.js';
@@ -770,6 +776,34 @@ describe('MCP Dispatch', () => {
       );
       // 会话上下文只构造一次（补查与 platform 分支共用）
       expect(workspaceService.buildSessionWorkspaceContext).toHaveBeenCalledTimes(1);
+    });
+
+    it('T-GD1/T-GD2: agent-gateway-tools 直发本地 handler；未装配仍 SERVER_NOT_FOUND', async () => {
+      vi.mocked(jwt.verify).mockReturnValue({
+        ...VALID_PAYLOAD,
+        serverNames: ['agent-gateway-tools'],
+      } as never);
+      vi.mocked(mcpEndpointService.getStatus).mockResolvedValue('active');
+      mockPlatformServerByName('agent-gateway-tools');
+      vi.mocked(handleGatewayToolsMcpRequest).mockResolvedValue({
+        result: { tools: [{ name: 'gateway_list' }] },
+      });
+
+      const result = await dispatch({
+        sessionId: 'session-1',
+        serverName: 'agent-gateway-tools',
+        token: 'valid-token',
+        body: { jsonrpc: '2.0', id: 5, method: 'tools/list' },
+      });
+
+      expect(result).toEqual({
+        status: 200,
+        body: { jsonrpc: '2.0', id: 5, result: { tools: [{ name: 'gateway_list' }] } },
+      });
+      expect(handleGatewayToolsMcpRequest).toHaveBeenCalledWith(
+        { userId: 'user-1', sessionId: 'session-1' },
+        expect.objectContaining({ method: 'tools/list' }),
+      );
     });
   });
 });
