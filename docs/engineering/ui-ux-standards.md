@@ -156,6 +156,7 @@ flowchart LR
 
 - [[prototypes/20261126-ui-ux-workspace-overhaul.html]] — UI/UX 工作区重构交互式设计原型（独立 HTML）
 - [[prototypes/20261127-ui-specification.md]] — 全场景组件化 UI 设计规范文档（整体风格、OKLCH 调色板、三层组件体系与九大业务场景蓝图）
+- [[prototypes/20261127-ui-specification.html]] — 全场景组件化 UI 设计规范交互式演示手册（支持亮暗主题切换、色板复制、三层外壳与九大场景演示）
 - [[frontend-rules.md]] — 前端开发技术规范
 - [[common-rules.md]] — 通用开发规范与领域模型同步准则
 - [[../product/released/20260721-frontend-design-overhaul.md]] — 整体前端设计优化 PRD

@@ -6,7 +6,7 @@ type: Permanent
 # ZeroAsh's Agent Gear — UI 规范与全场景组件化设计文档（UI Specification）
 
 **适用范围**：[`apps/agent-web`](../../../apps/agent-web)（多端 Agent 工作台）与 [`apps/admin-web`](../../../apps/admin-web)（平台运维与计费管理后台）  
-**配套原型**：[`20261126-ui-ux-workspace-overhaul.html`](./20261126-ui-ux-workspace-overhaul.html)  
+**配套原型**：[`20261126-ui-ux-workspace-overhaul.html`](./20261126-ui-ux-workspace-overhaul.html) · [`20261127-ui-specification.html`](./20261127-ui-specification.html)（交互式规范演示手册）  
 **关联规范**：[`../ui-ux-standards.md`](../ui-ux-standards.md) · [`../frontend-rules.md`](../frontend-rules.md)  
 **文档版本**：v1.0  
 **创建日期**：2026-11-27
