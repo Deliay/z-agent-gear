@@ -98,10 +98,10 @@ export default function CreateKnowledgeBaseDialog({
             }}
           />
           {invalid && trimmed.length > 64 && (
-            <p className="text-xs text-destructive">名称最多 64 个字符</p>
+            <p className="text-xs text-destructive-text">名称最多 64 个字符</p>
           )}
           {error && (
-            <p className="text-xs text-destructive" data-testid="knowledge-base-create-error" role="alert">
+            <p className="text-xs text-destructive-text" data-testid="knowledge-base-create-error" role="alert">
               {error}
             </p>
           )}

@@ -9,9 +9,9 @@ import type { SessionReviewData } from '../../../graphql/preview';
  */
 
 export const REVIEW_STATUS_CLASSES: Record<SessionReviewData['status'], string> = {
-  PENDING: 'text-yellow-500',
-  APPROVED: 'text-green-500',
-  REJECTED: 'text-red-500',
+  PENDING: 'text-warning-text',
+  APPROVED: 'text-success-text',
+  REJECTED: 'text-destructive-text',
   COMMENTED: 'text-muted-foreground',
   CANCELLED: 'text-muted-foreground italic',
 };
@@ -58,7 +58,7 @@ export function PreviewTabBar({ tabs, activeTabId, reviewStatuses, onActivate, o
           </button>
           <button
             type="button"
-            className="text-muted-foreground hover:text-destructive"
+            className="text-muted-foreground hover:text-destructive-text"
             onClick={() => onClose(tab.id)}
             data-testid="preview-tab-close"
           >

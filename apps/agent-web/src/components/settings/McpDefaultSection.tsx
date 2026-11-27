@@ -194,13 +194,13 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
         )}
 
         {!useAllEnabled && staleIds.length > 0 && (
-          <p className="text-xs text-warning">已选择的 MCP 中有已删除条目，请重新选择</p>
+          <p className="text-xs text-warning-text">已选择的 MCP 中有已删除条目，请重新选择</p>
         )}
         {!useAllEnabled && serverIds.length === 0 && (
           <p className="text-xs text-muted-foreground">未选择任何 MCP：新建会话不注入 MCP</p>
         )}
         {error && (
-          <p role="alert" className="break-words text-sm text-destructive">
+          <p role="alert" className="break-words text-sm text-destructive-text">
             {error}
           </p>
         )}

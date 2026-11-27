@@ -89,8 +89,8 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-muted px-4">
-      <Card className="w-full max-w-sm">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
+      <Card className="w-full max-w-[400px] rounded-xl">
         <CardHeader>
           <CardTitle className="text-center text-2xl">登录</CardTitle>
         </CardHeader>
@@ -124,7 +124,7 @@ export default function LoginPage() {
               />
             </div>
             {(error || oauthError) && (
-              <p role="alert" className="text-sm text-destructive">{error || oauthError}</p>
+              <p role="alert" className="text-sm text-destructive-text">{error || oauthError}</p>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? '登录中…' : '登录'}

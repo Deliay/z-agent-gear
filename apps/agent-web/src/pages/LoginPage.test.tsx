@@ -82,6 +82,34 @@ describe('LoginPage', () => {
     expect(screen.queryByText('或使用第三方帐号登录')).toBeNull();
   });
 
+  it('T-AUTH-CARD: 居中单卡片 max-w-[400px]，第三方登录按钮统一样式且无注册入口', () => {
+    mocks.useQuery.mockReturnValue({
+      data: {
+        authProviders: [
+          { id: 'p1', type: 'oidc', displayName: '公司 SSO' },
+          { id: 'p2', type: 'github_oauth', displayName: 'GitHub' },
+        ],
+      },
+      loading: false,
+      error: undefined,
+    });
+    const { container } = renderLogin();
+
+    const card = container.querySelector('.max-w-\\[400px\\]');
+    expect(card).not.toBeNull();
+    expect(card?.className).toContain('w-full');
+    // 外层居中
+    expect(container.firstElementChild?.className).toContain('justify-center');
+
+    const oidc = screen.getByRole('button', { name: '使用 公司 SSO 登录' });
+    const github = screen.getByRole('button', { name: '使用 GitHub 登录' });
+    for (const button of [oidc, github]) {
+      expect(button.className).toContain('w-full');
+      expect(button.className).toContain('border');
+    }
+    expect(screen.queryByText(/注册/)).toBeNull();
+  });
+
   it.each([
     ['access_denied', '已取消授权'],
     ['invalid_state', '登录状态已过期，请重试'],

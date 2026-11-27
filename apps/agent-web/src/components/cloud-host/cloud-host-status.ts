@@ -1,13 +1,13 @@
 import type { CloudHostData, CloudHostStatus } from '../../graphql/types'
+import { CLOUD_HOST_STATUS_MATRIX, cloudHostStatusVisual } from '../../lib/status-matrix'
 
-/** 云电脑状态文案（对齐实现计划 Phase 8 状态映射） */
-export const CLOUD_HOST_STATUS_LABELS: Record<CloudHostStatus, string> = {
-  STARTING: '启动中',
-  RUNNING: '运行中',
-  STOPPING: '停止中',
-  STOPPED: '已销毁',
-  FAILED: '失败',
-}
+/** 云电脑状态文案：唯一来源 `src/lib/status-matrix.ts`（规范 §2.4 / D2） */
+export const CLOUD_HOST_STATUS_LABELS: Record<CloudHostStatus, string> = Object.fromEntries(
+  (Object.keys(CLOUD_HOST_STATUS_MATRIX) as CloudHostStatus[]).map((status) => [
+    status,
+    CLOUD_HOST_STATUS_MATRIX[status].label,
+  ]),
+) as Record<CloudHostStatus, string>
 
 export const CLOUD_HOST_ACTIVE_STATUSES: CloudHostStatus[] = ['STARTING', 'RUNNING', 'STOPPING']
 
@@ -56,16 +56,5 @@ export function canStopCloudHost(cloudHost?: Pick<CloudHostData, 'status' | 'del
 }
 
 export function cloudHostStatusDotClass(status?: CloudHostStatus | null): string {
-  switch (status) {
-    case 'STARTING':
-    case 'STOPPING':
-      return 'bg-warning animate-pulse'
-    case 'RUNNING':
-      return 'bg-success'
-    case 'FAILED':
-      return 'bg-destructive'
-    case 'STOPPED':
-    default:
-      return 'bg-muted-foreground'
-  }
+  return cloudHostStatusVisual(status).dot
 }

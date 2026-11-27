@@ -301,7 +301,7 @@ export default function ContinueWorkflowDialog({
                 checked={effectiveCreateWorktree}
                 disabled={!workspaceId || !isGitRepo}
                 onChange={(event) => setCreateWorkflowWorktree(event.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
+                className="h-4 w-4 rounded border-input"
               />
               <Label htmlFor="continue-create-worktree" className="text-sm">
                 在新工作区创建新 Worktree
@@ -357,7 +357,7 @@ export default function ContinueWorkflowDialog({
                       </SelectPopup>
                     </Select>
                     {!value && availableServerTypes.length > 0 && (
-                      <span className="w-full text-xs text-warning">原 Harness 不可用，请改选</span>
+                      <span className="w-full text-xs text-warning-text">原 Harness 不可用，请改选</span>
                     )}
                   </div>
                 )
@@ -366,7 +366,7 @@ export default function ContinueWorkflowDialog({
           </div>
 
           {error && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
+            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">{error}</div>
           )}
         </div>
 

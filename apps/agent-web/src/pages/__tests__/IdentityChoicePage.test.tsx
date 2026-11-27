@@ -64,6 +64,20 @@ describe('IdentityChoicePage（T-OBO-WEB）', () => {
     });
   });
 
+  it('T-AUTH-CHOICE: 双选卡片分流（绑定已有帐号 / 创建新帐号）+ 来源信息 + 统一错误提示条', () => {
+    const { container } = renderAt('/login/identity-choice?pending=p1');
+
+    // 居中单卡片（与登录页统一 max-w-[400px]）
+    expect(container.querySelector('.max-w-\\[400px\\]')).not.toBeNull();
+    expect(container.firstElementChild?.className).toContain('justify-center');
+
+    expect(screen.getByText('第三方登录方式')).toBeInTheDocument();
+    expect(screen.getByText('公司 SSO')).toBeInTheDocument();
+    expect(screen.getByText('外部帐号')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '绑定并登录' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '创建新帐号' })).toBeInTheDocument();
+  });
+
   it('展示登录方式与外部帐号名（摘要白名单）', () => {
     renderAt('/login/identity-choice?pending=p1');
     expect(screen.getByText('公司 SSO')).toBeDefined();

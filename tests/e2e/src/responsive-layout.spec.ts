@@ -16,6 +16,34 @@ const sidebar = () => 'nav[aria-label="Sidebar"]';
 
 test.describe('Responsive Layout', () => {
 
+  test('E2E-RWD-1: <768px 隐藏 ActivityRail/SidebarResizer、底部导航行可用且无横向溢出', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    const { username } = await registerUser(page);
+    await loginViaUI(page, username);
+
+    await expect(page.locator('[data-testid="activity-rail"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="sidebar-resizer"]')).toHaveCount(0);
+
+    const bottomNav = page.locator('[data-testid="mobile-bottom-nav"]');
+    await expect(bottomNav).toBeVisible();
+    await expect(bottomNav.getByRole('link', { name: '费用' })).toBeVisible();
+    await expect(bottomNav.getByRole('link', { name: '设置' })).toBeVisible();
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBeLessThanOrEqual(1);
+
+    // 详情页（设置）保留 MobileBackButton 且无横向溢出
+    await bottomNav.getByRole('link', { name: '设置' }).click();
+    await expect(page.getByRole('heading', { name: '设置', exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('← 返回')).toBeVisible();
+    const detailOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(detailOverflow).toBeLessThanOrEqual(1);
+  });
+
   test('should show desktop sidebar at 1280px', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
     const { username } = await registerUser(page);

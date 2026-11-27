@@ -18,7 +18,7 @@ export default function UsageCard({ data }: UsageCardProps) {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-sm text-muted-foreground">Context Window</span>
-          <span className="text-sm font-medium text-foreground">
+          <span className="text-sm font-medium text-foreground tabular-nums">
             {data.used.toLocaleString()} / {data.size.toLocaleString()} tokens
           </span>
         </div>
@@ -31,7 +31,7 @@ export default function UsageCard({ data }: UsageCardProps) {
         {data.cost && (
           <div className="flex items-center justify-between pt-2 border-t border-border">
             <span className="text-sm text-muted-foreground">Cost</span>
-            <span className="text-sm font-medium text-foreground">
+            <span className="text-sm font-medium text-foreground tabular-nums">
               {data.cost.amount.toFixed(4)} {data.cost.currency}
             </span>
           </div>

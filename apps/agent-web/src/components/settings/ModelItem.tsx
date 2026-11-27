@@ -111,7 +111,7 @@ export default function ModelItem({
         {!hideProviderName && model.provider && (
           <p className="mt-0.5 text-xs text-muted-foreground">{model.provider.name}</p>
         )}
-        <p className="mt-0.5 text-xs text-muted-foreground" data-testid="model-context-length">
+        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums" data-testid="model-context-length">
           最长上下文：
           {typeof model.contextLength === 'number'
             ? `${model.contextLength.toLocaleString('en-US')} tokens`
@@ -134,7 +134,7 @@ export default function ModelItem({
         <Button
           variant="ghost"
           size="icon"
-          className="size-7 text-muted-foreground hover:text-destructive"
+          className="size-7 text-muted-foreground hover:text-destructive-text"
           onClick={() => {
             if (window.confirm(`确定要删除自定义模型「${model.name}」吗？`)) {
               onDelete(model.id)

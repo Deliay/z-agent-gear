@@ -268,7 +268,7 @@ function CloudHostPanel({
         </div>
       )}
       {cloudHost.failureReason && (
-        <p className="mt-2 break-words text-sm text-destructive" data-testid="cloud-host-failure-reason">
+        <p className="mt-2 break-words text-sm text-destructive-text" data-testid="cloud-host-failure-reason">
           失败原因：{cloudHost.failureReason}
         </p>
       )}

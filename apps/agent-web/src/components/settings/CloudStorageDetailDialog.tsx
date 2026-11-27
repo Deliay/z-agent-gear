@@ -232,7 +232,7 @@ export default function CloudStorageDetailDialog({
             <p className="text-sm text-muted-foreground">加载中...</p>
           ) : queryError && !storage ? (
             <div className="space-y-2">
-              <p role="alert" className="break-words text-sm text-destructive">
+              <p role="alert" className="break-words text-sm text-destructive-text">
                 {cloudStorageErrorMessage(queryError)}
               </p>
               <Button type="button" variant="outline" onClick={() => { void refetch() }}>
@@ -265,7 +265,7 @@ export default function CloudStorageDetailDialog({
                 </DetailRow>
                 {storage.failureReason && (
                   <DetailRow label="失败原因">
-                    <span className="text-destructive">{storage.failureReason}</span>
+                    <span className="text-destructive-text">{storage.failureReason}</span>
                   </DetailRow>
                 )}
               </section>
@@ -326,12 +326,12 @@ export default function CloudStorageDetailDialog({
                     </DetailRow>
                     {archive.failureReason && (
                       <DetailRow label="失败原因">
-                        <span className="text-destructive">{archive.failureReason}</span>
+                        <span className="text-destructive-text">{archive.failureReason}</span>
                       </DetailRow>
                     )}
                     {archive.status === 'SUCCEEDED' && archive.sourcePvcReleased === false && (
                       <DetailRow label="源卷释放">
-                        <span className="text-destructive">
+                        <span className="text-destructive-text">
                           源容量卷删除失败（数据已归档，再次挂载时自动清理）
                         </span>
                       </DetailRow>
@@ -353,11 +353,11 @@ export default function CloudStorageDetailDialog({
                   </DetailRow>
                   {restore.failureReason && (
                     <DetailRow label="失败原因">
-                      <span className="text-destructive">{restore.failureReason}</span>
+                      <span className="text-destructive-text">{restore.failureReason}</span>
                     </DetailRow>
                   )}
                   {restoreFailed && (
-                    <p className="break-words text-xs text-destructive">
+                    <p className="break-words text-xs text-destructive-text">
                       {RESTORE_FAILED_DESTROY_WARNING}
                     </p>
                   )}
@@ -403,13 +403,13 @@ export default function CloudStorageDetailDialog({
               )}
 
               {actionError && (
-                <p role="alert" className="break-words text-sm text-destructive">
+                <p role="alert" className="break-words text-sm text-destructive-text">
                   {actionError}
                 </p>
               )}
 
               {archiveFailed && (
-                <p className="break-words text-xs text-destructive">
+                <p className="break-words text-xs text-destructive-text">
                   {ARCHIVE_FAILED_DESTROY_WARNING}
                 </p>
               )}

@@ -1,5 +1,5 @@
-import { useLayoutEffect, useRef, useState } from 'react';
-import { getStatusBadgeClass, STATUS_LABELS } from './status-colors';
+import { useState } from 'react';
+import { STATUS_LABELS, getStatusDotColor } from './status-colors';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import MobileBackButton from '../MobileBackButton';
 import { Button } from '../ui/button';
@@ -10,7 +10,7 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '../ui/dropdown-menu';
-import { GitFork, Info, Loader2, Download, Archive, ArchiveRestore, MessageSquare, Columns2, Rows2, Activity, MoreHorizontalIcon, Play, Trash2, X } from 'lucide-react';
+import { GitFork, GitBranch, Folder, Info, Loader2, Download, Archive, ArchiveRestore, MessageSquare, Columns2, Rows2, Activity, MoreHorizontalIcon, Play, Trash2, X } from 'lucide-react';
 import { AgentCapabilityPanel } from './AgentCapabilityPanel';
 import type { AgentCapabilitiesController } from '../../hooks/useAgentCapabilities';
 import type { SessionData } from '../../graphql/types';
@@ -23,11 +23,14 @@ interface Session {
   userId: string;
   controllerId: string;
   controllerName: string;
+  /** 会话标题（契约 Session.title；缺失时回退控制器名/「会话」） */
+  title?: string | null;
   acpServerType: string;
   status: string;
   externalSessionId: string | null;
   cwd: string | null;
   worktreePath?: string | null;
+  worktreeBranch?: string | null;
   /** 归档状态（true=已归档，展示「已归档」徽标并把入口切换为「取消归档」） */
   archived?: boolean;
   createdAt: string;
@@ -42,8 +45,14 @@ function truncatePathLeft(path: string, maxLen = 40): string {
   return path;
 }
 
-/** 工具栏收纳阈值：为标题/状态信息区预留的最小宽度（px），不足以容纳完整工具栏时收成省略号下拉 */
-const TOOLBAR_MIN_INFO_WIDTH = 192;
+/** 工作区展示名：会话契约无工作区名称字段，以工作目录末段作为工作区标识（完整路径见环境胶囊） */
+function workspaceLabelOf(cwd: string | null | undefined): string | null {
+  if (!cwd) return null;
+  const normalized = cwd.replace(/\/+$/, '');
+  if (!normalized) return cwd;
+  const segments = normalized.split('/');
+  return segments[segments.length - 1] || normalized;
+}
 
 interface SessionHeaderProps {
   session: Session | null;
@@ -75,16 +84,13 @@ interface SessionHeaderProps {
   onLiveChange?: (live: boolean) => void;
   /** 宽度门控：不足 1024px 隐藏「左右分栏」入口 */
   wideEnoughForHorizontal?: boolean;
+  /** 所属工作区名称（契约未下发时以工作目录末段兜底） */
+  workspaceName?: string | null;
 }
 
-export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline, capabilities, capabilitySession, readOnly, onExport, onArchiveToggle, archiving, splitMode, onSplitModeChange, live, onLiveChange, wideEnoughForHorizontal }: SessionHeaderProps) {
+export default function SessionHeader({ session, status, onClose, onDelete, onContinue, resuming, closing, deleting, controllerOnline, capabilities, capabilitySession, readOnly, onExport, onArchiveToggle, archiving, splitMode, onSplitModeChange, live, onLiveChange, wideEnoughForHorizontal, workspaceName }: SessionHeaderProps) {
   const isMobile = useIsMobile();
   const [capabilityOpen, setCapabilityOpen] = useState(false);
-  const headerRef = useRef<HTMLDivElement>(null);
-  const toolbarRef = useRef<HTMLDivElement>(null);
-  /** 完整工具栏最近一次测得的自然宽度（收纳后 toolbar 不在 DOM，用它判定恢复） */
-  const toolbarNaturalWidthRef = useRef(0);
-  const [toolbarOverflow, setToolbarOverflow] = useState(false);
 
   const continueBlocked = (capabilities?.isBlocked('session.resume') ?? false)
     && (capabilities?.isBlocked('session.load') ?? false);
@@ -93,76 +99,98 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
   const showSplitOptions = Boolean(onSplitModeChange && splitMode);
   const showClose = status !== 'ended' && status !== 'creating' && status !== 'disconnected' && !resuming;
   const showContinue = (status === 'ended' || status === 'disconnected' || resuming) && !readOnly;
-
-  // 工具栏溢出收纳：标题栏宽度不足以容纳完整工具栏（为信息区预留 TOOLBAR_MIN_INFO_WIDTH）时，
-  // 工具栏整体收成省略号按钮，点击展开 icon+文字下拉。jsdom 无布局（clientWidth 恒 0）时保持展开，
-  // 组件测试经 stub 宽度 + window resize 事件驱动测量。
-  useLayoutEffect(() => {
-    const measure = () => {
-      const header = headerRef.current;
-      if (!header) return;
-      const headerWidth = header.clientWidth;
-      if (!headerWidth) return;
-      const toolbar = toolbarRef.current;
-      if (toolbar) {
-        const natural = toolbar.scrollWidth;
-        if (natural > 0) toolbarNaturalWidthRef.current = natural;
-      }
-      const natural = toolbarNaturalWidthRef.current;
-      if (!natural) return;
-      const shouldCollapse = natural > headerWidth - TOOLBAR_MIN_INFO_WIDTH;
-      setToolbarOverflow((prev) => (prev === shouldCollapse ? prev : shouldCollapse));
-    };
-    measure();
-    const observer = typeof ResizeObserver !== 'undefined' && headerRef.current
-      ? new ResizeObserver(measure)
-      : null;
-    if (observer && headerRef.current) observer.observe(headerRef.current);
-    window.addEventListener('resize', measure);
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener('resize', measure);
-    };
-  });
+  const statusLabel = STATUS_LABELS[status] ?? status;
+  const workspaceLabel = workspaceName ?? workspaceLabelOf(session?.cwd);
+  const branchLabel = session?.worktreeBranch ?? null;
 
   return (
-    <div ref={headerRef} className="flex items-center justify-between gap-2 border-b border-border bg-background px-4 py-3" data-testid="session-header">
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1">
+    <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-background px-4" data-testid="session-header">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {isMobile && <MobileBackButton to="/sessions" />}
-        <h1 className="truncate text-lg font-semibold">
-          {session?.controllerName || 'Session'}
+        <h1 className="min-w-0 shrink truncate text-base font-semibold" data-testid="session-title">
+          {session?.title || session?.controllerName || '会话'}
         </h1>
-        <span data-testid="session-status-badge" className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusBadgeClass(status)}`}>
-          {STATUS_LABELS[status] ?? status}
+        {/* 状态圆点（规范 §2.4/§6-C）：sr-only 保留文案供读屏与既有 E2E 断言 */}
+        <span
+          data-testid="session-status-badge"
+          role="status"
+          title={statusLabel}
+          aria-label={statusLabel}
+          className="inline-flex shrink-0 items-center"
+        >
+          <span
+            data-testid="session-status-dot"
+            aria-hidden="true"
+            className={`size-2 rounded-full ${getStatusDotColor(status)}`}
+          />
+          <span className="sr-only">{statusLabel}</span>
         </span>
         {session?.archived && (
-          <span data-testid="session-archived-badge" className="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+          <span data-testid="session-archived-badge" className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
             已归档
           </span>
         )}
-        {session?.acpServerType && !isMobile && (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-            {harnessLabel(session.acpServerType)}
-          </span>
-        )}
-        {session?.cwd && !isMobile && (
-          <div className="flex items-center gap-1">
-            <span className="text-sm text-muted-foreground font-mono" title={session.cwd}>{truncatePathLeft(session.cwd)}</span>
-            {session?.worktreePath && !isMobile && (
-              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary font-medium flex items-center gap-1">
-                <GitFork className="size-2.5" />
-                Worktree
+        {(workspaceLabel || branchLabel) && !isMobile && (
+          <div className="flex min-w-0 shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+            {workspaceLabel && (
+              <span
+                data-testid="session-workspace"
+                className="flex max-w-32 items-center gap-1 truncate"
+                title={session?.cwd ?? workspaceLabel}
+              >
+                <Folder className="size-3 shrink-0" />
+                <span className="truncate">{workspaceLabel}</span>
+              </span>
+            )}
+            {branchLabel && (
+              <span
+                data-testid="session-branch"
+                className="flex max-w-32 items-center gap-1 truncate rounded bg-muted px-1.5 py-0.5"
+                title={branchLabel}
+              >
+                <GitBranch className="size-3 shrink-0" />
+                <span className="truncate">{branchLabel}</span>
               </span>
             )}
           </div>
         )}
-        {session?.createdAt && (
-          <span className="text-xs text-muted-foreground">
-            {new Date(session.createdAt).toLocaleString()}
-          </span>
+        {(session?.controllerName || session?.acpServerType || session?.cwd || session?.worktreePath || session?.createdAt) && !isMobile && (
+          <div
+            data-testid="session-env-capsule"
+            title="环境信息：控制器 / Harness / 工作目录 / Worktree / 创建时间"
+            className="flex min-w-0 items-center gap-2 rounded-full bg-muted/60 px-2.5 py-1 text-xs text-muted-foreground"
+          >
+            {session?.controllerName && (
+              <span data-testid="session-env-controller" className="shrink-0 truncate">
+                控制器：{session.controllerName}
+              </span>
+            )}
+            {session?.acpServerType && (
+              <span className="shrink-0 rounded bg-background/60 px-1.5 py-0.5">
+                {harnessLabel(session.acpServerType)}
+              </span>
+            )}
+            {session?.cwd && (
+              <span className="min-w-0 truncate font-mono" title={session.cwd}>
+                {truncatePathLeft(session.cwd)}
+              </span>
+            )}
+            {session?.worktreePath && (
+              <span className="flex shrink-0 items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                <GitFork className="size-2.5" />
+                Worktree
+              </span>
+            )}
+            {session?.createdAt && (
+              <span className="hidden shrink-0 tabular-nums lg:inline">
+                {new Date(session.createdAt).toLocaleString()}
+              </span>
+            )}
+          </div>
         )}
       </div>
-      {toolbarOverflow ? (
+      {/* 窄屏操作收纳：保留 session-header-overflow 锚点，行为改为断点驱动（G3，不再被动测量折叠） */}
+      <div className="flex shrink-0 items-center md:hidden">
         <DropdownMenu>
           <DropdownMenuTrigger
             render={<Button variant="ghost" size="icon" aria-label="更多操作" data-testid="session-header-overflow" />}
@@ -244,7 +272,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
                 data-testid="overflow-close"
                 onClick={onClose}
                 disabled={closing}
-                className="text-destructive"
+                className="text-destructive-text"
               >
                 {closing ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
                 {closing ? '关闭中...' : '关闭'}
@@ -266,15 +294,16 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
               data-testid="overflow-delete"
               onClick={onDelete}
               disabled={deleting}
-              className="text-destructive"
+              className="text-destructive-text"
             >
               {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
               {deleting ? '删除中...' : '删除'}
             </DropdownMenuItem>
           </DropdownMenuPopup>
         </DropdownMenu>
-      ) : (
-        <div ref={toolbarRef} className="flex shrink-0 items-center gap-2" data-testid="session-header-toolbar">
+      </div>
+      {/* 桌面端完整工具栏（≥md 常驻） */}
+      <div className="hidden shrink-0 items-center gap-2 md:flex" data-testid="session-header-toolbar">
           <Button
             variant="ghost"
             size="icon"
@@ -393,7 +422,6 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
             ) : '删除'}
           </Button>
         </div>
-      )}
       <AgentCapabilityPanel
         open={capabilityOpen}
         onOpenChange={setCapabilityOpen}

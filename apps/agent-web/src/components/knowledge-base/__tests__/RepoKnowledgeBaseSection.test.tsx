@@ -110,6 +110,41 @@ afterEach(() => {
 });
 
 describe('RepoKnowledgeBaseSection（T-RKB-WEB1~6 / T-RKB2-WEB4~5）', () => {
+  it('T-KB-VIS: 只读来源标识 / 截断与文件过大标识 / 空态收敛', () => {
+    setup([host()]);
+    renderSection();
+
+    // 只读来源徽标（仓库知识库整体只读）
+    expect(screen.getByTestId('repo-kb-readonly-badge')).toHaveTextContent('只读');
+
+    queryResults.GetRepoKnowledgeBases = {
+      data: {
+        repoKnowledgeBases: [
+          kb({ truncated: true, documentCount: 3 }),
+          kb({ id: 'repo:ws-1:docs:b-bad', name: '', folder: 'b-bad', valid: false, errors: ['非法 JSON'], documentCount: 0 }),
+        ],
+      },
+      refetch: mockRefetchBases,
+    };
+    fireEvent.click(screen.getByRole('button', { name: /云电脑一/ }));
+
+    expect(screen.getByTestId('repo-kb-truncated-badge')).toBeInTheDocument();
+    expect(screen.getByTestId('repo-kb-error')).toHaveTextContent('非法 JSON');
+
+    // 文件过大文档：灰显 + 不可点击（error 非空）
+    queryResults.GetRepoKnowledgeBaseChildren = {
+      data: {
+        repoKnowledgeBaseDocumentChildren: nodes([
+          { kind: 'DOCUMENT', name: '超大文档', path: '/huge', error: 'file too large' },
+        ]),
+      },
+    };
+    fireEvent.click(screen.getByRole('button', { name: /甲库/ }));
+    expect(screen.getByTestId('repo-kb-document-error')).toHaveTextContent('文件过大');
+    expect(screen.queryByRole('button', { name: /超大文档/ })).toBeNull();
+    expect(screen.getByTestId('repo-kb-document-node')).toHaveAttribute('data-unavailable', 'true');
+  });
+
   it('T-RKB-WEB1 hosts 由 props 下发：初始零 bases/children 查询；全部层级默认折叠', () => {
     setup([host()]);
     renderSection();

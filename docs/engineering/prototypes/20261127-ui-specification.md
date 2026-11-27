@@ -91,6 +91,17 @@ ZeroAsh's Agent Gear 面向高频、长时间使用多 Agent 协同、云电脑�
 | `--info` | `oklch(0.58 0.15 245)` | `#2585D6` | `oklch(0.68 0.14 245)` | `#60A5FA` | 工作中（running）、AI 推理流式输出、进行中节点 |
 | `--destructive` | `oklch(0.58 0.22 27)` | `#DC3B2E` | `oklch(0.70 0.19 22)` | `#F87171` | 失败（FAILED）、断连（disconnected）、危险删除/销毁操作 |
 
+- **正文/提示条语义 Token**（浅色主题对白底与 10% 语义底均 ≥ 4.5:1，底色仅用于圆点/图标/徽标）：
+
+  | 语义 Token | Light 模式 (OKLCH) | Dark 模式 (OKLCH) | 用途 |
+  | --- | --- | --- | --- |
+  | `--success-text` | `oklch(0.44 0.13 148)` | `oklch(0.82 0.13 148)` | 成功类正文 / 提示条 |
+  | `--warning-text` | `oklch(0.46 0.12 75)` | `oklch(0.85 0.12 75)` | 警告类正文 / 提示条 |
+  | `--info-text` | `oklch(0.45 0.13 245)` | `oklch(0.80 0.11 245)` | 信息类正文 / 提示条 |
+  | `--destructive-text` | `oklch(0.48 0.19 27)` | `oklch(0.82 0.14 22)` | 危险/错误类正文 / 提示条 |
+
+- 徽标/提示条语义底色（`bg-*/10` 或 `bg-*/15`）只承载圆点、图标与徽标底，正文一律使用对应的 `*-text` Token。
+
 ### 2.3 图表与预览批注专色（Charts & Preview Highlights）
 
 | 类别 | Token / CSS Class | 色值定义 | 使用场景 |
@@ -104,14 +115,14 @@ ZeroAsh's Agent Gear 面向高频、长时间使用多 Agent 协同、云电脑�
 
 | 领域 | 状态值 | 指示点 / 动效 | 徽标样式 | 中文文案 |
 | --- | --- | --- | --- | --- |
-| **会话 (`Session`)** | `creating` / `connecting` | `bg-warning animate-pulse` | `bg-warning/15 text-warning` | 创建中 / 连接中 |
-| **会话 (`Session`)** | `idling` | `bg-success` | `bg-success/15 text-success` | 空闲 |
-| **会话 (`Session`)** | `running` | `bg-info animate-pulse` | `bg-info/15 text-info` | 工作中 |
-| **会话 (`Session`)** | `disconnected` | `bg-destructive` | `bg-destructive/15 text-destructive` | 已断连 |
+| **会话 (`Session`)** | `creating` / `connecting` | `bg-warning animate-pulse` | `bg-warning/15 text-warning-text` | 创建中 / 连接中 |
+| **会话 (`Session`)** | `idling` | `bg-success` | `bg-success/15 text-success-text` | 空闲 |
+| **会话 (`Session`)** | `running` | `bg-info animate-pulse` | `bg-info/15 text-info-text` | 工作中 |
+| **会话 (`Session`)** | `disconnected` | `bg-destructive` | `bg-destructive/15 text-destructive-text` | 已断连 |
 | **会话 (`Session`)** | `ended` | `bg-muted-foreground` | `bg-muted text-muted-foreground` | 已结束 |
-| **云电脑 (`CloudHost`)** | `STARTING` / `STOPPING` | `bg-warning animate-pulse` | `bg-warning/15 text-warning` | 启动中 / 停止中 |
-| **云电脑 (`CloudHost`)** | `RUNNING` | `bg-success` | `bg-success/15 text-success` | 运行中 |
-| **云电脑 (`CloudHost`)** | `FAILED` | `bg-destructive` | `bg-destructive/15 text-destructive` | 失败 |
+| **云电脑 (`CloudHost`)** | `STARTING` / `STOPPING` | `bg-warning animate-pulse` | `bg-warning/15 text-warning-text` | 启动中 / 停止中 |
+| **云电脑 (`CloudHost`)** | `RUNNING` | `bg-success` | `bg-success/15 text-success-text` | 运行中 |
+| **云电脑 (`CloudHost`)** | `FAILED` | `bg-destructive` | `bg-destructive/15 text-destructive-text` | 失败 |
 | **云电脑 (`CloudHost`)** | `STOPPED` | `bg-muted-foreground` | `bg-muted text-muted-foreground` | 已销毁 |
 | **工作流节点 (`WorkflowNode`)** | `PENDING` / `RUNNING` / `WAITING_HUMAN` / `REWORK` / `COMPLETED` / `FAILED` | 分别对应 `muted-foreground` / `info animate-pulse` / `warning animate-pulse` / `warning` / `success` / `destructive` | 统一使用 `bg-card` 不透明底色 + 语义边框/左竖条 | 待执行 / 执行中 / 等待人工 / 返工 / 已完成 / 失败 |
 
@@ -197,7 +208,7 @@ flowchart LR
 - **组件设计细节**：
   - 前台硬关闭公开注册（无注册表单与入口），支持账号密码登录及后台配置的 OIDC / GitHub OAuth 按钮组（图标 + 供应商名，统一样式 `variant="outline" w-full`）。
   - `IdentityChoicePage`：OAuth 首次登录未命中既有账号时，以双选卡片（绑定已有账号验密 vs 创建新账号）清晰分流。
-  - `ChangePasswordPage`：后台初始种子密码首次登录后强制拦截，含密码强度校验与错误提示条（`bg-destructive/10 text-destructive`）。
+  - `ChangePasswordPage`：后台初始种子密码首次登录后强制拦截，含密码强度校验与错误提示条（`bg-destructive/10 text-destructive-text`）。
 
 ### 场景 B：工作台概览与多租户工作区（Home Overview & Workspace Context）
 
@@ -257,7 +268,7 @@ flowchart LR
 
 - **涉及页面与组件**：前台 `BillingPage`；后台 `BillingPage`、`ReconciliationPage`、`AccountTable`、`InvoiceTable`、`ReceiptDrawer`、`RechargeDialog`、`RollupChart`、`ModelPricingSection`、`MyApiKeyManager`。
 - **组件设计细节**：
-  - 全部金额（Credits）、单价（每百万 Token / 每小时规格费）与增减明细强制使用 `tabular-nums` 右对齐，正数充值使用 `text-success`，扣费使用默认前景色或 `text-muted-foreground`，异常差异使用 `text-destructive`。
+  - 全部金额（Credits）、单价（每百万 Token / 每小时规格费）与增减明细强制使用 `tabular-nums` 右对齐，正数充值使用 `text-success-text`，扣费使用默认前景色或 `text-muted-foreground`，异常差异使用 `text-destructive-text`。
   - 点击账单行滑出 `ReceiptDrawer`（右侧 `Sheet`）展示完整计费维度拆解（未缓存输入 / 缓存输入 / 输出 / 中断 20%-80% 折算明细 / 存储小时桶）。
 
 ### 场景 I：管理后台运维工作台（Admin Console — `apps/admin-web`）

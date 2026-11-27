@@ -97,8 +97,8 @@ export default function IdentityChoicePage() {
   };
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-muted px-4">
-      <Card className="w-full max-w-md">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
+      <Card className="w-full max-w-[400px] rounded-xl">
         <CardHeader>
           <CardTitle className="text-center text-2xl">选择登录方式</CardTitle>
         </CardHeader>
@@ -107,7 +107,7 @@ export default function IdentityChoicePage() {
             <p className="text-center text-sm text-muted-foreground">正在加载登录信息…</p>
           ) : expired ? (
             <>
-              <p role="alert" className="text-sm text-destructive">
+              <p role="alert" className="text-sm text-destructive-text">
                 登录状态已过期，请重新登录
               </p>
               <Button className="w-full" onClick={() => navigate('/login', { replace: true })}>
@@ -156,7 +156,7 @@ export default function IdentityChoicePage() {
                   />
                 </div>
                 {error && (
-                  <p role="alert" className="text-sm text-destructive">{error}</p>
+                  <p role="alert" className="text-sm text-destructive-text">{error}</p>
                 )}
                 <Button type="submit" className="w-full" disabled={binding || provisioning}>
                   {binding ? '绑定中…' : '绑定并登录'}

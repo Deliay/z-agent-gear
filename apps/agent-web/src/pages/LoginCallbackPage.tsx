@@ -69,15 +69,15 @@ export default function LoginCallbackPage() {
   }, []);
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-muted px-4">
-      <Card className="w-full max-w-sm">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
+      <Card className="w-full max-w-[400px] rounded-xl">
         <CardHeader>
           <CardTitle className="text-center text-2xl">正在登录…</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4 text-center">
           {message ? (
             <>
-              <p role="alert" className="text-sm text-destructive">{message}</p>
+              <p role="alert" className="text-sm text-destructive-text">{message}</p>
               <Button className="w-full" onClick={() => navigate('/login', { replace: true })}>
                 返回登录
               </Button>

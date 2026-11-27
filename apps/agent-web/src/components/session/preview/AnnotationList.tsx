@@ -38,7 +38,7 @@ export function AnnotationList({ comments, onRemove }: AnnotationListProps) {
           </div>
           <button
             type="button"
-            className="shrink-0 text-muted-foreground hover:text-destructive"
+            className="shrink-0 text-muted-foreground hover:text-destructive-text"
             onClick={() => onRemove(comment.id)}
             data-testid="annotation-remove"
           >

@@ -160,7 +160,7 @@ describe('KnowledgeBasePage', () => {
     expect(screen.getByText('加载中…')).toBeInTheDocument();
   });
 
-  it('repo: id 走只读分支：front matter 表格 + 无编辑/删除/历史，?edit=1 忽略', () => {
+  it('repo: id 走只读分支：front matter 表格 + 无编辑/删除/历史，?edit=1 忽略（T-KB-PREVIEW）', () => {
     router.params = { kbId: 'repo:ws-1:zag:a-base', '*': 'guides/git' };
     router.search = new URLSearchParams('edit=1');
     mockUseQuery.mockImplementation((document: unknown) => {
@@ -208,6 +208,12 @@ describe('KnowledgeBasePage', () => {
     expect(screen.getByTestId('knowledge-base-title')).toHaveTextContent('Git 规范');
     expect(screen.getByTestId('repo-kb-breadcrumb')).toHaveTextContent('甲库');
     expect(screen.getByTestId('repo-kb-front-matter-table')).toHaveTextContent('自定义');
+    expect(screen.getByTestId('repo-kb-readonly-notice')).toHaveTextContent('只读来源');
+    // 预览排版：max-w-3xl 靠左（不使用 mx-auto），min-w-0 防横向溢出
+    const prose = screen.getByTestId('repo-knowledge-base-preview').querySelector('.max-w-3xl');
+    expect(prose).not.toBeNull();
+    expect(prose?.className).toContain('min-w-0');
+    expect(prose?.className).not.toContain('mx-auto');
     expect(screen.queryByTestId('knowledge-base-editor')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '编辑文档' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '删除文档' })).not.toBeInTheDocument();

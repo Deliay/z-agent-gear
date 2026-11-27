@@ -188,15 +188,13 @@ export default function SettingsPage() {
 
       <div className="flex flex-1 overflow-hidden md:grid md:grid-cols-[200px_1fr]">
         <nav className="hidden border-r p-4 md:block" aria-label="Settings navigation">
-          <h1 className="mb-3 px-3 text-base font-semibold text-foreground">设置</h1>
+          <h1 className="mb-3 px-3 text-xl font-semibold text-foreground">设置</h1>
           <div className="space-y-1">
             {navGroups.map((group) => (
               <div key={group.label} className="pt-2 first:pt-0">
-                {group.items.length > 1 && (
-                  <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
-                    {group.label}
-                  </div>
-                )}
+                <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
+                  {group.label}
+                </div>
                 {group.items.map((item) => {
                   const isActive = activeSectionId === item.id;
                   return (
@@ -228,8 +226,8 @@ export default function SettingsPage() {
               role={bindNotice.type === 'error' ? 'alert' : 'status'}
               className={`mb-4 rounded-md px-4 py-3 text-sm ${
                 bindNotice.type === 'success'
-                  ? 'bg-success/10 text-success'
-                  : 'bg-destructive/10 text-destructive'
+                  ? 'bg-success/10 text-success-text'
+                  : 'bg-destructive/10 text-destructive-text'
               }`}
             >
               {bindNotice.message}

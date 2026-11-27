@@ -27,7 +27,7 @@ export default function ProviderActionMenu({ isEnabled, onEdit, onToggle, onDele
           {isEnabled ? '禁用' : '启用'}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={onDelete} className="text-destructive">
+        <DropdownMenuItem onClick={onDelete} className="text-destructive-text">
           删除
         </DropdownMenuItem>
       </DropdownMenuPopup>

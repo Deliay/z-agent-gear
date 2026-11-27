@@ -11,10 +11,10 @@ const tabs: PreviewTab[] = [
 ];
 
 describe('PreviewTabBar（T-TABBAR / 返工 A2 状态色）', () => {
-  it('A2 四态色：data-review-status 逐态映射（PENDING 黄 / APPROVED 绿 / REJECTED 红 / COMMENTED·CANCELLED 灰）', () => {
-    expect(REVIEW_STATUS_CLASSES.PENDING).toContain('yellow');
-    expect(REVIEW_STATUS_CLASSES.APPROVED).toContain('green');
-    expect(REVIEW_STATUS_CLASSES.REJECTED).toContain('red');
+  it('A2 四态色：data-review-status 逐态映射（PENDING warning / APPROVED success / REJECTED destructive / COMMENTED·CANCELLED muted）', () => {
+    expect(REVIEW_STATUS_CLASSES.PENDING).toContain('warning');
+    expect(REVIEW_STATUS_CLASSES.APPROVED).toContain('success');
+    expect(REVIEW_STATUS_CLASSES.REJECTED).toContain('destructive');
     expect(REVIEW_STATUS_CLASSES.COMMENTED).toContain('muted');
     expect(REVIEW_STATUS_CLASSES.CANCELLED).toContain('italic');
 

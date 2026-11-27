@@ -12,7 +12,7 @@ describe('Button', () => {
     render(<Button variant="ghost-danger">Delete</Button>);
     const btn = screen.getByRole('button', { name: 'Delete' });
     expect(btn).toBeInTheDocument();
-    expect(btn.className).toContain('text-destructive');
+    expect(btn.className).toContain('text-destructive-text');
   });
 
   it('renders with xs size', () => {
@@ -42,7 +42,7 @@ describe('buttonVariants', () => {
 
   it('returns correct classes for ghost-danger variant', () => {
     const classes = buttonVariants({ variant: 'ghost-danger' });
-    expect(classes).toContain('text-destructive');
+    expect(classes).toContain('text-destructive-text');
   });
 
   it('returns correct classes for xs size', () => {

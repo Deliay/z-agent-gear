@@ -125,7 +125,7 @@ export default function ForkCloudStorageDialog({
               : '创建成功即开始计费，详见账单'}
           </p>
           {error && (
-            <p role="alert" className="break-words text-sm text-destructive">
+            <p role="alert" className="break-words text-sm text-destructive-text">
               {error}
             </p>
           )}
