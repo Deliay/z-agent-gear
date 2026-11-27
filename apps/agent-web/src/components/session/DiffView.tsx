@@ -64,7 +64,7 @@ export default function DiffView({ oldText, newText, filePath, inline }: DiffVie
         <div className="flex items-center justify-between gap-2 border-b border-border bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
           <span className="min-w-0 break-all">{filePath}</span>
           {isNewFile && (
-            <span className="shrink-0 rounded bg-success/20 px-1.5 py-0.5 text-[10px] font-semibold text-success">
+            <span className="shrink-0 rounded bg-success/20 px-1.5 py-0.5 text-xs font-semibold text-success">
               新建文件
             </span>
           )}

@@ -150,7 +150,7 @@ export default function WorkflowGraphView({
           className="pointer-events-none absolute inset-x-0 top-0 z-10 border-b border-border bg-background/85 px-2 py-1 backdrop-blur-xs"
         >
           <div className="pointer-events-auto flex min-w-0 flex-wrap items-center gap-1">
-            <span className="shrink-0 text-[10px] text-muted-foreground">实例资源</span>
+            <span className="shrink-0 text-xs text-muted-foreground">实例资源</span>
             <ResourceChips
               resources={viewModel.instanceResources}
               wrap

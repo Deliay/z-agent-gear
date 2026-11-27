@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@apollo/client/react';
 import { toast } from 'sonner';
@@ -58,6 +58,8 @@ interface SidebarProps {
   /** 当前用户展示名（登录响应 User.name，迁移后=原用户名） */
   name: string;
   mobile?: boolean;
+  /** 一级导航轨点击聚焦的分区（含递增 nonce 以支持重复点击同一分区展开并滚动） */
+  focusTarget?: { section: SidebarSectionKey; nonce: number } | null;
 }
 
 /** 主机选择浮层：聚合分区的新建入口先选主机，再打开对应对话框 */
@@ -89,7 +91,7 @@ function ControllerPicker({
   );
 }
 
-export default function Sidebar({ name, mobile }: SidebarProps) {
+export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
   const navigate = useNavigate();
   const [sections, setSections] = useState<SidebarSections>(readSidebarSections);
   // 主机分区内每个主机默认展开（追踪「已折叠」集合）
@@ -101,6 +103,20 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
   const [showGithubSetup, setShowGithubSetup] = useState<{ controllerId: string } | null>(null);
   // 聚合分区的新建入口需要先选择目标主机（工作流实例化 / 网关新增）
   const [picker, setPicker] = useState<'instantiate' | 'gateway' | null>(null);
+
+  // 一级导航轨点击某个分区时，确保该分区处于展开态并滚动到视口内
+  useEffect(() => {
+    if (!focusTarget) return;
+    const { section } = focusTarget;
+    setSections((prev) => {
+      if (prev[section]) return prev;
+      const next = { ...prev, [section]: true };
+      persistSidebarSections(next);
+      return next;
+    });
+    const el = document.querySelector(`[data-testid="sidebar-section-${section}"]`);
+    el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [focusTarget]);
 
   // 首页 + 侧边栏统一数据源（由 MainLayout 的 HOME_OVERVIEW 一次加载）
   const { data, refetch } = useHomeOverview();

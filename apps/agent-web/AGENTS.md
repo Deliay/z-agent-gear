@@ -493,3 +493,15 @@ pnpm run preview  # Preview production build
 - **复用与按需**：控制器在线状态改读 `homeOverview.controllers`（与首页同源同新鲜度，`ControllerListSection` 移除 `pollInterval`）；模板/已配置工作流改读 `homeOverview`（`WorkflowSection`/`InstantiateWorkflowDialog`/`ConfigureWorkflowDialog`/`IssuesLinkageDialog`/`RepoWorkflowSection` 打开时 `refetch()` HOME_OVERVIEW）；**模板/项目模板的写操作 `refetchQueries` 指向 `HOME_OVERVIEW`**（`TemplateEditorDialog` / `ConfigureRepoWorkflowDialog`），不再使用已无观察者的 `GET_WORKFLOW_TEMPLATES` / `GET_CONFIGURED_WORKFLOWS`；`GET_VALUT_MANUAL_OPTIONS`、`CLOUD_STORAGES(includeDestroyed:true)`、`personalGithubAccounts`、`workspaces`/`detectGitRepo`/`acpServerCapabilities` 等弹窗/切换类查询保持按需。
 - **云存储**：主列表读聚合分支；「含已销毁」切换仍按需 `CLOUD_STORAGES(includeDestroyed:true)`。
 - **githubAppUrl**：仅随首次加载/显式 refetch 求值（签发一次性 OAuth state），不因轮询放大签发频率。
+
+## UI/UX 工作区外壳重构与设计规范守卫
+
+> 设计规范见 `docs/engineering/ui-ux-standards.md`；提案见 `docs/engineering/proposals/20261126-refactor-ui-ux-workspace-overhaul.md`。
+
+- **三层工作区外壳（3-Tier Workspace Shell）**：桌面端 `MainLayout` 采用 `grid-cols-[3.5rem_var(--sidebar-width,20rem)_minmax(0,1fr)]`（二级面板收起时为 `grid-cols-[3.5rem_minmax(0,1fr)]`）：
+  1. **一级导航轨（`components/layout/ActivityRail.tsx`）**：固定 `56px`（`w-14`）宽，承载「概览」「会话」「工作流」「知识库」「主机」快速切换、二级列表栏收起/展开按钮（支持 `Cmd/Ctrl+B` 全局快捷键）、待处理 Review / 未读待办提醒圆点（`data-testid="rail-attention-dot"`），以及底部「费用」「设置」入口。
+  2. **二级上下文面板（`components/Sidebar.tsx`）**：接收 `focusTarget` prop，点击一级导航轨对应域时自动展开并滚动定位到该 `SidebarSection`；`SidebarResizer` 支持 `offsetLeft={56}` 偏移量。
+  3. **主工作舞台（`main`）**：承载路由页面；`SettingsPage` 支持左侧分类激活态高亮（`data-active="true"`），`ControllerConfigPage` 桌面端主区顶部提供面包屑导航（`data-testid="controller-config-breadcrumb"`，`设置中心 / 控制器管理 / <当前配置项>`）。
+- **零微字号硬性门禁（`>= 12px`）**：全站禁止使用小于 `12px`（`text-xs`）的微字号（如 `text-[9px]`、`text-[10px]`、`text-[11px]`）；静态守卫单测 `src/__tests__/ui-ux-standards.test.ts`（`T-UIUX-FONT1` / `T-UIUX-FONT2`）递归扫描 `apps/agent-web/src` 与 `apps/admin-web/src` 全部源码文件。
+- **OKLCH 表面明度层级**：`src/index.css`（及 `apps/admin-web/src/index.css`）在亮/暗双主题下通过带微色相（hue `264`）的明度梯度区分 `--background`、`--sidebar`、`--card`、`--popover`，数字计数与金额统一使用 `tabular-nums`。
+

@@ -8,6 +8,8 @@ import {
 interface SidebarResizerProps {
   width: number
   onWidthChange: (width: number) => void
+  /** 左侧固定导航轨偏移量（px），默认 0 */
+  offsetLeft?: number
 }
 
 /**
@@ -15,7 +17,7 @@ interface SidebarResizerProps {
  * pointer 拖拽实时调宽（clamp 15–28rem），pointerup 持久化到 localStorage，双击恢复默认 20rem。
  * 仅桌面端渲染（由 MainLayout 控制）。
  */
-export default function SidebarResizer({ width, onWidthChange }: SidebarResizerProps) {
+export default function SidebarResizer({ width, onWidthChange, offsetLeft = 0 }: SidebarResizerProps) {
   const cleanupRef = useRef<(() => void) | null>(null)
 
   useEffect(() => () => cleanupRef.current?.(), [])
@@ -60,7 +62,7 @@ export default function SidebarResizer({ width, onWidthChange }: SidebarResizerP
       title="拖拽调整宽度，双击恢复默认"
       data-testid="sidebar-resizer"
       className="absolute inset-y-0 z-20 w-1 cursor-col-resize bg-transparent transition-colors hover:bg-primary/40 active:bg-primary/60"
-      style={{ left: width - 2 }}
+      style={{ left: offsetLeft + width - 2 }}
       onPointerDown={handlePointerDown}
       onDoubleClick={handleDoubleClick}
     />

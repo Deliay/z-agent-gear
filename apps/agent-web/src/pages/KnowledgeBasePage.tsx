@@ -162,7 +162,7 @@ export default function KnowledgeBasePage() {
               data-testid="repo-kb-breadcrumb"
             >
               <span className="min-w-0 truncate">{repoBase?.name ?? decodedRepo.folder}</span>
-              <Badge variant="outline" className="shrink-0 px-1 py-0 text-[9px]">
+              <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-xs">
                 {sourceLabel(decodedRepo.source)}
               </Badge>
               {crumbs.map((crumb) => (

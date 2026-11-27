@@ -26,7 +26,7 @@ export default function ResourceChip({ resource, onOpen }: ResourceChipProps) {
       type="button"
       data-testid={`resource-chip-${resource.kind}`}
       title={`${KIND_LABEL[resource.kind]}：${resource.title}`}
-      className="nodrag flex max-w-48 min-w-0 items-center gap-1 rounded border bg-background/80 px-1.5 py-0.5 text-left text-[10px] text-foreground transition-colors hover:bg-muted"
+      className="nodrag flex max-w-48 min-w-0 items-center gap-1 rounded border bg-background/80 px-1.5 py-0.5 text-left text-xs text-foreground transition-colors hover:bg-muted"
       onClick={(event) => {
         event.stopPropagation()
         onOpen?.(resource)
@@ -35,7 +35,7 @@ export default function ResourceChip({ resource, onOpen }: ResourceChipProps) {
       <Icon className="size-3 shrink-0 text-muted-foreground" />
       <span className="line-clamp-2 min-w-0 break-all text-left leading-tight">{resource.title}</span>
       {resource.checkRunUrl && (
-        <span className="shrink-0 rounded bg-success/15 px-1 text-[9px] text-success">检查项</span>
+        <span className="shrink-0 rounded bg-success/15 px-1 text-xs text-success">检查项</span>
       )}
     </button>
   )
@@ -71,7 +71,7 @@ export function ResourceChips({
       {moreResources > 0 && (
         <button
           type="button"
-          className="nodrag inline-flex shrink-0 items-center gap-0.5 rounded border bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
+          className="nodrag inline-flex shrink-0 items-center gap-0.5 rounded border bg-background/80 px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground hover:bg-muted"
           onClick={(event) => {
             event.stopPropagation()
             onOpenMore?.()

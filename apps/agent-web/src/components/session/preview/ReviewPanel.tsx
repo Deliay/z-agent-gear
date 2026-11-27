@@ -145,7 +145,7 @@ export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
         <div className="w-48 shrink-0 overflow-auto border-r border-border p-2" data-testid="review-file-tree">
           {groups.map((group) => (
             <div key={group.dir} className="mb-2">
-              <div className="truncate px-1 text-[10px] text-muted-foreground">{group.dir}</div>
+              <div className="truncate px-1 text-xs text-muted-foreground">{group.dir}</div>
               {group.files.map((file) => (
                 <button
                   key={file}
@@ -157,7 +157,7 @@ export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
                 >
                   <span className="min-w-0 truncate">{file.split('/').pop()}</span>
                   {(fileReviews[file]?.length ?? 0) > 0 && (
-                    <span className="ml-1 rounded-sm bg-muted px-1 text-[10px]" data-testid="review-file-count">
+                    <span className="ml-1 rounded-sm bg-muted px-1 text-xs tabular-nums" data-testid="review-file-count">
                       {fileReviews[file].length}
                     </span>
                   )}

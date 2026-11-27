@@ -230,7 +230,7 @@ export default function KnowledgeBaseSection({ expanded, onToggle }: KnowledgeBa
                         {knowledgeBase.global && (
                           <Badge
                             variant="secondary"
-                            className="shrink-0 px-1 py-0 text-[9px]"
+                            className="shrink-0 px-1.5 py-0 text-xs"
                             data-testid="knowledge-base-global-badge"
                           >
                             全局

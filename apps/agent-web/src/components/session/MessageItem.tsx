@@ -155,7 +155,7 @@ export default function MessageItem({ message }: MessageItemProps) {
                   alt={image.name ?? 'image'}
                   className="max-h-32 rounded"
                 />
-                {image.name && <div className="text-[10px] opacity-70">{image.name}</div>}
+                {image.name && <div className="text-xs opacity-70">{image.name}</div>}
               </button>
             ))}
           </div>

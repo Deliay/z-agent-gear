@@ -119,12 +119,15 @@ export default function SettingsPage() {
     ? [...NAV_GROUPS, { label: '云存储', items: [STORAGE_NAV_ITEM] }]
     : NAV_GROUPS;
 
+  const [activeSectionId, setActiveSectionId] = useState<string>('account-section');
+
   const handleLogout = () => {
     logout();
     navigate('/login', { replace: true });
   };
 
   const scrollTo = (id: string) => {
+    setActiveSectionId(id);
     const el = document.getElementById(id);
     el?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -170,8 +173,13 @@ export default function SettingsPage() {
           <button
             key={item.id}
             type="button"
+            data-active={activeSectionId === item.id ? 'true' : undefined}
             onClick={() => scrollTo(item.id)}
-            className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent"
+            className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              activeSectionId === item.id
+                ? 'bg-accent text-accent-foreground'
+                : 'hover:bg-accent'
+            }`}
           >
             {item.label}
           </button>
@@ -188,17 +196,25 @@ export default function SettingsPage() {
                     {group.label}
                   </div>
                 )}
-                {group.items.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => scrollTo(item.id)}
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-left hover:bg-accent hover:text-accent-foreground"
-                  >
-                    <item.icon className="size-4 text-muted-foreground" />
-                    {item.label}
-                  </button>
-                ))}
+                {group.items.map((item) => {
+                  const isActive = activeSectionId === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      data-active={isActive ? 'true' : undefined}
+                      onClick={() => scrollTo(item.id)}
+                      className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-left transition-colors ${
+                        isActive
+                          ? 'bg-accent text-accent-foreground'
+                          : 'hover:bg-accent hover:text-accent-foreground'
+                      }`}
+                    >
+                      <item.icon className="size-4 text-muted-foreground" />
+                      {item.label}
+                    </button>
+                  );
+                })}
               </div>
             ))}
           </div>
