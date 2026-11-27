@@ -68,9 +68,9 @@ export default function SecurityPage() {
   const bindable = providers.filter((provider) => !boundProviderIds.has(provider.id))
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div>
-        <h1 className="text-xl font-semibold">账号安全</h1>
+        <h1 className="font-heading text-xl font-semibold text-foreground">账号安全</h1>
         <p className="text-sm text-muted-foreground">
           绑定外部身份后，方可使用对应的第三方登录方式进入管理后台。未绑定的身份一律拒绝登录。
         </p>

@@ -14,12 +14,12 @@ import { Button } from '@/components/ui/button';
 import { ADMIN_CLOUD_WORKLOAD_LOGS } from '@/graphql/queries';
 import type {
   CloudWorkloadLogData,
-  CloudWorkloadLogStatus,
   GetAdminCloudContainerWorkloadLogsQuery,
 } from '@/graphql/types';
 import { formatDateTime } from '@/lib/format';
 import { formatParams } from '@/lib/workload-params';
-import { REQUIRED_LABEL, WORKLOAD_LOG_PHASE_LABELS, WORKLOAD_LOG_STATUS_LABELS } from './labels';
+import { statusBadgeProps } from '@/lib/status-labels';
+import { REQUIRED_LABEL, WORKLOAD_LOG_PHASE_LABELS } from './labels';
 
 interface WorkloadLogsDialogProps {
   open: boolean;
@@ -27,16 +27,6 @@ interface WorkloadLogsDialogProps {
   containerId: string;
   containerName: string;
 }
-
-type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline';
-
-const STATUS_VARIANTS: Record<CloudWorkloadLogStatus, BadgeVariant> = {
-  PENDING: 'secondary',
-  RUNNING: 'secondary',
-  SUCCESS: 'default',
-  FAILED: 'destructive',
-  TIMEOUT: 'outline',
-};
 
 /** 执行记录轮询间隔：PRD 功能点 5 要求「执行中的记录实时可刷新」（5s，与容器列表同源节奏）。 */
 export const WORKLOAD_LOGS_POLL_INTERVAL_MS = 5000;
@@ -122,8 +112,8 @@ export default function WorkloadLogsDialog({
                               {REQUIRED_LABEL}
                             </span>
                           )}
-                          <Badge variant={STATUS_VARIANTS[item.status]}>
-                            {WORKLOAD_LOG_STATUS_LABELS[item.status]}
+                          <Badge variant={statusBadgeProps(item.status).variant}>
+                            {statusBadgeProps(item.status).label}
                           </Badge>
                         </span>
                         <span className="block max-w-full truncate text-xs text-muted-foreground">
@@ -157,7 +147,7 @@ export default function WorkloadLogsDialog({
                 </div>
                 <div className="min-w-0 space-y-1">
                   <p className="text-xs font-medium text-muted-foreground">输出日志</p>
-                  <pre className="max-h-48 min-w-0 overflow-auto rounded-md border bg-muted/50 p-3 font-mono text-xs whitespace-pre-wrap break-all">
+                  <pre className="max-h-48 min-w-0 overflow-auto rounded-md border border-white/10 bg-[oklch(0.18_0.006_264)] p-3 font-mono text-xs whitespace-pre-wrap break-all text-[oklch(0.96_0.005_264)]">
                     {selected.log || '(无输出)'}
                   </pre>
                 </div>

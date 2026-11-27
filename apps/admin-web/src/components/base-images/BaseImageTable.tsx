@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatDateTime } from '@/lib/format'
 import type { BaseImageData } from '@/graphql/types'
+import * as T from '@/lib/table-styles'
 
 interface BaseImageTableProps {
   images: BaseImageData[]
@@ -24,28 +25,28 @@ export default function BaseImageTable({ images, onEdit, onDelete }: BaseImageTa
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
-      <table className="w-full min-w-0 text-sm">
-        <thead className="bg-muted/50 text-left text-muted-foreground">
+    <div className={T.TABLE_CONTAINER_CLASS}>
+      <table className={T.TABLE_CLASS}>
+        <thead className={T.TABLE_HEAD_CLASS}>
           <tr>
-            <th className="px-4 py-2 font-medium">名称</th>
-            <th className="px-4 py-2 font-medium">描述</th>
-            <th className="px-4 py-2 font-medium">更新时间</th>
-            <th className="px-4 py-2 text-right font-medium">操作</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>描述</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>更新时间</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>操作</th>
           </tr>
         </thead>
         <tbody>
           {images.map((image) => (
-            <tr key={image.id} className="border-t">
-              <td className="px-4 py-3 font-medium text-foreground">{image.name}</td>
-              <td className="max-w-md truncate px-4 py-3 text-muted-foreground">
+            <tr key={image.id} className={T.TABLE_ROW_CLASS}>
+              <td className={T.TABLE_CELL_STRONG_CLASS}>{image.name}</td>
+              <td className={`max-w-md truncate ${T.TABLE_CELL_MUTED_CLASS}`}>
                 {image.description || '-'}
               </td>
-              <td className="px-4 py-3 text-muted-foreground">
+              <td className={T.TABLE_CELL_MUTED_CLASS}>
                 {formatDateTime(image.updatedAt)}
               </td>
-              <td className="px-4 py-3">
-                <div className="flex items-center justify-end gap-1">
+              <td className={T.TABLE_CELL_CLASS}>
+                <div className={T.TABLE_ACTION_CLASS}>
                   <Button
                     variant="ghost"
                     size="icon-sm"

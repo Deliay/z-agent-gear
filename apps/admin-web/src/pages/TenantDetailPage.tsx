@@ -9,7 +9,6 @@ import type {
   AdminTenantUserData,
   GetAdminTenantQuery,
   TenantRole,
-  TenantType,
 } from '@/graphql/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -19,14 +18,13 @@ import AddMemberDialog from '@/components/tenants/AddMemberDialog'
 import ChangeMemberRoleDialog from '@/components/tenants/ChangeMemberRoleDialog'
 import {
   WORKSPACE_TYPE_LABELS,
+  tenantRoleBadge,
   tenantRoleText,
+  tenantTypeBadge,
 } from '@/components/tenants/roles'
+import { statusBadgeProps } from '@/lib/status-labels'
 import { formatDateTime } from '@/lib/format'
-
-const TENANT_TYPE_LABELS: Record<TenantType, string> = {
-  personal: '个人',
-  team: '团队',
-}
+import * as T from '@/lib/table-styles'
 
 /** 添加成员错误映射：账号不存在 / 重复 / 角色非法 / personal 拒绝 / 转发通道不可用 / 其余原样透出。 */
 function mapAddMemberError(message: string): string {
@@ -194,8 +192,8 @@ export default function TenantDetailPage() {
               <div>
                 <dt className="text-muted-foreground">类型</dt>
                 <dd className="mt-1">
-                  <Badge variant="outline">
-                    {TENANT_TYPE_LABELS[tenant.type] ?? tenant.type}
+                  <Badge variant={tenantTypeBadge(tenant.type).variant}>
+                    {tenantTypeBadge(tenant.type).label}
                   </Badge>
                 </dd>
               </div>
@@ -222,36 +220,36 @@ export default function TenantDetailPage() {
             {tenant.users.length === 0 ? (
               <p className="text-sm text-muted-foreground">暂无成员</p>
             ) : (
-              <div className="overflow-x-auto rounded-lg border">
-                <table className="w-full min-w-0 text-sm">
-                  <thead className="bg-muted/50 text-left text-muted-foreground">
+              <div className={T.TABLE_CONTAINER_CLASS}>
+                <table className={T.TABLE_CLASS}>
+                  <thead className={T.TABLE_HEAD_CLASS}>
                     <tr>
-                      <th className="px-4 py-2 font-medium">用户名</th>
-                      <th className="px-4 py-2 font-medium">角色</th>
-                      <th className="px-4 py-2 font-medium">创建时间</th>
-                      {isTeam && <th className="px-4 py-2 text-right font-medium">操作</th>}
+                      <th className={T.TABLE_HEAD_CELL_CLASS}>用户名</th>
+                      <th className={T.TABLE_HEAD_CELL_CLASS}>角色</th>
+                      <th className={T.TABLE_HEAD_CELL_CLASS}>创建时间</th>
+                      {isTeam && <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>操作</th>}
                     </tr>
                   </thead>
                   <tbody>
                     {tenant.users.map((user) => (
-                      <tr key={user.id} className="border-t">
-                        <td className="px-4 py-3">
+                      <tr key={user.id} className={T.TABLE_ROW_CLASS}>
+                        <td className={T.TABLE_CELL_CLASS}>
                           <div className="font-medium text-foreground">{user.username}</div>
                           {user.name && user.name !== user.username && (
                             <div className="text-xs text-muted-foreground">{user.name}</div>
                           )}
                         </td>
-                        <td className="px-4 py-3">
-                          <Badge variant={user.role === 'admin' ? 'secondary' : 'outline'}>
+                        <td className={T.TABLE_CELL_CLASS}>
+                          <Badge variant={tenantRoleBadge(user.role).variant}>
                             {tenantRoleText(user.role)}
                           </Badge>
                         </td>
-                        <td className="px-4 py-3 text-muted-foreground">
+                        <td className={T.TABLE_CELL_MUTED_CLASS}>
                           {formatDateTime(user.createdAt)}
                         </td>
                         {isTeam && (
-                          <td className="px-4 py-3">
-                            <div className="flex items-center justify-end gap-2">
+                          <td className={T.TABLE_CELL_CLASS}>
+                            <div className={`${T.TABLE_ACTION_CLASS}`}>
                               <Button
                                 size="sm"
                                 variant="outline"
@@ -285,25 +283,25 @@ export default function TenantDetailPage() {
             {workspaces.length === 0 ? (
               <p className="text-sm text-muted-foreground">暂无工作区</p>
             ) : (
-              <div className="overflow-x-auto rounded-lg border">
-                <table className="w-full min-w-0 text-sm">
-                  <thead className="bg-muted/50 text-left text-muted-foreground">
+              <div className={T.TABLE_CONTAINER_CLASS}>
+                <table className={T.TABLE_CLASS}>
+                  <thead className={T.TABLE_HEAD_CLASS}>
                     <tr>
-                      <th className="px-4 py-2 font-medium">名称</th>
-                      <th className="px-4 py-2 font-medium">类型</th>
-                      <th className="px-4 py-2 text-right font-medium">成员数</th>
+                      <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
+                      <th className={T.TABLE_HEAD_CELL_CLASS}>类型</th>
+                      <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>成员数</th>
                     </tr>
                   </thead>
                   <tbody>
                     {workspaces.map((workspace) => (
-                      <tr key={workspace.id} className="border-t">
-                        <td className="px-4 py-3 font-medium text-foreground">{workspace.name}</td>
-                        <td className="px-4 py-3">
-                          <Badge variant="outline">
+                      <tr key={workspace.id} className={T.TABLE_ROW_CLASS}>
+                        <td className={T.TABLE_CELL_STRONG_CLASS}>{workspace.name}</td>
+                        <td className={T.TABLE_CELL_CLASS}>
+                          <Badge variant={statusBadgeProps(workspace.type).variant}>
                             {WORKSPACE_TYPE_LABELS[workspace.type] ?? workspace.type}
                           </Badge>
                         </td>
-                        <td className="px-4 py-3 text-right tabular-nums">
+                        <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                           {workspace.memberCount}
                         </td>
                       </tr>

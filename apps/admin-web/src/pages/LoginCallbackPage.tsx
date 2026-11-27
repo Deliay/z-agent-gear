@@ -60,15 +60,19 @@ export default function LoginCallbackPage() {
   }, [])
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-muted px-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="text-center text-2xl">正在登录…</CardTitle>
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4 py-10">
+      <Card className="w-full max-w-[400px] rounded-xl p-6">
+        <CardHeader className="px-0">
+          <CardTitle className="text-center text-2xl">
+            {message ? '登录失败' : '正在登录…'}
+          </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4 text-center">
+        <CardContent className="space-y-4 px-0 text-center">
           {message ? (
             <>
-              <p role="alert" className="text-sm text-destructive">{message}</p>
+              <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                {message}
+              </div>
               <Button className="w-full" onClick={() => navigate('/login', { replace: true })}>
                 返回登录
               </Button>

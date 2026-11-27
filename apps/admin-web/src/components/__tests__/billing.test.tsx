@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import AccountTable from '../billing/AccountTable';
+import ReceiptDrawer from '../billing/ReceiptDrawer';
 import RollupChart from '../billing/RollupChart';
-import type { BillingAccountData } from '@/graphql/types';
+import type { BillingAccountData, BillingInvoiceData } from '@/graphql/types';
 
 const accounts: BillingAccountData[] = [
   {
@@ -84,5 +85,50 @@ describe('费用中心组件', () => {
     );
     expect(screen.getByText(/消费 5\.00/)).toBeDefined();
     expect(screen.getByText(/充值 100\.00/)).toBeDefined();
+  });
+
+  it('T-AUI-RD1: ReceiptDrawer 以右侧 Sheet 呈现，金额等宽右对齐', () => {
+    const invoice: BillingInvoiceData = {
+      id: 'i1',
+      accountId: 'a1',
+      seq: 12,
+      type: 'charge',
+      category: 'model',
+      amount: -12.34,
+      balanceAfter: 87.66,
+      refType: 'metering',
+      refId: 'm1',
+      description: '模型调用扣费',
+      items: [
+        {
+          productId: 'gpt-5',
+          unitPrice: 2,
+          quantity: 1,
+          amount: -12.34,
+          meteringRef: 'mr1',
+          segment: 'aborted',
+        },
+      ],
+      receiptId: 'r1',
+      createdAt: '2026-10-18T00:00:00.000Z',
+    };
+
+    render(
+      <ReceiptDrawer
+        invoice={invoice}
+        receipt={null}
+        open
+        onClose={() => {}}
+      />,
+    );
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('data-side', 'right');
+    expect(dialog.className).toContain('sm:max-w-[560px]');
+    expect(screen.getByRole('heading', { name: '收据' })).toBeDefined();
+    expect(screen.getByText('用量与单价快照')).toBeDefined();
+    const amount = screen.getByText('-12.34 credits');
+    expect(amount.className).toContain('tabular-nums');
+    expect(amount.className).toContain('text-right');
   });
 });

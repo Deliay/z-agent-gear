@@ -94,7 +94,7 @@
   --sidebar-border: oklch(0.91 0.005 264);
   --sidebar-ring: oklch(0.54 0.19 264);
 
-  color-scheme: light dark;
+  color-scheme: light;
 }
 
 .dark {
@@ -135,6 +135,7 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 11%);
   --sidebar-ring: oklch(0.70 0.15 264);
+  color-scheme: dark;
 }
 
 @layer base {

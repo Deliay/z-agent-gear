@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { formatDateTime } from '@/lib/format';
 import type { CloudWorkloadData } from '@/graphql/types';
+import * as T from '@/lib/table-styles'
 
 interface WorkloadTableProps {
   workloads: CloudWorkloadData[];
@@ -33,18 +34,18 @@ export default function WorkloadTable({ workloads, onEdit, onDelete }: WorkloadT
   const nameById = new Map(workloads.map((workload) => [workload.id, workload.name]));
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
-      <table className="w-full min-w-0 text-sm">
-        <thead className="bg-muted/50 text-left text-muted-foreground">
+    <div className={T.TABLE_CONTAINER_CLASS}>
+      <table className={T.TABLE_CLASS}>
+        <thead className={T.TABLE_HEAD_CLASS}>
           <tr>
-            <th className="px-4 py-2 font-medium">名称</th>
-            <th className="px-4 py-2 font-medium">类型</th>
-            <th className="px-4 py-2 font-medium">参数</th>
-            <th className="px-4 py-2 font-medium">依赖</th>
-            <th className="px-4 py-2 font-medium">初始化脚本</th>
-            <th className="px-4 py-2 font-medium">清理脚本</th>
-            <th className="px-4 py-2 font-medium">更新时间</th>
-            <th className="px-4 py-2 text-right font-medium">操作</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>类型</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>参数</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>依赖</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>初始化脚本</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>清理脚本</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>更新时间</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -54,22 +55,22 @@ export default function WorkloadTable({ workloads, onEdit, onDelete }: WorkloadT
             );
             const paramCount = (workload.paramSchema ?? []).length;
             return (
-              <tr key={workload.id} className="border-t">
-                <td className="px-4 py-3 font-medium text-foreground">
+              <tr key={workload.id} className={T.TABLE_ROW_CLASS}>
+                <td className={T.TABLE_CELL_STRONG_CLASS}>
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="min-w-0 truncate">{workload.name}</span>
-                    {workload.isPreset && <Badge variant="secondary">预制</Badge>}
+                    {workload.isPreset && <Badge variant="info">预制</Badge>}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-muted-foreground">
+                <td className={T.TABLE_CELL_MUTED_CLASS}>
                   <Badge variant="outline">
                     {(workload.workloadKind ?? 'STANDARD') === 'HARNESS' ? 'HARNESS' : 'STANDARD'}
                   </Badge>
                 </td>
-                <td className="px-4 py-3 text-muted-foreground">
+                <td className={T.TABLE_CELL_MUTED_CLASS}>
                   {paramCount > 0 ? paramCount : '-'}
                 </td>
-                <td className="px-4 py-3 text-muted-foreground">
+                <td className={T.TABLE_CELL_MUTED_CLASS}>
                   {dependencyNames.length > 0 ? (
                     <span className="flex flex-wrap gap-1">
                       {dependencyNames.map((depName) => (
@@ -85,17 +86,17 @@ export default function WorkloadTable({ workloads, onEdit, onDelete }: WorkloadT
                     '-'
                   )}
                 </td>
-                <td className="px-4 py-3 text-muted-foreground">
+                <td className={T.TABLE_CELL_MUTED_CLASS}>
                   <span className="block max-w-xs truncate">{scriptSummary(workload.initScript)}</span>
                 </td>
-                <td className="px-4 py-3 text-muted-foreground">
+                <td className={T.TABLE_CELL_MUTED_CLASS}>
                   <span className="block max-w-xs truncate">{scriptSummary(workload.postScript)}</span>
                 </td>
-                <td className="px-4 py-3 text-muted-foreground">
+                <td className={T.TABLE_CELL_MUTED_CLASS}>
                   {formatDateTime(workload.updatedAt)}
                 </td>
-                <td className="px-4 py-3">
-                  <div className="flex items-center justify-end gap-1">
+                <td className={T.TABLE_CELL_CLASS}>
+                  <div className={T.TABLE_ACTION_CLASS}>
                     <Button
                       variant="ghost"
                       size="icon-sm"
