@@ -10,6 +10,7 @@ engineering/
 ├── common-rules.md       # 通用开发规范
 ├── backend-rules.md      # 后端开发规范
 ├── frontend-rules.md     # 前端开发规范
+├── ui-ux-standards.md    # UI/UX 设计规范与视觉系统准则
 ├── proposals/            # 技术提案（评审后锁定）
 ├── plan/                 # 实现计划（从 proposal 拆解出的可执行任务）
 └── acceptance/           # 验收报告（含 archived/ 归档子目录，规范见 acceptance/AGENTS.md）
@@ -139,6 +140,7 @@ flowchart LR
 - [[common-rules.md]] — 通用开发规范
 - [[backend-rules.md]] — 后端开发规范
 - [[frontend-rules.md]] — 前端开发规范
+- [[ui-ux-standards.md]] — UI/UX 设计规范与视觉系统准则
 - [[../knowledges/domain/00-领域模型库-索引.md]] — 领域模型知识库（方案同步目标）
 
 ### 技术提案（`proposals/`）
@@ -260,6 +262,7 @@ flowchart LR
 - [[proposals/20261118-feat-github-project-token.md]] — 云电脑为不同项目获取不同的 Token（Issue #566）：gh wrapper 覆盖 `/usr/local/bin/gh` + agent-gear 2.22.0 `github-token` 子命令（git origin 归一 + 项目级凭据申请 + 退出码分档）+ agent-api 凭据端点按 `repoFullName` 项目级签发与 `CloudHostGithubBinding` 多项目化（`{controllerId, repoFullName}` 唯一、迁移 029）+ cloud-controller `workload:run.githubRepoFullName`；含旧版兼容降级矩阵、API/数据模型/测试策略/部署方案/验收标准
 - [[proposals/20261121-feat-knowledge-base-docs-root.md]] — 仓库知识库搜索路径扩展：agent-gear 2.23.0 新增第三来源 `docs-root`（仓库 `docs/` 一层文件夹、跳过 `knowledges` 容器），controller-api 中继零改动，agent-api 来源枚举 `DOCS_ROOT` / id 段 `docs-root` / 编写指引同步，agent-web 来源标识；既有两个来源零回归、旧版组件优雅降级
 - [[proposals/20261124-feat-container-spec-tiered-billing.md]] — 容器规格管理与云电脑分段计费（`cloudhostspecs` admin-api 唯一写方 + 迁移 025 预制 6 款（unlimited-0c0g 白名单默认开启空名单）、可见性=非白名单或租户命中；`CreateCloudHostInput.specId` 创建快照贯通 cloudhosts/cloudcontainers 到 K8s resources.limits（普通 spec limits 按规格/requests 现状小值、全零不设置 resources、无 spec 回落 JOB_RESOURCES 现状）；七档 `cloud_spec.*` 价目 + `quoteSpecHourly` + `/internal/billing/spec-quote` + `cloudbillingcursors` 小时桶尾段分钟折算（`container.ready` payload.spec 分流，旧版 `container.minute` 预留零改动）；admin-web 规格管理页白名单 combo、agent-web 创建规格选择与总价；含 F1~F14 代码事实核对与 D1~D14 裁决）
+- [[proposals/20261126-refactor-ui-ux-workspace-overhaul.md]] — 整体工作区 UI/UX 重构与视觉规范升级（建立 `docs/engineering/ui-ux-standards.md` 设计规范；重构 `MainLayout` 为 `ActivityRail` 56px 一级导航轨 + `ContextPanel` 可调宽/可收起二级聚焦面板 + `MainStage` 主工作舞台；全站 18 组件 48 处 `<12px` 微字号清零与守卫单测、OKLCH 表面层级与全中文文案统一；协同 PR #585 落地无计数按需懒加载归档分组、`homeOverview` 三分支合流、在线控制器工作区过滤与 `settingsOverview` 单次聚合分类聚焦设置中心）
 
 ### 实现计划（`plan/`）
 
