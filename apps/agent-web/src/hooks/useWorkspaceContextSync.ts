@@ -37,7 +37,7 @@ export function useWorkspaceContextSync(): void {
     if (!user?.id) return;
     const refresh = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      void refetch();
+      Promise.resolve(refetch()).catch(() => undefined);
     };
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
@@ -55,7 +55,7 @@ export function useWorkspaceContextSync(): void {
     lastInvalidWorkspaceRef.current = invalidId;
     clearPersistedWorkspaceId(user.id);
     resetWorkspaceStore();
-    void refetch();
+    Promise.resolve(refetch()).catch(() => undefined);
   }, [error, refetch, user?.id]);
 
   useEffect(() => {

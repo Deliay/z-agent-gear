@@ -109,6 +109,8 @@ export default function SettingsPage() {
   const { data: settingsData, loading: settingsLoading, error: settingsError, refetch: refetchSettings } =
     useQuery<SettingsOverviewQuery>(SETTINGS_OVERVIEW, {
       fetchPolicy: 'cache-and-network',
+      // 控制器配置子页不渲染设置区块：跳过 14 分支聚合（避免 githubAppUrl 无谓签发 state）
+      skip: Boolean(controllerId),
     });
   const settings = settingsData?.settingsOverview ?? null;
   const storageEnabled = settings?.cloudStorageCapabilities?.enabled === true;

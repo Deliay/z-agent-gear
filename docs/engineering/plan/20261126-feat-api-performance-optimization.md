@@ -206,7 +206,7 @@ sequenceDiagram
 
 | 编号 | 文件 | 断言 |
 |------|------|------|
-| E2E-HP1 | `home.spec.ts`（改写 T-E1/T-E2 helper） | 首屏仅 1 次 HomeOverview 且无归档清单请求（`sessions(archived`/`workflowInstances(archived` 首屏 0 次） |
+| E2E-HP1 | `home.spec.ts`（改写 T-E1/T-E2 helper） | 首屏仅 1 次 HomeOverview 且无归档清单请求（按 operationName 判定：`GetArchivedSessions` / `GetWorkflowInstances` + `variables.archived:true` 首屏 0 次） |
 | E2E-HP2 | 同上 / 新增 | 展开「已归档」才发归档请求、标题与列表无数量、空态可展开；折叠再展开按 `cache-and-network` 重新拉取（本期不承诺复用缓存） |
 | E2E-HP3 | 新增 | workspaceContext/模板/配置随 15s 轮询刷新（建数据后一个周期内可见） |
 | E2E-WSF1 | 新增 | 「新建工作流」弹窗与工作区列表不展示离线/删除控制器工作区 |

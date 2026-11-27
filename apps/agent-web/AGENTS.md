@@ -31,7 +31,7 @@ pnpm run preview  # Preview production build
 
 ## 首页数据流
 
-首页（`HomePage`）与桌面端侧边栏（`Sidebar`）的全部信息流由 `pages/MainLayout.tsx` 挂载的唯一一次 `HOME_OVERVIEW` 查询（`graphql/home.ts`，`pollInterval: 15000`）统一下发，子组件通过 `stores/homeOverview.ts` 的 `useHomeOverview()` 消费，**不得各自发起信息流查询**（会话/控制器/工作区/工作流/待办/网关/Worktree/工作区上下文 `workspaceContext`/工作流模板/已配置工作流均随聚合查询下发）。归档会话/归档实例**不随首页获取**：侧边栏「已归档」分组常驻可展开，展开时才按需查询 `GetArchivedSessions` / `GetWorkflowInstances(archived:true)`，且不展示任何数量。`useWorkspaceContextSync` 消费 `homeOverview.workspaceContext`（无独立轮询；focus/visibility → `refetch()` HOME_OVERVIEW）。
+首页（`HomePage`）与桌面端侧边栏（`Sidebar`）的全部信息流由 `pages/MainLayout.tsx` 挂载的唯一一次 `HOME_OVERVIEW` 查询（`graphql/home.ts`，`pollInterval: 15000`）统一下发，子组件通过 `stores/homeOverview.ts` 的 `useHomeOverview()` 消费，**不得各自发起信息流查询**（会话/控制器/工作区/工作流/待办/网关/Worktree/工作区上下文 `workspaceContext`/工作流模板/已配置工作流均随聚合查询下发）。归档会话/归档实例**不随首页获取**：侧边栏「已归档」分组常驻可展开，展开时才按需查询 `GetArchivedSessions` / `GetWorkflowInstances(archived:true)`，且不展示任何数量。`useWorkspaceContextSync` 消费 `homeOverview.workspaceContext`（无独立轮询；focus/visibility → `refetch()` HOME_OVERVIEW）。**错误/加载页也必须挂载同步桥**（Provider + Bridge 包裹 early-return 分支），否则持久化工作区失效导致 `workspace not found` 时 hook 无法清理并 refetch，会卡在错误页死锁。
 
 - 首屏不阻塞布局外壳：`MainLayout` 先渲染侧边栏/页面外壳，聚合数据到达后各区块同批填充；任何需要 loading 兜底的判断必须写成 `loading && !data`，避免轮询时卸载整页（见 `frontend-rules.md` Apollo v4 轮询陷阱）。
 - 归属字段（`WorkflowInstance.workspace` / `controller`）可能已被删除，消费方须判空，回退显示「未知工作区」。
@@ -489,6 +489,6 @@ pnpm run preview  # Preview production build
 ## 设置页聚合查询（#584）
 
 - **单请求下发**：`SettingsPage` 仅发起一次 `SETTINGS_OVERVIEW`（`fetchPolicy: 'cache-and-network'`，**不轮询**），经 `stores/settingsOverview.ts` 的 `useSettingsOverview()` 下发；各设置区块删除自身只读 `useQuery`，改消费 Context；写操作 `refetchQueries: [{ query: SETTINGS_OVERVIEW }]`。
-- **复用与按需**：控制器在线状态改读 `homeOverview.controllers`（与首页同源同新鲜度，`ControllerListSection` 移除 `pollInterval`）；模板/已配置工作流改读 `homeOverview`（`WorkflowSection`/`InstantiateWorkflowDialog`/`ConfigureWorkflowDialog`/`IssuesLinkageDialog`/`RepoWorkflowSection` 打开时 `refetch()` HOME_OVERVIEW）；`GET_VALUT_MANUAL_OPTIONS`、`CLOUD_STORAGES(includeDestroyed:true)`、`personalGithubAccounts`、`workspaces`/`detectGitRepo`/`acpServerCapabilities` 等弹窗/切换类查询保持按需。
+- **复用与按需**：控制器在线状态改读 `homeOverview.controllers`（与首页同源同新鲜度，`ControllerListSection` 移除 `pollInterval`）；模板/已配置工作流改读 `homeOverview`（`WorkflowSection`/`InstantiateWorkflowDialog`/`ConfigureWorkflowDialog`/`IssuesLinkageDialog`/`RepoWorkflowSection` 打开时 `refetch()` HOME_OVERVIEW）；**模板/项目模板的写操作 `refetchQueries` 指向 `HOME_OVERVIEW`**（`TemplateEditorDialog` / `ConfigureRepoWorkflowDialog`），不再使用已无观察者的 `GET_WORKFLOW_TEMPLATES` / `GET_CONFIGURED_WORKFLOWS`；`GET_VALUT_MANUAL_OPTIONS`、`CLOUD_STORAGES(includeDestroyed:true)`、`personalGithubAccounts`、`workspaces`/`detectGitRepo`/`acpServerCapabilities` 等弹窗/切换类查询保持按需。
 - **云存储**：主列表读聚合分支；「含已销毁」切换仍按需 `CLOUD_STORAGES(includeDestroyed:true)`。
 - **githubAppUrl**：仅随首次加载/显式 refetch 求值（签发一次性 OAuth state），不因轮询放大签发频率。

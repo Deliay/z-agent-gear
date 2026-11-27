@@ -55,6 +55,7 @@ export default function MainLayout() {
   // 首屏不阻塞布局：聚合数据未就绪时以空数据渲染外壳，数据到达后各区块同批填充；
   // 轮询期间 loading=true 也不会卸载子页面（frontend-rules：Apollo v4 轮询陷阱）
   const homeData = data?.homeOverview ?? null;
+  const homeContextValue = { data: homeData, loading: homeLoading, error, refetch };
 
   // 用户级 SSE：harness 登录引导即时下发（待办轮询保留为断线兜底）
   useUserEventStream({
@@ -111,18 +112,27 @@ export default function MainLayout() {
     }
   }, [homeData, navigate]);
 
+  // 登录后先渲染错误/加载页也必须挂载同步桥：持久化工作区失效时由 hook 清理并 refetch
   if (loading) {
-    return <FullPageSpinner />;
+    return (
+      <HomeOverviewContext.Provider value={homeContextValue}>
+        <WorkspaceContextSyncBridge />
+        <FullPageSpinner />
+      </HomeOverviewContext.Provider>
+    );
   }
 
   // 整体加载失败：展示全局错误与重试入口，重试仍是一次请求
   if (error && !data) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-3" role="alert">
-        <p className="text-sm text-destructive">首页数据加载失败</p>
-        {error.message && <p className="max-w-md text-xs text-muted-foreground">{error.message}</p>}
-        <Button onClick={() => void refetch()}>重试</Button>
-      </div>
+      <HomeOverviewContext.Provider value={homeContextValue}>
+        <WorkspaceContextSyncBridge />
+        <div className="flex h-screen flex-col items-center justify-center gap-3" role="alert">
+          <p className="text-sm text-destructive">首页数据加载失败</p>
+          {error.message && <p className="max-w-md text-xs text-muted-foreground">{error.message}</p>}
+          <Button onClick={() => void refetch()}>重试</Button>
+        </div>
+      </HomeOverviewContext.Provider>
     );
   }
 
@@ -166,7 +176,7 @@ export default function MainLayout() {
   }
 
   return (
-    <HomeOverviewContext.Provider value={{ data: homeData, loading: homeLoading, error, refetch }}>
+    <HomeOverviewContext.Provider value={homeContextValue}>
       <WorkspaceContextSyncBridge />
       {layout}
       {/* 全站单例：登录引导弹窗挂在最高层级，不受 Sidebar / NewSessionDialog 挂载影响 */}

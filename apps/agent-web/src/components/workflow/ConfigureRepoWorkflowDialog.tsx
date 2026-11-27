@@ -15,11 +15,11 @@ import { Label } from '@/components/ui/label'
 import { GET_ACP_CAPABILITIES } from '@/graphql/queries'
 import type { GetAcpCapabilitiesQuery } from '@/graphql/types'
 import {
-  GET_CONFIGURED_WORKFLOWS,
   CONFIGURE_REPO_WORKFLOW,
   type ConfigureRepoWorkflowInput,
   type RepoWorkflowTemplateData,
 } from '@/graphql/workflow'
+import { HOME_OVERVIEW } from '@/graphql/home'
 import {
   templateNodeToEditable,
   toConfiguredNodeInput,
@@ -113,7 +113,7 @@ export default function ConfigureRepoWorkflowDialog({
     try {
       await configureRepoWorkflow({
         variables: { input },
-        refetchQueries: [{ query: GET_CONFIGURED_WORKFLOWS }],
+        refetchQueries: [{ query: HOME_OVERVIEW }],
       })
       toast.success('项目工作流配置已创建')
       onConfigured?.()
