@@ -23,6 +23,7 @@ import StartContainerDialog from '@/components/cloud-containers/StartContainerDi
 import DestroyConfirmDialog from '@/components/cloud-containers/DestroyConfirmDialog';
 import WorkloadLogsDialog from '@/components/cloud-containers/WorkloadLogsDialog';
 import { CONTAINER_PURPOSE_LABELS } from '@/components/cloud-containers/labels';
+import * as T from '@/lib/table-styles'
 
 export default function CloudContainersPage() {
   // 10s 轮询（Apollo v4：加载分支必须 `loading && !data`，否则每次轮询卸载整页）
@@ -76,9 +77,14 @@ export default function CloudContainersPage() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="font-heading text-xl font-medium text-foreground">云端容器</h1>
+    <div className="mx-auto max-w-6xl space-y-6 p-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-heading text-xl font-semibold text-foreground">云端容器</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            查看 cloud-controller 管理的工作容器状态、工作负载与执行日志。
+          </p>
+        </div>
         <Button size="sm" onClick={() => setStartOpen(true)}>
           启动
         </Button>
@@ -108,25 +114,25 @@ export default function CloudContainersPage() {
           />
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-lg border">
-          <table className="w-full min-w-0 text-sm">
-            <thead className="bg-muted/50 text-left text-muted-foreground">
-              <tr>
-                <th className="px-4 py-2 font-medium">名称</th>
-                <th className="px-4 py-2 font-medium">状态</th>
-                <th className="px-4 py-2 font-medium">用途</th>
-                <th className="px-4 py-2 font-medium">关联对象</th>
-                <th className="px-4 py-2 font-medium">工作负载</th>
-                <th className="px-4 py-2 font-medium">创建时间</th>
-                <th className="px-4 py-2 font-medium">在线时长</th>
-                <th className="px-4 py-2 text-right font-medium">操作</th>
+        <div className={T.TABLE_CONTAINER_CLASS}>
+          <table className={T.TABLE_CLASS}>
+            <thead>
+              <tr className={T.TABLE_HEAD_CLASS}>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>状态</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>用途</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>关联对象</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>工作负载</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>创建时间</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>在线时长</th>
+                <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>操作</th>
               </tr>
             </thead>
             <tbody>
               {containers.map((container) => (
-                <tr key={container.id} className="border-t">
-                  <td className="px-4 py-3 font-medium text-foreground">{container.name}</td>
-                  <td className="px-4 py-3">
+                <tr key={container.id} className={T.TABLE_ROW_CLASS}>
+                  <td className={T.TABLE_CELL_STRONG_CLASS}>{container.name}</td>
+                  <td className={T.TABLE_CELL_CLASS}>
                     <ContainerStatusBadge status={container.status} />
                     {container.status === 'INITIALIZING' && container.currentWorkloadName ? (
                       <div className="mt-1 text-xs text-muted-foreground">
@@ -134,11 +140,11 @@ export default function CloudContainersPage() {
                       </div>
                     ) : null}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                  <td className={T.TABLE_CELL_MUTED_CLASS}>
                     {CONTAINER_PURPOSE_LABELS[container.purpose]}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">{container.refId ?? '-'}</td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                  <td className={T.TABLE_CELL_MUTED_CLASS}>{container.refId ?? '-'}</td>
+                  <td className={T.TABLE_CELL_MUTED_CLASS}>
                     {container.workloads?.length ? (
                       <span className="flex flex-wrap gap-1">
                         {container.workloads.map((workload) => (
@@ -154,17 +160,17 @@ export default function CloudContainersPage() {
                       '-'
                     )}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                  <td className={T.TABLE_CELL_MUTED_CLASS}>
                     {formatDateTime(container.createdAt)}
                   </td>
-                  <td className="px-4 py-3 text-muted-foreground">
+                  <td className={T.TABLE_CELL_MUTED_CLASS}>
                     {formatOnlineDuration(container)}
                     {container.exitReason ? (
                       <span className="ml-2 text-xs text-destructive">{container.exitReason}</span>
                     ) : null}
                   </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-1">
+                  <td className={T.TABLE_CELL_CLASS}>
+                    <div className={T.TABLE_ACTION_CLASS}>
                       <Button
                         variant="ghost"
                         size="sm"

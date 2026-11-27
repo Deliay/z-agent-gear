@@ -81,8 +81,13 @@ export default function CloudWorkloadsPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="font-heading text-xl font-medium text-foreground">工作负载</h1>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-heading text-xl font-semibold text-foreground">工作负载</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            定义容器初始化/清理脚本、参数与依赖；启动云端容器时按所选顺序执行。
+          </p>
+        </div>
         <Button size="sm" onClick={handleCreate}>
           新建工作负载
         </Button>

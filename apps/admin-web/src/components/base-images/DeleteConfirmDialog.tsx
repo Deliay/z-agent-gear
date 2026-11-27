@@ -1,12 +1,4 @@
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 interface DeleteConfirmDialogProps {
   open: boolean
@@ -17,6 +9,7 @@ interface DeleteConfirmDialogProps {
   loading?: boolean
 }
 
+/** 基础镜像删除二次确认：统一走 `ConfirmDialog`（计划 §3.2 危险确认口径）。 */
 export default function DeleteConfirmDialog({
   open,
   onOpenChange,
@@ -26,28 +19,15 @@ export default function DeleteConfirmDialog({
   loading = false,
 }: DeleteConfirmDialogProps) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            取消
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={() => {
-              // 父组件负责错误提示；此处兜底吞掉未处理的 rejection
-              Promise.resolve(onConfirm()).catch(() => {})
-            }}
-            disabled={loading}
-          >
-            {loading ? '删除中...' : '删除'}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      description={description}
+      confirmLabel="删除"
+      loadingLabel="删除中..."
+      loading={loading}
+      onConfirm={onConfirm}
+    />
   )
 }
