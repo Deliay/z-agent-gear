@@ -682,7 +682,7 @@ Controller 转发 ACP 输出。
 1. AcpSessionBridge暂停等待用户响应（Promise）
 2. 通过Socket.IO发送权限请求到Server
 3. 等待`acp:permission:response`响应
-4. 超时（65秒）自动返回`cancelled`
+4. 超时（权限审批 905 秒 = controller-api 权威 900 秒 + 5 秒余量）自动返回`cancelled`
 
 ### 2.20 `acp:permission:response`（Server → Controller）
 
@@ -892,7 +892,7 @@ Agent 在 `initialize` 响应中返回的协议版本与客户端不兼容时上
 1. AcpSessionBridge 暂停等待用户响应（Promise）
 2. 通过 Socket.IO 发送 Elicitation 请求到 Server
 3. 等待 `acp:elicitation:response` 响应
-4. 超时（65秒）自动返回 `{ action: 'cancel' }`
+4. 超时（提问 1805 秒 = controller-api 权威 1800 秒 + 5 秒余量）自动返回 `{ action: 'cancel' }`
 
 ### 2.32 `acp:elicitation:response`（Server → Controller）
 

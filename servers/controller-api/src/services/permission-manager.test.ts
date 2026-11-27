@@ -315,7 +315,7 @@ describe('PermissionManager - permission:resolved', () => {
     // 已断连不回 Agent
     expect(mockSocket.emit).not.toHaveBeenCalled();
 
-    // 清理后 60s 不再触发 timeout 发布
+    // 清理后 900s 不再触发 timeout 发布
     vi.advanceTimersByTime(900_000);
     await flush();
     expect(resolvedCalls()).toHaveLength(2);
