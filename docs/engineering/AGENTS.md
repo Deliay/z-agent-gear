@@ -143,6 +143,7 @@ flowchart LR
 - [[frontend-rules.md]] — 前端开发规范
 - [[ui-ux-standards.md]] — UI/UX 设计规范与视觉系统准则
 - [[prototypes/20261126-ui-ux-workspace-overhaul.html]] — UI/UX 工作区重构交互式设计原型（独立 HTML）
+- [[prototypes/20261127-ui-specification.md]] — 全场景组件化 UI 设计规范文档（整体风格、OKLCH 调色板、三层组件体系与九大业务场景蓝图）
 - [[../knowledges/domain/00-领域模型库-索引.md]] — 领域模型知识库（方案同步目标）
 
 ### 技术提案（`proposals/`）
