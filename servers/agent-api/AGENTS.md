@@ -629,6 +629,34 @@ pnpm run start   # Start production server
   `knowledge-base-prompts.test.ts` 的 T-RKB2-P1/P2。
 - **零 MongoDB 变更**：不落库、无迁移、无索引；仓库为唯一事实源，无任何写入口。
 
+## 网关 MCP endpoint（#565）
+
+> 契约 `contracts/gateway.graphql`（`Gateway.endpoint`）、`contracts/mcp-server.graphql` 与
+> `contracts/agent-session-websocket.md` §2.12.1；计划
+> `docs/engineering/plan/20261126-feat-gateway-mcp-endpoint.md`。
+
+- **endpoint 单一来源**：`services/gateway-endpoint.ts` 的纯函数 `buildGatewayEndpoint(publicBaseUrl, controllerId, name)`
+  → `{PUBLIC_BASE_URL}/api/gateway/{controllerId}/{name}/`（恒尾斜杠，段编码）与 `buildGatewayBasePath`（path 部分）。
+  `gatewayService.mapGateway` 追加 `endpoint: String!`（`create` / `findAllByController` 两处输出）；**其余签名/校验/
+  错误文案/`port-forward:command` 发布形态零变化**。前端/接口/MCP 一律读取该派生字段，禁止二次拼接
+  （旧前端 `window.location.origin` 拼接已移除）。
+- **平台 MCP**：`services/gateway-tools.ts`（`agent-gateway-tools`，`transport/source=platform`）——三工具
+  `gateway_list` / `gateway_create_endpoint` / `gateway_delete_endpoint`；操作对象为**会话所在控制器**
+  （`Session.findById(caller.sessionId).select('controllerId')`，不接受外部 controllerId）；入参校验先行
+  （缺/非法 → `{code:'INVALID_PARAMS', message}`），服务层白名单错误逐字 `isError`（含 `Maximum N gateways per controller`
+  与删除未命中 `Gateway not found or not active`）；`gateway_list.limit = config.gatewayMaxPerController`。
+  `initialize` 声明 `tools` + `resources`（**不声明 prompts**）。
+- **暴露指引**：`services/gateway-prompts.ts` 单一来源资源
+  `zag://agent-gateway-tools/prompt/gateway-exposure-guidance`（Vite `base` / `allowedHosts` / `hmr: false`、
+  Next/Nuxt/Spring 映射、登录 401、30s 超时、上限 5、命名 `[a-zA-Z0-9_-]{1,50}`、禁拼 `localhost`）；
+  防漂移守卫 `gateway-prompts.test.ts` 的 T-GP1~4。
+- **装配与路由四处接线**：`session.ts` 的 `$nin` 六名 + 公共路径 `ensureGatewayToolsServer` 恒装配；
+  `controller.ts` 的 `setDefaultMcp` `$nin`/`$in` 同步六名（选择平台服务仍 `MCP_SERVER_NOT_SELECTABLE`）；
+  `mcp-dispatch` platform 链尾追加 `GATEWAY_TOOLS_SERVER_NAME` 分支（未知 serverName 仍 `SERVER_NOT_FOUND`）。
+- **测试**：`gateway-endpoint.test.ts`（T-GWE1~6）、`gateway.test.ts`（T-GWS1~4 + `T-GMCP-REPRO-1`）、
+  `gateway-tools.test.ts`（T-GT1~8 + `T-GMCP-REPRO-2`）、`gateway-prompts.test.ts`（T-GP1~4），
+  `session.test.ts` / `controller.test.ts` / `mcp-dispatch.test.ts` 增补装配与路由断言。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)

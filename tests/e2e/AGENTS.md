@@ -154,6 +154,15 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-TT2 成员协作可见资源 | 后台 API 建 team + owner(admin)/member(developer) → owner 在团队全局创建普通工作区、把 member 加入并创建供应商（mock LLM 校验连通性）→ member 登录后切换器含该工作区，设置页可见 owner 创建的供应商且徽标「本工作区」 |
 | E2E-TT3 团队计费口径 | 后台为 team 租户充值 10 credits → owner 在团队全局「我的费用」看到「可用余额 10.00」；切回个人工作区显示 0.00（个人余额不受团队扣费影响）。最小断言：真实创建云电脑扣费依赖 HARNESS_ENABLED，已由 tests/api T-B2 / cloud-host-charges / cloud-host-billing-quote 覆盖 |
 
+### 网关 E2E (`gateway.spec.ts`，#565)
+
+> fake controller 注册（`2.0.0`）+ GraphQL 造数；UI 四期起网关为侧边栏「网关」聚合分区（默认折叠）。
+
+| 测试 | 描述 |
+|------|------|
+| 既有用例 | 在线/离线入口、空态、新建对话框、创建/重名/删除、取消、隧道代理 200 零回归 |
+| E2E-GMCP1 | `createGateway` 返回服务端派生 `endpoint`（路径含 `/api/gateway/{controllerId}/{name}/`）；登录后侧边栏该条目复制按钮 `title` 与 GraphQL `endpoint` **逐字一致**（不硬编码域名，D10） |
+
 ### Settings Git E2E (`settings-git.spec.ts`)
 
 > 仅前端交互与文案；`commitSettings` / `updateCommitSettings` / `personalGithubAccounts` 经 `page.route` mock，
