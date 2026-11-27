@@ -2,6 +2,8 @@ import type { BillingInvoiceData } from '@/graphql/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatDateTime } from '@/lib/format'
+import { statusBadgeProps } from '@/lib/status-labels'
+import * as T from '@/lib/table-styles'
 
 interface Props {
   invoices: BillingInvoiceData[]
@@ -14,51 +16,52 @@ export default function InvoiceTable({ invoices, onViewReceipt }: Props) {
   }
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[760px] text-sm">
+      <table className={`${T.TABLE_CLASS} min-w-[760px]`}>
         <thead>
-          <tr className="border-b text-left text-muted-foreground">
-            <th className="py-2 pr-3 font-medium">序号</th>
-            <th className="py-2 pr-3 font-medium">时间</th>
-            <th className="py-2 pr-3 font-medium">类型</th>
-            <th className="py-2 pr-3 font-medium">来源</th>
-            <th className="py-2 pr-3 font-medium">描述</th>
-            <th className="py-2 pr-3 text-right font-medium">金额</th>
-            <th className="py-2 pr-3 text-right font-medium">入账后余额</th>
-            <th className="py-2 font-medium">收据</th>
+          <tr className={T.TABLE_HEAD_CLASS}>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>序号</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>时间</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>类型</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>来源</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>描述</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>金额</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>入账后余额</th>
+            <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>收据</th>
           </tr>
         </thead>
         <tbody>
-          {invoices.map((invoice) => (
-            <tr key={invoice.id} className="border-b last:border-0">
-              <td className="py-2 pr-3 tabular-nums">{invoice.seq}</td>
-              <td className="py-2 pr-3 text-xs text-muted-foreground">{formatDateTime(invoice.createdAt)}</td>
-              <td className="py-2 pr-3">
-                <Badge variant={invoice.type === 'recharge' ? 'secondary' : 'outline'}>
-                  {invoice.type === 'recharge' ? '充值' : invoice.type === 'charge' ? '消费' : '调整'}
-                </Badge>
-              </td>
-              <td className="py-2 pr-3">
-                {invoice.category === 'container' ? '容器' : invoice.category === 'model' ? '模型' : invoice.category === 'storage' ? '存储' : '手工'}
-              </td>
-              <td className="max-w-[260px] truncate py-2 pr-3" title={invoice.description}>
-                {invoice.description}
-              </td>
-              <td className={`py-2 pr-3 text-right tabular-nums ${invoice.amount < 0 ? 'text-destructive' : ''}`}>
-                {invoice.amount.toFixed(2)}
-              </td>
-              <td className="py-2 pr-3 text-right tabular-nums">{invoice.balanceAfter.toFixed(2)}</td>
-              <td className="py-2">
-                {/* R10-5：充值（recharge）账单同样有收据，不能再只对 charge 开放入口。 */}
-                {invoice.type === 'charge' || invoice.receiptId ? (
-                  <Button size="sm" variant="ghost" onClick={() => onViewReceipt(invoice)}>
-                    查看
-                  </Button>
-                ) : (
-                  '-'
-                )}
-              </td>
-            </tr>
-          ))}
+          {invoices.map((invoice) => {
+            const invoiceType = statusBadgeProps(invoice.type)
+            return (
+              <tr key={invoice.id} className={T.TABLE_ROW_CLASS}>
+                <td className={`${T.TABLE_CELL_CLASS} tabular-nums`}>{invoice.seq}</td>
+                <td className={T.TABLE_CELL_MUTED_CLASS}>{formatDateTime(invoice.createdAt)}</td>
+                <td className={T.TABLE_CELL_CLASS}>
+                  <Badge variant={invoiceType.variant}>{invoiceType.label}</Badge>
+                </td>
+                <td className={T.TABLE_CELL_CLASS}>
+                  {invoice.category === 'container' ? '容器' : invoice.category === 'model' ? '模型' : invoice.category === 'storage' ? '存储' : '手工'}
+                </td>
+                <td className={`${T.TABLE_CELL_CLASS} max-w-[260px] truncate`} title={invoice.description}>
+                  {invoice.description}
+                </td>
+                <td className={`${T.TABLE_CELL_NUMERIC_CLASS} ${invoice.amount > 0 ? 'text-success' : ''}`}>
+                  {invoice.amount.toFixed(2)}
+                </td>
+                <td className={T.TABLE_CELL_NUMERIC_CLASS}>{invoice.balanceAfter.toFixed(2)}</td>
+                <td className={T.TABLE_ACTION_CELL_CLASS}>
+                  {/* R10-5：充值（recharge）账单同样有收据，不能再只对 charge 开放入口。 */}
+                  {invoice.type === 'charge' || invoice.receiptId ? (
+                    <Button size="sm" variant="ghost" onClick={() => onViewReceipt(invoice)}>
+                      查看
+                    </Button>
+                  ) : (
+                    '-'
+                  )}
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>

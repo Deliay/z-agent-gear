@@ -7,6 +7,7 @@ import type { AdminModelData, GetAdminModelsQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import * as T from '@/lib/table-styles'
 
 interface Draft {
   inputPerMillion: string
@@ -78,31 +79,31 @@ export default function ModelPricingSection() {
         {models.length === 0 ? (
           <p className="text-sm text-muted-foreground">暂无模型</p>
         ) : (
-          <table className="w-full min-w-[760px] text-sm">
+          <table className={`${T.TABLE_CLASS} min-w-[760px]`}>
             <thead>
-              <tr className="border-b text-left text-muted-foreground">
-                <th className="py-2 pr-3 font-medium">模型</th>
-                <th className="py-2 pr-3 font-medium">输入</th>
-                <th className="py-2 pr-3 font-medium">缓存输入</th>
-                <th className="py-2 pr-3 font-medium">输出</th>
-                <th className="py-2 pr-3 font-medium">计费</th>
-                <th className="py-2 font-medium">操作</th>
+              <tr className={T.TABLE_HEAD_CLASS}>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>模型</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>输入</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>缓存输入</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>输出</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>计费</th>
+                <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>操作</th>
               </tr>
             </thead>
             <tbody>
               {models.map((model) => {
                 const draft = draftFor(model)
                 return (
-                  <tr key={model.id} className="border-b last:border-0">
-                    <td className="py-2 pr-3">{model.name}</td>
-                    <td className="py-2 pr-3">
+                  <tr key={model.id} className={T.TABLE_ROW_CLASS}>
+                    <td className={T.TABLE_CELL_CLASS}>{model.name}</td>
+                    <td className={T.TABLE_CELL_CLASS}>
                       <Input
                         className="w-24"
                         value={draft.inputPerMillion}
                         onChange={(event) => patch(model.id, model, { inputPerMillion: event.target.value })}
                       />
                     </td>
-                    <td className="py-2 pr-3">
+                    <td className={T.TABLE_CELL_CLASS}>
                       <Input
                         className="w-24"
                         value={draft.cachedInputPerMillion}
@@ -111,14 +112,14 @@ export default function ModelPricingSection() {
                         }
                       />
                     </td>
-                    <td className="py-2 pr-3">
+                    <td className={T.TABLE_CELL_CLASS}>
                       <Input
                         className="w-24"
                         value={draft.outputPerMillion}
                         onChange={(event) => patch(model.id, model, { outputPerMillion: event.target.value })}
                       />
                     </td>
-                    <td className="py-2 pr-3">
+                    <td className={T.TABLE_CELL_CLASS}>
                       <input
                         type="checkbox"
                         checked={draft.isBillable}
@@ -126,7 +127,7 @@ export default function ModelPricingSection() {
                         aria-label={`${model.name} 计费开关`}
                       />
                     </td>
-                    <td className="py-2">
+                    <td className={T.TABLE_ACTION_CELL_CLASS}>
                       <Button size="sm" onClick={() => save(model)} disabled={savingId === model.id}>
                         保存
                       </Button>

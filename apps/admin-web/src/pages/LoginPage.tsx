@@ -99,12 +99,12 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-muted px-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4 py-10">
+      <Card className="w-full max-w-[400px] rounded-xl p-6">
+        <CardHeader className="px-0">
           <CardTitle className="text-center text-2xl">管理后台登录</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-0">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="username">用户名</Label>
@@ -134,7 +134,9 @@ export default function LoginPage() {
               />
             </div>
             {(error || oauthError) && (
-              <p role="alert" className="text-sm text-destructive">{error || oauthError}</p>
+              <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                {error || oauthError}
+              </div>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? '登录中…' : '登录'}

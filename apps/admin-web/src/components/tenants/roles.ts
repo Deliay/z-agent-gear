@@ -1,15 +1,16 @@
 import type { TenantRole, WorkspaceType } from '@/graphql/types'
+import { statusBadgeProps, statusLabel } from '@/lib/status-labels'
 
 /** 租户角色文案（契约 TenantRole）；personal 租户唯一成员恒 admin。 */
 export const TENANT_ROLE_LABELS: Record<TenantRole, string> = {
-  admin: '管理员',
-  developer: '开发',
+  admin: statusLabel('admin'),
+  developer: statusLabel('developer'),
 }
 
 /** 工作区类型文案（契约 WorkspaceType）。 */
 export const WORKSPACE_TYPE_LABELS: Record<WorkspaceType, string> = {
-  global: '全局',
-  normal: '普通',
+  global: statusLabel('global'),
+  normal: statusLabel('normal'),
 }
 
 /** 角色下拉选项（缺省 developer，与 agent-api 内部端点口径一致）。 */
@@ -22,4 +23,14 @@ export const DEFAULT_TENANT_ROLE: TenantRole = 'developer'
 export function tenantRoleText(role: TenantRole | null | undefined): string {
   if (role && role in TENANT_ROLE_LABELS) return TENANT_ROLE_LABELS[role]
   return '-'
+}
+
+/** 角色徽标统一属性（管理员 primary / 开发 muted）。 */
+export function tenantRoleBadge(role: TenantRole | null | undefined) {
+  return statusBadgeProps(role ?? null, '-')
+}
+
+/** 租户类型徽标统一属性（个人 info / 团队 primary）。 */
+export function tenantTypeBadge(type: string | null | undefined) {
+  return statusBadgeProps(type, type ?? '-')
 }

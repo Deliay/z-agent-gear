@@ -52,12 +52,12 @@ export default function ChangePasswordPage() {
   }
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-muted px-4">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4 py-10">
+      <Card className="w-full max-w-[400px] rounded-xl p-6">
+        <CardHeader className="px-0">
           <CardTitle className="text-center text-2xl">修改密码</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-0">
           <p className="mb-4 text-sm text-muted-foreground">
             首次登录需修改默认密码后才能进入后台。
           </p>
@@ -82,8 +82,12 @@ export default function ChangePasswordPage() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder={`至少 ${MIN_PASSWORD_LENGTH} 位`}
+                aria-describedby="password-requirement"
                 required
               />
+              <p id="password-requirement" className="text-xs text-muted-foreground">
+                密码长度至少 {MIN_PASSWORD_LENGTH} 位，建议包含大小写字母、数字与符号。
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="confirm-password">确认新密码</Label>
@@ -97,7 +101,9 @@ export default function ChangePasswordPage() {
               />
             </div>
             {error && (
-              <p role="alert" className="text-sm text-destructive">{error}</p>
+              <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                {error}
+              </div>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? '提交中…' : '确认修改'}

@@ -5,6 +5,7 @@ import type { ModelRenameRecordsQuery } from '@/graphql/types'
 import CollapsibleGroup from '@/components/ui/collapsible-group'
 import { QueryError } from '@/components/ui/query-error'
 import { formatDateTime } from '@/lib/format'
+import * as T from '@/lib/table-styles'
 
 /**
  * 「重名整理记录」只读区块：迁移 005 的历史改名对照台账。
@@ -35,24 +36,24 @@ export default function ModelRenameRecordsPanel() {
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table className={T.TABLE_CLASS}>
             <thead>
-              <tr className="border-b text-left text-xs text-muted-foreground">
-                <th className="py-2 pr-3 font-medium">原名 → 新名</th>
-                <th className="py-2 pr-3 font-medium">供应商</th>
-                <th className="py-2 font-medium">整理时间</th>
+              <tr className={T.TABLE_HEAD_CLASS}>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>原名 → 新名</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>供应商</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>整理时间</th>
               </tr>
             </thead>
             <tbody>
               {records.map((record) => (
-                <tr key={record.id} className="border-b last:border-b-0">
-                  <td className="py-2 pr-3">
+                <tr key={record.id} className={T.TABLE_ROW_CLASS}>
+                  <td className={T.TABLE_CELL_CLASS}>
                     <span className="text-foreground">{record.oldName}</span>
                     <span className="mx-1 text-muted-foreground">→</span>
                     <span className="font-medium text-foreground">{record.newName}</span>
                   </td>
-                  <td className="py-2 pr-3 text-muted-foreground">{record.providerName}</td>
-                  <td className="py-2 text-muted-foreground">{formatDateTime(record.renamedAt)}</td>
+                  <td className={T.TABLE_CELL_MUTED_CLASS}>{record.providerName}</td>
+                  <td className={T.TABLE_CELL_MUTED_CLASS}>{formatDateTime(record.renamedAt)}</td>
                 </tr>
               ))}
             </tbody>
