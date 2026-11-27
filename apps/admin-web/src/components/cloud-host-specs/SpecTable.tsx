@@ -32,8 +32,8 @@ export default function SpecTable({ specs, onEdit, onDelete }: SpecTableProps) {
   return (
     <div className={T.TABLE_CONTAINER_CLASS}>
       <table className={T.TABLE_CLASS}>
-        <thead className={T.TABLE_HEAD_CLASS}>
-          <tr>
+        <thead>
+          <tr className={T.TABLE_HEAD_CLASS}>
             <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>CPU</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>内存（GiB）</th>
@@ -53,13 +53,13 @@ export default function SpecTable({ specs, onEdit, onDelete }: SpecTableProps) {
                   {spec.unlimited && <Badge variant="outline">不限制</Badge>}
                 </span>
               </td>
-              <td className="px-4 py-3 text-muted-foreground tabular-nums">
+              <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                 {resourceCell(spec, spec.cpu)}
               </td>
-              <td className="px-4 py-3 text-muted-foreground tabular-nums">
+              <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                 {resourceCell(spec, spec.memoryGi)}
               </td>
-              <td className="px-4 py-3 text-muted-foreground tabular-nums">
+              <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                 {resourceCell(spec, spec.ephemeralStorageGi)}
               </td>
               <td className={T.TABLE_CELL_CLASS}>

@@ -147,7 +147,7 @@ export default function WorkloadLogsDialog({
                 </div>
                 <div className="min-w-0 space-y-1">
                   <p className="text-xs font-medium text-muted-foreground">输出日志</p>
-                  <pre className="max-h-48 min-w-0 overflow-auto rounded-md border border-white/10 bg-[oklch(0.18_0.006_264)] p-3 font-mono text-xs whitespace-pre-wrap break-all text-[oklch(0.96_0.005_264)]">
+                  <pre className="max-h-48 min-w-0 overflow-auto rounded-md border border-terminal-border bg-terminal p-3 font-mono text-xs whitespace-pre-wrap break-all text-terminal-foreground">
                     {selected.log || '(无输出)'}
                   </pre>
                 </div>

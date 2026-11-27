@@ -36,8 +36,8 @@ export default function WorkloadTable({ workloads, onEdit, onDelete }: WorkloadT
   return (
     <div className={T.TABLE_CONTAINER_CLASS}>
       <table className={T.TABLE_CLASS}>
-        <thead className={T.TABLE_HEAD_CLASS}>
-          <tr>
+        <thead>
+          <tr className={T.TABLE_HEAD_CLASS}>
             <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>类型</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>参数</th>

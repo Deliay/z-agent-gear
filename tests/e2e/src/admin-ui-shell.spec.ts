@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { ADMIN_WEB_URL, adminLoginViaUI } from './helpers.js';
+import { adminLoginViaUI } from './helpers.js';
 
 test.describe('Admin UI Shell E2E', () => {
   test('E2E-AUI-1: 四分组导航入口可达且当前页 aria-current 高亮', async ({ page }) => {
@@ -41,22 +41,44 @@ test.describe('Admin UI Shell E2E', () => {
     );
   });
 
-  test('E2E-AUI-2: 主题三态切换即时生效并刷新持久化', async ({ page }) => {
+  test('E2E-AUI-2: 主题三态（跟随系统/明亮/黑暗）即时生效并刷新持久化', async ({ page }) => {
+    // 显式固定系统色板，避免依赖 Playwright 默认值
+    await page.emulateMedia({ colorScheme: 'light' });
     await adminLoginViaUI(page);
 
-    const toggle = page.getByRole('button', { name: /切换主题（当前：/ });
-    await expect(toggle).toBeVisible();
+    const html = page.locator('html');
+    const toggle = page.getByRole('button', { name: /^切换主题（当前：/ });
 
-    // 缺省 system（Playwright 默认亮色）→ light → dark
-    await toggle.click();
-    await expect(page.locator('html')).not.toHaveClass(/dark/);
-    await toggle.click();
-    await expect(page.locator('html')).toHaveClass(/dark/);
-    await expect(page.getByRole('button', { name: '切换主题（当前：黑暗模式）' })).toBeVisible();
+    // 1) 缺省跟随系统（系统亮色）→ 非 dark
+    await expect(toggle).toHaveAttribute('aria-label', '切换主题（当前：跟随系统）');
+    await expect(html).not.toHaveClass(/dark/);
 
+    // 2) system → light：显式明亮模式
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-label', '切换主题（当前：明亮模式）');
+    await expect(html).not.toHaveClass(/dark/);
+
+    // 3) light → dark：显式黑暗模式
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-label', '切换主题（当前：黑暗模式）');
+    await expect(html).toHaveClass(/dark/);
+
+    // 刷新后持久化保持 dark
     await page.reload();
-    await expect(page.locator('html')).toHaveClass(/dark/);
     await expect(page.getByRole('button', { name: '切换主题（当前：黑暗模式）' })).toBeVisible();
+    await expect(html).toHaveClass(/dark/);
+
+    // 4) dark → system：系统暗色时跟随系统仍为 dark
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.getByRole('button', { name: '切换主题（当前：黑暗模式）' }).click();
+    await expect(page.getByRole('button', { name: '切换主题（当前：跟随系统）' })).toBeVisible();
+    await expect(html).toHaveClass(/dark/);
+
+    // 5) 跟随系统时随系统色板实时切换
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(html).not.toHaveClass(/dark/);
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect(html).toHaveClass(/dark/);
   });
 
   test('E2E-AUI-3: 表格规范与危险操作二次确认（影响范围文案）', async ({ page }) => {

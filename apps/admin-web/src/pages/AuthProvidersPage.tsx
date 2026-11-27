@@ -244,20 +244,20 @@ export default function AuthProvidersPage() {
                 key={provider.id}
                 className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
               >
-                <div className="min-w-0 space-y-1">
-                  <div className="flex items-center gap-2">
+                <section className="min-w-0 space-y-1">
+                  <span className="flex items-center gap-2">
                     <span className="font-medium">{provider.displayName}</span>
                     <Badge variant={provider.enabled ? 'success' : 'muted'}>
                       {provider.enabled ? '已启用' : '已停用'}
                     </Badge>
                     <SurfaceBadges front={provider.enableFrontLogin} admin={provider.enableAdminLogin} />
-                  </div>
+                  </span>
                   <p className="truncate text-xs text-muted-foreground">{provider.issuer}</p>
                   <CopyableCallback value={provider.callbackUrl} />
                   <p className="text-xs text-muted-foreground">
                     Client ID: {provider.clientId} · Secret: {provider.hasSecret ? '已设置' : '未设置'}
                   </p>
-                </div>
+                </section>
                 <div className="flex items-center gap-2">
                   <Button size="sm" variant="outline" onClick={() => openEdit(provider)}>
                     编辑
@@ -341,7 +341,7 @@ export default function AuthProvidersPage() {
       </Card>
 
       {formOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/40 p-4">
           <Card className="w-full max-w-lg">
             <CardHeader>
               <CardTitle className="text-base">

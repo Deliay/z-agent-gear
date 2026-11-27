@@ -87,7 +87,7 @@ export default function ModelPricingSection() {
                 <th className={T.TABLE_HEAD_CELL_CLASS}>缓存输入</th>
                 <th className={T.TABLE_HEAD_CELL_CLASS}>输出</th>
                 <th className={T.TABLE_HEAD_CELL_CLASS}>计费</th>
-                <th className={T.TABLE_HEAD_CELL_CLASS}>操作</th>
+                <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>操作</th>
               </tr>
             </thead>
             <tbody>

@@ -80,8 +80,8 @@ export default function ReceiptDrawer({ invoice, receipt, open, loading, error, 
               ) : (
                 <div className="overflow-x-auto rounded-md border">
                   <table className="w-full min-w-0 text-xs">
-                    <thead className={T.TABLE_HEAD_CLASS}>
-                      <tr>
+                    <thead>
+                      <tr className={T.TABLE_HEAD_CLASS}>
                         <th className={T.TABLE_HEAD_CELL_CLASS}>产品</th>
                         <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>单价口径</th>
                         <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>金额</th>
@@ -90,14 +90,14 @@ export default function ReceiptDrawer({ invoice, receipt, open, loading, error, 
                     <tbody>
                       {invoice.items.map((item, index) => (
                         <tr key={`${item.productId}-${index}`} className={T.TABLE_ROW_CLASS}>
-                          <td className="py-2 px-2">
+                          <td className={T.TABLE_CELL_CLASS}>
                             {item.productId}
                             {item.segment ? `（${segmentLabel(item.segment)}）` : ''}
                           </td>
-                          <td className="py-2 px-2 text-right tabular-nums text-muted-foreground">
+                          <td className={`${T.TABLE_CELL_NUMERIC_CLASS} text-muted-foreground`}>
                             {unitLabel(item)}
                           </td>
-                          <td className="py-2 px-2 text-right tabular-nums">
+                          <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                             <div>{item.amount.toFixed(2)}</div>
                             <div className="text-muted-foreground">{itemFormula(item)}</div>
                           </td>

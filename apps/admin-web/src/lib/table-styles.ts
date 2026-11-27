@@ -17,6 +17,9 @@ export const TABLE_HEAD_CELL_CLASS = 'text-xs font-medium text-muted-foreground 
 export const TABLE_HEAD_CELL_NUMERIC_CLASS =
   'text-xs font-medium text-muted-foreground py-2.5 px-3 text-right'
 
+/** 操作/尾部列表头：必须与 `TABLE_ACTION_CELL_CLASS` 成对使用，避免表头左对齐、单元格右对齐。 */
+export const TABLE_HEAD_CELL_ACTION_CLASS = TABLE_HEAD_CELL_NUMERIC_CLASS
+
 export const TABLE_ROW_CLASS = 'border-t transition-colors hover:bg-muted/40'
 
 export const TABLE_CELL_CLASS = 'text-sm py-2.5 px-3'

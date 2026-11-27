@@ -36,7 +36,7 @@ export default function AccountTable({ accounts, selectedId, onSelect, onRecharg
             <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>授信</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>状态</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>创建时间</th>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>操作</th>
+            <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>操作</th>
           </tr>
         </thead>
         <tbody>
@@ -58,12 +58,12 @@ export default function AccountTable({ accounts, selectedId, onSelect, onRecharg
                   <div className="text-xs text-muted-foreground">{account.ownerId}</div>
                 </td>
                 <td className={T.TABLE_CELL_CLASS}>{OWNER_TYPE_LABELS[account.ownerType] ?? account.ownerType}</td>
-                <td className={`py-2 pr-3 text-right ${negative ? 'text-destructive' : ''}`}>
+                <td className={`${T.TABLE_CELL_NUMERIC_CLASS} ${negative ? 'text-destructive' : ''}`}>
                   {account.availableBalance.toFixed(2)}
                 </td>
-                <td className="py-2 pr-3 text-right">{account.cashBalance.toFixed(2)}</td>
-                <td className="py-2 pr-3 text-right">{account.frozenAmount.toFixed(2)}</td>
-                <td className="py-2 pr-3 text-right">{account.creditLimit.toFixed(2)}</td>
+                <td className={T.TABLE_CELL_NUMERIC_CLASS}>{account.cashBalance.toFixed(2)}</td>
+                <td className={T.TABLE_CELL_NUMERIC_CLASS}>{account.frozenAmount.toFixed(2)}</td>
+                <td className={T.TABLE_CELL_NUMERIC_CLASS}>{account.creditLimit.toFixed(2)}</td>
                 <td className={T.TABLE_CELL_CLASS}>
                   {account.insufficientSince ? (
                     <Badge variant={status.variant}>

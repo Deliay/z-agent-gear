@@ -26,7 +26,7 @@ export default function InvoiceTable({ invoices, onViewReceipt }: Props) {
             <th className={T.TABLE_HEAD_CELL_CLASS}>描述</th>
             <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>金额</th>
             <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>入账后余额</th>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>收据</th>
+            <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>收据</th>
           </tr>
         </thead>
         <tbody>

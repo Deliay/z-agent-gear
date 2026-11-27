@@ -236,7 +236,7 @@ export default function BillingPage() {
       <div>
         <h1 className="font-heading text-xl font-semibold text-foreground">费用中心</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          查看账户余额、账单明细与模型调用费用，支持充值、授信、冻结与精确核算。
+          查看账户余额、账单流水与模型调用费用，支持充值、授信、冻结与精确核算。
         </p>
       </div>
 
@@ -487,7 +487,7 @@ export default function BillingPage() {
                             {call.inputTokens}/{call.cachedInputTokens}/{call.outputTokens}
                           </td>
                           <td className={T.TABLE_CELL_NUMERIC_CLASS}>{call.cost.toFixed(2)}</td>
-                          <td className={T.TABLE_ACTION_CELL_CLASS}>
+                          <td className={T.TABLE_CELL_CLASS}>
                             <Badge variant={statusBadgeProps(call.status).variant}>
                               {statusBadgeProps(call.status).label}
                               {call.estimated ? '（估算）' : ''}
@@ -566,7 +566,7 @@ export default function BillingPage() {
         invoice={receiptInvoice}
         receipt={receipt}
         loading={receiptQuery.loading}
-        error={receiptQuery.error?.message ?? null}
+        error={receiptQuery.error ? '收据加载失败，请稍后重试' : null}
         open={receiptInvoice !== null}
         onClose={() => setReceiptInvoice(null)}
       />

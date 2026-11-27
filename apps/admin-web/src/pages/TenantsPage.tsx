@@ -210,8 +210,8 @@ export default function TenantsPage() {
         ) : (
           <div className={T.TABLE_CONTAINER_CLASS}>
             <table className={T.TABLE_CLASS}>
-              <thead className={T.TABLE_HEAD_CLASS}>
-                <tr>
+              <thead>
+                <tr className={T.TABLE_HEAD_CLASS}>
                   <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
                   <th className={T.TABLE_HEAD_CELL_CLASS}>类型</th>
                   <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>成员数</th>

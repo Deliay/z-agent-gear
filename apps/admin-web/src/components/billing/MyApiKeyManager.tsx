@@ -77,7 +77,7 @@ export default function MyApiKeyManager() {
             <th className={T.TABLE_HEAD_CELL_CLASS}>前缀</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>状态</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>最后使用</th>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>操作</th>
+            <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>操作</th>
           </tr>
         </thead>
         <tbody>

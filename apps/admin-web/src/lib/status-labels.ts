@@ -71,10 +71,11 @@ const STATUS_META: Record<string, StatusMeta> = {
   abnormal: { label: '异常', tone: 'destructive' },
   pass: { label: '通过', tone: 'success' },
   error: { label: '差错', tone: 'destructive' },
-  // 模型调用
+  // 模型调用（契约 BillingApiCall.status：started | completed | aborted | failed）
   started: { label: '进行中/异常', tone: 'warning' },
   completed: { label: '完成', tone: 'success' },
   aborted: { label: '中断调用', tone: 'warning' },
+  failed: { label: '失败', tone: 'destructive' },
   // 租户 / 成员 / 工作区
   personal: { label: '个人', tone: 'info' },
   team: { label: '团队', tone: 'primary' },
