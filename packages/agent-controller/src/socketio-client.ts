@@ -1807,7 +1807,7 @@ export function connectToServer(
     heartbeat.stop();
     gatewayManager.closeAll();
     // 断线后 pending 计时器必须就地收敛：socket.io 会缓存断线期间 emit，
-    // 不收敛会在重连后补发 65s timeout（待办被误标 expired）。
+    // 不收敛会在重连后补发 1805s（提问）/905s（权限审批）timeout（待办被误标 expired）。
     for (const bridge of acpBridges.values()) {
       bridge.settlePendingOnDisconnect();
     }
