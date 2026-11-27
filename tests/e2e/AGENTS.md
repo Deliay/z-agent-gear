@@ -275,8 +275,8 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| E2E-SARCH1 | 会话页「归档」→ toast「会话已归档」并返回 `/sessions` → 侧边栏活跃列表该条消失、「已归档（1）」出现 → 展开分组条目可打开（`session-archived-badge` + 「取消归档」入口）→「取消归档」toast 后恢复活跃分组、归档分组消失 |
-| E2E-SARCH2 | 删除工作区前置 `workspaceArchiveImpact` 取数：确认框文案「删除工作区将同时归档其下 2 个会话，是否继续？」→ 确认删除 → 配置页空态 + 侧边栏「已归档（2）」两条可打开 |
+| E2E-SARCH1 | 会话页「归档」→ toast「会话已归档」并返回 `/sessions` → 侧边栏活跃列表该条消失、常驻「已归档」分组（**无数量**）→ 展开分组按需加载条目可打开（`session-archived-badge` + 「取消归档」入口）→「取消归档」toast 后恢复活跃分组 |
+| E2E-SARCH2 | 删除工作区前置 `workspaceArchiveImpact` 取数：确认框文案「删除工作区将同时归档其下 2 个会话，是否继续？」→ 确认删除 → 配置页空态 + 侧边栏展开「已归档」后两条可打开 |
 | E2E-SRO1 | 删除工作区后的会话只读回看：`session-readonly-notice`（`data-readonly-reason=WORKSPACE_MISSING`，文案「工作区已不存在，会话记录仅供只读回看。」）出现、输入框（textbox）与「继续」按钮数量为 0、先前写入的历史消息仍可见。云电脑销毁只读回归由 `cloud-host-readonly.spec.ts`（T-AW10 / R2-10，需 `MONGODB_URI`，缺省 skip）覆盖，本套件不重复 |
 
 ### Settings History Session E2E (`settings-history-session.spec.ts`)
