@@ -1,56 +1,59 @@
 ---
-description: 提问超时从 60 秒改为 300 秒技术提案：controller-api elicitation TIMEOUT_MS 60s→300s 权威超时、agent-api SessionInteraction expiresAt 按 kind 拆分（提问 300s / 权限审批 60s）、agent-gear bridge elicitation 兜底 65s→305s；detail 文案、契约口径、AGENTS 口径与领域模型同步，权限审批 60s 零改动
+description: 提问/权限审批作答时限提升技术提案：controller-api elicitation TIMEOUT_MS 60s→1800s、permission TIMEOUT_MS 60s→900s，agent-api SessionInteraction expiresAt 按 kind 拆分（提问 30min / 权限审批 15min），agent-gear bridge 兜底 65s→1805s/905s（权威+5s）；detail 文案、契约口径、AGENTS 口径与领域模型同步，超时收敛语义零变化
 type: Permanent
 ---
 
-# 提问超时从 60 秒改为 300 秒 - 技术提案
+# 提问超时提升为 30 分钟、权限审批提升为 15 分钟 - 技术提案
 
-**功能名称**: 提问超时从 60 秒改为 300 秒
+**功能名称**: 提问超时提升为 30 分钟、权限审批提升为 15 分钟
 **关联 PRD**: [[../../product/draft/20261127-question-timeout-300s.md]]
-**技术提案版本**: v1.0
+**技术提案版本**: v1.1
 **创建日期**: 2026-11-27
 **作者**: z-agent-bot
-**feat-branch**: `feat/question-timeout-300s`
-**领域模型影响**: `docs/knowledges/domain/50-会话与交互/00-上下文概览.md`、`docs/knowledges/domain/50-会话与交互/01-聚合与实体.md`（交互作答时限口径 60s → 提问 300s / 权限审批 60s 拆分）；`docs/knowledges/domain/01-通用语言-术语表.md`（SessionInteraction 条目与「作答时限 vs 5 分钟」注）
+**feat-branch**: `feat/question-timeout-300s`（沿用 Issue #602 题面 slug）
+**领域模型影响**: `docs/knowledges/domain/50-会话与交互/00-上下文概览.md`、`docs/knowledges/domain/50-会话与交互/01-聚合与实体.md`（交互作答时限口径 60s → 提问 30 分钟 / 权限审批 15 分钟拆分）；`docs/knowledges/domain/01-通用语言-术语表.md`（SessionInteraction 条目与「作答时限 vs 通知 TTL」注）
+
+**修订记录**：
+
+- **v1.1（2026-11-27）**：按 PR [#603](https://github.com/Deliay/z-agent-gear/pull/603) 评审意见修订——提问超时 60s → **30 分钟（1_800_000ms）**、权限审批超时 60s → **15 分钟（900_000ms）**；权限审批链路由「零改动」改为同步调整（初版按 Issue #602 题面为提问 300s 且权限审批不变）。
+- **v1.0（2026-11-27）**：初版。
 
 ## 1. 概述
 
 ### 1.1 背景
 
-PRD（Issue [#602](https://github.com/Deliay/z-agent-gear/issues/602)）要求把会话内「提问」的用户可作答时限从 60 秒改为 300 秒。现状超时链路存在三个与时限相关的落点（详见 1.4 代码事实核对）：
+PRD（Issue [#602](https://github.com/Deliay/z-agent-gear/issues/602)，经 PR #603 评审调整）要求把会话内「提问」的用户可作答时限提升为 **30 分钟**、「权限审批」提升为 **15 分钟**。现状两类交互的超时链路各有三个与时限相关的落点（详见 1.4 代码事实核对）：
 
-1. **controller-api `ElicitationManager.TIMEOUT_MS = 60_000`**：唯一用户可见超时的权威计时器，到点发布 `elicitation:resolved{reason:'timeout'}` + 回 Agent `cancel`；
-2. **agent-api `SessionInteraction.expiresAt`**：提问卡片倒计时与过期判定的唯一依据，= 事件到达 agent-api 时刻 + 60s；
-3. **agent-gear bridge elicitation 兜底 timer 65s**：controller-api 无响应时的防御性兜底（权威 60s + 5s race 余量），到点自动取消并发出 `resolved{timeout, detail:'bridge timeout (65s)'}`。
-
-权限审批（`PermissionManager.TIMEOUT_MS = 60_000`）**不在本次范围**，维持 60s（PRD 3.6 范围边界、D1）。
+1. **controller-api 权威计时器**：`ElicitationManager.TIMEOUT_MS = 60_000` / `PermissionManager.TIMEOUT_MS = 60_000`，唯一用户可见超时，到点发布 `*:resolved{reason:'timeout'}` + 回 Agent `cancel`/`cancelled`；
+2. **agent-api `SessionInteraction.expiresAt`**：卡片倒计时与过期判定的唯一依据，= 事件到达 agent-api 时刻 + 60s（两 kind 共用一个常量）；
+3. **agent-gear bridge 兜底 timer 65s**（两类各一条）：controller-api 无响应时的防御性兜底（权威 60s + 5s race 余量），到点自动取消。
 
 ### 1.2 技术目标
 
-- 提问（elicitation）作答时限全链路统一改为 **300s**：权威超时、卡片倒计时、兜底 timer、文案四处口径一致。
-- 权限审批（permission）超时链路**零改动**：`PermissionManager.TIMEOUT_MS`、permission 兜底 65s、permission 的 `expiresAt` 均保持现状。
+- 提问（elicitation）作答时限全链路统一改为 **30 分钟（1_800_000ms）**；权限审批（permission）统一改为 **15 分钟（900_000ms）**：权威超时、卡片倒计时、兜底 timer、文案四处口径一致。
 - `sessioninteractions.expiresAt` 由「两 kind 共用一个常量」改为**按 kind 拆分**，成为两种时限并存后的单一口径来源。
-- 契约中「Elicitation / Permission 统一 60s 口径」的描述同步为拆分口径，避免契约与实现漂移。
-- 全链路 TDD 覆盖：定时器取值、detail 文案、expiresAt 分 kind 断言、权限审批零回归。
+- 契约中「Elicitation / Permission 统一 60s 口径」的描述同步为拆分口径（30 分钟 / 15 分钟），避免契约与实现漂移。
+- 超时收敛语义零变化：`reason` 映射、CAS 单调、租户隔离、权限超时默认不放行均不动。
+- 全链路 TDD 覆盖：定时器取值、detail 文案、expiresAt 分 kind 断言、两类互不串线。
 
 ### 1.3 范围
 
-- **做**：controller-api elicitation 超时常量与文案、agent-api expiresAt 按 kind 拆常量、agent-gear bridge elicitation 兜底 305s 与文案、agent-web 过期提示文案、契约口径描述、三份 AGENTS.md 口径、领域模型同步、测试矩阵。
-- **不做**：权限审批超时调整（维持 60s）、超时时长 env/用户级可配配置、超时后交互语义变化、`TodoItem` 5 分钟通知 TTL 调整、controller-api `permission-manager.ts` 与 `permission:resolved` 链路任何改动。
+- **做**：controller-api elicitation/permission 两个权威超时常量与 detail 文案、agent-api expiresAt 按 kind 拆常量、agent-gear bridge 两条兜底 timer 与文案、agent-web 两个弹窗过期提示文案、契约口径描述、三份 AGENTS.md 口径、领域模型同步、测试矩阵（含长超时的测试可行性处理）。
+- **不做**：超时时长 env/用户级可配配置、超时后交互语义变化、`TodoItem` 5 分钟通知 TTL 调整（通知先于作答窗口过期属预期，仅清理通知）、`permissionTimeoutAction`（超时放行策略）语义调整。
 
 ### 1.4 代码事实核对
 
 | # | 事实 |
 |---|------|
 | F1 | `servers/controller-api/src/services/elicitation-manager.ts`：L56 `const TIMEOUT_MS = 60_000`（唯一用户可见超时）；L136-138 注册 `setTimeout(..., TIMEOUT_MS)`；L246 `detail: 'controller-api timeout (60s)'`；L132/L237/L267 注释写「60s」 |
-| F2 | `servers/controller-api/src/services/permission-manager.ts`：L40 `TIMEOUT_MS = 60_000`、L150 `detail: 'controller-api timeout (60s)'`——权限审批，**本次零改动** |
+| F2 | `servers/controller-api/src/services/permission-manager.ts`：L40 `TIMEOUT_MS = 60_000`、L150 `detail: 'controller-api timeout (60s)'`、L141 注释「60s 是唯一用户可见超时口径」——本次一并调整 |
 | F3 | `servers/agent-api/src/services/session-interaction-service.ts`：L7-8 `SESSION_INTERACTION_TIMEOUT_MS = 60_000`（注释「与 controller-api `TIMEOUT_MS`（60s）对齐」）；L173（elicitation）与 L193（permission）共用同一常量；L132 注释「+ 60s」 |
-| F4 | `packages/agent-controller/src/acp/bridge.ts`：elicitation 兜底 L1038-1057 `setTimeout(..., 65_000)`、L1048 日志 `'elicitation timed out after 65s, auto-cancelling'`、L1054 `detail: 'bridge timeout (65s)'`；permission 兜底 L978-982 `65_000` 不动；L421/L445/L1127/L1208 注释提「65s」 |
-| F5 | `apps/agent-web/src/components/ElicitationDialog.tsx` L86：文案「该请求将在约 1 分钟后过期；请在会话内的提问卡片中填写并提交。」 |
+| F4 | `packages/agent-controller/src/acp/bridge.ts`：elicitation 兜底 L1038-1057 `setTimeout(..., 65_000)`、L1048 日志 `'elicitation timed out after 65s, auto-cancelling'`、L1054 `detail: 'bridge timeout (65s)'`；permission 兜底 L978-982 `setTimeout(..., 65_000)`（静默 resolve `cancelled`，无 detail）；L421/L445/L1127/L1208 注释提「65s」 |
+| F5 | `apps/agent-web/src/components/ElicitationDialog.tsx` L86「该请求将在约 1 分钟后过期；请在会话内的提问卡片中填写并提交。」；`apps/agent-web/src/components/PermissionDialog.tsx` L48「该请求将在约 1 分钟后过期；请在会话内的权限审批卡片中选择。」 |
 | F6 | `contracts/agent-session.graphql` L299：`expiresAt` 注释「作答截止（创建 + 60s，与 controller-api TIMEOUT_MS 一致）」 |
-| F7 | `contracts/agent-session-websocket.md` §2.34.1「作答时限统一口径」（L989-991）：Elicitation / Permission 统一 60s、`expiresAt` = 到达 + 60s、TodoItem 5min 仅通知 TTL；同节 detail 示例 `controller-api timeout (60s)`；§2.34/§2.34.1 两处「65s」描述（elicitation 相关） |
+| F7 | `contracts/agent-session-websocket.md` §2.34.1「作答时限统一口径」（L989-991）：Elicitation / Permission 统一 60s、`expiresAt` = 到达 + 60s、TodoItem 5min 仅通知 TTL；同节触发点「60s 未响应」与 detail 示例 `controller-api timeout (60s)`；§2.34/§2.34.1 两处「65s」描述（elicitation 相关） |
 | F8 | 现状超时链路：controller-api 60s 权威超时先于 bridge 65s 兜底触发；`expiresAt` 是卡片倒计时与过期判定唯一依据；TodoItem 5min 仅通知 TTL，不参与作答有效性 |
-| F9 | 测试触点：`servers/controller-api/src/services/elicitation-manager.test.ts` T-S5/T-S8（`advanceTimersByTime(60_000)`、detail 断言）；`packages/agent-controller/src/acp/bridge.test.ts`「65s timeout」用例与 T-B4/T-B5（`advanceTimersByTimeAsync(65_000)`、`detail: 'bridge timeout (65s)'`）；`servers/agent-api/src/services/session-interaction-service.test.ts` T-SI1（expiresAt≈+60s）、T-SI7（detail）；`tests/api/src/agent-api/elicitation.test.ts` API-SI1/SI2（≤65_000 断言、detail）；`tests/e2e/src/elicitation.spec.ts`（detail）；`apps/agent-web/src/components/ElicitationDialog.test.tsx`（「约 1 分钟后过期」） |
+| F9 | 测试触点：`servers/controller-api/src/services/elicitation-manager.test.ts` T-S5/T-S8（`advanceTimersByTime(60_000)`、detail 断言）；`servers/controller-api/src/services/permission-manager.test.ts` 5 处 `advanceTimersByTime(60_000)` + detail 断言；`packages/agent-controller/src/acp/bridge.test.ts`（elicitation 与 permission 兜底用例、T-B4/T-B5，`65_000` 与 `detail: 'bridge timeout (65s)'`）及 `packages/agent-controller/tests/acp-bridge.test.ts` 两处 `65_000`；`servers/agent-api/src/services/session-interaction-service.test.ts` T-SI1（expiresAt≈+60s）、T-SI7（detail）；`servers/agent-api/src/services/permission-subscriber.test.ts`、`servers/agent-api/src/services/workflow/interrupt-retry.test.ts`（fixture 含 `controller-api timeout (60s)`）；`tests/api/src/agent-api/elicitation.test.ts` API-SI1/SI2（≤65_000 断言、detail）、`tests/api/src/agent-api/permission.test.ts`「should handle permission timeout」（真实等待 65_000ms）；`tests/e2e/src/elicitation.spec.ts`（detail）；`apps/agent-web/src/components/ElicitationDialog.test.tsx`、`PermissionDialog.test.tsx`（「约 1 分钟后过期」） |
 | F10 | AGENTS.md 口径：`servers/controller-api/AGENTS.md` L44-46（`TIMEOUT_MS=60s` 唯一用户可见超时、permission detail 文案）、`servers/agent-api/AGENTS.md` L53（expiresAt = 到达 + 60s）、`packages/agent-controller/AGENTS.md` L344/L349（65s 兜底描述） |
 
 ## 2. 技术架构
@@ -59,24 +62,24 @@ PRD（Issue [#602](https://github.com/Deliay/z-agent-gear/issues/602)）要求�
 
 ```mermaid
 graph LR
-    H[Agent Harness<br/>elicitation request] --> BG[agent-gear bridge<br/>elicitation 兜底 305s]
-    BG -->|acp:elicitation| CA[controller-api<br/>ElicitationManager<br/>权威超时 300s]
-    CA -->|Redis elicitation request| AI[agent-api<br/>SessionInteraction.expiresAt<br/>= 到达 + 300s]
-    AI -->|SSE session_interaction| U[agent-web 提问卡片<br/>倒计时 / 过期判定]
+    H[Agent Harness<br/>elicitation / permission request] --> BG[agent-gear bridge<br/>兜底: elicitation 1805s / permission 905s]
+    BG -->|acp:elicitation / acp:permission| CA[controller-api<br/>权威超时: elicitation 1800s<br/>permission 900s]
+    CA -->|Redis request| AI[agent-api<br/>expiresAt 按 kind<br/>提问 +30min / 审批 +15min]
+    AI -->|SSE session_interaction| U[agent-web 卡片<br/>倒计时 / 过期判定]
     U -->|respond*| AI
     AI -->|publish response| CA
     CA -->|response| BG --> H
-    CA -.->|300s 到点<br/>resolved timeout + cancel| BG
-    BG -.->|305s 兜底<br/>resolved timeout| H
+    CA -.->|到点 resolved timeout + cancel| BG
+    BG -.->|兜底 resolved timeout| H
 ```
 
 ### 2.2 技术栈
 
 | 层级 | 技术选型 | 说明 |
 |------|---------|------|
-| 前端 | agent-web（React + TS） | 提问卡片/弹窗文案与倒计时展示（倒计时以 `expiresAt` 为唯一依据，前端零逻辑改动） |
+| 前端 | agent-web（React + TS） | 提问/权限审批卡片与弹窗文案（倒计时以 `expiresAt` 为唯一依据，前端零逻辑改动） |
 | 后端 | controller-api / agent-api（Node.js + TS） | 权威超时计时器、`sessioninteractions.expiresAt` 写入 |
-| 客户端 | packages/agent-controller（agent-gear） | bridge elicitation 兜底 timer |
+| 客户端 | packages/agent-controller（agent-gear） | bridge 两条兜底 timer |
 | 契约 | contracts/ GraphQL + WebSocket 契约 | 仅口径描述与注释同步，无协议结构变更 |
 | 数据库 | MongoDB（`sessioninteractions`） | 无 Schema 变更，仅 `expiresAt` 取值语义按 kind 拆分 |
 
@@ -84,17 +87,18 @@ graph LR
 
 ```mermaid
 graph LR
-    M1[controller-api<br/>elicitation-manager] -->|resolved timeout| M2[agent-api<br/>session-interaction-service]
-    M3[agent-gear<br/>acp/bridge] -.兜底晚于权威.-> M1
-    M2 --> M4[agent-web<br/>ElicitationDialog]
+    M1[controller-api<br/>elicitation-manager 1800s<br/>permission-manager 900s] -->|resolved timeout| M2[agent-api<br/>session-interaction-service]
+    M3[agent-gear<br/>acp/bridge 兜底 1805s/905s] -.兜底晚于权威.-> M1
+    M2 --> M4[agent-web<br/>ElicitationDialog 约 30 分钟<br/>PermissionDialog 约 15 分钟]
 ```
 
 | 模块 | 职责 | 关键技术点 |
 |------|------|-----------|
-| controller-api `elicitation-manager` | 权威超时计时（唯一用户可见超时） | `TIMEOUT_MS` 300_000；到点 `resolved{timeout}` + 回 Agent `cancel` |
-| agent-api `session-interaction-service` | 会话交互唯一读写口，`expiresAt` 写入 | 按 kind 拆常量：ELICITATION 300s / PERMISSION 60s |
-| agent-gear `acp/bridge` | elicitation 兜底 timer | 305_000（权威 + 5s race 余量）；permission 兜底 65s 不动 |
-| agent-web `ElicitationDialog` | 降级提醒弹窗文案 | 「约 5 分钟后过期」 |
+| controller-api `elicitation-manager` | 提问权威超时 | `TIMEOUT_MS` 1_800_000；到点 `resolved{timeout, detail:'controller-api timeout (1800s)'}` + 回 Agent `cancel` |
+| controller-api `permission-manager` | 权限审批权威超时 | `TIMEOUT_MS` 900_000；到点 `permission:resolved{timeout, detail:'controller-api timeout (900s)'}` + 回 Agent `cancelled` |
+| agent-api `session-interaction-service` | 会话交互唯一读写口，`expiresAt` 写入 | 按 kind 拆常量：ELICITATION 1_800_000 / PERMISSION 900_000 |
+| agent-gear `acp/bridge` | 两条兜底 timer | elicitation 1_805_000、permission 905_000（均为权威 + 5s race 余量） |
+| agent-web `ElicitationDialog` / `PermissionDialog` | 降级提醒弹窗文案 | 「约 30 分钟后过期」/「约 15 分钟后过期」 |
 
 ## 3. API 设计
 
@@ -104,13 +108,13 @@ graph LR
 
 - `contracts/agent-session.graphql`（`SessionInteraction.expiresAt` 注释）：
   - 现状：`# 作答截止（创建 + 60s，与 controller-api TIMEOUT_MS 一致）`
-  - 改为：`# 作答截止（提问 = 创建 + 300s、权限审批 = 创建 + 60s，分别对齐 controller-api elicitation/permission TIMEOUT_MS）`
+  - 改为：`# 作答截止（提问 = 创建 + 30 分钟、权限审批 = 创建 + 15 分钟，分别对齐 controller-api elicitation/permission TIMEOUT_MS）`
 - `contracts/agent-session-websocket.md` §2.34.1「作答时限统一口径」改为拆分口径：
-  - **提问（Elicitation）作答时限 300s**（controller-api `ElicitationManager.TIMEOUT_MS`）；
-  - **权限审批（Permission）作答时限 60s**（controller-api `PermissionManager.TIMEOUT_MS`，维持现状）；
-  - `sessioninteractions.expiresAt` 按 kind 写入：提问 = 事件到达 agent-api 时刻 + 300s、权限审批 = + 60s；卡片倒计时仍以该字段为唯一依据；TodoItem 的 5 分钟 `expiresAt` 仅为通知保留窗口（TTL 清理）不变。
-  - detail 示例 `controller-api timeout (60s)` → `controller-api timeout (300s)`（elicitation 处；permission 处保持 60s 示例）。
-- `contracts/agent-session-websocket.md` §2.34/§2.34.1 中 elicitation 相关「65s」描述 → 「305s」（bridge 兜底）；permission 相关 65s 描述不动。
+  - **提问（Elicitation）作答时限 30 分钟**（controller-api `ElicitationManager.TIMEOUT_MS` = 1_800_000ms）；
+  - **权限审批（Permission）作答时限 15 分钟**（controller-api `PermissionManager.TIMEOUT_MS` = 900_000ms）；
+  - `sessioninteractions.expiresAt` 按 kind 写入：提问 = 事件到达 agent-api 时刻 + 30 分钟、权限审批 = + 15 分钟；卡片倒计时仍以该字段为唯一依据；TodoItem 的 5 分钟 `expiresAt` 仅为通知保留窗口（TTL 清理）不变——**通知先于作答窗口过期属预期，不影响作答有效性**。
+  - 触发点「60s 未响应」→「15 分钟未响应」；detail 示例 `controller-api timeout (60s)` → elicitation `controller-api timeout (1800s)` / permission `controller-api timeout (900s)`。
+- `contracts/agent-session-websocket.md` §2.34/§2.34.1 中 elicitation 相关「65s」描述 → 「1805s」（bridge 兜底）；permission 兜底口径（905s）如有提及同步。
 
 ### 3.2 内部接口
 
@@ -124,7 +128,7 @@ graph LR
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `expiresAt` | Date | 作答截止，**取值语义变更**：`kind='ELICITATION'` = 创建 + 300s；`kind='PERMISSION'` = 创建 + 60s（现状两 kind 共用 60s） |
+| `expiresAt` | Date | 作答截止，**取值语义变更**：`kind='ELICITATION'` = 创建 + 30 分钟（1_800_000ms）；`kind='PERMISSION'` = 创建 + 15 分钟（900_000ms）（现状两 kind 共用 60s） |
 
 无 Schema/索引变更（既有 `{sessionId,status,expiresAt}` 等索引沿用）；`TodoItem.expiresAt`（5 分钟通知 TTL）不变。
 
@@ -144,61 +148,72 @@ sequenceDiagram
     participant AI as agent-api
     participant U as 用户 (agent-web)
 
-    H->>BG: elicitation request
-    BG->>CA: acp:elicitation（注册 pending + 305s 兜底 timer）
-    CA->>AI: Redis elicitation request（注册 300s 权威 timer）
-    AI->>U: 提问卡片（expiresAt = 到达 + 300s，倒计时约 5 分钟）
-    alt 300s 内作答
-        U->>AI: 提交作答（CAS PENDING→ACCEPTED）
-        AI->>CA: acp:elicitation:response
+    H->>BG: elicitation / permission request
+    BG->>CA: acp:elicitation / acp:permission（注册 pending + 兜底 timer）
+    CA->>AI: Redis request（注册权威 timer：提问 1800s / 审批 900s）
+    AI->>U: 卡片（提问 expiresAt = 到达 + 30min / 审批 + 15min）
+    alt 时限内作答
+        U->>AI: 提交作答（CAS PENDING→终态）
+        AI->>CA: acp:elicitation:response / acp:permission:response
         CA->>BG: response
-        BG->>H: elicitation response（clearTimeout 兜底 timer）
-    else 300s 未作答
-        CA->>AI: elicitation:resolved{timeout, detail:'controller-api timeout (300s)'}
-        CA->>BG: cancel
-        BG->>H: elicitation cancel
+        BG->>H: response（clearTimeout 兜底 timer）
+    else 超时未作答
+        CA->>AI: resolved{timeout}（detail：提问 (1800s) / 审批 (900s)）
+        CA->>BG: cancel / cancelled
+        BG->>H: cancel
         AI->>U: 卡片标记已过期（EXPIRED）
     end
-    Note over BG: 305s 兜底仅在 controller-api 无响应时触发（防御路径，正常不触发）
+    Note over BG: 兜底（提问 1805s / 审批 905s）仅在 controller-api 无响应时触发（防御路径，正常不触发）
 ```
 
 ### 5.2 关键实现点
 
-#### 实现点 1: controller-api elicitation 权威超时 300s
+#### 实现点 1: controller-api elicitation 权威超时 1800s
 
-- **描述**: `elicitation-manager.ts` `TIMEOUT_MS` 60_000 → 300_000；`detail: 'controller-api timeout (60s)'` → `'controller-api timeout (300s)'`；L132/L237/L267 注释「60s」→「300s」。
+- **描述**: `elicitation-manager.ts` `TIMEOUT_MS` 60_000 → 1_800_000；`detail: 'controller-api timeout (60s)'` → `'controller-api timeout (1800s)'`；L132/L237/L267 注释「60s」→「1800s」。
 - **技术细节**: 收敛不变量（`filter.resolution = null` 单调、缺 `userId` 拒绝）不变；重复 requestId 清旧 timer 逻辑（T-S8）不变，仅 timer 取值变。
-- **风险点**: 无。`permission-manager.ts` 零改动。
+- **风险点**: 无。
 
-#### 实现点 2: agent-api `expiresAt` 按 kind 拆常量
+#### 实现点 2: controller-api permission 权威超时 900s
 
-- **描述**: `session-interaction-service.ts` 将 `SESSION_INTERACTION_TIMEOUT_MS` 拆为 `ELICITATION_TIMEOUT_MS = 300_000` 与 `PERMISSION_TIMEOUT_MS = 60_000`（单一来源，禁止散落字面量）；`createFromElicitationRequest` 用 300s、`createFromPermissionRequest` 用 60s；L7-8/L132 注释同步。
+- **描述**: `permission-manager.ts` `TIMEOUT_MS` 60_000 → 900_000；`detail: 'controller-api timeout (60s)'` → `'controller-api timeout (900s)'`；L141 注释同步。
+- **技术细节**: `permission:resolved` 链路、超时默认不放行语义不变；`clearForSocket` 断连清理不变。
+
+#### 实现点 3: agent-api `expiresAt` 按 kind 拆常量
+
+- **描述**: `session-interaction-service.ts` 将 `SESSION_INTERACTION_TIMEOUT_MS` 拆为 `ELICITATION_TIMEOUT_MS = 1_800_000` 与 `PERMISSION_TIMEOUT_MS = 900_000`（单一来源，禁止散落字面量）；`createFromElicitationRequest` 用前者、`createFromPermissionRequest` 用后者；L7-8/L132 注释同步。
 - **技术细节**: `expiresAt` 仍是 CAS 过期判定（`expiresAt: { $gt: now }`）与卡片倒计时的唯一依据，逻辑零变化，仅取值按 kind 分流。
-- **风险点**: 需保证两个 kind 的写入口各自引用正确常量（测试矩阵 T-ET3 双向断言）。
+- **风险点**: 需保证两个 kind 的写入口各自引用正确常量（测试矩阵双向断言）。
 
-#### 实现点 3: agent-gear bridge elicitation 兜底 305s
+#### 实现点 4: agent-gear bridge 两条兜底 timer
 
-- **描述**: `bridge.ts` elicitation 兜底 `65_000` → `305_000`（L1057）；L1048 日志 `'elicitation timed out after 65s, auto-cancelling'` → `...305s...`；L1054 `detail: 'bridge timeout (305s)'`；L421/L445/L1127/L1208 注释「65s」→「305s」。
-- **技术细节**: 兜底 = 权威 300s + 5s race 余量，与现状「60 + 5」同构；permission 兜底 65_000（L978-982）不动。收敛路径（`clearTimeout` + `resolved{cancelled}`）不变。
-- **风险点**: 旧版 bridge（65s 兜底）混部期间会先于 300s 权威超时触发（见 R1）。
+- **描述**: `bridge.ts` elicitation 兜底 65_000 → 1_805_000（L1057），L1048 日志 `'elicitation timed out after 1805s, auto-cancelling'`、L1054 `detail: 'bridge timeout (1805s)'`；permission 兜底 65_000 → 905_000（L978-982，静默 resolve `cancelled` 口径不变）；L421/L445/L1127/L1208 注释「65s」→「1805s」（按语义分别标注）。
+- **技术细节**: 兜底 = 权威 + 5s race 余量，与现状「60 + 5」同构；收敛路径（`clearTimeout` + `resolved{cancelled}`）不变。
+- **风险点**: 旧版 bridge（65s 兜底）混部期间会先于新权威超时触发（见 R1）。
 
-#### 实现点 4: agent-web 过期提示文案
+#### 实现点 5: agent-web 过期提示文案
 
-- **描述**: `ElicitationDialog.tsx` L86「该请求将在约 1 分钟后过期」→「该请求将在约 **5 分钟**后过期」；「该问询已过期」不变。
+- **描述**: `ElicitationDialog.tsx` L86「约 1 分钟后过期」→「约 **30 分钟**后过期」；`PermissionDialog.tsx` L48「约 1 分钟后过期」→「约 **15 分钟**后过期」；「已过期」文案不变。
 - **技术细节**: 倒计时组件以 `expiresAt` 驱动，前端零逻辑改动。
 
-#### 实现点 5: 契约口径同步
+#### 实现点 6: 契约口径同步
 
-- **描述**: 按 §3.1 更新 `contracts/agent-session.graphql` 注释与 `contracts/agent-session-websocket.md` §2.34/§2.34.1 口径描述与 detail 示例。
+- **描述**: 按 §3.1 更新 `contracts/agent-session.graphql` 注释与 `contracts/agent-session-websocket.md` §2.34/§2.34.1 口径描述、触发点与 detail 示例。
 - **技术细节**: 仅描述/注释，无协议结构变更；契约同步随实现阶段同 PR 落地。
 
-#### 实现点 6: AGENTS.md 口径同步
+#### 实现点 7: AGENTS.md 口径同步
 
-- **描述**: `servers/controller-api/AGENTS.md` L44-46（60s 口径与 permission detail 示例）、`servers/agent-api/AGENTS.md` L53（+60s）、`packages/agent-controller/AGENTS.md` L344/L349（65s 兜底描述）同步为拆分口径。
+- **描述**: `servers/controller-api/AGENTS.md` L44-46、`servers/agent-api/AGENTS.md` L53、`packages/agent-controller/AGENTS.md` L344/L349 同步为拆分口径（30 分钟 / 15 分钟、兜底 1805s/905s）。
 
-#### 实现点 7: 领域模型同步（随本提案落地）
+#### 实现点 8: 长超时的测试可行性
 
-- **描述**: `docs/knowledges/domain/50-会话与交互/00-上下文概览.md`（交互状态机超时迁移、作答口径、口径陷阱 1）、`01-聚合与实体.md`（`expiresAt` 行）、`docs/knowledges/domain/01-通用语言-术语表.md`（SessionInteraction 条目与「作答时限 vs 5 分钟」注）。
+- **描述**: `tests/api/src/agent-api/permission.test.ts`「should handle permission timeout」现状真实等待 65_000ms；超时提升到 15/30 分钟后真实等待不可行。实现阶段为测试注入短超时（如仅测试环境读取的覆盖值 / 测试构造传参）或改用 fake timers 推进，**生产默认值不变**。
+- **技术细节**: 覆盖机制仅测试可达（如 `NODE_ENV=test` 分支或依赖注入），不得演化为面向用户的配置项（D3）。
+- **风险点**: 若处理不当 API 测试时长爆炸（R3）。
+
+#### 实现点 9: 领域模型同步（随本提案落地）
+
+- **描述**: `docs/knowledges/domain/50-会话与交互/00-上下文概览.md`（交互状态机超时迁移、作答口径、口径陷阱 1）、`01-聚合与实体.md`（`expiresAt` 行）、`docs/knowledges/domain/01-通用语言-术语表.md`（SessionInteraction 条目与「作答时限 vs 通知 TTL」注）。
 
 ## 6. 技术决策
 
@@ -206,30 +221,32 @@ sequenceDiagram
 
 | 决策 | 选项 A | 选项 B | 最终选择 | 原因 |
 |------|--------|--------|---------|------|
-| D1 范围 | 提问与权限审批一起改 300s | 仅提问改 300s，权限审批留 60s | **B** | Issue 用词「提问」对应 UI「提问卡片」（elicitation）；权限审批诉求是快速决策、有独立超时语义（`permissionTimeoutAction`），PRD 3.6 明确非目标，留待评审调整 |
+| D1 时限口径 | 提问 300s、权限审批不变（初版） | 提问 30 分钟、权限审批 15 分钟（评审） | **B** | PR #603 评审裁决「提问提升为30min，权限审批提高到15min」，推翻初版按 Issue #602 题面的取值；两类均提升 |
 | D2 改动落点 | 只改 controller-api 一处 | 三层同步（controller-api / agent-api / bridge） | **B** | 卡片倒计时唯一依据是 agent-api `expiresAt`、兜底在 bridge，单点修改必然口径漂移 |
-| D3 配置化 | 超时做成 env 可配 | 固定常量 | **B** | Issue 为固定值调整，无配置诉求（YAGNI），改值走发版 |
-| D4 兜底取值 | bridge 兜底保持 65s | 兜底 = 300 + 5 = 305s | **B** | 兜底必须晚于权威超时，否则会先于 controller-api 误取消；保持「权威 + 5s」与现状同构 |
-| D5 agent-api 常量 | 单常量改 300s（权限审批跟着变） | 按 kind 拆两个常量 | **B** | 权限审批必须保持 60s（D1），单常量无法两速并存 |
+| D3 配置化 | 超时做成 env 可配 | 固定常量 | **B** | 评审为固定值调整，无配置诉求（YAGNI），改值走发版；测试用短超时注入仅测试可达（实现点 8） |
+| D4 兜底取值 | bridge 兜底保持 65s | 兜底 = 权威 + 5s（1805s/905s） | **B** | 兜底必须晚于权威超时，否则会先于 controller-api 误取消；保持「权威 + 5s」与现状同构 |
+| D5 agent-api 常量 | 单常量 | 按 kind 拆两个常量 | **B** | 两 kind 时限不同（30/15 分钟），单常量无法两速并存 |
 | D6 契约同步 | 本阶段不动契约 | 契约随实现同步（仅描述/注释） | **B** | 契约「统一 60s 口径」描述与现实不符即误导；无结构变更，随实现同 PR 落地 |
-| D7 文案粒度 | 「约 5 分钟」 | 「300 秒」 | **A** | 与现有「约 1 分钟」粒度一致，面向用户口语化 |
-| D8 detail 文案 | 保持 `(60s)` 字样 | 同步改为 `(300s)` / bridge `(305s)` | **B** | detail 仅展示/日志（逻辑分支只看 `reason`），同步可避免误导，混部安全 |
+| D7 文案粒度 | 「约 30 分钟 / 约 15 分钟」 | 「1800 秒 / 900 秒」 | **A** | 与现有「约 1 分钟」粒度一致，面向用户口语化 |
+| D8 detail 文案 | 保持 `(60s)` 字样 | 同步为 `(1800s)`/`(900s)`/`(1805s)` | **B** | detail 仅展示/日志（逻辑分支只看 `reason`），沿用既有「秒」格式同步可避免误导，混部安全 |
+| D9 通知 TTL | 随作答窗口调整为 30/15 分钟 | TodoItem 5 分钟通知 TTL 不动 | **B** | TTL 仅是通知清理（TTL 索引），与作答有效性无关；通知先过期、卡片仍可作答属预期（PRD 3.6） |
 
 ### 6.2 依赖与约束
 
 | 类型 | 内容 | 说明 |
 |------|------|------|
 | 依赖 | agent-gear（bridge）随包升级 | 未升级控制器上 65s 兜底先触发（R1）；云电脑有自动升级机制收敛 |
-| 约束 | 权限审批链路零改动 | `permission-manager.ts`、`permission:resolved`、permission 兜底 65s、permission `expiresAt` 60s 全部不动 |
-| 约束 | `expiresAt` 仍是作答有效性唯一口径 | TodoItem 5min 通知 TTL 语义不变 |
+| 约束 | 超时收敛语义零变化 | reason 映射、CAS 单调、租户隔离、权限超时默认不放行全部不动 |
+| 约束 | `expiresAt` 仍是作答有效性唯一口径 | TodoItem 5min 通知 TTL 语义不变（D9） |
+| 约束 | 测试短超时注入仅测试可达 | 不得演化为用户配置（D3、实现点 8） |
 
 ### 6.3 风险
 
 | 风险 | 影响 | 缓解 |
 |------|------|------|
-| R1 旧版 bridge 65s 兜底先于 300s 权威超时触发 | 未升级控制器上提问最迟约 65s 被取消（等同现状口径，不享受 300s） | controller-api 与 agent-gear 同批发版；云电脑自动升级收敛到最新 bridge；混部期间无功能回归 |
-| R2 提问悬挂时间变长（最长 5 分钟） | Agent 等待窗口变长 | 超时后自动继续语义不变，5 分钟为 Issue 指定值 |
-| R3 测试中大量 60_000/65_000 字面量 | 遗漏即假绿 | 测试矩阵逐条列明（§8），TDD 红绿先改断言再改实现 |
+| R1 旧版 bridge 65s 兜底先于新权威超时触发 | 未升级控制器上提问/审批最迟约 65s 被取消（等同现状口径，不享受新时限） | controller-api 与 agent-gear 同批发版；云电脑自动升级收敛到最新 bridge；混部期间无功能回归 |
+| R2 请求悬挂时间变长（提问最长 30 分钟、审批 15 分钟） | Agent 等待窗口变长；敏感操作授权挂起时间变长 | 超时后自动继续语义不变（权限超时默认不放行）；取值为评审指定 |
+| R3 测试中 60_000/65_000 字面量与真实等待 | 遗漏即假绿；API 测试等待 15/30 分钟不可行 | 测试矩阵逐条列明（§8）；实现点 8 注入短超时/fake timers |
 
 ## 7. 项目结构
 
@@ -240,16 +257,17 @@ z-agent-gear/
 │   └── agent-session-websocket.md         # §2.34/§2.34.1 口径与 detail 示例（F7）
 ├── servers/
 │   ├── controller-api/src/services/
-│   │   ├── elicitation-manager.ts         # TIMEOUT_MS 300_000 + detail (300s)（F1）
-│   │   └── permission-manager.ts          # 零改动（F2）
+│   │   ├── elicitation-manager.ts         # TIMEOUT_MS 1_800_000 + detail (1800s)（F1）
+│   │   └── permission-manager.ts          # TIMEOUT_MS 900_000 + detail (900s)（F2）
 │   └── agent-api/src/services/
 │       └── session-interaction-service.ts # expiresAt 按 kind 拆常量（F3）
 ├── packages/agent-controller/src/acp/
-│   └── bridge.ts                          # elicitation 兜底 305_000 + 文案（F4）
+│   └── bridge.ts                          # 兜底 1_805_000 / 905_000 + 文案（F4）
 ├── apps/agent-web/src/components/
-│   └── ElicitationDialog.tsx              # 「约 5 分钟后过期」（F5）
+│   ├── ElicitationDialog.tsx              # 「约 30 分钟后过期」（F5）
+│   └── PermissionDialog.tsx               # 「约 15 分钟后过期」（F5）
 └── docs/
-    ├── knowledges/domain/                 # 领域模型同步（实现点 7）
+    ├── knowledges/domain/                 # 领域模型同步（实现点 9）
     └── engineering/proposals/20261127-fix-question-timeout-300s.md  # 本提案
 ```
 
@@ -259,19 +277,20 @@ TDD 红绿重构：先改断言（红）→ 改实现（绿）→ 收敛常量�
 
 ### 8.1 测试覆盖要求
 
-- 涉及模块单测覆盖率不下降；四个超时落点（权威 / expiresAt / 兜底 / 文案）100% 断言覆盖。
-- 权限审批链路以「零 diff + 既有测试零改动」为回归口径。
+- 涉及模块单测覆盖率不下降；六个超时落点（两权威 / expiresAt 两 kind / 两兜底 / 文案）100% 断言覆盖。
+- 提问与权限审批双向断言「互不串线」：提问 1800s 断言不被 900s 影响，反之亦然。
 
 ### 8.2 测试类型
 
 | 编号 | 类型 | 覆盖范围 |
 |------|------|---------|
-| T-ET1 | 单元（controller-api） | `elicitation-manager.test.ts`：T-S5/T-S8 等 `advanceTimersByTime(60_000)` → `300_000`；300s 到点发 `resolved{timeout, detail:'controller-api timeout (300s)'}` + 回 cancel；提前响应不触发 |
-| T-ET2 | 单元（agent-gear） | `bridge.test.ts`：elicitation 兜底用例与 T-B4/T-B5 的 `65_000` → `305_000`、`detail: 'bridge timeout (305s)'`；permission 65s 用例**不动** |
-| T-ET3 | 单元（agent-api） | `session-interaction-service.test.ts`：T-SI1 elicitation `expiresAt` ≈ +300s；**新增** permission `expiresAt` ≈ +60s 断言；T-SI7 detail 文案；T-SI5 过期拒答不变 |
-| T-ET4 | API（tests/api） | `agent-api/elicitation.test.ts` API-SI1/SI2：`expiresAt` 窗口断言（≤65_000 → 300s 口径）、`detail: 'controller-api timeout (300s)'`；`permission.test.ts` API-SI7 零改动 |
-| T-ET5 | E2E（tests/e2e） | `elicitation.spec.ts`：detail 文案、超时窗口按 300s、过期卡片态 |
-| T-ET6 | 单元（agent-web） | `ElicitationDialog.test.tsx`：「约 5 分钟后过期」文案 |
+| T-ET1 | 单元（controller-api） | `elicitation-manager.test.ts`：T-S5/T-S8 等 `advanceTimersByTime(60_000)` → `1_800_000`；到点发 `resolved{timeout, detail:'controller-api timeout (1800s)'}` + 回 cancel；提前响应不触发 |
+| T-ET2 | 单元（controller-api） | `permission-manager.test.ts`：5 处 `advanceTimersByTime(60_000)` → `900_000`；到点 `permission:resolved{timeout, detail:'controller-api timeout (900s)'}` + 回 cancelled |
+| T-ET3 | 单元（agent-gear） | `bridge.test.ts` + `tests/acp-bridge.test.ts`：elicitation 兜底 `65_000` → `1_805_000`、`detail: 'bridge timeout (1805s)'`（T-B4/T-B5）；permission 兜底 `65_000` → `905_000` |
+| T-ET4 | 单元（agent-api） | `session-interaction-service.test.ts`：T-SI1 elicitation `expiresAt` ≈ +30 分钟；**新增** permission `expiresAt` ≈ +15 分钟断言；T-SI7 detail 文案；T-SI5 过期拒答不变；`permission-subscriber.test.ts` / `interrupt-retry.test.ts` fixture detail 同步 |
+| T-ET5 | API（tests/api） | `agent-api/elicitation.test.ts` API-SI1/SI2：`expiresAt` 窗口断言改 30 分钟口径、`detail: 'controller-api timeout (1800s)'`；`permission.test.ts`「should handle permission timeout」改用短超时注入/fake timers（实现点 8）+ detail `(900s)` |
+| T-ET6 | E2E（tests/e2e） | `elicitation.spec.ts`：detail 文案、超时窗口按 30 分钟、过期卡片态 |
+| T-ET7 | 单元（agent-web） | `ElicitationDialog.test.tsx`「约 30 分钟后过期」；`PermissionDialog.test.tsx`「约 15 分钟后过期」 |
 
 ## 9. 部署方案
 
@@ -283,26 +302,26 @@ TDD 红绿重构：先改断言（红）→ 改实现（绿）→ 收敛常量�
 
 ### 9.2 配置管理
 
-无新增配置项、无数据迁移。升级兼容说明：
+无新增配置项、无数据迁移（测试短超时注入仅测试可达，见实现点 8）。升级兼容说明：
 
 - `detail` 为展示字段，逻辑分支只看 `reason`，新旧混部安全；
-- **升级顺序敏感**：旧版 bridge 的 65s 兜底会在 300s 权威超时前提前取消提问（表现约等于现状 60s 口径，无回归但不享受 300s），需 controller-api 与 agent-gear 同批发版（R1）。
+- **升级顺序敏感**：旧版 bridge 的 65s 兜底会在新权威超时前提前取消请求（表现约等于现状 60s 口径，无回归但不享受新时限），需 controller-api 与 agent-gear 同批发版（R1）。
 
 ## 10. 验收标准
 
 - [ ] 技术方案评审通过
-- [ ] 契约口径描述评审通过（Elicitation 300s / Permission 60s 拆分口径）
+- [ ] 契约口径描述评审通过（提问 30 分钟 / 权限审批 15 分钟拆分口径）
 - [ ] 领域模型已同步更新（`docs/knowledges/domain`）
-- [ ] 代码实现完成（F1/F3/F4/F5 四处落点 + 契约/AGENTS 口径）
-- [ ] 单元测试覆盖达标（T-ET1~T-ET3、T-ET6）
-- [ ] API 测试通过（T-ET4，permission 零改动回归）
-- [ ] E2E 测试通过（T-ET5）
-- [ ] 提问 5 分钟内作答有效、超时自动过期；权限审批仍 60s 超时零回归
+- [ ] 代码实现完成（F1~F5 五处落点 + 契约/AGENTS 口径）
+- [ ] 单元测试覆盖达标（T-ET1~T-ET4、T-ET7）
+- [ ] API 测试通过（T-ET5，含长超时注入处理）
+- [ ] E2E 测试通过（T-ET6）
+- [ ] 提问 30 分钟内作答有效、超时自动过期；权限审批 15 分钟内作答有效、超时默认不放行；两类口径互不串线
 
 ## 11. 相关文档
 
 - 关联 PRD：[[../../product/draft/20261127-question-timeout-300s.md]]
-- 需求来源：[Deliay/z-agent-gear#602](https://github.com/Deliay/z-agent-gear/issues/602)
+- 需求来源：[Deliay/z-agent-gear#602](https://github.com/Deliay/z-agent-gear/issues/602)；评审修订：[PR #603](https://github.com/Deliay/z-agent-gear/pull/603)
 - 关联 Contract：`contracts/agent-session.graphql`、`contracts/agent-session-websocket.md`
 - 开发规范：`docs/engineering/common-rules.md`（Domain Model Sync）
 - 领域模型文档：`docs/knowledges/domain/50-会话与交互/00-上下文概览.md`、`docs/knowledges/domain/50-会话与交互/01-聚合与实体.md`、`docs/knowledges/domain/01-通用语言-术语表.md`
