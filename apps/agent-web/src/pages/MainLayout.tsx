@@ -7,10 +7,17 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useUserEventStream } from '../hooks/useUserEventStream';
 import Sidebar from '../components/Sidebar';
 import SidebarResizer from '../components/SidebarResizer';
-import ActivityRail from '../components/layout/ActivityRail';
+import ActivityRail, { type RailKey } from '../components/layout/ActivityRail';
 import QuickCreatePanel from '../components/layout/QuickCreatePanel';
 import { readSidebarWidth } from '../lib/sidebar-width';
-import type { SidebarSectionKey } from '../lib/sidebar-prefs';
+import {
+  domainFromPathname,
+  persistActiveDomain,
+  persistSidebarCollapsed,
+  readActiveDomain,
+  readSidebarCollapsed,
+  type ContextDomainKey,
+} from '../lib/sidebar-prefs';
 import { Button } from '../components/ui/button';
 import { HarnessLoginDialog } from '../components/harness/HarnessLoginDialog';
 import {
@@ -30,9 +37,9 @@ function WorkspaceContextSyncBridge() {
 
 function FullPageSpinner() {
   return (
-    <output className="flex h-screen items-center justify-center" aria-label="Loading…">
+    <output className="flex h-screen items-center justify-center" aria-label="加载中…">
       <div className="motion-safe:h-8 motion-safe:w-8 motion-safe:animate-spin motion-safe:rounded-full motion-safe:border-4 motion-safe:border-muted motion-safe:border-t-primary" />
-      <span className="sr-only">Loading…</span>
+      <span className="sr-only">加载中…</span>
     </output>
   );
 }
@@ -42,17 +49,44 @@ export default function MainLayout() {
   const isMobile = useIsMobile();
   const location = useLocation();
   const navigate = useNavigate();
-  // 侧边栏宽度：本地记忆（localStorage['sidebar-width']），拖动分界线实时更新
+
+  // 侧边栏宽度：本地记忆（localStorage['sidebar-width']），默认 280px
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
-  // 二级列表栏折叠状态（⌘B / Ctrl+B 切换）与一级导航轨聚焦目标
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [focusTarget, setFocusTarget] = useState<{ section: SidebarSectionKey; nonce: number } | null>(null);
+  // 二级列表栏折叠状态（⌘B / Ctrl+B 切换并持久化）
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+  // 当前聚焦领域（持久化 + 随路由前缀自动同步）
+  const [activeDomain, setActiveDomain] = useState<ContextDomainKey>(() => {
+    return domainFromPathname(location.pathname) ?? readActiveDomain();
+  });
+  // 记录用户在概览/费用/设置页显式点击某个领域图标时的临时高亮覆盖，路由变化时清空
+  const [railOverride, setRailOverride] = useState<ContextDomainKey | null>(null);
+
+  useEffect(() => {
+    setRailOverride(null);
+    const routeDomain = domainFromPathname(location.pathname);
+    if (routeDomain) {
+      setActiveDomain(routeDomain);
+      persistActiveDomain(routeDomain);
+    }
+  }, [location.pathname]);
+
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      persistSidebarCollapsed(next);
+      return next;
+    });
+  };
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') {
         event.preventDefault();
-        setSidebarCollapsed((prev) => !prev);
+        setSidebarCollapsed((prev) => {
+          const next = !prev;
+          persistSidebarCollapsed(next);
+          return next;
+        });
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -100,10 +134,6 @@ export default function MainLayout() {
   });
 
   // D-2：云电脑就绪且服务端已建好默认会话时，自动进入该会话。
-  // - `startingHosts` 记录本次会话观测到过 STARTING 的主机：即使中间轮询到 RUNNING+null
-  //   （历史遗留/补建路径），后续 defaultSessionId 到达仍可补跳（R2-5/R2-21）。
-  // - 首次加载已是 RUNNING 的旧主机不跳转；整个页面生命周期只自动进入一次，避免多主机
-  //   同轮就绪时 navigate 互相覆盖。
   const startingCloudHosts = useRef<Set<string>>(new Set());
   const navigatedCloudHosts = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -159,35 +189,52 @@ export default function MainLayout() {
     (homeData?.unreadTodoCount ?? 0) > 0 ||
     (homeData?.sessionReviews ?? []).some((review) => review.status === 'PENDING');
 
-  const handleSelectRailSection = (section: SidebarSectionKey) => {
+  const handleSelectRailDomain = (domain: ContextDomainKey) => {
     setSidebarCollapsed(false);
-    setFocusTarget((prev) => ({ section, nonce: (prev?.nonce ?? 0) + 1 }));
+    persistSidebarCollapsed(false);
+    setActiveDomain(domain);
+    persistActiveDomain(domain);
+    setRailOverride(domain);
   };
+
+  // 严格派生唯一激活项（杜绝双高亮）
+  const activeRailKey: RailKey = (() => {
+    if (railOverride) return railOverride;
+    const path = location.pathname;
+    if (path === '/') return 'home';
+    if (path.startsWith('/billing')) return 'billing';
+    if (path.startsWith('/settings')) return 'settings';
+    return domainFromPathname(path) ?? activeDomain;
+  })();
 
   let layout: ReactNode;
 
-  // Desktop: 三层工作区外壳（56px ActivityRail + 可拖拽/可收起 ContextPanel + 主舞台）
+  // Desktop: 三层工作区外壳（56px Surface-0 ActivityRail + Surface-1 领域聚焦 ContextPanel + 主舞台）
   if (!isMobile) {
     layout = (
       <div
         className={`relative grid h-screen ${
           sidebarCollapsed
             ? 'grid-cols-[3.5rem_minmax(0,1fr)]'
-            : 'grid-cols-[3.5rem_var(--sidebar-width,20rem)_minmax(0,1fr)]'
+            : 'grid-cols-[3.5rem_var(--sidebar-width,17.5rem)_minmax(0,1fr)]'
         }`}
         style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
       >
         <ActivityRail
-          activeSection={focusTarget?.section ?? null}
-          onSelectSection={handleSelectRailSection}
+          activeRailKey={activeRailKey}
+          onSelectSection={handleSelectRailDomain}
           collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
+          onToggleCollapse={toggleSidebarCollapsed}
           hasPendingAttention={hasPendingAttention}
           onlineHostCount={onlineControllerCount}
         />
         {!sidebarCollapsed && (
           <>
-            <Sidebar name={user?.name ?? ''} focusTarget={focusTarget} />
+            <Sidebar
+              name={user?.name ?? ''}
+              activeDomain={activeDomain}
+              onSelectDomain={handleSelectRailDomain}
+            />
             <SidebarResizer width={sidebarWidth} offsetLeft={56} onWidthChange={setSidebarWidth} />
           </>
         )}
@@ -210,7 +257,12 @@ export default function MainLayout() {
       </main>
     ) : (
       <div className="h-full">
-        <Sidebar name={user?.name ?? ''} mobile />
+        <Sidebar
+          name={user?.name ?? ''}
+          mobile
+          activeDomain={activeDomain}
+          onSelectDomain={handleSelectRailDomain}
+        />
       </div>
     );
 

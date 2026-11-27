@@ -53,10 +53,12 @@ test.describe('UI/UX Workspace Shell & Navigation E2E', () => {
     await rail.getByRole('button', { name: '收起列表栏' }).click();
     await expect(sidebar).toHaveCount(0);
 
-    // Clicking a domain button in ActivityRail re-opens Context Panel and expands target section
+    // Clicking a domain button in ActivityRail re-opens Context Panel and switches to focused domain view
     await rail.getByRole('button', { name: '聚焦主机分区' }).click();
     await expect(sidebar).toBeVisible();
-    await expect(sidebar.getByRole('button', { name: /^主机/ })).toHaveAttribute('aria-expanded', 'true');
+    await expect(sidebar.getByTestId('context-panel-domain-hosts')).toBeVisible();
+    await expect(sidebar.getByTestId('context-panel-domain-sessions')).toHaveCount(0);
+    await expect(rail.getByTestId('rail-active-indicator')).toHaveCount(1);
 
     // Keyboard shortcut Ctrl+B toggles Context Panel collapse/expand
     await page.keyboard.press('Control+b');
@@ -186,4 +188,41 @@ test.describe('UI/UX Workspace Shell & Navigation E2E', () => {
       controller.disconnect();
     }
   });
+
+  test('E2E-UIUX-6: 工作流实例详情顶栏、画布实例资源抽屉、节点选中高亮与无横向溢出', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const env = await setupPhase4Env(page, 'uiux6', { withSessions: false, withInstances: true });
+    try {
+      await loginViaUI(page, env.username);
+      const instance = env.instances[0];
+      await page.goto(`/workflows/${instance.id}`);
+
+      await expect(page.getByTestId('workflow-top-bar')).toBeVisible({ timeout: 15000 });
+      await expect(page.getByTestId('workflow-progress-badge')).toContainText('已完成');
+
+      // 切换图表模式并打开实例资源抽屉
+      await page.getByRole('button', { name: '图表' }).click();
+      await expect(page.getByTestId('workflow-inspector-toggle')).toBeVisible();
+      await page.getByTestId('workflow-inspector-toggle').click();
+      await expect(page.getByTestId('workflow-inspector-drawer')).toBeVisible();
+      await page.keyboard.press('Escape');
+      await expect(page.getByTestId('workflow-inspector-drawer')).toHaveCount(0);
+
+      // 点击画布节点打开详情抽屉并验证节点选中态
+      const nodeId = instance.nodes[0]?.id;
+      const card = page.getByTestId(`workflow-node-card-${nodeId}`);
+      await card.getByRole('button', { name: /详情/ }).click();
+      await expect(page.getByTestId('node-detail-drawer')).toBeVisible();
+      await expect(card).toHaveAttribute('data-selected', 'true');
+
+      // 无横向溢出
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(1);
+    } finally {
+      env.controllers.forEach((controller) => controller.disconnect());
+    }
+  });
 });
+

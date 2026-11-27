@@ -65,6 +65,8 @@ export interface NodeCardViewModel {
 export interface WorkflowGraphNodeData extends NodeCardViewModel {
   /** React Flow 要求节点 data 满足可索引约束 */
   [key: string]: unknown
+  /** 当前节点是否正在详情抽屉中被检视 */
+  selected?: boolean
   onOpenDetail: (nodeId: string) => void
   onOpenResource: (resource: GraphResource) => void
   onOpenSession?: (sessionId: string) => void

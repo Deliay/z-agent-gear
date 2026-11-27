@@ -22,7 +22,7 @@ function liveActivityLabel(activity: NodeLiveActivity | null): string {
   if (activity?.kind === 'tool_call') {
     return activity.text ? `执行中: ${activity.text}` : '执行中'
   }
-  if (activity?.kind === 'text') return 'Concluding...'
+  if (activity?.kind === 'text') return '正在汇总结果…'
   return '思考中...'
 }
 
@@ -43,7 +43,10 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
     <div
       data-testid={`workflow-node-card-${data.nodeId}`}
       data-status={data.status}
-      className={`relative flex flex-col gap-1 rounded-lg border border-border ${visual.tint} p-2 pl-3 text-card-foreground shadow-sm`}
+      data-selected={data.selected ? 'true' : 'false'}
+      className={`relative flex flex-col gap-1.5 rounded-lg border ${
+        data.selected ? 'border-primary ring-2 ring-primary/40' : 'border-border'
+      } ${visual.tint} p-2.5 pl-3.5 text-card-foreground shadow-sm transition-shadow`}
       style={{ width: '100%' }}
     >
       {/* 依赖连线连接点：视觉隐藏但保留几何尺寸，不拦截卡片点击（缺 Handle 会导致边不渲染） */}

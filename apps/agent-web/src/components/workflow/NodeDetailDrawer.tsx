@@ -69,7 +69,8 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
   const failAction = useFailNodeAction({ instanceId: instance.id, node })
 
   return (
-    <div className="min-w-0 space-y-3">
+    <div className="min-w-0 space-y-4">
+      {/* 1. 顶部状态与快捷操作栏 */}
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
           {NODE_TYPE_LABELS[node.type]}
@@ -118,33 +119,23 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
         )}
       </div>
 
-      <div className="space-y-1.5">
-        <Field label="阶段" value={node.stage} />
-        <Field label="说明" value={node.description || '—'} />
-        {node.startedAt && <Field label="开始时间" value={node.startedAt} />}
-        {node.reworkedAt && <Field label="最近返工" value={node.reworkedAt} />}
-        {retryProgress && <Field label="自动重试" value={retryProgress} />}
-      </div>
-
-      {node.rejectInfo && node.status === 'REJECT' && (
-        <div className="rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive-text">
-          打回理由：{node.rejectInfo.reason}
-        </div>
-      )}
-      {node.failInfo && (node.status === 'FAILED' || node.status === 'RETRY_FAILED') && (
-        <div className="rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive-text">
-          <div>
-            {node.status === 'RETRY_FAILED' ? '重试失败原因' : '失败原因'}：{node.failInfo.reason}
-          </div>
-          <div data-testid="drawer-fail-source">失败来源：{failSourceText(node.failInfo.source)}</div>
-        </div>
+      {/* 2. 人类节点审批/打回前置（无需越过长篇产物） */}
+      {actionable && (
+        <section
+          data-testid="drawer-human-actions-section"
+          className="rounded-lg border border-warning/30 bg-warning/5 p-3"
+        >
+          <div className="mb-1.5 text-xs font-semibold text-warning-text">待人工确认</div>
+          <HumanNodeActions instanceId={instance.id} node={node} disabled={unavailable} />
+        </section>
       )}
 
+      {/* 3. 关联 Pull Request 前置（规范 §6-D） */}
       {nodeLinks.length > 0 && (
-        <div className="space-y-1.5">
+        <section data-testid="drawer-pr-section" className="space-y-1.5">
           <div className="text-xs font-medium text-muted-foreground">关联 Pull Request</div>
           {nodeLinks.map((link) => (
-            <div key={`${link.nodeId}-${link.pullRequestId}`} className="min-w-0 rounded-md border bg-muted/30 p-2">
+            <div key={`${link.nodeId}-${link.pullRequestId}`} className="min-w-0 rounded-md border border-border bg-muted/30 p-2.5">
               <div className="text-xs font-medium text-foreground">{link.pullRequestId}</div>
               {link.prUrl && (
                 <a
@@ -179,31 +170,59 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
                 </div>
               )}
               {link.lastSyncAt && (
-                <div className="mt-0.5 text-xs text-muted-foreground">最近同步：{link.lastSyncAt}</div>
+                <div className="mt-0.5 text-xs tabular-nums text-muted-foreground">最近同步：{link.lastSyncAt}</div>
               )}
               {link.lastSyncError && (
                 <div className="mt-0.5 break-all text-xs text-destructive-text">{link.lastSyncError}</div>
               )}
             </div>
           ))}
-        </div>
+        </section>
       )}
 
-      {nodeArtifacts.length > 0 && (
+      {/* 4. 基础元信息与异常说明 */}
+      <section className="space-y-2 border-t border-border pt-3">
         <div className="space-y-1.5">
-          <div className="text-xs font-medium text-muted-foreground">产物（{nodeArtifacts.length}）</div>
-          {nodeArtifacts.map((artifact) => (
-            <div key={artifact.title} className="min-w-0 rounded-md border bg-muted/30 p-2">
-              <div className="mb-0.5 text-xs wrap-anywhere font-medium text-foreground">{artifact.title}</div>
-              <div className="min-w-0 text-xs text-muted-foreground">
-                <MarkdownContent content={artifact.value} />
-              </div>
-            </div>
-          ))}
+          <Field label="阶段" value={node.stage} />
+          <Field label="说明" value={node.description || '—'} />
+          {node.startedAt && <Field label="开始时间" value={<span className="tabular-nums">{node.startedAt}</span>} />}
+          {node.reworkedAt && <Field label="最近返工" value={<span className="tabular-nums">{node.reworkedAt}</span>} />}
+          {retryProgress && <Field label="自动重试" value={<span className="tabular-nums">{retryProgress}</span>} />}
         </div>
-      )}
 
-      {actionable && <HumanNodeActions instanceId={instance.id} node={node} disabled={unavailable} />}
+        {node.rejectInfo && node.status === 'REJECT' && (
+          <div className="rounded-md bg-destructive/10 px-2.5 py-1.5 text-xs wrap-anywhere text-destructive-text">
+            打回理由：{node.rejectInfo.reason}
+          </div>
+        )}
+        {node.failInfo && (node.status === 'FAILED' || node.status === 'RETRY_FAILED') && (
+          <div className="rounded-md bg-destructive/10 px-2.5 py-1.5 text-xs wrap-anywhere text-destructive-text">
+            <div>
+              {node.status === 'RETRY_FAILED' ? '重试失败原因' : '失败原因'}：{node.failInfo.reason}
+            </div>
+            <div data-testid="drawer-fail-source">失败来源：{failSourceText(node.failInfo.source)}</div>
+          </div>
+        )}
+      </section>
+
+      {/* 5. 节点产物列表 */}
+      {nodeArtifacts.length > 0 && (
+        <section data-testid="drawer-artifacts-section" className="space-y-2 border-t border-border pt-3">
+          <div className="text-xs font-medium tabular-nums text-muted-foreground">
+            产物（{nodeArtifacts.length}）
+          </div>
+          <div className="divide-y divide-border rounded-md border border-border bg-muted/30">
+            {nodeArtifacts.map((artifact) => (
+              <div key={artifact.title} className="min-w-0 p-2.5">
+                <div className="mb-1 text-xs wrap-anywhere font-medium text-foreground">{artifact.title}</div>
+                <div className="min-w-0 text-xs text-muted-foreground">
+                  <MarkdownContent content={artifact.value} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {failAction.canFail && (
         <ConfirmDialog
