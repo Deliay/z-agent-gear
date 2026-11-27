@@ -9,9 +9,9 @@ import type { SessionReviewData } from '../../../graphql/preview';
  */
 
 export const REVIEW_STATUS_CLASSES: Record<SessionReviewData['status'], string> = {
-  PENDING: 'text-yellow-500',
-  APPROVED: 'text-green-500',
-  REJECTED: 'text-red-500',
+  PENDING: 'text-warning',
+  APPROVED: 'text-success',
+  REJECTED: 'text-destructive',
   COMMENTED: 'text-muted-foreground',
   CANCELLED: 'text-muted-foreground italic',
 };

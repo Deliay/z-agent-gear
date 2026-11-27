@@ -47,9 +47,9 @@ function groupByDirectory(files: string[]): Array<{ dir: string; files: string[]
 }
 
 const STATUS_BADGES: Record<SessionReviewData['status'], { label: string; className: string }> = {
-  PENDING: { label: '待评审', className: 'bg-yellow-500/15 text-yellow-600' },
-  APPROVED: { label: '已通过', className: 'bg-green-500/15 text-green-600' },
-  REJECTED: { label: '已驳回', className: 'bg-red-500/15 text-red-600' },
+  PENDING: { label: '待评审', className: 'bg-warning/15 text-warning' },
+  APPROVED: { label: '已通过', className: 'bg-success/15 text-success' },
+  REJECTED: { label: '已驳回', className: 'bg-destructive/15 text-destructive' },
   COMMENTED: { label: '仅评论', className: 'bg-muted text-muted-foreground' },
   CANCELLED: { label: '已取消', className: 'bg-muted text-muted-foreground italic' },
 };
@@ -214,7 +214,7 @@ export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
           <div className="mt-2 flex justify-end gap-2">
             <button
               type="button"
-              className="rounded-sm bg-green-600 px-3 py-1 text-xs text-white hover:opacity-90 disabled:opacity-50"
+              className="rounded-sm bg-success px-3 py-1 text-xs text-success-foreground hover:opacity-90 disabled:opacity-50"
               onClick={() => void submit('approve')}
               disabled={submitting}
               data-testid="review-approve"
@@ -223,7 +223,7 @@ export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
             </button>
             <button
               type="button"
-              className="rounded-sm bg-red-600 px-3 py-1 text-xs text-white hover:opacity-90 disabled:opacity-50"
+              className="rounded-sm bg-destructive px-3 py-1 text-xs text-destructive-foreground hover:opacity-90 disabled:opacity-50"
               onClick={() => void submit('reject')}
               disabled={submitting}
               data-testid="review-reject"

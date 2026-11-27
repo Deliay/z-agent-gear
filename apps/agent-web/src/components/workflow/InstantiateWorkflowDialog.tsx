@@ -388,7 +388,7 @@ export default function InstantiateWorkflowDialog({
                       userTouchedWorktreeRef.current = true
                       setCreateWorkflowWorktree(e.target.checked)
                     }}
-                    className="h-4 w-4 rounded border-gray-300"
+                    className="h-4 w-4 rounded border-input"
                   />
                   <Label htmlFor="createWorkflowWorktree" className="text-sm">
                     为工作流创建独立 Worktree

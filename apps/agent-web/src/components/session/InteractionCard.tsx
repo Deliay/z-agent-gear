@@ -74,9 +74,9 @@ function interactionStatusLabel(
 }
 
 function statusBadgeClass(status: SessionInteractionStatus, rejectedSelection = false): string {
-  if (status === 'PENDING') return 'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400';
+  if (status === 'PENDING') return 'border-warning/40 bg-warning/10 text-warning';
   if (rejectedSelection) return 'border-destructive/40 bg-destructive/10 text-destructive';
-  if (status === 'ACCEPTED') return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400';
+  if (status === 'ACCEPTED') return 'border-success/40 bg-success/10 text-success';
   if (status === 'DECLINED') return 'border-destructive/40 bg-destructive/10 text-destructive';
   return 'border-border bg-muted text-muted-foreground';
 }
@@ -244,7 +244,7 @@ export default function InteractionCard({ interaction, onResponded }: Interactio
             data-testid="interaction-countdown"
             role="timer"
             aria-live="off"
-            className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
+            className="shrink-0 rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground tabular-nums"
           >
             {formatRemaining(remainingMs)}
           </span>

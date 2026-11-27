@@ -38,9 +38,9 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
   };
 
   return (
-    <div className="group my-2 overflow-hidden rounded-md border border-border bg-[#282c34]" data-testid="code-block">
-      <div className="flex items-center justify-between gap-2 border-b border-white/10 px-2 py-1">
-        <span className="min-w-0 truncate font-mono text-xs text-gray-400" data-testid="code-block-language">
+    <div className="group my-2 overflow-hidden rounded-md border border-border bg-code" data-testid="code-block">
+      <div className="flex items-center justify-between gap-2 border-b border-code-border px-2 py-1">
+        <span className="min-w-0 truncate font-mono text-xs text-code-muted-foreground" data-testid="code-block-language">
           {displayLanguage}
         </span>
         <div className="flex shrink-0 items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
@@ -49,7 +49,7 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
             aria-label="复制代码"
             title="复制代码"
             onClick={handleCopy}
-            className="rounded p-1 text-gray-400 hover:bg-white/10 hover:text-gray-100"
+            className="rounded p-1 text-code-muted-foreground hover:bg-code-hover hover:text-code-foreground"
           >
             <Copy className="size-3.5" />
           </button>
@@ -59,7 +59,7 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
             title={wrap ? '关闭自动换行' : '自动换行'}
             aria-pressed={wrap}
             onClick={() => setWrap((prev) => !prev)}
-            className={`rounded p-1 hover:bg-white/10 hover:text-gray-100 ${wrap ? 'bg-white/10 text-gray-100' : 'text-gray-400'}`}
+            className={`rounded p-1 hover:bg-code-hover hover:text-code-foreground ${wrap ? 'bg-code-hover text-code-foreground' : 'text-code-muted-foreground'}`}
           >
             <WrapText className="size-3.5" />
           </button>
@@ -89,7 +89,7 @@ export default function CodeBlock({ code, language }: CodeBlockProps) {
           </SyntaxHighlighter>
         ) : (
           <pre
-            className={`m-0 p-3 text-sm text-gray-100 ${wrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
+            className={`m-0 p-3 text-sm text-code-foreground ${wrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
           >
             {code}
           </pre>

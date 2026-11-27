@@ -761,7 +761,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     >
       {/* 标题栏（含协议提示/只读提示）独立占一行 */}
       {protocolMismatch && (
-        <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+        <div className="border-b border-warning/10 bg-warning/10 px-4 py-2 text-sm text-warning">
           ⚠️ Agent 协议版本不兼容：期望 v{protocolMismatch.expectedVersion}，Agent 返回 v{protocolMismatch.agentVersion}。部分功能可能无法正常工作。
         </div>
       )}

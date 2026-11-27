@@ -301,7 +301,7 @@ export default function ContinueWorkflowDialog({
                 checked={effectiveCreateWorktree}
                 disabled={!workspaceId || !isGitRepo}
                 onChange={(event) => setCreateWorkflowWorktree(event.target.checked)}
-                className="h-4 w-4 rounded border-gray-300"
+                className="h-4 w-4 rounded border-input"
               />
               <Label htmlFor="continue-create-worktree" className="text-sm">
                 在新工作区创建新 Worktree

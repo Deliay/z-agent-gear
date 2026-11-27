@@ -151,17 +151,17 @@ export default function BillingPage() {
               <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
                 <div>
                   <div className="text-muted-foreground">可用余额</div>
-                  <div className={account.availableBalance < 0 ? 'text-destructive' : ''}>
+                  <div className={account.availableBalance < 0 ? 'text-destructive tabular-nums' : 'tabular-nums'}>
                     {account.availableBalance.toFixed(2)}
                   </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">现金</div>
-                  <div>{account.cashBalance.toFixed(2)}</div>
+                  <div className="tabular-nums">{account.cashBalance.toFixed(2)}</div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">冻结</div>
-                  <div>{account.frozenAmount.toFixed(2)}</div>
+                  <div className="tabular-nums">{account.frozenAmount.toFixed(2)}</div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">状态</div>
@@ -415,7 +415,7 @@ export default function BillingPage() {
               <div key={item.bucketStart} className="space-y-1">
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>{formatDateTime(item.bucketStart)}</span>
-                  <span>
+                  <span className="tabular-nums">
                     消费 {item.chargeTotal.toFixed(2)} · {item.chargeCount} 笔
                   </span>
                 </div>
@@ -443,7 +443,7 @@ export default function BillingPage() {
             </Button>
           </div>
           {secret && (
-            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+            <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs">
               <div className="mb-1 font-medium">完整 Key 仅显示一次，请立即保存：</div>
               <code className="break-all">{secret}</code>
               <Button size="sm" variant="ghost" className="mt-2" onClick={() => setSecret(null)}>
@@ -504,11 +504,11 @@ export default function BillingPage() {
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">金额</span>
-                <span>{receiptInvoice.amount.toFixed(2)} credits</span>
+                <span className="tabular-nums">{receiptInvoice.amount.toFixed(2)} credits</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">支付后余额</span>
-                <span>{receiptInvoice.balanceAfter.toFixed(2)} credits</span>
+                <span className="tabular-nums">{receiptInvoice.balanceAfter.toFixed(2)} credits</span>
               </div>
               <div className="space-y-1 border-t pt-2">
                 {receiptInvoice.items.map((item, index) => (

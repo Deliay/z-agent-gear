@@ -33,8 +33,8 @@ const FEATURE_LABELS: Record<string, string> = {
 
 
 const STATUS_META: Record<AgentFeatureStatus, { label: string; className: string }> = {
-  supported: { label: '支持', className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' },
-  partial: { label: '部分支持', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
+  supported: { label: '支持', className: 'bg-success/10 text-success' },
+  partial: { label: '部分支持', className: 'bg-warning/10 text-warning' },
   unsupported: { label: '不支持', className: 'bg-muted text-muted-foreground' },
 };
 

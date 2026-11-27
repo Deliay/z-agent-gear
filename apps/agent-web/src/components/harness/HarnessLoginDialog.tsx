@@ -139,7 +139,7 @@ export function HarnessLoginDialog() {
             </p>
           ) : (
             <p role="status" className="text-xs text-muted-foreground">
-              等待授权完成… 剩余 {formatRemaining(remaining)}
+              等待授权完成… 剩余 <span className="tabular-nums">{formatRemaining(remaining)}</span>
             </p>
           )}
           {!expired && (

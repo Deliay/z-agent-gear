@@ -92,7 +92,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
           data-testid={`node-pending-interaction-${data.nodeId}`}
           aria-label="有待处理的提问或审批"
           title="有待处理的提问或审批"
-          className="nodrag flex w-fit items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-xs font-medium text-amber-500 hover:bg-amber-500/20"
+          className="nodrag flex w-fit items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 text-xs font-medium text-warning hover:bg-warning/20"
           onClick={(event) => {
             event.stopPropagation();
             data.onOpenSession?.(data.sessionId!);

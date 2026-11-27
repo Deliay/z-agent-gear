@@ -32,21 +32,21 @@ export default function HomePage() {
             <Activity className="size-4" />
             在线控制器
           </div>
-          <p className="mt-2 text-2xl font-semibold text-foreground">{onlineControllers.length}</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground tabular-nums">{onlineControllers.length}</p>
         </div>
         <div className="rounded-lg border bg-card p-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <MessageSquarePlus className="size-4" />
             会话总数
           </div>
-          <p className="mt-2 text-2xl font-semibold text-foreground">{sessionTotalCount}</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground tabular-nums">{sessionTotalCount}</p>
         </div>
         <div className="rounded-lg border bg-card p-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Server className="size-4" />
             控制器总数
           </div>
-          <p className="mt-2 text-2xl font-semibold text-foreground">{controllers.length}</p>
+          <p className="mt-2 text-2xl font-semibold text-foreground tabular-nums">{controllers.length}</p>
         </div>
       </div>
 
@@ -86,7 +86,7 @@ export default function HomePage() {
                   {STATUS_LABELS[session.status] ?? session.status}
                 </div>
               </div>
-              <span className="shrink-0 text-xs text-muted-foreground">
+              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                 {new Date(session.updatedAt).toLocaleDateString('zh-CN')}
               </span>
             </button>
