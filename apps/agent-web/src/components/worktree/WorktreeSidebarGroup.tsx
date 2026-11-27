@@ -97,7 +97,7 @@ export default function WorktreeSidebarGroup({
                   <span className="text-xs text-muted-foreground">
                     {isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
                   </span>
-                  <GitFork className="size-3 shrink-0 text-info" />
+                  <GitFork className="size-3 shrink-0 text-info-text" />
                   <span className="truncate text-left text-sidebar-foreground">
                     {getBranchDisplay(wt)}
                   </span>
@@ -125,7 +125,7 @@ export default function WorktreeSidebarGroup({
 
                 <button
                   type="button"
-                  className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-destructive"
+                  className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-destructive-text"
                   aria-label="删除 Worktree"
                   onClick={() => setDeleteTarget(wt)}
                 >

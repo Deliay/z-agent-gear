@@ -34,11 +34,11 @@ function ReviewRow({ review }: { review: SessionReviewSummaryData }) {
       <span
         className={`size-2 shrink-0 rounded-full ${
           review.status === 'PENDING'
-            ? 'bg-yellow-500'
+            ? 'bg-warning'
             : review.status === 'APPROVED'
-              ? 'bg-green-500'
+              ? 'bg-success'
               : review.status === 'REJECTED'
-                ? 'bg-red-500'
+                ? 'bg-destructive'
                 : 'bg-muted-foreground/50'
         }`}
       />

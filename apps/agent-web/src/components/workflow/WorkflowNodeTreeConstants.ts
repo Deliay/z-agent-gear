@@ -1,4 +1,8 @@
 import type { WorkflowNodeStatus, WorkflowNodeType } from '@/graphql/workflow'
+import {
+  WORKFLOW_NODE_COLOR_VAR,
+  WORKFLOW_NODE_STATUS_MATRIX,
+} from '@/lib/status-matrix'
 
 export const NODE_TYPE_LABELS: Record<WorkflowNodeType, string> = {
   HUMAN: '人类',
@@ -6,86 +10,35 @@ export const NODE_TYPE_LABELS: Record<WorkflowNodeType, string> = {
   FLAG: '旗帜',
 }
 
-export const NODE_STATUS_LABELS: Record<WorkflowNodeStatus, string> = {
-  INITIALIZING: '等待中',
-  READY: '待开始',
-  RUNNING: '执行中',
-  DONE: '已完成',
-  REJECT: '已打回',
-  REWORK: '返工中',
-  FAILED: '失败',
-  RETRY_FAILED: '重试失败',
-}
+/** 节点状态文案：唯一来源 `src/lib/status-matrix.ts`（D2） */
+export const NODE_STATUS_LABELS: Record<WorkflowNodeStatus, string> = Object.fromEntries(
+  (Object.keys(WORKFLOW_NODE_STATUS_MATRIX) as WorkflowNodeStatus[]).map((status) => [
+    status,
+    WORKFLOW_NODE_STATUS_MATRIX[status].label,
+  ]),
+) as Record<WorkflowNodeStatus, string>
 
 /**
- * 节点状态语义配色单一来源（PRD 功能点 11）。
+ * 节点状态语义配色单一来源（PRD 功能点 11 / D2）。
  *
- * - `spine`：卡片左侧色脊（4px）
+ * - `spine`：卡片左侧色脊（4px）/ 顶部状态条
  * - `tint` ：卡片底色（统一不透明 `bg-card`，避免半透明导致卡片与画布底色混叠）
  * - `badge`：状态徽标
  *
- * 语义表：RUNNING→info、DONE→success、REJECT→warning（静态琥珀）、
- * REWORK→warning（琥珀 + 脉冲底纹，与 REJECT 双重区分）、FAILED→destructive、
- * INITIALIZING/READY→muted。全部走 `index.css` 的 oklch 语义变量，无固定色值。
+ * 取值全部来自 `src/lib/status-matrix.ts`（规范 §2.4）；本常量仅保留存量导出名。
  */
 export const NODE_STATUS_VISUAL: Record<
   WorkflowNodeStatus,
   { spine: string; tint: string; badge: string }
-> = {
-  INITIALIZING: {
-    spine: 'bg-muted-foreground/40',
-    tint: 'bg-card',
-    badge: 'bg-muted text-muted-foreground',
-  },
-  READY: {
-    spine: 'bg-border',
-    tint: 'bg-card',
-    badge: 'bg-muted text-muted-foreground',
-  },
-  RUNNING: {
-    spine: 'bg-info',
-    tint: 'bg-card',
-    badge: 'bg-info/15 text-info',
-  },
-  DONE: {
-    spine: 'bg-success',
-    tint: 'bg-card',
-    badge: 'bg-success/15 text-success',
-  },
-  REJECT: {
-    spine: 'bg-warning',
-    tint: 'bg-card',
-    badge: 'bg-warning/15 text-warning',
-  },
-  REWORK: {
-    spine: 'bg-warning animate-pulse',
-    tint: 'bg-card',
-    badge: 'bg-warning/15 text-warning animate-pulse',
-  },
-  FAILED: {
-    spine: 'bg-destructive',
-    tint: 'bg-card',
-    badge: 'bg-destructive/15 text-destructive',
-  },
-  // 自动重试用尽：与 FAILED 同族破坏色，文案区分「重试失败」
-  RETRY_FAILED: {
-    spine: 'bg-destructive',
-    tint: 'bg-card',
-    badge: 'bg-destructive/15 text-destructive',
-  },
-}
+> = Object.fromEntries(
+  (Object.keys(WORKFLOW_NODE_STATUS_MATRIX) as WorkflowNodeStatus[]).map((status) => {
+    const visual = WORKFLOW_NODE_STATUS_MATRIX[status]
+    return [status, { spine: visual.spine, tint: visual.tint, badge: visual.badge }]
+  }),
+) as Record<WorkflowNodeStatus, { spine: string; tint: string; badge: string }>
 
 /** 状态 → 语义色 CSS 变量（Canvas / MiniMap / 连线等无法使用 Tailwind 类的场景） */
-export const NODE_STATUS_COLOR_VAR: Record<WorkflowNodeStatus, string> = {
-  INITIALIZING: 'var(--color-muted-foreground)',
-  READY: 'var(--color-border)',
-  RUNNING: 'var(--color-info)',
-  DONE: 'var(--color-success)',
-  REJECT: 'var(--color-warning)',
-  REWORK: 'var(--color-warning)',
-  FAILED: 'var(--color-destructive)',
-  RETRY_FAILED: 'var(--color-destructive)',
-}
+export const NODE_STATUS_COLOR_VAR: Record<WorkflowNodeStatus, string> = WORKFLOW_NODE_COLOR_VAR
 
 /** 兼容存量调用方的导出名：徽标类值取自语义映射 `badge` 段 */
 export const NODE_STATUS_BADGE: Record<WorkflowNodeStatus, string> = Object.fromEntries(

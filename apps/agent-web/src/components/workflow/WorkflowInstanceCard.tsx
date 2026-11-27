@@ -6,6 +6,7 @@ import {
   NODE_STATUS_LABELS,
   instanceStatusText,
 } from './WorkflowNodeTreeConstants'
+import { workflowNodeStatusVisual } from '@/lib/status-matrix'
 
 interface WorkflowInstanceCardProps {
   instance: WorkflowInstanceSummaryData
@@ -29,6 +30,7 @@ export default function WorkflowInstanceCard({ instance }: WorkflowInstanceCardP
     ? 'RUNNING'
     : (instance.lastNodeStatus ?? 'INITIALIZING')
   const statusText = instanceStatusText(instance)
+  const statusVisual = workflowNodeStatusVisual(status)
   const unavailable = Boolean(instance.unavailableReason)
 
   const handleContinue = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -63,11 +65,16 @@ export default function WorkflowInstanceCard({ instance }: WorkflowInstanceCardP
               <span
                 data-testid="workflow-instance-unavailable"
                 data-reason={instance.unavailableReason ?? undefined}
-                className="shrink-0 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive"
+                className="shrink-0 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive-text"
               >
                 {unavailableReasonLabel(instance.unavailableReason)}
               </span>
             )}
+            <span
+              data-testid="workflow-instance-status-dot"
+              aria-hidden="true"
+              className={`size-2 shrink-0 rounded-full ${statusVisual.dot}`}
+            />
             <span
               data-testid="workflow-instance-status"
               data-status={status}
@@ -91,7 +98,7 @@ export default function WorkflowInstanceCard({ instance }: WorkflowInstanceCardP
           title="接续工作流"
           data-testid="workflow-instance-continue"
           onClick={handleContinue}
-          className="absolute right-1.5 top-1 rounded p-1 text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="absolute right-1.5 top-1 rounded p-1 text-destructive-text transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <RefreshCw className="size-3.5" />
         </button>

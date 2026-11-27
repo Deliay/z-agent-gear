@@ -232,10 +232,10 @@ export default function GitSettingsSection() {
       )}
 
       {blockingMessage && (
-        <p className="break-words text-xs text-warning">{blockingMessage}</p>
+        <p className="break-words text-xs text-warning-text">{blockingMessage}</p>
       )}
       {serverError && (
-        <p role="alert" className="break-words text-sm text-destructive">
+        <p role="alert" className="break-words text-sm text-destructive-text">
           {serverError}
         </p>
       )}

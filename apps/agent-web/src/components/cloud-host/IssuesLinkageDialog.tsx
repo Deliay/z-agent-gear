@@ -204,7 +204,7 @@ export default function IssuesLinkageDialog({
                 setLabelName(event.target.value)
               }}
             />
-            {labelError && <p className="mt-1 text-xs text-destructive">{labelError}</p>}
+            {labelError && <p className="mt-1 text-xs text-destructive-text">{labelError}</p>}
             {editing && (
               <p className="mt-1 text-xs text-muted-foreground">旧标签将保留在仓库中但不再触发。</p>
             )}
@@ -238,7 +238,7 @@ export default function IssuesLinkageDialog({
           </p>
 
           {error && (
-            <p role="alert" className="break-words text-sm text-destructive">
+            <p role="alert" className="break-words text-sm text-destructive-text">
               {error}
               {error.startsWith('label sync failed:') && (
                 <span className="mt-1 block text-xs">

@@ -23,6 +23,8 @@ export interface ActivityRailProps {
   onToggleCollapse: () => void;
   /** 是否存在待用户处理的 Review 或待办交互 */
   hasPendingAttention?: boolean;
+  /** 在线主机数量（底部状态徽标，展示型计数） */
+  onlineHostCount?: number;
 }
 
 const DOMAIN_ITEMS: Array<{
@@ -37,6 +39,17 @@ const DOMAIN_ITEMS: Array<{
   { key: 'hosts', label: '主机', icon: Server },
 ];
 
+/** 当前激活领域的 2px 品牌色指示条（规范 §5 ActivityRail） */
+function ActiveIndicator() {
+  return (
+    <span
+      data-testid="rail-active-indicator"
+      aria-hidden="true"
+      className="absolute left-0 top-1/2 h-6 w-0.5 -translate-y-1/2 rounded-full bg-primary"
+    />
+  );
+}
+
 /**
  * 三层工作区架构之一级导航轨（Activity Rail，56px 固定窄轨）：
  * - 顶部：工作台概览（Home）与二级列表栏折叠开关（⌘B）
@@ -49,6 +62,7 @@ export default function ActivityRail({
   collapsed,
   onToggleCollapse,
   hasPendingAttention = false,
+  onlineHostCount = 0,
 }: ActivityRailProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -71,12 +85,13 @@ export default function ActivityRail({
           title="工作台概览"
           aria-label="工作台概览"
           onClick={() => navigate('/')}
-          className={`flex h-10 w-10 flex-col items-center justify-center gap-0.5 rounded-lg text-xs transition-colors ${
+          className={`relative flex h-10 w-10 flex-col items-center justify-center gap-0.5 rounded-lg text-xs transition-colors ${
             isHome
               ? 'bg-card font-medium text-primary shadow-2xs ring-1 ring-sidebar-border'
               : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
           }`}
         >
+          {isHome && <ActiveIndicator />}
           <Home className="size-4 shrink-0" />
           <span className="text-xs leading-none">概览</span>
         </button>
@@ -102,6 +117,7 @@ export default function ActivityRail({
                   : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
               }`}
             >
+              {isSelected && <ActiveIndicator />}
               <Icon className="size-4 shrink-0" />
               <span className="text-xs leading-none">{label}</span>
               {showDot && (
@@ -117,6 +133,15 @@ export default function ActivityRail({
       </div>
 
       <div className="flex w-full flex-col items-center gap-1.5 border-t border-sidebar-border px-1.5 pt-3">
+        {onlineHostCount > 0 && (
+          <span
+            data-testid="rail-online-count"
+            title={`${onlineHostCount} 台控制器在线`}
+            className="rounded-full bg-sidebar-accent px-1.5 py-0.5 text-xs font-medium tabular-nums text-muted-foreground"
+          >
+            {onlineHostCount}
+          </span>
+        )}
         <button
           type="button"
           data-testid="rail-toggle-sidebar"
@@ -135,12 +160,13 @@ export default function ActivityRail({
           title="我的费用"
           aria-label="我的费用"
           onClick={() => navigate('/billing')}
-          className={`flex h-10 w-10 flex-col items-center justify-center gap-0.5 rounded-lg text-xs transition-colors ${
+          className={`relative flex h-10 w-10 flex-col items-center justify-center gap-0.5 rounded-lg text-xs transition-colors ${
             isBilling
               ? 'bg-card font-medium text-primary shadow-2xs ring-1 ring-sidebar-border'
               : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
           }`}
         >
+          {isBilling && <ActiveIndicator />}
           <CreditCard className="size-4 shrink-0" />
           <span className="text-xs leading-none">费用</span>
         </button>
@@ -151,12 +177,13 @@ export default function ActivityRail({
           title="设置中心"
           aria-label="设置中心"
           onClick={() => navigate('/settings')}
-          className={`flex h-10 w-10 flex-col items-center justify-center gap-0.5 rounded-lg text-xs transition-colors ${
+          className={`relative flex h-10 w-10 flex-col items-center justify-center gap-0.5 rounded-lg text-xs transition-colors ${
             isSettings
               ? 'bg-card font-medium text-primary shadow-2xs ring-1 ring-sidebar-border'
               : 'text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
           }`}
         >
+          {isSettings && <ActiveIndicator />}
           <Settings className="size-4 shrink-0" />
           <span className="text-xs leading-none">设置</span>
         </button>

@@ -78,14 +78,14 @@ export default function MessageItem({ message }: MessageItemProps) {
     switch (type) {
       case 'text':
         return isUser
-          ? 'bg-primary text-primary-foreground'
-          : 'bg-background text-foreground border border-border';
+          ? 'bg-muted/60 text-foreground'
+          : 'bg-transparent text-foreground';
       case 'tool_call':
         return 'bg-secondary text-secondary-foreground border border-border';
       case 'tool_result':
         return 'bg-secondary text-secondary-foreground border border-border';
       case 'error':
-        return 'bg-destructive/10 text-destructive border border-destructive/20';
+        return 'bg-destructive/10 text-destructive-text border border-destructive/20';
       case 'image':
         return 'bg-secondary text-secondary-foreground border border-border';
       default:
@@ -109,8 +109,16 @@ export default function MessageItem({ message }: MessageItemProps) {
   const typeLabel = getTypeLabel(displayType);
 
   return (
-    <div className={`group flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[70%] rounded-lg px-4 py-2 overflow-hidden ${getMessageStyle(displayType)}`}>
+    <div className={`group flex ${isUser ? 'justify-end' : 'justify-start'}`} data-testid="message-row">
+      <div
+        data-testid="message-bubble"
+        data-direction={isUser ? 'user' : 'agent'}
+        className={`overflow-hidden ${
+          !isUser && displayType === 'text'
+            ? 'max-w-full px-1 py-1'
+            : `max-w-[85%] rounded-lg px-4 py-2 ${getMessageStyle(displayType)}`
+        }`}
+      >
         {(typeLabel || (!isUser && displayType === 'text')) && (
           <div className="mb-1 flex items-center gap-2">
             {typeLabel && (
@@ -166,7 +174,7 @@ export default function MessageItem({ message }: MessageItemProps) {
       </div>
       {zoomImage && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/80"
           onClick={() => setZoomImage(null)}
           data-testid="message-image-zoom"
         >

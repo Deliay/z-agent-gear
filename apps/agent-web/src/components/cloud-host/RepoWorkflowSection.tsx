@@ -198,7 +198,7 @@ export default function RepoWorkflowSection({
                   )}
                 </div>
                 {!template.valid && template.errors[0] && (
-                  <p className="mt-1 text-xs text-destructive">{template.errors[0]}</p>
+                  <p className="mt-1 text-xs text-destructive-text">{template.errors[0]}</p>
                 )}
               </div>
             ))
@@ -229,7 +229,7 @@ export default function RepoWorkflowSection({
               <Button
                 size="sm"
                 variant="ghost"
-                className="ml-auto text-destructive"
+                className="ml-auto text-destructive-text"
                 onClick={() => void handleDelete(workflow)}
               >
                 删除

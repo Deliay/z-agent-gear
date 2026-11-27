@@ -45,7 +45,7 @@ export default function GatewayDialog({ controllerId, onClose }: GatewayDialogPr
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
       <div className="w-80 rounded-lg bg-popover p-4 shadow-lg">
         <h3 className="mb-3 text-sm font-medium text-popover-foreground">新建网关暴露</h3>
         <form onSubmit={handleSubmit}>
@@ -66,7 +66,7 @@ export default function GatewayDialog({ controllerId, onClose }: GatewayDialogPr
             onChange={(e) => setPort(e.target.value)}
             className="mb-2 w-full rounded border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground focus:border-ring focus:outline-none"
           />
-          {error && <p className="mb-2 text-xs text-destructive">{error}</p>}
+          {error && <p className="mb-2 text-xs text-destructive-text">{error}</p>}
           <div className="flex justify-end gap-2">
             <button
               type="button"

@@ -76,7 +76,7 @@ test.describe('Session Chat', () => {
 
     await expect(textarea).toHaveValue('Line one\nLine two');
 
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: /发送/ }).click();
 
     await expect(page.getByText('Line one Line two', { exact: false })).toBeVisible({ timeout: 10000 });
 

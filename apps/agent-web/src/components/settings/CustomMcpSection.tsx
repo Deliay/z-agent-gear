@@ -330,7 +330,7 @@ export default function CustomMcpSection() {
           {loading && !data ? (
             <p className="text-sm text-muted-foreground">加载中...</p>
           ) : error && !data ? (
-            <p className="text-sm text-destructive">列表加载失败，可稍后重试</p>
+            <p className="text-sm text-destructive-text">列表加载失败，可稍后重试</p>
           ) : servers.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">暂无自定义 MCP</p>
           ) : (
@@ -592,12 +592,12 @@ export default function CustomMcpSection() {
             )}
 
             {formError && (
-              <p role="alert" className="break-words text-sm text-destructive">
+              <p role="alert" className="break-words text-sm text-destructive-text">
                 {formError}
               </p>
             )}
             {serverError && (
-              <p role="alert" className="break-words text-sm text-destructive">
+              <p role="alert" className="break-words text-sm text-destructive-text">
                 {serverError}
               </p>
             )}

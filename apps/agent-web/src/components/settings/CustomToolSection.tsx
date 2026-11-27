@@ -115,7 +115,7 @@ export default function CustomToolSection() {
           {loading && tools.length === 0 ? (
             <p className="text-sm text-muted-foreground">加载中…</p>
           ) : error ? (
-            <p className="text-sm text-destructive">{customToolErrorMessage(error)}</p>
+            <p className="text-sm text-destructive-text">{customToolErrorMessage(error)}</p>
           ) : tools.length === 0 ? (
             <p className="text-sm text-muted-foreground">暂无自定义工具</p>
           ) : (

@@ -270,6 +270,26 @@ describe('前台我的费用', () => {
     expect(screen.getAllByText(/第 1 页/).length).toBeGreaterThan(0);
   });
 
+  it('T-BILL-NUM: 余额/单价/增减明细使用 tabular-nums 右对齐，充值成功色 / 异常危险色', async () => {
+    renderPage();
+    await screen.findByText('容器周期结算');
+
+    const numericCells = Array.from(document.querySelectorAll('td.tabular-nums'));
+    expect(numericCells.length).toBeGreaterThan(0);
+    const amountCells = numericCells.filter((cell) => cell.className.includes('text-right'));
+    expect(amountCells.length).toBeGreaterThan(0);
+
+    const negative = amountCells.find((cell) => cell.textContent?.startsWith('-'));
+    expect(negative?.className).toContain('text-destructive-text');
+
+    const recharge = amountCells.find((cell) => cell.textContent === '10.00');
+    expect(recharge?.className).toContain('text-success-text');
+
+    // 余额展示同样等宽数字
+    const balanceCells = Array.from(document.querySelectorAll('div.tabular-nums'));
+    expect(balanceCells.length).toBeGreaterThan(0);
+  });
+
   it('T-AW10: 账单翻页后查看收据仍显示正确收据号（不误报无收据）', async () => {
     renderPage();
     await screen.findByText('容器周期结算');

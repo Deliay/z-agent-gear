@@ -70,7 +70,7 @@ export default function CloudHostIssuesLinkageSection({
       </div>
 
       {error ? (
-        <p className="text-sm text-destructive">加载联动配置失败，可重试。</p>
+        <p className="text-sm text-destructive-text">加载联动配置失败，可重试。</p>
       ) : loading && !data ? (
         <p className="text-sm text-muted-foreground">加载中...</p>
       ) : linkages.length === 0 ? (
@@ -144,7 +144,7 @@ export default function CloudHostIssuesLinkageSection({
       )}
 
       {deleteError && (
-        <p role="alert" className="break-words text-sm text-destructive">{deleteError}</p>
+        <p role="alert" className="break-words text-sm text-destructive-text">{deleteError}</p>
       )}
 
       <IssuesLinkageDialog

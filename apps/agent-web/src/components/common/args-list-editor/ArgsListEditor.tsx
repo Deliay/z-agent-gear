@@ -58,7 +58,7 @@ export default function ArgsListEditor({ value, onChange, disabled = false }: Ar
                       disabled={disabled}
                       onChange={(event) => update(index, { key: event.target.value })}
                     />
-                    {keyError ? <p className="mt-1 text-xs text-destructive">{keyError}</p> : null}
+                    {keyError ? <p className="mt-1 text-xs text-destructive-text">{keyError}</p> : null}
                   </div>
                   <div className="min-w-0 flex-1">
                     <Input
@@ -69,7 +69,7 @@ export default function ArgsListEditor({ value, onChange, disabled = false }: Ar
                       disabled={disabled}
                       onChange={(event) => update(index, { name: event.target.value })}
                     />
-                    {nameError ? <p className="mt-1 text-xs text-destructive">{nameError}</p> : null}
+                    {nameError ? <p className="mt-1 text-xs text-destructive-text">{nameError}</p> : null}
                   </div>
                   <Button
                     type="button"
@@ -91,7 +91,7 @@ export default function ArgsListEditor({ value, onChange, disabled = false }: Ar
                   onChange={(event) => update(index, { description: event.target.value })}
                 />
                 {descriptionError ? (
-                  <p className="text-xs text-destructive">{descriptionError}</p>
+                  <p className="text-xs text-destructive-text">{descriptionError}</p>
                 ) : null}
               </li>
             )

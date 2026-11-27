@@ -295,7 +295,7 @@ export default function WorkflowInstancePage() {
         <Button
           variant="outline"
           size="sm"
-          className="text-destructive hover:text-destructive"
+          className="text-destructive-text hover:text-destructive-text"
           onClick={() => setDeleteOpen(true)}
         >
           <Trash2 className="size-3.5" />
@@ -311,7 +311,7 @@ export default function WorkflowInstancePage() {
           className="rounded-lg border border-destructive/40 bg-destructive/10 p-3"
         >
           <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-semibold text-destructive">
+            <p className="text-sm font-semibold text-destructive-text">
               {instance.unavailableReason === 'CONTROLLER_DELETED'
                 ? '控制器已删除，实例当前不可用'
                 : '控制器离线，实例当前不可用'}
@@ -320,7 +320,7 @@ export default function WorkflowInstancePage() {
               接续
             </Button>
           </div>
-          <p className="mt-1 text-xs text-destructive/90">
+          <p className="mt-1 text-xs text-destructive-text">
             已完成节点与产物保留；接续后可选择新控制器与工作路径继续流转。
             原控制器上的残留 Worktree 平台不做远程清理，请自行处理。
           </p>
@@ -332,7 +332,7 @@ export default function WorkflowInstancePage() {
           role="alert"
           className="rounded-lg border border-destructive/40 bg-destructive/10 p-3"
         >
-          <p className="text-sm font-semibold text-destructive">
+          <p className="text-sm font-semibold text-destructive-text">
             ⚠️ {blockedNodes.length} 个节点
             {retryFailedCount > 0 && failedCount > 0
               ? `（${failedCount} 个失败 / ${retryFailedCount} 个重试用尽）`
@@ -341,7 +341,7 @@ export default function WorkflowInstancePage() {
                 : '失败'}
             ，流程已阻断，需要人工介入
           </p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-destructive/90">
+          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-destructive-text">
             {blockedNodes.map((node) => (
               <li key={node.id}>
                 「{node.name}」：
@@ -456,7 +456,7 @@ export default function WorkflowInstancePage() {
               }}
             />
             {(renameError ?? validateName(renameDraft)) && (
-              <p className="text-xs text-destructive">
+              <p className="text-xs text-destructive-text">
                 {renameError ?? validateName(renameDraft)}
               </p>
             )}

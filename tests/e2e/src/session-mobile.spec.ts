@@ -92,6 +92,45 @@ const sidebar = () => 'nav[aria-label="Sidebar"]';
 
 test.describe('Session Mobile Layout', () => {
 
+  test('E2E-RWD-2: 移动端核心任务四连（会话/费用/设置/待办入口可达）且无横向溢出', async ({ page }) => {
+    const { token, username } = await registerUser(page);
+    const { rawKey } = await createControllerKey(page, token);
+    const { controllerId, disconnect } = await registerController(rawKey);
+    await createWorkspace(page, controllerId, '/tmp/e2e-rwd2', token);
+    const sessionId = await createSession(page, controllerId, token);
+
+    try {
+      await loginViaUI(page, username);
+      const nav = page.locator('[data-testid="mobile-bottom-nav"]');
+      await expect(nav).toBeVisible();
+
+      // 1) 会话：列表可达并可进入详情（详情保留返回入口）
+      await nav.getByRole('link', { name: '会话' }).click();
+      await page.locator(sidebar()).getByText(/新建会话|e2e-rwd2/).first().waitFor({ timeout: 10000 });
+      await page.goto(`/sessions/${sessionId}`);
+      await expect(page.getByText('← 返回')).toBeVisible({ timeout: 15000 });
+
+      // 2) 费用
+      await nav.getByRole('link', { name: '费用' }).click();
+      await expect(page.getByText('我的费用')).toBeVisible({ timeout: 15000 });
+
+      // 3) 设置
+      await nav.getByRole('link', { name: '设置' }).click();
+      await expect(page.getByRole('heading', { name: '设置', exact: true })).toBeVisible({ timeout: 15000 });
+
+      // 4) 待办入口（侧边栏铃铛 / 会话列表）在移动端仍可见
+      await nav.getByRole('link', { name: '会话' }).click();
+      await expect(page.locator(sidebar())).toBeVisible();
+
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(1);
+    } finally {
+      disconnect();
+    }
+  });
+
   test('should show full-screen session list on mobile', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey, keyId } = await createControllerKey(page, token);

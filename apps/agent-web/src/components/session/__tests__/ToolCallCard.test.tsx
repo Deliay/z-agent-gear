@@ -311,7 +311,7 @@ describe('ToolCallCard statuses', () => {
     const card = container.firstElementChild as HTMLElement;
     expect(card.className).toContain('bg-info/5');
     expect(card.className).not.toContain('animate-pulse');
-    expect(screen.getByText(/✗/).className).toContain('text-destructive');
+    expect(screen.getByText(/✗/).className).toContain('text-destructive-text');
   });
 
   it('should show cross summary for failed when collapsed', () => {

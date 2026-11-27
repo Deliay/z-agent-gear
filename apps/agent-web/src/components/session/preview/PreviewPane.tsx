@@ -92,7 +92,7 @@ function FileTabContent({
   if (!diff && status === 'error') {
     return (
       <div className="flex flex-col gap-2 p-4 text-sm" data-testid="preview-error">
-        <div className="text-destructive">加载失败：{error?.message ?? '文件内容读取失败'}</div>
+        <div className="text-destructive-text">加载失败：{error?.message ?? '文件内容读取失败'}</div>
         <div className="text-xs text-muted-foreground">
           控制器可能离线、文件不可读，或 agent-gear 版本过低；若持续失败，请确认控制器上的 agent-gear 已升级到最新版本。
         </div>

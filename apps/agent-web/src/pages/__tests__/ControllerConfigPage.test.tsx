@@ -173,7 +173,7 @@ describe('ControllerConfigPage', () => {
     expect(onBack).toHaveBeenCalledOnce();
   });
 
-  it('T-UIUX-CTRL1: 控制器配置页顶部渲染面包屑导航栏（设置中心 / 控制器管理 / 当前配置项），点击可返回', () => {
+  it('T-SET-BC: 面包屑「设置中心 / 控制器管理 / {分组}」+ 左侧分组切换（T-UIUX-CTRL1）', () => {
     mockControllers([makeController({ id: 'ctrl-1', name: '生产主机-01' })]);
     const onBack = vi.fn();
 
@@ -187,6 +187,11 @@ describe('ControllerConfigPage', () => {
 
     fireEvent.click(screen.getByTestId('breadcrumb-back-settings'));
     expect(onBack).toHaveBeenCalledOnce();
+
+    // 左侧分组切换后面包屑叶节点同步
+    fireEvent.click(screen.getByRole('button', { name: '可用 Harness 工具' }));
+    expect(screen.getByTestId('controller-config-breadcrumb').textContent).toContain('可用 Harness 工具');
+    expect(screen.getByTestId('harness-section')).toBeInTheDocument();
   });
 
   it('should show controller name and online status', () => {

@@ -84,14 +84,14 @@ export default function DeleteWorktreeConfirmDialog({
           <DialogTitle>确认删除 Worktree</DialogTitle>
           <DialogDescription>
             确定要删除{workspaceName ? <> Workspace <span className="font-medium text-foreground">{workspaceName}</span> 下的</> : ''} worktree <span className="font-medium text-foreground">{branchName}</span> 吗？此操作将
-            <span className="text-destructive font-medium"> 彻底删除 </span>
+            <span className="text-destructive-text font-medium"> 彻底删除 </span>
             worktree 及其关联数据，且
-            <span className="text-destructive font-medium"> 不可恢复</span>。
+            <span className="text-destructive-text font-medium"> 不可恢复</span>。
           </DialogDescription>
         </DialogHeader>
 
         {sessionCount > 0 && (
-          <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
             此 worktree 关联了 {sessionCount} 个会话，它们将被关闭。
           </div>
         )}

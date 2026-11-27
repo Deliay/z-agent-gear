@@ -97,7 +97,7 @@ export function HtmlPreview({ html, filePath, truncated = false, onConfirm }: Ht
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col" data-testid="html-preview">
       {truncated && (
-        <div className="border-b border-yellow-500/40 bg-yellow-500/10 px-2 py-1 text-xs" data-testid="html-truncated">
+        <div className="border-b border-warning/40 bg-warning/10 px-2 py-1 text-xs" data-testid="html-truncated">
           文件过大，内容已截断展示
         </div>
       )}

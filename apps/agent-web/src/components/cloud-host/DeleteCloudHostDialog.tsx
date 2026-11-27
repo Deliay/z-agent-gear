@@ -121,7 +121,7 @@ export default function DeleteCloudHostDialog({
             删除后云电脑将从主机列表移除，历史会话保留但不可再运行。确认删除？
           </p>
         ) : (
-          <p className="text-sm text-destructive">
+          <p className="text-sm text-destructive-text">
             当前状态（{cloudHostStatusLabel(cloudHost.status)}）不可删除，请先停止云电脑。
           </p>
         )}
@@ -139,7 +139,7 @@ export default function DeleteCloudHostDialog({
         )}
 
         {failedLabels.length > 0 && (
-          <div role="alert" className="rounded-md bg-muted p-2 text-sm text-destructive">
+          <div role="alert" className="rounded-md bg-muted p-2 text-sm text-destructive-text">
             <p>以下标签清理失败（不影响删除云电脑）：</p>
             <ul className="mt-1 list-disc pl-5">
               {failedLabels.map((item) => (
@@ -150,7 +150,7 @@ export default function DeleteCloudHostDialog({
         )}
 
         {error && (
-          <p role="alert" className="break-words text-sm text-destructive">
+          <p role="alert" className="break-words text-sm text-destructive-text">
             {error}
           </p>
         )}

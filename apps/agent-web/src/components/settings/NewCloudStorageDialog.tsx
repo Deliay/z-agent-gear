@@ -154,7 +154,7 @@ export default function NewCloudStorageDialog({
               placeholder="例如：我的工作数据"
               onChange={(event) => setName(event.target.value)}
             />
-            {nameError && <p className="mt-1 text-xs text-destructive">{nameError}</p>}
+            {nameError && <p className="mt-1 text-xs text-destructive-text">{nameError}</p>}
           </div>
 
           <div className="min-w-0">
@@ -169,7 +169,7 @@ export default function NewCloudStorageDialog({
               value={sizeText}
               onChange={(event) => setSizeText(event.target.value)}
             />
-            {sizeError && <p className="mt-1 text-xs text-destructive">{sizeError}</p>}
+            {sizeError && <p className="mt-1 text-xs text-destructive-text">{sizeError}</p>}
           </div>
 
           <div className="min-w-0 rounded-md border p-3" data-testid="cloud-storage-quote">
@@ -204,7 +204,7 @@ export default function NewCloudStorageDialog({
           </div>
 
           {error && (
-            <p role="alert" className="break-words text-sm text-destructive">
+            <p role="alert" className="break-words text-sm text-destructive-text">
               {error}
             </p>
           )}

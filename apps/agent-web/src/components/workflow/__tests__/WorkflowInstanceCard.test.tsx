@@ -41,6 +41,11 @@ describe('WorkflowInstanceCard', () => {
     expect(screen.getByTestId('workflow-instance-status')).toHaveTextContent('已完成')
   })
 
+  it('T-WF-CARD 状态圆点：使用状态矩阵 dot 语义（规范 §2.4）', () => {
+    render(<ul><WorkflowInstanceCard instance={makeInstance({ lastNodeStatus: 'FAILED' })} /></ul>)
+    expect(screen.getByTestId('workflow-instance-status-dot')).toHaveClass('bg-destructive')
+  })
+
   it('T-UI4-IC2 不在卡片上显示控制器名称（移入 tooltip）', () => {
     const { container } = render(<ul><WorkflowInstanceCard instance={makeInstance()} /></ul>)
     expect(container.textContent).not.toContain('我的主机')

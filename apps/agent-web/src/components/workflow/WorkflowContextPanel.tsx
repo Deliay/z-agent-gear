@@ -101,7 +101,7 @@ export default function WorkflowContextPanel({
               </div>
             )}
             {link.lastSyncError && (
-              <div className="mt-0.5 break-all text-xs text-destructive">{link.lastSyncError}</div>
+              <div className="mt-0.5 break-all text-xs text-destructive-text">{link.lastSyncError}</div>
             )}
           </div>
         ))}

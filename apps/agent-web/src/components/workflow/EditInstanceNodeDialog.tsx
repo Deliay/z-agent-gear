@@ -311,7 +311,7 @@ export default function EditInstanceNodeDialog({
           )}
 
           {error && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
+            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">{error}</div>
           )}
         </div>
 

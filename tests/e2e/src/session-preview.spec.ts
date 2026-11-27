@@ -198,7 +198,7 @@ test.describe('批注回传与片段（E2E-ANN/E2E-IB）', () => {
 
     // 发送 → 历史渲染
     await page.locator('textarea').fill('请按批注修改');
-    await page.getByRole('button', { name: 'Send' }).click();
+    await page.getByRole('button', { name: /发送/ }).click();
     await expect(page.getByTestId('prompt-part')).toHaveCount(0, { timeout: 10000 });
     await expect(page.getByTestId('message-list')).toContainText('这段重写', { timeout: 10000 });
     ctx.disconnect();
@@ -214,7 +214,7 @@ test.describe('批注回传与片段（E2E-ANN/E2E-IB）', () => {
     await expect(page.getByTestId('prompt-image-add')).toBeVisible();
     // 空输入 + 无片段时发送禁用
     await page.locator('textarea').fill('');
-    await expect(page.getByRole('button', { name: 'Send' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /发送/ })).toBeDisabled();
     ctx.disconnect();
   });
 

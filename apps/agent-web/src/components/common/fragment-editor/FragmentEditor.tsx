@@ -35,8 +35,8 @@ const CHIP_BASE =
 
 function chipClass(type: 'Valut' | 'Parameter'): string {
   return type === 'Valut'
-    ? `${CHIP_BASE} bg-emerald-500/15 text-emerald-700 dark:text-emerald-300`
-    : `${CHIP_BASE} bg-sky-500/15 text-sky-700 dark:text-sky-300`
+    ? `${CHIP_BASE} bg-success/15 text-success-text`
+    : `${CHIP_BASE} bg-info/15 text-info-text`
 }
 
 function formatBadge(format: string): string | null {
