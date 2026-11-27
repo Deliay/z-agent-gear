@@ -685,6 +685,7 @@ export const GET_GATEWAYS = gql`
         port
         status
         createdAt
+        endpoint
       }
       total
       limit

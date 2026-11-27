@@ -923,6 +923,8 @@ export interface GatewayData {
   port: number
   status: string
   createdAt: string
+  /** 服务端派生的完整外网访问地址（旧缓存/降级可能缺失） */
+  endpoint?: string | null
 }
 
 export interface GatewayListData {
