@@ -330,7 +330,7 @@ export default function ContinueWorkflowDialog({
                 return (
                   <div key={node.id} className="flex flex-wrap items-center gap-2" data-testid={`harness-mapping-${node.id}`}>
                     <span className="min-w-0 flex-1 truncate text-sm">{node.name}</span>
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                       原 Harness：{original || '未设置'}
                     </span>
                     <Select

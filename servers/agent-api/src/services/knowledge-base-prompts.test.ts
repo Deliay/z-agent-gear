@@ -1,25 +1,33 @@
 import { describe, it, expect } from 'vitest';
 import {
-  REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS,
+  REPO_KNOWLEDGE_BASE_PROMPT_RESOURCES,
+  REPO_KNOWLEDGE_BASE_PROMPT_RESOURCE_URI_PREFIX,
+  getKnowledgeBasePromptResource,
   getKnowledgeBasePromptText,
   listKnowledgeBasePromptNames,
 } from './knowledge-base-prompts.js';
 
 /**
- * 仓库知识库编写指引（prompts 单一来源）。
+ * 仓库知识库编写指引（resources 单一来源）。
  * T-RKB-P1~P4：注册表形态、要点覆盖、可用片段名、与扫描器常量防漂移守卫。
  */
 
 const PROMPT_NAME = 'repo-knowledge-base-authoring';
+const RESOURCE_URI = 'zag://agent-knowledge-base-tools/prompt/repo-knowledge-base-authoring';
 
 describe('knowledge-base prompts', () => {
-  it('T-RKB-P1 片段注册表：单片段 repo-knowledge-base-authoring 且含 description', () => {
-    expect(REPO_KNOWLEDGE_BASE_PROMPT_DEFINITIONS).toEqual([
+  it('T-RKB-P1 片段注册表：单片段 repo-knowledge-base-authoring 且含 uri/description/mimeType', () => {
+    expect(REPO_KNOWLEDGE_BASE_PROMPT_RESOURCES).toEqual([
       {
+        uri: RESOURCE_URI,
         name: PROMPT_NAME,
         description: expect.stringContaining('仓库知识库编写指引'),
+        mimeType: 'text/markdown',
       },
     ]);
+    expect(REPO_KNOWLEDGE_BASE_PROMPT_RESOURCE_URI_PREFIX).toBe(
+      'zag://agent-knowledge-base-tools/prompt/',
+    );
     expect(listKnowledgeBasePromptNames()).toEqual([PROMPT_NAME]);
   });
 
@@ -60,9 +68,18 @@ describe('knowledge-base prompts', () => {
     }
   });
 
-  it('T-RKB-P3 未知/空名称返回 null（供 prompts/get 转 INVALID_PARAMS）', () => {
+  it('T-RKB-P3 未知/空名称返回 null（供 resources/read 转 INVALID_PARAMS）', () => {
     expect(getKnowledgeBasePromptText('')).toBeNull();
     expect(getKnowledgeBasePromptText('unknown-prompt')).toBeNull();
+  });
+
+  it('T-RKB-P4 getKnowledgeBasePromptResource 按 URI 命中；未知 URI 返回 null', () => {
+    const found = getKnowledgeBasePromptResource(RESOURCE_URI);
+    expect(found).toBeTruthy();
+    expect(found!.definition.name).toBe(PROMPT_NAME);
+    expect(found!.text).toBe(getKnowledgeBasePromptText(PROMPT_NAME));
+    expect(getKnowledgeBasePromptResource('zag://agent-knowledge-base-tools/prompt/nope')).toBeNull();
+    expect(getKnowledgeBasePromptResource(PROMPT_NAME)).toBeNull();
   });
 
   it('T-RKB3-P2 防漂移守卫：三个来源（含 docs 一层文件夹与容器跳过）必须与扫描器一致', () => {

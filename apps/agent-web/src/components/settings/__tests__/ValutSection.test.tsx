@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 const mockUseQuery = vi.fn();
 const mockUseMutation = vi.fn();
+const mockSettings = vi.fn();
 const mockCreateValutEntry = vi.fn();
 const mockUpdateValutEntry = vi.fn();
 const mockDeleteValutEntry = vi.fn();
@@ -23,6 +24,10 @@ const mockToastError = vi.fn();
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+}));
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mockSettings(),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -127,6 +132,7 @@ const SERVICE_GROUP: ValutNamespaceGroupData = {
 };
 
 function mockQueries(groups: ValutNamespaceGroupData[] = [MANUAL_GROUP, SERVICE_GROUP]) {
+  mockSettings.mockReturnValue({ data: { valutEntries: groups }, loading: false, error: null });
   mockUseQuery.mockImplementation((query: { definitions?: Array<{ name?: { value?: string } }> }) => {
     const operationName = query?.definitions?.[0]?.name?.value;
     if (operationName === 'GetValutEntries') {

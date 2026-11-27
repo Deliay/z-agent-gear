@@ -198,19 +198,32 @@ function makeCloudHost(overrides: Partial<CloudHostData> = {}): CloudHostData {
   };
 }
 
+/** 归档按需查询数据（展开「已归档」时才由 useQuery 返回） */
+let archivedWorkflowFixtures: WorkflowInstanceSummaryData[] = [];
+let archivedSessionFixtures: SessionData[] = [];
+
+function mockArchived(options: {
+  workflows?: WorkflowInstanceSummaryData[];
+  sessions?: SessionData[];
+} = {}) {
+  archivedWorkflowFixtures = options.workflows ?? [];
+  archivedSessionFixtures = options.sessions ?? [];
+}
+
 /** 默认空数据；测试通过 mockHome 覆盖 */
 function mockHome(overrides: Partial<HomeOverviewData> = {}) {
   const data: HomeOverviewData = {
     controllers: [makeController()],
     sessions: [],
     sessionTotalCount: 0,
-    archivedSessions: [],
     workspaces: [],
     workflowInstances: [],
-    archivedWorkflowInstances: [],
     todos: [],
     unreadTodoCount: 0,
     sessionReviews: [],
+    configuredWorkflows: [],
+    workflowTemplates: [],
+    workspaceContext: { myWorkspaces: [], myTenants: [] },
     ...overrides,
   };
   mockUseHomeOverview.mockReturnValue({ data, loading: false, error: undefined, refetch: mockRefetch });
@@ -218,9 +231,25 @@ function mockHome(overrides: Partial<HomeOverviewData> = {}) {
 }
 
 function mockCapabilities(enabled = true, supportedHarnesses: CloudHostData['harnessTypes'] = ['OPENCODE']) {
-  mockUseQuery.mockReturnValue({
-    data: { cloudHostCapabilities: { enabled, supportedHarnesses } },
-    loading: false,
+  mockUseQuery.mockImplementation((query: { definitions?: Array<{ name?: { value?: string } }> }) => {
+    const operationName = query?.definitions?.[0]?.name?.value;
+    if (operationName === 'GetWorkflowInstances') {
+      return {
+        data: { workflowInstances: archivedWorkflowFixtures },
+        loading: false,
+        error: undefined,
+        refetch: vi.fn(),
+      };
+    }
+    if (operationName === 'GetArchivedSessions') {
+      return {
+        data: { sessions: archivedSessionFixtures },
+        loading: false,
+        error: undefined,
+        refetch: vi.fn(),
+      };
+    }
+    return { data: { cloudHostCapabilities: { enabled, supportedHarnesses } }, loading: false };
   });
 }
 
@@ -239,6 +268,7 @@ describe('Sidebar 集成测试', () => {
     vi.clearAllMocks();
     localStorage.clear();
     document.body.className = '';
+    mockArchived();
     mockCapabilities();
     mockHome();
   });
@@ -371,10 +401,11 @@ describe('Sidebar 集成测试', () => {
   });
 
   describe('④ 工作流集中列表', () => {
-    it('无工作流实例时空态收敛（不渲染占位文字，列表为空）', () => {
+    it('无工作流实例时空态收敛（不渲染占位文字，仍常驻可展开的已归档分组）', () => {
       renderSidebar();
       expect(screen.queryByText('无工作流实例')).not.toBeInTheDocument();
-      expect(screen.getByTestId('sidebar-workflow-list').children).toHaveLength(0);
+      expect(screen.getByTestId('sidebar-workflow-list').children).toHaveLength(1);
+      expect(within(screen.getByTestId('sidebar-workflow-list')).getByText('已归档')).toBeInTheDocument();
     });
 
     it('集中平铺展示全部实例并标注所属工作区与状态（不按工作区分组）', () => {
@@ -402,7 +433,7 @@ describe('Sidebar 集成测试', () => {
 
     it('实例上报后从空态切换为列表', () => {
       const { rerender } = renderSidebar();
-      expect(screen.getByTestId('sidebar-workflow-list').children).toHaveLength(0);
+      expect(screen.getByTestId('sidebar-workflow-list').children).toHaveLength(1);
 
       mockHome({ workflowInstances: [makeInstance()] });
       rerender(<Sidebar name="testuser" />);
@@ -427,10 +458,10 @@ describe('Sidebar 集成测试', () => {
   });
 
   describe('⑥ 空态收敛（不再渲染占位文字）', () => {
-    it('无会话时不显示「无会话」，会话列表为空', () => {
+    it('无会话时不显示「无会话」，会话列表仅常驻已归档分组', () => {
       renderSidebar();
       expect(screen.queryByText('无会话')).not.toBeInTheDocument();
-      expect(screen.getByTestId('sidebar-session-list').children).toHaveLength(0);
+      expect(screen.getByTestId('sidebar-session-list').children).toHaveLength(1);
     });
 
     it('无工作区时不显示「无工作区」，工作区分组仍可展开为空', () => {
@@ -440,30 +471,36 @@ describe('Sidebar 集成测试', () => {
     });
   });
 
-  describe('已归档工作流实例折叠', () => {
-    it('默认收起，展开后归档实例名称可见', () => {
+  describe('已归档工作流实例折叠（按需拉取、无计数）', () => {
+    it('默认收起，展开后才拉取并展示归档实例', () => {
       mockHome({
         workflowInstances: [makeInstance({ id: 'inst-active', name: '活跃实例' })],
-        archivedWorkflowInstances: [makeInstance({ id: 'inst-archived', name: '已归档实例', archived: true })],
+      });
+      mockArchived({
+        workflows: [makeInstance({ id: 'inst-archived', name: '已归档实例', archived: true })],
       });
 
       renderSidebar();
 
       expect(screen.queryByText('已归档实例')).not.toBeInTheDocument();
       expect(screen.getByText('活跃实例')).toBeInTheDocument();
-      const archiveButton = screen.getByText(/已归档/);
+      const list = screen.getByTestId('sidebar-workflow-list');
+      const archiveButton = within(list).getByRole('button', { name: '已归档' });
       expect(archiveButton).toHaveAttribute('aria-expanded', 'false');
 
       fireEvent.click(archiveButton);
 
       expect(screen.getByText('已归档实例')).toBeInTheDocument();
       expect(archiveButton).toHaveAttribute('aria-expanded', 'true');
+      expect(within(list).queryByText(/已归档（/)).not.toBeInTheDocument();
     });
 
     it('T-BDG1 活动与已归档并存时工作流分区 badge 仅显示活动数量', () => {
       mockHome({
         workflowInstances: [makeInstance({ id: 'inst-active', name: '活跃实例' })],
-        archivedWorkflowInstances: [makeInstance({ id: 'inst-archived', name: '已归档实例', archived: true })],
+      });
+      mockArchived({
+        workflows: [makeInstance({ id: 'inst-archived', name: '已归档实例', archived: true })],
       });
 
       renderSidebar();
@@ -471,13 +508,14 @@ describe('Sidebar 集成测试', () => {
       const section = screen.getByTestId('sidebar-section-workflows');
       const titleButton = within(section).getByRole('button', { name: '工作流' });
       expect(within(titleButton).getByText('1')).toBeInTheDocument();
-      // 已归档数量仍由分区内分组承载
-      expect(within(screen.getByTestId('sidebar-workflow-list')).getByText(/已归档（1）/)).toBeInTheDocument();
+      // 已归档分组常驻且不展示数量
+      const list = screen.getByTestId('sidebar-workflow-list');
+      expect(within(list).getByRole('button', { name: '已归档' })).toBeInTheDocument();
     });
 
     it('T-BDG2 仅已归档无活动时工作流分区 badge 显示 0', () => {
-      mockHome({
-        archivedWorkflowInstances: [
+      mockArchived({
+        workflows: [
           makeInstance({ id: 'inst-archived-1', name: '归档实例一', archived: true }),
           makeInstance({ id: 'inst-archived-2', name: '归档实例二', archived: true }),
         ],
@@ -488,8 +526,9 @@ describe('Sidebar 集成测试', () => {
       const section = screen.getByTestId('sidebar-section-workflows');
       const titleButton = within(section).getByRole('button', { name: '工作流' });
       expect(within(titleButton).getByText('0')).toBeInTheDocument();
-      const archiveGroup = within(screen.getByTestId('sidebar-workflow-list')).getByText(/已归档（2）/);
-      expect(archiveGroup).toBeInTheDocument();
+      const archiveGroup = within(screen.getByTestId('sidebar-workflow-list')).getByRole('button', {
+        name: '已归档',
+      });
       expect(archiveGroup).toHaveAttribute('aria-expanded', 'false');
     });
   });
@@ -574,14 +613,14 @@ describe('Sidebar 集成测试', () => {
           makeInstance({ id: 'w1', controllerId: 'ctrl-1', name: '主机一实例' }),
           makeInstance({ id: 'w2', controllerId: 'ctrl-2', name: '主机二实例' }),
         ],
-        archivedWorkflowInstances: [makeInstance({ id: 'w3', name: '归档实例', archived: true })],
       });
+      mockArchived({ workflows: [makeInstance({ id: 'w3', name: '归档实例', archived: true })] });
       render(<Sidebar name="testuser" />);
 
       const list = screen.getByTestId('sidebar-workflow-list');
       expect(within(list).getByText('主机一实例')).toBeInTheDocument();
       expect(within(list).getByText('主机二实例')).toBeInTheDocument();
-      expect(within(list).getByText(/已归档（1）/)).toBeInTheDocument();
+      expect(within(list).getByRole('button', { name: '已归档' })).toBeInTheDocument();
     });
 
     it('T-UI4-AGG3 排序稳定：updatedAt 倒序 + id tie-break（轮询不跳动）', () => {
@@ -991,21 +1030,48 @@ describe('Sidebar 集成测试', () => {
     });
   });
 
-  describe('已归档会话分组（T-WEB2）', () => {
-    it('T-WEB2 默认折叠、计数正确、活跃列表不含已归档，展开后条目可打开', () => {
+  describe('已归档会话分组（T-WEB2：按需拉取、无计数）', () => {
+    it('T-WEB-ARCH2 未展开时 skip 归档查询，展开后才发起（不随首页轮询）', () => {
+      mockHome({ sessions: [makeSession({ id: 's-active', title: '活跃会话' })] });
+      mockArchived({ sessions: [makeSession({ id: 's-archived', title: '归档会话', archived: true })] });
+
+      renderSidebar();
+
+      const callsFor = (operation: string) =>
+        mockUseQuery.mock.calls.filter(
+          ([doc]) =>
+            (doc as { definitions?: Array<{ name?: { value?: string } }> })?.definitions?.[0]?.name
+              ?.value === operation,
+        );
+
+      expect(callsFor('GetArchivedSessions').at(-1)?.[1]).toMatchObject({ skip: true });
+      expect(callsFor('GetWorkflowInstances').at(-1)?.[1]).toMatchObject({ skip: true });
+
+      const sessionList = screen.getByTestId('sidebar-session-list');
+      fireEvent.click(within(sessionList).getByRole('button', { name: '已归档' }));
+
+      expect(callsFor('GetArchivedSessions').at(-1)?.[1]).toMatchObject({ skip: false });
+      expect(within(sessionList).getByText('归档会话')).toBeInTheDocument();
+    });
+
+    it('T-WEB2 默认折叠、无数量、展开后才拉取且条目可打开', () => {
       mockHome({
         sessions: [
           makeSession({ id: 's-active', title: '活跃会话', updatedAt: '2026-01-02T00:00:00Z' }),
         ],
-        archivedSessions: [
+      });
+      mockArchived({
+        sessions: [
           makeSession({ id: 's-archived', title: '归档会话', archived: true, updatedAt: '2026-01-01T00:00:00Z' }),
         ],
       });
 
       render(<Sidebar name="testuser" />);
 
-      const groupButton = screen.getByRole('button', { name: /已归档（1）/ });
+      const sessionList = screen.getByTestId('sidebar-session-list');
+      const groupButton = within(sessionList).getByRole('button', { name: '已归档' });
       expect(groupButton).toHaveAttribute('aria-expanded', 'false');
+      expect(within(sessionList).queryByText(/已归档（/)).not.toBeInTheDocument();
       expect(screen.queryByText('归档会话')).not.toBeInTheDocument();
       expect(screen.getByText('活跃会话')).toBeInTheDocument();
 
@@ -1025,12 +1091,16 @@ describe('Sidebar 集成测试', () => {
       expect(screen.getByTestId('sidebar-session-list').querySelectorAll(':scope > li')).toHaveLength(2);
     });
 
-    it('T-WEB2 无已归档会话时不渲染分组', () => {
+    it('T-WEB2 无已归档会话时分组仍常驻，展开展示空态「暂无归档」', () => {
       mockHome({ sessions: [makeSession({ id: 's-active', title: '活跃会话' })] });
 
       render(<Sidebar name="testuser" />);
 
-      expect(screen.queryByRole('button', { name: /已归档/ })).not.toBeInTheDocument();
+      const sessionList = screen.getByTestId('sidebar-session-list');
+      const groupButton = within(sessionList).getByRole('button', { name: '已归档' });
+      expect(groupButton).toBeInTheDocument();
+      fireEvent.click(groupButton);
+      expect(within(sessionList).getByText('暂无归档')).toBeInTheDocument();
       expect(screen.getByText('活跃会话')).toBeInTheDocument();
     });
   });

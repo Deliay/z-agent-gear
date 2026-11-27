@@ -13,11 +13,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
-  GET_WORKFLOW_TEMPLATES,
   CREATE_WORKFLOW_TEMPLATE,
   UPDATE_WORKFLOW_TEMPLATE,
   type WorkflowTemplateData,
 } from '@/graphql/workflow'
+import { HOME_OVERVIEW } from '@/graphql/home'
 import {
   createEmptyNode,
   templateNodeToEditable,
@@ -84,13 +84,13 @@ export default function TemplateEditorDialog({
       if (template) {
         await updateTemplate({
           variables: { id: template.id, input },
-          refetchQueries: [{ query: GET_WORKFLOW_TEMPLATES }],
+          refetchQueries: [{ query: HOME_OVERVIEW }],
         })
         toast.success('工作流模板已更新')
       } else {
         await createTemplate({
           variables: { input },
-          refetchQueries: [{ query: GET_WORKFLOW_TEMPLATES }],
+          refetchQueries: [{ query: HOME_OVERVIEW }],
         })
         toast.success('工作流模板已创建')
       }

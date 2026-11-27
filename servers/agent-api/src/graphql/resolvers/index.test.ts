@@ -42,6 +42,11 @@ describe('graphql resolver registry', () => {
     expect(summaryFields.hourlyCredits.resolve).toEqual(expect.any(Function));
   });
 
+  it('registers settingsOverview query（设置页聚合登记守卫，T-REG1）', () => {
+    const queryType = schema.getType('Query') as GraphQLObjectType;
+    expect(queryType.getFields().settingsOverview.resolve).toEqual(expect.any(Function));
+  });
+
   it('registers ExternalLoginInfo provider resolvers（绑定优化 spread 登记守卫）', () => {
     const fields = (schema.getType('ExternalLoginInfo') as GraphQLObjectType).getFields();
     for (const name of ['providerType', 'providerDisplayName', 'providerEnabled']) {

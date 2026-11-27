@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
-import { useQuery, useMutation } from '@apollo/client/react'
+import { useMutation } from '@apollo/client/react'
 import {
   DndContext,
   closestCenter,
@@ -8,10 +8,7 @@ import {
   useSensors,
   type DragEndEvent,
 } from '@dnd-kit/core'
-import {
-  GET_MODELS,
-  GET_PROVIDERS,
-} from '@/graphql/queries'
+import { SETTINGS_OVERVIEW } from '@/graphql/queries'
 import {
   TOGGLE_MODEL,
   UPDATE_MODEL_SORT_ORDER,
@@ -19,7 +16,7 @@ import {
   UPDATE_MODEL_CONTEXT_LENGTH,
   DELETE_CUSTOM_MODEL,
 } from '@/graphql/mutations'
-import type { GetModelsQuery, GetProvidersQuery } from '@/graphql/types'
+import { useSettingsOverview } from '@/stores/settingsOverview'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import ModelGroup from './ModelGroup'
@@ -63,8 +60,8 @@ interface ModelGroupData {
 const SYSTEM_KEY = 'system'
 
 export default function ModelSection() {
-  const { data, loading } = useQuery<GetModelsQuery>(GET_MODELS)
-  const { data: providersData } = useQuery<GetProvidersQuery>(GET_PROVIDERS)
+  const { data, loading } = useSettingsOverview()
+  const providersData = data
   const { readOnly: contextReadOnly } = useWorkspaceAccess()
   const resolveSource = useResourceSourceResolver()
   const [toggleModel] = useMutation(TOGGLE_MODEL)
@@ -144,7 +141,7 @@ export default function ModelSection() {
   const handleDelete = useCallback(async (id: string) => {
     await deleteCustomModel({
       variables: { id },
-      refetchQueries: [GET_MODELS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
     notifyModelConfigApplied()
   }, [deleteCustomModel])
@@ -152,7 +149,7 @@ export default function ModelSection() {
   const handleToggle = async (id: string) => {
     await toggleModel({
       variables: { id },
-      refetchQueries: [GET_MODELS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
     notifyModelConfigApplied()
   }
@@ -183,7 +180,7 @@ export default function ModelSection() {
 
     await updateSortOrder({
       variables: { ids: userIds },
-      refetchQueries: [GET_MODELS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
     notifyModelConfigApplied()
   }
@@ -195,7 +192,7 @@ export default function ModelSection() {
   ) => {
     await createCustom({
       variables: { input: { providerId, name, contextLength } },
-      refetchQueries: [GET_MODELS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
     notifyModelConfigApplied()
   }
@@ -209,7 +206,7 @@ export default function ModelSection() {
     try {
       await updateContextLength({
         variables: { modelId: editingModel.id, contextLength },
-        refetchQueries: [GET_MODELS],
+        refetchQueries: [{ query: SETTINGS_OVERVIEW }],
       })
       notifyModelConfigApplied()
     } catch (err) {

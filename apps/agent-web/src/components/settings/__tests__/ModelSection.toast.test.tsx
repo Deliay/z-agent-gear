@@ -8,6 +8,7 @@ const dnd = vi.hoisted(() => ({ onDragEnd: null as null | ((event: unknown) => v
 
 const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
+  settings: vi.fn(),
   toggle: vi.fn(),
   sort: vi.fn(),
   create: vi.fn(),
@@ -38,6 +39,10 @@ vi.mock('@apollo/client/react', () => ({
 
 vi.mock('sonner', () => ({
   toast: { success: mocks.toastSuccess, error: mocks.toastError, warning: vi.fn() },
+}))
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mocks.settings(),
 }))
 
 vi.mock('@dnd-kit/core', async () => {
@@ -99,14 +104,9 @@ function model(id: string, overrides: Record<string, unknown> = {}) {
 }
 
 function setupQueries(models: unknown[]) {
-  mocks.useQuery.mockImplementation((doc: unknown) => {
-    if (String(doc).includes('providers')) {
-      return {
-        data: { providers: [{ id: 'p1', name: 'My OpenAI', type: 'OpenAI', isEnabled: true }] },
-        loading: false,
-      }
-    }
-    return { data: { models }, loading: false }
+  mocks.settings.mockReturnValue({
+    data: { models, providers: [{ id: 'p1', name: 'My OpenAI', type: 'OpenAI', isEnabled: true }] },
+    loading: false,
   })
 }
 

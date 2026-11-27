@@ -11,6 +11,7 @@ import { SESSION_PREVIEW_TOOLS_SERVER_NAME } from './session-preview-tools.js';
 import { VALUT_TOOLS_SERVER_NAME } from './valut-tools.js';
 import { CUSTOM_TOOLS_SERVER_NAME } from './custom-tools-mcp.js';
 import { KNOWLEDGE_BASE_TOOLS_SERVER_NAME } from './knowledge-base-tools.js';
+import { GATEWAY_TOOLS_SERVER_NAME } from './gateway-tools.js';
 
 export interface ControllerDefaultMcpInput {
   useAllEnabled: boolean;
@@ -161,6 +162,7 @@ export class ControllerService {
               VALUT_TOOLS_SERVER_NAME,
               CUSTOM_TOOLS_SERVER_NAME,
               KNOWLEDGE_BASE_TOOLS_SERVER_NAME,
+              GATEWAY_TOOLS_SERVER_NAME,
             ],
           },
         });
@@ -177,6 +179,7 @@ export class ControllerService {
                 VALUT_TOOLS_SERVER_NAME,
                 CUSTOM_TOOLS_SERVER_NAME,
                 KNOWLEDGE_BASE_TOOLS_SERVER_NAME,
+                GATEWAY_TOOLS_SERVER_NAME,
               ],
             },
           });

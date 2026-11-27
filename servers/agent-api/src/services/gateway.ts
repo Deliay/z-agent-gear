@@ -3,6 +3,8 @@ import { Gateway } from '../models/gateway.js';
 import { Controller } from '../models/controller.js';
 import { actorFilter } from './workspace-context.js';
 import { publish } from '../middleware/publish.js';
+import { config } from '../config/index.js';
+import { buildGatewayEndpoint } from './gateway-endpoint.js';
 
 const COMMAND_CHANNEL = 'port-forward:command';
 
@@ -68,13 +70,17 @@ export class GatewayService {
   }
 
   private mapGateway(doc: Record<string, unknown>): Record<string, unknown> {
+    const controllerId = (doc.controllerId as mongoose.Types.ObjectId).toString();
+    const name = doc.name as string;
     return {
       id: (doc._id as mongoose.Types.ObjectId).toString(),
-      controllerId: (doc.controllerId as mongoose.Types.ObjectId).toString(),
-      name: doc.name,
+      controllerId,
+      name,
       port: doc.port,
       status: doc.status,
       createdAt: (doc.createdAt as Date).toISOString(),
+      // 派生只读字段：与代理路由同源的完整外网地址（不落库，PUBLIC_BASE_URL 单一来源）
+      endpoint: buildGatewayEndpoint(config.publicBaseUrl, controllerId, name),
     };
   }
 }

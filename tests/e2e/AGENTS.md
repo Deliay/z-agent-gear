@@ -154,6 +154,15 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 | E2E-TT2 成员协作可见资源 | 后台 API 建 team + owner(admin)/member(developer) → owner 在团队全局创建普通工作区、把 member 加入并创建供应商（mock LLM 校验连通性）→ member 登录后切换器含该工作区，设置页可见 owner 创建的供应商且徽标「本工作区」 |
 | E2E-TT3 团队计费口径 | 后台为 team 租户充值 10 credits → owner 在团队全局「我的费用」看到「可用余额 10.00」；切回个人工作区显示 0.00（个人余额不受团队扣费影响）。最小断言：真实创建云电脑扣费依赖 HARNESS_ENABLED，已由 tests/api T-B2 / cloud-host-charges / cloud-host-billing-quote 覆盖 |
 
+### 网关 E2E (`gateway.spec.ts`，#565)
+
+> fake controller 注册（`2.0.0`）+ GraphQL 造数；UI 四期起网关为侧边栏「网关」聚合分区（默认折叠）。
+
+| 测试 | 描述 |
+|------|------|
+| 既有用例 | 在线/离线入口、空态、新建对话框、创建/重名/删除、取消、隧道代理 200 零回归 |
+| E2E-GMCP1 | `createGateway` 返回服务端派生 `endpoint`（路径含 `/api/gateway/{controllerId}/{name}/`）；登录后侧边栏该条目复制按钮 `title` 与 GraphQL `endpoint` **逐字一致**（不硬编码域名，D10） |
+
 ### Settings Git E2E (`settings-git.spec.ts`)
 
 > 仅前端交互与文案；`commitSettings` / `updateCommitSettings` / `personalGithubAccounts` 经 `page.route` mock，
@@ -275,8 +284,8 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| E2E-SARCH1 | 会话页「归档」→ toast「会话已归档」并返回 `/sessions` → 侧边栏活跃列表该条消失、「已归档（1）」出现 → 展开分组条目可打开（`session-archived-badge` + 「取消归档」入口）→「取消归档」toast 后恢复活跃分组、归档分组消失 |
-| E2E-SARCH2 | 删除工作区前置 `workspaceArchiveImpact` 取数：确认框文案「删除工作区将同时归档其下 2 个会话，是否继续？」→ 确认删除 → 配置页空态 + 侧边栏「已归档（2）」两条可打开 |
+| E2E-SARCH1 | 会话页「归档」→ toast「会话已归档」并返回 `/sessions` → 侧边栏活跃列表该条消失、常驻「已归档」分组（**无数量**）→ 展开分组按需加载条目可打开（`session-archived-badge` + 「取消归档」入口）→「取消归档」toast 后恢复活跃分组 |
+| E2E-SARCH2 | 删除工作区前置 `workspaceArchiveImpact` 取数：确认框文案「删除工作区将同时归档其下 2 个会话，是否继续？」→ 确认删除 → 配置页空态 + 侧边栏展开「已归档」后两条可打开 |
 | E2E-SRO1 | 删除工作区后的会话只读回看：`session-readonly-notice`（`data-readonly-reason=WORKSPACE_MISSING`，文案「工作区已不存在，会话记录仅供只读回看。」）出现、输入框（textbox）与「继续」按钮数量为 0、先前写入的历史消息仍可见。云电脑销毁只读回归由 `cloud-host-readonly.spec.ts`（T-AW10 / R2-10，需 `MONGODB_URI`，缺省 skip）覆盖，本套件不重复 |
 
 ### Settings History Session E2E (`settings-history-session.spec.ts`)
@@ -712,3 +721,14 @@ fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`�
 - 用例：E2E-UPG1 一致态展示 + 无按钮 / E2E-UPG2 不一致 → 按钮、字段缺失 → `—` 且无按钮 /
   E2E-UPG3 点击 → 升级中态 + `container is not online` 中文 toast + 按钮恢复 /
   E2E-UPG4 非 RUNNING 无按钮 / E2E-UPG5 既有面板关键路径零回归。
+
+## 接口性能优化（#584）
+
+| 编号 | 断言 |
+|------|------|
+| E2E-HP1 | 首屏仅 1 次 HomeOverview，且归档清单请求首屏 0 次（按 operationName 判定：`GetArchivedSessions` / `GetWorkflowInstances` + `variables.archived:true`） |
+| E2E-HP2 | 展开「已归档」才发归档请求；标题与列表无数量；空态可展开；折叠再展开按 `cache-and-network` 重新拉取（不承诺复用缓存） |
+| E2E-HP3 | workspaceContext/模板/配置随 15s 轮询刷新（建数据后一个周期内可见） |
+| E2E-WSF1 | 「新建工作流」弹窗与工作区列表不展示离线/删除控制器工作区 |
+| E2E-SET1 | 设置页打开请求 ≤3（1 次 SETTINGS_OVERVIEW + 少量按需），各区块内容完整、操作后即时更新 |
+| E2E-SARCH1/SARCH2 | 「已归档」无数量 + 展开加载；归档/取消归档行为不变 |

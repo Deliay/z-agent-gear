@@ -7,7 +7,9 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useUserEventStream } from '../hooks/useUserEventStream';
 import Sidebar from '../components/Sidebar';
 import SidebarResizer from '../components/SidebarResizer';
+import ActivityRail from '../components/layout/ActivityRail';
 import { readSidebarWidth } from '../lib/sidebar-width';
+import type { SidebarSectionKey } from '../lib/sidebar-prefs';
 import { Button } from '../components/ui/button';
 import { HarnessLoginDialog } from '../components/harness/HarnessLoginDialog';
 import {
@@ -18,6 +20,12 @@ import { HOME_OVERVIEW } from '../graphql/home';
 import type { HomeOverviewQuery } from '../graphql/types';
 import { HomeOverviewContext } from '../stores/homeOverview';
 import { useWorkspaceContextSync } from '../hooks/useWorkspaceContextSync';
+
+/** 工作区上下文同步桥：必须在 HomeOverviewContext.Provider 内（消费聚合数据）。 */
+function WorkspaceContextSyncBridge() {
+  useWorkspaceContextSync();
+  return null;
+}
 
 function FullPageSpinner() {
   return (
@@ -35,9 +43,20 @@ export default function MainLayout() {
   const navigate = useNavigate();
   // 侧边栏宽度：本地记忆（localStorage['sidebar-width']），拖动分界线实时更新
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  // 二级列表栏折叠状态（⌘B / Ctrl+B 切换）与一级导航轨聚焦目标
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [focusTarget, setFocusTarget] = useState<{ section: SidebarSectionKey; nonce: number } | null>(null);
 
-  // 工作区上下文：myWorkspaces/myTenants 同步 + 失效回退（Phase 8）
-  useWorkspaceContextSync();
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') {
+        event.preventDefault();
+        setSidebarCollapsed((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // 首页 + 侧边栏统一数据源：单一查询、单一轮询（15s）
   const {
@@ -52,6 +71,7 @@ export default function MainLayout() {
   // 首屏不阻塞布局：聚合数据未就绪时以空数据渲染外壳，数据到达后各区块同批填充；
   // 轮询期间 loading=true 也不会卸载子页面（frontend-rules：Apollo v4 轮询陷阱）
   const homeData = data?.homeOverview ?? null;
+  const homeContextValue = { data: homeData, loading: homeLoading, error, refetch };
 
   // 用户级 SSE：harness 登录引导即时下发（待办轮询保留为断线兜底）
   useUserEventStream({
@@ -108,32 +128,65 @@ export default function MainLayout() {
     }
   }, [homeData, navigate]);
 
+  // 登录后先渲染错误/加载页也必须挂载同步桥：持久化工作区失效时由 hook 清理并 refetch
   if (loading) {
-    return <FullPageSpinner />;
+    return (
+      <HomeOverviewContext.Provider value={homeContextValue}>
+        <WorkspaceContextSyncBridge />
+        <FullPageSpinner />
+      </HomeOverviewContext.Provider>
+    );
   }
 
   // 整体加载失败：展示全局错误与重试入口，重试仍是一次请求
   if (error && !data) {
     return (
-      <div className="flex h-screen flex-col items-center justify-center gap-3" role="alert">
-        <p className="text-sm text-destructive">首页数据加载失败</p>
-        {error.message && <p className="max-w-md text-xs text-muted-foreground">{error.message}</p>}
-        <Button onClick={() => void refetch()}>重试</Button>
-      </div>
+      <HomeOverviewContext.Provider value={homeContextValue}>
+        <WorkspaceContextSyncBridge />
+        <div className="flex h-screen flex-col items-center justify-center gap-3" role="alert">
+          <p className="text-sm text-destructive">首页数据加载失败</p>
+          {error.message && <p className="max-w-md text-xs text-muted-foreground">{error.message}</p>}
+          <Button onClick={() => void refetch()}>重试</Button>
+        </div>
+      </HomeOverviewContext.Provider>
     );
   }
 
+  const hasPendingAttention =
+    (homeData?.unreadTodoCount ?? 0) > 0 ||
+    (homeData?.sessionReviews ?? []).some((review) => review.status === 'PENDING');
+
+  const handleSelectRailSection = (section: SidebarSectionKey) => {
+    setSidebarCollapsed(false);
+    setFocusTarget((prev) => ({ section, nonce: (prev?.nonce ?? 0) + 1 }));
+  };
+
   let layout: ReactNode;
 
-  // Desktop: 两列布局，侧边栏宽度走 CSS 变量并由 SidebarResizer 拖拽调节
+  // Desktop: 三层工作区外壳（56px ActivityRail + 可拖拽/可收起 ContextPanel + 主舞台）
   if (!isMobile) {
     layout = (
       <div
-        className="relative grid h-screen grid-cols-[var(--sidebar-width,20rem)_minmax(0,1fr)]"
+        className={`relative grid h-screen ${
+          sidebarCollapsed
+            ? 'grid-cols-[3.5rem_minmax(0,1fr)]'
+            : 'grid-cols-[3.5rem_var(--sidebar-width,20rem)_minmax(0,1fr)]'
+        }`}
         style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
       >
-        <Sidebar name={user?.name ?? ''} />
-        <SidebarResizer width={sidebarWidth} onWidthChange={setSidebarWidth} />
+        <ActivityRail
+          activeSection={focusTarget?.section ?? null}
+          onSelectSection={handleSelectRailSection}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
+          hasPendingAttention={hasPendingAttention}
+        />
+        {!sidebarCollapsed && (
+          <>
+            <Sidebar name={user?.name ?? ''} focusTarget={focusTarget} />
+            <SidebarResizer width={sidebarWidth} offsetLeft={56} onWidthChange={setSidebarWidth} />
+          </>
+        )}
         <main className="min-w-0 overflow-auto">
           <Outlet />
         </main>
@@ -163,7 +216,8 @@ export default function MainLayout() {
   }
 
   return (
-    <HomeOverviewContext.Provider value={{ data: homeData, loading: homeLoading, error, refetch }}>
+    <HomeOverviewContext.Provider value={homeContextValue}>
+      <WorkspaceContextSyncBridge />
       {layout}
       {/* 全站单例：登录引导弹窗挂在最高层级，不受 Sidebar / NewSessionDialog 挂载影响 */}
       <HarnessLoginDialog />

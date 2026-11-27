@@ -301,7 +301,7 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
                     {(part.text ?? '').split('\n')[0].slice(0, 80)}
                   </span>
                   {part.origin && (
-                    <span className="shrink-0 rounded-sm bg-muted px-1 text-[10px] text-muted-foreground" data-testid="prompt-part-origin">
+                    <span className="shrink-0 rounded-sm bg-muted px-1 text-xs text-muted-foreground" data-testid="prompt-part-origin">
                       批注
                     </span>
                   )}

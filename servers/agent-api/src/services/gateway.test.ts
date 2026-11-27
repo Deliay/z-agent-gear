@@ -16,20 +16,19 @@ vi.mock('../models/controller.js', () => ({
   },
 }));
 
-vi.mock('../middleware/redis.js', () => ({
-  getRedisClient: vi.fn(),
+vi.mock('../middleware/publish.js', () => ({
+  publish: vi.fn(async () => 1),
 }));
 
 import { gatewayService } from './gateway.js';
 import { Gateway } from '../models/gateway.js';
 import { Controller } from '../models/controller.js';
-import { getRedisClient } from '../middleware/redis.js';
-
-const mockRedis = { publish: vi.fn().mockResolvedValue(1) };
+import { publish } from '../middleware/publish.js';
+import { buildGatewayEndpoint } from './gateway-endpoint.js';
+import { config } from '../config/index.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(getRedisClient).mockReturnValue(mockRedis as never);
 });
 
 describe('GatewayService', () => {
@@ -56,7 +55,11 @@ describe('GatewayService', () => {
       expect(result.gateways).toHaveLength(1);
       expect(result.gateways[0].name).toBe('my-service');
       expect(result.gateways[0].port).toBe(3000);
+      expect(result.gateways[0].endpoint).toBe(
+        buildGatewayEndpoint(config.publicBaseUrl, 'ctrl1', 'my-service'),
+      );
       expect(result.total).toBe(1);
+      expect(result.limit).toBe(0);
     });
 
     it('should return empty list when no gateways exist', async () => {
@@ -97,9 +100,14 @@ describe('GatewayService', () => {
       expect(result.name).toBe('my-service');
       expect(result.port).toBe(3000);
       expect(result.status).toBe('active');
-      expect(mockRedis.publish).toHaveBeenCalledWith('port-forward:command', expect.any(String));
-      const { _meta, ...createBody } = JSON.parse(mockRedis.publish.mock.calls[0][1]);
-      expect(createBody).toEqual({ type: 'tunnel:create', controllerId: 'ctrl1', port: 3000 });
+      expect(result.endpoint).toBe(
+        buildGatewayEndpoint(config.publicBaseUrl, 'ctrl1', 'my-service'),
+      );
+      expect(vi.mocked(publish)).toHaveBeenCalledWith('port-forward:command', {
+        type: 'tunnel:create',
+        controllerId: 'ctrl1',
+        port: 3000,
+      });
     });
 
     it('should throw when controller not found', async () => {
@@ -175,9 +183,11 @@ describe('GatewayService', () => {
       const result = await gatewayService.delete('ctrl1', 'user1', 'my-service');
 
       expect(result).toBe(true);
-      expect(mockRedis.publish).toHaveBeenCalledWith('port-forward:command', expect.any(String));
-      const { _meta, ...closeBody } = JSON.parse(mockRedis.publish.mock.calls[0][1]);
-      expect(closeBody).toEqual({ type: 'tunnel:close', controllerId: 'ctrl1', port: 3000 });
+      expect(vi.mocked(publish)).toHaveBeenCalledWith('port-forward:command', {
+        type: 'tunnel:close',
+        controllerId: 'ctrl1',
+        port: 3000,
+      });
     });
 
     it('should return false when gateway not found', async () => {
@@ -188,6 +198,94 @@ describe('GatewayService', () => {
       const result = await gatewayService.delete('ctrl1', 'user1', 'nonexistent');
 
       expect(result).toBe(false);
+    });
+  });
+
+  describe('endpoint 派生（T-GWS / T-GMCP-REPRO-1）', () => {
+    function mockCreateDeps() {
+      const now = new Date();
+      vi.mocked(Controller.findOne).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ _id: 'ctrl1', status: 'online' }),
+      } as never);
+      vi.mocked(Gateway.countDocuments).mockResolvedValue(0);
+      vi.mocked(Gateway.findOne).mockResolvedValue(null);
+      vi.mocked(Gateway.create).mockResolvedValue({
+        toObject: () => ({
+          _id: { toString: () => 'gw1' },
+          controllerId: { toString: () => 'ctrl1' },
+          name: 'my-service',
+          port: 3000,
+          status: 'active',
+          createdAt: now,
+        }),
+      } as never);
+    }
+
+    it('T-GWS1/T-GMCP-REPRO-1: create 返回具体 endpoint（默认 PUBLIC_BASE_URL）', async () => {
+      mockCreateDeps();
+
+      const result = await gatewayService.create('ctrl1', 'user1', 'my-service', 3000, 5);
+
+      expect(result.endpoint).toBe('http://localhost:10001/api/gateway/ctrl1/my-service/');
+    });
+
+    it('T-GWS2: create 的 endpoint 与纯函数 helper 逐字一致', async () => {
+      mockCreateDeps();
+
+      const result = await gatewayService.create('ctrl1', 'user1', 'my-service', 3000, 5);
+
+      expect(result.endpoint).toBe(
+        buildGatewayEndpoint(config.publicBaseUrl, 'ctrl1', 'my-service'),
+      );
+    });
+
+    it('T-GWS3: findAllByController 每条均带 endpoint 且与 helper 一致；既有字段不变', async () => {
+      const now = new Date();
+      vi.mocked(Gateway.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue([
+            {
+              _id: { toString: () => 'gw1' },
+              controllerId: { toString: () => 'ctrl1' },
+              name: 'a-svc',
+              port: 3000,
+              status: 'active',
+              createdAt: now,
+            },
+            {
+              _id: { toString: () => 'gw2' },
+              controllerId: { toString: () => 'ctrl1' },
+              name: 'b-svc',
+              port: 3001,
+              status: 'active',
+              createdAt: now,
+            },
+          ]),
+        }),
+      } as never);
+
+      const result = await gatewayService.findAllByController('ctrl1', 'user1');
+
+      expect(result.gateways.map((row) => row.endpoint)).toEqual([
+        buildGatewayEndpoint(config.publicBaseUrl, 'ctrl1', 'a-svc'),
+        buildGatewayEndpoint(config.publicBaseUrl, 'ctrl1', 'b-svc'),
+      ]);
+      expect(result.gateways[0]).toMatchObject({
+        id: 'gw1',
+        controllerId: 'ctrl1',
+        name: 'a-svc',
+        port: 3000,
+        status: 'active',
+      });
+      expect(result.limit).toBe(0);
+    });
+
+    it('T-GWS4: delete 不返回 endpoint（既有行为零变化）', async () => {
+      vi.mocked(Gateway.findOneAndDelete).mockReturnValue({
+        lean: vi.fn().mockResolvedValue({ port: 3000 }),
+      } as never);
+
+      await expect(gatewayService.delete('ctrl1', 'user1', 'my-service')).resolves.toBe(true);
     });
   });
 });

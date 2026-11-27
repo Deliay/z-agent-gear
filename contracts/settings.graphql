@@ -1,0 +1,50 @@
+# 设置页聚合查询契约（接口性能优化 #584）
+#
+# `settingsOverview` 把设置页各只读区块的数据收敛为一次 GraphQL 请求：
+# 各分支与被替代查询的返回口径逐字段一致，级别同既有 Query 实现（复用同一服务调用）。
+# 单分支失败经 per-branch degrade 降级为空值/默认值，不拖垮整页。
+#
+# 不并入本聚合的数据：
+# - `controllers`：复用 `homeOverview.controllers`（已随 15s 轮询刷新，单一来源）；
+# - `workflowTemplates` / `configuredWorkflows`：并入 `homeOverview`；
+# - 按需查询保持独立：`valutManualOptions`、`cloudStorages(includeDestroyed:true)`、
+#   `personalGithubAccounts`、`workspaces` / `detectGitRepo` / `acpServerCapabilities`、
+#   `repoWorkflowTemplates` 等弹窗/切换类数据。
+#
+# 本查询不轮询：仅设置页首次加载/显式 refetch 时求值一次（`githubAppUrl` 求值会签发
+# 一次性 OAuth state，不放大签发频率）。
+
+type SettingsOverview {
+  # 替代 commitSettings
+  commitSettings: CommitSettings!
+  # 替代 providers（设置页两处共用，聚合后只取一次）
+  providers: [Provider!]!
+  # 替代 models
+  models: [Model!]!
+  # 替代 controllerKeys
+  controllerKeys: [ControllerKey!]!
+  # 替代 mcpServers
+  mcpServers: [McpServer!]!
+  # 替代 valutEntries
+  valutEntries: [ValutNamespaceGroup!]!
+  # 替代 customMcpServers
+  customMcpServers: [CustomMcpServer!]!
+  # 替代 customTools
+  customTools: [CustomTool!]!
+  # 替代 githubAccounts
+  githubAccounts: [GitHubAccount!]!
+  # 替代 githubAppUrl（{url,state}；只读上下文求值失败时 degrade 为 {url:'',state:''}）
+  githubAppUrl: GitHubAppUrl!
+  # 替代 myExternalLogins
+  myExternalLogins: [ExternalLoginInfo!]!
+  # 替代 authProviders
+  authProviders: [AuthProviderInfo!]!
+  # 替代 cloudStorageCapabilities
+  cloudStorageCapabilities: CloudStorageCapabilities!
+  # 替代 cloudStorages(includeDestroyed:false)
+  cloudStorages: [CloudStorage!]!
+}
+
+extend type Query {
+  settingsOverview: SettingsOverview!
+}

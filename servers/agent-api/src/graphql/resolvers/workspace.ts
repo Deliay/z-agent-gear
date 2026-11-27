@@ -57,31 +57,54 @@ async function toWorkspaceView(
   };
 }
 
+/**
+ * 工作区上下文唯一组装口径：单次 `accessibleWorkspaces` 同时产出
+ * `myWorkspaces` 与 `myTenants`（消除 myWorkspaces/myTenants 各自重复查询）。
+ * `Query.myWorkspaces` / `Query.myTenants` / `homeOverview.workspaceContext` 共用。
+ */
+export async function buildWorkspaceContext(
+  userId: string,
+  context: AuthContext,
+): Promise<{
+  myWorkspaces: Awaited<ReturnType<typeof toWorkspaceView>>[];
+  myTenants: Array<{
+    tenant: { id: string; name: string; type: string; memberCount: number };
+    role: TenantRole;
+  }>;
+}> {
+  const accessible = await workspaceService.accessibleWorkspaces(userId);
+  const myWorkspaces = await Promise.all(
+    accessible.map((item) =>
+      toWorkspaceView(item.workspace as unknown as Record<string, unknown>, userId, context),
+    ),
+  );
+  const seen = new Map<string, TenantRole>();
+  for (const item of accessible) {
+    const tenant = item.workspace.tenantId ? String(item.workspace.tenantId) : '';
+    if (tenant && !seen.has(tenant)) seen.set(tenant, item.role);
+  }
+  const tenants = await Tenant.find({ _id: { $in: [...seen.keys()] } }).lean();
+  const myTenants = tenants.map((tenant) => ({
+    tenant: {
+      id: String(tenant._id),
+      name: tenant.name,
+      type: tenant.type,
+      memberCount: 0,
+    },
+    role: seen.get(String(tenant._id)) ?? 'developer',
+  }));
+  return { myWorkspaces, myTenants };
+}
+
 export const workspaceResolvers = {
   Query: {
     myWorkspaces: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       const userId = requireUser(context);
-      const accessible = await workspaceService.accessibleWorkspaces(userId);
-      return Promise.all(accessible.map((item) => toWorkspaceView(item.workspace as unknown as Record<string, unknown>, userId, context)));
+      return (await buildWorkspaceContext(userId, context)).myWorkspaces;
     },
     myTenants: async (_parent: unknown, _args: unknown, context: AuthContext) => {
       const userId = requireUser(context);
-      const accessible = await workspaceService.accessibleWorkspaces(userId);
-      const seen = new Map<string, TenantRole>();
-      for (const item of accessible) {
-        const tenant = item.workspace.tenantId ? String(item.workspace.tenantId) : '';
-        if (tenant && !seen.has(tenant)) seen.set(tenant, item.role);
-      }
-      const tenants = await Tenant.find({ _id: { $in: [...seen.keys()] } }).lean();
-      return tenants.map((tenant) => ({
-        tenant: {
-          id: String(tenant._id),
-          name: tenant.name,
-          type: tenant.type,
-          memberCount: 0,
-        },
-        role: seen.get(String(tenant._id)) ?? 'developer',
-      }));
+      return (await buildWorkspaceContext(userId, context)).myTenants;
     },
     workspaceMembers: async (_parent: unknown, args: { workspaceId: string }, context: AuthContext) => {
       const userId = requireUser(context);

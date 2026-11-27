@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import mongoose from 'mongoose';
 
 vi.mock('../middleware/redis.js', () => ({
   getRedisClient: vi.fn(),
@@ -31,9 +32,16 @@ vi.mock('./session.js', () => ({
   },
 }));
 
+vi.mock('./controller.js', () => ({
+  controllerService: {
+    findAllByUser: vi.fn(),
+  },
+}));
+
 import { runWithWorkspace } from './workspace-context.js';
 import { controllerWorkspaceService } from './controller-workspace.js';
 import { sessionService } from './session.js';
+import { controllerService } from './controller.js';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { Controller } from '../models/controller.js';
 import { getRedisClient } from '../middleware/redis.js';
@@ -511,9 +519,9 @@ describe('ControllerWorkspaceService', () => {
     };
 
     it('findAllByUser：返回本工作区控制器下的全部项目工作区（不按创建者过滤）', async () => {
-      vi.mocked(Controller.find).mockReturnValue({
-        lean: vi.fn().mockResolvedValue([{ _id: '507f1f77bcf86cd799439021' }]),
-      } as never);
+      vi.mocked(controllerService.findAllByUser).mockResolvedValue([
+        { id: '507f1f77bcf86cd799439021', status: 'online' },
+      ] as never);
       vi.mocked(ControllerWorkspace.find).mockReturnValue({
         sort: vi.fn().mockReturnValue({
           lean: vi.fn().mockResolvedValue([{ _id: 'ws-a', userId: 'user-a', controllerId: '507f1f77bcf86cd799439021', name: 'A 的目录', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-01-01') }]),
@@ -524,9 +532,45 @@ describe('ControllerWorkspaceService', () => {
         controllerWorkspaceService.findAllByUser('user-b'),
       );
 
-      expect(Controller.find).toHaveBeenCalledWith({});
-      expect(ControllerWorkspace.find).toHaveBeenCalledWith({ controllerId: { $in: ['507f1f77bcf86cd799439021'] } });
+      expect(controllerService.findAllByUser).toHaveBeenCalledWith('user-b');
+      expect(ControllerWorkspace.find).toHaveBeenCalledWith({
+        controllerId: { $in: [new mongoose.Types.ObjectId('507f1f77bcf86cd799439021')] },
+      });
       expect(rows.map((row) => row.name)).toEqual(['A 的目录']);
+    });
+
+    it('findAllByUser：仅返回 online 控制器下的工作区（offline/registering/unbound 不返回）', async () => {
+      vi.mocked(controllerService.findAllByUser).mockResolvedValue([
+        { id: '507f1f77bcf86cd799439021', status: 'online' },
+        { id: '507f1f77bcf86cd799439022', status: 'offline' },
+        { id: '507f1f77bcf86cd799439023', status: 'registering' },
+        { id: '507f1f77bcf86cd799439024', status: 'unbound' },
+      ] as never);
+      vi.mocked(ControllerWorkspace.find).mockReturnValue({
+        sort: vi.fn().mockReturnValue({
+          lean: vi.fn().mockResolvedValue([]),
+        }),
+      } as never);
+
+      await runWithWorkspace(teamContext, () => controllerWorkspaceService.findAllByUser('user-b'));
+
+      const filter = vi.mocked(ControllerWorkspace.find).mock.calls[0][0] as unknown as {
+        controllerId: { $in: unknown[] };
+      };
+      expect(filter.controllerId.$in.map((id) => String(id))).toEqual(['507f1f77bcf86cd799439021']);
+    });
+
+    it('findAllByUser：无可用控制器时短路返回空集', async () => {
+      vi.mocked(controllerService.findAllByUser).mockResolvedValue([
+        { id: '507f1f77bcf86cd799439022', status: 'offline' },
+      ] as never);
+
+      const rows = await runWithWorkspace(teamContext, () =>
+        controllerWorkspaceService.findAllByUser('user-b'),
+      );
+
+      expect(rows).toEqual([]);
+      expect(ControllerWorkspace.find).not.toHaveBeenCalled();
     });
 
     it('findAllByController：控制器可见时不按 userId 过滤', async () => {

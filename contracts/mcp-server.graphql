@@ -10,19 +10,32 @@ enum McpServerSource {
   manual    # P2 启用
   # 平台内置服务，随系统自动注册。节点作用域工具集（agent-workflow-tools）随节点会话自动装配；
   # 工作流管理工具集（agent-workflow-admin-tools）可装配到任意会话。
-  # agent-workflow-admin-tools 支持 MCP prompts 能力（initialize 声明 capabilities.prompts）：
-  # prompts/list 返回内置提示词片段清单；prompts/get 按 name 获取片段内容（messages 形态）。
+  # agent-workflow-admin-tools 支持 MCP resources 能力（initialize 声明 capabilities.resources，不声明 prompts）：
+  # resources/list 返回内置资源片段清单；resources/read 按 uri 获取片段正文（contents[].mimeType=text/markdown）。
+  # 资源 URI 约定：zag://agent-workflow-admin-tools/prompt/<name>。
   # 内置片段：workflow-schema（工作流 Schema 说明）、workflow-project-persistence（项目持久化指引）。
-  # prompts/get 未知名称或不传 name 返回 INVALID_PARAMS，message 列出可用片段名称。
+  # resources/read 未知 URI 或不传 uri 返回 INVALID_PARAMS，message 列出可用资源 URI。
   # 知识库工具集（agent-knowledge-base-tools）全部会话恒装配：`knowledge_base_create` /
   # `knowledge_base_list` / `knowledge_base_document_list` / `knowledge_base_document_get` /
   # `knowledge_base_document_update` / `knowledge_base_document_delete`；可见范围按「会话工作区 ∪
   # 本租户全局工作区」× 四档权限矩阵（与界面同口径）；`knowledge_base_create` 仅在会话创建人为
   # 租户管理员时出现在 tools/list。
-  # 该服务支持 MCP prompts 能力（initialize 声明 capabilities.prompts）：prompts/list 返回单个
-  # 内置片段 `repo-knowledge-base-authoring`（仓库知识库编写指引），prompts/get 按 name 返回指引文本
-  # （messages 形态），未知名称/缺 name → INVALID_PARAMS 附可用片段名。
+  # 该服务支持 MCP resources 能力（initialize 声明 capabilities.resources，不声明 prompts）：resources/list
+  # 返回单个内置资源 `repo-knowledge-base-authoring`（仓库知识库编写指引），resources/read 按 uri 返回正文
+  # （contents[].mimeType=text/markdown），URI 为 zag://agent-knowledge-base-tools/prompt/repo-knowledge-base-authoring；
+  # 未知 URI/缺 uri → INVALID_PARAMS 附可用资源 URI。
   # 仓库内建知识库仍不出现在任何工具结果中（六工具清单与行为不变；AI 可直接读会话工作目录中的仓库文件）。
+  # 网关工具集（agent-gateway-tools）全部会话恒装配：`gateway_list` /
+  # `gateway_create_endpoint` / `gateway_delete_endpoint`；操作对象为**会话所在控制器**
+  # （`caller.sessionId → Session.controllerId`，不接受外部 controllerId）。创建端点成功后返回
+  # `{name, port, status, endpoint, basePath}`，endpoint 为服务端单一来源派生的完整外网地址
+  # （`{PUBLIC_BASE_URL}/api/gateway/{controllerId}/{name}/`），与 GraphQL `Gateway.endpoint` 及界面同源。
+  # 该服务支持 MCP resources 能力（initialize 声明 capabilities.resources，不声明 prompts）：
+  # resources/list 返回单个内置资源 `gateway-exposure-guidance`（服务暴露指引），resources/read
+  # 按 uri 返回正文（contents[].mimeType=text/markdown），URI 为
+  # zag://agent-gateway-tools/prompt/gateway-exposure-guidance；未知 URI/缺 uri → INVALID_PARAMS 附可用资源 URI。
+  # tools/call 错误统一 `content[0].text = JSON.stringify({code,message}) + isError:true`，服务层
+  # 白名单文案逐字透传（名称/长度/重名/上限/控制器不存在或离线/删除未命中）；未知工具 → METHOD_NOT_FOUND。
   platform
 }
 

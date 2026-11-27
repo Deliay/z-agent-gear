@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@/stores/auth';
 import MobileBackButton from '../components/MobileBackButton';
 import { Button } from '@/components/ui/button';
-import { CLOUD_STORAGE_CAPABILITIES } from '@/graphql/queries';
-import type { CloudStorageCapabilitiesQuery } from '@/graphql/types';
+import { SETTINGS_OVERVIEW } from '@/graphql/queries';
+import type { SettingsOverviewQuery } from '@/graphql/types';
+import { SettingsOverviewContext } from '@/stores/settingsOverview';
 import { mapOauthError } from '@/lib/auth-oauth';
 import {
   Card,
@@ -105,15 +106,20 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const { data: storageCapabilitiesData } = useQuery<CloudStorageCapabilitiesQuery>(
-    CLOUD_STORAGE_CAPABILITIES,
-  );
-  const storageEnabled =
-    storageCapabilitiesData?.cloudStorageCapabilities?.enabled === true;
+  const { data: settingsData, loading: settingsLoading, error: settingsError, refetch: refetchSettings } =
+    useQuery<SettingsOverviewQuery>(SETTINGS_OVERVIEW, {
+      fetchPolicy: 'cache-and-network',
+      // 控制器配置子页不渲染设置区块：跳过 14 分支聚合（避免 githubAppUrl 无谓签发 state）
+      skip: Boolean(controllerId),
+    });
+  const settings = settingsData?.settingsOverview ?? null;
+  const storageEnabled = settings?.cloudStorageCapabilities?.enabled === true;
   const navItems = storageEnabled ? [...NAV_ITEMS, STORAGE_NAV_ITEM] : NAV_ITEMS;
   const navGroups = storageEnabled
     ? [...NAV_GROUPS, { label: '云存储', items: [STORAGE_NAV_ITEM] }]
     : NAV_GROUPS;
+
+  const [activeSectionId, setActiveSectionId] = useState<string>('account-section');
 
   const handleLogout = () => {
     logout();
@@ -121,6 +127,7 @@ export default function SettingsPage() {
   };
 
   const scrollTo = (id: string) => {
+    setActiveSectionId(id);
     const el = document.getElementById(id);
     el?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -147,6 +154,14 @@ export default function SettingsPage() {
   }
 
   return (
+    <SettingsOverviewContext.Provider
+      value={{
+        data: settings,
+        loading: settingsLoading,
+        error: settingsError,
+        refetch: refetchSettings,
+      }}
+    >
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b px-4 py-3 md:hidden">
         <MobileBackButton to="/sessions" />
@@ -158,8 +173,13 @@ export default function SettingsPage() {
           <button
             key={item.id}
             type="button"
+            data-active={activeSectionId === item.id ? 'true' : undefined}
             onClick={() => scrollTo(item.id)}
-            className="shrink-0 rounded-md px-3 py-1.5 text-sm font-medium hover:bg-accent"
+            className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+              activeSectionId === item.id
+                ? 'bg-accent text-accent-foreground'
+                : 'hover:bg-accent'
+            }`}
           >
             {item.label}
           </button>
@@ -168,6 +188,7 @@ export default function SettingsPage() {
 
       <div className="flex flex-1 overflow-hidden md:grid md:grid-cols-[200px_1fr]">
         <nav className="hidden border-r p-4 md:block" aria-label="Settings navigation">
+          <h1 className="mb-3 px-3 text-base font-semibold text-foreground">设置</h1>
           <div className="space-y-1">
             {navGroups.map((group) => (
               <div key={group.label} className="pt-2 first:pt-0">
@@ -176,17 +197,25 @@ export default function SettingsPage() {
                     {group.label}
                   </div>
                 )}
-                {group.items.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => scrollTo(item.id)}
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-left hover:bg-accent hover:text-accent-foreground"
-                  >
-                    <item.icon className="size-4 text-muted-foreground" />
-                    {item.label}
-                  </button>
-                ))}
+                {group.items.map((item) => {
+                  const isActive = activeSectionId === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      data-active={isActive ? 'true' : undefined}
+                      onClick={() => scrollTo(item.id)}
+                      className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-left transition-colors ${
+                        isActive
+                          ? 'bg-accent text-accent-foreground'
+                          : 'hover:bg-accent hover:text-accent-foreground'
+                      }`}
+                    >
+                      <item.icon className="size-4 text-muted-foreground" />
+                      {item.label}
+                    </button>
+                  );
+                })}
               </div>
             ))}
           </div>
@@ -286,5 +315,6 @@ export default function SettingsPage() {
         </div>
       </div>
     </div>
+    </SettingsOverviewContext.Provider>
   );
 }

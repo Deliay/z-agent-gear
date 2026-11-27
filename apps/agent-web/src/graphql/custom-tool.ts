@@ -152,7 +152,7 @@ const HTTP_FIELDS = gql`
   ${KEY_VALUE_FIELDS}
 `
 
-const CUSTOM_TOOL_FIELDS = gql`
+export const CUSTOM_TOOL_FIELDS = gql`
   fragment CustomToolFields on CustomTool {
     id
     name

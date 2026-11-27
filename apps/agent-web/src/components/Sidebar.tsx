@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery } from '@apollo/client/react';
 import { toast } from 'sonner';
@@ -10,7 +10,6 @@ import type {
   GetCloudHostCapabilitiesQuery,
   SessionData,
 } from '../graphql/types';
-import type { WorkflowInstanceSummaryData } from '../graphql/workflow';
 import NewSessionDialog from './session/NewSessionDialog';
 import NewCloudHostDialog from './cloud-host/NewCloudHostDialog';
 import GithubProjectSetupDialog from './cloud-host/GithubProjectSetupDialog';
@@ -42,7 +41,9 @@ import {
 } from 'lucide-react';
 import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
 import { HOME_OVERVIEW } from '../graphql/home';
-import { CLOUD_HOST_CAPABILITIES } from '../graphql/queries';
+import { CLOUD_HOST_CAPABILITIES, GET_ARCHIVED_SESSIONS } from '../graphql/queries';
+import { GET_WORKFLOW_INSTANCES, type GetWorkflowInstancesQuery } from '../graphql/workflow';
+import type { GetArchivedSessionsQuery } from '../graphql/types';
 import { useHomeOverview } from '../stores/homeOverview';
 import WorkspaceSwitcher from './WorkspaceSwitcher';
 import {
@@ -57,6 +58,8 @@ interface SidebarProps {
   /** 当前用户展示名（登录响应 User.name，迁移后=原用户名） */
   name: string;
   mobile?: boolean;
+  /** 一级导航轨点击聚焦的分区（含递增 nonce 以支持重复点击同一分区展开并滚动） */
+  focusTarget?: { section: SidebarSectionKey; nonce: number } | null;
 }
 
 /** 主机选择浮层：聚合分区的新建入口先选主机，再打开对应对话框 */
@@ -88,7 +91,7 @@ function ControllerPicker({
   );
 }
 
-export default function Sidebar({ name, mobile }: SidebarProps) {
+export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
   const navigate = useNavigate();
   const [sections, setSections] = useState<SidebarSections>(readSidebarSections);
   // 主机分区内每个主机默认展开（追踪「已折叠」集合）
@@ -101,6 +104,20 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
   // 聚合分区的新建入口需要先选择目标主机（工作流实例化 / 网关新增）
   const [picker, setPicker] = useState<'instantiate' | 'gateway' | null>(null);
 
+  // 一级导航轨点击某个分区时，确保该分区处于展开态并滚动到视口内
+  useEffect(() => {
+    if (!focusTarget) return;
+    const { section } = focusTarget;
+    setSections((prev) => {
+      if (prev[section]) return prev;
+      const next = { ...prev, [section]: true };
+      persistSidebarSections(next);
+      return next;
+    });
+    const el = document.querySelector(`[data-testid="sidebar-section-${section}"]`);
+    el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [focusTarget]);
+
   // 首页 + 侧边栏统一数据源（由 MainLayout 的 HOME_OVERVIEW 一次加载）
   const { data, refetch } = useHomeOverview();
 
@@ -111,11 +128,9 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
   const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
 
   const sessions = data?.sessions ?? [];
-  const archivedSessions = data?.archivedSessions ?? [];
   const controllers = data?.controllers ?? [];
   const allWorkspaces = data?.workspaces ?? [];
   const workflowInstances = data?.workflowInstances ?? [];
-  const archivedWorkflowInstances = data?.archivedWorkflowInstances ?? [];
 
   const githubSetupController = showGithubSetup
     ? controllers.find((controller) => controller.id === showGithubSetup.controllerId)
@@ -240,9 +255,7 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
     })),
   );
   const sortedSessions = sortByUpdatedAtDesc(sessions.map((session) => ({ ...session, updatedAt: session.updatedAt ?? '' })));
-  const sortedArchivedSessions = sortByUpdatedAtDesc(archivedSessions.map((session) => ({ ...session, updatedAt: session.updatedAt ?? '' })));
   const sortedWorkflows = sortByUpdatedAtDesc(workflowInstances);
-  const sortedArchivedWorkflows = sortByUpdatedAtDesc(archivedWorkflowInstances);
   const gatewayCount = gatewayRows.length;
 
   return (
@@ -488,9 +501,7 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
             {sortedWorkflows.map((instance) => (
               <WorkflowInstanceCard key={instance.id} instance={instance} />
             ))}
-            {sortedArchivedWorkflows.length > 0 && (
-              <ArchivedWorkflowGroup instances={sortedArchivedWorkflows} />
-            )}
+            <ArchivedWorkflowGroup />
           </ul>
         </SidebarSection>
 
@@ -525,13 +536,10 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
                 />
               );
             })}
-            {sortedArchivedSessions.length > 0 && (
-              <ArchivedSessionGroup
-                sessions={sortedArchivedSessions}
-                controllers={controllers}
-                resolveWorkspaceName={getWorkspaceNameForSession}
-              />
-            )}
+            <ArchivedSessionGroup
+              controllers={controllers}
+              resolveWorkspaceName={getWorkspaceNameForSession}
+            />
           </ul>
         </SidebarSection>
 
@@ -689,9 +697,20 @@ export default function Sidebar({ name, mobile }: SidebarProps) {
   );
 }
 
-/** 已归档实例：自折叠分组（沿用聚合列表结构） */
-function ArchivedWorkflowGroup({ instances }: { instances: WorkflowInstanceSummaryData[] }) {
+/** 已归档实例：自折叠分组，展开时才按需拉取（不随首页轮询、不展示数量） */
+function ArchivedWorkflowGroup() {
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const {
+    data,
+    loading,
+    error,
+    refetch,
+  } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
+    variables: { archived: true },
+    skip: !archivedOpen,
+    fetchPolicy: 'cache-and-network',
+  });
+  const instances = sortByUpdatedAtDesc(data?.workflowInstances ?? []);
   return (
     <li>
       <button
@@ -702,14 +721,29 @@ function ArchivedWorkflowGroup({ instances }: { instances: WorkflowInstanceSumma
       >
         {archivedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         <Archive className="size-3" />
-        已归档（{instances.length}）
+        已归档
       </button>
       {archivedOpen && (
-        <ul className="ml-4 space-y-1">
-          {instances.map((instance) => (
-            <WorkflowInstanceCard key={instance.id} instance={instance} />
-          ))}
-        </ul>
+        <div className="ml-4 space-y-1">
+          {loading && instances.length === 0 ? (
+            <p className="px-3 py-1.5 text-xs text-muted-foreground">加载中…</p>
+          ) : error ? (
+            <div className="px-3 py-1.5 text-xs text-muted-foreground">
+              加载失败
+              <button type="button" className="ml-2 underline" onClick={() => void refetch()}>
+                重试
+              </button>
+            </div>
+          ) : instances.length === 0 ? (
+            <p className="px-3 py-1.5 text-xs text-muted-foreground">暂无归档</p>
+          ) : (
+            <ul className="space-y-1" data-testid="sidebar-archived-workflow-list">
+              {instances.map((instance) => (
+                <WorkflowInstanceCard key={instance.id} instance={instance} />
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </li>
   );
@@ -751,17 +785,27 @@ function SessionListEntry({
   );
 }
 
-/** 已归档会话：自折叠分组（复刻 ArchivedWorkflowGroup 交互，默认折叠，条目可打开） */
+/** 已归档会话：自折叠分组，展开时才按需拉取（不随首页轮询、不展示数量） */
 function ArchivedSessionGroup({
-  sessions,
   controllers,
   resolveWorkspaceName,
 }: {
-  sessions: SessionData[];
   controllers: Array<{ id: string; name: string; hostname: string }>;
   resolveWorkspaceName: (session: SessionData) => string;
 }) {
   const [archivedOpen, setArchivedOpen] = useState(false);
+  const {
+    data,
+    loading,
+    error,
+    refetch,
+  } = useQuery<GetArchivedSessionsQuery>(GET_ARCHIVED_SESSIONS, {
+    skip: !archivedOpen,
+    fetchPolicy: 'cache-and-network',
+  });
+  const sessions = sortByUpdatedAtDesc(
+    (data?.sessions ?? []).map((session) => ({ ...session, updatedAt: session.updatedAt ?? '' })),
+  );
   return (
     <li>
       <button
@@ -772,22 +816,37 @@ function ArchivedSessionGroup({
       >
         {archivedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
         <Archive className="size-3" />
-        已归档（{sessions.length}）
+        已归档
       </button>
       {archivedOpen && (
-        <ul className="ml-4 space-y-1" data-testid="sidebar-archived-session-list">
-          {sessions.map((session) => {
-            const controller = controllers.find((item) => item.id === session.controllerId);
-            return (
-              <SessionListEntry
-                key={session.id}
-                session={session}
-                title={controller ? `${session.title || 'New Session'} · ${controller.name || controller.hostname}` : undefined}
-                resolveWorkspaceName={resolveWorkspaceName}
-              />
-            );
-          })}
-        </ul>
+        <div className="ml-4 space-y-1">
+          {loading && sessions.length === 0 ? (
+            <p className="px-3 py-1.5 text-xs text-muted-foreground">加载中…</p>
+          ) : error ? (
+            <div className="px-3 py-1.5 text-xs text-muted-foreground">
+              加载失败
+              <button type="button" className="ml-2 underline" onClick={() => void refetch()}>
+                重试
+              </button>
+            </div>
+          ) : sessions.length === 0 ? (
+            <p className="px-3 py-1.5 text-xs text-muted-foreground">暂无归档</p>
+          ) : (
+            <ul className="space-y-1" data-testid="sidebar-archived-session-list">
+              {sessions.map((session) => {
+                const controller = controllers.find((item) => item.id === session.controllerId);
+                return (
+                  <SessionListEntry
+                    key={session.id}
+                    session={session}
+                    title={controller ? `${session.title || 'New Session'} · ${controller.name || controller.hostname}` : undefined}
+                    resolveWorkspaceName={resolveWorkspaceName}
+                  />
+                );
+              })}
+            </ul>
+          )}
+        </div>
       )}
     </li>
   );

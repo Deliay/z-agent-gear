@@ -1,7 +1,9 @@
 import { useState } from 'react'
-import { useQuery, useMutation } from '@apollo/client/react'
+import { useMutation } from '@apollo/client/react'
 import { gql } from '@apollo/client'
-import type { GetControllerKeysQuery, GetControllersQuery, CreateControllerKeyMutation, RegenerateControllerKeyMutation } from '@/graphql/types'
+import type { CreateControllerKeyMutation, RegenerateControllerKeyMutation } from '@/graphql/types'
+import { useSettingsOverview } from '@/stores/settingsOverview'
+import { useHomeOverview } from '@/stores/homeOverview'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -18,39 +20,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import CommandTemplate from '@/components/common/CommandTemplate'
-const GET_CONTROLLER_KEYS = gql`
-  query GetControllerKeys {
-    controllerKeys {
-      id
-      name
-      type
-      keyPrefix
-      status
-      rawKey
-      lastUsedAt
-      createdAt
-      updatedAt
-    }
-  }
-`
-
-const GET_CONTROLLERS = gql`
-  query GetControllers {
-    controllers {
-      id
-      name
-      hostname
-      type
-      status
-      keyId
-      version
-      lastHeartbeatAt
-      createdAt
-      updatedAt
-    }
-  }
-`
-
 const CREATE_KEY = gql`
   mutation CreateControllerKey($input: CreateKeyInput!) {
     createControllerKey(input: $input) {
@@ -94,8 +63,6 @@ const REGENERATE_CONTROLLER_KEY = gql`
   }
 `
 
-const POLL_INTERVAL = 15_000
-
 function autoKeyName(): string {
   const now = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')
@@ -107,10 +74,9 @@ interface ControllerListSectionProps {
 }
 
 export default function ControllerListSection({ onNavigateToConfig }: ControllerListSectionProps) {
-  const { data: keyData, loading: keysLoading, refetch: refetchKeys } = useQuery<GetControllerKeysQuery>(GET_CONTROLLER_KEYS)
-  const { data: controllerData, loading: controllersLoading, refetch: refetchControllers } = useQuery<GetControllersQuery>(GET_CONTROLLERS, {
-    pollInterval: POLL_INTERVAL,
-  })
+  const { data: keyData, loading: keysLoading, refetch: refetchKeys } = useSettingsOverview()
+  // 控制器在线状态与首页同源同新鲜度（15s 全局轮询），设置页不再自带轮询
+  const { data: controllerData, loading: controllersLoading, refetch: refetchControllers } = useHomeOverview()
 
   const [createKey] = useMutation<CreateControllerKeyMutation>(CREATE_KEY)
   const [unbindController] = useMutation(UNBIND_CONTROLLER)

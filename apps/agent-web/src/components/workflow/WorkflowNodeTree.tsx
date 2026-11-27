@@ -84,11 +84,11 @@ function NodeCard({
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{node.name}</span>
         {node.type === 'AI' && node.agentConfig && (
           <div className="flex items-center gap-1">
-            <span className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            <span className="rounded bg-primary/20 px-1.5 py-0.5 text-xs font-medium text-primary">
               {node.agentConfig.acpServerType}
             </span>
             {node.agentConfig.modelId && (
-              <span className="rounded bg-secondary/20 px-1.5 py-0.5 text-[10px] font-medium text-secondary-foreground">
+              <span className="rounded bg-secondary/20 px-1.5 py-0.5 text-xs font-medium text-secondary-foreground">
                 {node.agentConfig.modelId}
               </span>
             )}
@@ -107,7 +107,7 @@ function NodeCard({
               target="_blank"
               rel="noreferrer"
               title={link.pullRequestId}
-              className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:underline"
+              className="rounded bg-primary/15 px-1.5 py-0.5 text-xs font-medium text-primary hover:underline"
             >
               PR
             </a>
@@ -116,7 +116,7 @@ function NodeCard({
             <span
               key={link.pullRequestId}
               title={link.pullRequestId}
-              className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+              className="rounded bg-primary/15 px-1.5 py-0.5 text-xs font-medium text-primary"
             >
               PR
             </span>
@@ -135,7 +135,7 @@ function NodeCard({
                   ? `检查项 · commit ${link.lastSyncedCommitSha.slice(0, 7)}`
                   : '检查项'
               }
-              className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+              className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-xs font-medium text-emerald-600 hover:underline dark:text-emerald-400"
             >
               检查项
             </a>

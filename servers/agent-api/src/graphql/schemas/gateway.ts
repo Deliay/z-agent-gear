@@ -6,6 +6,7 @@ export const gatewayTypeDefs = `#graphql
     port: Int!
     status: String!
     createdAt: String!
+    endpoint: String!
   }
 
   type GatewayList {

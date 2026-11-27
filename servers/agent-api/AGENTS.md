@@ -97,7 +97,11 @@ pnpm run start   # Start production server
 
 ## 首页聚合查询
 
-`homeOverview`（`graphql/schemas/home.ts` + `graphql/resolvers/home.ts`）为薄聚合 resolver：用 `Promise.all` 并行组合既有 service，**不新增 service 层**；单分支失败降级为空值（数组/0），不拖垮整次查询。`Controller.gateways` 为嵌套惰性字段，仅查询语句选择时才执行，且是**纯 DB 查询**（`gatewayService.findAllByController`），不依赖控制器在线状态、离线不降级；`ControllerWorkspace.worktrees` 同样惰性，经 **Redis relay** 扇出，离线或失败/超时降级为空列表。
+`homeOverview`（`graphql/schemas/home.ts` + `graphql/resolvers/home.ts`）为薄聚合 resolver：用 `Promise.all` 并行组合既有 service，**不新增 service 层**；单分支失败降级为空值（数组/0/空上下文），不拖垮整次查询。改造后为 **10 分支**：`controllers` / `sessions` / `workspaces` / `workflowInstances` / `todos` / `unreadTodoCount` / `sessionReviews` / `configuredWorkflows` / `workflowTemplates` / `workspaceContext`（`sessionTotalCount` = `sessions.length` 派生值，不是分支）。归档清单已移出：前端展开「已归档」时才调用 `sessions(archived:true)` / `workflowInstances(archived:true)`，且不返回数量。`Controller.gateways` 为嵌套惰性字段，仅查询语句选择时才执行，且是**纯 DB 查询**（`gatewayService.findAllByController`），不依赖控制器在线状态、离线不降级；`ControllerWorkspace.worktrees` 同样惰性，经 **Redis relay** 扇出，离线或失败/超时降级为空列表。
+
+## 设置页聚合查询（settingsOverview）
+
+`graphql/resolvers/settings.ts` + `graphql/schemas/settings.ts`（契约 `contracts/settings.graphql`）把设置页只读数据收敛为 **14 分支**：`commitSettings` / `providers` / `models` / `controllerKeys` / `mcpServers` / `valutEntries` / `customMcpServers` / `customTools` / `githubAccounts` / `githubAppUrl` / `myExternalLogins` / `authProviders` / `cloudStorageCapabilities` / `cloudStorages`。各分支原样复用被替代查询的服务调用，`Promise.all` + per-branch `degrade()`；非空分支兜底形态：`commitSettings` UNSET、`githubAppUrl {url:'',state:''}`、`cloudStorageCapabilities {enabled:false}`。**不放宽任何权限过滤**：`githubAppUrl` 求值即签发一次性 OAuth state（只读上下文抛错经 degrade 降级，settingsOverview 不轮询）；`controllers` 复用 `homeOverview.controllers`；`workflowTemplates`/`configuredWorkflows` 在 `homeOverview`；`valutManualOptions`、`cloudStorages(includeDestroyed:true)` 等仍按需查询。
 
 新增 Query/类型级 resolver（含 `WorkflowInstance.workspace` / `controller`）必须登记 `graphql/resolvers/index.ts`，否则线上不生效。
 
@@ -108,7 +112,7 @@ pnpm run start   # Start production server
 - **归档服务**：`setArchived(userId,id,archived)`（`actorFilter` 归属 → `Session not found`；`workflowInstanceId != null` → `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED` 且不写库；`$set archivedAt` 幂等）；`findAllByUser({archived})` 追加 `archivedAt: archived ? {$ne:null} : null`（与 `includeWorkflowSessions` 排除口径正交，缺省 = 活跃）；`mapSession` 输出 `archived: Boolean(archivedAt)`（**不透出 `archivedAt` 原文**）。归档不发任何 acp 命令、不撤销 endpoint、不改状态机（D1）。
 - **统一只读判定（三场景）**：`assertControllerWritable`（保留函数名）委托 `resolveReadOnlyReason` 返回四态 `null` / `CONTROLLER_MISSING`（`Controller.findOne` 空）/ `CLOUD_HOST_DESTROYED`（cloud 且 host 缺失/软删/STOPPING/STOPPED/FAILED，口径未变）/ `WORKSPACE_MISSING`（非 cloud：`controllerWorkspaceId` 非空 → `ControllerWorkspace.exists({_id})` 不存在即缺失；为空回退根目录 `cwd == ws.path` 或前缀 `ws.path + '/'` 匹配该控制器任一工作区；`worktreePath != null` 或无 cwd 无法判定 → 放行，D8）。接入点：`assertSessionWritable`（`sendSessionMessage`）、`cancelGeneration`、`resume`——`resume` 已删除重复云电脑判定收敛为同一判定（ended/disconnected 门禁与返回形状 `{success:false,status:'ended',error:'session is ended'}` 不变）。写路径统一文案 `session is ended`（D4）；原因展示由 `Session.readOnlyReason` 字段 resolver 调 `resolveSessionReadOnlyReason(session,userId)` 实时计算（D5，不落库），**必须落在 `sessionResolvers.Session` 内**（`resolvers/index.ts` spread 登记，`resolvers/index.test.ts` 守卫）。
 - **工作区删除连带**：`matchWorkspaceSessions(workspace,userId)` 为匹配**唯一口径**（精确 `{controllerId, controllerWorkspaceId}`；旧数据根目录 cwd 等值/前缀、worktree 按 `worktreeScopePrefix` 前缀匹配，复用 `worktree-utils` 并保留 homeDir 缺失退化；查询层 `workflowInstanceId: null` 排除节点会话）——`archiveByWorkspace` 与 resolver `workspaceArchiveImpact` 共用（提示数量 = 实际归档数量）。`archiveByWorkspace`：匹配 → 非 ended 逐个 `close(suppressFallback:true, reason:'workspace_deleted')`（单会话失败仅记日志不阻断）→ `updateMany({_id:{$in}, archivedAt:null, ...actorFilter})` 幂等归档并返回数量；`controllerWorkspaceService.delete/clear` 删除前先连带（`clear` 逐个工作区执行），**归档失败抛错中止删除**（D7：工作区行保留，避免「工作区没了、会话未归档」中间态）。
-- **首页聚合**：`homeOverview.archivedSessions` 分支（`findAllByUser({includeWorkflowSessions:false, archived:true})`，`degrade` 兜底 `[]`）与活跃 `sessions`（`archived:false`）互补，`sessionTotalCount` 为未归档口径。
+- **首页聚合**：归档清单已退出 `homeOverview`（改为前端展开「已归档」时按需 `sessions(archived:true)` / `workflowInstances(archived:true)`，不提供数量）；`sessionTotalCount` 仍为未归档口径（`sessions.length` 派生值）。`workspaceContext` 由 `buildWorkspaceContext` 单次 `accessibleWorkspaces` 同时产出 `myWorkspaces`/`myTenants`（`Query.myWorkspaces`/`myTenants` 共用同一 helper）。
 
 ## 前台云电脑（harness）
 
@@ -625,6 +629,34 @@ pnpm run start   # Start production server
   `knowledge-base-prompts.test.ts` 的 T-RKB2-P1/P2。
 - **零 MongoDB 变更**：不落库、无迁移、无索引；仓库为唯一事实源，无任何写入口。
 
+## 网关 MCP endpoint（#565）
+
+> 契约 `contracts/gateway.graphql`（`Gateway.endpoint`）、`contracts/mcp-server.graphql` 与
+> `contracts/agent-session-websocket.md` §2.12.1；计划
+> `docs/engineering/plan/20261126-feat-gateway-mcp-endpoint.md`。
+
+- **endpoint 单一来源**：`services/gateway-endpoint.ts` 的纯函数 `buildGatewayEndpoint(publicBaseUrl, controllerId, name)`
+  → `{PUBLIC_BASE_URL}/api/gateway/{controllerId}/{name}/`（恒尾斜杠，段编码）与 `buildGatewayBasePath`（path 部分）。
+  `gatewayService.mapGateway` 追加 `endpoint: String!`（`create` / `findAllByController` 两处输出）；**其余签名/校验/
+  错误文案/`port-forward:command` 发布形态零变化**。前端/接口/MCP 一律读取该派生字段，禁止二次拼接
+  （旧前端 `window.location.origin` 拼接已移除）。
+- **平台 MCP**：`services/gateway-tools.ts`（`agent-gateway-tools`，`transport/source=platform`）——三工具
+  `gateway_list` / `gateway_create_endpoint` / `gateway_delete_endpoint`；操作对象为**会话所在控制器**
+  （`Session.findById(caller.sessionId).select('controllerId')`，不接受外部 controllerId）；入参校验先行
+  （缺/非法 → `{code:'INVALID_PARAMS', message}`），服务层白名单错误逐字 `isError`（含 `Maximum N gateways per controller`
+  与删除未命中 `Gateway not found or not active`）；`gateway_list.limit = config.gatewayMaxPerController`。
+  `initialize` 声明 `tools` + `resources`（**不声明 prompts**）。
+- **暴露指引**：`services/gateway-prompts.ts` 单一来源资源
+  `zag://agent-gateway-tools/prompt/gateway-exposure-guidance`（Vite `base` / `allowedHosts` / `hmr: false`、
+  Next/Nuxt/Spring 映射、登录 401、30s 超时、上限 5、命名 `[a-zA-Z0-9_-]{1,50}`、禁拼 `localhost`）；
+  防漂移守卫 `gateway-prompts.test.ts` 的 T-GP1~4。
+- **装配与路由四处接线**：`session.ts` 的 `$nin` 六名 + 公共路径 `ensureGatewayToolsServer` 恒装配；
+  `controller.ts` 的 `setDefaultMcp` `$nin`/`$in` 同步六名（选择平台服务仍 `MCP_SERVER_NOT_SELECTABLE`）；
+  `mcp-dispatch` platform 链尾追加 `GATEWAY_TOOLS_SERVER_NAME` 分支（未知 serverName 仍 `SERVER_NOT_FOUND`）。
+- **测试**：`gateway-endpoint.test.ts`（T-GWE1~6）、`gateway.test.ts`（T-GWS1~4 + `T-GMCP-REPRO-1`）、
+  `gateway-tools.test.ts`（T-GT1~8 + `T-GMCP-REPRO-2`）、`gateway-prompts.test.ts`（T-GP1~4），
+  `session.test.ts` / `controller.test.ts` / `mcp-dispatch.test.ts` 增补装配与路由断言。
+
 ## Related Rules
 
 - [Common Rules](../../docs/engineering/common-rules.md)
@@ -742,7 +774,7 @@ pnpm run start   # Start production server
 - **异步链路**：Issue/PR 回调、SSE 等无请求头链路先 `runWithWorkspace(...)` 建立上下文，再执行同样口径的查询。
 - **写入继承（团队可见性）**：`sessionService.create` / `sessionImportService.importSessions` 的租户工作区归属按「显式传值 → 请求上下文 → 控制器（云电脑）归属」补齐并显式落 `workspaceId/tenantId`；云电脑 ready 默认会话与 Git 项目设置会话显式传 `resourceWorkspaceId`；`buildSessionWorkspaceContext` 在会话缺 `workspaceId` 时回退控制器（再回退 `CloudHost.resourceWorkspaceId`），保证后台会话里的 MCP 工具调用（如 `createConfiguredWorkflow`）仍落团队工作区。`configuredWorkflowService.configure/configureFromContent` 也显式写当前工作区/租户（插件之外的第二道保证）。存量空归属由迁移 `024-resource-workspace-backfill` 按控制器/已配置工作流补齐（opaque：无法推导的行不猜测）。
 - **保留 `{userId}` 的例外**（按一期口径仍跟随成员本人）：个人 MCP 配置、待办通知、网关、未绑定 `ControllerKey` 的创建清理（避免误删他人 key）、`CloudHostSetupOperation` 等内部操作单、`CloudHostIssuesLinkage` 等个人联动配置。
-- **项目工作区（ControllerWorkspace）跟随控制器成员口径（修复 B 看不到 A 的 working directory）**：`controllerWorkspaceService` 在请求工作区上下文内按「控制器可见集」查询/校验（`Controller.find/findOne` + `actorFilter`），不再用创建者 `userId`；`homeOverview.workspaces`、控制器设置-工作区、worktree 列表、会话创建/导入、工作流实例化与默认分支解析同步收敛。无 ALS 上下文（引擎/内部/迁移）仍沿用 `{controllerId,userId}` 旧口径，避免后台链路越权。项目工作区按 `{controllerId,path}` 在团队内幂等共享。
+- **项目工作区（ControllerWorkspace）跟随控制器成员口径（修复 B 看不到 A 的 working directory）**：`controllerWorkspaceService` 在请求工作区上下文内按「控制器可见集」查询/校验（`Controller.find/findOne` + `actorFilter`），不再用创建者 `userId`；`homeOverview.workspaces`、控制器设置-工作区、worktree 列表、会话创建/导入、工作流实例化与默认分支解析同步收敛。**读口径过滤（#584）**：`findAllByUser` 仅返回「控制器文档存在 ∧ 云电脑未软删 ∧ `status === 'online'`」控制器下的项目工作区（覆盖 offline/registering/unbound；数据保留，恢复 online 自动重新返回），过滤只作用于查询返回值，写路径/按 id 详情零改动。无 ALS 上下文（引擎/内部/迁移）仍沿用 `{controllerId,userId}` 旧口径，避免后台链路越权。项目工作区按 `{controllerId,path}` 在团队内幂等共享。
 
 ## 云存储归档优化（停止归档可选 + 归档/复原/fork）
 

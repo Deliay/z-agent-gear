@@ -34,6 +34,10 @@ vi.mock('sonner', () => ({
   toast: { success: mocks.toastSuccess, error: mocks.toastError, warning: vi.fn() },
 }))
 
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mocks.useQuery(),
+}))
+
 // 表单/行组件简化为可触发回调的按钮，聚焦 ProviderSection 的「保存成功提示」口径
 vi.mock('../ProviderFormDialog', async () => {
   const React = await import('react')

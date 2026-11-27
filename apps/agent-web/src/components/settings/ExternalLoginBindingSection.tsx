@@ -1,17 +1,13 @@
 import { useState } from 'react'
-import { useMutation, useQuery } from '@apollo/client/react'
-import {
-  GET_AUTH_PROVIDERS,
-  GET_MY_EXTERNAL_LOGINS,
-} from '@/graphql/queries'
+import { useMutation } from '@apollo/client/react'
+import { SETTINGS_OVERVIEW } from '@/graphql/queries'
+import { useSettingsOverview } from '@/stores/settingsOverview'
 import {
   CREATE_FRONT_BIND_TICKET,
   UNBIND_EXTERNAL_LOGIN,
 } from '@/graphql/mutations'
 import type {
   CreateFrontBindTicketMutation,
-  GetAuthProvidersQuery,
-  GetMyExternalLoginsQuery,
   UnbindExternalLoginMutation,
 } from '@/graphql/types'
 import { mapIdentityChoiceError, oauthAuthorizeUrl } from '@/lib/auth-oauth'
@@ -31,12 +27,8 @@ function formatTime(value: string | null | undefined): string {
  * - 解绑：二次确认后调用 `unbindExternalLogin`，服务端强制「无密码账户最后一条不可解绑」。
  */
 export default function ExternalLoginBindingSection() {
-  const { data, loading } = useQuery<GetMyExternalLoginsQuery>(GET_MY_EXTERNAL_LOGINS, {
-    fetchPolicy: 'cache-and-network',
-  })
-  const { data: providerData } = useQuery<GetAuthProvidersQuery>(GET_AUTH_PROVIDERS, {
-    fetchPolicy: 'cache-and-network',
-  })
+  const { data, loading } = useSettingsOverview()
+  const providerData = data
   const [unbindTarget, setUnbindTarget] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [bindingProviderId, setBindingProviderId] = useState<string | null>(null)
@@ -44,7 +36,7 @@ export default function ExternalLoginBindingSection() {
   const [unbindExternalLogin] = useMutation<UnbindExternalLoginMutation>(
     UNBIND_EXTERNAL_LOGIN,
     {
-      refetchQueries: [GET_MY_EXTERNAL_LOGINS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
       onError: (err: Error) => setError(mapIdentityChoiceError(err.message)),
       onCompleted: () => setError(''),
     },

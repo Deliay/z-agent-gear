@@ -16,9 +16,12 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
   });
   const [copied, setCopied] = useState(false);
 
-  const accessUrl = `${window.location.origin}/api/gateway/${controllerId}/${gateway.name}/`;
+  // 地址唯一来源：服务端派生字段（PUBLIC_BASE_URL 单一来源），前端不得自行拼接。
+  // 旧缓存/降级缺失时展示空并禁用复制（不拼假地址，计划 D6）。
+  const accessUrl = gateway.endpoint ?? '';
 
   const handleCopy = async () => {
+    if (!accessUrl) return;
     await navigator.clipboard.writeText(accessUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -45,8 +48,9 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
         <button
           type="button"
           onClick={handleCopy}
-          className="text-xs text-muted-foreground hover:text-sidebar-foreground"
-          title={copied ? '已复制' : accessUrl}
+          disabled={!accessUrl}
+          className="text-xs text-muted-foreground hover:text-sidebar-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          title={copied ? '已复制' : accessUrl || '暂无访问地址'}
         >
           {copied ? <Check className="size-3" /> : <Copy className="size-3" />}
         </button>

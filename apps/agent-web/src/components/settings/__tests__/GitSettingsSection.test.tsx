@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import GitSettingsSection from '../GitSettingsSection';
-import { GET_COMMIT_SETTINGS } from '@/graphql/queries';
+import { SETTINGS_OVERVIEW } from '@/graphql/queries';
 import type { CommitSettings, PersonalGithubAccount } from '@/graphql/types';
 
 const mockUseQuery = vi.fn();
+const mockSettings = vi.fn();
 const mockUseMutation = vi.fn();
 const mockUpdateCommitSettings = vi.fn();
 const mockToastSuccess = vi.fn();
@@ -12,6 +13,10 @@ const mockToastSuccess = vi.fn();
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+}));
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mockSettings(),
 }));
 
 vi.mock('sonner', () => ({
@@ -48,22 +53,17 @@ function mockQueries({
   accounts = ACCOUNTS,
   settingsLoading = false,
 }: MockQueryOptions = {}) {
-  mockUseQuery.mockImplementation((query: { definitions?: Array<{ name?: { value?: string } }> }) => {
-    const operationName = query?.definitions?.[0]?.name?.value;
-    if (operationName === 'GetCommitSettings') {
-      return {
-        data: settings ? { commitSettings: settings } : null,
-        loading: settingsLoading,
-        error: null,
-        refetch: vi.fn(),
-      };
-    }
-    return {
-      data: { personalGithubAccounts: accounts },
-      loading: false,
-      error: null,
-      refetch: vi.fn(),
-    };
+  mockSettings.mockReturnValue({
+    data: settings ? { commitSettings: settings } : null,
+    loading: settingsLoading,
+    error: null,
+    refetch: vi.fn(),
+  });
+  mockUseQuery.mockReturnValue({
+    data: { personalGithubAccounts: accounts },
+    loading: false,
+    error: null,
+    refetch: vi.fn(),
   });
 }
 
@@ -126,16 +126,13 @@ describe('GitSettingsSection', () => {
       expect(screen.getByText('加载中...')).toBeInTheDocument();
     });
 
-    it('查询使用 cache-and-network，保存后重拉 GetCommitSettings', () => {
+    it('设置聚合查询下发（无独立只读查询），保存后重拉 SETTINGS_OVERVIEW', () => {
       render(<GitSettingsSection />);
 
-      expect(mockUseQuery).toHaveBeenCalledWith(
-        GET_COMMIT_SETTINGS,
-        expect.objectContaining({ fetchPolicy: 'cache-and-network' }),
-      );
+      expect(mockSettings).toHaveBeenCalled();
       expect(mockUseMutation).toHaveBeenCalledWith(
         expect.anything(),
-        expect.objectContaining({ refetchQueries: [GET_COMMIT_SETTINGS] }),
+        expect.objectContaining({ refetchQueries: [{ query: SETTINGS_OVERVIEW }] }),
       );
     });
   });

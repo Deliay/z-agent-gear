@@ -1,9 +1,6 @@
 import { useState, useCallback, useEffect } from 'react'
-import { useQuery, useMutation } from '@apollo/client/react'
-import {
-  GET_PROVIDERS,
-  GET_MODELS,
-} from '@/graphql/queries'
+import { useMutation } from '@apollo/client/react'
+import { SETTINGS_OVERVIEW } from '@/graphql/queries'
 import {
   CREATE_PROVIDER,
   UPDATE_PROVIDER,
@@ -13,7 +10,7 @@ import {
   BATCH_DISABLE_PROVIDERS,
   BATCH_DELETE_PROVIDERS,
 } from '@/graphql/mutations'
-import type { GetProvidersQuery } from '@/graphql/types'
+import { useSettingsOverview } from '@/stores/settingsOverview'
 import { Button } from '@/components/ui/button'
 import ProviderItem from './ProviderItem'
 import ProviderFormDialog from './ProviderFormDialog'
@@ -31,7 +28,7 @@ interface ProviderInput {
 }
 
 export default function ProviderSection() {
-  const { data, loading } = useQuery<GetProvidersQuery>(GET_PROVIDERS)
+  const { data, loading } = useSettingsOverview()
   const { readOnly: contextReadOnly } = useWorkspaceAccess()
   const resolveSource = useResourceSourceResolver()
   const [createProvider] = useMutation(CREATE_PROVIDER)
@@ -83,12 +80,12 @@ export default function ProviderSection() {
     if (editingId) {
       await updateProvider({
         variables: { id: editingId, input },
-        refetchQueries: [GET_PROVIDERS, GET_MODELS],
+        refetchQueries: [{ query: SETTINGS_OVERVIEW }],
       })
     } else {
       await createProvider({
         variables: { input },
-        refetchQueries: [GET_PROVIDERS, GET_MODELS],
+        refetchQueries: [{ query: SETTINGS_OVERVIEW }],
       })
     }
     // 创建/更新会触发服务端下发给运行中的云电脑；toggle/delete 保持静默（D18）
@@ -101,14 +98,14 @@ export default function ProviderSection() {
   const handleToggle = async (id: string) => {
     await toggleProvider({
       variables: { id },
-      refetchQueries: [GET_PROVIDERS, GET_MODELS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
   }
 
   const handleDelete = async (id: string) => {
     await deleteProvider({
       variables: { id },
-      refetchQueries: [GET_PROVIDERS, GET_MODELS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
   }
 
@@ -136,7 +133,7 @@ export default function ProviderSection() {
   const handleBatchEnable = async () => {
     await batchEnable({
       variables: { ids: Array.from(selectedIds) },
-      refetchQueries: [GET_PROVIDERS, GET_MODELS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
     handleCancelMulti()
   }
@@ -144,7 +141,7 @@ export default function ProviderSection() {
   const handleBatchDisable = async () => {
     await batchDisable({
       variables: { ids: Array.from(selectedIds) },
-      refetchQueries: [GET_PROVIDERS, GET_MODELS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
     handleCancelMulti()
   }
@@ -152,7 +149,7 @@ export default function ProviderSection() {
   const handleBatchDelete = async () => {
     await batchDelete({
       variables: { ids: Array.from(selectedIds) },
-      refetchQueries: [GET_PROVIDERS, GET_MODELS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
     handleCancelMulti()
   }
