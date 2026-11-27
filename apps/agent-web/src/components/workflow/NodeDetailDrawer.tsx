@@ -81,7 +81,7 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
           {NODE_STATUS_LABELS[node.status]}
         </span>
         {node.reworkCount > 0 && (
-          <span className="inline-flex items-center gap-0.5 rounded bg-warning/15 px-1.5 py-0.5 text-xs tabular-nums text-warning">
+          <span className="inline-flex items-center gap-0.5 rounded bg-warning/15 px-1.5 py-0.5 text-xs tabular-nums text-warning-text">
             <RotateCcw className="size-3" />
             返工 {node.reworkCount} 次
           </span>

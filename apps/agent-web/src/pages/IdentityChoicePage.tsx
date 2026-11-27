@@ -98,7 +98,7 @@ export default function IdentityChoicePage() {
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background px-4">
-      <Card className="w-full max-w-md">
+      <Card className="w-full max-w-[400px] rounded-xl">
         <CardHeader>
           <CardTitle className="text-center text-2xl">选择登录方式</CardTitle>
         </CardHeader>

@@ -28,7 +28,7 @@ export default function ModeSelectDialog({ open, modes, currentModeId, loading, 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/30"
       role="dialog"
       tabIndex={-1}
       onClick={onClose}

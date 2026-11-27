@@ -219,7 +219,7 @@ export default function HistorySessionDialog({
             {results.length > 0 && (
               <div className="space-y-1 rounded-lg border p-3 text-sm">
                 {hasSuccessResults && (
-                  <div className="text-success">
+                  <div className="text-success-text">
                     成功导入 {results.filter((r) => r.success).length} 个会话
                   </div>
                 )}

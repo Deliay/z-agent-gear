@@ -65,6 +65,12 @@ describe('QuickCreatePanel ⌘K 快速新建（D6）', () => {
     expect(screen.getByTestId('quick-create-panel')).toBeInTheDocument();
     expect(screen.getByTestId('quick-create-session')).toHaveFocus();
 
+    // Esc 关闭（Dialog 与面板键盘处理双保险）
+    fireEvent.keyDown(screen.getByRole('listbox', { name: '快速新建操作' }), { key: 'Escape' });
+    expect(screen.queryByTestId('quick-create-panel')).toBeNull();
+
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    expect(screen.getByTestId('quick-create-panel')).toBeInTheDocument();
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
     expect(screen.queryByTestId('quick-create-panel')).toBeNull();
   });
@@ -102,5 +108,34 @@ describe('QuickCreatePanel ⌘K 快速新建（D6）', () => {
 
     expect(mockToastError).toHaveBeenCalled();
     expect(screen.queryByTestId('mock-instantiate-dialog')).toBeNull();
+  });
+
+  it('T-QCP4b: 仅离线控制器时不得回退选中，提示且不打开工作流对话框', () => {
+    homeState.data.controllers = [
+      { id: 'ctrl-off-1', name: '离线一', status: 'offline' },
+      { id: 'ctrl-off-2', name: '离线二', status: 'offline' },
+    ];
+    render(<QuickCreatePanel />);
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    fireEvent.click(screen.getByTestId('quick-create-workflow'));
+
+    expect(mockToastError).toHaveBeenCalledWith('暂无在线可用控制器，请先启动控制器');
+    expect(screen.queryByTestId('mock-instantiate-dialog')).toBeNull();
+  });
+
+  it('T-QCP4c: 多在线控制器时先在面板内选择目标控制器再实例化', () => {
+    homeState.data.controllers = [
+      { id: 'ctrl-1', name: '控制器一', status: 'online' },
+      { id: 'ctrl-3', name: '控制器三', status: 'online' },
+    ];
+    render(<QuickCreatePanel />);
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    fireEvent.click(screen.getByTestId('quick-create-workflow'));
+
+    // 不直接打开对话框，先展示在线控制器选择
+    expect(screen.queryByTestId('mock-instantiate-dialog')).toBeNull();
+    expect(screen.queryByTestId('quick-create-controller-ctrl-off-1')).toBeNull();
+    fireEvent.click(screen.getByTestId('quick-create-controller-ctrl-3'));
+    expect(screen.getByTestId('mock-instantiate-dialog')).toHaveAttribute('data-controller', 'ctrl-3');
   });
 });

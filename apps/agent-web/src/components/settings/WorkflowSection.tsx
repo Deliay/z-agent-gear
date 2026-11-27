@@ -238,7 +238,7 @@ export default function WorkflowSection() {
                 </CardHeader>
                 {outdated && (
                   <CardContent>
-                    <div className="flex items-center justify-between gap-2 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning">
+                    <div className="flex items-center justify-between gap-2 rounded-md bg-warning/10 px-3 py-2 text-xs text-warning-text">
                       <span>
                         模板已更新至 v{latest.version}，当前配置基于 v
                         {workflow.sourceTemplateVersion}

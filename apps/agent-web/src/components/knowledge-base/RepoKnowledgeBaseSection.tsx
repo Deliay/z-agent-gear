@@ -370,6 +370,13 @@ export default function RepoKnowledgeBaseSection({
       <div className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-muted-foreground">
         <BookOpen className="size-3 shrink-0" />
         <span className="min-w-0 flex-1 truncate">仓库知识库</span>
+        <span
+          data-testid="repo-kb-readonly-badge"
+          className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs"
+          title="仓库内建知识库为只读来源"
+        >
+          只读
+        </span>
         <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums">{hosts.length}</span>
       </div>
       <ul className="space-y-0.5">

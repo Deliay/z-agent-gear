@@ -47,8 +47,8 @@ function groupByDirectory(files: string[]): Array<{ dir: string; files: string[]
 }
 
 const STATUS_BADGES: Record<SessionReviewData['status'], { label: string; className: string }> = {
-  PENDING: { label: '待评审', className: 'bg-warning/15 text-warning' },
-  APPROVED: { label: '已通过', className: 'bg-success/15 text-success' },
+  PENDING: { label: '待评审', className: 'bg-warning/15 text-warning-text' },
+  APPROVED: { label: '已通过', className: 'bg-success/15 text-success-text' },
   REJECTED: { label: '已驳回', className: 'bg-destructive/15 text-destructive' },
   COMMENTED: { label: '仅评论', className: 'bg-muted text-muted-foreground' },
   CANCELLED: { label: '已取消', className: 'bg-muted text-muted-foreground italic' },

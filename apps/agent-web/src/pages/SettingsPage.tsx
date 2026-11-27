@@ -192,11 +192,9 @@ export default function SettingsPage() {
           <div className="space-y-1">
             {navGroups.map((group) => (
               <div key={group.label} className="pt-2 first:pt-0">
-                {group.items.length > 1 && (
-                  <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
-                    {group.label}
-                  </div>
-                )}
+                <div className="px-3 pb-1 text-xs font-medium text-muted-foreground">
+                  {group.label}
+                </div>
                 {group.items.map((item) => {
                   const isActive = activeSectionId === item.id;
                   return (
@@ -228,7 +226,7 @@ export default function SettingsPage() {
               role={bindNotice.type === 'error' ? 'alert' : 'status'}
               className={`mb-4 rounded-md px-4 py-3 text-sm ${
                 bindNotice.type === 'success'
-                  ? 'bg-success/10 text-success'
+                  ? 'bg-success/10 text-success-text'
                   : 'bg-destructive/10 text-destructive'
               }`}
             >

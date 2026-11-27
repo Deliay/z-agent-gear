@@ -761,7 +761,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     >
       {/* 标题栏（含协议提示/只读提示）独立占一行 */}
       {protocolMismatch && (
-        <div className="border-b border-warning/10 bg-warning/10 px-4 py-2 text-sm text-warning">
+        <div className="border-b border-warning/10 bg-warning/10 px-4 py-2 text-sm text-warning-text">
           ⚠️ Agent 协议版本不兼容：期望 v{protocolMismatch.expectedVersion}，Agent 返回 v{protocolMismatch.agentVersion}。部分功能可能无法正常工作。
         </div>
       )}
@@ -776,6 +776,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           externalSessionId: sessionData.session.externalSessionId,
           cwd: sessionData.session.cwd,
           worktreePath: ('worktreePath' in sessionData.session ? (sessionData.session as { worktreePath?: string }).worktreePath : null) || null,
+          worktreeBranch: ('worktreeBranch' in sessionData.session ? (sessionData.session as { worktreeBranch?: string }).worktreeBranch : null) || null,
           createdAt: sessionData.session.createdAt,
           updatedAt: sessionData.session.updatedAt,
           endedAt: sessionData.session.endedAt,

@@ -150,6 +150,12 @@ export default function StopCloudHostDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {needsConfirm && !loading && !impactError && (
+          <h3 className="text-sm font-semibold text-foreground" data-testid="cloud-host-stop-impact-title">
+            影响范围
+          </h3>
+        )}
+
         {loading ? (
           <p className="text-sm text-muted-foreground">正在检查活动会话...</p>
         ) : impactError ? (
@@ -210,6 +216,9 @@ export default function StopCloudHostDialog({
             </label>
             <p className="text-xs text-muted-foreground">
               勾选：归档后按半价计费；不勾选：存储回到待挂载并继续全价计费，数据原样保留
+            </p>
+            <p className="text-xs text-muted-foreground" data-testid="cloud-host-stop-storage-impact">
+              存储影响：{canArchiveStorage && archiveStorage ? '停止后归档（半价计费）' : '不归档（保持全价计费）'}
             </p>
             {!canArchiveStorage && (
               <p className="text-xs text-muted-foreground">

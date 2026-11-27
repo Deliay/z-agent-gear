@@ -135,7 +135,7 @@ function NodeCard({
                   ? `检查项 · commit ${link.lastSyncedCommitSha.slice(0, 7)}`
                   : '检查项'
               }
-              className="rounded bg-success/15 px-1.5 py-0.5 text-xs font-medium text-success hover:underline"
+              className="rounded bg-success/15 px-1.5 py-0.5 text-xs font-medium text-success-text hover:underline"
             >
               检查项
             </a>
@@ -193,7 +193,7 @@ function NodeCard({
             data-testid={`node-pending-interaction-${node.id}`}
             aria-label="有待处理的提问或审批"
             title="有待处理的提问或审批"
-            className="text-warning"
+            className="text-warning-text"
             onClick={() => onOpenSession(node.sessionId!)}
           >
             <AlertCircle className="size-3" />

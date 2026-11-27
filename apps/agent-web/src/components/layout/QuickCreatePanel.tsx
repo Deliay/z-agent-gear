@@ -65,11 +65,14 @@ export default function QuickCreatePanel() {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [activeDialog, setActiveDialog] = useState<QuickCreateKind | null>(null);
+  const [workflowControllerId, setWorkflowControllerId] = useState<string | null>(null);
+  const [pickingController, setPickingController] = useState(false);
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const controllers = useMemo(() => data?.controllers ?? [], [data?.controllers]);
-  const defaultController = useMemo(
-    () => controllers.find((controller) => controller.status === 'online') ?? controllers[0],
+  // 不可回退口径（F12）：工作区/控制器仅展示在线可用，离线控制器不得被回退选中
+  const onlineControllers = useMemo(
+    () => controllers.filter((controller) => controller.status === 'online'),
     [controllers],
   );
 
@@ -89,11 +92,12 @@ export default function QuickCreatePanel() {
   // 打开时把焦点移入第一项，保证键盘可达
   useEffect(() => {
     if (open) itemRefs.current[0]?.focus();
-  }, [open]);
+  }, [open, pickingController]);
 
   const closePanel = useCallback(() => {
     setOpen(false);
     setActiveIndex(0);
+    setPickingController(false);
   }, []);
 
   const selectItem = useCallback(
@@ -103,17 +107,58 @@ export default function QuickCreatePanel() {
         setActiveDialog('session');
         return;
       }
-      if (!defaultController) {
-        toast.error('暂无可用控制器，请先创建控制器');
+      if (onlineControllers.length === 0) {
+        toast.error('暂无在线可用控制器，请先启动控制器');
         return;
       }
+      if (onlineControllers.length === 1) {
+        setWorkflowControllerId(onlineControllers[0].id);
+        closePanel();
+        setActiveDialog('workflow');
+        return;
+      }
+      // 多控制器：先在面板内显式选择目标控制器，避免实例化到错误主机
+      setPickingController(true);
+      setActiveIndex(0);
+    },
+    [closePanel, onlineControllers],
+  );
+
+  const selectWorkflowController = useCallback(
+    (controllerId: string) => {
+      setWorkflowControllerId(controllerId);
       closePanel();
       setActiveDialog('workflow');
     },
-    [closePanel, defaultController],
+    [closePanel],
   );
 
   const handlePanelKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      if (pickingController) {
+        setPickingController(false);
+        setActiveIndex(0);
+      } else {
+        closePanel();
+      }
+      return;
+    }
+    if (pickingController) {
+      const total = onlineControllers.length;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setActiveIndex((prev) => (prev + 1) % total);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setActiveIndex((prev) => (prev - 1 + total) % total);
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        const target = onlineControllers[activeIndex];
+        if (target) selectWorkflowController(target.id);
+      }
+      return;
+    }
     if (event.key === 'ArrowDown') {
       event.preventDefault();
       setActiveIndex((prev) => {
@@ -147,7 +192,33 @@ export default function QuickCreatePanel() {
             className="space-y-1"
             onKeyDown={handlePanelKeyDown}
           >
-            {QUICK_CREATE_ITEMS.map((item, index) => {
+            {pickingController ? (
+              onlineControllers.map((controller, index) => (
+                <button
+                  key={controller.id}
+                  ref={(node) => {
+                    itemRefs.current[index] = node;
+                  }}
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeIndex}
+                  data-testid={`quick-create-controller-${controller.id}`}
+                  className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                    index === activeIndex
+                      ? 'border-ring/40 bg-accent text-foreground'
+                      : 'border-transparent text-muted-foreground hover:bg-accent hover:text-foreground'
+                  }`}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => selectWorkflowController(controller.id)}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium text-foreground">{controller.name}</span>
+                    <span className="mt-0.5 block text-xs text-muted-foreground">在线</span>
+                  </span>
+                </button>
+              ))
+            ) : (
+              QUICK_CREATE_ITEMS.map((item, index) => {
               const Icon = item.icon;
               return (
                 <button
@@ -177,12 +248,15 @@ export default function QuickCreatePanel() {
                   <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-xs text-muted-foreground sm:block">
                     {index === 0 ? '↵' : '↵'}
                   </kbd>
-                </button>
-              );
-            })}
+                  </button>
+                );
+              })
+            )}
           </div>
           <p className="text-xs text-muted-foreground">
-            使用 ↑ ↓ 选择，Enter 确认，Esc 关闭（⌘K / Ctrl+K 唤起）
+            {pickingController
+              ? '选择实例化目标控制器（仅在线可用），Esc 返回'
+              : '使用 ↑ ↓ 选择，Enter 确认，Esc 关闭（⌘K / Ctrl+K 唤起）'}
           </p>
         </DialogContent>
       </Dialog>
@@ -191,13 +265,13 @@ export default function QuickCreatePanel() {
         <QuickCreateSessionDialog controllers={controllers} onClose={() => setActiveDialog(null)} />
       )}
 
-      {activeDialog === 'workflow' && defaultController && (
+      {activeDialog === 'workflow' && workflowControllerId && (
         <InstantiateWorkflowDialog
           open
           onOpenChange={(next) => {
             if (!next) setActiveDialog(null);
           }}
-          controllerId={defaultController.id}
+          controllerId={workflowControllerId}
         />
       )}
     </>

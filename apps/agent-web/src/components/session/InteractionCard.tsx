@@ -74,9 +74,9 @@ function interactionStatusLabel(
 }
 
 function statusBadgeClass(status: SessionInteractionStatus, rejectedSelection = false): string {
-  if (status === 'PENDING') return 'border-warning/40 bg-warning/10 text-warning';
+  if (status === 'PENDING') return 'border-warning/40 bg-warning/10 text-warning-text';
   if (rejectedSelection) return 'border-destructive/40 bg-destructive/10 text-destructive';
-  if (status === 'ACCEPTED') return 'border-success/40 bg-success/10 text-success';
+  if (status === 'ACCEPTED') return 'border-success/40 bg-success/10 text-success-text';
   if (status === 'DECLINED') return 'border-destructive/40 bg-destructive/10 text-destructive';
   return 'border-border bg-muted text-muted-foreground';
 }

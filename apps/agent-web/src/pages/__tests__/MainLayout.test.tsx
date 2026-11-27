@@ -42,6 +42,7 @@ vi.mock('@apollo/client/react', () => ({
 
 vi.mock('react-router-dom', () => ({
   Outlet: () => <div data-testid="outlet" />,
+  NavLink: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
   useLocation: () => ({ pathname: '/' }),
   useNavigate: () => mockNavigate,
 }));
@@ -172,6 +173,10 @@ describe('MainLayout 首页聚合查询', () => {
 
     expect(screen.queryByTestId('sidebar-resizer')).not.toBeInTheDocument();
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+    // Phase 10：移动端底部导航行（费用/设置可达）
+    const bottomNav = screen.getByTestId('mobile-bottom-nav');
+    expect(bottomNav).toHaveTextContent('费用');
+    expect(bottomNav).toHaveTextContent('设置');
   });
 
   it('仅挂载一次 HOME_OVERVIEW 查询且 pollInterval 为 15000（T-F1）', () => {

@@ -472,7 +472,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
       ))}
 
       {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
             <h2 className="mb-4 text-lg font-semibold">删除工作区</h2>
             <p className="mb-4 text-sm text-muted-foreground">
@@ -499,7 +499,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
       )}
 
       {showWorktreeDirPicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
             <h2 className="mb-4 text-lg font-semibold">选择 Worktree 工作目录</h2>
             <p className="mb-4 text-sm text-muted-foreground">所有 Git Worktree 将创建在此目录下</p>

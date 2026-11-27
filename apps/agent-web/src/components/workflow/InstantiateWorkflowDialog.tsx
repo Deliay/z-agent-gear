@@ -403,7 +403,7 @@ export default function InstantiateWorkflowDialog({
               )}
 
               {blockedByGit && (
-                <div className="rounded-md bg-warning/10 p-3 text-sm text-warning">
+                <div className="rounded-md bg-warning/10 p-3 text-sm text-warning-text">
                   当前工作区不支持 Git，无法实例化需要 Worktree 的工作流
                 </div>
               )}

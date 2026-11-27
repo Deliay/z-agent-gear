@@ -77,6 +77,40 @@ beforeEach(() => {
 })
 
 describe('WorkflowNodeCard', () => {
+  it('T-WF-NC: bg-card 不透明 + 顶部/左侧语义色脊 + ResourceChip + 静态动态行', () => {
+    const { container } = renderCard({
+      status: 'REWORK',
+      reworkCount: 2,
+      resources: [{
+        id: 'r1',
+        kind: 'blackboard',
+        title: '产物 A',
+        value: 'v',
+        url: null,
+        checkRunUrl: null,
+        pullRequestId: null,
+        nodeId: 'n1',
+      }],
+    })
+
+    const cardEl = screen.getByTestId('workflow-node-card-n1')
+    expect(cardEl.className).toContain('bg-card')
+    expect(cardEl.className).not.toMatch(/bg-card\/\d+/)
+    const spine = screen.getByTestId('node-status-spine')
+    expect(spine.className).toContain('bg-warning')
+    expect(spine.className).toContain('inset-y-0')
+    // 资源小卡片（ResourceChip 族）
+    expect(container.textContent).toContain('产物 A')
+    // 进行中静态动态行
+    expect(screen.getByText('思考中...')).toBeInTheDocument()
+  })
+
+  it('T-WF-NC: 人类节点静态展示类型徽标与状态徽标', () => {
+    renderCard({ type: 'HUMAN', status: 'READY', sessionId: null, actionable: true })
+    expect(screen.getByText('人类')).toBeInTheDocument()
+    expect(screen.getByTestId('node-status-badge-n1')).toHaveTextContent('待开始')
+  });
+
   it('T-UI4-NC1 七态渲染状态徽标与状态色脊', () => {
     const { rerender } = renderCard({ status: 'RUNNING' })
     expect(screen.getByTestId('node-status-badge-n1')).toHaveTextContent('执行中')

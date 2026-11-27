@@ -43,7 +43,7 @@ export function PendingElicitationBanner({ sessionId }: PendingElicitationBanner
       role="status"
       aria-live="polite"
       aria-atomic="true"
-      className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-warning/10 bg-warning/10 px-4 py-2 text-sm text-warning"
+      className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-warning/10 bg-warning/10 px-4 py-2 text-sm text-warning-text"
     >
       <span>Agent 正在等待你的输入（{pending.length}）</span>
       <Button

@@ -21,7 +21,7 @@ const statusIcons = {
 const statusColors = {
   pending: 'text-muted-foreground',
   in_progress: 'text-primary',
-  completed: 'text-success',
+  completed: 'text-success-text',
 };
 
 const statusLabels = {

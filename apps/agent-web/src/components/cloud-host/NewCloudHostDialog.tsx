@@ -98,6 +98,18 @@ function getErrorMessage(error: unknown): string {
  * 新建云电脑对话框：名称（trim 1~64）+ harness 多选（≥1）+ 可选预装 standard 负载。
  * 一期无存储/会话导入参数；选择 1 个 harness 时服务端会自动创建默认会话。
  */
+function StepBadge({ step }: { step: number }) {
+  return (
+    <span
+      aria-hidden="true"
+      data-testid={`cloud-host-step-${step}`}
+      className="mr-1.5 inline-flex size-5 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold tabular-nums text-primary"
+    >
+      {step}
+    </span>
+  )
+}
+
 export default function NewCloudHostDialog({
   open,
   capabilities,
@@ -460,7 +472,7 @@ export default function NewCloudHostDialog({
           </div>
 
           <div className="min-w-0">
-            <span className="mb-1 block text-sm font-medium">规格</span>
+            <span className="mb-1 block text-sm font-medium"><StepBadge step={1} />规格</span>
             {specsLoading && specs.length === 0 ? (
               <p className="text-sm text-muted-foreground">正在加载规格...</p>
             ) : specs.length === 0 ? (
@@ -522,7 +534,7 @@ export default function NewCloudHostDialog({
           </div>
 
           <div className="min-w-0">
-            <span className="mb-1 block text-sm font-medium">Harness 工具</span>
+            <span className="mb-1 block text-sm font-medium"><StepBadge step={2} />Harness 工具</span>
             {supportedHarnesses.length === 0 ? (
               <p className="text-sm text-muted-foreground">暂无可用的 Harness 工具</p>
             ) : (
@@ -557,7 +569,7 @@ export default function NewCloudHostDialog({
           </div>
 
           <div className="min-w-0">
-            <span className="mb-1 block text-sm font-medium">预装工作负载（可选）</span>
+            <span className="mb-1 block text-sm font-medium"><StepBadge step={3} />预装工作负载（可选）</span>
             {catalogError ? (
               <p className="text-xs text-muted-foreground">负载列表加载失败，可仅创建基础云电脑</p>
             ) : catalogLoading && !catalogData ? (
@@ -618,7 +630,7 @@ export default function NewCloudHostDialog({
                   }}
                   className="h-4 w-4"
                 />
-                <span className="text-sm font-medium">云存储（可选）</span>
+                <span className="text-sm font-medium"><StepBadge step={4} />云存储（可选）</span>
               </label>
               <p className="mt-1 text-xs text-muted-foreground">
                 将云电脑主目录 /home/worker 挂载到云存储，停止云电脑时自动归档数据
@@ -688,7 +700,7 @@ export default function NewCloudHostDialog({
                 onChange={(event) => setProjectEnabled(event.target.checked)}
                 className="h-4 w-4"
               />
-              <span className="text-sm font-medium">配置 Github 项目（可选）</span>
+              <span className="text-sm font-medium"><StepBadge step={5} />配置 Github 项目（可选）</span>
             </label>
             <p className="mt-1 text-xs text-muted-foreground">
               创建后自动安装 Github 工作负载、克隆仓库并进入项目会话
@@ -775,7 +787,7 @@ export default function NewCloudHostDialog({
           </div>
 
           <div className="min-w-0 rounded-md border p-3">
-            <span className="mb-1 block text-sm font-medium">收费详情</span>
+            <span className="mb-1 block text-sm font-medium"><StepBadge step={6} />收费详情</span>
             {quoteError && !quote ? (
               <p className="text-xs text-muted-foreground">创建与运行将产生费用，详见账单</p>
             ) : quoteLoading && !quote ? (

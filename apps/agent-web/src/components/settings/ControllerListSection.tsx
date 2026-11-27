@@ -188,7 +188,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                       <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                         {key.type}
                       </span>
-                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs text-warning">
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs text-warning-text">
                         等待连接
                       </span>
                     </div>
@@ -218,7 +218,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                         {ctrl.type}
                       </span>
                       <span className={`rounded px-1.5 py-0.5 text-xs ${
-                        ctrl.status === 'online' ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground'
+                        ctrl.status === 'online' ? 'bg-success/15 text-success-text' : 'bg-muted text-muted-foreground'
                       }`}>
                         {ctrl.status === 'online' ? '在线' : '离线'}
                       </span>
@@ -261,7 +261,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                       <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
                         {ctrl.type}
                       </span>
-                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs text-warning">
+                      <span className="rounded bg-warning/15 px-1.5 py-0.5 text-xs text-warning-text">
                         未绑定
                       </span>
                     </div>

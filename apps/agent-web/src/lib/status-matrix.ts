@@ -55,22 +55,22 @@ export const STATUS_FALLBACK: StatusVisual = {
 export const SESSION_STATUS_MATRIX: Record<SessionStatusValue, StatusVisual> = {
   creating: {
     dot: 'bg-warning animate-pulse',
-    badge: 'bg-warning/15 text-warning',
+    badge: 'bg-warning/15 text-warning-text',
     label: '创建中',
   },
   connecting: {
     dot: 'bg-warning animate-pulse',
-    badge: 'bg-warning/15 text-warning',
+    badge: 'bg-warning/15 text-warning-text',
     label: '连接中',
   },
   idling: {
     dot: 'bg-success',
-    badge: 'bg-success/15 text-success',
+    badge: 'bg-success/15 text-success-text',
     label: '空闲',
   },
   running: {
     dot: 'bg-info animate-pulse',
-    badge: 'bg-info/15 text-info animate-pulse',
+    badge: 'bg-info/15 text-info-text animate-pulse',
     label: '工作中',
   },
   disconnected: {
@@ -89,17 +89,17 @@ export const SESSION_STATUS_MATRIX: Record<SessionStatusValue, StatusVisual> = {
 export const CLOUD_HOST_STATUS_MATRIX: Record<CloudHostStatus, StatusVisual> = {
   STARTING: {
     dot: 'bg-warning animate-pulse',
-    badge: 'bg-warning/15 text-warning',
+    badge: 'bg-warning/15 text-warning-text',
     label: '启动中',
   },
   RUNNING: {
     dot: 'bg-success',
-    badge: 'bg-success/15 text-success',
+    badge: 'bg-success/15 text-success-text',
     label: '运行中',
   },
   STOPPING: {
     dot: 'bg-warning animate-pulse',
-    badge: 'bg-warning/15 text-warning',
+    badge: 'bg-warning/15 text-warning-text',
     label: '停止中',
   },
   STOPPED: {
@@ -137,28 +137,28 @@ export const WORKFLOW_NODE_STATUS_MATRIX: Record<WorkflowNodeStatus, WorkflowNod
   },
   RUNNING: {
     dot: 'bg-info animate-pulse',
-    badge: 'bg-info/15 text-info',
+    badge: 'bg-info/15 text-info-text',
     label: '执行中',
     spine: 'bg-info',
     tint: 'bg-card',
   },
   DONE: {
     dot: 'bg-success',
-    badge: 'bg-success/15 text-success',
+    badge: 'bg-success/15 text-success-text',
     label: '已完成',
     spine: 'bg-success',
     tint: 'bg-card',
   },
   REJECT: {
     dot: 'bg-warning',
-    badge: 'bg-warning/15 text-warning',
+    badge: 'bg-warning/15 text-warning-text',
     label: '已打回',
     spine: 'bg-warning',
     tint: 'bg-card',
   },
   REWORK: {
     dot: 'bg-warning animate-pulse',
-    badge: 'bg-warning/15 text-warning animate-pulse',
+    badge: 'bg-warning/15 text-warning-text animate-pulse',
     label: '返工中',
     spine: 'bg-warning animate-pulse',
     tint: 'bg-card',

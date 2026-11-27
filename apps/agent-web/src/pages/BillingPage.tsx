@@ -279,7 +279,7 @@ export default function BillingPage() {
                       <td className="max-w-[220px] truncate py-2 pr-3" title={invoice.description}>
                         {invoice.description}
                       </td>
-                      <td className={`py-2 pr-3 text-right tabular-nums ${invoice.amount < 0 ? 'text-destructive' : ''}`}>
+                      <td className={`py-2 pr-3 text-right tabular-nums ${invoice.amount < 0 ? 'text-destructive' : invoice.type === 'recharge' ? 'text-success-text' : ''}`}>
                         {invoice.amount.toFixed(2)}
                       </td>
                       <td className="py-2 pr-3 text-right tabular-nums">{invoice.balanceAfter.toFixed(2)}</td>

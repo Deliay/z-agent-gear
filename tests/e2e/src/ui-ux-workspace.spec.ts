@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { io as SocketIOClient } from 'socket.io-client';
 import { registerUser, loginViaUI, createControllerKey } from './helpers';
+import { gql, setupPhase4Env } from './phase4-helpers';
 
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 
@@ -83,6 +84,60 @@ test.describe('UI/UX Workspace Shell & Navigation E2E', () => {
     // Esc 关闭
     await page.keyboard.press('Escape');
     await expect(page.getByRole('dialog', { name: '新建会话' })).toHaveCount(0);
+  });
+
+  test('E2E-UIUX-4: 状态色抽样（会话圆点 + 工作流节点徽标与状态矩阵一致）', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const env = await setupPhase4Env(page, 'uiux4', { withSessions: true, withInstances: true });
+    await loginViaUI(page, env.username);
+
+    // 会话状态圆点：会话详情顶栏使用矩阵 dot（非旧徽标底色）
+    const home = await gql<{ homeOverview: { sessions: Array<{ id: string }> } }>(
+      page,
+      env.token,
+      'query { homeOverview { sessions { id } } }',
+    );
+    const sessionId = home.homeOverview.sessions[0]?.id;
+    if (sessionId) {
+      await page.goto(`/sessions/${sessionId}`);
+      const dot = page.getByTestId('session-status-dot');
+      await expect(dot).toBeVisible({ timeout: 15000 });
+      await expect(dot).toHaveClass(/bg-(info|success|warning|muted-foreground|destructive)/);
+    }
+
+    // 工作流节点徽标：DONE/READY 状态使用矩阵 badge
+    const instance = env.instances[0];
+    await page.goto(`/workflows/${instance.id}`);
+    await page.getByRole('button', { name: '图形' }).click();
+    const nodeId = instance.nodes[0]?.id;
+    const badge = page.getByTestId(`node-status-badge-${nodeId}`);
+    await expect(badge).toBeVisible({ timeout: 15000 });
+    await expect(badge).toHaveClass(/bg-/);
+    await expect(badge).toHaveAttribute('data-status', /READY|RUNNING|DONE|REWORK|REJECT|FAILED/);
+
+    // 会话/工作流均由同一 status-matrix 消费，不存在就地 hex 色
+    const card = page.getByTestId(`workflow-node-card-${nodeId}`);
+    await expect(card).toHaveClass(/bg-card/);
+  });
+
+  test('E2E-UIUX-5: 设置导航激活态 + 分组标题 + 控制器配置面包屑复核', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const { username } = await registerUser(page, { prefix: 'uiux5' });
+    await loginViaUI(page, username);
+
+    await page.locator('[data-testid="activity-rail"]').getByRole('button', { name: '设置中心' }).click();
+    const settingsNav = page.locator('nav[aria-label="Settings navigation"]');
+    await expect(settingsNav).toBeVisible({ timeout: 15000 });
+    await expect(settingsNav.getByRole('heading', { name: '设置', exact: true })).toBeVisible();
+
+    for (const group of ['帐号', 'Git', '模型设置', '本地控制器', 'MCP', '工作流']) {
+      await expect(settingsNav.getByText(group, { exact: true }).first()).toBeVisible();
+    }
+
+    const modelButton = settingsNav.getByRole('button', { name: '可用模型' });
+    await modelButton.click();
+    await expect(modelButton).toHaveAttribute('data-active', 'true');
+    await expect(settingsNav.getByRole('button', { name: '帐号' })).not.toHaveAttribute('data-active', 'true');
   });
 
   test('E2E-UIUX-2: Settings navigation highlights active section and Controller Config displays breadcrumb header', async ({ page }) => {

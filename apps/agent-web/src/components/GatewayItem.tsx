@@ -39,7 +39,7 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
       <span className="text-xs text-muted-foreground">:{gateway.port}</span>
       <span
         className={`text-xs ${
-          gateway.status === 'active' ? 'text-success' : 'text-muted-foreground'
+          gateway.status === 'active' ? 'text-success-text' : 'text-muted-foreground'
         }`}
       >
         {gateway.status}

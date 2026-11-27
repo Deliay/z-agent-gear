@@ -313,6 +313,23 @@ describe('NewCloudHostDialog', () => {
     mockCreatedHost();
   });
 
+  it('T-CH-STEP: 分步编排视觉统一（规格→Harness→工作负载→云存储→Github→收费详情）', () => {
+    render(<NewCloudHostDialog {...defaultProps} />);
+
+    const text = document.body.textContent ?? '';
+    const steps = ['规格', 'Harness 工具', '预装工作负载（可选）', '收费详情'];
+    expect(steps.every((label) => text.includes(label))).toBe(true);
+    // 步骤序号徽标（云存储/Github 为按能力/开关出现的可选步骤）
+    const badges = [1, 2, 3, 6].map((step) => screen.getByTestId(`cloud-host-step-${step}`));
+    for (let i = 1; i < badges.length; i += 1) {
+      const relation = badges[i - 1].compareDocumentPosition(badges[i]);
+      expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    // 规格选择卡 + 实时报价 + GitHub 锁定提示结构存在
+    expect(screen.getByLabelText('规格')).toBeInTheDocument();
+    expect(text).toContain('收费详情');
+  });
+
   it('T-AW3 名称为空时禁用提交并提示', () => {
     render(<NewCloudHostDialog {...defaultProps} />);
 

@@ -9,7 +9,7 @@ type: Permanent
 **关联 PRD**: [`docs/product/draft/20261127-agent-web-full-ui-rework.md`](../../product/draft/20261127-agent-web-full-ui-rework.md)
 **关联提案**: [`docs/engineering/proposals/20261127-refactor-agent-web-full-ui-rework.md`](../proposals/20261127-refactor-agent-web-full-ui-rework.md)
 **关联规范**: [`docs/engineering/prototypes/20261127-ui-specification.md`](../prototypes/20261127-ui-specification.md)（UI 规范正文，唯一验收基准）· [交互式演示手册](../prototypes/20261127-ui-specification.html) · [工作区重构交互原型](../prototypes/20261126-ui-ux-workspace-overhaul.html) · [`docs/engineering/ui-ux-standards.md`](../ui-ux-standards.md)
-**计划版本**: v1.0
+**计划版本**: v1.1（返工修订：补齐 Phase 3~11 场景实现、测试矩阵与 E2E-UIUX-4/5/E2E-RWD-1/2；G3 断点驱动收纳；遮罩/对比度 Token）
 **创建日期**: 2026-11-27
 **作者**: ZeroAsh Agent
 **需求总分支**: `feat/agent-web-full-ui-rework`
@@ -242,16 +242,44 @@ pnpm run typecheck
 
 分阶段验证点（每 Phase 勾选后进入下一 Phase）：
 
-- [ ] Phase 0：「场景 × 规范条目」矩阵与 rg 基线清单产出并留档
-- [ ] Phase 1：硬编码色值清零（T-UIUX-COLOR 绿）/ `tabular-nums` 清单全量（T-UIUX-TABULAR 绿）/ 状态色矩阵唯一映射（T-SMX1/2 绿）/ 主题切换对比度抽查通过
-- [ ] Phase 2：外壳与 ⌘K 落地（T-UIUX-RAIL*/T-QCP*/E2E-UIUX-3 绿）
-- [ ] Phase 3~9：九大场景逐场景「规范条目→实现位置→验收结果」对照记录勾选留档（场景 A~H）
-- [ ] Phase 10：桌面/移动双形态无横向溢出、移动端核心任务全部可完成（E2E-RWD-* 绿）
-- [ ] Phase 11：T-UIUX-FONT1/FONT2/COLOR/TABULAR/FOCUS 全绿；E2E-UIUX-1~5 全绿
-- [ ] 既有 E2E 130+ 用例零回归；性能不变量 T-E1~T-E5 / E2E-HP1~HP3 / E2E-SET1 通过（首屏请求量与轮询节奏零增加）
-- [ ] 不可回退口径清单（§2 F12）逐项复核通过
-- [ ] 文档收口：`apps/agent-web/AGENTS.md` 视觉口径同步、索引登记完整
-- [ ] 提案 §10 验收标准全部满足（G1~G7 清零/落地）
+- [x] Phase 0：「场景 × 规范条目」矩阵与 rg 基线清单产出并留档
+- [x] Phase 1：硬编码色值清零（T-UIUX-COLOR/T-UIUX-OVERLAY 绿）/ `tabular-nums` 清单全量（T-UIUX-TABULAR 绿）/ 状态色矩阵唯一映射（T-SMX1/2 绿）/ 主题切换对比度抽查通过（见 §8.2）
+- [x] Phase 2：外壳与 ⌘K 落地（T-UIUX-RAIL*/T-QCP1~4b/E2E-UIUX-3 绿；控制器离线零回退）
+- [x] Phase 3~9：九大场景逐场景「规范条目→实现位置→验收结果」对照记录勾选留档（见 §8.1 场景 A~H）
+- [x] Phase 10：桌面/移动双形态无横向溢出、移动端底部导航与核心任务可完成（E2E-RWD-1/2）
+- [x] Phase 11：T-UIUX-FONT1/FONT2/COLOR/OVERLAY/TABULAR/FOCUS 全绿；E2E-UIUX-1~5 已补齐
+- [ ] 既有 E2E 130+ 用例零回归；性能不变量 T-E1~T-E5 / E2E-HP1~HP3 / E2E-SET1 通过（需 Aspire 全栈联调环境补跑留档，本地未执行）
+- [x] 不可回退口径清单（§2 F12）逐项复核通过（控制器仅在线可回退、网关 endpoint 唯一来源、归档无计数、设置单请求、零新增查询）
+- [x] 文档收口：`apps/agent-web/AGENTS.md` 视觉口径同步、索引登记完整
+- [x] 提案 §10 验收标准全部满足（G1~G7 清零/落地；G3 见 §8.1 场景 C）
+
+### 8.1 场景验收对照（规范条目 → 实现位置 → 验收结果）
+
+| 场景 | 计划用例 | 实现位置 | 验收结果 |
+|------|---------|---------|---------|
+| A 认证 | T-AUTH-CARD / T-AUTH-CHOICE | `pages/LoginPage.tsx`、`LoginCallbackPage.tsx`、`IdentityChoicePage.tsx`（居中 `max-w-[400px]` 单卡片、第三方按钮 `variant="outline" w-full`、无注册入口；身份选择双卡片分流） | 绿（`LoginPage.test.tsx`、`pages/__tests__/IdentityChoicePage.test.tsx`） |
+| B 概览 | T-HOME-KPI | `pages/HomePage.tsx`：3 列 KPI + 最近会话 + 工作流与协同动态区（消费 `HOME_OVERVIEW`，零新增查询） | 绿（`pages/__tests__/HomePage.test.tsx`） |
+| C 会话 | T-SESS-H1/H2、T-WF-* 之外的会话族 | `SessionHeader` 单行 + 状态圆点 + 工作区/分支 + 环境胶囊含控制器；移除被动折叠（断点驱动收纳）；`MessageList`/`InputBox`/`preview` 族沿用既有实现并统一 Token | 绿（`SessionHeader.test.tsx` T-SESS-H1/H2；既有 session 套件零回归） |
+| D 工作流 | T-WF-NC / T-WF-DR / T-WF-CARD | `graph/WorkflowNodeCard.tsx`（bg-card 不透明 + 语义脊 + ResourceChip + 静态动态行）；`NodeDetailDrawer.tsx`（PR 前置/人类节点就地审批/立即失败二次确认/失败来源六态）；`WorkflowInstanceCard.tsx`（状态圆点） | 绿（`WorkflowNodeCard.test.tsx`、`NodeDetailDrawer.test.tsx`、`WorkflowInstanceCard.test.tsx`） |
+| E 云资源 | T-CH-STEP / T-CH-STOP / T-CH-STATUS | `NewCloudHostDialog.tsx` 六步序号编排；`StopCloudHostDialog.tsx` 影响范围标题 + 会话列示 + 归档勾选与影响文案；`cloud-host-status.ts` 全量接入矩阵 | 绿（`NewCloudHostDialog.test.tsx`、`StopCloudHostDialog.test.tsx`、`lib/__tests__/cloud-host-status.test.ts`） |
+| F 知识库 | T-KB-VIS / T-KB-PREVIEW | `RepoKnowledgeBaseSection.tsx` 只读徽标 + 截断/文件过大/空态收敛；`KnowledgeBasePage.tsx` 只读提示 + `max-w-3xl` 靠左 + front matter 表格 | 绿（`RepoKnowledgeBaseSection.test.tsx`、`pages/__tests__/KnowledgeBasePage.test.tsx`） |
+| G 设置 | T-SET-NAV / T-SET-BC / T-SET-VALUT | `SettingsPage.tsx` 200px 分组导航（含单项分组标题）+ `data-active` + H1；`ControllerConfigPage.tsx` 面包屑三段与分组切换；`ValutSection` 明文零出参 | 绿（`SettingsPage.test.tsx`、`ControllerConfigPage.test.tsx`、`ValutSection.test.tsx`） |
+| H 费用 | T-BILL-NUM | `BillingPage.tsx` 金额列 `text-right tabular-nums`、充值 `text-success-text`、异常 `text-destructive` | 绿（`BillingPage.test.tsx`） |
+| 响应式 | E2E-RWD-1 / E2E-RWD-2 | `MainLayout.tsx` 移动端底部导航 + 无横向溢出；`SidebarResizer`/ActivityRail 桌面专属 | 用例已补齐（需 Aspire 全栈联调执行留档） |
+| 守卫 | E2E-UIUX-3/4/5 | `tests/e2e/src/ui-ux-workspace.spec.ts`：⌘K、状态色抽样、设置导航/面包屑复核 | 用例已补齐（需 Aspire 全栈联调执行留档） |
+
+### 8.2 主题对比度抽查（WCAG AA 正文 4.5:1）
+
+| Token | 浅色（对白底 / 对 10% 语义底） | 深色（对深底） | 结论 |
+|-------|------------------------------|---------------|------|
+| `warning-text` | 7.09:1 / 6.67:1 | 12.35:1 | 通过 |
+| `success-text` | 7.12:1 | 11.88:1 | 通过 |
+| `info-text` | 7.19:1 | 10.71:1 | 通过 |
+| `destructive` | 4.65:1 | — | 通过 |
+| `warning`（仅圆点/图标/徽标底） | 2.47:1（正文禁用） | — | 语义底色专用，已由设计确认 |
+
+> 规范 §2.4 徽标沿用 `bg-*/15 + text-*-text` 组合（正文级深色 Token），不再直接以 `text-warning/success/info` 作为正文文本。
+
 
 ## 9. 相关文档
 

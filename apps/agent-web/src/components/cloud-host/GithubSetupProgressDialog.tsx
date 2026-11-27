@@ -64,8 +64,8 @@ const STEP_STATUS_LABELS: Record<CloudHostSetupStepStatus, string> = {
 
 const STEP_STATUS_CLASSES: Record<CloudHostSetupStepStatus, string> = {
   PENDING: 'border-transparent bg-muted text-muted-foreground',
-  RUNNING: 'border-transparent bg-warning/10 text-warning',
-  SUCCEEDED: 'border-transparent bg-success/10 text-success',
+  RUNNING: 'border-transparent bg-warning/10 text-warning-text',
+  SUCCEEDED: 'border-transparent bg-success/10 text-success-text',
   FAILED: 'border-transparent bg-destructive/10 text-destructive',
   SKIPPED: 'border-transparent bg-muted text-muted-foreground',
 }
@@ -321,13 +321,13 @@ export default function GithubSetupProgressDialog({
             )}
 
             {operation?.status === 'SUCCEEDED' && sessionFailed && (
-              <p className="break-words text-sm text-warning">
+              <p className="break-words text-sm text-warning-text">
                 仓库已就绪，请手动创建会话
               </p>
             )}
 
             {operation?.status === 'SUCCEEDED' && !operation.sessionId && !sessionFailed && (
-              <p className="break-words text-sm text-success">操作已完成</p>
+              <p className="break-words text-sm text-success-text">操作已完成</p>
             )}
           </div>
         )}

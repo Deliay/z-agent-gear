@@ -155,6 +155,70 @@ describe('NodeDetailDrawer', () => {
     )
   })
 
+  it('T-WF-DR: PR 区块前置 + 人类节点就地审批/打回 + 失败二次确认/来源展示', () => {
+    const { rerender } = renderDrawer(
+      { type: 'node', nodeId: 'n1' },
+      instance({ nodes: [node({ status: 'RUNNING', rejectInfo: null, reworkCount: 0 })] }),
+    )
+    const text = document.body.textContent ?? ''
+    expect(text.indexOf('关联 Pull Request')).toBeGreaterThanOrEqual(0)
+    expect(text.indexOf('关联 Pull Request')).toBeLessThan(text.indexOf('产物（'))
+    // 人类节点就地操作（完成/打回）
+    expect(screen.getByRole('button', { name: /完成/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /打回/ })).toBeInTheDocument()
+
+    // 失败节点：来源展示（六来源映射）
+    rerender(
+      <NodeDetailDrawer
+        open
+        onOpenChange={() => {}}
+        instance={instance({
+          nodes: [
+            node({
+              type: 'AI',
+              status: 'FAILED',
+              failInfo: {
+                reason: '人工标记失败',
+                source: 'MANUAL',
+                at: '2026-11-27T00:00:00Z',
+              },
+            }),
+          ],
+        })}
+        target={{ type: 'node', nodeId: 'n1' }}
+        onOpenSession={vi.fn()}
+      />,
+    )
+    expect(screen.getByTestId('drawer-fail-source')).toHaveTextContent('失败来源：人工标记')
+  });
+
+  it('T-WF-DR: 「立即失败」二次确认（确认后才调用 mutation）', async () => {
+    renderDrawer({
+      type: 'node',
+      nodeId: 'n1',
+    }, instance({
+      nodes: [
+        node({
+          type: 'AI',
+          status: 'RUNNING',
+          sessionId: 's1',
+          rejectInfo: null,
+          reworkCount: 0,
+        }),
+      ],
+    }))
+
+    fireEvent.click(screen.getByRole('button', { name: '立即失败' }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/中断会话/)).toBeInTheDocument()
+    expect(mockFailNode).not.toHaveBeenCalled()
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认失败' }))
+    await waitFor(() => expect(mockFailNode).toHaveBeenCalledWith({
+      variables: { instanceId: 'inst-1', nodeId: 'n1' },
+    }))
+  });
+
   it('T-WFI-SH1b 仅产物或仅 PR 时展示正常', () => {
     const artifactsOnly = instance({ pullRequestLinks: [] })
     renderDrawer({ type: 'node', nodeId: 'n1' }, artifactsOnly)

@@ -55,7 +55,7 @@ export default function CommandSuggest({
         parts.push(<span key={`text-${i}`}>{name.slice(lastIndex, idx)}</span>);
       }
       parts.push(
-        <span key={`highlight-${i}`} className="font-bold text-info">
+        <span key={`highlight-${i}`} className="font-bold text-info-text">
           {name[idx]}
         </span>
       );

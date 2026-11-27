@@ -22,7 +22,7 @@ const statusIcons = {
 const statusColors = {
   pending: 'text-muted-foreground',
   in_progress: 'text-primary',
-  completed: 'text-success',
+  completed: 'text-success-text',
 };
 
 const statusLabels = {
@@ -67,20 +67,20 @@ export default function PlanFloatingCard({ messages }: PlanFloatingCardProps) {
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-warning hover:opacity-80 transition-opacity"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-warning-text hover:opacity-80 transition-opacity"
       >
         {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-warning" />
+          <ChevronDown className="h-4 w-4 shrink-0 text-warning-text" />
         ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-warning" />
+          <ChevronRight className="h-4 w-4 shrink-0 text-warning-text" />
         )}
         <span className="text-sm font-medium">Plan</span>
         {!expanded && (
-          <span className="ml-auto truncate text-xs text-warning max-w-[50%]">
+          <span className="ml-auto truncate text-xs text-warning-text max-w-[50%]">
             {lastEntry.content}
           </span>
         )}
-        <span className="ml-2 text-xs text-warning">
+        <span className="ml-2 text-xs text-warning-text">
           {planSummaryLabel(completed, total)}
         </span>
       </button>

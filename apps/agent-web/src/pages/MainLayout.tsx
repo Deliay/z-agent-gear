@@ -1,4 +1,4 @@
-import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { toast } from 'sonner';
@@ -204,19 +204,49 @@ export default function MainLayout() {
     const isKnowledgeBase = path.startsWith('/knowledge-bases/');
     const isSettings = path.startsWith('/settings');
 
-    if (isSessionDetail || isWorkflowDetail || isKnowledgeBase || isSettings) {
-      layout = (
-        <main className="h-screen overflow-auto">
-          <Outlet />
-        </main>
-      );
-    } else {
-      layout = (
-        <div className="h-screen">
-          <Sidebar name={user?.name ?? ''} mobile />
-        </div>
-      );
-    }
+    const content = isSessionDetail || isWorkflowDetail || isKnowledgeBase || isSettings ? (
+      <main className="h-full overflow-auto">
+        <Outlet />
+      </main>
+    ) : (
+      <div className="h-full">
+        <Sidebar name={user?.name ?? ''} mobile />
+      </div>
+    );
+
+    const mobileNavItems = [
+      { to: '/', label: '概览', end: true },
+      { to: '/sessions', label: '会话' },
+      { to: '/workflows', label: '工作流' },
+      { to: '/billing', label: '费用' },
+      { to: '/settings', label: '设置' },
+    ];
+
+    layout = (
+      <div className="flex h-screen flex-col">
+        <div className="min-h-0 flex-1">{content}</div>
+        <nav
+          aria-label="移动端主导航"
+          data-testid="mobile-bottom-nav"
+          className="flex h-14 shrink-0 items-center justify-around border-t border-border bg-background px-2 pb-[env(safe-area-inset-bottom)]"
+        >
+          {mobileNavItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) =>
+                `flex min-w-0 flex-1 items-center justify-center rounded-md px-2 py-2 text-center text-xs font-medium transition-colors ${
+                  isActive ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                }`
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+      </div>
+    );
   }
 
   return (

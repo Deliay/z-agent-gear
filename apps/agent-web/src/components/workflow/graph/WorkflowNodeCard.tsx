@@ -70,7 +70,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
           {data.name}
         </span>
         {data.reworkCount > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-warning/15 px-1 text-xs tabular-nums text-warning">
+          <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-warning/15 px-1 text-xs tabular-nums text-warning-text">
             <RotateCcw className="size-2.5" />
             {data.reworkCount}
           </span>
@@ -92,7 +92,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
           data-testid={`node-pending-interaction-${data.nodeId}`}
           aria-label="有待处理的提问或审批"
           title="有待处理的提问或审批"
-          className="nodrag flex w-fit items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 text-xs font-medium text-warning hover:bg-warning/20"
+          className="nodrag flex w-fit items-center gap-1 rounded bg-warning/10 px-1.5 py-0.5 text-xs font-medium text-warning-text hover:bg-warning/20"
           onClick={(event) => {
             event.stopPropagation();
             data.onOpenSession?.(data.sessionId!);
@@ -135,7 +135,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
         <div
           data-testid={`node-result-${data.nodeId}`}
           title="该数值为会话当前上下文长度"
-          className="min-w-0 truncate text-xs tabular-nums text-success"
+          className="min-w-0 truncate text-xs tabular-nums text-success-text"
         >
           {tokenUsage != null ? `已完成 · ${tokenUsage} tokens` : '已完成'}
         </div>
@@ -175,7 +175,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
                 target="_blank"
                 rel="noreferrer"
                 title={link.lastSyncedCommitSha ? `检查项 · commit ${link.lastSyncedCommitSha.slice(0, 7)}` : '检查项'}
-                className="rounded bg-success/15 px-1 py-0.5 text-xs text-success hover:underline"
+                className="rounded bg-success/15 px-1 py-0.5 text-xs text-success-text hover:underline"
                 onClick={(event) => event.stopPropagation()}
               >
                 检查项

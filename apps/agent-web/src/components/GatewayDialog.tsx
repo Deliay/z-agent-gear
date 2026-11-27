@@ -45,7 +45,7 @@ export default function GatewayDialog({ controllerId, onClose }: GatewayDialogPr
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
       <div className="w-80 rounded-lg bg-popover p-4 shadow-lg">
         <h3 className="mb-3 text-sm font-medium text-popover-foreground">新建网关暴露</h3>
         <form onSubmit={handleSubmit}>

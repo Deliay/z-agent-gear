@@ -97,7 +97,7 @@ export default function WorktreeSidebarGroup({
                   <span className="text-xs text-muted-foreground">
                     {isExpanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
                   </span>
-                  <GitFork className="size-3 shrink-0 text-info" />
+                  <GitFork className="size-3 shrink-0 text-info-text" />
                   <span className="truncate text-left text-sidebar-foreground">
                     {getBranchDisplay(wt)}
                   </span>

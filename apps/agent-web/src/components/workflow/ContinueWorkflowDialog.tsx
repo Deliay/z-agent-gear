@@ -357,7 +357,7 @@ export default function ContinueWorkflowDialog({
                       </SelectPopup>
                     </Select>
                     {!value && availableServerTypes.length > 0 && (
-                      <span className="w-full text-xs text-warning">原 Harness 不可用，请改选</span>
+                      <span className="w-full text-xs text-warning-text">原 Harness 不可用，请改选</span>
                     )}
                   </div>
                 )
