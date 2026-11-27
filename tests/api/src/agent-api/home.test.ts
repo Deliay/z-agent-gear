@@ -87,7 +87,9 @@ const HOME_OVERVIEW = `
       sessionTotalCount
       workspaces { id name worktrees { path branch sessionCount } }
       workflowInstances { id name workspace { id name } controller { id name } }
-      archivedWorkflowInstances { id name archived }
+      configuredWorkflows { id name }
+      workflowTemplates { id name }
+      workspaceContext { myWorkspaces { id name } myTenants { role } }
       todos { id title }
       unreadTodoCount
     }
@@ -302,7 +304,9 @@ describe('首页聚合与按控制器索引 API', () => {
         sessionTotalCount: number;
         workspaces: Array<{ id: string }>;
         workflowInstances: Array<{ id: string; workspace: { id: string } | null; controller: { id: string } | null }>;
-        archivedWorkflowInstances: unknown[];
+        configuredWorkflows: Array<{ id: string }>;
+        workflowTemplates: Array<{ id: string }>;
+        workspaceContext: { myWorkspaces: Array<{ id: string }>; myTenants: Array<{ role: string }> };
         todos: unknown[];
         unreadTodoCount: number;
       };
@@ -319,6 +323,11 @@ describe('首页聚合与按控制器索引 API', () => {
     expect(inst.workspace?.id).toBe(workspaceId);
     expect(inst.controller?.id).toBe(controllerId);
     expect(home.unreadTodoCount).toBeGreaterThanOrEqual(0);
+    // #584：新三分支随 homeOverview 下发
+    expect(Array.isArray(home.configuredWorkflows)).toBe(true);
+    expect(Array.isArray(home.workflowTemplates)).toBe(true);
+    expect(home.workspaceContext.myWorkspaces.some((w) => w.id === workspaceId)).toBe(true);
+    expect(Array.isArray(home.workspaceContext.myTenants)).toBe(true);
   });
 
   it('T-H2 嵌套 gateways（在线控制器）返回列表且不报错', async () => {
@@ -396,14 +405,13 @@ describe('首页聚合与按控制器索引 API', () => {
     );
     expect(archived.workflowInstances.some((i) => i.id === instanceId)).toBe(true);
 
-    // homeOverview 归档字段
-    const home = await gqlData<{ homeOverview: { workflowInstances: unknown[]; archivedWorkflowInstances: Array<{ id: string }> } }>(
+    // homeOverview 不再返回归档清单（#584：改为展开时按需拉取）
+    const home = await gqlData<{ homeOverview: { workflowInstances: Array<{ id: string }> } }>(
       HOME_OVERVIEW,
       undefined,
       token,
     );
-    expect(home.homeOverview.archivedWorkflowInstances.some((i) => i.id === instanceId)).toBe(true);
-    expect(home.homeOverview.workflowInstances.some((i) => (i as { id: string }).id === instanceId)).toBe(false);
+    expect(home.homeOverview.workflowInstances.some((i) => i.id === instanceId)).toBe(false);
 
     // 跨用户隔离：其他用户看不到本用户实例
     const otherList = await gqlData<{ workflowInstances: Array<{ id: string }> }>(

@@ -1,5 +1,6 @@
-import { useQuery, useMutation } from '@apollo/client/react';
-import { GET_MCP_SERVERS } from '@/graphql/queries';
+import { useMutation } from '@apollo/client/react';
+import { SETTINGS_OVERVIEW } from '@/graphql/queries';
+import { useSettingsOverview } from '@/stores/settingsOverview';
 import { SET_MCP_SERVER_ENABLED } from '@/graphql/mutations';
 import { logger } from '@/lib/logger';
 import {
@@ -33,10 +34,6 @@ interface McpServer {
   updatedAt: string;
 }
 
-interface GetMcpServersData {
-  mcpServers: McpServer[];
-}
-
 const SOURCE_LABELS: Record<string, string> = {
   proxy: '代理注册',
   manual: '远程绑定',
@@ -44,10 +41,10 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 export default function McpRegistrySection() {
-  const { data, loading, refetch } = useQuery<GetMcpServersData>(GET_MCP_SERVERS);
+  const { data, loading, refetch } = useSettingsOverview();
   const [setEnabled] = useMutation(SET_MCP_SERVER_ENABLED);
 
-  const servers: McpServer[] = data?.mcpServers || [];
+  const servers = (data?.mcpServers ?? []) as unknown as McpServer[];
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -66,7 +63,7 @@ export default function McpRegistrySection() {
     try {
       await setEnabled({
         variables: { id: server.id, enabled: !server.enabled },
-        refetchQueries: [{ query: GET_MCP_SERVERS }],
+        refetchQueries: [{ query: SETTINGS_OVERVIEW }],
       });
     } catch (error) {
       logger.error({ err: error }, 'Failed to toggle MCP server');

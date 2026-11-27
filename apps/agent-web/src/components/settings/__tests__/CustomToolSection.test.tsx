@@ -16,6 +16,9 @@ vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
 }))
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mockUseQuery(),
+}))
 vi.mock('sonner', () => ({
   toast: {
     success: (...args: unknown[]) => mockToastSuccess(...args),

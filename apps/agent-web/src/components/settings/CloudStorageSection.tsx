@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { CLOUD_STORAGES } from '@/graphql/queries'
+import { useSettingsOverview } from '@/stores/settingsOverview'
 import {
   ARCHIVE_CLOUD_STORAGE,
   DESTROY_CLOUD_STORAGE,
@@ -186,10 +187,18 @@ export default function CloudStorageSection() {
   const [actionBusy, setActionBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
-  const mainQuery = useQuery<GetCloudStoragesQuery>(CLOUD_STORAGES, {
-    variables: { onlyAttachable: false, includeDestroyed: false },
-    fetchPolicy: 'cache-and-network',
-  })
+  const {
+    data: settingsData,
+    loading: settingsLoading,
+    error: settingsError,
+    refetch: refetchSettings,
+  } = useSettingsOverview()
+  const mainQuery = {
+    data: settingsData ? { cloudStorages: settingsData.cloudStorages } : undefined,
+    loading: settingsLoading,
+    error: settingsError,
+    refetch: refetchSettings,
+  } as { data?: GetCloudStoragesQuery; loading: boolean; error?: Error; refetch: () => Promise<unknown> }
   const destroyedQuery = useQuery<GetCloudStoragesQuery>(CLOUD_STORAGES, {
     variables: { onlyAttachable: false, includeDestroyed: true },
     skip: !showDestroyed,

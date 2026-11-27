@@ -6,11 +6,14 @@ import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { sessionService } from '../../services/session.js';
 import { workflowInstanceService } from '../../services/workflow/instance.js';
+import { configuredWorkflowService } from '../../services/workflow/configured.js';
+import { workflowTemplateService } from '../../services/workflow/template.js';
 import { todoService } from '../../services/todo-service.js';
 import { sessionReviewService } from '../../services/session-review-service.js';
 import { gatewayService } from '../../services/gateway.js';
 import { worktreeService } from '../../services/worktree.js';
-import { mapInstance } from './workflow.js';
+import { mapConfigured, mapInstance, mapTemplate } from './workflow.js';
+import { buildWorkspaceContext } from './workspace.js';
 import type { AuthContext } from './auth.js';
 
 type Doc = Record<string, unknown>;
@@ -55,13 +58,14 @@ export const homeResolvers = {
       const [
         controllers,
         sessions,
-        archivedSessionDocs,
         workspaces,
         activeDocs,
-        archivedDocs,
         todos,
         unreadTodoCount,
         sessionReviews,
+        configuredDocs,
+        templateDocs,
+        workspaceContext,
       ] = await Promise.all([
         degrade<Doc[]>(
           async () => (await controllerService.findAllByUser(userId)) as Doc[],
@@ -77,16 +81,6 @@ export const homeResolvers = {
           [],
           'sessions',
         ),
-        // 侧边栏「已归档」分组：与活跃 sessions 口径互补，单分支失败降级 []
-        degrade<Doc[]>(
-          async () =>
-            (await sessionService.findAllByUser(userId, {
-              includeWorkflowSessions: false,
-              archived: true,
-            })) as Doc[],
-          [],
-          'archivedSessions',
-        ),
         degrade<Doc[]>(
           async () => (await controllerWorkspaceService.findAllByUser(userId)) as Doc[],
           [],
@@ -97,12 +91,6 @@ export const homeResolvers = {
             (await workflowInstanceService.list(userId, { archived: false })) as unknown as Doc[],
           [],
           'workflowInstances',
-        ),
-        degrade<Doc[]>(
-          async () =>
-            (await workflowInstanceService.list(userId, { archived: true })) as unknown as Doc[],
-          [],
-          'archivedWorkflowInstances',
         ),
         degrade<Doc[]>(
           async () => (await todoService.getTodoList(userId)) as unknown as Doc[],
@@ -134,19 +122,47 @@ export const homeResolvers = {
           [],
           'sessionReviews',
         ),
+        // 随 15s 轮询定时刷新：已配置工作流（复用既有映射）
+        degrade<Doc[]>(
+          async () =>
+            (await configuredWorkflowService.listForUser(userId)).map((doc) =>
+              mapConfigured(doc as unknown as Doc),
+            ) as unknown as Doc[],
+          [],
+          'configuredWorkflows',
+        ),
+        // 随 15s 轮询定时刷新：工作流模板（复用既有映射）
+        degrade<Doc[]>(
+          async () =>
+            (await workflowTemplateService.listForUser(userId)).map((doc) =>
+              mapTemplate(doc as unknown as Doc),
+            ) as unknown as Doc[],
+          [],
+          'workflowTemplates',
+        ),
+        // 工作区上下文：单次 accessibleWorkspaces 产出 myWorkspaces + myTenants
+        degrade<{ myWorkspaces: Doc[]; myTenants: Doc[] }>(
+          async () => {
+            const built = await buildWorkspaceContext(userId, context);
+            return built as unknown as { myWorkspaces: Doc[]; myTenants: Doc[] };
+          },
+          { myWorkspaces: [], myTenants: [] },
+          'workspaceContext',
+        ),
       ]);
 
       return {
         controllers,
         sessions,
         sessionTotalCount: sessions.length,
-        archivedSessions: archivedSessionDocs,
         workspaces,
         workflowInstances: activeDocs.map((doc) => mapInstance(doc)),
-        archivedWorkflowInstances: archivedDocs.map((doc) => mapInstance(doc)),
         todos,
         unreadTodoCount,
         sessionReviews,
+        configuredWorkflows: configuredDocs,
+        workflowTemplates: templateDocs,
+        workspaceContext,
       };
     },
   },

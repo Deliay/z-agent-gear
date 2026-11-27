@@ -5,7 +5,7 @@ import { registerUser, loginViaUI, gqlRequest, createControllerKey, createWorksp
 /**
  * 会话归档 / 工作区删除连带归档 / 工作区缺失只读（Phase 9，计划 §4.3）：
  *
- * - E2E-SARCH1：会话页归档 → 侧边栏活跃列表消失、「已归档（1）」出现、打开可查看、取消归档恢复；
+ * - E2E-SARCH1：会话页归档 → 侧边栏活跃列表消失、「已归档」（无数量）出现、展开按需加载可查看、取消归档恢复；
  * - E2E-SARCH2：删除工作区确认文案含连带会话数量 → 确认后该工作区会话进入「已归档」分组且可打开；
  * - E2E-SRO1：删除工作区后的会话只读提示条（`session-readonly-notice`）出现、输入框与「继续」隐藏、历史消息仍可见
  *   （云电脑销毁只读回归由 `cloud-host-readonly.spec.ts` T-AW10/R2-10 覆盖，此处不重复）。
@@ -93,27 +93,29 @@ test.describe('会话归档与工作区连带归档 E2E', () => {
       await expect(page).toHaveURL('/sessions', { timeout: 10000 });
       await expect(page.getByText('会话已归档')).toBeVisible({ timeout: 10000 });
 
-      // 侧边栏：活跃列表消失、「已归档（1）」出现
+      // 侧边栏：活跃列表消失；常驻「已归档」分组（无数量）展开后按需拉取
       await expect(sessionList.locator(`a[href="/sessions/${sessionId}"]`)).toHaveCount(0, { timeout: 20000 });
-      const archivedGroup = page.getByRole('button', { name: '已归档（1）' });
+      const archivedGroup = page
+        .locator(sidebarSessionList())
+        .getByRole('button', { name: '已归档', exact: true });
       await expect(archivedGroup).toBeVisible({ timeout: 20000 });
+      await expect(page.getByRole('button', { name: /已归档（\d+）/ })).toHaveCount(0);
 
       // 展开分组后条目可打开
       await archivedGroup.click();
       const archivedList = page.locator(sidebarArchivedList());
-      await expect(archivedList.locator(`a[href="/sessions/${sessionId}"]`)).toBeVisible();
+      await expect(archivedList.locator(`a[href="/sessions/${sessionId}"]`)).toBeVisible({ timeout: 20000 });
       await archivedList.locator(`a[href="/sessions/${sessionId}"]`).click();
       await expect(page).toHaveURL(`/sessions/${sessionId}`);
       await expect(page.getByTestId('session-archived-badge')).toBeVisible({ timeout: 10000 });
       await expect(page.getByRole('button', { name: '取消归档', exact: true })).toBeVisible();
 
-      // 取消归档：恢复活跃分组
+      // 取消归档：恢复活跃分组（已归档列表即时一致）
       await page.getByRole('button', { name: '取消归档', exact: true }).click();
       await expect(page.getByText('已取消归档')).toBeVisible({ timeout: 10000 });
       await expect(
         page.locator(sidebarSessionList()).locator(`a[href="/sessions/${sessionId}"]`),
       ).toBeVisible({ timeout: 20000 });
-      await expect(page.getByRole('button', { name: /已归档（\d+）/ })).toHaveCount(0, { timeout: 20000 });
     } finally {
       disconnect();
     }
@@ -145,14 +147,16 @@ test.describe('会话归档与工作区连带归档 E2E', () => {
       await page.getByRole('button', { name: '确认删除' }).click();
       await expect(page.getByText('暂无工作区，点击「添加」开始配置')).toBeVisible({ timeout: 10000 });
 
-      // 侧边栏「已归档（2）」分组可见可打开（homeOverview 15s 轮询，放宽等待）
+      // 侧边栏常驻「已归档」分组（无数量），展开后按需拉取（放宽等待）
       await page.goto('/sessions');
-      const archivedGroup = page.getByRole('button', { name: '已归档（2）' });
+      const archivedGroup = page
+        .locator(sidebarSessionList())
+        .getByRole('button', { name: '已归档', exact: true });
       await expect(archivedGroup).toBeVisible({ timeout: 25000 });
       await archivedGroup.click();
       const archivedList = page.locator(sidebarArchivedList());
-      await expect(archivedList.locator(`a[href="/sessions/${s1}"]`)).toBeVisible();
-      await expect(archivedList.locator(`a[href="/sessions/${s2}"]`)).toBeVisible();
+      await expect(archivedList.locator(`a[href="/sessions/${s1}"]`)).toBeVisible({ timeout: 20000 });
+      await expect(archivedList.locator(`a[href="/sessions/${s2}"]`)).toBeVisible({ timeout: 20000 });
 
       await archivedList.locator(`a[href="/sessions/${s1}"]`).click();
       await expect(page).toHaveURL(`/sessions/${s1}`);

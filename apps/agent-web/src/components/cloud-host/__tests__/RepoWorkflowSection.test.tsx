@@ -10,6 +10,7 @@ import {
 
 const h = vi.hoisted(() => ({
   useQuery: vi.fn(),
+  home: vi.fn(),
   useMutation: vi.fn(),
   deleteConfigured: vi.fn(),
 }));
@@ -22,6 +23,10 @@ vi.mock('@apollo/client/react', () => ({
 vi.mock('../../workflow/ConfigureRepoWorkflowDialog', () => ({
   default: ({ open, template }: { open: boolean; template: { fileName: string } | null }) =>
     open ? <div data-testid="stub-configure-dialog">{template?.fileName}</div> : null,
+}));
+
+vi.mock('@/stores/homeOverview', () => ({
+  useHomeOverview: () => h.home(),
 }));
 
 import RepoWorkflowSection from '../RepoWorkflowSection';
@@ -76,6 +81,16 @@ function setupQueries(overrides: {
   refetchTemplates?: ReturnType<typeof vi.fn>;
 } = {}) {
   const refetchTemplates = overrides.refetchTemplates ?? vi.fn();
+  h.home.mockReturnValue({
+    data: {
+      configuredWorkflows: (overrides.configured ?? []).map((workflow) => ({
+        controllerId: 'ctrl-1',
+        ...(workflow as Record<string, unknown>),
+      })),
+    },
+    loading: false,
+    refetch: vi.fn(),
+  });
   h.useQuery.mockImplementation((query: unknown) => {
     if (query === GET_CONTROLLER_WORKSPACES) {
       return { data: { controllerWorkspaces: workspaces }, loading: false, refetch: vi.fn() };

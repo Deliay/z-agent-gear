@@ -31,7 +31,7 @@ pnpm run preview  # Preview production build
 
 ## 首页数据流
 
-首页（`HomePage`）与桌面端侧边栏（`Sidebar`）的全部信息流由 `pages/MainLayout.tsx` 挂载的唯一一次 `HOME_OVERVIEW` 查询（`graphql/home.ts`，`pollInterval: 15000`）统一下发，子组件通过 `stores/homeOverview.ts` 的 `useHomeOverview()` 消费，**不得各自发起信息流查询**（会话/控制器/工作区/工作流/待办/网关/Worktree 均随聚合查询下发）。
+首页（`HomePage`）与桌面端侧边栏（`Sidebar`）的全部信息流由 `pages/MainLayout.tsx` 挂载的唯一一次 `HOME_OVERVIEW` 查询（`graphql/home.ts`，`pollInterval: 15000`）统一下发，子组件通过 `stores/homeOverview.ts` 的 `useHomeOverview()` 消费，**不得各自发起信息流查询**（会话/控制器/工作区/工作流/待办/网关/Worktree/工作区上下文 `workspaceContext`/工作流模板/已配置工作流均随聚合查询下发）。归档会话/归档实例**不随首页获取**：侧边栏「已归档」分组常驻可展开，展开时才按需查询 `GetArchivedSessions` / `GetWorkflowInstances(archived:true)`，且不展示任何数量。`useWorkspaceContextSync` 消费 `homeOverview.workspaceContext`（无独立轮询；focus/visibility → `refetch()` HOME_OVERVIEW）。
 
 - 首屏不阻塞布局外壳：`MainLayout` 先渲染侧边栏/页面外壳，聚合数据到达后各区块同批填充；任何需要 loading 兜底的判断必须写成 `loading && !data`，避免轮询时卸载整页（见 `frontend-rules.md` Apollo v4 轮询陷阱）。
 - 归属字段（`WorkflowInstance.workspace` / `controller`）可能已被删除，消费方须判空，回退显示「未知工作区」。
@@ -181,11 +181,11 @@ pnpm run preview  # Preview production build
 
 > 纯前端展示层；计划见 `docs/engineering/plan/20261030-feat-ui-optimization-phase4.md`。
 
-- **侧边栏折叠分区**：`Sidebar` 顶层为「主机」「工作流」「会话」「知识库」「网关」五个全宽折叠分区；默认展开工作流/会话、折叠主机/知识库/网关，展开态持久化在 `localStorage['sidebar-sections-expanded']`（`lib/sidebar-prefs.ts`，逐 key 读取，旧持久化缺 key 自动回退默认）。工作流/会话/网关跨环境聚合（工作流含「已归档（N）」自折叠分组）；网关仅聚合**在线主机**的网关配置行（离线主机不渲染，与既有「UI 层按 status 自行隐藏该区块」口径一致）；主机分区保留「主机 → 工作区 → 会话」树与设置按钮；条目排序 `updatedAt` 倒序 + id tie-break，防轮询跳动。
+- **侧边栏折叠分区**：`Sidebar` 顶层为「主机」「工作流」「会话」「知识库」「网关」五个全宽折叠分区；默认展开工作流/会话、折叠主机/知识库/网关，展开态持久化在 `localStorage['sidebar-sections-expanded']`（`lib/sidebar-prefs.ts`，逐 key 读取，旧持久化缺 key 自动回退默认）。工作流/会话/网关跨环境聚合（工作流/会话分区尾部常驻「已归档」自折叠分组，展开时才按需拉取、无数量、空态「暂无归档」）；网关仅聚合**在线主机**的网关配置行（离线主机不渲染，与既有「UI 层按 status 自行隐藏该区块」口径一致）；主机分区保留「主机 → 工作区 → 会话」树与设置按钮；条目排序 `updatedAt` 倒序 + id tie-break，防轮询跳动。
 - **空态收敛**：`TreeSection` 不再渲染 `emptyMessage` 占位文字（入参保留兼容），无内容时仅保留可展开空容器；层级缩进按 `level * 0.5rem`（≈2 空格）。
 - **拖拽调宽**：`SidebarResizer` 4px 热区（pointer capture），clamp 15–28rem、默认 20rem，`pointerup` 写入 `localStorage['sidebar-width']`，双击恢复默认；`MainLayout` 桌面 grid 列使用 `var(--sidebar-width,20rem)`，移动端不渲染 Resizer（`lib/sidebar-width.ts` 为宽度口径单一来源）。
 - **工作流卡片**：侧边栏条目不显示控制器名，第一行「名称 + 状态徽标」、第二行工作区；控制器名与执行中节点名走 tooltip（`WorkflowInstanceCard`）。
-- **分区 badge 口径**：工作流分区标题行 badge 仅统计活动实例数量（不含已归档），已归档数量由分区内「已归档（N）」自折叠分组承载；活动为 0 时 badge 照常显示 `0`，不引入隐藏形态（T-BDG1/T-BDG2）。其余分区 badge 口径不变（主机/会话/网关/工作区）。
+- **分区 badge 口径**：工作流分区标题行 badge 仅统计活动实例数量（不含已归档）；会话分区 badge 仅统计活跃会话。已归档分组不再展示数量（标题固定「已归档」，展开后也不渲染计数），活动为 0 时 badge 照常显示 `0`。其余分区 badge 口径不变（主机/网关/工作区）。
 - **图表视图**：`graph-layout.ts` 以 dagre `rankdir:'TB'`（nodesep 40 / ranksep 70）布局，节点宽 280px、高度分档估算（120–220px）；连线 `strokeWidth:2` + `MarkerType.ArrowClosed`；画布 `h-full min-h-[480px]`，由 `WorkflowInstancePage` 视图区行填充；图表模式隐藏右栏 `BlackboardPanel`/`WorkflowContextPanel`（列表视图零变化）。
 - **节点卡片**：`graph/WorkflowNodeCard.tsx` 自定义节点（状态色左脊 + 名称 + 类型/返工徽标 + Harness/模型 + 进行中动态行 + 完成态 token + PR/检查项徽标 + 资源小卡片 + 人类节点就地操作）；交互元素统一 `nodrag` + `stopPropagation`。
 - **实时动态**：`hooks/useNodeSessionActivity.ts` 复用 `useSessionStream`（不自行创建 EventSource），复用 `group-messages.parseSessionUpdate` 与 `tool-call-state` 的 `mergeToolCallMessages`/`toolCallHeaderTitle` 口径；思考/文本结尾截断常量 `LIVE_ACTIVITY_TAIL_CHARS = 40`；进行中节点建立实时连接，转为 DONE 后关闭连接并保留已捕获的最后动态与用量；**首屏即为 DONE 的 AI 节点**以快照模式短连一次，收到 SSE history（含最后一条 `usage_update`）后立即断开，用于补全刷新后的 token 展示（不长期占用连接）。
@@ -355,11 +355,11 @@ pnpm run preview  # Preview production build
 
 ## 会话归档与只读（会话管理优化）
 
-> 契约：`contracts/agent-session.graphql`（`Session.archived` / `SessionReadOnlyReason` / `archiveSession` / `workspaceArchiveImpact`）、`contracts/home.graphql`（`HomeOverview.archivedSessions`）。实现计划见 `docs/engineering/plan/20261104-feat-session-management-optimization.md` Phase 6~8。
+> 契约：`contracts/agent-session.graphql`（`Session.archived` / `SessionReadOnlyReason` / `archiveSession` / `workspaceArchiveImpact`）、`contracts/home.graphql`（归档清单已退出 `homeOverview`，改为 `sessions(archived:true)` 按需拉取，#584）。实现计划见 `docs/engineering/plan/20261104-feat-session-management-optimization.md` Phase 6~8。
 
 - **归档入口**：`SessionHeader` 按钮组在「导出对话」之后渲染「归档/取消归档」图标按钮（lucide `Archive`/`ArchiveRestore`，对齐工作流实例页形态，`archiving` 期间禁用）；`onArchiveToggle` 不传即不渲染——`SessionView` 对工作流节点会话（`workflowInstanceId` 非空）不传该回调（服务端同样拒绝 `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED`）。已归档会话在状态徽标旁展示「已归档」徽标（`data-testid="session-archived-badge"`），入口切换为「取消归档」。
 - **归档接线**：`SessionView` 调 `ARCHIVE_SESSION`，归档成功 toast「会话已归档」并经 `onDeleted` 回调返回列表（`SessionPage` 传 `navigate('/sessions')`，对齐工作流实例归档后导航）；取消归档 toast「已取消归档」并 `refetchQueries: [GET_SESSION, HOME_OVERVIEW]` 就地生效（徽标与侧边栏同批刷新）。错误原样 toast，不吞错。
-- **侧边栏已归档分组**：`Sidebar` 会话分区列表尾部的 `ArchivedSessionGroup` 复刻 `ArchivedWorkflowGroup` 自折叠交互（默认折叠、`Archive` 图标、「已归档（N）」、`aria-expanded`），数据源 `HOME_OVERVIEW.archivedSessions`（为空不渲染）；条目与活跃条目共用 `SessionListEntry`（状态点 + 标题 + 所属工作区，点击直达 `/sessions/{id}`），归档分组列表带 `data-testid="sidebar-archived-session-list"`。**活跃列表不含已归档由服务端保证**（D12：`GET_SESSIONS`/`HOME_OVERVIEW.sessions` 不加归档参数消费，活跃过滤走服务端默认口径）。
+- **侧边栏已归档分组**：`Sidebar` 会话分区列表尾部 `ArchivedSessionGroup` 与会话内工作流分区的 `ArchivedWorkflowGroup` 均为**自足组件**：常驻渲染「已归档」（`Archive` 图标、`aria-expanded`，**无数量**），展开时才 `useQuery(GET_ARCHIVED_SESSIONS / GET_WORKFLOW_INSTANCES(archived:true), { skip: !open, fetchPolicy: 'cache-and-network' })`；空列表展示「暂无归档」，加载/错误态就地展示（错误带重试）。条目与活跃条目共用 `SessionListEntry`，归档分组列表带 `data-testid="sidebar-archived-session-list"`。**活跃列表不含已归档由服务端保证**（`GET_SESSIONS`/`HOME_OVERVIEW.sessions` 默认活跃口径）。`SessionView` 归档/取消归档 `refetchQueries` 同时刷新 `HOME_OVERVIEW`、`GET_SESSION` 与 `GET_ARCHIVED_SESSIONS`。
 - **只读收敛（`readOnlyReason`）**：`SessionView` 只读判定唯一来源为 `GET_SESSION.readOnlyReason != null`，**替代旧 `readOnlyCloudHost` 计算**（`controllerType/cloudHost` 查询字段保留兼容，不再参与判定）。提示条按原因三态文案：`WORKSPACE_MISSING`「工作区已不存在，会话记录仅供只读回看。」/ `CONTROLLER_MISSING`「控制器已不存在，会话记录仅供只读回看。」/ `CLOUD_HOST_DESTROYED`「云电脑已销毁，会话记录仅供只读回看。」；统一 `data-testid="session-readonly-notice"`（附 `data-readonly-reason`），云电脑场景额外嵌套 `data-testid="cloud-host-readonly-notice"` 承载文案，保持 E2E 回归（D10）。只读时隐藏 `InputBox`，`SessionHeader`「继续」由统一 `readOnly` 门控隐藏；归档/取消归档/删除/导出对只读会话仍可用。
 - **工作区删除确认（含连带数量）**：`WorkspaceSection` 单删点击「删除」先经 `WORKSPACE_ARCHIVE_IMPACT` 取数：N>0 弹确认框「删除工作区将同时归档其下 N 个会话，是否继续？」（确认才调 `deleteWorkspace`，取消不调用），N=0 与取数失败保持现状直接删除（D9，取数失败不阻断）；「清空」沿用既有内联确认面板并追加「将同时归档其下 N 个会话」合计——确认面板打开时按工作区渲染 `WorkspaceArchiveImpactProbe` 探针逐个取数求和，任一失败降级为不展示数量（确认本身不阻断）。
 - **测试入口**：`components/session/SessionHeader.test.tsx`（T-WEB1 归档入口渲染/回调/徽标）、`components/session/__tests__/SessionView.archive.test.tsx`（T-WEB1 归档 mutation、归档后导航、取消归档就地、节点会话不渲染）、`components/session/__tests__/SessionView.readonly.test.tsx`（T-WEB3 三态文案与入口隐藏）、`components/__tests__/Sidebar.test.tsx`（T-WEB2 已归档分组折叠/计数/可打开/活跃列表不含已归档）、`components/settings/__tests__/WorkspaceSection.test.tsx`（T-WEB4 删除与清空确认数量）。
@@ -485,3 +485,10 @@ pnpm run preview  # Preview production build
 - **版本区块**：`ControllerConfigPage` 的 `CloudHostPanel` 内 `data-testid="cloud-host-agent-gear-version"`——`当前版本 {currentVersion ?? '—'}` / `最新版本 {latestVersion ?? '—'}`，「立即升级」按钮仅在 `upgradeAvailable && status==='RUNNING' && !deletedAt` 时渲染；小字 `自动升级每 {autoUpdateIntervalMinutes ?? 10} 分钟检查一次`（`text-xs text-muted-foreground`）。
 - **升级流程（D14）**：点击 → `UPGRADE_CLOUD_HOST_AGENT_GEAR({ controllerId })` → 升级中态（按钮禁用 + spinner）→ 每 **2s** `CLOUD_HOST`（`fetchPolicy: network-only`）轮询 → `currentVersion === latestVersion` toast「工作组件已升级到 {version}」，**3 分钟**超时 toast 可重试/等待自动升级；组件卸载清理定时器不残留；成功后 `refetch` 控制器列表刷新版本信息。
 - **错误文案单一来源**：`lib/cloud-host-agent-gear.ts` 的 `CLOUD_HOST_AGENT_GEAR_ERROR_MESSAGES`（契约六条 + `internal error` 兜底，未命中原样展示）；`isAgentGearUpgradeAvailable` 为按钮可见性纯函数。测试入口：`lib/__tests__/cloud-host-agent-gear.test.ts`（T-UPG-W-L）与 `pages/__tests__/ControllerConfigPage.test.tsx`（T-UPG-W1~W5）。
+
+## 设置页聚合查询（#584）
+
+- **单请求下发**：`SettingsPage` 仅发起一次 `SETTINGS_OVERVIEW`（`fetchPolicy: 'cache-and-network'`，**不轮询**），经 `stores/settingsOverview.ts` 的 `useSettingsOverview()` 下发；各设置区块删除自身只读 `useQuery`，改消费 Context；写操作 `refetchQueries: [{ query: SETTINGS_OVERVIEW }]`。
+- **复用与按需**：控制器在线状态改读 `homeOverview.controllers`（与首页同源同新鲜度，`ControllerListSection` 移除 `pollInterval`）；模板/已配置工作流改读 `homeOverview`（`WorkflowSection`/`InstantiateWorkflowDialog`/`ConfigureWorkflowDialog`/`IssuesLinkageDialog`/`RepoWorkflowSection` 打开时 `refetch()` HOME_OVERVIEW）；`GET_VALUT_MANUAL_OPTIONS`、`CLOUD_STORAGES(includeDestroyed:true)`、`personalGithubAccounts`、`workspaces`/`detectGitRepo`/`acpServerCapabilities` 等弹窗/切换类查询保持按需。
+- **云存储**：主列表读聚合分支；「含已销毁」切换仍按需 `CLOUD_STORAGES(includeDestroyed:true)`。
+- **githubAppUrl**：仅随首次加载/显式 refetch 求值（签发一次性 OAuth state），不因轮询放大签发频率。

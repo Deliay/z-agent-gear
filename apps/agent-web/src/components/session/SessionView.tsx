@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import {
   GET_SESSION,
   GET_SESSIONS,
+  GET_ARCHIVED_SESSIONS,
   GET_CONTROLLERS,
   GET_SESSION_MESSAGES,
   GET_SESSION_INTERACTIONS,
@@ -563,7 +564,11 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     try {
       await archiveSession({
         variables: { id, archived: nextArchived },
-        refetchQueries: [{ query: GET_SESSION }, { query: HOME_OVERVIEW }],
+        refetchQueries: [
+          { query: GET_SESSION },
+          { query: HOME_OVERVIEW },
+          { query: GET_ARCHIVED_SESSIONS },
+        ],
       });
       if (nextArchived) {
         toast.success('会话已归档');

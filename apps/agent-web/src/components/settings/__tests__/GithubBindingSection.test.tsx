@@ -2,30 +2,38 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import GithubBindingSection from '../GithubBindingSection';
 
-const mockUseQuery = vi.fn();
+const mockSettings = vi.fn();
 const mockUseMutation = vi.fn();
 const mockUseSearchParams = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
-  useQuery: (...args: unknown[]) => mockUseQuery(...args),
+  useQuery: vi.fn(),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+}));
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mockSettings(),
 }));
 
 vi.mock('react-router-dom', () => ({
   useSearchParams: (...args: unknown[]) => mockUseSearchParams(...args),
 }));
 
-function mockQuery(overrides: Record<string, unknown> = {}) {
-  return {
-    data: null,
-    loading: false,
+const defaultAppUrl = { url: 'https://github.com/apps/test/installations/new?state=abc', state: 'abc' };
+
+function setSettings(
+  accounts: unknown[],
+  options: { loading?: boolean; appUrl?: typeof defaultAppUrl } = {},
+) {
+  mockSettings.mockReturnValue({
+    data: options.loading
+      ? null
+      : { githubAccounts: accounts, githubAppUrl: options.appUrl ?? defaultAppUrl },
+    loading: options.loading ?? false,
     error: null,
     refetch: vi.fn(),
-    ...overrides,
-  };
+  });
 }
-
-const defaultAppUrlData = { githubAppUrl: { url: 'https://github.com/apps/test/installations/new?state=abc', state: 'abc' } };
 
 describe('GithubBindingSection', () => {
   beforeEach(() => {
@@ -35,59 +43,45 @@ describe('GithubBindingSection', () => {
   });
 
   it('should show loading state', () => {
-    mockUseQuery
-      .mockReturnValueOnce(mockQuery({ loading: true }))
-      .mockReturnValueOnce(mockQuery({ loading: true }));
-
+    setSettings([], { loading: true });
     render(<GithubBindingSection />);
-
     expect(screen.getByText('加载中...')).toBeDefined();
   });
 
   it('should show empty state when no accounts bound', () => {
-    mockUseQuery
-      .mockReturnValueOnce(mockQuery({ data: { githubAccounts: [] } }))
-      .mockReturnValueOnce(mockQuery({ data: defaultAppUrlData }));
-
+    setSettings([]);
     render(<GithubBindingSection />);
-
     expect(screen.getByText(/暂无绑定/)).toBeDefined();
     expect(screen.getByRole('button', { name: '绑定 GitHub 帐号' })).toBeDefined();
   });
 
   it('should render account list when accounts exist and expand repos', () => {
-    mockUseQuery
-      .mockReturnValueOnce(mockQuery({
-        data: {
-          githubAccounts: [
-            {
-              id: 'acc1',
-              githubUserId: 12345,
-              githubLogin: 'testuser',
-              githubAvatarUrl: null,
-              installations: [
-                {
-                  id: 'inst1',
-                  installationId: 42,
-                  repos: [
-                    {
-                      id: 'repo1',
-                      repoId: 1,
-                      repoName: 'my-repo',
-                      fullName: 'testuser/my-repo',
-                      private: false,
-                      permissions: { read: true, write: true },
-                    },
-                  ],
-                  createdAt: '2026-01-01T00:00:00Z',
-                },
-              ],
-              createdAt: '2026-01-01T00:00:00Z',
-            },
-          ],
-        },
-      }))
-      .mockReturnValueOnce(mockQuery({ data: defaultAppUrlData }));
+    setSettings([
+      {
+        id: 'acc1',
+        githubUserId: 12345,
+        githubLogin: 'testuser',
+        githubAvatarUrl: null,
+        installations: [
+          {
+            id: 'inst1',
+            installationId: 1,
+            managementUrl: 'https://github.com/settings/installations/1',
+            repos: [
+              {
+                id: 'repo1',
+                repoId: 1,
+                repoName: 'repo1',
+                fullName: 'testuser/repo1',
+                private: false,
+                permissions: { read: true, write: true },
+              },
+            ],
+          },
+        ],
+        createdAt: '2026-01-01T00:00:00Z',
+      },
+    ]);
 
     render(<GithubBindingSection />);
 
@@ -96,16 +90,10 @@ describe('GithubBindingSection', () => {
   });
 
   it('should render multiple accounts', () => {
-    mockUseQuery
-      .mockReturnValueOnce(mockQuery({
-        data: {
-          githubAccounts: [
-            { id: 'acc1', githubUserId: 1, githubLogin: 'user1', githubAvatarUrl: null, installations: [], createdAt: '2026-01-01T00:00:00Z' },
-            { id: 'acc2', githubUserId: 2, githubLogin: 'user2', githubAvatarUrl: null, installations: [], createdAt: '2026-01-01T00:00:00Z' },
-          ],
-        },
-      }))
-      .mockReturnValueOnce(mockQuery({ data: defaultAppUrlData }));
+    setSettings([
+      { id: 'acc1', githubUserId: 1, githubLogin: 'user1', githubAvatarUrl: null, installations: [], createdAt: '2026-01-01T00:00:00Z' },
+      { id: 'acc2', githubUserId: 2, githubLogin: 'user2', githubAvatarUrl: null, installations: [], createdAt: '2026-01-01T00:00:00Z' },
+    ]);
 
     render(<GithubBindingSection />);
 
@@ -116,7 +104,7 @@ describe('GithubBindingSection', () => {
   it('should show success toast when binding=success query param', () => {
     const mockSetSearchParams = vi.fn();
     mockUseSearchParams.mockReturnValue([new URLSearchParams('binding=success'), mockSetSearchParams]);
-    mockUseQuery.mockReturnValue(mockQuery({ data: { githubAccounts: [] } }));
+    setSettings([]);
 
     render(<GithubBindingSection />);
 
@@ -127,7 +115,7 @@ describe('GithubBindingSection', () => {
   it('should show error toast when binding=error query param', () => {
     const mockSetSearchParams = vi.fn();
     mockUseSearchParams.mockReturnValue([new URLSearchParams('binding=error&message=invalid_state'), mockSetSearchParams]);
-    mockUseQuery.mockReturnValue(mockQuery({ data: { githubAccounts: [] } }));
+    setSettings([]);
 
     render(<GithubBindingSection />);
 
@@ -139,13 +127,9 @@ describe('GithubBindingSection', () => {
   it('should show unbind button when account exists', async () => {
     const mockUnbind = vi.fn();
     mockUseMutation.mockReturnValue([mockUnbind, { loading: false }]);
-    mockUseQuery.mockReturnValue(mockQuery({
-      data: {
-        githubAccounts: [
-          { id: 'acc1', githubUserId: 12345, githubLogin: 'testuser', githubAvatarUrl: null, installations: [], createdAt: '2026-01-01T00:00:00Z' },
-        ],
-      },
-    }));
+    setSettings([
+      { id: 'acc1', githubUserId: 12345, githubLogin: 'testuser', githubAvatarUrl: null, installations: [], createdAt: '2026-01-01T00:00:00Z' },
+    ]);
 
     render(<GithubBindingSection />);
 

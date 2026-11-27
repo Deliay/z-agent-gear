@@ -4,10 +4,20 @@ import ControllerListSection from '../ControllerListSection';
 
 const mockUseQuery = vi.fn();
 const mockUseMutation = vi.fn();
+const mockSettings = vi.fn();
+const mockHome = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+}));
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mockSettings(),
+}));
+
+vi.mock('@/stores/homeOverview', () => ({
+  useHomeOverview: () => mockHome(),
 }));
 
 interface ControllerFixture {
@@ -39,13 +49,8 @@ function controller(overrides: Partial<ControllerFixture> & { id: string }): Con
 }
 
 function mockQueries(controllers: ControllerFixture[]) {
-  mockUseQuery.mockImplementation((query: { definitions?: Array<{ name?: { value?: string } }> }) => {
-    const operation = query?.definitions?.[0]?.name?.value;
-    if (operation === 'GetControllers') {
-      return { data: { controllers }, loading: false, refetch: vi.fn() };
-    }
-    return { data: { controllerKeys: [] }, loading: false, refetch: vi.fn() };
-  });
+  mockHome.mockReturnValue({ data: { controllers }, loading: false, refetch: vi.fn() });
+  mockSettings.mockReturnValue({ data: { controllerKeys: [] }, loading: false, refetch: vi.fn() });
 }
 
 /** 按控制器名称定位卡片行（行容器为带 rounded-lg 的 flex 卡片）。 */

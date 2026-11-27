@@ -19,6 +19,12 @@ import type { HomeOverviewQuery } from '../graphql/types';
 import { HomeOverviewContext } from '../stores/homeOverview';
 import { useWorkspaceContextSync } from '../hooks/useWorkspaceContextSync';
 
+/** 工作区上下文同步桥：必须在 HomeOverviewContext.Provider 内（消费聚合数据）。 */
+function WorkspaceContextSyncBridge() {
+  useWorkspaceContextSync();
+  return null;
+}
+
 function FullPageSpinner() {
   return (
     <output className="flex h-screen items-center justify-center" aria-label="Loading…">
@@ -35,9 +41,6 @@ export default function MainLayout() {
   const navigate = useNavigate();
   // 侧边栏宽度：本地记忆（localStorage['sidebar-width']），拖动分界线实时更新
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
-
-  // 工作区上下文：myWorkspaces/myTenants 同步 + 失效回退（Phase 8）
-  useWorkspaceContextSync();
 
   // 首页 + 侧边栏统一数据源：单一查询、单一轮询（15s）
   const {
@@ -164,6 +167,7 @@ export default function MainLayout() {
 
   return (
     <HomeOverviewContext.Provider value={{ data: homeData, loading: homeLoading, error, refetch }}>
+      <WorkspaceContextSyncBridge />
       {layout}
       {/* 全站单例：登录引导弹窗挂在最高层级，不受 Sidebar / NewSessionDialog 挂载影响 */}
       <HarnessLoginDialog />

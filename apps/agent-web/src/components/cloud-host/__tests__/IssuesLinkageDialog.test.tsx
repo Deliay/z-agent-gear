@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const h = vi.hoisted(() => ({
   useQuery: vi.fn(),
+  home: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
 }));
@@ -13,6 +14,10 @@ vi.mock('@apollo/client/react', () => ({
     const name = mutation?.definitions?.[0]?.name?.value ?? '';
     return [name.toLowerCase().includes('update') ? h.update : h.create];
   },
+}));
+
+vi.mock('@/stores/homeOverview', () => ({
+  useHomeOverview: () => h.home(),
 }));
 
 import IssuesLinkageDialog from '../IssuesLinkageDialog';
@@ -29,21 +34,26 @@ const aiOnlyWorkflow = {
 };
 
 function setup(workflows: unknown[], overrides: Record<string, unknown> = {}) {
-  let call = 0;
-  h.useQuery.mockImplementation(() => {
-    const even = call++ % 2 === 0;
-    if (even) return { data: { configuredWorkflows: workflows } };
-    return {
-      data: {
-        githubAccounts: [
-          {
-            installations: [
-              { repos: [{ fullName: 'a/b' }, { fullName: 'a/b' }, { fullName: 'c/d' }] },
-            ],
-          },
-        ],
-      },
-    };
+  h.home.mockReturnValue({
+    data: {
+      configuredWorkflows: workflows.map((workflow) => ({
+        controllerId: 'ctrl-1',
+        ...(workflow as Record<string, unknown>),
+      })),
+    },
+    loading: false,
+    refetch: vi.fn(),
+  });
+  h.useQuery.mockReturnValue({
+    data: {
+      githubAccounts: [
+        {
+          installations: [
+            { repos: [{ fullName: 'a/b' }, { fullName: 'a/b' }, { fullName: 'c/d' }] },
+          ],
+        },
+      ],
+    },
   });
   h.create.mockResolvedValue({ data: {} });
   h.update.mockResolvedValue({ data: {} });

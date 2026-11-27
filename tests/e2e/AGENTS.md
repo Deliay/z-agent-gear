@@ -712,3 +712,14 @@ fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`�
 - 用例：E2E-UPG1 一致态展示 + 无按钮 / E2E-UPG2 不一致 → 按钮、字段缺失 → `—` 且无按钮 /
   E2E-UPG3 点击 → 升级中态 + `container is not online` 中文 toast + 按钮恢复 /
   E2E-UPG4 非 RUNNING 无按钮 / E2E-UPG5 既有面板关键路径零回归。
+
+## 接口性能优化（#584）
+
+| 编号 | 断言 |
+|------|------|
+| E2E-HP1 | 首屏仅 1 次 HomeOverview，且 `sessions(archived`/`workflowInstances(archived` 首屏 0 次 |
+| E2E-HP2 | 展开「已归档」才发归档请求；标题与列表无数量；空态可展开；折叠再展开复用缓存 |
+| E2E-HP3 | workspaceContext/模板/配置随 15s 轮询刷新（建数据后一个周期内可见） |
+| E2E-WSF1 | 「新建工作流」弹窗与工作区列表不展示离线/删除控制器工作区 |
+| E2E-SET1 | 设置页打开请求 ≤3（1 次 SETTINGS_OVERVIEW + 少量按需），各区块内容完整、操作后即时更新 |
+| E2E-SARCH1/SARCH2 | 「已归档」无数量 + 展开加载；归档/取消归档行为不变 |
