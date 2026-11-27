@@ -190,6 +190,8 @@ test.describe('首页展示优化 E2E', () => {
     const tracker = await trackHomeAndArchiveRequests(page);
     await loginViaUI(page, username);
 
+    const rail = page.locator('[data-testid="activity-rail"]');
+    await rail.getByTestId('rail-item-workflows').click();
     const sidebar = page.locator(sidebarSel);
     await expect(sidebar.getByText('首屏实例')).toBeVisible({ timeout: 15000 });
 
@@ -222,14 +224,14 @@ test.describe('首页展示优化 E2E', () => {
     await sidebar.waitFor({ timeout: 15000 });
 
     // 常驻「已归档」且无数量；首屏未发归档查询
-    const sessionList = sidebar.locator('[data-testid="sidebar-session-list"]');
-    const archivedGroup = sessionList.getByRole('button', { name: '已归档', exact: true });
+    const sessionsDomain = sidebar.locator('[data-testid="context-panel-domain-sessions"]');
+    const archivedGroup = sessionsDomain.getByRole('button', { name: '已归档', exact: true });
     await expect(archivedGroup).toBeVisible();
     await expect(sidebar.getByText(/已归档（\d+）/)).toHaveCount(0);
     expect(getArchiveCount()).toBe(0);
 
     await archivedGroup.click();
-    await expect(sessionList.getByText('暂无归档')).toBeVisible({ timeout: 15000 });
+    await expect(sessionsDomain.getByText('暂无归档')).toBeVisible({ timeout: 15000 });
     expect(getArchiveCount()).toBeGreaterThanOrEqual(1);
     disconnect();
   });
@@ -262,10 +264,12 @@ test.describe('首页展示优化 E2E', () => {
       .toBe(0);
 
     await loginViaUI(page, username);
+    const rail = page.locator('[data-testid="activity-rail"]');
     const sidebar = page.locator(sidebarSel);
     await sidebar.waitFor({ timeout: 15000 });
     await expect(sidebar.getByText(wsName)).toHaveCount(0);
 
+    await rail.getByTestId('rail-item-workflows').click();
     const instantiateButton = sidebar.getByLabel('实例化工作流');
     await expect(instantiateButton).toBeVisible({ timeout: 15000 });
     await instantiateButton.click();
@@ -368,6 +372,8 @@ test.describe('首页展示优化 E2E', () => {
     const instanceId = await createInstance(page, token, controllerId, workspaceId, '集中展示实例');
 
     await loginViaUI(page, username);
+    const rail = page.locator('[data-testid="activity-rail"]');
+    await rail.getByTestId('rail-item-workflows').click();
     const sidebar = page.locator(sidebarSel);
 
     // 工作流集中列表：无需展开工作区即可见实例
@@ -390,15 +396,19 @@ test.describe('首页展示优化 E2E', () => {
     await createSession(page, controllerId, token, workspaceId);
 
     await loginViaUI(page, username);
+    const rail = page.locator('[data-testid="activity-rail"]');
     const sidebar = page.locator(sidebarSel);
 
-    // 「主机」分区默认折叠，展开后可定位控制器节点
-    await sidebar.getByRole('button', { name: /^主机/ }).click();
+    // 切换至「主机」领域，定位控制器节点
+    await rail.getByTestId('rail-item-hosts').click();
     await expect(sidebar.getByRole('button', { name: /home-e4-host/ }).first()).toBeVisible({
       timeout: 15000,
     });
-    // UI 四期：工作流与会话为跨环境聚合列表，无需展开工作区即可见
+    // 切换至「工作流」领域可见工作流实例
+    await rail.getByTestId('rail-item-workflows').click();
     await expect(sidebar.getByText('控制器实例')).toBeVisible();
+    // 切换至「会话」领域可见会话条目
+    await rail.getByTestId('rail-item-sessions').click();
     await expect(sidebar.locator('a[href^="/sessions/"]').first()).toBeVisible();
     disconnect();
   });

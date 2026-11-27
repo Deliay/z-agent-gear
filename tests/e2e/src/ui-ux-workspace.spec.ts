@@ -206,11 +206,12 @@ test.describe('UI/UX Workspace Shell & Navigation E2E', () => {
       await page.getByTestId('workflow-inspector-toggle').click();
       await expect(page.getByTestId('workflow-inspector-drawer')).toBeVisible();
       await page.keyboard.press('Escape');
+      await expect(page.getByTestId('workflow-inspector-drawer')).toHaveCount(0);
 
       // 点击画布节点打开详情抽屉并验证节点选中态
       const nodeId = instance.nodes[0]?.id;
       const card = page.getByTestId(`workflow-node-card-${nodeId}`);
-      await card.click();
+      await card.getByRole('button', { name: /详情/ }).click();
       await expect(page.getByTestId('node-detail-drawer')).toBeVisible();
       await expect(card).toHaveAttribute('data-selected', 'true');
 
