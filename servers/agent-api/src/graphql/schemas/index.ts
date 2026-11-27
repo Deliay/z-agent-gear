@@ -10,6 +10,7 @@ import { mcpServerTypeDefs } from './mcp-server.js';
 import { githubTypeDefs } from './github.js';
 import { workflowTypeDefs } from './workflow.js';
 import { homeTypeDefs } from './home.js';
+import { settingsTypeDefs } from './settings.js';
 import { billingTypeDefs } from './billing.js';
 import { cloudHostTypeDefs } from './cloud-host.js';
 import { cloudStorageTypeDefs } from './cloud-storage.js';
@@ -25,4 +26,4 @@ const baseTypeDefs = `#graphql
   type Mutation
 `;
 
-export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, gatewayTypeDefs, todoTypeDefs, mcpServerTypeDefs, githubTypeDefs, workflowTypeDefs, homeTypeDefs, billingTypeDefs, cloudHostTypeDefs, cloudStorageTypeDefs, workspaceTypeDefs, valutTypeDefs, customMcpTypeDefs, customToolTypeDefs, knowledgeBaseTypeDefs];
+export const typeDefs = [baseTypeDefs, authTypeDefs, providerTypeDefs, modelTypeDefs, controllerTypeDefs, controllerWorkspaceTypeDefs, sessionTypeDefs, gatewayTypeDefs, todoTypeDefs, mcpServerTypeDefs, githubTypeDefs, workflowTypeDefs, homeTypeDefs, billingTypeDefs, cloudHostTypeDefs, cloudStorageTypeDefs, workspaceTypeDefs, valutTypeDefs, customMcpTypeDefs, customToolTypeDefs, knowledgeBaseTypeDefs, settingsTypeDefs];

@@ -3,11 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { ExternalLink, Pencil, Plus, Trash2 } from 'lucide-react'
-import {
-  GET_CUSTOM_MCP_SERVERS,
-  GET_VALUT_ENTRIES,
-  GET_VALUT_MANUAL_OPTIONS,
-} from '@/graphql/queries'
+import { GET_VALUT_MANUAL_OPTIONS, SETTINGS_OVERVIEW } from '@/graphql/queries'
+import { useSettingsOverview } from '@/stores/settingsOverview'
 import {
   CREATE_CUSTOM_MCP_SERVER,
   DELETE_CUSTOM_MCP_SERVER,
@@ -20,7 +17,6 @@ import type {
   CustomMcpAuthType,
   CustomMcpServerData,
   DeleteCustomMcpServerMutation,
-  GetCustomMcpServersQuery,
   GetValutManualOptionsQuery,
   UpdateCustomMcpServerInput,
   UpdateCustomMcpServerMutation,
@@ -87,9 +83,8 @@ const FIELD_CLASS =
  * 同页 ValutSection 与「选择 token」数据源必须一并刷新（否则删除后残留悬空行）。
  */
 const CUSTOM_MCP_REFETCH_QUERIES = [
-  GET_CUSTOM_MCP_SERVERS,
-  GET_VALUT_ENTRIES,
-  GET_VALUT_MANUAL_OPTIONS,
+  { query: SETTINGS_OVERVIEW },
+  { query: GET_VALUT_MANUAL_OPTIONS },
 ]
 
 /**
@@ -104,9 +99,7 @@ const CUSTOM_MCP_REFETCH_QUERIES = [
 export default function CustomMcpSection() {
   const { readOnly } = useWorkspaceAccess()
   const navigate = useNavigate()
-  const { data, loading, error } = useQuery<GetCustomMcpServersQuery>(GET_CUSTOM_MCP_SERVERS, {
-    fetchPolicy: 'cache-and-network',
-  })
+  const { data, loading, error } = useSettingsOverview()
   const [createCustomMcpServer] = useMutation<CreateCustomMcpServerMutation>(
     CREATE_CUSTOM_MCP_SERVER,
     { refetchQueries: CUSTOM_MCP_REFETCH_QUERIES },

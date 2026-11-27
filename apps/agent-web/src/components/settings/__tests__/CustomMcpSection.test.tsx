@@ -7,11 +7,12 @@ import type {
   WorkspaceTenantData,
 } from '@/graphql/types';
 import { resetWorkspaceStore, selectWorkspace, syncWorkspaceContext } from '@/stores/workspace';
-import { GET_CUSTOM_MCP_SERVERS, GET_VALUT_ENTRIES, GET_VALUT_MANUAL_OPTIONS } from '@/graphql/queries';
+import { GET_VALUT_MANUAL_OPTIONS, SETTINGS_OVERVIEW } from '@/graphql/queries';
 
 const mocks = vi.hoisted(() => ({ navigate: vi.fn() }));
 
 const mockUseQuery = vi.fn();
+const mockSettings = vi.fn();
 const mockUseMutation = vi.fn();
 const mockCreateCustomMcpServer = vi.fn();
 const mockUpdateCustomMcpServer = vi.fn();
@@ -22,6 +23,10 @@ const mockToastError = vi.fn();
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+}));
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mockSettings(),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -105,6 +110,7 @@ const REFERENCED_BEARER = makeServer({
 });
 
 function mockQueries(servers: CustomMcpServerData[] = []) {
+  mockSettings.mockReturnValue({ data: { customMcpServers: servers }, loading: false, error: null });
   mockUseQuery.mockImplementation((query: { definitions?: Array<{ name?: { value?: string } }> }) => {
     const operationName = query?.definitions?.[0]?.name?.value;
     if (operationName === 'GetCustomMcpServers') {
@@ -436,12 +442,15 @@ describe('CustomMcpSection', () => {
       await waitFor(() => {
         expect(mockCreateCustomMcpServer).toHaveBeenCalled();
       });
-      const refetch = refetchQueriesOf('CreateCustomMcpServer');
-      expect(refetch).toContain(GET_CUSTOM_MCP_SERVERS);
-      expect(refetch).toContain(GET_VALUT_ENTRIES);
+      const refetch = refetchQueriesOf('CreateCustomMcpServer').map(
+        (item) => (item as { query: unknown }).query,
+      );
+      expect(refetch).toContain(SETTINGS_OVERVIEW);
       expect(refetch).toContain(GET_VALUT_MANUAL_OPTIONS);
       // 更新路径同源（同一 refetch 集合）
-      expect(refetchQueriesOf('UpdateCustomMcpServer')).toContain(GET_VALUT_ENTRIES);
+      expect(
+        refetchQueriesOf('UpdateCustomMcpServer').map((item) => (item as { query: unknown }).query),
+      ).toContain(SETTINGS_OVERVIEW);
     });
 
     it('删除自建 token 后 refetchQueries 含 GET_VALUT_ENTRIES（Valut 区块同步刷新，不留悬空行）', async () => {
@@ -455,9 +464,10 @@ describe('CustomMcpSection', () => {
       await waitFor(() => {
         expect(mockDeleteCustomMcpServer).toHaveBeenCalledWith({ variables: { id: 'cmcp-2' } });
       });
-      const refetch = refetchQueriesOf('DeleteCustomMcpServer');
-      expect(refetch).toContain(GET_CUSTOM_MCP_SERVERS);
-      expect(refetch).toContain(GET_VALUT_ENTRIES);
+      const refetch = refetchQueriesOf('DeleteCustomMcpServer').map(
+        (item) => (item as { query: unknown }).query,
+      );
+      expect(refetch).toContain(SETTINGS_OVERVIEW);
       expect(refetch).toContain(GET_VALUT_MANUAL_OPTIONS);
     });
   });

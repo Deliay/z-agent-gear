@@ -1,4 +1,5 @@
 import { gql } from '@apollo/client'
+import { CUSTOM_TOOL_FIELDS } from './custom-tool'
 
 export const GET_PROVIDERS = gql`
   query GetProviders {
@@ -76,6 +77,28 @@ export const GET_MODELS_BY_PROVIDER = gql`
 export const GET_SESSIONS = gql`
   query GetSessions {
     sessions {
+      id
+      userId
+      controllerId
+      controllerName
+      acpServerType
+      status
+      title
+      externalSessionId
+      cwd
+      worktreePath
+      worktreeBranch
+      archived
+      createdAt
+      updatedAt
+      endedAt
+    }
+  }
+`
+
+export const GET_ARCHIVED_SESSIONS = gql`
+  query GetArchivedSessions {
+    sessions(archived: true) {
       id
       userId
       controllerId
@@ -998,34 +1021,184 @@ export const CLOUD_HOST_ISSUES_LINKAGES = gql`
 
 // ---------- 多租户二期：租户工作区 / 成员（contracts/workspace.graphql） ----------
 
-/** 工作区切换器数据源：myWorkspaces 已按角色过滤，myTenants 透出各租户角色 */
-export const GET_WORKSPACE_CONTEXT = gql`
-  query GetWorkspaceContext {
-    myWorkspaces {
-      id
-      name
-      type
-      tenant {
+/** 设置页聚合查询（contracts/settings.graphql）：打开设置页仅 1 次请求 */
+export const SETTINGS_OVERVIEW = gql`
+  query SettingsOverview {
+    settingsOverview {
+      commitSettings {
+        committerType
+        customName
+        customEmail
+        commitWithBot
+      }
+      providers {
         id
         name
         type
-        memberCount
+        endpoint
+        credentialType
+        credentialValue
+        isEnabled
+        scope
+        workspaceId
+        models {
+          id
+          providerId
+          name
+          isCustom
+          isEnabled
+          sortOrder
+        }
+        createdAt
+        updatedAt
       }
-      memberCount
-      myRole
-      readOnly
-      createdAt
-    }
-    myTenants {
-      tenant {
+      models {
+        id
+        providerId
+        provider {
+          id
+          name
+          type
+          isEnabled
+        }
+        name
+        isCustom
+        isEnabled
+        sortOrder
+        contextLength
+        scope
+        workspaceId
+        createdAt
+        updatedAt
+      }
+      controllerKeys {
         id
         name
         type
-        memberCount
+        keyPrefix
+        status
+        rawKey
+        lastUsedAt
+        createdAt
+        updatedAt
       }
-      role
+      mcpServers {
+        id
+        name
+        transport
+        source
+        enabled
+        command
+        url
+        hostname
+        status
+        tools {
+          name
+          description
+        }
+        toolsSyncedAt
+        lastHeartbeatAt
+        createdAt
+        updatedAt
+      }
+      valutEntries {
+        namespace {
+          name
+          displayName
+          managed
+        }
+        entries {
+          id
+          namespace
+          namespaceDisplayName
+          key
+          editable
+          deletable
+          refs {
+            feature
+            refId
+            refLabel
+            createdAt
+          }
+          createdBy
+          createdAt
+          updatedAt
+        }
+      }
+      customMcpServers {
+        id
+        name
+        description
+        endpoint
+        authType
+        customHeaders {
+          key
+          values
+        }
+        bearerEntryId
+        bearerEntryManaged
+        workspaceId
+        createdBy
+        createdAt
+        updatedAt
+      }
+      customTools {
+        ...CustomToolFields
+      }
+      githubAccounts {
+        id
+        githubUserId
+        githubLogin
+        githubAvatarUrl
+        workspaceId
+        createdAt
+        installations {
+          id
+          installationId
+          managementUrl
+          repos {
+            id
+            repoId
+            repoName
+            fullName
+            private
+            permissions {
+              read
+              write
+            }
+          }
+        }
+      }
+      githubAppUrl {
+        url
+        state
+      }
+      myExternalLogins {
+        id
+        providerId
+        providerType
+        providerDisplayName
+        providerEnabled
+        externalUsername
+        displayName
+        createdAt
+        lastLoginAt
+      }
+      authProviders {
+        id
+        type
+        displayName
+      }
+      cloudStorageCapabilities {
+        enabled
+      }
+      cloudStorages {
+        ...CloudStorageFields
+      }
     }
   }
+  ${CLOUD_STORAGE_FIELDS}
+  ${CUSTOM_TOOL_FIELDS}
 `
 
 export const GET_WORKSPACE_MEMBERS = gql`

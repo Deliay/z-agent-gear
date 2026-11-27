@@ -10,6 +10,7 @@ import {
 import type { CloudStorageData } from '@/graphql/types'
 
 const mockUseQuery = vi.fn()
+const mockSettings = vi.fn()
 const mockUseMutation = vi.fn()
 const mockDestroyStorage = vi.fn()
 const mockArchiveStorage = vi.fn()
@@ -20,6 +21,10 @@ const mockRefetch = vi.fn()
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+}))
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mockSettings(),
 }))
 
 vi.mock('sonner', () => ({
@@ -73,6 +78,7 @@ function makeStorage(overrides: Partial<CloudStorageData> = {}): CloudStorageDat
 }
 
 function mockStorages(main: CloudStorageData[], destroyed: CloudStorageData[] = []) {
+  mockSettings.mockReturnValue({ data: { cloudStorages: main }, loading: false, error: null, refetch: mockRefetch })
   mockUseQuery.mockImplementation((query: unknown, options?: { variables?: { includeDestroyed?: boolean } }) => {
     if (query === CLOUD_STORAGES) {
       return {
@@ -169,19 +175,17 @@ describe('CloudStorageSection', () => {
     expect(screen.getByTestId('new-storage-dialog')).toBeInTheDocument()
   })
 
-  it('T-WEB1 列表查询仅使用 onlyAttachable/includeDestroyed，工作区由服务端上下文隔离', () => {
+  it('T-WEB1 主列表来自设置页聚合（工作区由服务端上下文隔离）', () => {
     mockStorages([])
 
     render(<CloudStorageSection />)
 
-    const mainCall = mockUseQuery.mock.calls.find(
+    expect(mockSettings).toHaveBeenCalled()
+    // 主列表不再单独发起 CLOUD_STORAGES 查询；仅「含已销毁」切换按需查询
+    const mainCalls = mockUseQuery.mock.calls.filter(
       (call) => call[0] === CLOUD_STORAGES && call[1]?.variables?.includeDestroyed === false,
     )
-    expect(mainCall?.[1]?.variables).toEqual({
-      onlyAttachable: false,
-      includeDestroyed: false,
-    })
-    expect(mainCall?.[1]?.variables).not.toHaveProperty('workspaceId')
+    expect(mainCalls).toHaveLength(0)
   })
 
   it('T-WEB6 ATTACHED / ARCHIVING 进行中无销毁入口；归档失败时展示额外警示', async () => {

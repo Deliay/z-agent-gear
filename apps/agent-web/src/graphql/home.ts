@@ -1,5 +1,6 @@
 import { gql } from '@apollo/client'
 import { CLOUD_HOST_FIELDS } from './queries'
+import { CONFIGURED_NODE_FIELDS, TEMPLATE_NODE_FIELDS } from './workflow'
 
 // 对齐 contracts/home.graphql（首页展示优化聚合查询，已定稿契约）
 //
@@ -88,25 +89,6 @@ export const HOME_OVERVIEW = gql`
         endedAt
       }
       sessionTotalCount
-      archivedSessions {
-        id
-        userId
-        controllerId
-        controllerName
-        acpServerType
-        status
-        title
-        externalSessionId
-        cwd
-        worktreePath
-        worktreeBranch
-        workflowInstanceId
-        workflowNodeId
-        archived
-        createdAt
-        updatedAt
-        endedAt
-      }
       workspaces {
         id
         userId
@@ -131,9 +113,6 @@ export const HOME_OVERVIEW = gql`
         }
       }
       workflowInstances {
-        ...HomeWorkflowInstanceFields
-      }
-      archivedWorkflowInstances {
         ...HomeWorkflowInstanceFields
       }
       todos {
@@ -197,8 +176,73 @@ export const HOME_OVERVIEW = gql`
         createdAt
         resolvedAt
       }
+      configuredWorkflows {
+        id
+        name
+        controllerId
+        sourceTemplateId
+        sourceTemplateVersion
+        sourceKind
+        sourceRepoPath
+        sourceWorkspaceId
+        nodes {
+          ...ConfiguredNodeFields
+          agentConfig {
+            acpServerType
+            modeId
+            modelId
+            initNewWorktree
+          }
+        }
+        createdBy
+        resourceWorkspaceId
+        createdAt
+        updatedAt
+      }
+      workflowTemplates {
+        id
+        name
+        description
+        version
+        nodes {
+          ...TemplateNodeFields
+        }
+        isBuiltin
+        createdBy
+        resourceWorkspaceId
+        createdAt
+        updatedAt
+      }
+      workspaceContext {
+        myWorkspaces {
+          id
+          name
+          type
+          tenant {
+            id
+            name
+            type
+            memberCount
+          }
+          memberCount
+          myRole
+          readOnly
+          createdAt
+        }
+        myTenants {
+          tenant {
+            id
+            name
+            type
+            memberCount
+          }
+          role
+        }
+      }
     }
   }
   ${HOME_WORKFLOW_INSTANCE_FIELDS}
   ${CLOUD_HOST_FIELDS}
+  ${CONFIGURED_NODE_FIELDS}
+  ${TEMPLATE_NODE_FIELDS}
 `

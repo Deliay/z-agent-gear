@@ -24,14 +24,8 @@ import {
 } from '@/components/ui/select'
 import { DETECT_GIT_REPO, GET_ACP_CAPABILITIES, GET_WORKSPACES } from '@/graphql/queries'
 import type { DetectGitRepoQuery, GetAcpCapabilitiesQuery, GetWorkspacesQuery } from '@/graphql/types'
-import {
-  GET_WORKFLOW_TEMPLATES,
-  GET_CONFIGURED_WORKFLOWS,
-  INSTANTIATE_WORKFLOW,
-  type GetWorkflowTemplatesQuery,
-  type GetConfiguredWorkflowsQuery,
-  type InstantiateSource,
-} from '@/graphql/workflow'
+import { INSTANTIATE_WORKFLOW, type InstantiateSource } from '@/graphql/workflow'
+import { useHomeOverview } from '@/stores/homeOverview'
 import { HOME_OVERVIEW } from '@/graphql/home'
 import {
   configuredNodeToEditable,
@@ -82,14 +76,10 @@ export default function InstantiateWorkflowDialog({
   const [error, setError] = useState<string | null>(null)
   const [refreshFailed, setRefreshFailed] = useState(false)
 
-  const { data: configuredData, refetch: refetchConfigured } = useQuery<GetConfiguredWorkflowsQuery>(
-    GET_CONFIGURED_WORKFLOWS,
-    { variables: { controllerId }, fetchPolicy: 'cache-and-network' },
-  )
-  const { data: templatesData, refetch: refetchTemplates } = useQuery<GetWorkflowTemplatesQuery>(
-    GET_WORKFLOW_TEMPLATES,
-    { fetchPolicy: 'cache-and-network' },
-  )
+  const {
+    data: homeData,
+    refetch: refetchHome,
+  } = useHomeOverview()
   const { data: workspacesData, refetch: refetchWorkspaces } = useQuery<GetWorkspacesQuery>(
     GET_WORKSPACES,
     { fetchPolicy: 'cache-and-network' },
@@ -104,8 +94,10 @@ export default function InstantiateWorkflowDialog({
   })
   const [instantiateWorkflow] = useMutation<InstantiateWorkflowMutation>(INSTANTIATE_WORKFLOW)
 
-  const configuredWorkflows = configuredData?.configuredWorkflows ?? []
-  const templates = templatesData?.workflowTemplates ?? []
+  const configuredWorkflows = (homeData?.configuredWorkflows ?? []).filter(
+    (workflow) => workflow.controllerId === controllerId,
+  )
+  const templates = homeData?.workflowTemplates ?? []
   const allWorkspaces = workspacesData?.workspaces ?? []
   const enabledWorkspaces = allWorkspaces.filter(
     (w) => w.controllerId === controllerId && w.isEnabled
@@ -125,8 +117,7 @@ export default function InstantiateWorkflowDialog({
     if (!open) return
     setRefreshFailed(false)
     Promise.all([
-      Promise.resolve(refetchConfigured?.()),
-      Promise.resolve(refetchTemplates?.()),
+      Promise.resolve(refetchHome?.()),
       Promise.resolve(refetchWorkspaces?.()),
     ]).catch(() => setRefreshFailed(true))
     // refetch 引用稳定；仅在打开时刷新一次

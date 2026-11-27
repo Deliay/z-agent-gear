@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import MainLayout from '../MainLayout';
 import { HOME_OVERVIEW } from '../../graphql/home';
+import { persistWorkspaceId, readPersistedWorkspaceId } from '../../stores/workspace';
 
 const mockUseQuery = vi.fn();
 const mockRefetch = vi.fn();
@@ -46,7 +47,7 @@ vi.mock('react-router-dom', () => ({
 }));
 
 vi.mock('../../stores/auth', () => ({
-  useAuth: () => ({ user: { name: 'tester' }, loading: false }),
+  useAuth: () => ({ user: { id: 'user-1', name: 'tester' }, loading: false }),
 }));
 
 const { mockIsMobile } = vi.hoisted(() => ({ mockIsMobile: { value: false } }));
@@ -66,7 +67,6 @@ const homeData = {
     sessionTotalCount: 0,
     workspaces: [],
     workflowInstances: [],
-    archivedWorkflowInstances: [],
     todos: [],
     unreadTodoCount: 0,
   },
@@ -108,7 +108,6 @@ function homeWithCloudHost(
       sessionTotalCount: 0,
       workspaces: [],
       workflowInstances: [],
-      archivedWorkflowInstances: [],
       todos: [],
       unreadTodoCount: 0,
     },
@@ -120,6 +119,23 @@ describe('MainLayout 首页聚合查询', () => {
     vi.clearAllMocks();
     localStorage.clear();
     mockIsMobile.value = false;
+  });
+
+  it('P1 持久化工作区失效时错误页仍执行清理并 refetch（不死锁）', () => {
+    persistWorkspaceId('user-1', 'ws-deleted');
+    mockUseQuery.mockReturnValue({
+      data: undefined,
+      loading: false,
+      error: new Error('workspace not found'),
+      refetch: mockRefetch,
+    });
+
+    render(<MainLayout />);
+
+    expect(screen.getByText('首页数据加载失败')).toBeInTheDocument();
+    // 错误页也挂载同步桥：清理非法持久化选择并立即重取
+    expect(readPersistedWorkspaceId('user-1')).toBeNull();
+    expect(mockRefetch).toHaveBeenCalled();
   });
 
   it('T-UI4-RES6 桌面端挂载侧边栏拖拽热区，宽度走 CSS 变量（默认 20rem/320px）', () => {

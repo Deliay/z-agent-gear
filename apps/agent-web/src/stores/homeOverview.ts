@@ -9,14 +9,14 @@ export interface HomeOverviewContextValue {
   data: HomeOverviewData | null
   loading: boolean
   error: Error | undefined
-  refetch: () => void
+  refetch: () => Promise<unknown>
 }
 
 export const HomeOverviewContext = createContext<HomeOverviewContextValue>({
   data: null,
   loading: false,
   error: undefined,
-  refetch: () => {},
+  refetch: () => Promise.resolve(),
 })
 
 export function useHomeOverview(): HomeOverviewContextValue {

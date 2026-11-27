@@ -11,7 +11,7 @@ import { personalGlobalWorkspaceId } from '../support/workspace-fixtures.js';
  * - T-ARCH-API2 归档/取消归档成功，DB `archivedAt` 往返（幂等）；
  * - T-ARCH-API3 工作流节点会话拒绝 `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED`；
  *   `sessions(archived)` 三档列表口径（默认=活跃 / false=活跃 / true=已归档，与 includeWorkflowSessions 正交）；
- * - T-ARCH-API4 `homeOverview.archivedSessions` 与活跃 `sessions` 互补、`sessionTotalCount` 为未归档计数；
+ * - T-ARCH-API4 归档清单退出 `homeOverview`（改为按需 `sessions(archived:true)`）、`sessionTotalCount` 为未归档计数；
  * - T-WSARC-API1 `deleteWorkspace` 连带：DB 断言 `archivedAt` 非空、活跃会话 `status=ended`、工作区行删除；
  * - T-WSARC-API2 `workspaceArchiveImpact.sessionCount` = 实际连带归档数量（且不含其它工作区会话）。
  *
@@ -102,7 +102,6 @@ const HOME_OVERVIEW = `
     homeOverview {
       sessions { id archived }
       sessionTotalCount
-      archivedSessions { id archived }
     }
   }
 `;
@@ -359,7 +358,7 @@ describe.skipIf(!HAS_MONGO)('Session archive API (T-ARCH-API*)', () => {
     );
   });
 
-  it('T-ARCH-API4: homeOverview.archivedSessions 与 sessions 互补，sessionTotalCount 为未归档计数', async () => {
+  it('T-ARCH-API4: 归档清单退出 homeOverview，按需 sessions(archived:true) 与活跃互补，sessionTotalCount 为未归档计数', async () => {
     const fixture = await createFixture('api4');
     const wsId = await fixture.createWorkspace(`/tmp/arch-api4-${Date.now()}`);
     const s1 = await fixture.createSession(wsId);
@@ -370,12 +369,15 @@ describe.skipIf(!HAS_MONGO)('Session archive API (T-ARCH-API*)', () => {
     expect(res.errors).toBeUndefined();
     const home = res.data.homeOverview;
     const activeIds = home.sessions.map((s: { id: string }) => s.id);
-    const archivedIds = home.archivedSessions.map((s: { id: string }) => s.id);
+
+    const archivedRes = await gql(SESSIONS, { archived: true }, fixture.token);
+    expect(archivedRes.errors).toBeUndefined();
+    const archivedIds = archivedRes.data.sessions.map((s: { id: string }) => s.id);
 
     expect(activeIds).toContain(s1.id);
     expect(activeIds).not.toContain(s2.id);
     expect(archivedIds).toEqual([s2.id]);
-    expect(home.archivedSessions[0].archived).toBe(true);
+    expect(activeIds).not.toContain(s2.id);
     // 计数口径：sessionTotalCount = 未归档活跃会话数
     expect(home.sessionTotalCount).toBe(home.sessions.length);
     expect(home.sessionTotalCount).toBe(1);

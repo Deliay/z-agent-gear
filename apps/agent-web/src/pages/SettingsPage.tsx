@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '@/stores/auth';
 import MobileBackButton from '../components/MobileBackButton';
 import { Button } from '@/components/ui/button';
-import { CLOUD_STORAGE_CAPABILITIES } from '@/graphql/queries';
-import type { CloudStorageCapabilitiesQuery } from '@/graphql/types';
+import { SETTINGS_OVERVIEW } from '@/graphql/queries';
+import type { SettingsOverviewQuery } from '@/graphql/types';
+import { SettingsOverviewContext } from '@/stores/settingsOverview';
 import { mapOauthError } from '@/lib/auth-oauth';
 import {
   Card,
@@ -105,11 +106,14 @@ export default function SettingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const { data: storageCapabilitiesData } = useQuery<CloudStorageCapabilitiesQuery>(
-    CLOUD_STORAGE_CAPABILITIES,
-  );
-  const storageEnabled =
-    storageCapabilitiesData?.cloudStorageCapabilities?.enabled === true;
+  const { data: settingsData, loading: settingsLoading, error: settingsError, refetch: refetchSettings } =
+    useQuery<SettingsOverviewQuery>(SETTINGS_OVERVIEW, {
+      fetchPolicy: 'cache-and-network',
+      // 控制器配置子页不渲染设置区块：跳过 14 分支聚合（避免 githubAppUrl 无谓签发 state）
+      skip: Boolean(controllerId),
+    });
+  const settings = settingsData?.settingsOverview ?? null;
+  const storageEnabled = settings?.cloudStorageCapabilities?.enabled === true;
   const navItems = storageEnabled ? [...NAV_ITEMS, STORAGE_NAV_ITEM] : NAV_ITEMS;
   const navGroups = storageEnabled
     ? [...NAV_GROUPS, { label: '云存储', items: [STORAGE_NAV_ITEM] }]
@@ -147,6 +151,14 @@ export default function SettingsPage() {
   }
 
   return (
+    <SettingsOverviewContext.Provider
+      value={{
+        data: settings,
+        loading: settingsLoading,
+        error: settingsError,
+        refetch: refetchSettings,
+      }}
+    >
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b px-4 py-3 md:hidden">
         <MobileBackButton to="/sessions" />
@@ -286,5 +298,6 @@ export default function SettingsPage() {
         </div>
       </div>
     </div>
+    </SettingsOverviewContext.Provider>
   );
 }
