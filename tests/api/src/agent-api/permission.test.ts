@@ -450,7 +450,7 @@ describe('ACP Permission Reminder API', () => {
       ctrlClient.disconnect();
     });
 
-    it('should handle permission timeout', async () => {
+    it('should not fire the long permission timeout early (15min) and not reply to Agent on disconnect', async () => {
       const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
       const workspaceId = await createWorkspace(ctrlId);
 
@@ -474,13 +474,11 @@ describe('ACP Permission Reminder API', () => {
 
       await new Promise((r) => setTimeout(r, 500));
 
-      // Send permission request
       const permissionRequestId = `perm_timeout_${Date.now()}`;
-      const permissionResponseEvent = waitForEvent<{ requestId: string; outcome: any }>(
-        ctrlClient,
-        'acp:permission:response',
-        65000, // Wait for timeout
-      );
+      let responded = false;
+      ctrlClient.once('acp:permission:response', () => {
+        responded = true;
+      });
 
       ctrlClient.emit('acp:permission', {
         requestId: permissionRequestId,
@@ -491,13 +489,16 @@ describe('ACP Permission Reminder API', () => {
         ],
       });
 
-      // Wait for timeout (60 seconds on server side)
-      const responseData = await permissionResponseEvent;
-      expect(responseData.requestId).toBe(permissionRequestId);
-      expect(responseData.outcome.outcome).toBe('cancelled');
+      // 权威超时 900s：短窗口内不得按旧 60s 口径提前回 cancelled（超时定时器取值由
+      // permission-manager 单测 T-ET2 锁定，卡片收敛由 API-SI7 断连路径覆盖）。
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(responded).toBe(false);
 
+      // 断连清理（clearForSocket）不向已断开的 Agent 回执
       ctrlClient.disconnect();
-    }, 70000); // Extended timeout for this test
+      await new Promise((r) => setTimeout(r, 500));
+      expect(responded).toBe(false);
+    });
   });
 
   describe('Todo Management', () => {
@@ -793,62 +794,62 @@ describe('Session interaction cards - permission (API-SI5~SI8)', () => {
     ctrlClient.disconnect();
   });
 
-  it(
-    'API-SI7: permission 60s 超时经 permission:resolved 收敛 EXPIRED，后续作答被拒绝',
-    async () => {
-      const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
-      const workspaceId = await createWorkspace(ctrlId);
+  it('API-SI7: permission 卡片 +15 分钟窗口，控制器断连经 permission:resolved 收敛 CANCELLED，后续作答被拒绝', async () => {
+    const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
+    const workspaceId = await createWorkspace(ctrlId);
 
-      const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
-      const sessionRes = await gqlRequest(
-        CREATE_SESSION,
-        { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
-        authToken,
-      );
-      const sessionId = (await sessionRes.json()).data.createSession.session.id;
+    const startEvent = waitForEvent<{ requestId: string; sessionId: string }>(ctrlClient, 'acp:start', 10000);
+    const sessionRes = await gqlRequest(
+      CREATE_SESSION,
+      { input: { controllerId: ctrlId, acpServerType: 'opencode', workspaceId } },
+      authToken,
+    );
+    const sessionId = (await sessionRes.json()).data.createSession.session.id;
 
-      const startData = await startEvent;
-      ctrlClient.emit('acp:start:result', {
-        requestId: startData.requestId,
-        sessionId,
-        success: true,
-        externalSessionId: `ext_${Date.now()}`,
-      });
+    const startData = await startEvent;
+    ctrlClient.emit('acp:start:result', {
+      requestId: startData.requestId,
+      sessionId,
+      success: true,
+      externalSessionId: `ext_${Date.now()}`,
+    });
+    await new Promise((r) => setTimeout(r, 500));
+
+    const requestId = `perm_timeout_${Date.now()}`;
+    ctrlClient.emit('acp:permission', {
+      requestId,
+      sessionId,
+      toolCall: { toolCallId: 'call_timeout_1', title: 'Bash: sleep 60', kind: 'execute' },
+      options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
+    });
+
+    const created = await waitForInteraction(sessionId, requestId, 'PENDING');
+    expect(created).toBeDefined();
+    const remaining = new Date(created.expiresAt).getTime() - Date.now();
+    expect(remaining).toBeGreaterThan(840_000);
+    expect(remaining).toBeLessThanOrEqual(900_000);
+
+    // 去真实等待 15 分钟：改走 permission:resolved 的第二个真实生产者——
+    // 控制器断连 → controller-api clearForSocket 发布 {reason:'cancelled'} →
+    // agent-api 订阅后把会话卡片收敛为 CANCELLED（真实 Redis 订阅/收敛/拒答链路不降级）。
+    ctrlClient.disconnect();
+
+    let cancelled: any = null;
+    for (let i = 0; i < 20; i++) {
       await new Promise((r) => setTimeout(r, 500));
+      cancelled = (await listInteractions(sessionId)).find((row) => row.interactionId === requestId);
+      if (cancelled?.status === 'CANCELLED') break;
+    }
+    expect(cancelled?.status).toBe('CANCELLED');
+    expect(cancelled.history.map((event: any) => `${event.state}:${event.actor}`)).toContain('CANCELLED:system');
 
-      const requestId = `perm_timeout_${Date.now()}`;
-      ctrlClient.emit('acp:permission', {
-        requestId,
-        sessionId,
-        toolCall: { toolCallId: 'call_timeout_1', title: 'Bash: sleep 60', kind: 'execute' },
-        options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
-      });
-
-      const created = await waitForInteraction(sessionId, requestId, 'PENDING');
-      expect(created).toBeDefined();
-
-      // 真实 60s 超时：controller-api 到点发布 permission:resolved{reason:timeout}，
-      // agent-api 订阅后把会话卡片收敛为 EXPIRED（不依赖客户端轮询兜底）。
-      let expired: any = null;
-      for (let i = 0; i < 150; i++) {
-        await new Promise((r) => setTimeout(r, 500));
-        expired = (await listInteractions(sessionId)).find((row) => row.interactionId === requestId);
-        if (expired?.status === 'EXPIRED') break;
-      }
-      expect(expired?.status).toBe('EXPIRED');
-      expect(expired.history.map((event: any) => `${event.state}:${event.actor}`)).toContain('EXPIRED:system');
-
-      const respondRes = await gqlRequest(
-        RESPOND_PERMISSION,
-        { requestId, outcome: 'selected', optionId: 'allow-once' },
-        authToken,
-      );
-      expect((await respondRes.json()).errors?.[0]?.message).toBe(
-        'Todo item not found or already handled',
-      );
-
-      ctrlClient.disconnect();
-    },
-    90_000,
-  );
+    const respondRes = await gqlRequest(
+      RESPOND_PERMISSION,
+      { requestId, outcome: 'selected', optionId: 'allow-once' },
+      authToken,
+    );
+    expect((await respondRes.json()).errors?.[0]?.message).toBe(
+      'Todo item not found or already handled',
+    );
+  });
 });

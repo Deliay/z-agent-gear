@@ -928,7 +928,7 @@ Server 将用户的 Elicitation 响应返回给 Controller。
 **客户端行为：** 无需响应，收到后忽略未知或已完成的 `elicitationId`。
 controller 侧对匹配的 pending 问询就地收敛（`clearTimeout` + 回 Agent `cancel`），并补发
 `acp:elicitation:resolved{reason:'cancelled', detail:'agent completed elicitation'}`，
-避免待办悬挂到 65s 被误标 `expired`。
+避免待办悬挂到 1805s 被误标 `expired`。
 
 `cancelled` 的产生条件（全部在 controller 侧）：
 1. Agent 自发 `elicitation/complete`（**用户主动取消不走本事件**：走 `acp:elicitation:response`，由服务端直接写终态，避免重复收敛）；
@@ -936,7 +936,7 @@ controller 侧对匹配的 pending 问询就地收敛（`clearTimeout` + 回 Age
 3. socket `disconnect`（`settlePendingOnDisconnect`）与 `acp:reconcile` 对账杀会话（走 `stop()`）。
 
 以上路径均 `clearTimeout` + resolve(cancel) + delete pending，并在会话仍连接时发 `resolved{cancelled}`；
-因此**任何会话关闭/进程退出/断线/对账之后都不应再出现 65s 迟到的 `resolved{timeout}`**。
+因此**任何会话关闭/进程退出/断线/对账之后都不应再出现 1805s 迟到的 `resolved{timeout}`**。
 
 ### 2.34 `acp:elicitation:resolved`（Controller → Server）
 
@@ -950,7 +950,7 @@ Agent 侧问询在到达用户之前已结束（模式不支持 / 超时 / 被 A
 | `requestId` | `string` | 否 | 平台侧请求 ID。新 controller 在所有路径（含 `unsupported_mode`）都会携带；仅旧版本可能缺省，服务端按 `sessionId` 会话级兜底收敛 |
 | `sessionId` | `string` | 是 | 会话 ID |
 | `reason` | `"unsupported_mode" \| "timeout" \| "cancelled"` | 是 | 结束原因。controller-api 运行时校验，契约外取值丢弃并告警 |
-| `detail` | `string` | 否 | 可读原因（如未知模式名）。bridge 侧截断 100 字符、controller-api/Redis 侧截断 200 字符 |
+| `detail` | `string` | 否 | 可读原因（如未知模式名，或超时 `controller-api timeout (1800s)` / 桥兜底 `bridge timeout (1805s)`）。bridge 侧截断 100 字符、controller-api/Redis 侧截断 200 字符 |
 
 **服务端行为：**
 
@@ -963,7 +963,7 @@ Agent 侧问询在到达用户之前已结束（模式不支持 / 超时 / 被 A
 
 ### 2.34.1 `permission:resolved`（Controller → Redis）
 
-权限请求在到达用户前已结束（60s 超时 / 控制器断连清理）时发布，供 agent-api 收敛会话交互卡片。
+权限请求在到达用户前已结束（超时未作答 / 控制器断连清理）时发布，供 agent-api 收敛会话交互卡片。
 仅用于状态收敛；用户已响应的情况走 `acp:permission:response`（由服务端 CAS 直接写终态）。
 
 **Payload（Redis 频道 `permission:resolved`，与 `elicitation:resolved` 同构）：**
@@ -973,23 +973,24 @@ Agent 侧问询在到达用户之前已结束（模式不支持 / 超时 / 被 A
 | `requestId` | `string` | 否 | 平台侧请求 ID。缺省时 agent-api 按 `sessionId` 会话级兜底收敛 |
 | `sessionId` | `string` | 是 | 会话 ID |
 | `reason` | `"timeout" \| "cancelled"` | 是 | 结束原因（reason 子集：超时 / 断连清理） |
-| `detail` | `string` | 否 | 可读原因（`controller-api timeout (60s)` / `socket disconnected`） |
+| `detail` | `string` | 否 | 可读原因（`controller-api timeout (900s)` / `socket disconnected`） |
 | `controllerId` | `string` | 是 | 控制器 ID |
 | `userId` | `string` | 是 | 会话归属用户（租户隔离维度；缺失时 agent-api 拒绝写入并告警） |
 | `_meta` | `object` | 否 | 链路传播保留位（见 §7） |
 
 **触发点：**
 
-1. `PermissionManager.handleTimeout`：60s 未响应 → 回 Agent `cancelled` + 发布 `permission:resolved{reason:'timeout'}`。
+1. `PermissionManager.handleTimeout`：15 分钟未响应 → 回 Agent `cancelled` + 发布 `permission:resolved{reason:'timeout'}`。
 2. `PermissionManager.clearForSocket`：控制器断连 → 清理该 socket 全部 pending + 逐条发布
    `permission:resolved{reason:'cancelled', detail:'socket disconnected'}`（Agent 侧 Promise 不再可能收到回答）。
 
 **agent-api 行为：** `reason: timeout → EXPIRED`、`cancelled → CANCELLED`；契约外 reason 收敛为 `FAILED` 并告警；
 单调收敛（仅 `PENDING → 终态`），同时将对应 TodoItem 标记已读，并推送用户级 SSE `session_interaction` 终态事件。
 
-**作答时限统一口径：** Elicitation / Permission 的用户可作答时限统一为 **60s（controller-api `TIMEOUT_MS`）**；
-`sessioninteractions.expiresAt` 按事件到达 agent-api 时刻 + 60s 写入，卡片倒计时以该字段为唯一依据；
-TodoItem 的 5 分钟 `expiresAt` 仅为通知保留窗口（TTL 清理），不再作为作答有效性依据。
+**作答时限拆分口径：** 提问（Elicitation）用户可作答时限为 **30 分钟**（controller-api `ElicitationManager.TIMEOUT_MS` = 1_800_000ms）、
+权限审批（Permission）为 **15 分钟**（controller-api `PermissionManager.TIMEOUT_MS` = 900_000ms）；
+`sessioninteractions.expiresAt` 按 kind 写入（提问 = 事件到达 agent-api 时刻 + 30 分钟、权限审批 = + 15 分钟），卡片倒计时以该字段为唯一依据；
+TodoItem 的 5 分钟 `expiresAt` 仅为通知保留窗口（TTL 清理），不再作为作答有效性依据——**通知先于作答窗口过期属预期，不影响作答有效性**。
 
 ### 2.35 `harness:login:required`（Controller → Server）
 

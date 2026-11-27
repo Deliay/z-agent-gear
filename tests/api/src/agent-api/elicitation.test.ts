@@ -436,7 +436,7 @@ describe('Session interaction cards (API-SI)', () => {
     }
   });
 
-  it('API-SI1/SI2: elicitation 触发落库 PENDING（+60s/首条 history）→ accept 后 ACCEPTED 回显提交内容', async () => {
+  it('API-SI1/SI2: elicitation 触发落库 PENDING（+30 分钟/首条 history）→ accept 后 ACCEPTED 回显提交内容', async () => {
     const { controllerId: ctrlId, client: ctrlClient } = await createFreshController();
     const sessionId = await createRunningSession(ctrlClient, ctrlId);
 
@@ -456,8 +456,8 @@ describe('Session interaction cards (API-SI)', () => {
     expect(created.mode).toBe('form');
     expect(created.history[0]).toMatchObject({ state: 'PENDING', actor: 'agent' });
     const remaining = new Date(created.expiresAt).getTime() - Date.now();
-    expect(remaining).toBeGreaterThan(0);
-    expect(remaining).toBeLessThanOrEqual(65_000);
+    expect(remaining).toBeGreaterThan(1_740_000);
+    expect(remaining).toBeLessThanOrEqual(1_800_000);
 
     const responseEvent = waitForEvent<{ requestId: string }>(ctrlClient, 'acp:elicitation:response', 10000);
     const respondRes = await gqlRequest(
@@ -495,7 +495,7 @@ describe('Session interaction cards (API-SI)', () => {
       requestId,
       sessionId,
       reason: 'timeout',
-      detail: 'controller-api timeout (60s)',
+      detail: 'controller-api timeout (1800s)',
     });
 
     let expired: any = null;

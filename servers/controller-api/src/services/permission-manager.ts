@@ -37,7 +37,7 @@ interface PendingRequest {
 const PERMISSION_REQUEST_CHANNEL = 'permission:request';
 const PERMISSION_RESPONSE_CHANNEL = 'permission:response';
 const PERMISSION_RESOLVED_CHANNEL = 'permission:resolved';
-const TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = 900_000;
 
 export class PermissionManager {
   private pendingRequests = new Map<string, PendingRequest>();
@@ -138,7 +138,7 @@ export class PermissionManager {
 
     this.pendingRequests.delete(requestId);
 
-    // 60s 是唯一用户可见超时口径：回 Agent cancelled 的同时发布 permission:resolved，
+    // 900s 是唯一用户可见超时口径：回 Agent cancelled 的同时发布 permission:resolved，
     // 供 agent-api 把会话交互卡片收敛为 EXPIRED（对齐 elicitation:resolved 语义）。
     void Promise.resolve()
       .then(() => publish(PERMISSION_RESOLVED_CHANNEL, {
@@ -147,7 +147,7 @@ export class PermissionManager {
         userId: pending.userId,
         controllerId: pending.controllerId,
         reason: 'timeout',
-        detail: 'controller-api timeout (60s)',
+        detail: 'controller-api timeout (900s)',
       }))
       .catch((err: unknown) => {
         this.logger.error({ err, requestId }, 'failed to publish permission resolved (timeout)');

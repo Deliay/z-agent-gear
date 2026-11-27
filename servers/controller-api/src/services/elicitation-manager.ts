@@ -53,7 +53,7 @@ const ELICITATION_REQUEST_CHANNEL = 'elicitation:request';
 const ELICITATION_RESPONSE_CHANNEL = 'elicitation:response';
 const ELICITATION_COMPLETE_CHANNEL = 'elicitation:complete';
 const ELICITATION_RESOLVED_CHANNEL = 'elicitation:resolved';
-const TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = 1_800_000;
 
 export class ElicitationManager {
   private pendingRequests = new Map<string, PendingRequest>();
@@ -129,7 +129,7 @@ export class ElicitationManager {
       return;
     }
 
-    // 重复 requestId：先清旧 timer，避免悬挂的 60s 定时器泄漏/误发 timeout
+    // 重复 requestId：先清旧 timer，避免悬挂的 1800s 定时器泄漏/误发 timeout
     const existing = this.pendingRequests.get(requestId);
     if (existing) clearTimeout(existing.timeout);
 
@@ -234,7 +234,7 @@ export class ElicitationManager {
     this.pendingRequests.delete(requestId);
 
     // 1) 回 Agent cancel（既有行为）
-    // 2) 落 resolved(timeout)：60s 是唯一用户可见超时口径，待办据此收敛为 expired
+    // 2) 落 resolved(timeout)：1800s 是唯一用户可见超时口径，待办据此收敛为 expired
     // 3) 仍回发 acp:elicitation:response{cancel} 给 controller（既有行为）
     void Promise.resolve()
       .then(() => publish(ELICITATION_RESOLVED_CHANNEL, {
@@ -243,7 +243,7 @@ export class ElicitationManager {
         userId: pending.userId,
         controllerId: pending.controllerId,
         reason: 'timeout',
-        detail: 'controller-api timeout (60s)',
+        detail: 'controller-api timeout (1800s)',
       }))
       .catch((err: unknown) => {
         this.logger.error({ err, requestId }, 'failed to publish elicitation resolved (timeout)');
@@ -264,7 +264,7 @@ export class ElicitationManager {
     return this.pendingRequests.size;
   }
 
-  /** controller 断线：清理该 socket 的 pending 与 timer，避免 60s 后对已失联会话发 timeout */
+  /** controller 断线：清理该 socket 的 pending 与 timer，避免 1800s 后对已失联会话发 timeout */
   clearForSocket(socketId: string): void {
     for (const [requestId, pending] of this.pendingRequests) {
       if (pending.socketId !== socketId) continue;

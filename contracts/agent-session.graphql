@@ -256,7 +256,7 @@ enum SessionInteractionStatus {
   ACCEPTED     # 已提交/已批准
   DECLINED     # 已拒绝（elicitation decline）
   CANCELLED    # 已取消（用户 cancel / 控制器断连）
-  EXPIRED      # 已过期（60s 内未响应）
+  EXPIRED      # 已过期（超时未响应：提问 30 分钟 / 权限审批 15 分钟）
   FAILED       # 已失效（链路不支持等）
 }
 
@@ -296,7 +296,7 @@ type SessionInteraction {
   # permission 审批选项 [{optionId,name,kind}]
   options: JSON
   response: SessionInteractionResponse
-  # 作答截止（创建 + 60s，与 controller-api TIMEOUT_MS 一致）
+  # 作答截止（提问 = 创建 + 30 分钟、权限审批 = 创建 + 15 分钟，分别对齐 controller-api elicitation/permission TIMEOUT_MS）
   expiresAt: String
   createdAt: String!
   respondedAt: String

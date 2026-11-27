@@ -148,7 +148,7 @@ describe('PermissionSubscriberService', () => {
       sessionId: 'sess-1',
       reason: 'timeout',
       userId: 'user-1',
-      detail: 'controller-api timeout (60s)',
+      detail: 'controller-api timeout (900s)',
     }));
 
     expect(sessionInteractionService.resolve).toHaveBeenCalledWith({
@@ -156,7 +156,7 @@ describe('PermissionSubscriberService', () => {
       interactionId: 'perm-1',
       sessionId: 'sess-1',
       resolution: 'EXPIRED',
-      detail: 'controller-api timeout (60s)',
+      detail: 'controller-api timeout (900s)',
     });
     expect(todoService.markTodoAsResponded).toHaveBeenCalledWith('perm-1', 'user-1');
     expect(sessionSSEService.pushToUser).toHaveBeenCalledWith('user-1', {
