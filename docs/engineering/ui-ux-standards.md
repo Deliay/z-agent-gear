@@ -154,6 +154,7 @@ flowchart LR
 
 ## 7. 相关文档
 
+- [[prototypes/20261126-ui-ux-workspace-overhaul.html]] — UI/UX 工作区重构交互式设计原型（独立 HTML）
 - [[frontend-rules.md]] — 前端开发技术规范
 - [[common-rules.md]] — 通用开发规范与领域模型同步准则
 - [[../product/released/20260721-frontend-design-overhaul.md]] — 整体前端设计优化 PRD

@@ -11,6 +11,7 @@ engineering/
 ├── backend-rules.md      # 后端开发规范
 ├── frontend-rules.md     # 前端开发规范
 ├── ui-ux-standards.md    # UI/UX 设计规范与视觉系统准则
+├── prototypes/           # 交互式 UI/UX 设计原型（独立 HTML）
 ├── proposals/            # 技术提案（评审后锁定）
 ├── plan/                 # 实现计划（从 proposal 拆解出的可执行任务）
 └── acceptance/           # 验收报告（含 archived/ 归档子目录，规范见 acceptance/AGENTS.md）
@@ -141,6 +142,7 @@ flowchart LR
 - [[backend-rules.md]] — 后端开发规范
 - [[frontend-rules.md]] — 前端开发规范
 - [[ui-ux-standards.md]] — UI/UX 设计规范与视觉系统准则
+- [[prototypes/20261126-ui-ux-workspace-overhaul.html]] — UI/UX 工作区重构交互式设计原型（独立 HTML）
 - [[../knowledges/domain/00-领域模型库-索引.md]] — 领域模型知识库（方案同步目标）
 
 ### 技术提案（`proposals/`）

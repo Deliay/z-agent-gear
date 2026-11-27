@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZeroAsh's Agent Gear — UI/UX 重构原型 v2.0</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(0.92); }
+    }
+    .animate-pulse-dot { animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased m-0 p-0 select-none overflow-hidden h-screen w-screen flex flex-col">
+
+  <!-- Top Prototype Banner / Interactive Controls -->
+  <header class="h-10 shrink-0 bg-[var(--sidebar)] border-b border-[var(--border)] px-3 flex items-center justify-between gap-3 text-xs">
+    <div class="flex items-center gap-2 min-w-0">
+      <span class="inline-flex items-center gap-1.5 font-semibold text-[var(--foreground)]">
+        <span class="w-2 h-2 rounded-full bg-[var(--primary)]"></span>
+        Agent Gear UI/UX Prototype v2.0
+      </span>
+      <span class="hidden sm:inline text-[var(--muted-foreground)]">|</span>
+      <span class="hidden sm:inline text-[var(--muted-foreground)] truncate">
+        三层工作区架构 (Activity Rail + Context Panel + Main Stage) · 字号底线 ≥12px · 完整对齐 PR #585
+      </span>
+    </div>
+    <div class="flex items-center gap-2 shrink-0">
+      <button id="btn-toggle-context" onclick="toggleContextPanel()" class="px-2.5 py-1 rounded border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--background)] text-[var(--foreground)] transition-colors cursor-pointer">
+        收起/展开列表栏 (⌘B)
+      </button>
+      <button onclick="openCmdModal()" class="px-2.5 py-1 rounded border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--background)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors flex items-center gap-1.5 cursor-pointer">
+        <span>全局命令/新建</span>
+        <kbd class="px-1 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-xs font-mono">⌘K</kbd>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main 3-Tier Workspace Shell -->
+  <div class="flex-1 min-h-0 flex overflow-hidden">
+
+    <!-- TIER 1: Activity Rail (56px Fixed) -->
+    <aside class="w-14 shrink-0 bg-[var(--sidebar)] border-r border-[var(--border)] flex flex-col items-center justify-between py-3 z-20" aria-label="一级导航轨">
+      <div class="flex flex-col items-center gap-2 w-full px-1.5">
+        <!-- Brand / Tenant Avatar -->
+        <button onclick="switchDomain('home')" title="ZeroAsh Team · 切换域" class="w-9 h-9 rounded-lg bg-[var(--primary)] text-[var(--primary-foreground)] font-semibold text-sm flex items-center justify-center shadow-xs mb-1 cursor-pointer">
+          ZA
+        </button>
+
+        <!-- Primary Domains -->
+        <button id="rail-home" onclick="switchDomain('home')" class="rail-btn w-10 h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer" title="概览工作台 (Home)">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1h-5.5v-6h-5v6H4a1 1 0 01-1-1v-9.5z"/></svg>
+          <span class="text-xs leading-none">概览</span>
+        </button>
+
+        <button id="rail-sessions" onclick="switchDomain('sessions')" class="rail-btn relative w-10 h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer" title="会话工作区 (Sessions)">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 10h8M8 14h5m-9 6l1.6-3.2A8 8 0 1112 20a8.3 8.3 0 01-3.6-.8L4 20z"/></svg>
+          <span class="text-xs leading-none">会话</span>
+          <span class="absolute top-1 right-1.5 w-2 h-2 rounded-full bg-[var(--warning)]" title="1 个待审批交互 / 1 个待 Review"></span>
+        </button>
+
+        <button id="rail-workflows" onclick="switchDomain('workflows')" class="rail-btn relative w-10 h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer" title="工作流编排 (Workflows)">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 5a2 2 0 100 4 2 2 0 000-4zm12 10a2 2 0 100 4 2 2 0 000-4zM6 15a2 2 0 100 4 2 2 0 000-4zM6 9v6m0-6c0 3 12 0 12 6"/></svg>
+          <span class="text-xs leading-none">工作流</span>
+        </button>
+
+        <button id="rail-kb" onclick="switchDomain('kb')" class="rail-btn w-10 h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer" title="知识库与仓库文档 (Knowledge Base)">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm4 0v12m4-9h4m-4 4h4"/></svg>
+          <span class="text-xs leading-none">知识库</span>
+        </button>
+
+        <button id="rail-infra" onclick="switchDomain('infra')" class="rail-btn w-10 h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer" title="主机、云电脑与网关 (Hosts & Gateways)">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 15a4 4 0 004 4h10a4 4 0 100-8h-.3A6 6 0 106 11.3 4 4 0 003 15z"/></svg>
+          <span class="text-xs leading-none">主机</span>
+        </button>
+      </div>
+
+      <!-- Bottom Global Actions -->
+      <div class="flex flex-col items-center gap-2 w-full px-1.5 border-t border-[var(--border)] pt-3">
+        <button id="rail-billing" onclick="switchDomain('billing')" class="rail-btn w-10 h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer" title="我的费用 (Billing)">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/></svg>
+          <span class="text-xs leading-none">费用</span>
+        </button>
+        <button id="rail-settings" onclick="switchDomain('settings')" class="rail-btn w-10 h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 transition-colors cursor-pointer" title="设置中心 (Settings Overview 单请求聚合)">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>
+          <span class="text-xs leading-none">设置</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- TIER 2: Context Panel (Focused Domain List, 288px) -->
+    <section id="context-panel" class="w-72 shrink-0 bg-[var(--sidebar)] border-r border-[var(--border)] flex flex-col min-h-0 transition-all">
+      <!-- Top Workspace Switcher (Synced via homeOverview.workspaceContext in PR #585) -->
+      <div class="p-3 border-b border-[var(--border)] space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-medium text-[var(--muted-foreground)]">当前租户工作区</span>
+          <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] text-xs text-[var(--muted-foreground)]" title="PR #585: workspaceContext 已并入 homeOverview 15s 统一轮询">
+            <span class="w-1.5 h-1.5 rounded-full bg-[var(--success)]"></span>
+            15s 同源同步
+          </span>
+        </div>
+        <select id="workspace-select" onchange="handleWorkspaceSwitch(this.value)" class="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 text-sm font-medium text-[var(--foreground)] outline-none">
+          <optgroup label="ZeroAsh Team（管理员）">
+            <option value="core-platform">核心平台研发组</option>
+            <option value="team-global">全局工作区（只读共享）</option>
+          </optgroup>
+          <optgroup label="deliay（个人租户）">
+            <option value="personal-global">个人全局工作区</option>
+          </optgroup>
+        </select>
+        <!-- Quick Filter / Search -->
+        <div class="relative">
+          <input id="context-filter" type="text" oninput="renderContextList()" placeholder="筛选当前列表..." class="w-full h-8 rounded-md border border-[var(--border)] bg-[var(--background)] pl-2.5 pr-7 text-xs text-[var(--foreground)] placeholder:text-[var(--placeholder)] outline-none" />
+          <span class="absolute right-2 top-1.5 text-xs text-[var(--muted-foreground)]">⌘F</span>
+        </div>
+      </div>
+
+      <!-- Dynamic Domain Header -->
+      <div class="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between">
+        <div class="flex items-center gap-1.5">
+          <h2 id="context-title" class="text-xs font-semibold tracking-wide text-[var(--muted-foreground)] uppercase">会话列表</h2>
+          <span id="context-badge" class="px-1.5 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] text-xs tabular-nums text-[var(--foreground)]">4</span>
+        </div>
+        <button id="context-add-btn" onclick="openCmdModal()" class="px-2 py-1 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-medium hover:opacity-90 transition-opacity cursor-pointer">
+          + 新建会话
+        </button>
+      </div>
+
+      <!-- Dynamic Scrollable List Area -->
+      <div id="context-list-container" class="flex-1 overflow-y-auto p-2 space-y-1.5">
+        <!-- Populated by JS -->
+      </div>
+
+      <!-- Persistent Footer: Lazy-Loaded Archived Group (PR #585: No Count, On-Demand Fetch) -->
+      <div id="archived-container" class="border-t border-[var(--border)] p-2 bg-[var(--sidebar)]">
+        <button id="archived-toggle-btn" onclick="toggleArchivedGroup()" class="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--card)] transition-colors cursor-pointer" aria-expanded="false">
+          <span class="flex items-center gap-1.5">
+            <span id="archived-chevron" class="inline-block transition-transform">▸</span>
+            <span>已归档</span>
+          </span>
+          <span class="text-xs text-[var(--muted-foreground)]">按需加载</span>
+        </button>
+        <div id="archived-content" class="hidden mt-1.5 pl-2 space-y-1 max-h-40 overflow-y-auto">
+          <!-- Populated on demand when clicked -->
+        </div>
+      </div>
+    </section>
+
+    <!-- TIER 3: Main Stage -->
+    <main id="main-stage" class="flex-1 min-w-0 flex flex-col bg-[var(--background)] overflow-hidden">
+      <!-- Populated dynamically by active domain -->
+    </main>
+
+  </div>
+
+  <!-- Command / Quick Create Modal (Demonstrates PR #585 Online-Only Workspaces Filter) -->
+  <div id="cmd-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+    <div class="w-full max-w-lg rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] shadow-xl overflow-hidden">
+      <div class="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between">
+        <h3 class="text-base font-semibold">快速拉起会话 / 实例化工作流</h3>
+        <button onclick="closeCmdModal()" class="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] px-2 py-1 rounded cursor-pointer">关闭 (Esc)</button>
+      </div>
+      <div class="p-4 space-y-4 text-sm">
+        <div class="p-3 rounded-md border border-[var(--border)] bg-[var(--background)] text-xs space-y-1">
+          <div class="font-semibold text-[var(--foreground)] flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-[var(--success)]"></span>
+            PR #585 口径保护已启用
+          </div>
+          <p class="text-[var(--muted-foreground)]">
+            1. 工作流配置与模板直接取自 <code class="font-mono text-[var(--code-foreground)]">homeOverview</code> 15s 缓存，弹窗打开零等待。<br/>
+            2. 项目工作区列表自动过滤<strong>已离线或已删除控制器</strong>下的条目，防止踩坑。
+          </p>
+        </div>
+
+        <div class="space-y-1.5">
+          <label class="block text-xs font-medium text-[var(--muted-foreground)]">选择可用项目工作区（仅显示在线控制器）</label>
+          <select class="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]">
+            <option>z-agent-gear (~/workspace/z-agent-gear) — 云电脑 cloud-dev-01 [在线]</option>
+            <option>agent-controller (~/workspace/agent-controller) — 本地 MacBook-Pro [在线]</option>
+          </select>
+          <p class="text-xs text-[var(--muted-foreground)]">
+            注：离线主机 <code class="font-mono">legacy-ubuntu-node</code> 下的 2 个工作区已自动隐藏，主机恢复在线后自动重现。
+          </p>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-[var(--muted-foreground)]">Harness 工具</label>
+            <select class="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]">
+              <option>OpenCode (v2.23.0)</option>
+              <option>DeepSeek Harness</option>
+              <option>Kimi Code</option>
+            </select>
+          </div>
+          <div class="space-y-1.5">
+            <label class="block text-xs font-medium text-[var(--muted-foreground)]">初始模型与模式</label>
+            <select class="w-full h-9 rounded-md border border-[var(--border)] bg-[var(--background)] px-3 text-sm text-[var(--foreground)]">
+              <option>Agent Gear / claude-sonnet-4-5 (Code)</option>
+              <option>Agent Gear / deepseek-v3 (Architect)</option>
+            </select>
+          </div>
+        </div>
+
+        <label class="flex items-center gap-2 text-sm pt-1 cursor-pointer">
+          <input type="checkbox" checked class="accent-[var(--primary)]" />
+          <span>启用独立 Git Worktree 隔离执行（自动注入成员 Commit 署名）</span>
+        </label>
+      </div>
+      <div class="px-4 py-3 border-t border-[var(--border)] bg-[var(--sidebar)] flex items-center justify-end gap-2">
+        <button onclick="closeCmdModal()" class="px-3 py-1.5 rounded-md border border-[var(--border)] bg-[var(--card)] text-sm hover:bg-[var(--background)] cursor-pointer">取消</button>
+        <button onclick="closeCmdModal(); switchDomain('sessions');" class="px-4 py-1.5 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-sm font-medium hover:opacity-90 cursor-pointer">立即创建</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- STATE ---
+    const state = {
+      domain: 'sessions', // 'home' | 'sessions' | 'workflows' | 'kb' | 'infra' | 'billing' | 'settings'
+      contextCollapsed: false,
+      activeSessionId: 'sess-585',
+      splitMode: 'horizontal', // 'chat' | 'horizontal' | 'vertical'
+      liveFollow: true,
+      previewTab: 'diff', // 'diff' | 'review' | 'markdown'
+      activeWorkflowId: 'wf-585',
+      workflowView: 'graph', // 'graph' | 'list'
+      selectedWfNodeId: 'node-impl',
+      activeKbDocId: 'kb-ui-standards',
+      settingsCategory: 'models', // 'account' | 'git' | 'models' | 'controllers' | 'mcp' | 'workflows' | 'storage'
+      selectedControllerDetail: null,
+      archivedOpen: { sessions: false, workflows: false },
+      archivedLoading: { sessions: false, workflows: false },
+      archivedLoaded: { sessions: false, workflows: false },
+      interactionApproved: false,
+    };
+
+    const SESSIONS = [
+      {
+        id: 'sess-585',
+        title: 'feat(api): 接口性能优化与设置页聚合查询 (#584)',
+        workspace: 'z-agent-gear',
+        controller: 'cloud-dev-01',
+        harness: 'OpenCode',
+        model: 'claude-sonnet-4-5',
+        mode: 'Code',
+        worktree: 'feat/api-performance-optimization',
+        status: 'running',
+        statusLabel: '运行中',
+        updatedAt: '刚刚',
+        hasReview: true,
+        hasInteraction: true,
+      },
+      {
+        id: 'sess-ui',
+        title: 'refactor(ui): 三层工作区外壳与字号层级规范重构',
+        workspace: 'z-agent-gear',
+        controller: 'cloud-dev-01',
+        harness: 'DeepSeek Harness',
+        model: 'deepseek-r1',
+        mode: 'Architect',
+        worktree: 'refactor/ui-workspace-shell',
+        status: 'idling',
+        statusLabel: '空闲等待',
+        updatedAt: '4 分钟前',
+        hasReview: false,
+        hasInteraction: false,
+      },
+      {
+        id: 'sess-kb',
+        title: 'docs(domain): 同步 30/50/60 限界上下文读口径',
+        workspace: 'z-agent-gear',
+        controller: 'MacBook-Pro',
+        harness: 'Kimi Code',
+        model: 'kimi-k2',
+        mode: 'Code',
+        worktree: null,
+        status: 'idling',
+        statusLabel: '空闲等待',
+        updatedAt: '18 分钟前',
+        hasReview: false,
+        hasInteraction: false,
+      },
+      {
+        id: 'sess-legacy',
+        title: 'fix(cloud): 容器规格分段小时计费游标对齐',
+        workspace: 'z-agent-gear',
+        controller: 'cloud-dev-01',
+        harness: 'OpenCode',
+        model: 'claude-sonnet-4-5',
+        mode: 'Code',
+        worktree: 'fix/spec-billing-cursor',
+        status: 'ended',
+        statusLabel: '已结束',
+        updatedAt: '2 小时前',
+        hasReview: false,
+        hasInteraction: false,
+      }
+    ];
+
+    const ARCHIVED_SESSIONS = [
+      { id: 'arch-s1', title: 'feat(kb): 仓库 docs 根目录一层知识库扫描', workspace: 'z-agent-gear', updatedAt: '昨天' },
+      { id: 'arch-s2', title: 'fix(gh): 云电脑按项目路径签发独立 GitHub Token', workspace: 'z-agent-gear', updatedAt: '3 天前' },
+    ];
+
+    const WORKFLOWS = [
+      {
+        id: 'wf-585',
+        name: 'Issue #584 接口性能优化全流程研发',
+        workspace: 'z-agent-gear',
+        status: 'RUNNING',
+        statusLabel: '执行中：前端聚合改造',
+        updatedAt: '1 分钟前',
+        prNumber: '#585',
+        unavailable: false,
+      },
+      {
+        id: 'wf-ui',
+        name: 'UI/UX 设计规范与工作区重构评审流',
+        workspace: 'z-agent-gear',
+        status: 'WAITING_HUMAN',
+        statusLabel: '待人工节点：设计规范终审',
+        updatedAt: '12 分钟前',
+        prNumber: '#586',
+        unavailable: false,
+      },
+      {
+        id: 'wf-offline',
+        name: '旧控制器遗留回归测试流水线',
+        workspace: 'agent-controller',
+        status: 'FAILED',
+        statusLabel: '控制器离线 · 可接续',
+        updatedAt: '1 天前',
+        prNumber: null,
+        unavailable: true,
+      }
+    ];
+
+    const ARCHIVED_WORKFLOWS = [
+      { id: 'arch-w1', name: 'Issue #566 云电脑多项目 GitHub Token 签发', workspace: 'z-agent-gear', statusLabel: '已完成' },
+    ];
+
+    const KB_DOCS = [
+      { id: 'kb-ui-standards', source: '仓库 docs/engineering', path: '/engineering/ui-ux-standards.md', title: 'UI/UX 设计规范（Design System & Guidelines）', type: 'repo', badge: '仓库内建' },
+      { id: 'kb-domain-index', source: '仓库 docs/knowledges', path: '/domain/00-领域模型库-索引.md', title: '领域模型库 · 索引（11 限界上下文）', type: 'repo', badge: '仓库内建' },
+      { id: 'kb-domain-50', source: '仓库 docs/knowledges', path: '/domain/50-会话与交互/00-上下文概览.md', title: '50-会话与交互 · 上下文概览（含归档按需口径）', type: 'repo', badge: '仓库内建' },
+      { id: 'kb-platform-arch', source: '平台知识库 · 架构委员会', path: '/adr/2026-workspace-shell.md', title: 'ADR-042: 三层工作区架构与首屏聚合规范', type: 'platform', badge: '全局可写' },
+    ];
+
+    const INFRA_HOSTS = [
+      { id: 'ctrl-cloud-01', name: 'cloud-dev-01', type: 'cloud', status: 'online', spec: '4C 8Gi · 10Gi 临时存储 · 1.80 credits/h', version: '2.23.0 (最新)', workspaces: ['~/workspace/z-agent-gear'], gateways: [{ port: 5173, label: 'agent-web-dev', url: 'https://5173--cloud-dev-01.zag.dev' }] },
+      { id: 'ctrl-mac', name: 'MacBook-Pro.local', type: 'local', status: 'online', spec: '本地控制器 · macOS arm64', version: '2.23.0', workspaces: ['~/Deliay/z-agent-gear', '~/Deliay/agent-controller'], gateways: [{ port: 4000, label: 'graphql-inspector', url: 'https://4000--macbook.zag.dev' }] },
+      { id: 'ctrl-offline', name: 'legacy-ubuntu-node', type: 'local', status: 'offline', spec: '已离线 · 其下工作区不在选择器中返回 (PR #585)', version: '2.21.0', workspaces: [], gateways: [] },
+    ];
+
+    // --- HELPERS ---
+    function openCmdModal() { document.getElementById('cmd-modal').classList.remove('hidden'); }
+    function closeCmdModal() { document.getElementById('cmd-modal').classList.add('hidden'); }
+
+    function toggleContextPanel() {
+      state.contextCollapsed = !state.contextCollapsed;
+      const panel = document.getElementById('context-panel');
+      if (state.contextCollapsed) {
+        panel.classList.add('hidden');
+      } else {
+        panel.classList.remove('hidden');
+      }
+    }
+
+    function handleWorkspaceSwitch(val) {
+      renderAll();
+    }
+
+    function switchDomain(domain) {
+      state.domain = domain;
+      // Show context panel for list-driven domains; auto-collapse for full-stage pages if desired, or keep consistent
+      const panel = document.getElementById('context-panel');
+      if (domain === 'home' || domain === 'billing' || domain === 'settings') {
+        panel.classList.add('hidden');
+        state.contextCollapsed = true;
+      } else {
+        panel.classList.remove('hidden');
+        state.contextCollapsed = false;
+      }
+      renderAll();
+    }
+
+    function toggleArchivedGroup() {
+      const key = state.domain === 'workflows' ? 'workflows' : 'sessions';
+      const isOpen = !state.archivedOpen[key];
+      state.archivedOpen[key] = isOpen;
+
+      if (isOpen && !state.archivedLoaded[key]) {
+        state.archivedLoading[key] = true;
+        renderArchivedSection();
+        setTimeout(() => {
+          state.archivedLoading[key] = false;
+          state.archivedLoaded[key] = true;
+          renderArchivedSection();
+        }, 420);
+      } else {
+        renderArchivedSection();
+      }
+    }
+
+    function renderArchivedSection() {
+      const container = document.getElementById('archived-container');
+      if (state.domain !== 'sessions' && state.domain !== 'workflows') {
+        container.classList.add('hidden');
+        return;
+      }
+      container.classList.remove('hidden');
+      const key = state.domain === 'workflows' ? 'workflows' : 'sessions';
+      const isOpen = state.archivedOpen[key];
+      const isLoading = state.archivedLoading[key];
+      const content = document.getElementById('archived-content');
+      const chevron = document.getElementById('archived-chevron');
+      chevron.textContent = isOpen ? '▾' : '▸';
+
+      if (!isOpen) {
+        content.classList.add('hidden');
+        return;
+      }
+      content.classList.remove('hidden');
+      if (isLoading) {
+        content.innerHTML = `
+          <div class="px-2.5 py-2 rounded border border-[var(--border)] bg-[var(--card)] text-xs text-[var(--muted-foreground)] flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-[var(--primary)] animate-pulse-dot"></span>
+            按需请求 ${key === 'workflows' ? 'workflowInstances(archived:true)' : 'sessions(archived:true)'}...
+          </div>
+        `;
+        return;
+      }
+
+      const items = key === 'workflows' ? ARCHIVED_WORKFLOWS : ARCHIVED_SESSIONS;
+      content.innerHTML = items.map(item => `
+        <div class="px-2.5 py-1.5 rounded-md hover:bg-[var(--card)] text-xs flex items-center justify-between gap-2 cursor-pointer">
+          <span class="truncate text-[var(--foreground)]">${item.title || item.name}</span>
+          <span class="shrink-0 text-[var(--muted-foreground)]">${item.updatedAt || item.statusLabel}</span>
+        </div>
+      `).join('');
+    }
+
+    // --- RENDER RAIL & CONTEXT LIST ---
+    function renderRail() {
+      const domains = ['home', 'sessions', 'workflows', 'kb', 'infra', 'billing', 'settings'];
+      domains.forEach(d => {
+        const btn = document.getElementById('rail-' + d);
+        if (!btn) return;
+        if (state.domain === d) {
+          btn.className = 'rail-btn relative w-10 h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 bg-[var(--card)] text-[var(--primary)] border border-[var(--border)] font-medium shadow-2xs cursor-pointer';
+        } else {
+          btn.className = 'rail-btn relative w-10 h-10 rounded-lg flex flex-col items-center justify-center gap-0.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--card)] transition-colors cursor-pointer';
+        }
+      });
+    }
+
+    function renderContextList() {
+      const titleEl = document.getElementById('context-title');
+      const badgeEl = document.getElementById('context-badge');
+      const addBtn = document.getElementById('context-add-btn');
+      const listEl = document.getElementById('context-list-container');
+      const filter = (document.getElementById('context-filter')?.value || '').toLowerCase();
+
+      if (state.domain === 'sessions') {
+        titleEl.textContent = '活跃会话';
+        const filtered = SESSIONS.filter(s => s.title.toLowerCase().includes(filter) || s.workspace.toLowerCase().includes(filter));
+        badgeEl.textContent = String(filtered.length);
+        addBtn.textContent = '+ 新建会话';
+        listEl.innerHTML = `
+          <!-- Pending Review / Interaction Attention Card -->
+          <div class="mb-2 p-2.5 rounded-lg border border-[var(--border)] bg-[var(--card)] space-y-1.5">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-semibold text-[var(--warning)] flex items-center gap-1.5">
+                <span class="w-2 h-2 rounded-full bg-[var(--warning)]"></span>
+                待你处理 (2)
+              </span>
+              <span class="text-[var(--muted-foreground)]">实时推送</span>
+            </div>
+            <button onclick="state.activeSessionId='sess-585'; state.splitMode='horizontal'; state.previewTab='review'; renderAll();" class="w-full text-left px-2 py-1.5 rounded bg-[var(--background)] hover:border-[var(--primary)] border border-[var(--border)] text-xs flex items-center justify-between gap-2 cursor-pointer">
+              <span class="truncate text-[var(--foreground)]">待 Review: 4 个契约与前端文件</span>
+              <span class="shrink-0 text-[var(--primary)] font-medium">查看 →</span>
+            </button>
+          </div>
+        ` + filtered.map(s => {
+          const active = s.id === state.activeSessionId;
+          const dotColor = s.status === 'running' ? 'bg-[var(--primary)] animate-pulse-dot' : s.status === 'idling' ? 'bg-[var(--success)]' : 'bg-[var(--muted-foreground)]';
+          return `
+            <button onclick="state.activeSessionId='${s.id}'; renderAll();" class="w-full text-left p-2.5 rounded-lg border transition-colors cursor-pointer ${active ? 'bg-[var(--card)] border-[var(--primary)] shadow-2xs' : 'border-transparent hover:bg-[var(--card)]'}">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="w-2 h-2 rounded-full shrink-0 ${dotColor}"></span>
+                <span class="text-sm font-medium text-[var(--foreground)] truncate flex-1">${s.title}</span>
+              </div>
+              <div class="mt-1.5 flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                <span class="truncate">${s.workspace} · ${s.controller}</span>
+                <span class="shrink-0 tabular-nums">${s.updatedAt}</span>
+              </div>
+            </button>
+          `;
+        }).join('');
+      } else if (state.domain === 'workflows') {
+        titleEl.textContent = '工作流实例';
+        const filtered = WORKFLOWS.filter(w => w.name.toLowerCase().includes(filter));
+        badgeEl.textContent = String(filtered.length);
+        addBtn.textContent = '+ 实例化';
+        listEl.innerHTML = filtered.map(w => {
+          const active = w.id === state.activeWorkflowId;
+          const statusColor = w.unavailable ? 'text-[var(--error)]' : w.status === 'WAITING_HUMAN' ? 'text-[var(--warning)]' : 'text-[var(--primary)]';
+          return `
+            <button onclick="state.activeWorkflowId='${w.id}'; renderAll();" class="w-full text-left p-2.5 rounded-lg border transition-colors cursor-pointer ${active ? 'bg-[var(--card)] border-[var(--primary)] shadow-2xs' : 'border-transparent hover:bg-[var(--card)]'}">
+              <div class="flex items-center justify-between gap-2 min-w-0">
+                <span class="text-sm font-medium text-[var(--foreground)] truncate">${w.name}</span>
+                ${w.prNumber ? `<span class="shrink-0 px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-xs font-mono">${w.prNumber}</span>` : ''}
+              </div>
+              <div class="mt-1.5 flex items-center justify-between gap-2 text-xs">
+                <span class="truncate ${statusColor} font-medium">${w.statusLabel}</span>
+                <span class="shrink-0 text-[var(--muted-foreground)]">${w.workspace}</span>
+              </div>
+            </button>
+          `;
+        }).join('');
+      } else if (state.domain === 'kb') {
+        titleEl.textContent = '知识库与仓库文档';
+        badgeEl.textContent = String(KB_DOCS.length);
+        addBtn.textContent = '+ 新建文档';
+        listEl.innerHTML = `
+          <div class="px-2 py-1 text-xs font-semibold text-[var(--muted-foreground)]">仓库内建知识库 (只读懒加载)</div>
+        ` + KB_DOCS.map(doc => {
+          const active = doc.id === state.activeKbDocId;
+          return `
+            <button onclick="state.activeKbDocId='${doc.id}'; renderAll();" class="w-full text-left p-2.5 rounded-lg border transition-colors cursor-pointer ${active ? 'bg-[var(--card)] border-[var(--primary)]' : 'border-transparent hover:bg-[var(--card)]'}">
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-sm font-medium text-[var(--foreground)] truncate">${doc.title}</span>
+              </div>
+              <div class="mt-1 flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                <span class="truncate font-mono">${doc.path}</span>
+                <span class="shrink-0 px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-xs">${doc.badge}</span>
+              </div>
+            </button>
+          `;
+        }).join('');
+      } else if (state.domain === 'infra') {
+        titleEl.textContent = '控制器与云电脑';
+        badgeEl.textContent = String(INFRA_HOSTS.length);
+        addBtn.textContent = '+ 新建云电脑';
+        listEl.innerHTML = INFRA_HOSTS.map(h => `
+          <div class="p-2.5 rounded-lg border border-[var(--border)] bg-[var(--card)] space-y-1.5 ${h.status !== 'online' ? 'opacity-60' : ''}">
+            <div class="flex items-center justify-between gap-2">
+              <span class="flex items-center gap-1.5 text-sm font-medium text-[var(--foreground)] truncate">
+                <span class="w-2 h-2 rounded-full ${h.status === 'online' ? 'bg-[var(--success)]' : 'bg-[var(--muted-foreground)]'}"></span>
+                ${h.name}
+              </span>
+              <span class="px-1.5 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-xs">${h.type === 'cloud' ? '云电脑' : '本地'}</span>
+            </div>
+            <div class="text-xs text-[var(--muted-foreground)]">${h.spec}</div>
+            ${h.workspaces.length > 0 ? `<div class="text-xs font-mono text-[var(--muted-foreground)] truncate">工作区: ${h.workspaces.join(', ')}</div>` : ''}
+          </div>
+        `).join('');
+      }
+      renderArchivedSection();
+    }
+
+    // --- RENDER MAIN STAGE ---
+    function renderMainStage() {
+      const stage = document.getElementById('main-stage');
+      if (state.domain === 'home') {
+        stage.innerHTML = renderHomeStage();
+      } else if (state.domain === 'sessions') {
+        stage.innerHTML = renderSessionStage();
+      } else if (state.domain === 'workflows') {
+        stage.innerHTML = renderWorkflowStage();
+      } else if (state.domain === 'kb') {
+        stage.innerHTML = renderKbStage();
+      } else if (state.domain === 'infra') {
+        stage.innerHTML = renderInfraStage();
+      } else if (state.domain === 'billing') {
+        stage.innerHTML = renderBillingStage();
+      } else if (state.domain === 'settings') {
+        stage.innerHTML = renderSettingsStage();
+      }
+    }
+
+    function renderHomeStage() {
+      return `
+        <div class="flex-1 overflow-y-auto p-6">
+          <div class="max-w-5xl mx-auto space-y-6">
+            <!-- Hero Header -->
+            <div class="flex flex-wrap items-center justify-between gap-4 pb-4 border-b border-[var(--border)]">
+              <div>
+                <h1 class="text-2xl font-semibold text-[var(--foreground)]">工作台概览 · 核心平台研发组</h1>
+                <p class="mt-1 text-sm text-[var(--muted-foreground)]">
+                  数据源由 <code class="font-mono text-xs px-1.5 py-0.5 rounded bg-[var(--card)] border border-[var(--border)]">HOME_OVERVIEW</code> 单次聚合提供（含工作流模板、配置与租户上下文，15s 静默同步，零归档冗余载荷）
+                </p>
+              </div>
+              <div class="flex items-center gap-2">
+                <button onclick="openCmdModal()" class="px-3.5 py-2 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-sm font-medium hover:opacity-90 cursor-pointer">
+                  + 新建会话 / 工作流
+                </button>
+              </div>
+            </div>
+
+            <!-- 4 KPI Cards -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div class="p-4 rounded-lg border border-[var(--border)] bg-[var(--card)]">
+                <div class="text-xs font-medium text-[var(--muted-foreground)]">活跃会话 / 待介入</div>
+                <div class="mt-2 flex items-baseline justify-between">
+                  <span class="text-2xl font-semibold tabular-nums">4</span>
+                  <span class="text-xs font-medium text-[var(--warning)]">1 待审批 · 1 待 Review</span>
+                </div>
+              </div>
+              <div class="p-4 rounded-lg border border-[var(--border)] bg-[var(--card)]">
+                <div class="text-xs font-medium text-[var(--muted-foreground)]">运行中工作流实例</div>
+                <div class="mt-2 flex items-baseline justify-between">
+                  <span class="text-2xl font-semibold tabular-nums">3</span>
+                  <span class="text-xs text-[var(--primary)]">2 正常 · 1 待接续</span>
+                </div>
+              </div>
+              <div class="p-4 rounded-lg border border-[var(--border)] bg-[var(--card)]">
+                <div class="text-xs font-medium text-[var(--muted-foreground)]">在线控制器 & 云电脑</div>
+                <div class="mt-2 flex items-baseline justify-between">
+                  <span class="text-2xl font-semibold tabular-nums">2 <span class="text-sm font-normal text-[var(--muted-foreground)]">/ 3</span></span>
+                  <span class="text-xs text-[var(--success)]">已过滤 1 离线工作区</span>
+                </div>
+              </div>
+              <div class="p-4 rounded-lg border border-[var(--border)] bg-[var(--card)]">
+                <div class="text-xs font-medium text-[var(--muted-foreground)]">已配置工作流 / 模板缓存</div>
+                <div class="mt-2 flex items-baseline justify-between">
+                  <span class="text-2xl font-semibold tabular-nums">6 <span class="text-sm font-normal text-[var(--muted-foreground)]">个模板</span></span>
+                  <span class="text-xs text-[var(--muted-foreground)]">并入概览即开即用</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Actionable Triage Center -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div class="rounded-lg border border-[var(--border)] bg-[var(--card)] p-5 space-y-3">
+                <div class="flex items-center justify-between">
+                  <h2 class="text-base font-semibold">最近活跃会话</h2>
+                  <button onclick="switchDomain('sessions')" class="text-xs text-[var(--primary)] hover:underline cursor-pointer">进入会话工作区 →</button>
+                </div>
+                <div class="space-y-2">
+                  ${SESSIONS.slice(0, 3).map(s => `
+                    <div onclick="state.activeSessionId='${s.id}'; switchDomain('sessions');" class="p-3 rounded-md border border-[var(--border)] bg-[var(--background)] hover:border-[var(--primary)] flex items-center justify-between gap-3 cursor-pointer">
+                      <div class="min-w-0">
+                        <div class="text-sm font-medium truncate">${s.title}</div>
+                        <div class="mt-0.5 text-xs text-[var(--muted-foreground)]">${s.workspace} · ${s.harness} · ${s.model}</div>
+                      </div>
+                      <span class="shrink-0 px-2 py-0.5 rounded-full bg-[var(--card)] border border-[var(--border)] text-xs">${s.statusLabel}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div class="rounded-lg border border-[var(--border)] bg-[var(--card)] p-5 space-y-3">
+                <div class="flex items-center justify-between">
+                  <h2 class="text-base font-semibold">工作流与 PR 协同动态</h2>
+                  <button onclick="switchDomain('workflows')" class="text-xs text-[var(--primary)] hover:underline cursor-pointer">查看工作流 DAG 图 →</button>
+                </div>
+                <div class="space-y-2">
+                  ${WORKFLOWS.map(w => `
+                    <div onclick="state.activeWorkflowId='${w.id}'; switchDomain('workflows');" class="p-3 rounded-md border border-[var(--border)] bg-[var(--background)] hover:border-[var(--primary)] flex items-center justify-between gap-3 cursor-pointer">
+                      <div class="min-w-0">
+                        <div class="text-sm font-medium truncate">${w.name}</div>
+                        <div class="mt-0.5 text-xs text-[var(--muted-foreground)]">${w.statusLabel}</div>
+                      </div>
+                      <span class="shrink-0 text-xs font-mono text-[var(--muted-foreground)]">${w.prNumber || '无 PR'}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderSessionStage() {
+      const s = SESSIONS.find(item => item.id === state.activeSessionId) || SESSIONS[0];
+      const showPreview = state.splitMode !== 'chat';
+
+      return `
+        <!-- Unified 48px Single-Row Session Header -->
+        <div class="h-12 shrink-0 border-b border-[var(--border)] bg-[var(--card)] px-4 flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <span class="w-2.5 h-2.5 rounded-full shrink-0 ${s.status === 'running' ? 'bg-[var(--primary)] animate-pulse-dot' : 'bg-[var(--success)]'}"></span>
+            <h1 class="text-sm font-semibold text-[var(--foreground)] truncate">${s.title}</h1>
+            <span class="shrink-0 px-2 py-0.5 rounded-full bg-[var(--background)] border border-[var(--border)] text-xs font-medium">${s.statusLabel}</span>
+            <!-- Compact Environment Pill -->
+            <div class="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[var(--background)] border border-[var(--border)] text-xs text-[var(--muted-foreground)]" title="工作目录: ~/workspace/${s.workspace} | 分支: ${s.worktree || 'main'}">
+              <span>${s.controller}</span>
+              <span>·</span>
+              <span class="font-mono">${s.workspace}</span>
+              ${s.worktree ? `<span class="text-[var(--primary)] font-mono">(${s.worktree})</span>` : ''}
+            </div>
+          </div>
+
+          <!-- Right Toolbar: Split Mode + Live Follow + Actions -->
+          <div class="flex items-center gap-1.5 shrink-0">
+            <div class="flex items-center rounded-md border border-[var(--border)] bg-[var(--background)] p-0.5 text-xs">
+              <button onclick="state.splitMode='chat'; renderMainStage();" class="px-2 py-1 rounded cursor-pointer ${state.splitMode === 'chat' ? 'bg-[var(--card)] text-[var(--foreground)] font-medium shadow-2xs' : 'text-[var(--muted-foreground)]'}">仅对话</button>
+              <button onclick="state.splitMode='horizontal'; renderMainStage();" class="px-2 py-1 rounded cursor-pointer ${state.splitMode === 'horizontal' ? 'bg-[var(--card)] text-[var(--foreground)] font-medium shadow-2xs' : 'text-[var(--muted-foreground)]'}">左右分屏</button>
+            </div>
+            ${showPreview ? `
+              <button onclick="state.liveFollow=!state.liveFollow; renderMainStage();" class="px-2.5 py-1 rounded-md border text-xs font-medium cursor-pointer ${state.liveFollow ? 'border-[var(--primary)] text-[var(--primary)] bg-[var(--card)]' : 'border-[var(--border)] text-[var(--muted-foreground)]'}">
+                ${state.liveFollow ? '● 实况跟随已开' : '○ 实况跟随'}
+              </button>
+            ` : ''}
+            <button class="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--sidebar)] text-xs cursor-pointer">导出</button>
+            <button class="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--sidebar)] text-xs cursor-pointer">归档</button>
+          </div>
+        </div>
+
+        <!-- Split Workspace Body -->
+        <div class="flex-1 min-h-0 grid ${showPreview ? 'grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]' : 'grid-cols-1'} overflow-hidden">
+          <!-- Left Column: Conversation Stream + Integrated Prompt Composer -->
+          <div class="flex flex-col min-h-0 min-w-0 border-r border-[var(--border)]">
+            <div class="flex-1 overflow-y-auto p-4 space-y-4">
+              <div class="max-w-3xl mx-auto space-y-4">
+
+                <!-- User Prompt Bubble -->
+                <div class="flex justify-end">
+                  <div class="max-w-[85%] rounded-lg bg-[var(--card)] border border-[var(--border)] px-4 py-3 text-sm space-y-1.5">
+                    <div class="flex items-center justify-between gap-4 text-xs text-[var(--muted-foreground)]">
+                      <span class="font-medium text-[var(--foreground)]">你 (deliay)</span>
+                      <span class="tabular-nums">21:18</span>
+                    </div>
+                    <p class="leading-relaxed">请按照 Issue #584 与 PR #585 的技术提案，移除 <code class="font-mono text-xs px-1 py-0.5 rounded bg-[var(--background)]">homeOverview</code> 中的归档字段，把侧边栏「已归档」改为点击展开时按需懒加载，并聚合设置页为单次 <code class="font-mono text-xs px-1 py-0.5 rounded bg-[var(--background)]">settingsOverview</code> 查询。</p>
+                  </div>
+                </div>
+
+                <!-- Agent Response + Tool Calls -->
+                <div class="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 space-y-3 text-sm">
+                  <div class="flex items-center justify-between text-xs text-[var(--muted-foreground)]">
+                    <span class="font-semibold text-[var(--foreground)] flex items-center gap-1.5">
+                      <span class="w-2 h-2 rounded-full bg-[var(--primary)]"></span>
+                      ${s.harness} · ${s.model}
+                    </span>
+                    <span class="font-mono tabular-nums">14,280 tokens</span>
+                  </div>
+
+                  <p class="leading-relaxed text-[var(--foreground)]">
+                    已完成契约与前端数据流改造，关键改动如下：
+                  </p>
+
+                  <!-- Clickable File Write Tool Call (Triggers Live Preview) -->
+                  <div class="space-y-1.5">
+                    <div onclick="state.splitMode='horizontal'; state.previewTab='diff'; renderMainStage();" class="flex items-center justify-between gap-2 px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] hover:border-[var(--primary)] text-xs cursor-pointer">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span class="px-1.5 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] font-medium text-[var(--success)]">写入差异</span>
+                        <span class="font-mono truncate text-[var(--foreground)]">apps/agent-web/src/components/Sidebar.tsx</span>
+                      </div>
+                      <span class="shrink-0 text-[var(--primary)]">在右侧预览 Diff →</span>
+                    </div>
+
+                    <div onclick="state.splitMode='horizontal'; state.previewTab='diff'; renderMainStage();" class="flex items-center justify-between gap-2 px-3 py-2 rounded-md border border-[var(--border)] bg-[var(--background)] hover:border-[var(--primary)] text-xs cursor-pointer">
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span class="px-1.5 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] font-medium text-[var(--success)]">新增契约</span>
+                        <span class="font-mono truncate text-[var(--foreground)]">contracts/settings.graphql</span>
+                      </div>
+                      <span class="shrink-0 text-[var(--primary)]">+48 -0 行 →</span>
+                    </div>
+                  </div>
+
+                  <!-- Dark Terminal Output Block (xterm-headless spec) -->
+                  <div class="rounded-md bg-[#0d1117] text-[#e6edf3] p-3 font-mono text-xs space-y-1 overflow-x-auto border border-[var(--border)]">
+                    <div class="text-[#8b949e]">$ npx vitest run src/components/__tests__/Sidebar.test.tsx src/pages/__tests__/SettingsPage.test.tsx</div>
+                    <div class="text-[#3fb950]">✓ src/components/__tests__/Sidebar.test.tsx (14 tests) 312ms</div>
+                    <div class="text-[#3fb950]">✓ src/pages/__tests__/SettingsPage.test.tsx (9 tests) 248ms</div>
+                    <div class="text-[#e6edf3]">Test Files  2 passed (2) | Tests  23 passed (23)</div>
+                  </div>
+
+                  <!-- Inline Timeline Interaction Card (Elicitation / Permission Card) -->
+                  <div class="rounded-md border border-[var(--border)] bg-[var(--background)] p-3 space-y-2">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="font-semibold text-[var(--foreground)] flex items-center gap-1.5">
+                        <span class="w-2 h-2 rounded-full ${state.interactionApproved ? 'bg-[var(--success)]' : 'bg-[var(--warning)]'}"></span>
+                        ${state.interactionApproved ? '已批准：发起内建 Review 工具请求' : '待确认：AI 请求唤起内建代码评审 (SessionReview)'}
+                      </span>
+                      <span class="font-mono text-xs text-[var(--muted-foreground)]">${state.interactionApproved ? '已提交' : '剩余 28:45'}</span>
+                    </div>
+                    <p class="text-xs text-[var(--muted-foreground)]">
+                      包含 4 个变更文件（<code class="font-mono">home.graphql</code>、<code class="font-mono">settings.graphql</code>、<code class="font-mono">Sidebar.tsx</code>、<code class="font-mono">SettingsPage.tsx</code>）。
+                    </p>
+                    ${!state.interactionApproved ? `
+                      <div class="flex items-center gap-2 pt-1">
+                        <button onclick="state.interactionApproved=true; state.splitMode='horizontal'; state.previewTab='review'; renderMainStage();" class="px-3 py-1 rounded bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-medium cursor-pointer">批准并打开 Review 面板</button>
+                        <button onclick="state.interactionApproved=true; renderMainStage();" class="px-3 py-1 rounded border border-[var(--border)] bg-[var(--card)] text-xs cursor-pointer">仅允许本次</button>
+                      </div>
+                    ` : ''}
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            <!-- Unified Prompt Composer (100% Simplified Chinese, >=12px Typography) -->
+            <div class="p-3 border-t border-[var(--border)] bg-[var(--card)]">
+              <div class="max-w-3xl mx-auto rounded-lg border border-[var(--border)] bg-[var(--background)] p-2.5 space-y-2">
+                <!-- Prompt Parts Attachment Chip -->
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-[var(--card)] border border-[var(--border)] text-xs">
+                    <span class="font-medium text-[var(--primary)]">批注片段</span>
+                    <span class="truncate max-w-xs text-[var(--muted-foreground)]">Sidebar.tsx#L692-L715: 确认移除括号计数展示</span>
+                  </span>
+                </div>
+                <textarea rows="2" placeholder="输入消息或输入 / 唤起命令... (⌘ + Enter 发送)" class="w-full bg-transparent text-sm text-[var(--foreground)] placeholder:text-[var(--placeholder)] resize-none outline-none"></textarea>
+                <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-[var(--border)] text-xs">
+                  <div class="flex items-center gap-2">
+                    <span class="px-2 py-1 rounded bg-[var(--card)] border border-[var(--border)] font-medium">模式: ${s.mode}</span>
+                    <span class="px-2 py-1 rounded bg-[var(--card)] border border-[var(--border)] font-medium">模型: Agent Gear / ${s.model}</span>
+                    <button class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] cursor-pointer">+ 添加图片</button>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <button class="px-3 py-1.5 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-medium hover:opacity-90 cursor-pointer">发送消息 (⌘↵)</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Column: Live Split Inspector (Code Diff / Structured Review / Markdown) -->
+          ${showPreview ? `
+            <div class="flex flex-col min-h-0 min-w-0 bg-[var(--background)]">
+              <div class="h-10 shrink-0 border-b border-[var(--border)] bg-[var(--sidebar)] px-3 flex items-center justify-between gap-2 text-xs">
+                <div class="flex items-center gap-1">
+                  <button onclick="state.previewTab='diff'; renderMainStage();" class="px-2.5 py-1 rounded cursor-pointer ${state.previewTab === 'diff' ? 'bg-[var(--card)] text-[var(--foreground)] font-medium border border-[var(--border)]' : 'text-[var(--muted-foreground)]'}">
+                    Sidebar.tsx · 差异对比 (常开)
+                  </button>
+                  <button onclick="state.previewTab='review'; renderMainStage();" class="px-2.5 py-1 rounded flex items-center gap-1.5 cursor-pointer ${state.previewTab === 'review' ? 'bg-[var(--card)] text-[var(--foreground)] font-medium border border-[var(--border)]' : 'text-[var(--muted-foreground)]'}">
+                    <span class="w-2 h-2 rounded-full bg-[var(--warning)]"></span>
+                    代码评审 Review (4 文件)
+                  </button>
+                </div>
+                <span class="text-xs text-[var(--muted-foreground)]">点击行号可添加批注回传输入框</span>
+              </div>
+
+              <div class="flex-1 overflow-y-auto p-4 text-xs">
+                ${state.previewTab === 'diff' ? `
+                  <div class="rounded-lg border border-[var(--border)] bg-[var(--card)] overflow-hidden font-mono">
+                    <div class="px-3 py-2 border-b border-[var(--border)] bg-[var(--sidebar)] flex items-center justify-between">
+                      <span>apps/agent-web/src/components/Sidebar.tsx</span>
+                      <span class="text-[var(--success)]">+24 -12 · PR #585 归档按需加载</span>
+                    </div>
+                    <div class="divide-y divide-[var(--border)] leading-relaxed">
+                      <div class="px-3 py-1 text-[var(--muted-foreground)]">@@ -692,15 +692,26 @@ function ArchivedWorkflowGroup()</div>
+                      <div class="px-3 py-1 bg-red-500/10 text-red-400">-   已归档（{instances.length}）</div>
+                      <div class="px-3 py-1 bg-emerald-500/10 text-emerald-400">+   {/* PR #585: 常驻展示「已归档」无数量，点击展开按需请求 workflowInstances(archived: true) */}</div>
+                      <div class="px-3 py-1 bg-emerald-500/10 text-emerald-400">+   已归档</div>
+                      <div class="px-3 py-1 bg-emerald-500/10 text-emerald-400">+   {archivedOpen && loading && &lt;span className="text-xs text-muted-foreground"&gt;加载中…&lt;/span&gt;}</div>
+                      <div class="px-3 py-1 bg-emerald-500/10 text-emerald-400">+   {archivedOpen && !loading && instances.length === 0 && &lt;span className="text-xs text-muted-foreground"&gt;暂无归档&lt;/span&gt;}</div>
+                    </div>
+                  </div>
+                ` : `
+                  <div class="space-y-4">
+                    <div class="p-3.5 rounded-lg border border-[var(--border)] bg-[var(--card)] space-y-2">
+                      <div class="flex items-center justify-between">
+                        <span class="text-sm font-semibold">会话内建 Review 评审单 #rev-585</span>
+                        <span class="px-2 py-0.5 rounded-full bg-[var(--background)] border border-[var(--border)] text-xs text-[var(--warning)]">待提交结论</span>
+                      </div>
+                      <p class="text-xs text-[var(--muted-foreground)]">逐文件核对修改并回传结构化结论（通过 / 驳回返工 / 仅评论），AI 将收到完整行级批注。</p>
+                      <div class="space-y-1.5 pt-1">
+                        <div class="p-2 rounded border border-[var(--border)] bg-[var(--background)] flex items-center justify-between">
+                          <span class="font-mono">contracts/home.graphql</span>
+                          <span class="text-[var(--success)]">已审阅 · 0 批注</span>
+                        </div>
+                        <div class="p-2 rounded border border-[var(--border)] bg-[var(--background)] flex items-center justify-between">
+                          <span class="font-mono">contracts/settings.graphql</span>
+                          <span class="text-[var(--success)]">已审阅 · 1 批注</span>
+                        </div>
+                        <div class="p-2 rounded border border-[var(--border)] bg-[var(--background)] flex items-center justify-between">
+                          <span class="font-mono">apps/agent-web/src/components/Sidebar.tsx</span>
+                          <span class="text-[var(--primary)]">当前文件 · 1 批注</span>
+                        </div>
+                      </div>
+                      <div class="pt-2 flex items-center justify-end gap-2">
+                        <button class="px-3 py-1.5 rounded border border-[var(--border)] bg-[var(--background)] text-xs cursor-pointer">驳回并要求修改</button>
+                        <button class="px-3 py-1.5 rounded bg-[var(--success)] text-white text-xs font-medium cursor-pointer">通过 Review 并回传 Agent</button>
+                      </div>
+                    </div>
+                  </div>
+                `}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    function renderWorkflowStage() {
+      const wf = WORKFLOWS.find(item => item.id === state.activeWorkflowId) || WORKFLOWS[0];
+      return `
+        <!-- Top Workflow Context Bar -->
+        <div class="h-12 shrink-0 border-b border-[var(--border)] bg-[var(--card)] px-4 flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <h1 class="text-sm font-semibold truncate">${wf.name}</h1>
+            <span class="px-2 py-0.5 rounded-full bg-[var(--background)] border border-[var(--border)] text-xs font-medium text-[var(--primary)]">${wf.statusLabel}</span>
+            ${wf.prNumber ? `<span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-xs font-mono text-[var(--success)]">关联 PR ${wf.prNumber} · Check Runs 已同步</span>` : ''}
+          </div>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <div class="flex items-center rounded-md border border-[var(--border)] bg-[var(--background)] p-0.5 text-xs">
+              <button onclick="state.workflowView='graph'; renderMainStage();" class="px-2.5 py-1 rounded cursor-pointer ${state.workflowView === 'graph' ? 'bg-[var(--card)] font-medium shadow-2xs' : 'text-[var(--muted-foreground)]'}">竖向 DAG 图</button>
+              <button onclick="state.workflowView='list'; renderMainStage();" class="px-2.5 py-1 rounded cursor-pointer ${state.workflowView === 'list' ? 'bg-[var(--card)] font-medium shadow-2xs' : 'text-[var(--muted-foreground)]'}">节点列表</button>
+            </div>
+            <button class="px-2.5 py-1 rounded-md border border-[var(--border)] bg-[var(--background)] text-xs cursor-pointer">归档实例</button>
+          </div>
+        </div>
+
+        ${wf.unavailable ? `
+          <div class="mx-6 mt-4 p-3.5 rounded-lg border border-[var(--error)] bg-[var(--card)] flex flex-wrap items-center justify-between gap-3">
+            <div class="space-y-0.5">
+              <div class="text-sm font-semibold text-[var(--error)]">控制器已离线，当前工作流实例处于暂停保护态</div>
+              <div class="text-xs text-[var(--muted-foreground)]">已完成节点与黑板产物完整保留；点击「接续工作流」可迁移至在线控制器与可用工作区（遵循 PR #585 在线过滤）。</div>
+            </div>
+            <button onclick="openCmdModal()" class="px-3 py-1.5 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-medium cursor-pointer">接续到在线主机 →</button>
+          </div>
+        ` : ''}
+
+        <!-- Workflow Stage Body: Vertical DAG Canvas + Right Node Inspector Drawer -->
+        <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] overflow-hidden">
+          <!-- Vertical DAG Canvas (All badges >= 12px text-xs) -->
+          <div class="flex-1 overflow-y-auto p-6 flex flex-col items-center">
+            <div class="w-full max-w-xl space-y-3">
+              <!-- Instance Resource Bar -->
+              <div class="p-2.5 rounded-lg border border-[var(--border)] bg-[var(--card)] flex flex-wrap items-center justify-between gap-2 text-xs">
+                <span class="font-medium text-[var(--muted-foreground)]">实例全局资源：</span>
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] font-mono">PR #585 (OPEN)</span>
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)]">黑板: prd_doc, tech_proposal</span>
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)]">追加提示词 (1)</span>
+                </div>
+              </div>
+
+              <!-- Node 1: Completed AI Node -->
+              <div onclick="state.selectedWfNodeId='node-prd'; renderMainStage();" class="p-4 rounded-lg border cursor-pointer transition-all ${state.selectedWfNodeId === 'node-prd' ? 'border-[var(--primary)] bg-[var(--card)] shadow-sm' : 'border-[var(--border)] bg-[var(--card)]'}">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-[var(--success)]"></span>
+                    <span class="text-sm font-semibold">1. 编写 PRD 与同步领域模型</span>
+                  </div>
+                  <span class="px-2 py-0.5 rounded-full bg-[var(--background)] border border-[var(--border)] text-xs font-medium text-[var(--success)]">已完成</span>
+                </div>
+                <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)]">AI 节点 · OpenCode</span>
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)]">claude-sonnet-4-5</span>
+                  <span class="font-mono tabular-nums">38,420 tokens</span>
+                </div>
+              </div>
+
+              <div class="flex justify-center text-xs text-[var(--muted-foreground)]">↓ 依赖通过</div>
+
+              <!-- Node 2: Running AI Node -->
+              <div onclick="state.selectedWfNodeId='node-impl'; renderMainStage();" class="p-4 rounded-lg border-2 cursor-pointer transition-all border-[var(--primary)] bg-[var(--card)] shadow-sm">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-[var(--primary)] animate-pulse-dot"></span>
+                    <span class="text-sm font-semibold">2. 契约改造与前端聚合实现 (TDD)</span>
+                  </div>
+                  <span class="px-2 py-0.5 rounded-full bg-[var(--background)] border border-[var(--primary)] text-xs font-medium text-[var(--primary)]">进行中</span>
+                </div>
+                <div class="mt-2 flex flex-wrap items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)]">AI 节点 · OpenCode</span>
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)]">claude-sonnet-4-5</span>
+                  <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-[var(--warning)]">! 1 个会话待确认</span>
+                </div>
+                <div class="mt-2.5 px-2.5 py-1.5 rounded bg-[var(--background)] border border-[var(--border)] text-xs text-[var(--muted-foreground)] flex items-center justify-between">
+                  <span>● 正在执行工具调用：vitest run SettingsPage.test.tsx</span>
+                  <button onclick="event.stopPropagation(); switchDomain('sessions');" class="text-[var(--primary)] font-medium hover:underline cursor-pointer">进入节点会话 →</button>
+                </div>
+              </div>
+
+              <div class="flex justify-center text-xs text-[var(--muted-foreground)]">↓ 下游节点</div>
+
+              <!-- Node 3: Human Review Node (Inline Actionable) -->
+              <div onclick="state.selectedWfNodeId='node-human'; renderMainStage();" class="p-4 rounded-lg border cursor-pointer transition-all ${state.selectedWfNodeId === 'node-human' ? 'border-[var(--primary)] bg-[var(--card)]' : 'border-[var(--border)] bg-[var(--card)]'}">
+                <div class="flex items-center justify-between gap-2">
+                  <div class="flex items-center gap-2">
+                    <span class="w-2.5 h-2.5 rounded-full bg-[var(--warning)]"></span>
+                    <span class="text-sm font-semibold">3. 人类验收与 PR #585 合并审查</span>
+                  </div>
+                  <span class="px-2 py-0.5 rounded-full bg-[var(--background)] border border-[var(--border)] text-xs font-medium text-[var(--muted-foreground)]">联动上游 PR</span>
+                </div>
+                <div class="mt-2.5 flex items-center gap-2">
+                  <input type="text" placeholder="直接在卡片输入验收意见或由 GitHub PR Review 自动驱动..." class="flex-1 h-8 rounded border border-[var(--border)] bg-[var(--background)] px-2.5 text-xs outline-none" />
+                  <button class="px-2.5 h-8 rounded bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-medium cursor-pointer">完成节点</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right Inspector Drawer -->
+          <aside class="border-l border-[var(--border)] bg-[var(--sidebar)] p-4 overflow-y-auto space-y-4">
+            <div class="flex items-center justify-between border-b border-[var(--border)] pb-3">
+              <div>
+                <div class="text-xs text-[var(--muted-foreground)]">节点详情抽屉</div>
+                <h3 class="text-sm font-semibold mt-0.5">2. 契约改造与前端聚合实现</h3>
+              </div>
+              <span class="px-2 py-0.5 rounded-full bg-[var(--card)] border border-[var(--border)] text-xs text-[var(--primary)]">RUNNING</span>
+            </div>
+
+            <div class="space-y-2 text-xs">
+              <div class="font-semibold text-[var(--muted-foreground)]">会话与返工策略</div>
+              <div class="p-3 rounded-md border border-[var(--border)] bg-[var(--card)] space-y-1.5">
+                <div class="flex justify-between"><span>返工时会话策略</span><span class="font-medium">复用原始会话 + /compact 压缩</span></div>
+                <div class="flex justify-between"><span>中断自动重试</span><span class="font-medium tabular-nums">0 / 10 次 (指数退避)</span></div>
+                <div class="flex justify-between"><span>累计消耗</span><span class="font-mono tabular-nums">14,280 tokens</span></div>
+              </div>
+            </div>
+
+            <div class="space-y-2 text-xs">
+              <div class="font-semibold text-[var(--muted-foreground)]">黑板产物 (Blackboard Artifacts)</div>
+              <div class="p-3 rounded-md border border-[var(--border)] bg-[var(--card)] space-y-2">
+                <div>
+                  <div class="font-mono font-medium text-[var(--foreground)]">contract_diff_summary</div>
+                  <p class="text-[var(--muted-foreground)] mt-0.5">home.graphql 移除归档字段并新增 3 个聚合字段；新增 settings.graphql (13 分支)。</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="pt-2 flex flex-col gap-2">
+              <button onclick="switchDomain('sessions')" class="w-full py-2 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-medium cursor-pointer">打开绑定会话窗口</button>
+              <button class="w-full py-2 rounded-md border border-[var(--border)] bg-[var(--card)] text-[var(--error)] text-xs font-medium cursor-pointer">立即标记失败 (中断重试)</button>
+            </div>
+          </aside>
+        </div>
+      `;
+    }
+
+    function renderKbStage() {
+      const doc = KB_DOCS.find(d => d.id === state.activeKbDocId) || KB_DOCS[0];
+      return `
+        <div class="h-12 shrink-0 border-b border-[var(--border)] bg-[var(--card)] px-4 flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2 text-xs text-[var(--muted-foreground)] min-w-0">
+            <span class="px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)] text-xs font-medium text-[var(--foreground)]">${doc.source}</span>
+            <span>/</span>
+            <span class="font-mono truncate text-[var(--foreground)]">${doc.path}</span>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="px-2 py-0.5 rounded-full bg-[var(--background)] border border-[var(--border)] text-xs">${doc.badge}</span>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto p-6">
+          <article class="max-w-3xl mx-auto space-y-5">
+            <h1 class="text-2xl font-semibold text-[var(--foreground)]">${doc.title}</h1>
+            <!-- Front Matter Table -->
+            <div class="rounded-lg border border-[var(--border)] bg-[var(--card)] overflow-hidden text-xs">
+              <div class="px-3 py-2 border-b border-[var(--border)] bg-[var(--sidebar)] font-semibold text-[var(--muted-foreground)]">文档元数据 (YAML Front Matter)</div>
+              <div class="grid grid-cols-[120px_1fr] divide-y divide-[var(--border)]">
+                <div class="px-3 py-2 text-[var(--muted-foreground)]">类型 (type)</div>
+                <div class="px-3 py-2 font-mono">Permanent</div>
+                <div class="px-3 py-2 text-[var(--muted-foreground)]">最小字号约束</div>
+                <div class="px-3 py-2">全站禁止 &lt; 12px (移除 text-[9px]/text-[10px]/text-[11px])</div>
+                <div class="px-3 py-2 text-[var(--muted-foreground)]">关联规范</div>
+                <div class="px-3 py-2 font-mono">docs/engineering/ui-ux-standards.md</div>
+              </div>
+            </div>
+
+            <div class="space-y-3 text-sm leading-relaxed text-[var(--foreground)]">
+              <h2 class="text-lg font-semibold">核心架构准则摘要</h2>
+              <p>1. <strong>三层工作区架构</strong>：左侧 56px 一级导航轨 (Activity Rail) + 280px 聚焦上下文面板 (Context Panel) + 自适应主舞台 (Main Stage)。</p>
+              <p>2. <strong>性能感知的 UI 设计 (PR #585)</strong>：侧边栏「已归档」分组常驻折叠、不显示计数、首次展开时按需查询；设置中心采用 <code class="font-mono text-xs px-1.5 py-0.5 rounded bg-[var(--card)] border border-[var(--border)]">settingsOverview</code> 单次聚合请求。</p>
+            </div>
+          </article>
+        </div>
+      `;
+    }
+
+    function renderInfraStage() {
+      return `
+        <div class="flex-1 overflow-y-auto p-6">
+          <div class="max-w-4xl mx-auto space-y-6">
+            <div class="flex items-center justify-between">
+              <div>
+                <h1 class="text-xl font-semibold">主机、云电脑与端口网关</h1>
+                <p class="text-sm text-[var(--muted-foreground)] mt-0.5">统一管理 K8s 云端工作容器、本地 Agent 控制器及暴露的 HTTP/MCP 网关服务</p>
+              </div>
+              <button onclick="openCmdModal()" class="px-3.5 py-2 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-sm font-medium cursor-pointer">+ 创建云电脑</button>
+            </div>
+            <div class="space-y-4">
+              ${INFRA_HOSTS.map(h => `
+                <div class="p-5 rounded-lg border border-[var(--border)] bg-[var(--card)] space-y-3">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="flex items-center gap-2.5">
+                      <span class="w-2.5 h-2.5 rounded-full ${h.status === 'online' ? 'bg-[var(--success)]' : 'bg-[var(--muted-foreground)]'}"></span>
+                      <h2 class="text-base font-semibold">${h.name}</h2>
+                      <span class="px-2 py-0.5 rounded-full bg-[var(--background)] border border-[var(--border)] text-xs">${h.status === 'online' ? '在线' : '已离线'}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                      <button onclick="state.selectedControllerDetail='${h.id}'; switchDomain('settings');" class="px-3 py-1.5 rounded-md border border-[var(--border)] bg-[var(--background)] text-xs font-medium hover:border-[var(--primary)] cursor-pointer">配置工作区与工作负载 →</button>
+                    </div>
+                  </div>
+                  <div class="text-xs text-[var(--muted-foreground)]">${h.spec} · 组件版本 ${h.version}</div>
+                  ${h.gateways.length > 0 ? `
+                    <div class="pt-2 border-t border-[var(--border)] flex flex-wrap items-center gap-2 text-xs">
+                      <span class="text-[var(--muted-foreground)]">活跃网关:</span>
+                      ${h.gateways.map(g => `<span class="px-2 py-1 rounded bg-[var(--background)] border border-[var(--border)] font-mono">${g.label} (:${g.port}) → ${g.url}</span>`).join('')}
+                    </div>
+                  ` : ''}
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderBillingStage() {
+      return `
+        <div class="flex-1 overflow-y-auto p-6">
+          <div class="max-w-4xl mx-auto space-y-6">
+            <div>
+              <h1 class="text-xl font-semibold">我的费用 (Credits 计费中心)</h1>
+              <p class="text-sm text-[var(--muted-foreground)] mt-0.5">当前计费归属：ZeroAsh Team 租户账户 · 全部金额与 Token 采用等宽数字 (tabular-nums) 对齐</p>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div class="p-4 rounded-lg border border-[var(--border)] bg-[var(--card)]">
+                <div class="text-xs text-[var(--muted-foreground)]">可用余额 (Credits)</div>
+                <div class="mt-1.5 text-2xl font-semibold tabular-nums text-[var(--success)]">1,284.50</div>
+              </div>
+              <div class="p-4 rounded-lg border border-[var(--border)] bg-[var(--card)]">
+                <div class="text-xs text-[var(--muted-foreground)]">现金余额</div>
+                <div class="mt-1.5 text-2xl font-semibold tabular-nums">1,310.00</div>
+              </div>
+              <div class="p-4 rounded-lg border border-[var(--border)] bg-[var(--card)]">
+                <div class="text-xs text-[var(--muted-foreground)]">运行预留冻结</div>
+                <div class="mt-1.5 text-2xl font-semibold tabular-nums">25.50</div>
+              </div>
+              <div class="p-4 rounded-lg border border-[var(--border)] bg-[var(--card)]">
+                <div class="text-xs text-[var(--muted-foreground)]">账单状态</div>
+                <div class="mt-1.5 text-2xl font-semibold text-[var(--foreground)]">正常</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderSettingsStage() {
+      const categories = [
+        { id: 'models', label: '供应商与模型设置', count: '4 供应商 · 12 模型' },
+        { id: 'controllers', label: '控制器与云电脑', count: '复用 homeOverview' },
+        { id: 'mcp', label: 'MCP · Valut · 自定义工具', count: '8 项已配置' },
+        { id: 'git', label: 'GitHub 绑定与 Git 署名', count: 'Co-Author 开启' },
+        { id: 'workflows', label: '工作流模板与配置', count: '复用 homeOverview' },
+        { id: 'storage', label: '云存储卷 (PVC)', count: '2 块存储' },
+        { id: 'account', label: '帐号与外部登录 (OIDC)', count: '已绑定 GitHub' },
+      ];
+
+      return `
+        <div class="h-12 shrink-0 border-b border-[var(--border)] bg-[var(--card)] px-6 flex items-center justify-between gap-4">
+          <div class="flex items-center gap-2 text-sm">
+            <span class="font-semibold">设置中心</span>
+            ${state.selectedControllerDetail ? `
+              <span class="text-[var(--muted-foreground)]">/</span>
+              <button onclick="state.selectedControllerDetail=null; renderMainStage();" class="text-[var(--primary)] hover:underline cursor-pointer">控制器管理</button>
+              <span class="text-[var(--muted-foreground)]">/</span>
+              <span class="font-mono text-xs px-2 py-0.5 rounded bg-[var(--background)] border border-[var(--border)]">${state.selectedControllerDetail}</span>
+            ` : ''}
+          </div>
+          <div class="flex items-center gap-2 text-xs">
+            <span class="px-2.5 py-1 rounded-full bg-[var(--background)] border border-[var(--border)] text-[var(--success)] font-medium">
+              ✓ PR #585 单次 SETTINGS_OVERVIEW 聚合加载 (18~20 次请求 → 1 次)
+            </span>
+          </div>
+        </div>
+
+        <div class="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[230px_minmax(0,1fr)] overflow-hidden">
+          <!-- Left Settings Category Nav -->
+          <nav class="border-r border-[var(--border)] bg-[var(--sidebar)] p-3 space-y-1 overflow-y-auto">
+            ${categories.map(c => `
+              <button onclick="state.selectedControllerDetail=null; state.settingsCategory='${c.id}'; renderMainStage();" class="w-full text-left px-3 py-2 rounded-md text-sm flex flex-col gap-0.5 transition-colors cursor-pointer ${state.settingsCategory === c.id && !state.selectedControllerDetail ? 'bg-[var(--card)] text-[var(--foreground)] font-medium border border-[var(--border)] shadow-2xs' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--card)]'}">
+                <span>${c.label}</span>
+                <span class="text-xs text-[var(--muted-foreground)]">${c.count}</span>
+              </button>
+            `).join('')}
+          </nav>
+
+          <!-- Right Settings Content (Focused Category View instead of 12-Section Infinite Scroll) -->
+          <div class="flex-1 overflow-y-auto p-6">
+            <div class="max-w-3xl space-y-6">
+              ${state.selectedControllerDetail ? `
+                <div class="p-5 rounded-lg border border-[var(--border)] bg-[var(--card)] space-y-4">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <h2 class="text-lg font-semibold">云电脑配置 · ${state.selectedControllerDetail}</h2>
+                      <p class="text-xs text-[var(--muted-foreground)] mt-0.5">面包屑嵌入式详情视图，无需脱离设置中心上下文</p>
+                    </div>
+                    <button onclick="state.selectedControllerDetail=null; renderMainStage();" class="px-3 py-1.5 rounded border border-[var(--border)] bg-[var(--background)] text-xs cursor-pointer">← 返回控制器列表</button>
+                  </div>
+                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div class="p-3 rounded border border-[var(--border)] bg-[var(--background)]">
+                      <div class="text-[var(--muted-foreground)]">项目工作区 (仅在线可用)</div>
+                      <div class="font-mono font-medium text-sm mt-1">~/workspace/z-agent-gear</div>
+                    </div>
+                    <div class="p-3 rounded border border-[var(--border)] bg-[var(--background)]">
+                      <div class="text-[var(--muted-foreground)]">已装 Harness</div>
+                      <div class="font-medium text-sm mt-1">OpenCode, DeepSeek, Kimi</div>
+                    </div>
+                    <div class="p-3 rounded border border-[var(--border)] bg-[var(--background)]">
+                      <div class="text-[var(--muted-foreground)]">agent-gear 版本</div>
+                      <div class="font-mono font-medium text-sm mt-1 text-[var(--success)]">2.23.0 (最新)</div>
+                    </div>
+                  </div>
+                </div>
+              ` : `
+                <div class="p-5 rounded-lg border border-[var(--border)] bg-[var(--card)] space-y-4">
+                  <div class="flex items-center justify-between border-b border-[var(--border)] pb-3">
+                    <div>
+                      <h2 class="text-lg font-semibold">${categories.find(c => c.id === state.settingsCategory)?.label}</h2>
+                      <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
+                        分类聚焦视图：告别 12 个区块同屏长滚；数据由 <code class="font-mono">SettingsOverviewContext</code> 一次下发，局部变更即时更新。
+                      </p>
+                    </div>
+                    <button class="px-3 py-1.5 rounded-md bg-[var(--primary)] text-[var(--primary-foreground)] text-xs font-medium cursor-pointer">+ 新增配置项</button>
+                  </div>
+
+                  <div class="space-y-2.5 text-sm">
+                    <div class="p-3.5 rounded-md border border-[var(--border)] bg-[var(--background)] flex items-center justify-between">
+                      <div>
+                        <div class="font-medium">Agent Gear 平台内建渠道 (ModelProvision 实时下发)</div>
+                        <div class="text-xs text-[var(--muted-foreground)] mt-0.5">claude-sonnet-4-5 · deepseek-v3 · kimi-k2 (最长上下文 200,000 tokens)</div>
+                      </div>
+                      <span class="px-2 py-0.5 rounded-full bg-[var(--card)] border border-[var(--border)] text-xs text-[var(--success)]">已同步至运行中云电脑</span>
+                    </div>
+                    <div class="p-3.5 rounded-md border border-[var(--border)] bg-[var(--background)] flex items-center justify-between">
+                      <div>
+                        <div class="font-medium">控制器列表与工作区可用性口径 (PR #585)</div>
+                        <div class="text-xs text-[var(--muted-foreground)] mt-0.5">移除 ControllerListSection 独立 15s 轮询，直接复用 homeOverview.controllers；离线主机工作区自动隐藏</div>
+                      </div>
+                      <button onclick="state.selectedControllerDetail='cloud-dev-01'; renderMainStage();" class="px-2.5 py-1 rounded border border-[var(--border)] bg-[var(--card)] text-xs hover:border-[var(--primary)] cursor-pointer">进入云电脑详情 →</button>
+                    </div>
+                  </div>
+                </div>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderAll() {
+      renderRail();
+      renderContextList();
+      renderMainStage();
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        openCmdModal();
+      } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        toggleContextPanel();
+      } else if (e.key === 'Escape') {
+        closeCmdModal();
+      }
+    });
+
+    renderAll();
+  </script>
+</body>
+</html>
