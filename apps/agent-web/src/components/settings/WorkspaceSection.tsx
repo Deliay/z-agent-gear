@@ -377,7 +377,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-destructive shrink-0"
+                  className="text-destructive-text shrink-0"
                   onClick={() => handleDeleteClick(ws.id)}
                 >
                   删除
@@ -392,7 +392,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
                       检测 Git 状态中...
                     </div>
                   ) : gitStates[ws.id]?.error ? (
-                    <div className="text-sm text-destructive">
+                    <div className="text-sm text-destructive-text">
                       {gitStates[ws.id].error}
                     </div>
                   ) : gitStates[ws.id]?.data?.isGitRepo ? (
@@ -445,7 +445,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
 
       {confirmClear && (
         <div className="mt-4 rounded-lg border border-destructive/50 p-4">
-          <p className="text-sm text-destructive mb-3">确定要清空所有工作区吗？此操作不可撤销。</p>
+          <p className="text-sm text-destructive-text mb-3">确定要清空所有工作区吗？此操作不可撤销。</p>
           {clearSessionCount != null && clearSessionCount > 0 && (
             <p className="mb-3 text-sm text-muted-foreground" data-testid="clear-archive-impact">
               将同时归档其下 {clearSessionCount} 个会话
@@ -472,7 +472,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
       ))}
 
       {deleteConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
             <h2 className="mb-4 text-lg font-semibold">删除工作区</h2>
             <p className="mb-4 text-sm text-muted-foreground">
@@ -499,7 +499,7 @@ export default function WorkspaceSection({ controllerId, controllerOnline = fals
       )}
 
       {showWorktreeDirPicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
             <h2 className="mb-4 text-lg font-semibold">选择 Worktree 工作目录</h2>
             <p className="mb-4 text-sm text-muted-foreground">所有 Git Worktree 将创建在此目录下</p>

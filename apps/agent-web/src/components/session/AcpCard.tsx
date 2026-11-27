@@ -19,9 +19,9 @@ interface AcpCardProps {
 const colorClasses = {
   purple: {
     container: 'bg-info/10 border border-info motion-safe:animate-pulse',
-    header: 'text-info',
-    summary: 'text-info',
-    chevron: 'text-info hover:opacity-70',
+    header: 'text-info-text',
+    summary: 'text-info-text',
+    chevron: 'text-info-text hover:opacity-70',
   },
   yellow: {
     container: 'bg-muted border border-border',
@@ -44,21 +44,21 @@ const colorClasses = {
   // 恒高亮：进行中最强（脉冲），完成/失败减弱为同色系浅高亮，失败摘要用 destructive 略微区分
   active: {
     container: 'bg-info/10 border border-info motion-safe:animate-pulse',
-    header: 'text-info',
-    summary: 'text-info',
-    chevron: 'text-info hover:opacity-70',
+    header: 'text-info-text',
+    summary: 'text-info-text',
+    chevron: 'text-info-text hover:opacity-70',
   },
   completed: {
     container: 'bg-info/5 border border-info/40',
-    header: 'text-info',
-    summary: 'text-info/70',
-    chevron: 'text-info/70 hover:opacity-70',
+    header: 'text-info-text',
+    summary: 'text-info-text',
+    chevron: 'text-info-text/70 hover:opacity-70',
   },
   failed: {
     container: 'bg-info/5 border border-info/40',
-    header: 'text-info',
-    summary: 'text-destructive',
-    chevron: 'text-info/70 hover:opacity-70',
+    header: 'text-info-text',
+    summary: 'text-destructive-text',
+    chevron: 'text-info-text/70 hover:opacity-70',
   },
   // 等待确认/待执行：弱化描边，不脉冲
   pending: {

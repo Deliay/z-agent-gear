@@ -131,7 +131,7 @@ export default function BillingPage() {
 
       {accountQuery.error && (
         <Card>
-          <CardContent className="py-6 text-sm text-destructive">
+          <CardContent className="py-6 text-sm text-destructive-text">
             费用数据加载失败：{accountQuery.error.message}
           </CardContent>
         </Card>
@@ -143,7 +143,7 @@ export default function BillingPage() {
             </CardHeader>
             <CardContent className="space-y-3">
               {account.availableBalance < 0 && (
-                <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive-text">
                   账户已欠费（可用余额 {account.availableBalance.toFixed(2)} credits），
                   请联系统管理员充值；持续欠费将导致云端容器被强制销毁。
                 </div>
@@ -151,17 +151,17 @@ export default function BillingPage() {
               <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
                 <div>
                   <div className="text-muted-foreground">可用余额</div>
-                  <div className={account.availableBalance < 0 ? 'text-destructive' : ''}>
+                  <div className={account.availableBalance < 0 ? 'text-destructive-text tabular-nums' : 'tabular-nums'}>
                     {account.availableBalance.toFixed(2)}
                   </div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">现金</div>
-                  <div>{account.cashBalance.toFixed(2)}</div>
+                  <div className="tabular-nums">{account.cashBalance.toFixed(2)}</div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">冻结</div>
-                  <div>{account.frozenAmount.toFixed(2)}</div>
+                  <div className="tabular-nums">{account.frozenAmount.toFixed(2)}</div>
                 </div>
                 <div>
                   <div className="text-muted-foreground">状态</div>
@@ -240,7 +240,7 @@ export default function BillingPage() {
           {invoicesQuery.loading && !invoicesQuery.data ? (
             <p className="text-sm text-muted-foreground">加载中…</p>
           ) : invoicesQuery.error ? (
-            <div className="space-y-2 text-sm text-destructive">
+            <div className="space-y-2 text-sm text-destructive-text">
               <p>账单加载失败：{invoicesQuery.error.message}</p>
               <Button size="sm" variant="outline" onClick={() => void invoicesQuery.refetch()}>
                 重试
@@ -279,7 +279,7 @@ export default function BillingPage() {
                       <td className="max-w-[220px] truncate py-2 pr-3" title={invoice.description}>
                         {invoice.description}
                       </td>
-                      <td className={`py-2 pr-3 text-right tabular-nums ${invoice.amount < 0 ? 'text-destructive' : ''}`}>
+                      <td className={`py-2 pr-3 text-right tabular-nums ${invoice.amount < 0 ? 'text-destructive-text' : invoice.type === 'recharge' ? 'text-success-text' : ''}`}>
                         {invoice.amount.toFixed(2)}
                       </td>
                       <td className="py-2 pr-3 text-right tabular-nums">{invoice.balanceAfter.toFixed(2)}</td>
@@ -319,7 +319,7 @@ export default function BillingPage() {
           {callsQuery.loading && !callsQuery.data ? (
             <p className="text-sm text-muted-foreground">加载中…</p>
           ) : callsQuery.error ? (
-            <div className="space-y-2 text-sm text-destructive">
+            <div className="space-y-2 text-sm text-destructive-text">
               <p>调用记录加载失败：{callsQuery.error.message}</p>
               <Button size="sm" variant="outline" onClick={() => void callsQuery.refetch()}>
                 重试
@@ -400,7 +400,7 @@ export default function BillingPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           {rollupsQuery.error ? (
-            <div className="space-y-2 text-sm text-destructive">
+            <div className="space-y-2 text-sm text-destructive-text">
               <p>汇总加载失败：{rollupsQuery.error.message}</p>
               <Button size="sm" variant="outline" onClick={() => void rollupsQuery.refetch()}>
                 重试
@@ -415,7 +415,7 @@ export default function BillingPage() {
               <div key={item.bucketStart} className="space-y-1">
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>{formatDateTime(item.bucketStart)}</span>
-                  <span>
+                  <span className="tabular-nums">
                     消费 {item.chargeTotal.toFixed(2)} · {item.chargeCount} 笔
                   </span>
                 </div>
@@ -443,7 +443,7 @@ export default function BillingPage() {
             </Button>
           </div>
           {secret && (
-            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+            <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs">
               <div className="mb-1 font-medium">完整 Key 仅显示一次，请立即保存：</div>
               <code className="break-all">{secret}</code>
               <Button size="sm" variant="ghost" className="mt-2" onClick={() => setSecret(null)}>
@@ -504,11 +504,11 @@ export default function BillingPage() {
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">金额</span>
-                <span>{receiptInvoice.amount.toFixed(2)} credits</span>
+                <span className="tabular-nums">{receiptInvoice.amount.toFixed(2)} credits</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">支付后余额</span>
-                <span>{receiptInvoice.balanceAfter.toFixed(2)} credits</span>
+                <span className="tabular-nums">{receiptInvoice.balanceAfter.toFixed(2)} credits</span>
               </div>
               <div className="space-y-1 border-t pt-2">
                 {receiptInvoice.items.map((item, index) => (

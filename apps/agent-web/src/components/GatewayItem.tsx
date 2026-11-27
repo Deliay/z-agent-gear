@@ -39,7 +39,7 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
       <span className="text-xs text-muted-foreground">:{gateway.port}</span>
       <span
         className={`text-xs ${
-          gateway.status === 'active' ? 'text-success' : 'text-muted-foreground'
+          gateway.status === 'active' ? 'text-success-text' : 'text-muted-foreground'
         }`}
       >
         {gateway.status}
@@ -58,7 +58,7 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
       <button
         type="button"
         onClick={handleDelete}
-        className="text-xs text-destructive hover:text-destructive/80"
+        className="text-xs text-destructive-text hover:text-destructive-text/80"
         title="删除网关暴露"
       >
         <Trash2 className="size-3" />

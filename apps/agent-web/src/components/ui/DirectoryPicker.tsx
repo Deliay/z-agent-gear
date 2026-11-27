@@ -160,7 +160,7 @@ export default function DirectoryPicker({ controllerId, onSelect, onClose }: Dir
         </Button>
       </div>
     {showNewFolder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50">
           <div className="w-full max-w-sm rounded-lg bg-card p-6 shadow-xl">
             <h3 className="mb-4 text-base font-semibold">新建文件夹</h3>
             <Input

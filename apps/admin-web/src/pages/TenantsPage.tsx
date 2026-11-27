@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Building2 } from 'lucide-react'
 import { ADMIN_TENANTS } from '@/graphql/queries'
 import { ADMIN_CREATE_FRONT_USER, ADMIN_CREATE_TEAM_TENANT } from '@/graphql/mutations'
-import type { AdminTenantData, GetAdminTenantsQuery, TenantType } from '@/graphql/types'
+import type { AdminTenantData, GetAdminTenantsQuery } from '@/graphql/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,12 +20,9 @@ import {
 } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { QueryError } from '@/components/ui/query-error'
+import { tenantTypeBadge } from '@/components/tenants/roles'
 import { formatDateTime } from '@/lib/format'
-
-const TENANT_TYPE_LABELS: Record<TenantType, string> = {
-  personal: '个人',
-  team: '团队',
-}
+import * as T from '@/lib/table-styles'
 
 const PAGE_SIZE = 20
 
@@ -167,9 +164,14 @@ export default function TenantsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="font-heading text-xl font-medium text-foreground">租户管理</h1>
+    <div className="mx-auto max-w-6xl space-y-6 p-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-heading text-xl font-semibold text-foreground">租户管理</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            管理前台个人/团队租户，支持开户、团队租户创建与成员角色维护。
+          </p>
+        </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={openTeam}>
             创建团队租户
@@ -206,15 +208,15 @@ export default function TenantsPage() {
             />
           </div>
         ) : (
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-0 text-sm">
-              <thead className="bg-muted/50 text-left text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-2 font-medium">名称</th>
-                  <th className="px-4 py-2 font-medium">类型</th>
-                  <th className="px-4 py-2 text-right font-medium">成员数</th>
-                  <th className="px-4 py-2 text-right font-medium">余额</th>
-                  <th className="px-4 py-2 font-medium">创建时间</th>
+          <div className={T.TABLE_CONTAINER_CLASS}>
+            <table className={T.TABLE_CLASS}>
+              <thead>
+                <tr className={T.TABLE_HEAD_CLASS}>
+                  <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
+                  <th className={T.TABLE_HEAD_CELL_CLASS}>类型</th>
+                  <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>成员数</th>
+                  <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>余额</th>
+                  <th className={T.TABLE_HEAD_CELL_CLASS}>创建时间</th>
                 </tr>
               </thead>
               <tbody>
@@ -231,17 +233,17 @@ export default function TenantsPage() {
                     }}
                     tabIndex={0}
                   >
-                    <td className="px-4 py-3 font-medium text-foreground">{tenant.name}</td>
-                    <td className="px-4 py-3">
-                      <Badge variant="outline">
-                        {TENANT_TYPE_LABELS[tenant.type] ?? tenant.type}
+                    <td className={`${T.TABLE_CELL_CLASS} font-medium text-foreground`}>{tenant.name}</td>
+                    <td className={T.TABLE_CELL_CLASS}>
+                      <Badge variant={tenantTypeBadge(tenant.type).variant}>
+                        {tenantTypeBadge(tenant.type).label}
                       </Badge>
                     </td>
-                    <td className="px-4 py-3 text-right tabular-nums">{tenant.memberCount}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">
+                    <td className={T.TABLE_CELL_NUMERIC_CLASS}>{tenant.memberCount}</td>
+                    <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                       {tenantBalanceText(tenant.balance)}
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground">
+                    <td className={T.TABLE_CELL_MUTED_CLASS}>
                       {formatDateTime(tenant.createdAt)}
                     </td>
                   </tr>

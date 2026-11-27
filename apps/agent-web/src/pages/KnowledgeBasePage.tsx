@@ -178,6 +178,12 @@ export default function KnowledgeBasePage() {
             >
               {repoDocument.title}
             </h1>
+            <p
+              className="mb-4 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground"
+              data-testid="repo-kb-readonly-notice"
+            >
+              仓库内建知识库为只读来源，内容随仓库同步，不支持在线编辑。
+            </p>
             <RepoKnowledgeBaseContent document={repoDocument} />
           </div>
         </article>

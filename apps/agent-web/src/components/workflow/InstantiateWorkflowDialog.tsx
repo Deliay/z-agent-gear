@@ -354,7 +354,7 @@ export default function InstantiateWorkflowDialog({
               </div>
 
               {error && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
                   {error}
                 </div>
               )}
@@ -388,7 +388,7 @@ export default function InstantiateWorkflowDialog({
                       userTouchedWorktreeRef.current = true
                       setCreateWorkflowWorktree(e.target.checked)
                     }}
-                    className="h-4 w-4 rounded border-gray-300"
+                    className="h-4 w-4 rounded border-input"
                   />
                   <Label htmlFor="createWorkflowWorktree" className="text-sm">
                     为工作流创建独立 Worktree
@@ -403,13 +403,13 @@ export default function InstantiateWorkflowDialog({
               )}
 
               {blockedByGit && (
-                <div className="rounded-md bg-warning/10 p-3 text-sm text-warning">
+                <div className="rounded-md bg-warning/10 p-3 text-sm text-warning-text">
                   当前工作区不支持 Git，无法实例化需要 Worktree 的工作流
                 </div>
               )}
 
               {error && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
                   {error}
                 </div>
               )}

@@ -81,7 +81,7 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
           {NODE_STATUS_LABELS[node.status]}
         </span>
         {node.reworkCount > 0 && (
-          <span className="inline-flex items-center gap-0.5 rounded bg-warning/15 px-1.5 py-0.5 text-xs tabular-nums text-warning">
+          <span className="inline-flex items-center gap-0.5 rounded bg-warning/15 px-1.5 py-0.5 text-xs tabular-nums text-warning-text">
             <RotateCcw className="size-3" />
             返工 {node.reworkCount} 次
           </span>
@@ -127,12 +127,12 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
       </div>
 
       {node.rejectInfo && node.status === 'REJECT' && (
-        <div className="rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
+        <div className="rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive-text">
           打回理由：{node.rejectInfo.reason}
         </div>
       )}
       {node.failInfo && (node.status === 'FAILED' || node.status === 'RETRY_FAILED') && (
-        <div className="rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
+        <div className="rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive-text">
           <div>
             {node.status === 'RETRY_FAILED' ? '重试失败原因' : '失败原因'}：{node.failInfo.reason}
           </div>
@@ -182,7 +182,7 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
                 <div className="mt-0.5 text-xs text-muted-foreground">最近同步：{link.lastSyncAt}</div>
               )}
               {link.lastSyncError && (
-                <div className="mt-0.5 break-all text-xs text-destructive">{link.lastSyncError}</div>
+                <div className="mt-0.5 break-all text-xs text-destructive-text">{link.lastSyncError}</div>
               )}
             </div>
           ))}

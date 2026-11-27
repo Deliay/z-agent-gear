@@ -1,15 +1,12 @@
 import { useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { useMutation, useQuery } from '@apollo/client/react';
-import { toast } from 'sonner';
-import { CREATE_SESSION } from '../graphql/mutations';
-import { logger } from '../lib/logger';
+import { useQuery } from '@apollo/client/react';
 import type {
   CloudHostCapabilitiesData,
-  CreateSessionMutation,
   GetCloudHostCapabilitiesQuery,
   SessionData,
 } from '../graphql/types';
+import { useCreateSession } from '../hooks/useCreateSession';
 import NewSessionDialog from './session/NewSessionDialog';
 import NewCloudHostDialog from './cloud-host/NewCloudHostDialog';
 import GithubProjectSetupDialog from './cloud-host/GithubProjectSetupDialog';
@@ -40,7 +37,6 @@ import {
   GitBranch,
 } from 'lucide-react';
 import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
-import { HOME_OVERVIEW } from '../graphql/home';
 import { CLOUD_HOST_CAPABILITIES, GET_ARCHIVED_SESSIONS } from '../graphql/queries';
 import { GET_WORKFLOW_INSTANCES, type GetWorkflowInstancesQuery } from '../graphql/workflow';
 import type { GetArchivedSessionsQuery } from '../graphql/types';
@@ -125,7 +121,7 @@ export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
   const { data: capabilitiesData } = useQuery<GetCloudHostCapabilitiesQuery>(CLOUD_HOST_CAPABILITIES);
   const capabilities: CloudHostCapabilitiesData | undefined = capabilitiesData?.cloudHostCapabilities;
 
-  const [createSession] = useMutation<CreateSessionMutation>(CREATE_SESSION);
+  const submitCreateSession = useCreateSession();
 
   const sessions = data?.sessions ?? [];
   const controllers = data?.controllers ?? [];
@@ -201,36 +197,21 @@ export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
     modelId?: string,
     customMcpServerIds?: string[],
   ) => {
-    try {
-      const { data: result } = await createSession({
-        variables: {
-          input: {
-            controllerId,
-            acpServerType,
-            workspaceId,
-            enableWorktree: existingWorktreePath ? false : (enableWorktree || false),
-            worktreeBranchSuffix: worktreeBranchSuffix || null,
-            // 显式空数组 = 不注入；undefined 走控制器默认
-            mcpServerIds: mcpServerIds === undefined ? null : mcpServerIds,
-            existingWorktreePath: existingWorktreePath || null,
-            modeId: modeId || null,
-            modelId: modelId || null,
-            // 第 10 参：自定义 MCP；undefined/[] 不注入（保持旧报文形状不含该键）
-            ...(customMcpServerIds && customMcpServerIds.length > 0
-              ? { customMcpServerIds }
-              : {}),
-          },
-        },
-        refetchQueries: [{ query: HOME_OVERVIEW }],
-      });
-      if (result?.createSession?.session?.id) {
-        navigate(`/sessions/${result.createSession.session.id}`);
-        setShowNewDialog(null);
-      }
-    } catch (error) {
-      logger.error({ err: error }, 'Failed to create session');
-      // C-19：创建失败不能静默（弹窗已关闭，至少给出可感知反馈）
-      toast.error(error instanceof Error ? error.message : '创建会话失败，请重试');
+    // 提交链路收敛到 useCreateSession（与 ⌘K 快速新建共用，D6）
+    const sessionId = await submitCreateSession(
+      controllerId,
+      acpServerType,
+      workspaceId,
+      enableWorktree,
+      worktreeBranchSuffix,
+      mcpServerIds,
+      existingWorktreePath,
+      modeId,
+      modelId,
+      customMcpServerIds,
+    );
+    if (sessionId) {
+      setShowNewDialog(null);
     }
   };
 
@@ -351,7 +332,7 @@ export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
                               && cloudHost.harnessTypes.length === 1
                               && !cloudHost.defaultSessionId && (
                                 <span
-                                  className="truncate text-xs text-destructive"
+                                  className="truncate text-xs text-destructive-text"
                                   data-testid="cloud-host-default-session-hint"
                                 >
                                   默认会话创建失败，可手动创建会话

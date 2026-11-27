@@ -51,7 +51,7 @@ export function ModelSelectDialog({ open, models, currentModelId, loading, onSel
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50"
       role="dialog"
       tabIndex={-1}
       onClick={handleOverlayClick}

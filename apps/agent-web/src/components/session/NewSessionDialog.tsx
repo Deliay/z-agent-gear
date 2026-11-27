@@ -306,7 +306,7 @@ export default function NewSessionDialog({
       role="dialog"
       aria-modal="true"
       aria-label="新建会话"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/50"
     >
       <div className="w-full max-w-md rounded-lg bg-card p-6 shadow-xl">
         <h2 className="mb-4 text-lg font-semibold text-foreground">新建会话</h2>
@@ -335,10 +335,10 @@ export default function NewSessionDialog({
               ))}
             </select>
             {onlineControllers.length === 0 && (
-              <p className="mt-1 text-sm text-destructive">无在线控制器</p>
+              <p className="mt-1 text-sm text-destructive-text">无在线控制器</p>
             )}
             {preselectedControllerUnavailable ? (
-              <p className="mt-1 text-sm text-destructive" data-testid="cloud-host-unavailable-hint">
+              <p className="mt-1 text-sm text-destructive-text" data-testid="cloud-host-unavailable-hint">
                 该云电脑未运行，无法创建会话
               </p>
             ) : selectedCloudHostUnavailable ? (
@@ -462,7 +462,7 @@ export default function NewSessionDialog({
                 <p className="mt-2 text-xs text-muted-foreground">正在探测可选模式与模型…</p>
               )}
               {optionsError && (
-                <p className="mt-2 text-xs text-destructive">{optionsError}</p>
+                <p className="mt-2 text-xs text-destructive-text">{optionsError}</p>
               )}
             </div>
           )}

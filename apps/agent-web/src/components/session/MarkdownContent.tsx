@@ -90,7 +90,7 @@ const BASE_COMPONENTS = {
   },
   a(props: CompProps) {
     const { node: _node, ...rest } = props;
-    return <a className="break-all text-info underline" target="_blank" rel="noreferrer" {...rest} />;
+    return <a className="break-all text-info-text underline" target="_blank" rel="noreferrer" {...rest} />;
   },
   strong(props: CompProps) {
     const { node: _node, ...rest } = props;

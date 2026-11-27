@@ -161,7 +161,7 @@ export default function GithubProjectSetupDialog({
               {cloudHost.name}
             </p>
             {!hostRunning && (
-              <p className="mt-1 text-xs text-destructive">云电脑未运行，无法设置 Git 项目</p>
+              <p className="mt-1 text-xs text-destructive-text">云电脑未运行，无法设置 Git 项目</p>
             )}
           </div>
 
@@ -208,7 +208,7 @@ export default function GithubProjectSetupDialog({
                 </p>
               )}
               {lockedAccountMissing && (
-                <p className="mt-1 text-xs text-destructive">该帐号授权已失效、仓库不可用</p>
+                <p className="mt-1 text-xs text-destructive-text">该帐号授权已失效、仓库不可用</p>
               )}
             </div>
           )}
@@ -289,7 +289,7 @@ export default function GithubProjectSetupDialog({
               项目将 clone 到 {normalizedPrefix === null ? '<前缀>' : normalizedPrefix}/&lt;User/Repo&gt;
             </p>
             {prefixError !== null && (
-              <p className="mt-1 text-xs text-destructive">{prefixError}</p>
+              <p className="mt-1 text-xs text-destructive-text">{prefixError}</p>
             )}
             {normalizedPrefix !== null && (
               <p className="mt-1 break-all text-xs text-muted-foreground">
@@ -299,7 +299,7 @@ export default function GithubProjectSetupDialog({
           </div>
 
           {error && (
-            <p role="alert" className="break-words text-sm text-destructive">
+            <p role="alert" className="break-words text-sm text-destructive-text">
               {error}
             </p>
           )}

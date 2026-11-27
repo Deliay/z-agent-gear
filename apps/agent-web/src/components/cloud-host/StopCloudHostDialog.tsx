@@ -150,11 +150,17 @@ export default function StopCloudHostDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {needsConfirm && !loading && !impactError && (
+          <h3 className="text-sm font-semibold text-foreground" data-testid="cloud-host-stop-impact-title">
+            影响范围
+          </h3>
+        )}
+
         {loading ? (
           <p className="text-sm text-muted-foreground">正在检查活动会话...</p>
         ) : impactError ? (
           <div className="space-y-2">
-            <p role="alert" className="break-words text-sm text-destructive">
+            <p role="alert" className="break-words text-sm text-destructive-text">
               {getErrorMessage(impactError)}
             </p>
             <Button type="button" variant="outline" onClick={() => { void refetch() }}>
@@ -163,7 +169,7 @@ export default function StopCloudHostDialog({
           </div>
         ) : hasActiveSessions ? (
           <div className="space-y-2">
-            <p className="text-sm font-medium text-destructive">{LOSS_WARNING}</p>
+            <p className="text-sm font-medium text-destructive-text">{LOSS_WARNING}</p>
             <p className="text-sm text-muted-foreground">
               当前有 {impact?.activeSessionCount} 个活动会话。
             </p>
@@ -211,6 +217,9 @@ export default function StopCloudHostDialog({
             <p className="text-xs text-muted-foreground">
               勾选：归档后按半价计费；不勾选：存储回到待挂载并继续全价计费，数据原样保留
             </p>
+            <p className="text-xs text-muted-foreground" data-testid="cloud-host-stop-storage-impact">
+              存储影响：{canArchiveStorage && archiveStorage ? '停止后归档（半价计费）' : '不归档（保持全价计费）'}
+            </p>
             {!canArchiveStorage && (
               <p className="text-xs text-muted-foreground">
                 存储尚未挂载完成，停止后按原状态回滚（不归档）
@@ -220,7 +229,7 @@ export default function StopCloudHostDialog({
         )}
 
         {error && (
-          <p role="alert" className="break-words text-sm text-destructive">
+          <p role="alert" className="break-words text-sm text-destructive-text">
             {error}
           </p>
         )}

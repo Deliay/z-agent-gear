@@ -22,7 +22,7 @@ const statusIcons = {
 const statusColors = {
   pending: 'text-muted-foreground',
   in_progress: 'text-primary',
-  completed: 'text-green-600',
+  completed: 'text-success-text',
 };
 
 const statusLabels = {
@@ -67,25 +67,25 @@ export default function PlanFloatingCard({ messages }: PlanFloatingCardProps) {
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-yellow-800 hover:opacity-80 transition-opacity"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-warning-text hover:opacity-80 transition-opacity"
       >
         {expanded ? (
-          <ChevronDown className="h-4 w-4 shrink-0 text-yellow-400" />
+          <ChevronDown className="h-4 w-4 shrink-0 text-warning-text" />
         ) : (
-          <ChevronRight className="h-4 w-4 shrink-0 text-yellow-400" />
+          <ChevronRight className="h-4 w-4 shrink-0 text-warning-text" />
         )}
         <span className="text-sm font-medium">Plan</span>
         {!expanded && (
-          <span className="ml-auto truncate text-xs text-yellow-700 max-w-[50%]">
+          <span className="ml-auto truncate text-xs text-warning-text max-w-[50%]">
             {lastEntry.content}
           </span>
         )}
-        <span className="ml-2 text-xs text-yellow-600">
+        <span className="ml-2 text-xs text-warning-text">
           {planSummaryLabel(completed, total)}
         </span>
       </button>
       {expanded && (
-        <div className="space-y-1.5 border-t border-yellow-200 px-3 py-2">
+        <div className="space-y-1.5 border-t border-warning/20 px-3 py-2">
           {entries.map((entry, i) => {
             const Icon = statusIcons[entry.status as keyof typeof statusIcons] || Circle;
             const colorClass = statusColors[entry.status as keyof typeof statusColors] || 'text-muted-foreground';

@@ -347,7 +347,7 @@ export default function CloudHostWorkloadsSection({
           <div className="min-w-0 space-y-3">
             <WorkloadParamFields schema={targetSchema} values={params} onChange={handleParamChange} />
             {error && (
-              <p role="alert" className="break-words text-sm text-destructive">
+              <p role="alert" className="break-words text-sm text-destructive-text">
                 {error}
               </p>
             )}

@@ -705,7 +705,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   if (sessionError || !sessionData?.session) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3" role="alert" data-testid="session-load-error">
-        <p className="text-sm text-destructive">会话不存在或无权访问</p>
+        <p className="text-sm text-destructive-text">会话不存在或无权访问</p>
         {sessionError?.message && (
           <p className="max-w-md text-xs text-muted-foreground">{sessionError.message}</p>
         )}
@@ -761,7 +761,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
     >
       {/* 标题栏（含协议提示/只读提示）独立占一行 */}
       {protocolMismatch && (
-        <div className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+        <div className="border-b border-warning/10 bg-warning/10 px-4 py-2 text-sm text-warning-text">
           ⚠️ Agent 协议版本不兼容：期望 v{protocolMismatch.expectedVersion}，Agent 返回 v{protocolMismatch.agentVersion}。部分功能可能无法正常工作。
         </div>
       )}
@@ -771,11 +771,13 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           userId: sessionData.session.userId,
           controllerId: sessionData.session.controllerId,
           controllerName: sessionData.session.controllerName,
+          title: sessionData.session.title,
           acpServerType: sessionData.session.acpServerType,
           status: sessionData.session.status,
           externalSessionId: sessionData.session.externalSessionId,
           cwd: sessionData.session.cwd,
           worktreePath: ('worktreePath' in sessionData.session ? (sessionData.session as { worktreePath?: string }).worktreePath : null) || null,
+          worktreeBranch: ('worktreeBranch' in sessionData.session ? (sessionData.session as { worktreeBranch?: string }).worktreeBranch : null) || null,
           createdAt: sessionData.session.createdAt,
           updatedAt: sessionData.session.updatedAt,
           endedAt: sessionData.session.endedAt,

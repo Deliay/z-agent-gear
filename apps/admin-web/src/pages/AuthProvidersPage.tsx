@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -222,7 +223,7 @@ export default function AuthProvidersPage() {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">登录认证</h1>
+          <h1 className="font-heading text-xl font-semibold text-foreground">登录认证</h1>
           <p className="text-sm text-muted-foreground">
             配置自定义 OIDC Provider 与 GitHub OAuth；仅启用的方式会出现在前台/后台登录页。
           </p>
@@ -243,26 +244,20 @@ export default function AuthProvidersPage() {
                 key={provider.id}
                 className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
               >
-                <div className="min-w-0 space-y-1">
-                  <div className="flex items-center gap-2">
+                <section className="min-w-0 space-y-1">
+                  <span className="flex items-center gap-2">
                     <span className="font-medium">{provider.displayName}</span>
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-xs ${
-                        provider.enabled
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : 'bg-muted text-muted-foreground'
-                      }`}
-                    >
+                    <Badge variant={provider.enabled ? 'success' : 'muted'}>
                       {provider.enabled ? '已启用' : '已停用'}
-                    </span>
+                    </Badge>
                     <SurfaceBadges front={provider.enableFrontLogin} admin={provider.enableAdminLogin} />
-                  </div>
+                  </span>
                   <p className="truncate text-xs text-muted-foreground">{provider.issuer}</p>
                   <CopyableCallback value={provider.callbackUrl} />
                   <p className="text-xs text-muted-foreground">
                     Client ID: {provider.clientId} · Secret: {provider.hasSecret ? '已设置' : '未设置'}
                   </p>
-                </div>
+                </section>
                 <div className="flex items-center gap-2">
                   <Button size="sm" variant="outline" onClick={() => openEdit(provider)}>
                     编辑
@@ -346,7 +341,7 @@ export default function AuthProvidersPage() {
       </Card>
 
       {formOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/40 p-4">
           <Card className="w-full max-w-lg">
             <CardHeader>
               <CardTitle className="text-base">

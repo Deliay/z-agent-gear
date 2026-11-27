@@ -239,7 +239,7 @@ export default function WorkspacePage() {
               onChange={(event) => setFormName(event.target.value)}
             />
             {error && (
-              <p role="alert" className="text-sm text-destructive">
+              <p role="alert" className="text-sm text-destructive-text">
                 {error}
               </p>
             )}

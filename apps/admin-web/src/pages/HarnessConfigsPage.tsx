@@ -92,9 +92,9 @@ export default function HarnessConfigsPage() {
   }
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div>
-        <h1 className="text-xl font-semibold">Harness 配置</h1>
+        <h1 className="font-heading text-xl font-semibold text-foreground">Harness 配置</h1>
         <p className="text-sm text-muted-foreground">
           配置各 Harness 的原始上下文压缩指令。工作流节点在返工/复工时若选择「原始会话」并开启压缩，将向该会话发送此指令。
         </p>

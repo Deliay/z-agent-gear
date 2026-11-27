@@ -146,7 +146,7 @@ export default function TemplateEditorDialog({
           <WorkflowGraphEditor nodes={nodes} onNodesChange={setNodes} readOnly={readOnly} />
 
           {errors.length > 0 && (
-            <div className="space-y-1 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <div className="space-y-1 rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
               {errors.map((err, i) => (
                 <div key={i}>{err}</div>
               ))}

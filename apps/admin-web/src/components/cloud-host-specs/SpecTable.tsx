@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { formatDateTime } from '@/lib/format';
 import type { AdminCloudSpecData } from '@/graphql/types';
+import * as T from '@/lib/table-styles'
 
 interface SpecTableProps {
   specs: AdminCloudSpecData[];
@@ -29,58 +30,58 @@ export default function SpecTable({ specs, onEdit, onDelete }: SpecTableProps) {
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
-      <table className="w-full min-w-0 text-sm">
-        <thead className="bg-muted/50 text-left text-muted-foreground">
-          <tr>
-            <th className="px-4 py-2 font-medium">名称</th>
-            <th className="px-4 py-2 font-medium">CPU</th>
-            <th className="px-4 py-2 font-medium">内存（GiB）</th>
-            <th className="px-4 py-2 font-medium">临时存储（GiB）</th>
-            <th className="px-4 py-2 font-medium">白名单</th>
-            <th className="px-4 py-2 font-medium">预制</th>
-            <th className="px-4 py-2 font-medium">更新时间</th>
-            <th className="px-4 py-2 text-right font-medium">操作</th>
+    <div className={T.TABLE_CONTAINER_CLASS}>
+      <table className={T.TABLE_CLASS}>
+        <thead>
+          <tr className={T.TABLE_HEAD_CLASS}>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>CPU</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>内存（GiB）</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>临时存储（GiB）</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>白名单</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>预制</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>更新时间</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>操作</th>
           </tr>
         </thead>
         <tbody>
           {specs.map((spec) => (
-            <tr key={spec.id} className="border-t">
-              <td className="px-4 py-3 font-medium text-foreground">
+            <tr key={spec.id} className={T.TABLE_ROW_CLASS}>
+              <td className={T.TABLE_CELL_STRONG_CLASS}>
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="min-w-0 truncate">{spec.name}</span>
                   {spec.unlimited && <Badge variant="outline">不限制</Badge>}
                 </span>
               </td>
-              <td className="px-4 py-3 text-muted-foreground tabular-nums">
+              <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                 {resourceCell(spec, spec.cpu)}
               </td>
-              <td className="px-4 py-3 text-muted-foreground tabular-nums">
+              <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                 {resourceCell(spec, spec.memoryGi)}
               </td>
-              <td className="px-4 py-3 text-muted-foreground tabular-nums">
+              <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                 {resourceCell(spec, spec.ephemeralStorageGi)}
               </td>
-              <td className="px-4 py-3">
+              <td className={T.TABLE_CELL_CLASS}>
                 {spec.whitelistEnabled ? (
                   <span className="flex flex-wrap items-center gap-1">
-                    <Badge variant="secondary">开启</Badge>
+                    <Badge variant="success">开启</Badge>
                     <span className="text-xs text-muted-foreground">
                       可见租户 {spec.allowedTenantIds.length}
                     </span>
                   </span>
                 ) : (
-                  <Badge variant="outline">关闭</Badge>
+                  <Badge variant="muted">关闭</Badge>
                 )}
               </td>
-              <td className="px-4 py-3">
-                {spec.isPreset ? <Badge variant="secondary">预制</Badge> : '-'}
+              <td className={T.TABLE_CELL_CLASS}>
+                {spec.isPreset ? <Badge variant="info">预制</Badge> : '-'}
               </td>
-              <td className="px-4 py-3 text-muted-foreground">
+              <td className={T.TABLE_CELL_MUTED_CLASS}>
                 {formatDateTime(spec.updatedAt)}
               </td>
-              <td className="px-4 py-3">
-                <div className="flex items-center justify-end gap-1">
+              <td className={T.TABLE_CELL_CLASS}>
+                <div className={T.TABLE_ACTION_CLASS}>
                   <Button
                     variant="ghost"
                     size="icon-sm"

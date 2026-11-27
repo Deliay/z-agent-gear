@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import SettingsPage from '../SettingsPage';
 
 const mocks = vi.hoisted(() => ({
@@ -147,6 +147,24 @@ describe('SettingsPage（D5 代理入口移除 / 新增 Valut 与自定义 MCP�
     expect(document.getElementById('account-section')).toBeTruthy();
     // 无 provider/绑定数据时区块不渲染（PRD：未配置第三方登录时设置页与升级前一致）
     expect(screen.queryByTestId('external-login-binding-section')).toBeNull();
+  });
+
+  it('T-SET-NAV: 200px 分组导航 + 分组标题 + data-active 激活高亮 + 可见 H1', () => {
+    render(<SettingsPage />);
+
+    const nav = screen.getByRole('navigation', { name: 'Settings navigation' });
+    expect(nav.parentElement?.className).toContain('md:grid-cols-[200px_1fr]');
+    expect(nav.querySelector('h1')).toHaveTextContent('设置');
+
+    // 分组标题（含单项分组）
+    for (const label of ['帐号', 'Git', '模型设置', '本地控制器', 'MCP', '工作流']) {
+      expect(within(nav).getByText(label, { selector: 'div' })).toBeInTheDocument();
+    }
+
+    const modelButtons = within(nav).getAllByRole('button', { name: '可用模型' });
+    fireEvent.click(modelButtons[0]);
+    expect(modelButtons[0]).toHaveAttribute('data-active', 'true');
+    expect(within(nav).getByRole('button', { name: '帐号' })).not.toHaveAttribute('data-active', 'true');
   });
 
   it('T-UIUX-SET1：设置中心左侧导航支持激活态高亮切换', () => {

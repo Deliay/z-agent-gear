@@ -51,6 +51,36 @@ describe('StopCloudHostDialog', () => {
     });
   });
 
+  it('T-CH-STOP: 影响范围列示（活动会话 + 归档勾选 + 二次确认）', async () => {
+    mockImpact(
+      2,
+      [
+        { id: 's1', title: '会话一', status: 'running', acpServerType: 'opencode' },
+        { id: 's2', title: '会话二', status: 'idling', acpServerType: 'opencode' },
+      ],
+      { id: 'st1', name: '存储一', sizeGi: 10, status: 'ATTACHED', usageBytes: null, hourlyCredits: 1 },
+    );
+    const onStopped = vi.fn();
+    render(<StopCloudHostDialog open cloudHost={cloudHost} onClose={vi.fn()} onStopped={onStopped} />);
+
+    expect(screen.getByTestId('cloud-host-stop-impact-title')).toHaveTextContent('影响范围');
+    const list = screen.getByTestId('cloud-host-stop-sessions');
+    expect(list).toHaveTextContent('会话一');
+    expect(list).toHaveTextContent('会话二');
+    expect(screen.getByLabelText('归档云存储')).toBeChecked();
+    expect(screen.getByTestId('cloud-host-stop-storage-impact')).toHaveTextContent('归档（半价计费）');
+
+    // 取消勾选后影响文案切换
+    fireEvent.click(screen.getByLabelText('归档云存储'));
+    expect(screen.getByTestId('cloud-host-stop-storage-impact')).toHaveTextContent('不归档（保持全价计费）');
+
+    // 二次确认后才停止
+    expect(mockStopCloudHost).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '继续停止' }));
+    await waitFor(() => expect(mockStopCloudHost).toHaveBeenCalled());
+    expect(onStopped).toHaveBeenCalled();
+  });
+
   it('T-AW7 无活动会话时直接 stopCloudHost(force:false)，不展示告警', async () => {
     mockImpact(0);
     const onStopped = vi.fn();

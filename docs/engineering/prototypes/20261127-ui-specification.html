@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZeroAsh's Agent Gear — UI 规范与全场景组件化演示手册</title>
+  <style>
+    :root {
+      --font-sans: 'Geist Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+      --font-mono: 'Geist Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+      --background: oklch(0.99 0.002 264);
+      --foreground: oklch(0.145 0.005 264);
+      --sidebar: oklch(0.975 0.004 264);
+      --rail: oklch(0.962 0.005 264);
+      --card: oklch(1 0 0);
+      --popover: oklch(1 0 0);
+      --primary: oklch(0.54 0.19 264);
+      --primary-foreground: oklch(0.985 0 0);
+      --secondary: oklch(0.96 0.005 264);
+      --secondary-foreground: oklch(0.205 0.006 264);
+      --muted: oklch(0.955 0.005 264);
+      --muted-foreground: oklch(0.52 0.008 264);
+      --accent: oklch(0.955 0.005 264);
+      --accent-foreground: oklch(0.205 0.006 264);
+      --destructive: oklch(0.58 0.22 27);
+      --success: oklch(0.55 0.17 148);
+      --warning: oklch(0.72 0.16 75);
+      --info: oklch(0.58 0.15 245);
+      --border: oklch(0.91 0.005 264);
+      --input: oklch(0.91 0.005 264);
+      --ring: oklch(0.54 0.19 264);
+      --radius: 10px;
+      --shadow-sm: 0 1px 2px rgba(9, 10, 15, 0.05);
+      --shadow-md: 0 8px 24px rgba(9, 10, 15, 0.08);
+    }
+
+    .dark {
+      --background: oklch(0.145 0.005 264);
+      --foreground: oklch(0.985 0 0);
+      --sidebar: oklch(0.175 0.006 264);
+      --rail: oklch(0.132 0.005 264);
+      --card: oklch(0.205 0.008 264);
+      --popover: oklch(0.225 0.010 264);
+      --primary: oklch(0.70 0.15 264);
+      --primary-foreground: oklch(0.205 0.008 264);
+      --secondary: oklch(0.255 0.008 264);
+      --secondary-foreground: oklch(0.985 0 0);
+      --muted: oklch(0.255 0.008 264);
+      --muted-foreground: oklch(0.708 0.006 264);
+      --accent: oklch(0.255 0.008 264);
+      --accent-foreground: oklch(0.985 0 0);
+      --destructive: oklch(0.70 0.19 22);
+      --success: oklch(0.68 0.15 148);
+      --warning: oklch(0.78 0.14 75);
+      --info: oklch(0.68 0.14 245);
+      --border: oklch(1 0 0 / 11%);
+      --input: oklch(1 0 0 / 15%);
+      --ring: oklch(0.70 0.15 264);
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+      --shadow-md: 0 12px 32px rgba(0, 0, 0, 0.45);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; font-family: var(--font-sans); font-size: 16px; }
+    body {
+      margin: 0;
+      background: var(--background);
+      color: var(--foreground);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .tabular { font-variant-numeric: tabular-nums; }
+    .mono { font-family: var(--font-mono); }
+
+    /* Layout Shell */
+    .doc-shell {
+      display: grid;
+      grid-template-columns: 248px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    .doc-nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      background: var(--sidebar);
+      border-right: 1px solid var(--border);
+      padding: 20px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 8px;
+    }
+    .brand-mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      background: color-mix(in oklch, var(--primary) 16%, transparent);
+      border: 1px solid color-mix(in oklch, var(--primary) 35%, transparent);
+      color: var(--primary);
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .brand-title { font-size: 14px; font-weight: 600; line-height: 1.25; }
+    .brand-sub { font-size: 12px; color: var(--muted-foreground); }
+
+    .nav-group-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted-foreground);
+      padding: 0 10px 6px;
+    }
+    .nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+    .nav-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 7px 10px;
+      border-radius: 8px;
+      font-size: 13px;
+      color: var(--muted-foreground);
+      text-decoration: none;
+      transition: background 0.15s, color 0.15s;
+    }
+    .nav-link:hover, .nav-link.active {
+      background: var(--accent);
+      color: var(--foreground);
+      font-weight: 500;
+    }
+    .nav-link.active {
+      box-shadow: inset 2px 0 0 var(--primary);
+    }
+
+    .theme-switch {
+      margin-top: auto;
+      display: flex;
+      gap: 6px;
+      padding: 4px;
+      background: var(--muted);
+      border-radius: 10px;
+      border: 1px solid var(--border);
+    }
+    .theme-btn {
+      flex: 1;
+      height: 30px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--muted-foreground);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .theme-btn.active {
+      background: var(--card);
+      color: var(--foreground);
+      box-shadow: var(--shadow-sm);
+    }
+
+    /* Main Content */
+    .doc-main {
+      padding: 40px 48px 96px;
+      max-width: 1180px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    .hero {
+      padding-bottom: 32px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 40px;
+    }
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      background: color-mix(in oklch, var(--primary) 14%, transparent);
+      color: var(--primary);
+      margin-bottom: 14px;
+    }
+    .hero h1 {
+      margin: 0 0 12px;
+      font-size: 28px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.25;
+    }
+    .hero p {
+      margin: 0;
+      max-width: 760px;
+      font-size: 14px;
+      color: var(--muted-foreground);
+      line-height: 1.65;
+    }
+    .kpi-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+    .kpi-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+    }
+    .kpi-label { font-size: 12px; color: var(--muted-foreground); }
+    .kpi-value { font-size: 20px; font-weight: 600; margin-top: 4px; }
+
+    /* Sections */
+    section.spec-section {
+      margin-bottom: 56px;
+      scroll-margin-top: 28px;
+    }
+    .section-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-head h2 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .section-tag {
+      font-size: 12px;
+      color: var(--muted-foreground);
+      font-family: var(--font-mono);
+    }
+    .section-desc {
+      margin: 0 0 20px;
+      font-size: 14px;
+      color: var(--muted-foreground);
+      max-width: 820px;
+    }
+
+    /* Grids & Cards */
+    .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px;
+    }
+    .card h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+    .card p { margin: 0; font-size: 13px; color: var(--muted-foreground); line-height: 1.6; }
+
+    /* Color Swatches */
+    .swatch-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .swatch {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      cursor: pointer;
+      transition: transform 0.12s, border-color 0.15s;
+    }
+    .swatch:hover { border-color: var(--primary); transform: translateY(-1px); }
+    .swatch-preview {
+      height: 62px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+    }
+    .swatch-body { padding: 10px 12px; }
+    .swatch-name { font-size: 13px; font-weight: 600; font-family: var(--font-mono); }
+    .swatch-val { font-size: 12px; color: var(--muted-foreground); font-family: var(--font-mono); margin-top: 2px; word-break: break-all; }
+    .swatch-role { font-size: 12px; color: var(--muted-foreground); margin-top: 4px; }
+
+    /* Typography Scale Demo */
+    .type-row {
+      display: grid;
+      grid-template-columns: 180px 140px minmax(0, 1fr);
+      align-items: center;
+      gap: 16px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .type-row:last-child { border-bottom: 0; }
+    .type-meta { font-size: 12px; color: var(--muted-foreground); font-family: var(--font-mono); }
+
+    /* Status Matrix */
+    table.spec-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .spec-table th {
+      text-align: left;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--muted-foreground);
+      background: color-mix(in oklch, var(--muted) 55%, transparent);
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .spec-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .spec-table tr:last-child td { border-bottom: 0; }
+
+    /* Live Atomic Primitives */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      font-family: var(--font-sans);
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.14s;
+      white-space: nowrap;
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+    .btn-default { background: var(--primary); color: var(--primary-foreground); }
+    .btn-default:hover { opacity: 0.9; }
+    .btn-outline { background: var(--background); color: var(--foreground); border-color: var(--border); }
+    .btn-outline:hover { background: var(--muted); }
+    .btn-secondary { background: var(--secondary); color: var(--secondary-foreground); }
+    .btn-secondary:hover { opacity: 0.85; }
+    .btn-ghost { background: transparent; color: var(--foreground); }
+    .btn-ghost:hover { background: var(--muted); }
+    .btn-destructive { background: color-mix(in oklch, var(--destructive) 14%, transparent); color: var(--destructive); }
+    .btn-destructive:hover { background: color-mix(in oklch, var(--destructive) 22%, transparent); }
+    .btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+    .btn-md { height: 32px; padding: 0 12px; font-size: 14px; }
+    .btn-lg { height: 36px; padding: 0 14px; font-size: 14px; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 500;
+      border: 1px solid transparent;
+    }
+    .badge-primary { background: var(--primary); color: var(--primary-foreground); }
+    .badge-secondary { background: var(--secondary); color: var(--secondary-foreground); }
+    .badge-outline { background: transparent; border-color: var(--border); color: var(--foreground); }
+    .badge-success { background: color-mix(in oklch, var(--success) 15%, transparent); color: var(--success); }
+    .badge-warning { background: color-mix(in oklch, var(--warning) 16%, transparent); color: var(--warning); }
+    .badge-info { background: color-mix(in oklch, var(--info) 15%, transparent); color: var(--info); }
+    .badge-destructive { background: color-mix(in oklch, var(--destructive) 15%, transparent); color: var(--destructive); }
+
+    .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+    .dot-pulse { animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+    .input-field {
+      height: 34px;
+      padding: 0 10px;
+      border-radius: 8px;
+      border: 1px solid var(--input);
+      background: var(--background);
+      color: var(--foreground);
+      font-size: 14px;
+      font-family: var(--font-sans);
+      width: 100%;
+    }
+    .input-field:focus { outline: 2px solid color-mix(in oklch, var(--ring) 45%, transparent); border-color: var(--ring); }
+
+    /* Interactive 3-Tier Shell Preview */
+    .mini-shell {
+      display: flex;
+      height: 300px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--background);
+      box-shadow: var(--shadow-sm);
+    }
+    .mini-rail {
+      width: 56px;
+      flex-shrink: 0;
+      background: var(--rail);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 10px 6px;
+      gap: 6px;
+    }
+    .mini-rail-btn {
+      width: 44px;
+      height: 40px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted-foreground);
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    .mini-rail-btn.active {
+      background: var(--accent);
+      color: var(--foreground);
+      font-weight: 600;
+    }
+    .mini-rail-btn.active::before {
+      content: '';
+      position: absolute;
+      left: -6px;
+      top: 8px;
+      bottom: 8px;
+      width: 2px;
+      background: var(--primary);
+      border-radius: 2px;
+    }
+    .mini-sidebar {
+      width: 240px;
+      flex-shrink: 0;
+      background: var(--sidebar);
+      border-right: 1px solid var(--border);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      transition: width 0.18s ease, padding 0.18s ease, opacity 0.18s ease;
+    }
+    .mini-sidebar.collapsed {
+      width: 0;
+      padding: 0;
+      opacity: 0;
+      overflow: hidden;
+      border-right: 0;
+    }
+    .mini-stage {
+      flex: 1;
+      min-width: 0;
+      padding: 18px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* Scenario Tabs */
+    .scenario-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+    .scenario-tab {
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--muted-foreground);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.14s;
+    }
+    .scenario-tab:hover { color: var(--foreground); border-color: color-mix(in oklch, var(--primary) 50%, var(--border)); }
+    .scenario-tab.active {
+      background: color-mix(in oklch, var(--primary) 14%, transparent);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+    .scenario-panel {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 22px;
+    }
+    .chip-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 16px; }
+    .comp-chip {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: var(--muted);
+      color: var(--foreground);
+      border: 1px solid var(--border);
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: var(--popover);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow-md);
+      font-size: 13px;
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: all 0.18s;
+      z-index: 100;
+    }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 960px) {
+      .doc-shell { grid-template-columns: 1fr; }
+      .doc-nav { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+      .doc-main { padding: 24px 18px 64px; }
+      .kpi-strip, .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      .type-row { grid-template-columns: 1fr; gap: 6px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="doc-shell">
+    <!-- Left Navigation -->
+    <aside class="doc-nav" aria-label="UI 规范目录">
+      <div class="brand">
+        <div class="brand-mark">AG</div>
+        <div>
+          <div class="brand-title">Agent Gear UI Spec</div>
+          <div class="brand-sub">v1.0 · OKLCH Design System</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="nav-group-label">设计基础</div>
+        <ul class="nav-list">
+          <li><a class="nav-link active" href="#style">1. 整体视觉风格</a></li>
+          <li><a class="nav-link" href="#palette">2. OKLCH 色彩调色板</a></li>
+          <li><a class="nav-link" href="#typography">3. 排版与状态映射</a></li>
+          <li><a class="nav-link" href="#layout">4. 三层工作区布局</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <div class="nav-group-label">三层组件化体系</div>
+        <ul class="nav-list">
+          <li><a class="nav-link" href="#primitives">5. 原子组件库 (UI)</a></li>
+          <li><a class="nav-link" href="#patterns">6. 跨场景通用模式</a></li>
+          <li><a class="nav-link" href="#scenarios">7. 九大业务场景蓝图</a></li>
+          <li><a class="nav-link" href="#guardrails">8. 交互与质量守卫</a></li>
+        </ul>
+      </div>
+
+      <div class="theme-switch" role="group" aria-label="主题切换">
+        <button type="button" class="theme-btn" id="btn-light">亮色 Light</button>
+        <button type="button" class="theme-btn active" id="btn-dark">暗色 Dark</button>
+      </div>
+    </aside>
+
+    <!-- Main Presentation Canvas -->
+    <main class="doc-main">
+      <header class="hero">
+        <div class="hero-eyebrow">Precision Developer Workbench · 极简精密工程工作台</div>
+        <h1>ZeroAsh's Agent Gear — UI 规范与全场景组件化演示手册</h1>
+        <p>
+          覆盖 <code>apps/agent-web</code>（多端 Agent 工作台）与 <code>apps/admin-web</code>（平台运维与计费后台）的统一视觉设计语言、OKLCH 亮/暗双模式调色板、三层空间外壳以及全部 9 大业务场景的组件化设计蓝图。点击任意色块可复制 CSS Token。
+        </p>
+        <div class="kpi-strip">
+          <div class="kpi-card">
+            <div class="kpi-label">最小字号红线</div>
+            <div class="kpi-value tabular">≥ 12px</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">表面层级梯度</div>
+            <div class="kpi-value tabular">4 Tiers</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">业务场景覆盖</div>
+            <div class="kpi-value tabular">9 Scenarios</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">组件化分层</div>
+            <div class="kpi-value tabular">3 Layers</div>
+          </div>
+        </div>
+      </header>
+
+      <!-- 1. Overall Style -->
+      <section class="spec-section" id="style">
+        <div class="section-head">
+          <h2>1. 整体视觉风格与设计原则</h2>
+          <span class="section-tag">Aesthetic Direction</span>
+        </div>
+        <p class="section-desc">
+          面向长时间高频使用 Agent 协同、DAG 工作流与代码审阅的研发人员，坚持克制、低视觉噪点、高信息辨识度的精密工程美学。
+        </p>
+        <div class="grid-3">
+          <div class="card">
+            <h3>清晰高于密度</h3>
+            <p>采用「56px Activity Rail 一级导航轨 + 可折叠 Context Panel + MainStage 主舞台」分离高频领域，终结无限纵向折叠手风琴。</p>
+          </div>
+          <div class="card">
+            <h3>表面层级优先于重边框</h3>
+            <p>通过 OKLCH 四级微明度差（Surface-0 → Surface-3）自然分层，仅以 1px 低饱和度描边辅助分割，亮暗模式同等耐久。</p>
+          </div>
+          <div class="card">
+            <h3>零微字号与性能感知</h3>
+            <p>严禁任何 &lt; 12px 微字号（静态单测强制阻断）；「已归档」常驻折叠、无冗余计数、展开懒加载，与聚合查询契约一致。</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. OKLCH Color Palette -->
+      <section class="spec-section" id="palette">
+        <div class="section-head">
+          <h2>2. OKLCH 色彩调色板与语义 Token</h2>
+          <span class="section-tag">Click swatch to copy</span>
+        </div>
+        <p class="section-desc">
+          所有色彩基于 OKLCH 感知均匀色彩空间（冷灰中性色阶锚定 <code>264°</code> 靛蓝微调），切换左侧「亮色 / 暗色」即可实时预览双模式色值与对比度。
+        </p>
+
+        <h3 style="font-size:14px;font-weight:600;margin:0 0 10px;">2.1 四级表面与中性色阶（Surface &amp; Neutral）</h3>
+        <div class="swatch-grid" id="surface-swatches"></div>
+
+        <h3 style="font-size:14px;font-weight:600;margin:0 0 10px;">2.2 品牌主色与语义状态色（Brand &amp; Semantic）</h3>
+        <div class="swatch-grid" id="semantic-swatches"></div>
+      </section>
+
+      <!-- 3. Typography & Status Matrix -->
+      <section class="spec-section" id="typography">
+        <div class="section-head">
+          <h2>3. 排版阶梯与跨领域状态色矩阵</h2>
+          <span class="section-tag">Geist + Tabular Nums</span>
+        </div>
+        <div class="card" style="padding:0;margin-bottom:24px;">
+          <div class="type-row">
+            <div class="type-meta">页面主标题 H1 · text-2xl</div>
+            <div class="type-meta tabular">24px / 1.3 · 600</div>
+            <div style="font-size:24px;font-weight:600;line-height:1.3;">欢迎使用 Agent Gear 工作台</div>
+          </div>
+          <div class="type-row">
+            <div class="type-meta">区块标题 H2 · text-lg</div>
+            <div class="type-meta tabular">18px / 1.4 · 600</div>
+            <div style="font-size:18px;font-weight:600;line-height:1.4;">工作流节点配置与 GitHub PR 联动</div>
+          </div>
+          <div class="type-row">
+            <div class="type-meta">正文与主交互 · text-sm</div>
+            <div class="type-meta tabular">14px / 1.5 · 400</div>
+            <div style="font-size:14px;line-height:1.5;">按钮、表单输入、侧边栏条目与 Agent 对话消息正文基准字号。</div>
+          </div>
+          <div class="type-row">
+            <div class="type-meta">元信息与徽标 · text-xs</div>
+            <div class="type-meta tabular">12px / 1.4 · 500</div>
+            <div style="font-size:12px;font-weight:500;color:var(--muted-foreground);">最小合法字号底线 · 2026-11-27 09:00 · <span class="mono tabular">12,480 tokens · 48.50 Credits</span></div>
+          </div>
+        </div>
+
+        <table class="spec-table">
+          <thead>
+            <tr>
+              <th>业务领域</th>
+              <th>状态值</th>
+              <th>视觉呈现（圆点 + 徽标）</th>
+              <th>中文文案</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>会话 (Session)</td>
+              <td class="mono">running</td>
+              <td><span class="badge badge-info"><span class="dot dot-pulse" style="background:var(--info)"></span>工作中</span></td>
+              <td>AI 正在流式生成或执行工具调用</td>
+            </tr>
+            <tr>
+              <td>会话 / 云电脑</td>
+              <td class="mono">idling / RUNNING</td>
+              <td><span class="badge badge-success"><span class="dot" style="background:var(--success)"></span>空闲 / 运行中</span></td>
+              <td>就绪可交互、控制器在线</td>
+            </tr>
+            <tr>
+              <td>会话 / 云电脑 / 工作流</td>
+              <td class="mono">creating / STARTING / WAITING_HUMAN</td>
+              <td><span class="badge badge-warning"><span class="dot dot-pulse" style="background:var(--warning)"></span>等待人工 / 启动中</span></td>
+              <td>初始化、审批倒计时、返工待处理</td>
+            </tr>
+            <tr>
+              <td>全领域异常</td>
+              <td class="mono">disconnected / FAILED</td>
+              <td><span class="badge badge-destructive"><span class="dot" style="background:var(--destructive)"></span>失败 / 已断连</span></td>
+              <td>容器失败、节点异常、连接中断</td>
+            </tr>
+            <tr>
+              <td>终态与归档</td>
+              <td class="mono">ended / STOPPED / PENDING</td>
+              <td><span class="badge badge-secondary"><span class="dot" style="background:var(--muted-foreground)"></span>已结束 / 已销毁</span></td>
+              <td>只读回看历史、未启动节点</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- 4. 3-Tier Workspace Layout -->
+      <section class="spec-section" id="layout">
+        <div class="section-head">
+          <h2>4. 桌面端 3-Tier Workspace Shell 交互演示</h2>
+          <span class="section-tag">ActivityRail + ContextPanel + MainStage</span>
+        </div>
+        <p class="section-desc">
+          点击下方迷你工作台左侧 56px <code>ActivityRail</code> 图标切换领域，或点击「收起」按钮 / 按 <kbd class="mono" style="padding:2px 6px;border:1px solid var(--border);border-radius:5px;font-size:12px;">Ctrl/Cmd + B</kbd> 体验列表栏折叠联动。
+        </p>
+        <div class="mini-shell">
+          <div class="mini-rail">
+            <button type="button" class="mini-rail-btn active" data-domain="sessions">会话</button>
+            <button type="button" class="mini-rail-btn" data-domain="workflows">工作流</button>
+            <button type="button" class="mini-rail-btn" data-domain="kb">知识库</button>
+            <button type="button" class="mini-rail-btn" data-domain="hosts">主机</button>
+            <button type="button" class="mini-rail-btn" id="toggle-mini-sidebar" style="margin-top:auto;" title="收起/展开列表栏">收起</button>
+          </div>
+          <div class="mini-sidebar" id="mini-sidebar">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span style="font-size:13px;font-weight:600;" id="mini-sidebar-title">会话列表</span>
+              <span class="badge badge-secondary tabular" id="mini-sidebar-count">2</span>
+            </div>
+            <div id="mini-sidebar-items" style="display:flex;flex-direction:column;gap:6px;"></div>
+            <div style="margin-top:auto;padding-top:8px;border-top:1px solid var(--border);font-size:12px;color:var(--muted-foreground);">
+              ▸ 已归档（按需懒加载 · 无计数）
+            </div>
+          </div>
+          <div class="mini-stage">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--border);">
+              <div>
+                <div style="font-size:15px;font-weight:600;" id="mini-stage-title">会话：refactor-ui-ux-workspace</div>
+                <div style="font-size:12px;color:var(--muted-foreground);" id="mini-stage-sub">z-agent-gear · main · OpenCode Harness</div>
+              </div>
+              <span class="badge badge-info"><span class="dot dot-pulse" style="background:var(--info)"></span>工作中</span>
+            </div>
+            <div class="card" style="background:var(--muted);padding:12px 14px;font-size:13px;">
+              <strong>Surface-2 主舞台</strong>：专注单一任务上下文；在会话场景下支持三态分屏（仅对话 / 对话+Monaco 预览 / 仅预览）。
+            </div>
+            <div style="display:flex;gap:8px;margin-top:auto;">
+              <span class="comp-chip">ActivityRail: 56px</span>
+              <span class="comp-chip">Sidebar: 220–420px</span>
+              <span class="comp-chip">MainStage: flex-1 min-w-0</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. Layer 1 Atomic Primitives -->
+      <section class="spec-section" id="primitives">
+        <div class="section-head">
+          <h2>5. 第一层：基础原子组件库（Atomic UI Primitives）</h2>
+          <span class="section-tag">components/ui/* · Base UI + CVA</span>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Button 变体与尺寸</h3>
+            <p style="margin-bottom:14px;">统一圆角 <code>8px</code>、键盘焦点环 <code>ring-ring/50</code> 与点击微沉反馈。</p>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+              <button type="button" class="btn btn-default btn-md">主要操作</button>
+              <button type="button" class="btn btn-outline btn-md">次要描边</button>
+              <button type="button" class="btn btn-secondary btn-md">浅底填充</button>
+              <button type="button" class="btn btn-ghost btn-md">幽灵按钮</button>
+              <button type="button" class="btn btn-destructive btn-md">危险操作</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <button type="button" class="btn btn-outline btn-sm">Small (28px)</button>
+              <button type="button" class="btn btn-outline btn-md">Default (32px)</button>
+              <button type="button" class="btn btn-outline btn-lg">Large (36px)</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Badge、输入控件与标签徽章</h3>
+            <p style="margin-bottom:14px;">徽标最小字号 <code>12px</code>（<code>text-xs</code>），计数强制 <code>tabular-nums</code>。</p>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+              <span class="badge badge-primary">Primary</span>
+              <span class="badge badge-secondary">Secondary</span>
+              <span class="badge badge-outline">Outline</span>
+              <span class="badge badge-success">运行中</span>
+              <span class="badge badge-warning">待审批 58s</span>
+              <span class="badge badge-info">工作中</span>
+              <span class="badge badge-destructive">失败</span>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr auto;gap:8px;">
+              <input class="input-field" type="text" placeholder="输入工作区路径或搜索组件..." aria-label="示例输入框" />
+              <button type="button" class="btn btn-default btn-md">确认</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 6. Layer 2 Shared Patterns -->
+      <section class="spec-section" id="patterns">
+        <div class="section-head">
+          <h2>6. 第二层：跨场景通用业务模式（Shared Patterns）</h2>
+          <span class="section-tag">Cross-Domain Components</span>
+        </div>
+        <div class="grid-3">
+          <div class="card">
+            <h3>FragmentEditor 原子引用块</h3>
+            <p style="margin-bottom:10px;">支持 <code>{{valut.key}}</code> 与 <code>{{arg}}</code> 不可拆字原子胶囊，整体退格删除。</p>
+            <div style="padding:10px;border-radius:8px;border:1px solid var(--input);background:var(--background);font-size:13px;line-height:1.8;">
+              使用凭据 <span class="badge badge-info mono">{{valut.github_pat}}</span> 拉取分支 <span class="badge badge-secondary mono">{{arg.branch}}</span>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Controller 面包屑导航</h3>
+            <p style="margin-bottom:10px;">在设置中心进入控制器配置子页时，顶部固定面包屑明确层级与当前分组。</p>
+            <div style="padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--sidebar);font-size:13px;display:flex;align-items:center;gap:6px;">
+              <span style="color:var(--muted-foreground);">设置</span>
+              <span style="color:var(--muted-foreground);">/</span>
+              <span style="color:var(--muted-foreground);">控制器</span>
+              <span style="color:var(--muted-foreground);">/</span>
+              <span style="font-weight:600;">可用 Harness 工具</span>
+            </div>
+          </div>
+          <div class="card">
+            <h3>WorkspaceSwitcher 作用域切换</h3>
+            <p style="margin-bottom:10px;">按个人/团队分组，自动同步 <code>x-workspace-id</code> 并随 15s 轮询更新。</p>
+            <select class="input-field" aria-label="工作区示例">
+              <optgroup label="个人空间">
+                <option>个人全局工作区</option>
+              </optgroup>
+              <optgroup label="Core Engineering 团队">
+                <option>团队全局工作区（只读）</option>
+                <option>z-agent-gear 项目工作区</option>
+              </optgroup>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- 7. Layer 3: 9 Product Scenarios -->
+      <section class="spec-section" id="scenarios">
+        <div class="section-head">
+          <h2>7. 第三层：九大业务场景组件化蓝图</h2>
+          <span class="section-tag">agent-web + admin-web</span>
+        </div>
+        <p class="section-desc">点击切换以下 9 大核心业务场景，查看各场景的组件拆分清单、职责边界与设计细节。</p>
+
+        <div class="scenario-tabs" id="scenario-tabs" role="tablist"></div>
+        <div class="scenario-panel" id="scenario-panel" role="tabpanel"></div>
+      </section>
+
+      <!-- 8. Guardrails -->
+      <section class="spec-section" id="guardrails">
+        <div class="section-head">
+          <h2>8. 交互、无障碍与自动化质量守卫</h2>
+          <span class="section-tag">TDD &amp; E2E Guardrails</span>
+        </div>
+        <div class="grid-3">
+          <div class="card">
+            <h3>微字号零容忍静态单测</h3>
+            <p><code class="mono">T-UIUX-FONT1</code> 与 <code class="mono">T-UIUX-FONT2</code> 扫描全量前端源码，发现 <code>text-[9px]</code>/<code>10px</code>/<code>11px</code> 即阻断 CI。</p>
+          </div>
+          <div class="card">
+            <h3>工作区外壳 E2E 守卫</h3>
+            <p><code class="mono">E2E-UIUX-1~5</code> 在真实 Chromium 下验证 ActivityRail、<code>Ctrl/Cmd+B</code>、⌘K 快速新建、状态色抽样、设置导航与控制器面包屑。</p>
+          </div>
+          <div class="card">
+            <h3>聚合性能不变量</h3>
+            <p><code class="mono">T-E1/T-E2</code> 与 <code class="mono">E2E-SET1</code> 确保首屏仅 1 次 <code>HomeOverview</code>、设置页仅 1 次 <code>SettingsOverview</code>。</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const SURFACES = [
+      { token: '--rail', light: 'oklch(0.962 0.005 264)', dark: 'oklch(0.132 0.005 264)', role: 'Surface-0 · 一级导航轨 (56px)' },
+      { token: '--sidebar', light: 'oklch(0.975 0.004 264)', dark: 'oklch(0.175 0.006 264)', role: 'Surface-1 · 侧边列表与管理侧栏' },
+      { token: '--background', light: 'oklch(0.99 0.002 264)', dark: 'oklch(0.145 0.005 264)', role: 'Surface-2 · 主工作画布' },
+      { token: '--card', light: 'oklch(1 0 0)', dark: 'oklch(0.205 0.008 264)', role: 'Surface-2 · 卡片与工作流节点' },
+      { token: '--popover', light: 'oklch(1 0 0)', dark: 'oklch(0.225 0.010 264)', role: 'Surface-3 · 弹层与模态框' },
+      { token: '--muted', light: 'oklch(0.955 0.005 264)', dark: 'oklch(0.255 0.008 264)', role: '次级胶囊与代码块表头' },
+      { token: '--border', light: 'oklch(0.91 0.005 264)', dark: 'oklch(1 0 0 / 11%)', role: '全局 1px 低对比度分割线' },
+      { token: '--muted-foreground', light: 'oklch(0.52 0.008 264)', dark: 'oklch(0.708 0.006 264)', role: '次级说明、元信息与占位符' }
+    ];
+
+    const SEMANTICS = [
+      { token: '--primary', light: 'oklch(0.54 0.19 264)', dark: 'oklch(0.70 0.15 264)', role: 'Indigo-Violet 品牌主色与聚焦态' },
+      { token: '--success', light: 'oklch(0.55 0.17 148)', dark: 'oklch(0.68 0.15 148)', role: '在线 / 空闲 / 运行中 / 完成' },
+      { token: '--warning', light: 'oklch(0.72 0.16 75)', dark: 'oklch(0.78 0.14 75)', role: '启动中 / 等待人工 / 返工' },
+      { token: '--info', light: 'oklch(0.58 0.15 245)', dark: 'oklch(0.68 0.14 245)', role: '工作中 / 流式输出 / 进行中' },
+      { token: '--destructive', light: 'oklch(0.58 0.22 27)', dark: 'oklch(0.70 0.19 22)', role: '失败 / 断连 / 危险销毁操作' },
+      { token: '--success-text', light: 'oklch(0.44 0.13 148)', dark: 'oklch(0.82 0.13 148)', role: '成功类正文 / 提示条（≥ 4.5:1）' },
+      { token: '--warning-text', light: 'oklch(0.46 0.12 75)', dark: 'oklch(0.85 0.12 75)', role: '警告类正文 / 提示条（≥ 4.5:1）' },
+      { token: '--info-text', light: 'oklch(0.45 0.13 245)', dark: 'oklch(0.80 0.11 245)', role: '信息类正文 / 提示条（≥ 4.5:1）' },
+      { token: '--destructive-text', light: 'oklch(0.48 0.19 27)', dark: 'oklch(0.82 0.14 22)', role: '危险/错误类正文 / 提示条（≥ 4.5:1）' }
+    ];
+
+    const SCENARIOS = [
+      {
+        id: 'auth',
+        label: 'A. 认证与身份绑定',
+        summary: '居中单卡片（max-w-400px），前台硬关闭公开注册；支持账号密码、OIDC / GitHub OAuth 登录与首次身份绑定分流，后台支持首登强制改密。',
+        components: ['LoginPage', 'LoginCallbackPage', 'IdentityChoicePage', 'ChangePasswordPage', 'ProtectedRoute'],
+        highlights: [
+          'OAuth 供应商按钮组统一采用 outline 全宽样式，清晰区分品牌图标与名称。',
+          'IdentityChoicePage 以双选卡片引导用户「绑定已有账号验密」或「创建新账号」。',
+          '错误提示统一使用 bg-destructive/10 text-destructive-text 圆角提示条。'
+        ]
+      },
+      {
+        id: 'home',
+        label: 'B. 概览与多租户工作区',
+        summary: '首页 KPI 概览 + 多租户工作区切换与角色权限隔离（admin 全权 vs developer 成员工作区读写 / 全局只读）。',
+        components: ['HomePage', 'WorkspacePage', 'TenantMembersPage', 'WorkspaceMembersDialog', 'WorkspaceContextBanner', 'WorkspaceManagerDialog'],
+        highlights: [
+          'KPI 卡片数值采用 text-2xl font-semibold tabular-nums，避免轮询刷新抖动。',
+          'WorkspaceContextBanner 在设置页顶部清晰标识当前租户、工作区及只读限制。',
+          '最后一位管理员受保护禁用态展示清晰提示，防止误移除。'
+        ]
+      },
+      {
+        id: 'session',
+        label: 'C. Agent 会话与实时预览',
+        summary: '最高频核心场景：消息时间线 + 多态工具调用/终端仿真 + 内联审批提问卡片 + 三态分屏实时内容预览（Monaco / HTML 沙箱 / Markdown 批注）。',
+        components: ['SessionHeader', 'MessageList', 'MessageItem', 'ThoughtBlock', 'ToolCallCard', 'DiffView', 'TerminalOutput', 'InteractionCard', 'PlanCard', 'InputBox', 'CommandSuggest', 'PreviewPane', 'ReviewPanel'],
+        highlights: [
+          'SessionHeader 单行 h-12：会话标题 + 状态圆点 + 工作区/分支，环境信息收进悬停胶囊。',
+          'MessageList max-w-3xl 居中阅读宽，用户浅色气泡（bg-muted/60）、AI 消息无边框流式。',
+          'InputBox 一体化浮岛：模式/模型/附件/片段收入底栏，中文主按钮「发送 ⌘↵ / 停止」。',
+          'TerminalOutput 使用 xterm-headless 仿真最终画面行，零 dangerouslySetInnerHTML。',
+          'InteractionCard 将提问表单（含 anyOf 多选）与权限审批内联进时间线，附带 60s 倒计时。',
+          'PreviewPane 支持仅对话 / 对话+预览 / 仅预览三态，写文件常开 Diff Tab，读文件共享预览 Tab。'
+        ]
+      },
+      {
+        id: 'workflow',
+        label: 'D. 工作流编排与 DAG 画布',
+        summary: '跨环境聚合两行实例卡片 + React Flow & Dagre 自顶向下 DAG 画布 + 右侧节点详情抽屉 + 控制器不可用时的工作流接续。',
+        components: ['WorkflowInstanceCard', 'WorkflowGraphView', 'WorkflowNodeCard', 'ResourceChip', 'WorkflowNodeTree', 'NodeDetailDrawer', 'SessionSidePanel', 'BlackboardPanel', 'HumanNodeActions', 'ContinueWorkflowDialog'],
+        highlights: [
+          'WorkflowNodeCard 固定不透明 bg-card，按执行中节点前后各 2 卡片自动 fitView 居中。',
+          'NodeDetailDrawer 前置 GitHub PR 联动区块，支持人类节点审批/打回与 AI 节点立即失败。',
+          'ContinueWorkflowDialog 支持换绑控制器/工作区/新 Worktree 并逐节点映射 Harness。'
+        ]
+      },
+      {
+        id: 'cloud',
+        label: 'E. 云电脑、控制器与 Worktree',
+        summary: '无限制云电脑全生命周期编排（规格报价 → 存储挂载 → Harness/负载多选 → GitHub 锁定），涵盖端口转发网关与 Harness 设备登录引导。',
+        components: ['NewCloudHostDialog', 'StopCloudHostDialog', 'DeleteCloudHostDialog', 'CloudHostWorkloadsSection', 'CloudHostIssuesLinkageSection', 'GithubProjectSetupDialog', 'RepoWorkflowSection', 'WorktreeSidebarGroup', 'GatewayDialog', 'HarnessLoginDialog'],
+        highlights: [
+          'NewCloudHostDialog 实时呈现规格小时价与一次性启动扣费报价（tabular-nums）。',
+          'StopCloudHostDialog 明确提示「停止时归档存储（半价）」与「保持 IDLE（全价）」差异。',
+          'HarnessLoginDialog 逐字展示设备登录链接与验证码，支持一键复制与本地倒计时。'
+        ]
+      },
+      {
+        id: 'kb',
+        label: 'F. 知识库与仓库内建文档',
+        summary: '双来源知识库统一体验：平台托管知识库（读写、四档权限、原子移动+更新、事件溯源历史）+ 仓库内建知识库（只读懒加载、front matter 表格化）。',
+        components: ['KnowledgeBasePage', 'KnowledgeBaseSection', 'RepoKnowledgeBaseSection', 'RepoKnowledgeBaseContent', 'KnowledgeBasePreview', 'KnowledgeBaseEditor', 'KnowledgeBaseHistoryDrawer', 'KnowledgeBaseSettingsDialog'],
+        highlights: [
+          'KnowledgeBaseEditor 提供分栏源码/预览、localStorage 草稿保护与 TagBadgeInput。',
+          'RepoKnowledgeBaseSection 默认全部折叠按需扫描，清晰区分 .zag/knowledges、docs/knowledges 与 docs/ 来源。',
+          'KnowledgeBaseHistoryDrawer 按时间倒序呈现 CREATE / UPDATE / MOVE / DELETE 完整轨迹。'
+        ]
+      },
+      {
+        id: 'settings',
+        label: 'G. 设置中心与控制器配置',
+        summary: '单次 14 分支 SettingsOverview 聚合驱动，左侧分组导航激活高亮，进入控制器子页自动跳过聚合查询并展示顶部面包屑导航。',
+        components: ['SettingsPage', 'ControllerConfigPage', 'ProviderSection', 'ModelSection', 'ControllerListSection', 'HarnessToolsSection', 'McpRegistrySection', 'CustomMcpSection', 'CustomToolSection', 'ValutSection', 'GitSettingsSection', 'CloudStorageSection'],
+        highlights: [
+          'SettingsPage 桌面端带可见「设置」标题与 data-active 高亮项。',
+          'ControllerConfigPage 顶部固定「设置 / 控制器 / {分组}」面包屑，云端控制器自动隐藏本地专属危险操作。',
+          'ValutSection 严格执行「明文不出服务端」，列表仅展示键名、命名空间与引用数。'
+        ]
+      },
+      {
+        id: 'billing',
+        label: 'H. 费用中心与计费对账',
+        summary: '前后台统一的 Credits 计费与对账视图，全部金额与 Token 计量采用 tabular-nums 右对齐，右侧抽屉展示多维计费明细。',
+        components: ['BillingPage', 'ReconciliationPage', 'AccountTable', 'InvoiceTable', 'ReceiptDrawer', 'RechargeDialog', 'RollupChart', 'ModelPricingSection', 'MyApiKeyManager'],
+        highlights: [
+          'RollupChart 使用 --chart-1 ~ --chart-5 统一调色板绘制费用与消耗趋势。',
+          'ReceiptDrawer 拆解未缓存输入 / 缓存输入 / 输出 / 中断 20%-80% 折算 / 存储小时桶。',
+          '正数充值使用 text-success-text，对账异常使用 text-destructive-text。'
+        ]
+      },
+      {
+        id: 'admin',
+        label: 'I. 管理后台运维工作台',
+        summary: 'apps/admin-web 2-Tier 管理后台：覆盖云容器生命周期、规格白名单、预制工作负载、基础镜像、Harness 配置、模型管理与租户开户。',
+        components: ['AdminLayout', 'CloudContainersPage', 'CloudHostSpecsPage', 'CloudWorkloadsPage', 'BaseImagePage', 'HarnessConfigsPage', 'ModelConfigPage', 'TenantsPage', 'TenantDetailPage', 'AuthProvidersPage', 'SecurityPage'],
+        highlights: [
+          '高密度数据表统一 bg-muted/40 12px 表头 + 14px 单元格 + 右对齐幽灵操作按钮。',
+          'TenantWhitelistPicker 支持规格租户白名单搜索组合选择；WorkloadLogsDialog 提供深色等宽日志检视。',
+          '前后台共享同一套 OKLCH Token 与 >= 12px 静态源码守卫测试。'
+        ]
+      }
+    ];
+
+    const MINI_DOMAINS = {
+      sessions: {
+        title: '会话列表', count: '2',
+        stageTitle: '会话：refactor-ui-ux-workspace', stageSub: 'z-agent-gear · main · OpenCode Harness',
+        items: [
+          { name: 'refactor-ui-ux-workspace', meta: 'z-agent-gear · 工作中', color: 'var(--info)' },
+          { name: 'api-perf-benchmark', meta: 'z-agent-gear · 空闲', color: 'var(--success)' }
+        ]
+      },
+      workflows: {
+        title: '工作流实例', count: '1',
+        stageTitle: '工作流：UI/UX 重构全流程', stageSub: '6/10 节点完成 · 等待人工验收',
+        items: [
+          { name: 'UI/UX 重构全流程', meta: 'z-agent-gear · 6/10', color: 'var(--warning)' }
+        ]
+      },
+      kb: {
+        title: '知识库', count: '3',
+        stageTitle: '文档：UI/UX 设计规范', stageSub: 'docs/engineering/ui-ux-standards.md · 只读',
+        items: [
+          { name: '领域模型知识库', meta: '仓库内建 · docs/knowledges', color: 'var(--primary)' },
+          { name: '前端工程规范', meta: '平台托管 · 团队可写', color: 'var(--success)' }
+        ]
+      },
+      hosts: {
+        title: '主机与云电脑', count: '2',
+        stageTitle: '云电脑：cloud-dev-01', stageSub: '4C 8G · 运行中 · OpenCode + DeepSeek',
+        items: [
+          { name: 'cloud-dev-01', meta: '云电脑 · 运行中', color: 'var(--success)' },
+          { name: 'macbook-pro-local', meta: '本地控制器 · 在线', color: 'var(--success)' }
+        ]
+      }
+    };
+
+    const toastEl = document.getElementById('toast');
+    let toastTimer;
+    function showToast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2000);
+    }
+
+    function renderSwatches() {
+      const isDark = document.documentElement.classList.contains('dark');
+      const build = (list, targetId) => {
+        const root = document.getElementById(targetId);
+        root.innerHTML = '';
+        list.forEach((item) => {
+          const val = isDark ? item.dark : item.light;
+          const el = document.createElement('div');
+          el.className = 'swatch';
+          el.innerHTML = `
+            <div class="swatch-preview" style="background:var(${item.token});"></div>
+            <div class="swatch-body">
+              <div class="swatch-name">${item.token}</div>
+              <div class="swatch-val">${val}</div>
+              <div class="swatch-role">${item.role}</div>
+            </div>
+          `;
+          el.addEventListener('click', () => {
+            navigator.clipboard?.writeText(`var(${item.token}) /* ${val} */`).catch(() => {});
+            showToast(`已复制 ${item.token}: ${val}`);
+          });
+          root.appendChild(el);
+        });
+      };
+      build(SURFACES, 'surface-swatches');
+      build(SEMANTICS, 'semantic-swatches');
+    }
+
+    // Theme toggle
+    const btnLight = document.getElementById('btn-light');
+    const btnDark = document.getElementById('btn-dark');
+    function setTheme(mode) {
+      document.documentElement.classList.toggle('dark', mode === 'dark');
+      btnDark.classList.toggle('active', mode === 'dark');
+      btnLight.classList.toggle('active', mode === 'light');
+      renderSwatches();
+    }
+    btnLight.addEventListener('click', () => setTheme('light'));
+    btnDark.addEventListener('click', () => setTheme('dark'));
+
+    // Mini 3-Tier Shell interactivity
+    const miniSidebar = document.getElementById('mini-sidebar');
+    const toggleSidebarBtn = document.getElementById('toggle-mini-sidebar');
+    function renderMiniDomain(key) {
+      const data = MINI_DOMAINS[key];
+      document.getElementById('mini-sidebar-title').textContent = data.title;
+      document.getElementById('mini-sidebar-count').textContent = data.count;
+      document.getElementById('mini-stage-title').textContent = data.stageTitle;
+      document.getElementById('mini-stage-sub').textContent = data.stageSub;
+      const list = document.getElementById('mini-sidebar-items');
+      list.innerHTML = data.items.map((item) => `
+        <div style="padding:8px 10px;border-radius:8px;background:var(--card);border:1px solid var(--border);">
+          <div style="display:flex;align-items:center;gap:6px;font-size:13px;font-weight:500;">
+            <span class="dot" style="background:${item.color}"></span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${item.name}</span>
+          </div>
+          <div style="font-size:12px;color:var(--muted-foreground);margin-top:2px;">${item.meta}</div>
+        </div>
+      `).join('');
+    }
+    document.querySelectorAll('.mini-rail-btn[data-domain]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mini-rail-btn[data-domain]').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        miniSidebar.classList.remove('collapsed');
+        toggleSidebarBtn.textContent = '收起';
+        renderMiniDomain(btn.dataset.domain);
+      });
+    });
+    function toggleMiniSidebar() {
+      const collapsed = miniSidebar.classList.toggle('collapsed');
+      toggleSidebarBtn.textContent = collapsed ? '展开' : '收起';
+    }
+    toggleSidebarBtn.addEventListener('click', toggleMiniSidebar);
+    window.addEventListener('keydown', (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        toggleMiniSidebar();
+        showToast(miniSidebar.classList.contains('collapsed') ? '已收起列表栏 (Cmd/Ctrl+B)' : '已展开列表栏 (Cmd/Ctrl+B)');
+      }
+    });
+
+    // Scenario tabs
+    const tabsRoot = document.getElementById('scenario-tabs');
+    const panelRoot = document.getElementById('scenario-panel');
+    function renderScenario(id) {
+      const sc = SCENARIOS.find((s) => s.id === id) || SCENARIOS[0];
+      tabsRoot.querySelectorAll('.scenario-tab').forEach((t) => t.classList.toggle('active', t.dataset.id === sc.id));
+      panelRoot.innerHTML = `
+        <h3 style="margin:0 0 8px;font-size:17px;font-weight:600;">${sc.label}</h3>
+        <p style="margin:0;font-size:14px;color:var(--muted-foreground);">${sc.summary}</p>
+        <div class="chip-list">
+          ${sc.components.map((c) => `<span class="comp-chip">${c}</span>`).join('')}
+        </div>
+        <ul style="margin:0;padding-left:18px;display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--foreground);">
+          ${sc.highlights.map((h) => `<li>${h}</li>`).join('')}
+        </ul>
+      `;
+    }
+    SCENARIOS.forEach((sc, idx) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'scenario-tab' + (idx === 0 ? ' active' : '');
+      btn.dataset.id = sc.id;
+      btn.textContent = sc.label;
+      btn.addEventListener('click', () => renderScenario(sc.id));
+      tabsRoot.appendChild(btn);
+    });
+
+    // Active nav highlight on scroll
+    const navLinks = Array.from(document.querySelectorAll('.nav-link'));
+    const sections = navLinks.map((a) => document.querySelector(a.getAttribute('href'))).filter(Boolean);
+    window.addEventListener('scroll', () => {
+      const pos = window.scrollY + 100;
+      let current = sections[0]?.id;
+      for (const sec of sections) {
+        if (sec.offsetTop <= pos) current = sec.id;
+      }
+      navLinks.forEach((a) => a.classList.toggle('active', a.getAttribute('href') === `#${current}`));
+    }, { passive: true });
+
+    renderSwatches();
+    renderMiniDomain('sessions');
+    renderScenario(SCENARIOS[0].id);
+  </script>
+</body>
+</html>

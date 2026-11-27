@@ -201,6 +201,17 @@ describe('ValutSection', () => {
       expect(screen.getByTestId('valut-section')).not.toHaveTextContent('super-secret');
     });
 
+    it('T-SET-VALUT 列表仅展示名称/命名空间/引用计数（明文不出服务端视觉契约）', () => {
+      render(<ValutSection />);
+
+      const section = screen.getByTestId('valut-section');
+      expect(section).toHaveTextContent('api-token');
+      expect(section).toHaveTextContent('自定义密钥');
+      expect(section).toHaveTextContent('引用 1');
+      expect(section).not.toHaveTextContent(/value/i);
+      expect(print(GET_VALUT_ENTRIES)).not.toContain('value');
+    });
+
     it('空态展示「暂无密钥条目」', () => {
       mockQueries([]);
       render(<ValutSection />);

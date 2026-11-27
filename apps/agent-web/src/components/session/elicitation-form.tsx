@@ -40,7 +40,7 @@ export function ElicitationFields({ schema, values, disabled = false, onChange }
         <div key={name} className="space-y-2" role="radiogroup" aria-label={label}>
           <Label>
             {label}
-            {required && <span className="text-destructive">*</span>}
+            {required && <span className="text-destructive-text">*</span>}
           </Label>
           {prop.description && <p className="text-xs text-muted-foreground">{prop.description}</p>}
           <div className="space-y-1">
@@ -72,7 +72,7 @@ export function ElicitationFields({ schema, values, disabled = false, onChange }
         <div key={name} className="space-y-2">
           <Label htmlFor={name}>
             {label}
-            {required && <span className="text-destructive">*</span>}
+            {required && <span className="text-destructive-text">*</span>}
           </Label>
           {prop.description && <p className="text-xs text-muted-foreground">{prop.description}</p>}
           <Input
@@ -101,7 +101,7 @@ export function ElicitationFields({ schema, values, disabled = false, onChange }
           />
           <Label htmlFor={name}>
             {label}
-            {required && <span className="text-destructive">*</span>}
+            {required && <span className="text-destructive-text">*</span>}
           </Label>
           {prop.description && <p className="text-xs text-muted-foreground">{prop.description}</p>}
         </div>
@@ -128,7 +128,7 @@ export function ElicitationFields({ schema, values, disabled = false, onChange }
         <div key={name} className="space-y-2" role="group" aria-label={label}>
           <Label>
             {label}
-            {required && <span className="text-destructive">*</span>}
+            {required && <span className="text-destructive-text">*</span>}
           </Label>
           {prop.description && <p className="text-xs text-muted-foreground">{prop.description}</p>}
           <div className="space-y-1">
@@ -159,7 +159,7 @@ export function ElicitationFields({ schema, values, disabled = false, onChange }
       <div key={name} className="space-y-2">
         <Label htmlFor={name}>
           {label}
-          {required && <span className="text-destructive">*</span>}
+          {required && <span className="text-destructive-text">*</span>}
         </Label>
         {prop.description && <p className="text-xs text-muted-foreground">{prop.description}</p>}
         <Input

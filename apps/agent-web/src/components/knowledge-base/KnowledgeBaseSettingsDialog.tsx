@@ -244,7 +244,7 @@ export default function KnowledgeBaseSettingsDialog({
             )}
 
             {error && (
-              <p className="text-xs text-destructive" role="alert" data-testid="knowledge-base-settings-error">
+              <p className="text-xs text-destructive-text" role="alert" data-testid="knowledge-base-settings-error">
                 {error}
               </p>
             )}
