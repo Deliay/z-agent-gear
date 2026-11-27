@@ -803,7 +803,7 @@ export function createSocketIOServer(
       try {
         mcpRelayService.handleSocketDisconnect(socket.id);
         acpSessionSyncService.cleanupSocket(socket);
-        // 失联 controller 的 pending 问询无法再收到响应：清 timer，避免 60s 后误发 timeout
+        // 失联 controller 的 pending 问询无法再收到响应：清 timer，避免 1800s（提问）/900s（权限审批）后误发 timeout
         elicitationManager.clearForSocket(socket.id);
         // 权限请求同理：清 timer + 逐条发布 permission:resolved(cancelled)，收敛会话卡片
         permissionManager.clearForSocket(socket.id);

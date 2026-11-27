@@ -63,7 +63,7 @@ const sessionInteractionSchema = new Schema(
     toolCall: { type: Schema.Types.Mixed },
     options: { type: [Schema.Types.Mixed] },
     response: { type: sessionInteractionResponseSchema, default: undefined },
-    /** 作答截止 = 创建时刻 + 60s（与 controller-api TIMEOUT_MS 对齐） */
+    /** 作答截止 = 提问创建时刻 + 30 分钟、权限审批创建时刻 + 15 分钟（分别对齐 controller-api elicitation/permission TIMEOUT_MS） */
     expiresAt: { type: Date },
     respondedAt: { type: Date },
     resolvedAt: { type: Date },

@@ -12,6 +12,10 @@ import { withSpan } from '../observability/trace.js';
 
 const ACP_PROTOCOL_VERSION = 1;
 
+/** 问询/授权兜底超时 = controller-api 权威超时 + 5s race 余量（提问 30 分钟 / 权限审批 15 分钟） */
+const ELICITATION_FALLBACK_TIMEOUT_MS = 1_805_000;
+const PERMISSION_FALLBACK_TIMEOUT_MS = 905_000;
+
 /** 初始 mode/model 应用后回读确认失败时的重试间隔 */
 const INITIAL_CONFIG_RETRY_DELAY_MS = 300;
 
@@ -418,7 +422,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     this.activePrompt = null;
     this.inputQueue = [];
     // 会话关闭：所有在途问询/授权必须先同步收敛（在 cancel/closeSession 的 5s race 之前），
-    // 否则 race 窗口内 65s timer 仍可能迟到发 timeout。
+    // 否则 race 窗口内 1805s/905s timer 仍可能迟到发 timeout。
     this.settlePendingRequests('session stopped by user');
     this.clearPendingInitialConfig();
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
@@ -442,7 +446,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
 
   /**
    * 清空 pending 请求：clearTimeout + resolve(cancel) + delete。
-   * 问询额外回发 resolved(cancelled)，让服务端待办收敛为 cancelled 而不是等 65s 超时误标 expired。
+   * 问询额外回发 resolved(cancelled)，让服务端待办收敛为 cancelled 而不是等 1805s 超时误标 expired。
    * 同时发出 settled 事件，供 socketio-client 清理 requestId → bridge 映射（避免 Map 单调增长/阻止 GC）。
    */
   private settlePendingRequests(detail: string): void {
@@ -979,7 +983,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
         this.pendingPermissions.delete(requestId);
         this.emit('permission:settled', requestId);
         resolve({ outcome: { outcome: 'cancelled' } });
-      }, 65_000);
+      }, PERMISSION_FALLBACK_TIMEOUT_MS);
 
       this.pendingPermissions.set(requestId, { resolve, timeout });
 
@@ -1045,16 +1049,16 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
             requestId,
             ...(pending?.elicitationId ? { elicitationId: pending.elicitationId } : {}),
           },
-          'elicitation timed out after 65s, auto-cancelling',
+          'elicitation timed out after 1805s, auto-cancelling',
         );
         this.socket.emit('acp:elicitation:resolved', {
           requestId,
           sessionId: this.sessionId,
           reason: 'timeout',
-          detail: 'bridge timeout (65s)',
+          detail: 'bridge timeout (1805s)',
         });
         resolve({ action: 'cancel' });
-      }, 65_000);
+      }, ELICITATION_FALLBACK_TIMEOUT_MS);
 
       this.pendingElicitations.set(requestId, {
         resolve,
@@ -1124,7 +1128,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
       elicitationId: params.elicitationId,
     });
 
-    // Agent 自行完成/取消：对匹配的 pending 就地收敛，避免悬挂到 65s 被误标 expired。
+    // Agent 自行完成/取消：对匹配的 pending 就地收敛，避免悬挂到 1805s 被误标 expired。
     // 契约 reason:'cancelled' 的产生路径之一（另一处为会话关闭 settle）。
     const entry = [...this.pendingElicitations.entries()]
       .find(([, pending]) => pending.elicitationId === params.elicitationId);
@@ -1205,7 +1209,7 @@ export class AcpSessionBridge extends EventEmitter implements acp.Client {
     );
     const wasStopped = this.stopped || this.silentStop;
     this.stopped = true;
-    // 进程崩溃同样必须收敛 pending：否则 65s timer 泄漏且迟发 timeout 事件
+    // 进程崩溃同样必须收敛 pending：否则 1805s timer 泄漏且迟发 timeout 事件
     this.settlePendingRequests('session failed');
     this.clearPendingInitialConfig();
     // 已停止（含 silent 替换/对账）后迟到的初始化失败：不得再发 stopped，

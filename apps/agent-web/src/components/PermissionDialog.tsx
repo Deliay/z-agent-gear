@@ -45,7 +45,7 @@ export function PermissionDialog({ open, onOpenChange, todo }: PermissionDialogP
           </p>
 
           <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-            该请求将在约 1 分钟后过期；请在会话内的权限审批卡片中选择。
+            该请求将在约 15 分钟后过期；请在会话内的权限审批卡片中选择。
           </p>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">

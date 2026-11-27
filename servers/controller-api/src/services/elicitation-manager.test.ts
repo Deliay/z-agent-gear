@@ -141,7 +141,7 @@ describe('ElicitationManager', () => {
         message: 'Which strategy?',
       });
 
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(1_800_000);
 
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:response', {
         requestId: 'elic-1',
@@ -161,12 +161,12 @@ describe('ElicitationManager', () => {
 
       await manager.handleElicitationResponse({ requestId: 'elic-1', action: 'decline' });
 
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(1_800_000);
 
       expect(mockSocket.emit).toHaveBeenCalledTimes(1);
     });
 
-    it('T-S5: 60s 超时同时发布 elicitation:resolved(timeout) 并回 cancel', async () => {
+    it('T-S5: 1800s 超时同时发布 elicitation:resolved(timeout) 并回 cancel', async () => {
       await manager.handleElicitationRequest(mockSocket as never, {
         requestId: 'elic-1',
         sessionId: 'session-1',
@@ -175,7 +175,7 @@ describe('ElicitationManager', () => {
       });
 
       mockRedis.publish.mockClear();
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(1_800_000);
       await Promise.resolve();
 
       const resolvedCall = mockRedis.publish.mock.calls.find((c) => c[0] === 'elicitation:resolved');
@@ -187,6 +187,7 @@ describe('ElicitationManager', () => {
         userId: 'user-1',
         controllerId: 'ctrl-1',
         reason: 'timeout',
+        detail: 'controller-api timeout (1800s)',
       });
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:response', {
         requestId: 'elic-1',
@@ -298,12 +299,44 @@ describe('ElicitationManager', () => {
   });
 
   describe('pending 生命周期', () => {
-    it('T-S8: 重复 requestId 清理旧 60s timer（不重复发 timeout）', async () => {
+    it('T-ET1: 1800s 边界（900s 不串线；1799999ms 不触发、1800000ms 触发且文案 1800s）', async () => {
+      await manager.handleElicitationRequest(mockSocket as never, {
+        requestId: 'elic-boundary',
+        sessionId: 'session-1',
+        mode: 'form',
+        message: 'boundary',
+      });
+
+      mockRedis.publish.mockClear();
+      await vi.advanceTimersByTimeAsync(900_000);
+      await Promise.resolve();
+      expect(mockRedis.publish.mock.calls.filter(
+        (c) => c[0] === 'elicitation:resolved' && JSON.parse(c[1]).reason === 'timeout',
+      )).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(899_999);
+      await Promise.resolve();
+      expect(mockRedis.publish.mock.calls.filter(
+        (c) => c[0] === 'elicitation:resolved' && JSON.parse(c[1]).reason === 'timeout',
+      )).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+      const timeouts = mockRedis.publish.mock.calls.filter(
+        (c) => c[0] === 'elicitation:resolved' && JSON.parse(c[1]).reason === 'timeout',
+      );
+      expect(timeouts).toHaveLength(1);
+      expect(JSON.parse(timeouts[0][1])).toMatchObject({
+        detail: 'controller-api timeout (1800s)',
+      });
+    });
+
+    it('T-S8: 重复 requestId 清理旧 1800s timer（不重复发 timeout）', async () => {
       await manager.handleElicitationRequest(mockSocket as never, {
         requestId: 'elic-dup', sessionId: 'session-1', mode: 'form', message: 'first',
       });
-      // 先推进 30s 再发同 requestId：若旧 timer 未清理，它会在 t=60s 提前触发 timeout
-      await vi.advanceTimersByTimeAsync(30_000);
+      // 先推进 900s 再发同 requestId：若旧 timer 未清理，它会在 t=1800s 提前触发 timeout
+      await vi.advanceTimersByTimeAsync(900_000);
       await manager.handleElicitationRequest(mockSocket as never, {
         requestId: 'elic-dup', sessionId: 'session-1', mode: 'form', message: 'second',
       });
@@ -311,15 +344,15 @@ describe('ElicitationManager', () => {
       expect(manager.getPendingRequestCount()).toBe(1);
 
       mockRedis.publish.mockClear();
-      // t=65s：旧 timer 若未清会在 t=60s 误发 timeout（新请求此时才 35s）
-      await vi.advanceTimersByTimeAsync(35_000);
+      // t=1900s：旧 timer 若未清会在 t=1800s 误发 timeout（新请求此时才 1000s）
+      await vi.advanceTimersByTimeAsync(1_000_000);
       await Promise.resolve();
       expect(mockRedis.publish.mock.calls.filter(
         (c) => c[0] === 'elicitation:resolved' && JSON.parse(c[1]).reason === 'timeout',
       )).toHaveLength(0);
 
-      // t=95s：新请求自身在 t=90s 超时，且整段只允许 1 条 timeout
-      await vi.advanceTimersByTimeAsync(30_000);
+      // t=2700s：新请求自身在 t=1800s（相对发出时刻）超时，且整段只允许 1 条 timeout
+      await vi.advanceTimersByTimeAsync(800_000);
       await Promise.resolve();
       const timeoutPublishes = mockRedis.publish.mock.calls.filter(
         (c) => c[0] === 'elicitation:resolved' && JSON.parse(c[1]).reason === 'timeout',
@@ -337,7 +370,7 @@ describe('ElicitationManager', () => {
       expect(manager.getPendingRequestCount()).toBe(0);
 
       mockRedis.publish.mockClear();
-      await vi.advanceTimersByTimeAsync(60_000);
+      await vi.advanceTimersByTimeAsync(1_800_000);
       await Promise.resolve();
       expect(mockRedis.publish).not.toHaveBeenCalledWith('elicitation:resolved', expect.anything());
     });

@@ -109,7 +109,7 @@ describe('AcpSessionBridge - requestPermission', () => {
     expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'opt-1' } });
   });
 
-  it('should resolve with cancelled after 65s timeout', async () => {
+  it('should resolve with cancelled after 905s timeout', async () => {
     const bridge = createBridge();
 
     const promise = bridge.requestPermission({
@@ -117,7 +117,7 @@ describe('AcpSessionBridge - requestPermission', () => {
       options: [{ optionId: 'opt-1', name: 'Allow', kind: 'allow_once' }],
     } as never);
 
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(905_000);
 
     const result = await promise;
     expect(result).toEqual({ outcome: { outcome: 'cancelled' } });
@@ -140,7 +140,7 @@ describe('AcpSessionBridge - requestPermission', () => {
     const result = await promise;
     expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'opt-1' } });
 
-    await vi.advanceTimersByTimeAsync(35_000);
+    await vi.advanceTimersByTimeAsync(905_000);
   });
 
   it('should warn and ignore invalid requestId in handlePermissionResponse', () => {
@@ -210,7 +210,7 @@ describe('AcpSessionBridge - requestPermission', () => {
       options: [{ optionId: 'opt-1', name: 'Allow', kind: 'allow_once' }],
     } as never);
 
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(905_000);
     await promise;
 
     const emitCall = mockSocket.emit.mock.calls.find((c: unknown[]) => c[0] === 'acp:permission');
@@ -879,7 +879,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
     expect((resolved![1] as { detail: string }).detail).toHaveLength(100);
   });
 
-  it('T-B4: 65s 超时返回 cancel 并发出 resolved(timeout)，不残留 pending', async () => {
+  it('T-B4: 1805s 超时返回 cancel 并发出 resolved(timeout)，不残留 pending', async () => {
     const bridge = createBridge();
 
     const promise = bridge.unstable_createElicitation({
@@ -891,13 +891,13 @@ describe('AcpSessionBridge - elicitation observability', () => {
     const emitCall = mockSocket.emit.mock.calls.find((c: unknown[]) => c[0] === 'acp:elicitation');
     const requestId = (emitCall![1] as { requestId: string }).requestId;
 
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(1_805_000);
 
     expect(await promise).toEqual({ action: 'cancel' });
     expect(mockSocket.emit).toHaveBeenCalledWith('acp:elicitation:resolved', expect.objectContaining({
       requestId,
       reason: 'timeout',
-      detail: 'bridge timeout (65s)',
+      detail: 'bridge timeout (1805s)',
     }));
     expect(testLog.records).toContainEqual(
       expect.objectContaining({ level: 'warn', event: 'elicitation_timeout', requestId }),
@@ -913,7 +913,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
     );
   });
 
-  it('T-B5: 正常 form 模式只发 acp:elicitation，响应后 65s 内不发 resolved（clearTimeout 生效）', async () => {
+  it('T-B5: 正常 form 模式只发 acp:elicitation，响应后 1805s 内不发 resolved（clearTimeout 生效）', async () => {
     const bridge = createBridge();
 
     const promise = bridge.unstable_createElicitation({
@@ -929,8 +929,8 @@ describe('AcpSessionBridge - elicitation observability', () => {
 
     expect(await promise).toEqual({ action: 'accept', content: { answer: 'x' } });
 
-    // 推进 65s：已响应的请求不得再发 timeout resolved
-    await vi.advanceTimersByTimeAsync(65_000);
+    // 推进 1805s：已响应的请求不得再发 timeout resolved
+    await vi.advanceTimersByTimeAsync(1_805_000);
     expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation:resolved', expect.anything());
   });
 
@@ -958,7 +958,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
     expect(await promise).toEqual({ action: 'cancel' });
   });
 
-  it('T-B5c: stop() 就地收敛 pending 问询为 cancelled，65s 后不再发 timeout', async () => {
+  it('T-B5c: stop() 就地收敛 pending 问询为 cancelled，1805s 后不再发 timeout', async () => {
     const bridge = createBridge();
 
     const promise = bridge.unstable_createElicitation({
@@ -979,7 +979,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
     }));
 
     mockSocket.emit.mockClear();
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(1_805_000);
     expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation:resolved', expect.anything());
   });
 
@@ -997,8 +997,8 @@ describe('AcpSessionBridge - elicitation observability', () => {
 
     expect(await promise).toEqual({ outcome: { outcome: 'cancelled' } });
     expect(settled).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(65_000);
-    // timer 已清理：65s 后不会再有新的 permission 事件，且不会二次 settled
+    await vi.advanceTimersByTimeAsync(905_000);
+    // timer 已清理：905s 后不会再有新的 permission 事件，且不会二次 settled
     expect(mockSocket.emit.mock.calls.filter((c: unknown[]) => c[0] === 'acp:permission')).toHaveLength(1);
     expect(settled).toHaveBeenCalledTimes(1);
   });
@@ -1101,7 +1101,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
     await stopPromise;
   });
 
-  it('T-B11: 进程退出（spawner.closed）收敛 pending 并发 cancelled，65s 后不再发 timeout', async () => {
+  it('T-B11: 进程退出（spawner.closed）收敛 pending 并发 cancelled，1805s 后不再发 timeout', async () => {
     const bridge = createBridge();
     await bridge.start();
 
@@ -1125,11 +1125,11 @@ describe('AcpSessionBridge - elicitation observability', () => {
       detail: 'process exited',
     }));
 
-    // 真实时钟推进 65s：timer 已清理，不得再发 timeout
+    // 真实时钟推进 1805s：timer 已清理，不得再发 timeout
     const resolvedReasons = mockSocket.emit.mock.calls
       .filter((c: unknown[]) => c[0] === 'acp:elicitation:resolved')
       .map((c: unknown[]) => (c[1] as { reason: string }).reason);
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(1_805_000);
     const afterReasons = mockSocket.emit.mock.calls
       .filter((c: unknown[]) => c[0] === 'acp:elicitation:resolved')
       .map((c: unknown[]) => (c[1] as { reason: string }).reason);
@@ -1150,7 +1150,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
     bridge.settlePendingOnDisconnect();
 
     expect(await promise).toEqual({ action: 'cancel' });
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(1_805_000);
     const reasons = mockSocket.emit.mock.calls
       .filter((c: unknown[]) => c[0] === 'acp:elicitation:resolved')
       .map((c: unknown[]) => (c[1] as { reason: string }).reason);
@@ -1183,7 +1183,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
     const permissionId = (mockSocket.emit.mock.calls.find(
       (c: unknown[]) => c[0] === 'acp:permission',
     )![1] as { requestId: string }).requestId;
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(905_000);
     await permissionPromise;
     expect(permissionSettled).toHaveBeenCalledWith(permissionId);
   });
@@ -1216,7 +1216,7 @@ describe('AcpSessionBridge - elicitation observability', () => {
     }));
 
     mockSocket.emit.mockClear();
-    await vi.advanceTimersByTimeAsync(65_000);
+    await vi.advanceTimersByTimeAsync(1_805_000);
     expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation:resolved', expect.anything());
   });
 });

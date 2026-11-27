@@ -519,7 +519,7 @@ describe('AcpSessionBridge', () => {
       expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'opt-1' } });
     });
 
-    it('should resolve with cancelled on 65s timeout', async () => {
+    it('should resolve with cancelled on 905s timeout', async () => {
       const bridge = createBridge();
 
       const promise = bridge.requestPermission({
@@ -527,7 +527,7 @@ describe('AcpSessionBridge', () => {
         toolCall: { toolCallId: 'tc-1' },
       } as never);
 
-      await vi.advanceTimersByTimeAsync(65_000);
+      await vi.advanceTimersByTimeAsync(905_000);
 
       const result = await promise;
       expect(result).toEqual({ outcome: { outcome: 'cancelled' } });
@@ -609,7 +609,7 @@ describe('AcpSessionBridge', () => {
       expect(mockSocket.emit).not.toHaveBeenCalledWith('acp:elicitation', expect.anything());
     });
 
-    it('65s 超时自动 resolve cancel', async () => {
+    it('1805s 超时自动 resolve cancel', async () => {
       const bridge = createBridge();
 
       const promise = bridge.unstable_createElicitation({
@@ -619,7 +619,7 @@ describe('AcpSessionBridge', () => {
         requestedSchema: { type: 'object' },
       } as never);
 
-      await vi.advanceTimersByTimeAsync(65_000);
+      await vi.advanceTimersByTimeAsync(1_805_000);
 
       const result = await promise;
       expect(result).toEqual({ action: 'cancel' });

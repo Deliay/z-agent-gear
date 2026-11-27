@@ -104,7 +104,11 @@ vi.mock('./todo-service.js', () => ({
 }));
 
 import { SessionInteraction } from '../models/session-interaction.js';
-import { sessionInteractionService, SESSION_INTERACTION_TIMEOUT_MS } from './session-interaction-service.js';
+import {
+  sessionInteractionService,
+  ELICITATION_TIMEOUT_MS,
+  PERMISSION_TIMEOUT_MS,
+} from './session-interaction-service.js';
 
 const USER = 'user-1';
 const OTHER_USER = 'user-2';
@@ -143,7 +147,7 @@ function permissionInput(overrides: Record<string, unknown> = {}) {
 }
 
 describe('SessionInteractionService (T-SI)', () => {
-  it('T-SI1: elicitation 创建 PENDING + expiresAt≈+60s + history 首条 PENDING(agent)', async () => {
+  it('T-SI1: elicitation 创建 PENDING + expiresAt≈+30 分钟 + history 首条 PENDING(agent)', async () => {
     const before = Date.now();
     const { interaction, created } = await sessionInteractionService.createFromElicitationRequest(
       elicitationInput(),
@@ -153,11 +157,23 @@ describe('SessionInteractionService (T-SI)', () => {
     expect(interaction.status).toBe('PENDING');
     expect(interaction.kind).toBe('ELICITATION');
     const expiresAt = new Date(String(interaction.expiresAt)).getTime();
-    expect(expiresAt - before).toBeGreaterThanOrEqual(SESSION_INTERACTION_TIMEOUT_MS - 1_000);
-    expect(expiresAt - before).toBeLessThanOrEqual(SESSION_INTERACTION_TIMEOUT_MS + 5_000);
+    expect(expiresAt - before).toBeGreaterThanOrEqual(ELICITATION_TIMEOUT_MS - 1_000);
+    expect(expiresAt - before).toBeLessThanOrEqual(ELICITATION_TIMEOUT_MS + 5_000);
     const history = interaction.history as Array<Record<string, unknown>>;
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({ state: 'PENDING', actor: 'agent' });
+  });
+
+  it('T-ET4: permission 创建 PENDING + expiresAt≈+15 分钟（与 elicitation 30 分钟互不串线）', async () => {
+    const before = Date.now();
+    const { interaction } = await sessionInteractionService.createFromPermissionRequest(permissionInput());
+
+    expect(interaction.kind).toBe('PERMISSION');
+    const expiresAt = new Date(String(interaction.expiresAt)).getTime();
+    expect(expiresAt - before).toBeGreaterThanOrEqual(PERMISSION_TIMEOUT_MS - 1_000);
+    expect(expiresAt - before).toBeLessThanOrEqual(PERMISSION_TIMEOUT_MS + 5_000);
+    expect(PERMISSION_TIMEOUT_MS).toBe(900_000);
+    expect(ELICITATION_TIMEOUT_MS).toBe(1_800_000);
   });
 
   it('T-SI2: 重复 requestId 幂等——只一张卡片，created=false', async () => {
@@ -247,7 +263,7 @@ describe('SessionInteractionService (T-SI)', () => {
       userId: USER,
       interactionId: 'req-perm-1',
       resolution: 'EXPIRED',
-      detail: 'controller-api timeout (60s)',
+      detail: 'controller-api timeout (900s)',
     });
     expect(converged).toBe(0);
     expect(store.get('req-perm-1')?.status).toBe('ACCEPTED');
