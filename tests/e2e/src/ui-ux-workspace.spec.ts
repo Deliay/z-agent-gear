@@ -64,6 +64,27 @@ test.describe('UI/UX Workspace Shell & Navigation E2E', () => {
     await expect(sidebar).toBeVisible();
   });
 
+  test('E2E-UIUX-3: ⌘K/Ctrl+K quick create panel opens existing dialogs and Esc closes', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const { username } = await registerUser(page, { prefix: 'uiux3' });
+    await loginViaUI(page, username);
+
+    // ⌘K / Ctrl+K 唤起全局快速新建面板
+    await page.keyboard.press('Control+k');
+    const panel = page.locator('[data-testid="quick-create-panel"]');
+    await expect(panel).toBeVisible();
+    await expect(panel.getByRole('option', { name: /快速拉起会话/ })).toBeVisible();
+    await expect(panel.getByRole('option', { name: /实例化工作流/ })).toBeVisible();
+
+    // 选择「快速拉起会话」→ 打开既有新建会话对话框
+    await panel.getByRole('option', { name: /快速拉起会话/ }).click();
+    await expect(page.getByRole('dialog', { name: '新建会话' })).toBeVisible({ timeout: 15000 });
+
+    // Esc 关闭
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: '新建会话' })).toHaveCount(0);
+  });
+
   test('E2E-UIUX-2: Settings navigation highlights active section and Controller Config displays breadcrumb header', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
     const { token, username } = await registerUser(page, { prefix: 'uiux2' });

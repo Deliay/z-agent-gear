@@ -126,40 +126,48 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
   });
 
   return (
-    <div ref={headerRef} className="flex items-center justify-between gap-2 border-b border-border bg-background px-4 py-3" data-testid="session-header">
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1">
+    <div ref={headerRef} className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-background px-4" data-testid="session-header">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {isMobile && <MobileBackButton to="/sessions" />}
-        <h1 className="truncate text-lg font-semibold">
+        <h1 className="min-w-0 truncate text-base font-semibold">
           {session?.controllerName || 'Session'}
         </h1>
-        <span data-testid="session-status-badge" className={`rounded-full px-2 py-1 text-xs font-medium ${getStatusBadgeClass(status)}`}>
+        <span data-testid="session-status-badge" className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${getStatusBadgeClass(status)}`}>
           {STATUS_LABELS[status] ?? status}
         </span>
         {session?.archived && (
-          <span data-testid="session-archived-badge" className="rounded-full bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+          <span data-testid="session-archived-badge" className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
             已归档
           </span>
         )}
-        {session?.acpServerType && !isMobile && (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-            {harnessLabel(session.acpServerType)}
-          </span>
-        )}
-        {session?.cwd && !isMobile && (
-          <div className="flex items-center gap-1">
-            <span className="text-sm text-muted-foreground font-mono" title={session.cwd}>{truncatePathLeft(session.cwd)}</span>
-            {session?.worktreePath && !isMobile && (
-              <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs text-primary font-medium flex items-center gap-1">
+        {(session?.acpServerType || session?.cwd || session?.createdAt) && !isMobile && (
+          <div
+            data-testid="session-env-capsule"
+            title="环境信息：控制器 / Harness / 工作目录 / Worktree / 创建时间"
+            className="flex min-w-0 items-center gap-2 rounded-full bg-muted/60 px-2.5 py-1 text-xs text-muted-foreground"
+          >
+            {session?.acpServerType && (
+              <span className="shrink-0 rounded bg-background/60 px-1.5 py-0.5">
+                {harnessLabel(session.acpServerType)}
+              </span>
+            )}
+            {session?.cwd && (
+              <span className="min-w-0 truncate font-mono" title={session.cwd}>
+                {truncatePathLeft(session.cwd)}
+              </span>
+            )}
+            {session?.worktreePath && (
+              <span className="flex shrink-0 items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
                 <GitFork className="size-2.5" />
                 Worktree
               </span>
             )}
+            {session?.createdAt && (
+              <span className="hidden shrink-0 tabular-nums lg:inline">
+                {new Date(session.createdAt).toLocaleString()}
+              </span>
+            )}
           </div>
-        )}
-        {session?.createdAt && (
-          <span className="text-xs text-muted-foreground">
-            {new Date(session.createdAt).toLocaleString()}
-          </span>
         )}
       </div>
       {toolbarOverflow ? (

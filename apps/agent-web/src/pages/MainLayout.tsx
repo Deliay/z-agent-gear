@@ -8,6 +8,7 @@ import { useUserEventStream } from '../hooks/useUserEventStream';
 import Sidebar from '../components/Sidebar';
 import SidebarResizer from '../components/SidebarResizer';
 import ActivityRail from '../components/layout/ActivityRail';
+import QuickCreatePanel from '../components/layout/QuickCreatePanel';
 import { readSidebarWidth } from '../lib/sidebar-width';
 import type { SidebarSectionKey } from '../lib/sidebar-prefs';
 import { Button } from '../components/ui/button';
@@ -152,6 +153,8 @@ export default function MainLayout() {
     );
   }
 
+  const onlineControllerCount = (homeData?.controllers ?? []).filter((controller) => controller.status === 'online').length;
+
   const hasPendingAttention =
     (homeData?.unreadTodoCount ?? 0) > 0 ||
     (homeData?.sessionReviews ?? []).some((review) => review.status === 'PENDING');
@@ -180,6 +183,7 @@ export default function MainLayout() {
           collapsed={sidebarCollapsed}
           onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
           hasPendingAttention={hasPendingAttention}
+          onlineHostCount={onlineControllerCount}
         />
         {!sidebarCollapsed && (
           <>
@@ -221,6 +225,8 @@ export default function MainLayout() {
       {layout}
       {/* 全站单例：登录引导弹窗挂在最高层级，不受 Sidebar / NewSessionDialog 挂载影响 */}
       <HarnessLoginDialog />
+      {/* ⌘K / Ctrl+K 全局快速新建（D6） */}
+      <QuickCreatePanel />
     </HomeOverviewContext.Provider>
   );
 }

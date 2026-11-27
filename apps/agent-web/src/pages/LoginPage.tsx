@@ -89,8 +89,8 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-muted px-4">
-      <Card className="w-full max-w-sm">
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
+      <Card className="w-full max-w-[400px] rounded-xl">
         <CardHeader>
           <CardTitle className="text-center text-2xl">登录</CardTitle>
         </CardHeader>

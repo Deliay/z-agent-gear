@@ -62,4 +62,25 @@ describe('ActivityRail 三层工作区一级导航轨', () => {
     fireEvent.click(collapseBtn);
     expect(onToggleCollapse).toHaveBeenCalledTimes(1);
   });
+
+  it('T-UIUX-RAIL3: 激活领域展示 2px 品牌色指示条，底部在线主机计数使用 tabular-nums', () => {
+    mockLocation.pathname = '/workflows';
+    render(
+      <ActivityRail
+        activeSection="workflows"
+        onSelectSection={vi.fn()}
+        collapsed={false}
+        onToggleCollapse={vi.fn()}
+        onlineHostCount={3}
+      />,
+    );
+
+    const indicator = screen.getByTestId('rail-active-indicator');
+    expect(indicator).toHaveClass('bg-primary');
+    expect(indicator).toHaveClass('w-0.5');
+
+    const onlineCount = screen.getByTestId('rail-online-count');
+    expect(onlineCount).toHaveTextContent('3');
+    expect(onlineCount).toHaveClass('tabular-nums');
+  });
 });

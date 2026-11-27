@@ -505,3 +505,15 @@ pnpm run preview  # Preview production build
 - **零微字号硬性门禁（`>= 12px`）**：全站禁止使用小于 `12px`（`text-xs`）的微字号（如 `text-[9px]`、`text-[10px]`、`text-[11px]`）；静态守卫单测 `src/__tests__/ui-ux-standards.test.ts`（`T-UIUX-FONT1` / `T-UIUX-FONT2`）递归扫描 `apps/agent-web/src` 与 `apps/admin-web/src` 全部源码文件。
 - **OKLCH 表面明度层级**：`src/index.css`（及 `apps/admin-web/src/index.css`）在亮/暗双主题下通过带微色相（hue `264`）的明度梯度区分 `--background`、`--sidebar`、`--card`、`--popover`，数字计数与金额统一使用 `tabular-nums`。
 
+
+## 全场景 UI 重构口径（20261127）
+
+> 唯一验收基准：`docs/engineering/prototypes/20261127-ui-specification.md`；实现计划见 `docs/engineering/plan/20261127-refactor-agent-web-full-ui-rework.md`。
+
+- **状态色矩阵唯一来源**：`src/lib/status-matrix.ts` 承载会话 6 态、云电脑 5 态、工作流节点 8 态的 `dot / badge / label`（工作流额外 `spine / tint`）。`components/session/status-colors.ts`、`WorkflowNodeTreeConstants.ts`、`cloud-host/cloud-host-status.ts` 均为兼容薄层，**禁止**新增第二套取色/文案表；未知状态回退 `bg-muted-foreground` 中性灰。
+- **硬编码色值禁令**：`src/**/*.{ts,tsx}` 禁止出现 `text-|bg-|border-<palette>-<n>` 调色板类，必须使用 `index.css` 的语义 Token（`primary/success/warning/info/destructive/muted*`）；代码块深色表面使用 `code / code-foreground / code-muted-foreground / code-border / code-hover` Token。规范 §2.3 专色（`.zag-focus-highlight`、`[data-zag-hover/selected]`、`.md-annotation-highlight`）与 `lib/terminal-theme.ts`（xterm 调色板）列入守卫豁免。守卫：`T-UIUX-COLOR`。
+- **`tabular-nums` 清单**：金额（Credits）、单价、Token/上下文用量、倒计时、计数徽标、表格数值列必须使用 `tabular-nums`；`Badge` 基类已内置。守卫：`T-UIUX-TABULAR`（清单式，新增数值场景时扩清单）。
+- **⌘K 快速新建（D6）**：`components/layout/QuickCreatePanel.tsx` 全局挂载（`MainLayout`），仅两个条目「快速拉起会话 / 实例化工作流」，复用 `NewSessionDialog` / `InstantiateWorkflowDialog` 与 `useCreateSession` 提交链路；面板自身零查询（控制器来自 `homeOverview`），打开对话框后才触发既有查询。快捷键 `Cmd/Ctrl+K`，↑↓ 选择、Enter 确认、Esc 关闭。
+- **焦点呈现**：可交互原子组件统一 `focus-visible:ring-3 focus-visible:ring-ring/50`；图标按钮必须带 `aria-label`。守卫：`T-UIUX-FOCUS`（`ui/button|input|select|checkbox|switch` 抽样清单）。
+- **会话顶栏（G3）**：`SessionHeader` 单行 `h-12`，标题 + 状态徽标 + 环境信息胶囊（`data-testid="session-env-capsule"`：Harness / 工作目录 / Worktree / 创建时间），窄屏下胶囊自动隐藏次要信息；工具栏溢出收纳锚点 `session-header-overflow` 保持兼容。
+- **性能不变量零改动**：本次重构不新增任何查询/轮询/订阅；`HOME_OVERVIEW` 15s 单轮询、`SETTINGS_OVERVIEW` 单次聚合、归档分组无计数按需懒加载、`loading && !data` 轮询不卸载等口径保持不变（`E2E-HP*` / `E2E-SET1` 守卫）。

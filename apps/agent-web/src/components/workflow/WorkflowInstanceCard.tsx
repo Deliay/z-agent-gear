@@ -6,6 +6,7 @@ import {
   NODE_STATUS_LABELS,
   instanceStatusText,
 } from './WorkflowNodeTreeConstants'
+import { workflowNodeStatusVisual } from '@/lib/status-matrix'
 
 interface WorkflowInstanceCardProps {
   instance: WorkflowInstanceSummaryData
@@ -29,6 +30,7 @@ export default function WorkflowInstanceCard({ instance }: WorkflowInstanceCardP
     ? 'RUNNING'
     : (instance.lastNodeStatus ?? 'INITIALIZING')
   const statusText = instanceStatusText(instance)
+  const statusVisual = workflowNodeStatusVisual(status)
   const unavailable = Boolean(instance.unavailableReason)
 
   const handleContinue = (event: React.MouseEvent<HTMLButtonElement>) => {
@@ -68,6 +70,11 @@ export default function WorkflowInstanceCard({ instance }: WorkflowInstanceCardP
                 {unavailableReasonLabel(instance.unavailableReason)}
               </span>
             )}
+            <span
+              data-testid="workflow-instance-status-dot"
+              aria-hidden="true"
+              className={`size-2 shrink-0 rounded-full ${statusVisual.dot}`}
+            />
             <span
               data-testid="workflow-instance-status"
               data-status={status}
