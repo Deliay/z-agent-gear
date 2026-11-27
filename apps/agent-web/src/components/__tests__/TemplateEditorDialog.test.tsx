@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import TemplateEditorDialog from '../workflow/TemplateEditorDialog';
+import { HOME_OVERVIEW } from '../../graphql/home';
 import {
   createEmptyNode,
   validateTemplateNodes,
@@ -71,6 +72,7 @@ describe('TemplateEditorDialog', () => {
 
     expect(mutate).toHaveBeenCalledWith(
       expect.objectContaining({
+        refetchQueries: [{ query: HOME_OVERVIEW }],
         variables: {
           input: expect.objectContaining({
             name: '测试模板',
@@ -215,6 +217,7 @@ describe('TemplateEditorDialog 联动上游 Pull Request', () => {
     await waitFor(() => expect(mutate).toHaveBeenCalled());
     expect(mutate).toHaveBeenCalledWith(
       expect.objectContaining({
+        refetchQueries: [{ query: HOME_OVERVIEW }],
         variables: {
           input: expect.objectContaining({
             nodes: [expect.objectContaining({ linkUpstreamPullRequest: true })],

@@ -139,19 +139,63 @@ async function trackHomeOverviewRequests(page: Page): Promise<() => number> {
   return () => count;
 }
 
+/** 解析 GraphQL 请求体：operationName + variables（归档参数在 variables 里，不在 query 紧邻括号内）。 */
+function parseGraphqlBody(post: string): { operation: string; variables: Record<string, unknown> } {
+  try {
+    const body = JSON.parse(post) as { operationName?: string; variables?: Record<string, unknown> };
+    return { operation: body.operationName ?? '', variables: body.variables ?? {} };
+  } catch {
+    return { operation: '', variables: {} };
+  }
+}
+
+function isArchiveRequest(post: string): boolean {
+  const { operation, variables } = parseGraphqlBody(post);
+  if (operation === 'GetArchivedSessions') return true;
+  // 工作流归档查询：GET_WORKFLOW_INSTANCES($archived) 且变量 archived=true
+  return operation === 'GetWorkflowInstances' && variables.archived === true;
+}
+
+/** 单 route handler 同时统计 HomeOverview 与归档清单请求（后注册 handler 会覆盖前一个）。 */
+async function trackHomeAndArchiveRequests(
+  page: Page,
+): Promise<{ home: () => number; archive: () => number }> {
+  let homeCount = 0;
+  let archiveCount = 0;
+  await page.route('**/graphql', async (route) => {
+    const post = route.request().postData() ?? '';
+    if (parseGraphqlBody(post).operation === 'HomeOverview') homeCount += 1;
+    if (isArchiveRequest(post)) archiveCount += 1;
+    await route.continue();
+  });
+  return { home: () => homeCount, archive: () => archiveCount };
+}
+
+/** 统计归档清单按需查询（GetArchivedSessions / GetWorkflowInstances(archived:true)）请求数 */
+async function trackArchiveRequests(page: Page): Promise<() => number> {
+  let count = 0;
+  await page.route('**/graphql', async (route) => {
+    if (isArchiveRequest(route.request().postData() ?? '')) count += 1;
+    await route.continue();
+  });
+  return () => count;
+}
+
 test.describe('首页展示优化 E2E', () => {
   test('T-E1 打开首页首屏仅发起一次 HomeOverview 请求', async ({ page }) => {
     test.setTimeout(60000);
     const { token, username, controllerId, workspaceId, disconnect } = await setupUserWithController(page, 'e1');
     await createInstance(page, token, controllerId, workspaceId, '首屏实例');
 
-    const getCount = await trackHomeOverviewRequests(page);
+    const tracker = await trackHomeAndArchiveRequests(page);
     await loginViaUI(page, username);
 
     const sidebar = page.locator(sidebarSel);
     await expect(sidebar.getByText('首屏实例')).toBeVisible({ timeout: 15000 });
 
-    expect(getCount()).toBe(1);
+    expect(tracker.home()).toBe(1);
+    // E2E-HP1：首屏不拉取归档清单
+    expect(tracker.archive()).toBe(0);
     disconnect();
   });
 
@@ -166,6 +210,155 @@ test.describe('首页展示优化 E2E', () => {
     const baseline = getCount();
     // 15s 轮询周期：等待恰好新增一次
     await expect.poll(() => getCount() - baseline, { timeout: 25000, intervals: [500] }).toBe(1);
+    disconnect();
+  });
+
+  test('E2E-HP2 展开「已归档」才发归档请求、无数量、空态可展开', async ({ page }) => {
+    test.setTimeout(60000);
+    const { username, disconnect } = await setupUserWithController(page, 'hp2');
+    const getArchiveCount = await trackArchiveRequests(page);
+    await loginViaUI(page, username);
+    const sidebar = page.locator(sidebarSel);
+    await sidebar.waitFor({ timeout: 15000 });
+
+    // 常驻「已归档」且无数量；首屏未发归档查询
+    const sessionList = sidebar.locator('[data-testid="sidebar-session-list"]');
+    const archivedGroup = sessionList.getByRole('button', { name: '已归档', exact: true });
+    await expect(archivedGroup).toBeVisible();
+    await expect(sidebar.getByText(/已归档（\d+）/)).toHaveCount(0);
+    expect(getArchiveCount()).toBe(0);
+
+    await archivedGroup.click();
+    await expect(sessionList.getByText('暂无归档')).toBeVisible({ timeout: 15000 });
+    expect(getArchiveCount()).toBeGreaterThanOrEqual(1);
+    disconnect();
+  });
+
+  test('E2E-WSF1 离线控制器的工作区不在侧边栏/实例化弹窗展示', async ({ page }) => {
+    test.setTimeout(70000);
+    const { token, username, controllerId, disconnect } = await setupUserWithController(page, 'wsf1');
+    const wsPath = `/tmp/home-wsf1-ws-${Date.now()}`;
+    await createWorkspace(page, controllerId, wsPath, token);
+    const wsName = wsPath.split('/').filter(Boolean).pop()!;
+
+    disconnect();
+    // 等控制器离线：workspaces 过滤后不再返回该项目工作区
+    await expect
+      .poll(
+        async () => {
+          const res = await gqlRequest(
+            page,
+            `query Q { workspaces { id name controllerId } }`,
+            undefined,
+            token,
+          );
+          const body = await res.json();
+          return (body.data?.workspaces ?? []).filter(
+            (w: { controllerId: string }) => w.controllerId === controllerId,
+          ).length;
+        },
+        { timeout: 30000, intervals: [1000] },
+      )
+      .toBe(0);
+
+    await loginViaUI(page, username);
+    const sidebar = page.locator(sidebarSel);
+    await sidebar.waitFor({ timeout: 15000 });
+    await expect(sidebar.getByText(wsName)).toHaveCount(0);
+
+    const instantiateButton = sidebar.getByLabel('实例化工作流');
+    await expect(instantiateButton).toBeVisible({ timeout: 15000 });
+    await instantiateButton.click();
+    const firstController = page.getByRole('menuitem').first();
+    await expect(firstController).toBeVisible({ timeout: 10000 });
+    await firstController.click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 15000 });
+    await expect(dialog.getByText(wsName)).toHaveCount(0);
+  });
+
+  test('E2E-HP3 workspaceContext 与模板/配置随 15s 轮询刷新（无需刷新页面）', async ({ page }) => {
+    test.skip(!process.env.INTERNAL_API_TOKEN, '需要 INTERNAL_API_TOKEN 创建团队并加入成员');
+    test.setTimeout(90000);
+    const { token, username, controllerId, workspaceId, disconnect } = await setupUserWithController(page, 'hp3');
+    await loginViaUI(page, username);
+    await page.locator(sidebarSel).waitFor({ timeout: 15000 });
+
+    // 监听后续 HomeOverview 响应，验证轮询载荷包含新建的模板/已配置工作流
+    const polled = { templates: new Set<string>(), configured: new Set<string>() };
+    page.on('response', async (response) => {
+      if (!response.url().includes('/graphql')) return;
+      const request = response.request();
+      try {
+        const requestBody = JSON.parse(request.postData() ?? '{}') as { operationName?: string };
+        if (requestBody.operationName !== 'HomeOverview') return;
+        const body = await response.json();
+        for (const template of body.data?.homeOverview?.workflowTemplates ?? []) {
+          if (template?.name) polled.templates.add(template.name);
+        }
+        for (const configured of body.data?.homeOverview?.configuredWorkflows ?? []) {
+          if (configured?.name) polled.configured.add(configured.name);
+        }
+      } catch {
+        // 忽略非 JSON/已取消响应
+      }
+    });
+
+    const apiBase = (process.env.API_URL || 'http://localhost:10001/graphql').replace(/\/graphql\/?$/, '');
+    const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` };
+    const teamName = `hp3-team-${Date.now().toString(36)}`.slice(0, 60);
+    const teamRes = await page.request.post(`${apiBase}/internal/tenants`, {
+      headers: auth,
+      data: { name: teamName },
+    });
+    expect(teamRes.ok()).toBeTruthy();
+    const team = await teamRes.json();
+    const addRes = await page.request.post(`${apiBase}/internal/tenants/${team.tenant.id}/members`, {
+      headers: auth,
+      data: { username, role: 'developer' },
+    });
+    expect(addRes.ok()).toBeTruthy();
+
+    // workspaceContext：团队全局工作区 option 在下一轮轮询后出现（以 id 精确断言，不用名称）
+    await expect
+      .poll(
+        async () =>
+          page
+            .getByLabel('切换工作区')
+            .locator(`option[value="${team.globalWorkspace.id}"]`)
+            .count(),
+        { timeout: 30000, intervals: [1000] },
+      )
+      .toBeGreaterThanOrEqual(1);
+
+    // workflowTemplates / configuredWorkflows：登录后造数，断言后续 HomeOverview 轮询载荷包含
+    const stamp = Date.now().toString(36);
+    const templateName = `hp3-tpl-${stamp}`;
+    const configuredName = `hp3-cfg-${stamp}`;
+    const tplRes = await gqlRequest(page, `
+      mutation CreateTemplate($input: WorkflowTemplateInput!) {
+        createWorkflowTemplate(input: $input) { id }
+      }
+    `, { input: { name: templateName, nodes: HUMAN_NODES } }, token);
+    const tplBody = await tplRes.json();
+    expect(tplBody.errors).toBeUndefined();
+    const cfgRes = await gqlRequest(page, `
+      mutation ConfigureWorkflow($templateId: ID!, $input: ConfigureWorkflowInput!) {
+        configureWorkflow(templateId: $templateId, input: $input) { id }
+      }
+    `, {
+      templateId: tplBody.data.createWorkflowTemplate.id,
+      input: { name: configuredName, controllerId, nodes: HUMAN_NODES },
+    }, token);
+    const cfgBody = await cfgRes.json();
+    expect(cfgBody.errors).toBeUndefined();
+
+    await expect
+      .poll(() => polled.templates.has(templateName), { timeout: 30000, intervals: [1000] })
+      .toBe(true);
+    await expect
+      .poll(() => polled.configured.has(configuredName), { timeout: 30000, intervals: [1000] })
+      .toBe(true);
     disconnect();
   });
 

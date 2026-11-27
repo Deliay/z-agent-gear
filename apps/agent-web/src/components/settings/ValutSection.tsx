@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useMutation, useQuery } from '@apollo/client/react'
+import { useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { ChevronDown, ChevronRight, Plus } from 'lucide-react'
-import { GET_VALUT_ENTRIES } from '@/graphql/queries'
+import { SETTINGS_OVERVIEW } from '@/graphql/queries'
+import { useSettingsOverview } from '@/stores/settingsOverview'
 import {
   CREATE_VALUT_ENTRY,
   DELETE_VALUT_ENTRY,
@@ -12,7 +13,6 @@ import {
 import type {
   CreateValutEntryMutation,
   DeleteValutEntryMutation,
-  GetValutEntriesQuery,
   UpdateValutEntryMutation,
   ValutEntryData,
   ValutNamespaceGroupData,
@@ -77,17 +77,15 @@ function renderRefs(entry: ValutEntryData) {
 export default function ValutSection() {
   const { readOnly } = useWorkspaceAccess()
   const [searchParams] = useSearchParams()
-  const { data, loading, error } = useQuery<GetValutEntriesQuery>(GET_VALUT_ENTRIES, {
-    fetchPolicy: 'cache-and-network',
-  })
+  const { data, loading, error } = useSettingsOverview()
   const [createValutEntry] = useMutation<CreateValutEntryMutation>(CREATE_VALUT_ENTRY, {
-    refetchQueries: [GET_VALUT_ENTRIES],
+    refetchQueries: [{ query: SETTINGS_OVERVIEW }],
   })
   const [updateValutEntry] = useMutation<UpdateValutEntryMutation>(UPDATE_VALUT_ENTRY, {
-    refetchQueries: [GET_VALUT_ENTRIES],
+    refetchQueries: [{ query: SETTINGS_OVERVIEW }],
   })
   const [deleteValutEntry] = useMutation<DeleteValutEntryMutation>(DELETE_VALUT_ENTRY, {
-    refetchQueries: [GET_VALUT_ENTRIES],
+    refetchQueries: [{ query: SETTINGS_OVERVIEW }],
   })
 
   const [dialog, setDialog] = useState<DialogState>(CLOSED_DIALOG)

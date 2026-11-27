@@ -13,11 +13,16 @@ import {
 } from '@/graphql/queries';
 
 const mockUseQuery = vi.fn();
+const mockHome = vi.fn();
 const mockUseMutation = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+}));
+
+vi.mock('@/stores/homeOverview', () => ({
+  useHomeOverview: () => mockHome(),
 }));
 
 vi.mock('sonner', () => ({
@@ -63,6 +68,14 @@ const TEMPLATES: GetWorkflowTemplatesQuery = {
 } as unknown as GetWorkflowTemplatesQuery;
 
 function setupQueries(optionsData: unknown, optionsLoading = false) {
+  mockHome.mockReturnValue({
+    data: {
+      workflowTemplates: TEMPLATES.workflowTemplates,
+      controllers: [{ id: 'ctrl-1', name: '本机', hostname: 'localhost', status: 'online' }],
+    },
+    loading: false,
+    refetch: vi.fn(),
+  });
   mockUseQuery.mockImplementation((doc: unknown) => {
     if (doc === GET_WORKFLOW_TEMPLATES) return { data: TEMPLATES };
     if (doc === GET_CONTROLLERS) {

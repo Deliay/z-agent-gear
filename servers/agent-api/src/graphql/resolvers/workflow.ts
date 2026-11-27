@@ -40,7 +40,7 @@ function mapTemplateNode(node: Doc) {
   };
 }
 
-function mapTemplate(doc: Doc) {
+export function mapTemplate(doc: Doc) {
   return {
     id: toId(doc._id),
     name: doc.name,
@@ -55,7 +55,7 @@ function mapTemplate(doc: Doc) {
   };
 }
 
-function mapConfigured(doc: Doc) {
+export function mapConfigured(doc: Doc) {
   return {
     id: toId(doc._id),
     name: doc.name,

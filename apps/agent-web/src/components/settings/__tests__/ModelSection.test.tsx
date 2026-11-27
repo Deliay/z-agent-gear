@@ -7,6 +7,7 @@ const dnd = vi.hoisted(() => ({ onDragEnd: null as null | ((event: unknown) => v
 
 const mocks = vi.hoisted(() => ({
   useQuery: vi.fn(),
+  settings: vi.fn(),
   toggle: vi.fn(),
   sort: vi.fn(),
   create: vi.fn(),
@@ -35,6 +36,10 @@ vi.mock('@apollo/client/react', () => ({
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
+}))
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mocks.settings(),
 }))
 
 vi.mock('@dnd-kit/core', async () => {
@@ -95,12 +100,7 @@ function model(id: string, overrides: Record<string, unknown> = {}) {
 }
 
 function setupQueries(models: unknown[], providers: unknown[] = []) {
-  mocks.useQuery.mockImplementation((doc: unknown) => {
-    if (String(doc).includes('providers')) {
-      return { data: { providers }, loading: false }
-    }
-    return { data: { models }, loading: false }
-  })
+  mocks.settings.mockReturnValue({ data: { models, providers }, loading: false })
 }
 
 function expandGroup(title: string) {
@@ -260,12 +260,10 @@ describe('agent-web ModelSection', () => {
 
   it('T-AW10: recomputes user ids from the latest groups at drag end (groupsRef, C-12)', async () => {
     let currentModels = [model('u1'), model('u2')]
-    mocks.useQuery.mockImplementation((doc: unknown) => {
-      if (String(doc).includes('providers')) {
-        return { data: { providers: [] }, loading: false }
-      }
-      return { data: { models: currentModels }, loading: false }
-    })
+    mocks.settings.mockImplementation(() => ({
+      data: { models: currentModels, providers: [] },
+      loading: false,
+    }))
 
     const { rerender } = render(<ModelSection />)
     const staleHandler = dnd.onDragEnd

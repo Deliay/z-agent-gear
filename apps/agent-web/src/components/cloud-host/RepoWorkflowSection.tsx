@@ -7,13 +7,13 @@ import { Button } from '@/components/ui/button'
 import { GET_CONTROLLER_WORKSPACES } from '@/graphql/queries'
 import type { ControllerWorkspaceData, GetControllerWorkspacesQuery } from '@/graphql/types'
 import {
-  GET_CONFIGURED_WORKFLOWS,
   DELETE_CONFIGURED_WORKFLOW,
   REPO_WORKFLOW_TEMPLATES,
   type ConfiguredWorkflowData,
-  type GetConfiguredWorkflowsQuery,
   type RepoWorkflowTemplateData,
 } from '@/graphql/workflow'
+import { HOME_OVERVIEW } from '@/graphql/home'
+import { useHomeOverview } from '@/stores/homeOverview'
 import { isRepoTemplateScanSupported } from '@/lib/repo-workflow'
 import ConfigureRepoWorkflowDialog from '@/components/workflow/ConfigureRepoWorkflowDialog'
 
@@ -84,15 +84,15 @@ export default function RepoWorkflowSection({
     fetchPolicy: 'cache-and-network',
   })
 
-  const { data: configuredData, refetch: refetchConfigured } = useQuery<GetConfiguredWorkflowsQuery>(
-    GET_CONFIGURED_WORKFLOWS,
-    { variables: { controllerId } },
-  )
+  const { data: homeData, refetch: refetchHome } = useHomeOverview()
   const [deleteConfigured] = useMutation(DELETE_CONFIGURED_WORKFLOW)
 
   const repoWorkflows: ConfiguredWorkflowData[] = useMemo(
-    () => (configuredData?.configuredWorkflows ?? []).filter((w) => w.sourceKind === 'REPO'),
-    [configuredData],
+    () =>
+      (homeData?.configuredWorkflows ?? []).filter(
+        (w) => w.sourceKind === 'REPO' && w.controllerId === controllerId,
+      ),
+    [homeData, controllerId],
   )
 
   const templates = templatesData?.repoWorkflowTemplates ?? []
@@ -102,9 +102,9 @@ export default function RepoWorkflowSection({
     try {
       await deleteConfigured({
         variables: { id: workflow.id },
-        refetchQueries: [{ query: GET_CONFIGURED_WORKFLOWS }],
+        refetchQueries: [{ query: HOME_OVERVIEW }],
       })
-      await refetchConfigured()
+      await refetchHome()
       onChanged?.()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '删除失败，请重试')
@@ -246,7 +246,7 @@ export default function RepoWorkflowSection({
         controllerId={controllerId}
         template={configureTemplate}
         onConfigured={() => {
-          void refetchConfigured()
+          void refetchHome()
           onChanged?.()
         }}
       />

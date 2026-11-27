@@ -9,6 +9,10 @@ const mockUseQuery = vi.fn();
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: () => [vi.fn(), { loading: false }],
+}))
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mockUseQuery(),
 }));
 
 const TEAM: WorkspaceTenantData = { id: 't1', name: '团队一', type: 'team', memberCount: 2 };

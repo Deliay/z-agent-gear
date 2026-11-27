@@ -331,7 +331,7 @@ export interface WorkflowNodeUpdateInput extends WorkflowNodeSessionBehaviorFiel
 
 // ---------- Query ----------
 
-const TEMPLATE_NODE_FIELDS = gql`
+export const TEMPLATE_NODE_FIELDS = gql`
   fragment TemplateNodeFields on WorkflowTemplateNode {
     nodeKey
     type
@@ -371,7 +371,7 @@ export const GET_WORKFLOW_TEMPLATES = gql`
   ${TEMPLATE_NODE_FIELDS}
 `
 
-const CONFIGURED_NODE_FIELDS = gql`
+export const CONFIGURED_NODE_FIELDS = gql`
   fragment ConfiguredNodeFields on ConfiguredWorkflowNode {
     nodeKey
     type

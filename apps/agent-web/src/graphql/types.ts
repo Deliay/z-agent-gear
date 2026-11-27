@@ -1,4 +1,5 @@
-import type { WorkflowInstanceSummaryData } from './workflow'
+import type { ConfiguredWorkflowData, WorkflowInstanceSummaryData, WorkflowTemplateData } from './workflow'
+import type { CustomToolData } from './custom-tool'
 
 // ---------- 多租户二期：租户工作区与租户成员（contracts/workspace.graphql） ----------
 
@@ -49,11 +50,6 @@ export interface AccountSummaryData {
   username: string
   name: string
   userId: string
-}
-
-export interface GetWorkspaceContextQuery {
-  myWorkspaces: WorkspaceData[]
-  myTenants: TenantMembershipData[]
 }
 
 export interface GetWorkspaceMembersQuery {
@@ -765,6 +761,11 @@ export interface GetSessionsQuery {
   sessions: SessionData[]
 }
 
+/** 归档会话（展开侧边栏「已归档」时按需拉取；不进入首页轮询） */
+export interface GetArchivedSessionsQuery {
+  sessions: SessionData[]
+}
+
 export interface GetSessionQuery {
   session: SessionData | null
 }
@@ -1293,15 +1294,24 @@ export interface HomeOverviewData {
   /** 未归档活跃会话（服务端已按未归档过滤，D12） */
   sessions: SessionData[]
   sessionTotalCount: number
-  /** 已归档会话（侧边栏「已归档（N）」折叠分组，与 sessions 互补） */
-  archivedSessions: SessionData[]
   workspaces: HomeOverviewWorkspaceData[]
   workflowInstances: WorkflowInstanceSummaryData[]
-  archivedWorkflowInstances: WorkflowInstanceSummaryData[]
   todos: TodoItemData[]
   unreadTodoCount: number
   /** Review 列表（PENDING 在前、终态 resolvedAt 倒序、上限 20） */
   sessionReviews: SessionReviewSummaryData[]
+  /** 已配置工作流（随 15s 轮询刷新） */
+  configuredWorkflows: ConfiguredWorkflowData[]
+  /** 工作流模板（随 15s 轮询刷新） */
+  workflowTemplates: WorkflowTemplateData[]
+  /** 工作区上下文（原 GetWorkspaceContext 组合查询，随 15s 轮询刷新） */
+  workspaceContext: WorkspaceContextData
+}
+
+/** 工作区上下文包络（homeOverview.workspaceContext） */
+export interface WorkspaceContextData {
+  myWorkspaces: WorkspaceData[]
+  myTenants: TenantMembershipData[]
 }
 
 /** Review 摘要（HOME_OVERVIEW.sessionReviews / GET_SESSION_REVIEW 共用） */
@@ -1321,6 +1331,48 @@ export interface SessionReviewSummaryData {
 
 export interface HomeOverviewQuery {
   homeOverview: HomeOverviewData
+}
+
+// ---------- 设置页聚合（contracts/settings.graphql） ----------
+
+/** MCP 服务（SETTINGS_OVERVIEW.mcpServers） */
+export interface McpServerData {
+  id: string
+  name: string
+  transport: string
+  source: 'proxy' | 'manual' | 'platform'
+  enabled: boolean
+  command: string | null
+  url: string | null
+  hostname: string | null
+  status: 'active' | 'offline' | 'disabled'
+  tools: Array<{ name: string; description: string | null }>
+  toolsSyncedAt?: string | null
+  lastHeartbeatAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** 设置页单次聚合返回（14 个只读分支） */
+export interface SettingsOverviewData {
+  commitSettings: CommitSettings
+  providers: ProviderData[]
+  models: ModelData[]
+  controllerKeys: ControllerKeyData[]
+  mcpServers: McpServerData[]
+  valutEntries: ValutNamespaceGroupData[]
+  customMcpServers: CustomMcpServerData[]
+  customTools: CustomToolData[]
+  githubAccounts: GitHubAccountData[]
+  githubAppUrl: GitHubAppUrlData
+  myExternalLogins: ExternalLoginInfoData[]
+  authProviders: AuthProviderOptionData[]
+  cloudStorageCapabilities: CloudStorageCapabilitiesData
+  cloudStorages: CloudStorageData[]
+}
+
+export interface SettingsOverviewQuery {
+  settingsOverview: SettingsOverviewData
 }
 
 // ---------- 我的费用（contracts/billing.graphql） ----------

@@ -53,6 +53,8 @@ input CreateWorkspaceInput {
 
 type Query {
   controllerWorkspaces(controllerId: ID!): [ControllerWorkspace!]!
+  # 当前用户可见的项目工作区：不返回已删除控制器（文档缺失或云电脑软删）或
+  # status != 'online' 控制器下的条目；数据保留，控制器恢复 online 后重新返回。
   workspaces: [ControllerWorkspace!]!
   browseFolder(controllerId: ID!, path: String): [FolderEntry!]!
   getHomeDirectory(controllerId: ID!): String

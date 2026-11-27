@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { GET_GITHUB_ACCOUNTS } from '../../graphql/queries'
-import {
-  GET_CONFIGURED_WORKFLOWS,
-  type GetConfiguredWorkflowsQuery,
-} from '../../graphql/workflow'
+import { useHomeOverview } from '../../stores/homeOverview'
 import {
   CREATE_CLOUD_HOST_ISSUES_LINKAGE,
   UPDATE_CLOUD_HOST_ISSUES_LINKAGE,
@@ -70,20 +67,17 @@ export default function IssuesLinkageDialog({
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const { data: workflowsData } = useQuery<GetConfiguredWorkflowsQuery>(
-    GET_CONFIGURED_WORKFLOWS,
-    { variables: { controllerId }, skip: !open, fetchPolicy: 'cache-and-network' },
-  )
+  const { data: homeData, refetch: refetchHome } = useHomeOverview()
   const { data: accountsData } = useQuery<GetGithubAccountsQuery>(GET_GITHUB_ACCOUNTS, {
     skip: !open,
   })
 
   const workflows = useMemo(
     () =>
-      (workflowsData?.configuredWorkflows ?? []).filter((workflow) =>
-        (workflow.nodes ?? []).some((node) => node.type === 'HUMAN'),
-      ),
-    [workflowsData],
+      (homeData?.configuredWorkflows ?? [])
+        .filter((workflow) => workflow.controllerId === controllerId)
+        .filter((workflow) => (workflow.nodes ?? []).some((node) => node.type === 'HUMAN')),
+    [homeData, controllerId],
   )
   const repos = useMemo(
     () => mergeGithubRepos((accountsData?.githubAccounts ?? []).flatMap((a) => a.installations ?? [])),
@@ -99,13 +93,14 @@ export default function IssuesLinkageDialog({
 
   useEffect(() => {
     if (!open) return
+    void refetchHome()
     setSubmitting(false)
     setError(null)
     setWorkflowId(linkage?.configuredWorkflowId ?? '')
     setLabelName(linkage?.labelName ?? '')
     setLabelDirty(Boolean(linkage))
     setSelectedRepos(linkage?.repoFullNames ?? [])
-  }, [open, linkage])
+  }, [open, linkage, refetchHome])
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === workflowId)
 

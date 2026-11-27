@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import { ControllerWorkspace } from '../models/controller-workspace.js';
 import { Controller } from '../models/controller.js';
 import { actorFilter, getWorkspaceContext } from './workspace-context.js';
+import { controllerService } from './controller.js';
 import { getRedisClient } from '../middleware/redis.js';
 import { publish } from '../middleware/publish.js';
 import { sessionService } from './session.js';
@@ -10,12 +11,6 @@ import { sessionService } from './session.js';
 const MAX_WORKSPACES = 10;
 
 export class ControllerWorkspaceService {
-  /** 当前用户可见的控制器（工作区上下文内=本工作区全部控制器）。 */
-  private async visibleControllerIds(userId: string): Promise<mongoose.Types.ObjectId[]> {
-    const controllers = await Controller.find({ ...actorFilter(userId) }).lean();
-    return controllers.map((controller) => controller._id as mongoose.Types.ObjectId);
-  }
-
   private async isControllerVisible(controllerId: string, userId: string): Promise<boolean> {
     if (!mongoose.isValidObjectId(controllerId)) return false;
     const controller = await Controller.findOne({
@@ -47,16 +42,23 @@ export class ControllerWorkspaceService {
     return visible ? (workspace as Record<string, unknown>) : null;
   }
 
+  /**
+   * 当前用户可见的项目工作区。
+   *
+   * 读口径按控制器可用性过滤（仅查询返回，数据不删除）：控制器文档存在 ∧ 云电脑未软删
+   * （复用 `controllerService.findAllByUser` 的过滤口径）∧ `status === 'online'`
+   * （覆盖 offline/registering/unbound，与 `workflow/unavailable.ts` 的 CONTROLLER_OFFLINE 一致）。
+   * 控制器恢复 online 后条目自动重新返回。`workspaces` 与 `homeOverview.workspaces` 共用此路径。
+   */
   async findAllByUser(userId: string): Promise<Record<string, unknown>[]> {
-    if (!getWorkspaceContext()) {
-      const workspaces = await ControllerWorkspace.find({ userId })
-        .sort({ name: 1 })
-        .lean();
-      return workspaces.map(this.mapWorkspace.bind(this));
-    }
-    const controllerIds = await this.visibleControllerIds(userId);
-    if (controllerIds.length === 0) return [];
-    const workspaces = await ControllerWorkspace.find({ controllerId: { $in: controllerIds } })
+    const availableControllerIds = (await controllerService.findAllByUser(userId))
+      .filter((controller) => controller.status === 'online')
+      .map((controller) => new mongoose.Types.ObjectId(String(controller.id)));
+    if (availableControllerIds.length === 0) return [];
+    const filter = getWorkspaceContext()
+      ? { controllerId: { $in: availableControllerIds } }
+      : { userId, controllerId: { $in: availableControllerIds } };
+    const workspaces = await ControllerWorkspace.find(filter)
       .sort({ name: 1 })
       .lean();
     return workspaces.map(this.mapWorkspace.bind(this));
