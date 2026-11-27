@@ -62,7 +62,7 @@ export default function ConfigureWorkflowDialog({
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const { data: homeData } = useHomeOverview()
+  const { data: homeData, refetch: refetchHome } = useHomeOverview()
   const templatesData = homeData
   const controllersData = homeData
   const { data: capabilitiesData } = useQuery<GetAcpCapabilitiesQuery>(GET_ACP_CAPABILITIES, {
@@ -88,6 +88,8 @@ export default function ConfigureWorkflowDialog({
 
   useEffect(() => {
     if (!open) return
+    // 「打开即最新」：模板/配置/控制器随 HOME_OVERVIEW 刷新（不再是 15s 前的快照）
+    void refetchHome()
     setError(null)
     setSaving(false)
     if (editing) {

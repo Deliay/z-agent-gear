@@ -114,4 +114,20 @@ describe('useWorkspaceContextSync（消费 homeOverview.workspaceContext）', ()
     expect(state.myWorkspaces.map((item) => item.id)).toEqual(['ws-global', 'ws-normal']);
     expect(state.current?.id).toBe('ws-global');
   });
+
+  it('D12 降级空集不清持久化工作区、不重置 store、不 resetStore', () => {
+    persistWorkspaceId('user-1', 'ws-team');
+    mocks.home = {
+      data: homeData({ workspaces: [], tenants: [] }),
+      error: undefined,
+      refetch: mocks.refetch,
+    };
+
+    renderHook(() => useWorkspaceContextSync());
+
+    expect(readPersistedWorkspaceId('user-1')).toBe('ws-team');
+    expect(mocks.resetStore).not.toHaveBeenCalled();
+    // 未写入空集（store 仍保持未初始化/未同步）
+    expect(getWorkspaceState().initialized).toBe(false);
+  });
 });

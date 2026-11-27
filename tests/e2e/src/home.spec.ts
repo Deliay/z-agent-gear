@@ -139,6 +139,17 @@ async function trackHomeOverviewRequests(page: Page): Promise<() => number> {
   return () => count;
 }
 
+/** 统计归档清单按需查询（sessions(archived / workflowInstances(archived）请求数 */
+async function trackArchiveRequests(page: Page): Promise<() => number> {
+  let count = 0;
+  await page.route('**/graphql', async (route) => {
+    const post = route.request().postData() ?? '';
+    if (post.includes('sessions(archived') || post.includes('workflowInstances(archived')) count += 1;
+    await route.continue();
+  });
+  return () => count;
+}
+
 test.describe('首页展示优化 E2E', () => {
   test('T-E1 打开首页首屏仅发起一次 HomeOverview 请求', async ({ page }) => {
     test.setTimeout(60000);
@@ -146,12 +157,15 @@ test.describe('首页展示优化 E2E', () => {
     await createInstance(page, token, controllerId, workspaceId, '首屏实例');
 
     const getCount = await trackHomeOverviewRequests(page);
+    const getArchiveCount = await trackArchiveRequests(page);
     await loginViaUI(page, username);
 
     const sidebar = page.locator(sidebarSel);
     await expect(sidebar.getByText('首屏实例')).toBeVisible({ timeout: 15000 });
 
     expect(getCount()).toBe(1);
+    // E2E-HP1：首屏不拉取归档清单
+    expect(getArchiveCount()).toBe(0);
     disconnect();
   });
 
@@ -166,6 +180,106 @@ test.describe('首页展示优化 E2E', () => {
     const baseline = getCount();
     // 15s 轮询周期：等待恰好新增一次
     await expect.poll(() => getCount() - baseline, { timeout: 25000, intervals: [500] }).toBe(1);
+    disconnect();
+  });
+
+  test('E2E-HP2 展开「已归档」才发归档请求、无数量、空态可展开', async ({ page }) => {
+    test.setTimeout(60000);
+    const { username, disconnect } = await setupUserWithController(page, 'hp2');
+    const getArchiveCount = await trackArchiveRequests(page);
+    await loginViaUI(page, username);
+    const sidebar = page.locator(sidebarSel);
+    await sidebar.waitFor({ timeout: 15000 });
+
+    // 常驻「已归档」且无数量；首屏未发归档查询
+    const sessionList = sidebar.locator('[data-testid="sidebar-session-list"]');
+    const archivedGroup = sessionList.getByRole('button', { name: '已归档', exact: true });
+    await expect(archivedGroup).toBeVisible();
+    await expect(sidebar.getByText(/已归档（\d+）/)).toHaveCount(0);
+    expect(getArchiveCount()).toBe(0);
+
+    await archivedGroup.click();
+    await expect(sessionList.getByText('暂无归档')).toBeVisible({ timeout: 15000 });
+    expect(getArchiveCount()).toBeGreaterThanOrEqual(1);
+    disconnect();
+  });
+
+  test('E2E-WSF1 离线控制器的工作区不在侧边栏/实例化弹窗展示', async ({ page }) => {
+    test.setTimeout(70000);
+    const { token, username, controllerId, disconnect } = await setupUserWithController(page, 'wsf1');
+    const wsPath = `/tmp/home-wsf1-ws-${Date.now()}`;
+    await createWorkspace(page, controllerId, wsPath, token);
+    const wsName = wsPath.split('/').filter(Boolean).pop()!;
+
+    disconnect();
+    // 等控制器离线：workspaces 过滤后不再返回该项目工作区
+    await expect
+      .poll(
+        async () => {
+          const res = await gqlRequest(
+            page,
+            `query Q { workspaces { id name controllerId } }`,
+            undefined,
+            token,
+          );
+          const body = await res.json();
+          return (body.data?.workspaces ?? []).filter(
+            (w: { controllerId: string }) => w.controllerId === controllerId,
+          ).length;
+        },
+        { timeout: 30000, intervals: [1000] },
+      )
+      .toBe(0);
+
+    await loginViaUI(page, username);
+    const sidebar = page.locator(sidebarSel);
+    await sidebar.waitFor({ timeout: 15000 });
+    await expect(sidebar.getByText(wsName)).toHaveCount(0);
+
+    const instantiateButton = sidebar.getByLabel('实例化工作流');
+    if (await instantiateButton.count()) {
+      await instantiateButton.click();
+      const firstController = page.getByRole('menuitem').first();
+      if (await firstController.count()) {
+        await firstController.click();
+        const dialog = page.getByRole('dialog');
+        if (await dialog.count()) {
+          await expect(dialog.getByText(wsName)).toHaveCount(0);
+        }
+      }
+    }
+  });
+
+  test('E2E-HP3 工作区上下文随 15s 轮询刷新（新建团队工作区无需刷新页面）', async ({ page }) => {
+    test.skip(!process.env.INTERNAL_API_TOKEN, '需要 INTERNAL_API_TOKEN 创建团队并加入成员');
+    test.setTimeout(70000);
+    const { username, disconnect } = await setupUserWithController(page, 'hp3');
+    await loginViaUI(page, username);
+    await page.locator(sidebarSel).waitFor({ timeout: 15000 });
+
+    const apiBase = (process.env.API_URL || 'http://localhost:10001/graphql').replace(/\/graphql\/?$/, '');
+    const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.INTERNAL_API_TOKEN}` };
+    const teamName = `hp3-team-${Date.now().toString(36)}`.slice(0, 60);
+    const teamRes = await page.request.post(`${apiBase}/internal/tenants`, {
+      headers: auth,
+      data: { name: teamName },
+    });
+    expect(teamRes.ok()).toBeTruthy();
+    const team = await teamRes.json();
+    const addRes = await page.request.post(`${apiBase}/internal/tenants/${team.tenant.id}/members`, {
+      headers: auth,
+      data: { username, role: 'developer' },
+    });
+    expect(addRes.ok()).toBeTruthy();
+
+    // HOME_OVERVIEW 15s 轮询后 workspaceContext 进入切换器（optgroup label 含团队名）
+    await expect
+      .poll(
+        async () =>
+          (await page.getByLabel('切换工作区').locator('option', { hasText: teamName }).count()),
+        { timeout: 30000, intervals: [1000] },
+      )
+      .toBeGreaterThanOrEqual(1);
     disconnect();
   });
 

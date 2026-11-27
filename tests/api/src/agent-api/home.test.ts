@@ -89,10 +89,17 @@ const HOME_OVERVIEW = `
       workflowInstances { id name workspace { id name } controller { id name } }
       configuredWorkflows { id name }
       workflowTemplates { id name }
-      workspaceContext { myWorkspaces { id name } myTenants { role } }
+      workspaceContext { myWorkspaces { id name type myRole } myTenants { tenant { id name } role } }
       todos { id title }
       unreadTodoCount
     }
+  }
+`;
+
+const WORKSPACE_CONTEXT = `
+  query WorkspaceContextCompare {
+    myWorkspaces { id name type myRole }
+    myTenants { tenant { id name } role }
   }
 `;
 
@@ -306,7 +313,7 @@ describe('首页聚合与按控制器索引 API', () => {
         workflowInstances: Array<{ id: string; workspace: { id: string } | null; controller: { id: string } | null }>;
         configuredWorkflows: Array<{ id: string }>;
         workflowTemplates: Array<{ id: string }>;
-        workspaceContext: { myWorkspaces: Array<{ id: string }>; myTenants: Array<{ role: string }> };
+        workspaceContext: { myWorkspaces: Array<{ id: string; name: string; type: string; myRole: string }>; myTenants: Array<{ tenant: { id: string; name: string }; role: string }> };
         todos: unknown[];
         unreadTodoCount: number;
       };
@@ -328,6 +335,24 @@ describe('首页聚合与按控制器索引 API', () => {
     expect(Array.isArray(home.workflowTemplates)).toBe(true);
     expect(home.workspaceContext.myWorkspaces.some((w) => w.id === workspaceId)).toBe(true);
     expect(Array.isArray(home.workspaceContext.myTenants)).toBe(true);
+  });
+
+  it('T-HP2 homeOverview.workspaceContext 与 myWorkspaces/myTenants 口径一致', async () => {
+    const home = await gqlData<{
+      homeOverview: {
+        workspaceContext: {
+          myWorkspaces: Array<{ id: string; name: string; type: string; myRole: string }>;
+          myTenants: Array<{ tenant: { id: string; name: string }; role: string }>;
+        };
+      };
+    }>(HOME_OVERVIEW, undefined, token);
+    const standalone = await gqlData<{
+      myWorkspaces: Array<{ id: string; name: string; type: string; myRole: string }>;
+      myTenants: Array<{ tenant: { id: string; name: string }; role: string }>;
+    }>(WORKSPACE_CONTEXT, undefined, token);
+
+    expect(home.homeOverview.workspaceContext.myWorkspaces).toEqual(standalone.myWorkspaces);
+    expect(home.homeOverview.workspaceContext.myTenants).toEqual(standalone.myTenants);
   });
 
   it('T-H2 嵌套 gateways（在线控制器）返回列表且不报错', async () => {

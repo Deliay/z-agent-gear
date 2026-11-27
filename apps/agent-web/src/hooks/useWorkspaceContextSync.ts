@@ -71,6 +71,12 @@ export function useWorkspaceContextSync(): void {
     ) {
       return;
     }
+    // D12 降级保护：workspaceContext 单分支失败会 degrade 为空集；登录用户至少拥有
+    // 个人全局工作区，因此空 myWorkspaces 只可能是降级值。此时不得据此清空持久化
+    // 工作区 / 触发 resetStore（否则一次 Mongo 抖动会把用户静默切回个人全局）。
+    if (workspaceContext.myWorkspaces.length === 0) {
+      return;
+    }
 
     // 请求已成功，失效工作区自愈完成；下一次再出现可重新处理。
     lastInvalidWorkspaceRef.current = null;

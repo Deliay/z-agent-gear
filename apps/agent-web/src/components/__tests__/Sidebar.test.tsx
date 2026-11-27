@@ -1031,6 +1031,29 @@ describe('Sidebar 集成测试', () => {
   });
 
   describe('已归档会话分组（T-WEB2：按需拉取、无计数）', () => {
+    it('T-WEB-ARCH2 未展开时 skip 归档查询，展开后才发起（不随首页轮询）', () => {
+      mockHome({ sessions: [makeSession({ id: 's-active', title: '活跃会话' })] });
+      mockArchived({ sessions: [makeSession({ id: 's-archived', title: '归档会话', archived: true })] });
+
+      renderSidebar();
+
+      const callsFor = (operation: string) =>
+        mockUseQuery.mock.calls.filter(
+          ([doc]) =>
+            (doc as { definitions?: Array<{ name?: { value?: string } }> })?.definitions?.[0]?.name
+              ?.value === operation,
+        );
+
+      expect(callsFor('GetArchivedSessions').at(-1)?.[1]).toMatchObject({ skip: true });
+      expect(callsFor('GetWorkflowInstances').at(-1)?.[1]).toMatchObject({ skip: true });
+
+      const sessionList = screen.getByTestId('sidebar-session-list');
+      fireEvent.click(within(sessionList).getByRole('button', { name: '已归档' }));
+
+      expect(callsFor('GetArchivedSessions').at(-1)?.[1]).toMatchObject({ skip: false });
+      expect(within(sessionList).getByText('归档会话')).toBeInTheDocument();
+    });
+
     it('T-WEB2 默认折叠、无数量、展开后才拉取且条目可打开', () => {
       mockHome({
         sessions: [

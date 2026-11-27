@@ -117,8 +117,9 @@ export const settingsResolvers = {
         // settingsOverview 不轮询：仅首次加载/显式 refetch 求值一次，不放大签发频率。
         degrade<{ url: string; state: string }>(
           async () => {
+            // 只读上下文（全局工作区 + developer）不得发起绑定：正常降级为空值（不记 error 噪音）。
             if (context.workspaceAccess?.readOnly) {
-              throw new GraphQLError('global workspace is read-only');
+              return FALLBACK_GITHUB_APP_URL;
             }
             const { url, state } = await githubService.getAppUrl(userId);
             const redis = getRedisClient();

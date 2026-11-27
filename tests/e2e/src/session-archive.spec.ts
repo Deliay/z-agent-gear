@@ -72,7 +72,7 @@ const sidebarSessionList = () => '[data-testid="sidebar-session-list"]';
 const sidebarArchivedList = () => '[data-testid="sidebar-archived-session-list"]';
 
 test.describe('会话归档与工作区连带归档 E2E', () => {
-  test('E2E-SARCH1 归档 → 活跃列表消失、「已归档（1）」出现、可打开、取消归档恢复', async ({ page }) => {
+  test('E2E-SARCH1 归档 → 活跃列表消失、「已归档」无数量、展开加载可打开、取消归档恢复', async ({ page }) => {
     const { token, username } = await registerUser(page);
     const { rawKey } = await createControllerKey(page, token);
     const { controllerId, disconnect } = await registerController(rawKey);

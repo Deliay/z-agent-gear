@@ -7,13 +7,18 @@ import type {
   WorkspaceTenantData,
 } from '../../graphql/types';
 import { resetWorkspaceStore, selectWorkspace, syncWorkspaceContext } from '../../stores/workspace';
+import { HOME_OVERVIEW } from '../../graphql/home';
 import { toast } from 'sonner';
 
 const mockCreate = vi.fn();
+const mockUseMutation = vi.fn();
 const mockUseQuery = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
-  useMutation: () => [mockCreate, { loading: false }],
+  useMutation: (...args: unknown[]) => {
+    mockUseMutation(...args);
+    return [mockCreate, { loading: false }];
+  },
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useApolloClient: () => ({ resetStore: vi.fn() }),
 }));
@@ -188,5 +193,23 @@ describe('WorkspacePage（仅 admin 可操作）', () => {
     fireEvent.click(within(screen.getByTestId('workspace-row-ws-tn')).getByRole('button', { name: '成员' }));
     expect(screen.getByText('工作区成员')).toBeInTheDocument();
     expect(screen.getByText('李四')).toBeInTheDocument();
+  });
+
+  it('T-WEB-HOME2 创建/改名/删除工作区后立即刷新 HOME_OVERVIEW（workspaceContext 同源）', () => {
+    setup([PERSONAL_GLOBAL, TEAM_GLOBAL, TEAM_NORMAL], MEMBERSHIPS, 'ws-tn');
+    render(<WorkspacePage />);
+
+    // WorkspacePage 挂载时按序创建三个 mutation（create/rename/delete），均须指向 HOME_OVERVIEW
+    const targetOps = new Set(['CreateTenantWorkspace', 'RenameTenantWorkspace', 'DeleteTenantWorkspace']);
+    const optionCalls = mockUseMutation.mock.calls
+      .filter((call) =>
+        targetOps.has((call[0] as { definitions?: Array<{ name?: { value?: string } }> })
+          ?.definitions?.[0]?.name?.value ?? ''),
+      )
+      .map((call) => call[1] as { refetchQueries?: Array<{ query: unknown }> });
+    expect(optionCalls).toHaveLength(3);
+    for (const options of optionCalls) {
+      expect(options.refetchQueries).toEqual([{ query: HOME_OVERVIEW }]);
+    }
   });
 });
