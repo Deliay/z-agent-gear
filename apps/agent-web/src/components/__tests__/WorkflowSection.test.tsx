@@ -1,19 +1,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import WorkflowSection from '../settings/WorkflowSection';
-import {
-  GET_WORKFLOW_TEMPLATES,
-  GET_CONFIGURED_WORKFLOWS,
-  DELETE_WORKFLOW_TEMPLATE,
-} from '@/graphql/workflow';
-import { GET_CONTROLLERS } from '@/graphql/queries';
+import { DELETE_WORKFLOW_TEMPLATE } from '@/graphql/workflow';
 
 const mockUseQuery = vi.fn();
 const mockUseMutation = vi.fn();
+const mockHome = vi.fn();
 
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+}));
+
+vi.mock('@/stores/homeOverview', () => ({
+  useHomeOverview: () => mockHome(),
 }));
 
 vi.mock('sonner', () => ({
@@ -110,18 +110,15 @@ function setupMocks({
   configured?: unknown[];
   loading?: boolean;
 } = {}) {
-  mockUseQuery.mockImplementation((doc: unknown) => {
-    if (doc === GET_WORKFLOW_TEMPLATES) {
-      return { data: { workflowTemplates: templates }, loading, error: null };
-    }
-    if (doc === GET_CONFIGURED_WORKFLOWS) {
-      return { data: { configuredWorkflows: configured }, loading: false, error: null };
-    }
-    if (doc === GET_CONTROLLERS) {
-      return { data: { controllers: baseControllers() }, loading: false, error: null };
-    }
-    return { data: null, loading: false, error: null };
+  mockHome.mockReturnValue({
+    data: loading
+      ? null
+      : { workflowTemplates: templates, configuredWorkflows: configured, controllers: baseControllers() },
+    loading,
+    error: null,
+    refetch: vi.fn(),
   });
+  mockUseQuery.mockReturnValue({ data: null, loading: false, error: null, refetch: vi.fn() });
   mockUseMutation.mockReturnValue([vi.fn().mockResolvedValue({})]);
 }
 

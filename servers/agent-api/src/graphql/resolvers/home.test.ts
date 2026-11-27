@@ -16,6 +16,18 @@ vi.mock('../../services/workflow/instance.js', () => ({
   workflowInstanceService: { list: vi.fn() },
 }));
 
+vi.mock('../../services/workflow/configured.js', () => ({
+  configuredWorkflowService: { listForUser: vi.fn() },
+}));
+
+vi.mock('../../services/workflow/template.js', () => ({
+  workflowTemplateService: { listForUser: vi.fn() },
+}));
+
+vi.mock('./workspace.js', () => ({
+  buildWorkspaceContext: vi.fn(),
+}));
+
 vi.mock('../../services/todo-service.js', () => ({
   todoService: { getTodoList: vi.fn(), getUnreadTodoCount: vi.fn() },
 }));
@@ -33,6 +45,9 @@ import { controllerService } from '../../services/controller.js';
 import { controllerWorkspaceService } from '../../services/controller-workspace.js';
 import { sessionService } from '../../services/session.js';
 import { workflowInstanceService } from '../../services/workflow/instance.js';
+import { configuredWorkflowService } from '../../services/workflow/configured.js';
+import { workflowTemplateService } from '../../services/workflow/template.js';
+import { buildWorkspaceContext } from './workspace.js';
 import { todoService } from '../../services/todo-service.js';
 import { gatewayService } from '../../services/gateway.js';
 import { worktreeService } from '../../services/worktree.js';
@@ -77,12 +92,17 @@ describe('home resolvers', () => {
     vi.mocked(controllerWorkspaceService.findAllByUser).mockResolvedValue([
       { id: 'ws-1', controllerId: 'ctrl-1', name: 'project' },
     ] as never);
-    vi.mocked(workflowInstanceService.list).mockImplementation(
-      (_userId: string, options?: { archived?: boolean }) =>
-        Promise.resolve(
-          (options?.archived ? [{ ...instanceDoc, _id: oid('inst-arch') }] : [instanceDoc]) as never,
-        ),
-    );
+    vi.mocked(workflowInstanceService.list).mockResolvedValue([instanceDoc] as never);
+    vi.mocked(configuredWorkflowService.listForUser).mockResolvedValue([
+      { _id: oid('cfg-1'), name: '已配置A', nodes: [] },
+    ] as never);
+    vi.mocked(workflowTemplateService.listForUser).mockResolvedValue([
+      { _id: oid('tpl-1'), name: '模板A', nodes: [] },
+    ] as never);
+    vi.mocked(buildWorkspaceContext).mockResolvedValue({
+      myWorkspaces: [{ id: 'ws-1', name: 'project' }],
+      myTenants: [{ tenant: { id: 'tenant-1', name: 't', type: 'team', memberCount: 0 }, role: 'admin' }],
+    } as never);
     vi.mocked(todoService.getTodoList).mockResolvedValue([{ id: 'todo-1' }] as never);
     vi.mocked(todoService.getUnreadTodoCount).mockResolvedValue(3 as never);
   });
@@ -101,24 +121,27 @@ describe('home resolvers', () => {
       includeWorkflowSessions: false,
       archived: false,
     });
-    expect(sessionService.findAllByUser).toHaveBeenCalledWith('user-1', {
-      includeWorkflowSessions: false,
-      archived: true,
-    });
     expect(controllerWorkspaceService.findAllByUser).toHaveBeenCalledWith('user-1');
     expect(workflowInstanceService.list).toHaveBeenCalledWith('user-1', { archived: false });
-    expect(workflowInstanceService.list).toHaveBeenCalledWith('user-1', { archived: true });
+    expect(configuredWorkflowService.listForUser).toHaveBeenCalledWith('user-1');
+    expect(workflowTemplateService.listForUser).toHaveBeenCalledWith('user-1');
+    expect(buildWorkspaceContext).toHaveBeenCalledTimes(1);
 
     expect(result.controllers).toHaveLength(1);
     expect(result.sessions).toHaveLength(2);
     expect(result.sessionTotalCount).toBe(2);
-    // 已归档会话与活跃 sessions 口径互补
-    expect(result.archivedSessions).toEqual([{ id: 's-arch' }]);
     expect(result.workspaces).toHaveLength(1);
     expect(result.workflowInstances[0]).toMatchObject({ id: 'inst-1', name: '需求A开发' });
-    expect(result.archivedWorkflowInstances[0]).toMatchObject({ id: 'inst-arch' });
     expect(result.todos).toHaveLength(1);
     expect(result.unreadTodoCount).toBe(3);
+    // 归档字段已退出 homeOverview
+    expect(result).not.toHaveProperty('archivedSessions');
+    expect(result).not.toHaveProperty('archivedWorkflowInstances');
+    // 新分支随轮询返回
+    expect(result.configuredWorkflows).toHaveLength(1);
+    expect(result.workflowTemplates).toHaveLength(1);
+    expect(result.workspaceContext.myWorkspaces).toHaveLength(1);
+    expect(result.workspaceContext.myTenants).toHaveLength(1);
   });
 
   it('单分支失败降级为空值，其余信息流正常', async () => {
@@ -127,28 +150,23 @@ describe('home resolvers', () => {
     const result = await homeResolvers.Query.homeOverview({}, {}, ctx);
 
     expect(result.workflowInstances).toEqual([]);
-    expect(result.archivedWorkflowInstances).toEqual([]);
     // 其余分支不受影响
     expect(result.controllers).toHaveLength(1);
     expect(result.sessionTotalCount).toBe(2);
     expect(result.unreadTodoCount).toBe(3);
   });
 
-  it('archivedSessions 分支失败降级为空数组，其余信息流不受影响', async () => {
-    vi.mocked(sessionService.findAllByUser).mockImplementation(
-      (_userId: string, options?: { archived?: boolean }) =>
-        options?.archived
-          ? Promise.reject(new Error('mongo 挂了'))
-          : Promise.resolve([{ id: 's-1' }] as never),
-    );
+  it('新分支失败仅降级该分支', async () => {
+    vi.mocked(configuredWorkflowService.listForUser).mockRejectedValue(new Error('mongo 挂了'));
+    vi.mocked(buildWorkspaceContext).mockRejectedValue(new Error('mongo 挂了'));
 
     const result = await homeResolvers.Query.homeOverview({}, {}, ctx);
 
-    expect(result.archivedSessions).toEqual([]);
-    expect(result.sessions).toEqual([{ id: 's-1' }]);
-    expect(result.sessionTotalCount).toBe(1);
-    expect(result.controllers).toHaveLength(1);
-    expect(result.unreadTodoCount).toBe(3);
+    expect(result.configuredWorkflows).toEqual([]);
+    expect(result.workspaceContext).toEqual({ myWorkspaces: [], myTenants: [] });
+    // 其他新分支正常
+    expect(result.workflowTemplates).toHaveLength(1);
+    expect(result.sessions).toEqual([{ id: 's-1' }, { id: 's-2' }]);
   });
 
   it('Controller.gateways 惰性解析，失败降级为空列表', async () => {

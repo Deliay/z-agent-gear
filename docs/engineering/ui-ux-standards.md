@@ -99,19 +99,19 @@ flowchart LR
    - **列表卡片规范**：每个条目严格限制在 **2 行以内**：
      - 第一行：状态圆点（`8px`）+ 标题（`text-sm font-medium truncate`）+ 关键状态徽标（`text-xs`）。
      - 第二行：所属项目工作区 / 控制器环境 + 相对更新时间（`text-xs text-muted-foreground`）。
-   - **「已归档」分组（对齐 PR #585 规范）**：
+   - **「已归档」分组（对齐 #584 / PR #585 规范）**：
      - 位于会话列表与工作流列表底部，常驻显示 `> 已归档` 折叠行。
      - **严禁展示归档数量**（无论折叠还是展开均不显示括号计数）。
-     - 默认折叠且首屏不请求归档数据；用户首次点击展开时发起按需查询（`sessions(archived: true)` / `workflowInstances(archived: true)`），展开区就地展示骨架加载态、归档列表或「暂无归档」空态。
+     - 默认折叠且首屏不请求归档数据；用户首次点击展开时发起按需查询（`GET_ARCHIVED_SESSIONS` / `GET_WORKFLOW_INSTANCES(archived: true)`），展开区就地展示「加载中…」态、「加载失败 + 重试」、归档列表或「暂无归档」空态。
 
 3. **Main Stage（主工作舞台）**：
    - **统一顶栏（Top Context Bar，高度 `48px`）**：左侧展示面包屑/标题 + 核心状态徽标；次要环境信息（如完整工作目录路径、Worktree 路径、创建时间、Harness 类型）收敛进紧凑的 **环境信息胶囊（点击或悬停展开详情 Popover）**；右侧固定分屏切换器与高频操作按钮。
    - **对话舞台（Session Stage）**：
      - 单栏模式下消息流居中阅读宽度上限为 `840px`（`max-w-3xl mx-auto`），分屏模式下自适应占满左栏，保证长代码与 Markdown 表格舒适阅读。
      - 底部输入区（Prompt Composer）采用一体化浮岛卡片设计：模型切换器、模式切换器、图片上传与片段标签（Prompt Parts）整合在输入框内底栏，发送/停止按钮采用明确中文标识（「发送 `⌘↵`」/「停止生成」）。
-   - **设置中心（Settings Stage，对齐 PR #585 `settingsOverview`）**：
-     - 打开设置页时通过 `settingsOverview` **单次聚合请求**加载全部 12 个区块数据，复用 `homeOverview.controllers` 实时状态，不在设置页内启动独立轮询。
-     - 左侧二级分类导航支持分类切换或锚点高亮联动；当进入某个控制器/云电脑详情（`?controllerId=xxx`）时，在设置舞台顶部展示清晰的 **面包屑返回栏（`设置中心 / 控制器管理 / <主机名>`）**，而非生硬替换整个页面结构。
+   - **设置中心（Settings Stage，对齐 #584 / PR #585 `settingsOverview`）**：
+     - 打开设置页时通过 `SETTINGS_OVERVIEW`（14 分支）与 `SettingsOverviewContext` **单次聚合请求**加载全部设置区块只读数据（进入 `?controllerId=xxx` 控制器配置子页时 `skip: Boolean(controllerId)` 避免无谓签发 OAuth state），复用 `homeOverview.controllers` 实时状态，不在设置页内启动独立轮询。
+     - 左侧二级分类导航支持分类切换或锚点高亮联动；当进入某个控制器/云电脑详情（`?controllerId=xxx`）时，在顶部展示清晰的 **面包屑返回栏（`设置中心 / 控制器管理 / <主机名>`）**。
 
 4. **响应式与移动端适配（Responsive Breakpoints）**：
    - `< 768px`（移动端）：隐藏桌面端 Activity Rail，采用 **底部导航栏（Bottom Tab Bar：概览 / 会话 / 工作流 / 知识库 / 设置）** + Master-Detail 页面推入动画。

@@ -347,6 +347,77 @@ describe('Controller Workspace API', () => {
       const body = await res.json();
       expect(body.data.workspaces.length).toBeGreaterThanOrEqual(1);
     });
+
+    it.skipIf(!Boolean(process.env.MONGODB_URI))(
+      'T-WSF1 workspaces 过滤矩阵：仅 online 控制器（offline/文档缺失/云电脑软删不返回，恢复在线重新可见）',
+      async () => {
+        if (mongoose.connection.readyState === 0) await mongoose.connect(process.env.MONGODB_URI!);
+        const db = mongoose.connection.db!;
+        const controllers = db.collection('controllers');
+        const workspaces = db.collection('controllerworkspaces');
+        const cloudHosts = db.collection('cloudhosts');
+        const base = await controllers.findOne({ _id: new mongoose.Types.ObjectId(controllerId) });
+        expect(base).toBeTruthy();
+
+        const offlineId = new mongoose.Types.ObjectId();
+        const wsId = new mongoose.Types.ObjectId();
+        const workspaceRow = {
+          _id: wsId,
+          userId: base!.userId,
+          tenantId: base!.tenantId,
+          controllerId: offlineId,
+          name: `t-wsf1-${Date.now()}`,
+          path: `/tmp/t-wsf1-${Date.now()}`,
+          isEnabled: true,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        await controllers.insertOne({
+          ...base!,
+          _id: offlineId,
+          keyId: new mongoose.Types.ObjectId(),
+          status: 'offline',
+          hostname: `t-wsf1-offline-${Date.now()}`,
+        });
+        await workspaces.insertOne(workspaceRow);
+
+        const listIds = async () => {
+          const res = await gqlRequest(ALL_WORKSPACES_QUERY, undefined, authToken);
+          const body = await res.json();
+          expect(body.errors).toBeUndefined();
+          return (body.data.workspaces as Array<{ id: string }>).map((w) => w.id);
+        };
+
+        // offline 不返回
+        expect(await listIds()).not.toContain(String(wsId));
+        // 恢复 online 重新可见（数据未删除）
+        await controllers.updateOne({ _id: offlineId }, { $set: { status: 'online' } });
+        expect(await listIds()).toContain(String(wsId));
+        // 控制器文档缺失不返回
+        await controllers.deleteOne({ _id: offlineId });
+        expect(await listIds()).not.toContain(String(wsId));
+        // 云电脑软删不返回
+        const cloudId = new mongoose.Types.ObjectId();
+        const cloudWsId = new mongoose.Types.ObjectId();
+        await controllers.insertOne({
+          ...base!,
+          _id: cloudId,
+          keyId: new mongoose.Types.ObjectId(),
+          type: 'cloud',
+          status: 'online',
+          hostname: `t-wsf1-cloud-${Date.now()}`,
+        });
+        await workspaces.insertOne({ ...workspaceRow, _id: cloudWsId, controllerId: cloudId });
+        await cloudHosts.insertOne({ controllerId: cloudId, deletedAt: new Date(), status: 'STOPPED' });
+        expect(await listIds()).not.toContain(String(cloudWsId));
+        expect((await listIds()).length).toBeGreaterThanOrEqual(1); // 在线既有条目零变化
+
+        // 清理
+        await workspaces.deleteMany({ controllerId: { $in: [offlineId, cloudId] } });
+        await controllers.deleteOne({ _id: cloudId });
+        await cloudHosts.deleteOne({ controllerId: cloudId });
+      },
+    );
   });
 
   describe('toggleWorkspace', () => {

@@ -23,7 +23,7 @@ type McpServerResult = {
   updatedAt: Date;
 };
 
-function mapMcpServer(s: McpServerDoc): McpServerResult {
+export function mapMcpServer(s: McpServerDoc): McpServerResult {
   return {
     id: s._id.toString(),
     name: s.name,

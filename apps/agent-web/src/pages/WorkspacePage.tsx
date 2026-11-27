@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation } from '@apollo/client/react';
 import { toast } from 'sonner';
 import { Boxes, Plus } from 'lucide-react';
-import { GET_WORKSPACE_CONTEXT } from '@/graphql/queries';
+import { HOME_OVERVIEW } from '@/graphql/home';
 import {
   CREATE_TENANT_WORKSPACE,
   DELETE_TENANT_WORKSPACE,
@@ -54,15 +54,15 @@ export default function WorkspacePage() {
 
   const [createWorkspace, { loading: creating }] = useMutation<CreateTenantWorkspaceMutation>(
     CREATE_TENANT_WORKSPACE,
-    { refetchQueries: [GET_WORKSPACE_CONTEXT] },
+    { refetchQueries: [{ query: HOME_OVERVIEW }] },
   );
   const [renameWorkspace, { loading: renaming }] = useMutation<RenameTenantWorkspaceMutation>(
     RENAME_TENANT_WORKSPACE,
-    { refetchQueries: [GET_WORKSPACE_CONTEXT] },
+    { refetchQueries: [{ query: HOME_OVERVIEW }] },
   );
   const [deleteWorkspace, { loading: deleting }] = useMutation<DeleteTenantWorkspaceMutation>(
     DELETE_TENANT_WORKSPACE,
-    { refetchQueries: [GET_WORKSPACE_CONTEXT] },
+    { refetchQueries: [{ query: HOME_OVERVIEW }] },
   );
 
   const tenant = current?.tenant ?? null;

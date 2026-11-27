@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useQuery, useMutation } from '@apollo/client/react'
-import { GET_GITHUB_ACCOUNTS, GET_GITHUB_APP_URL } from '@/graphql/queries'
+import { useMutation } from '@apollo/client/react'
+import { SETTINGS_OVERVIEW } from '@/graphql/queries'
+import { useSettingsOverview } from '@/stores/settingsOverview'
 import { UNBIND_GITHUB_ACCOUNT } from '@/graphql/mutations'
-import type { GetGithubAccountsQuery, GetGithubAppUrlQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import GithubAccountCard from './GithubAccountCard'
 import UnbindConfirmDialog from './UnbindConfirmDialog'
@@ -11,8 +11,8 @@ import { useResourceSourceResolver } from '@/hooks/useResourceSource'
 import { useWorkspaceAccess } from '@/stores/workspace'
 
 export default function GithubBindingSection() {
-  const { data, loading } = useQuery<GetGithubAccountsQuery>(GET_GITHUB_ACCOUNTS)
-  const { data: appUrlData } = useQuery<GetGithubAppUrlQuery>(GET_GITHUB_APP_URL)
+  const { data, loading } = useSettingsOverview()
+  const appUrlData = data
   const { readOnly: contextReadOnly } = useWorkspaceAccess()
   const resolveSource = useResourceSourceResolver()
   const [unbindAccount] = useMutation(UNBIND_GITHUB_ACCOUNT)
@@ -57,7 +57,7 @@ export default function GithubBindingSection() {
     if (!unbindTarget) return
     await unbindAccount({
       variables: { accountId: unbindTarget },
-      refetchQueries: [GET_GITHUB_ACCOUNTS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
     setUnbindTarget(null)
   }

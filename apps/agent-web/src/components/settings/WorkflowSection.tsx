@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useQuery, useMutation } from '@apollo/client/react'
+import { useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -11,41 +11,31 @@ import {
   CardDescription,
   CardAction,
 } from '@/components/ui/card'
-import { GET_CONTROLLERS } from '@/graphql/queries'
-import type { GetControllersQuery } from '@/graphql/types'
 import {
-  GET_WORKFLOW_TEMPLATES,
-  GET_CONFIGURED_WORKFLOWS,
   DELETE_WORKFLOW_TEMPLATE,
   DELETE_CONFIGURED_WORKFLOW,
-  type GetWorkflowTemplatesQuery,
-  type GetConfiguredWorkflowsQuery,
   type WorkflowTemplateData,
   type ConfiguredWorkflowData,
 } from '@/graphql/workflow'
+import { HOME_OVERVIEW } from '@/graphql/home'
+import { useHomeOverview } from '@/stores/homeOverview'
 import TemplateEditorDialog from '@/components/workflow/TemplateEditorDialog'
 import ConfigureWorkflowDialog from '@/components/workflow/ConfigureWorkflowDialog'
 import { Plus, Copy, RefreshCw } from 'lucide-react'
 
 export default function WorkflowSection() {
-  const { data: templatesData, loading: templatesLoading, refetch: refetchTemplates } =
-    useQuery<GetWorkflowTemplatesQuery>(GET_WORKFLOW_TEMPLATES, {
-      fetchPolicy: 'cache-and-network',
-    })
-  const { data: configuredData, refetch: refetchConfigured } =
-    useQuery<GetConfiguredWorkflowsQuery>(GET_CONFIGURED_WORKFLOWS, {
-      fetchPolicy: 'cache-and-network',
-    })
-  const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS)
+  const {
+    data: homeData,
+    loading: homeLoading,
+    refetch: refetchHome,
+  } = useHomeOverview()
 
   const [refreshFailed, setRefreshFailed] = useState(false)
 
-  // 进入设置页（或重新切回工作流区块）时刷新一次来源列表
+  // 进入设置页时刷新一次首页聚合（模板/配置/控制器同源，「打开即最新」）
   useEffect(() => {
     setRefreshFailed(false)
-    Promise.all([Promise.resolve(refetchTemplates?.()), Promise.resolve(refetchConfigured?.())]).catch(
-      () => setRefreshFailed(true),
-    )
+    void Promise.resolve(refetchHome()).catch(() => setRefreshFailed(true))
     // refetch 引用稳定；仅挂载/切回时刷新一次
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -65,9 +55,10 @@ export default function WorkflowSection() {
     editing: ConfiguredWorkflowData | null
   }>({ open: false, templateId: null, editing: null })
 
-  const templates = templatesData?.workflowTemplates ?? []
-  const configuredWorkflows = configuredData?.configuredWorkflows ?? []
-  const controllers = controllersData?.controllers ?? []
+  const templates = homeData?.workflowTemplates ?? []
+  const configuredWorkflows = homeData?.configuredWorkflows ?? []
+  const controllers = homeData?.controllers ?? []
+  const templatesLoading = homeLoading && !homeData
 
   const controllerName = (id: string) =>
     controllers.find((c) => c.id === id)?.name ??
@@ -81,7 +72,7 @@ export default function WorkflowSection() {
     try {
       await deleteTemplate({
         variables: { id: template.id },
-        refetchQueries: [{ query: GET_WORKFLOW_TEMPLATES }],
+        refetchQueries: [{ query: HOME_OVERVIEW }],
       })
       toast.success('模板已删除')
     } catch (err) {
@@ -94,7 +85,7 @@ export default function WorkflowSection() {
     try {
       await deleteConfigured({
         variables: { id: workflow.id },
-        refetchQueries: [{ query: GET_CONFIGURED_WORKFLOWS }],
+        refetchQueries: [{ query: HOME_OVERVIEW }],
       })
       toast.success('已配置工作流已删除')
     } catch (err) {

@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery } from '@apollo/client/react'
+import { useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
-import { GET_COMMIT_SETTINGS } from '@/graphql/queries'
+import { SETTINGS_OVERVIEW } from '@/graphql/queries'
+import { useSettingsOverview } from '@/stores/settingsOverview'
 import { UPDATE_COMMIT_SETTINGS } from '@/graphql/mutations'
 import type {
   CommitSettings,
   CommitSettingsInput,
   CommitterType,
-  GetCommitSettingsQuery,
   PersonalGithubAccount,
   UpdateCommitSettingsMutation,
 } from '@/graphql/types'
@@ -50,17 +50,12 @@ function mapCommitSettingsError(error: unknown): string {
  * 仅对云电脑环境生效；服务端校验为权威，前端拦截只做即时反馈。
  */
 export default function GitSettingsSection() {
-  const { data: settingsData, loading: settingsLoading } = useQuery<GetCommitSettingsQuery>(
-    GET_COMMIT_SETTINGS,
-    // CommitSettings 无 id 字段、Apollo 无法归一化 mutation 结果：必须显式回写 / 重拉缓存。
-    // cache-and-network 保证卸载重挂载时不会用陈旧缓存初始化表单（先例 McpDefaultSection）。
-    { fetchPolicy: 'cache-and-network' },
-  )
+  const { data: settingsData, loading: settingsLoading } = useSettingsOverview()
   const [saveCommitSettings, { loading: saving }] =
     useMutation<UpdateCommitSettingsMutation>(UPDATE_COMMIT_SETTINGS, {
       // mutation 返回的 CommitSettings 无 id，Apollo 无法自动合并到 ROOT_QUERY.commitSettings；
       // 显式重拉以更新缓存，避免离开设置页再返回时回显旧值（先例 GithubBindingSection）。
-      refetchQueries: [GET_COMMIT_SETTINGS],
+      refetchQueries: [{ query: SETTINGS_OVERVIEW }],
     })
 
   const [committerType, setCommitterType] = useState<CommitterType>('UNSET')

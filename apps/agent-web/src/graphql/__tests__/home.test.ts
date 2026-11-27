@@ -15,6 +15,19 @@ import {
 } from '../mutations';
 
 describe('云电脑 GraphQL 文档（T-AW15）', () => {
+  it('T-WEB-HOME1 HOME_OVERVIEW 选择集不含归档字段、含三分支', () => {
+    const document = print(HOME_OVERVIEW);
+
+    expect(document).not.toContain('archivedSessions');
+    expect(document).not.toContain('archivedWorkflowInstances');
+    expect(document).toContain('configuredWorkflows');
+    expect(document).toContain('workflowTemplates');
+    expect(document).toContain('workspaceContext');
+    expect(document).toContain('myWorkspaces');
+    expect(document).toContain('myTenants');
+    expect(document).toContain('sessionTotalCount');
+  });
+
   it('HOME_OVERVIEW.controllers 包含 cloudHost 及状态字段', () => {
     const document = print(HOME_OVERVIEW);
 

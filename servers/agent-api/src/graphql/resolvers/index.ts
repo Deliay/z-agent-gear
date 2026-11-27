@@ -11,6 +11,7 @@ import { mcpServerResolvers } from './mcp-server.js';
 import { githubResolvers } from './github.js';
 import { workflowResolvers } from './workflow.js';
 import { homeResolvers } from './home.js';
+import { settingsResolvers } from './settings.js';
 import { billingResolvers } from './billing.js';
 import { cloudHostResolvers } from './cloud-host.js';
 import { cloudStorageResolvers } from './cloud-storage.js';
@@ -35,6 +36,7 @@ export const resolvers = {
     ...githubResolvers.Query,
     ...workflowResolvers.Query,
     ...homeResolvers.Query,
+    ...settingsResolvers.Query,
     ...billingResolvers.Query,
     ...cloudHostResolvers.Query,
     ...cloudStorageResolvers.Query,

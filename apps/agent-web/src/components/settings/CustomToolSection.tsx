@@ -1,20 +1,20 @@
 import { useState } from 'react'
-import { useMutation, useQuery } from '@apollo/client/react'
+import { useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import {
   CREATE_CUSTOM_TOOL,
   DELETE_CUSTOM_TOOL,
-  GET_CUSTOM_TOOLS,
   UPDATE_CUSTOM_TOOL,
   type CreateCustomToolInput,
   type CreateCustomToolMutation,
   type CustomToolData,
   type DeleteCustomToolMutation,
-  type GetCustomToolsQuery,
   type UpdateCustomToolMutation,
 } from '@/graphql/custom-tool'
 import { customToolErrorMessage, resolveExposedName } from '@/lib/custom-tool'
+import { SETTINGS_OVERVIEW } from '@/graphql/queries'
+import { useSettingsOverview } from '@/stores/settingsOverview'
 import { formatDateTime } from '@/lib/format'
 import { useWorkspaceAccess } from '@/stores/workspace'
 import { Badge } from '@/components/ui/badge'
@@ -37,17 +37,15 @@ const TYPE_LABELS: Record<CustomToolData['type'], string> = {
  */
 export default function CustomToolSection() {
   const { readOnly } = useWorkspaceAccess()
-  const { data, loading, error } = useQuery<GetCustomToolsQuery>(GET_CUSTOM_TOOLS, {
-    fetchPolicy: 'cache-and-network',
-  })
+  const { data, loading, error } = useSettingsOverview()
   const [createCustomTool] = useMutation<CreateCustomToolMutation>(CREATE_CUSTOM_TOOL, {
-    refetchQueries: [GET_CUSTOM_TOOLS],
+    refetchQueries: [{ query: SETTINGS_OVERVIEW }],
   })
   const [updateCustomTool] = useMutation<UpdateCustomToolMutation>(UPDATE_CUSTOM_TOOL, {
-    refetchQueries: [GET_CUSTOM_TOOLS],
+    refetchQueries: [{ query: SETTINGS_OVERVIEW }],
   })
   const [deleteCustomTool] = useMutation<DeleteCustomToolMutation>(DELETE_CUSTOM_TOOL, {
-    refetchQueries: [GET_CUSTOM_TOOLS],
+    refetchQueries: [{ query: SETTINGS_OVERVIEW }],
   })
 
   const [dialogOpen, setDialogOpen] = useState(false)

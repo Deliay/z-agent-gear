@@ -392,7 +392,7 @@ pnpm test
 | T-ARCH-API1 | `archiveSession` 未认证 → `Not authenticated` |
 | T-ARCH-API2 | 归档/取消归档成功：DB `archivedAt` 置位/置空往返 + 重复归档幂等；`session.archived` 透出，会话在活跃/已归档列表间即时进出 |
 | T-ARCH-API3 | 工作流节点会话 `archiveSession` → `ARCHIVE_WORKFLOW_SESSION_UNSUPPORTED` 且不写库；`sessions(archived)` 三档口径（缺省=活跃、`archived:false`=活跃、`archived:true`=仅已归档）且与 `includeWorkflowSessions` 正交（直写归档的节点会话仅在 `includeWorkflowSessions=true` 时出现） |
-| T-ARCH-API4 | `homeOverview.archivedSessions` 与活跃 `sessions` 互补（互不相交且并集为全量），`sessionTotalCount == sessions.length`（未归档计数） |
+| T-ARCH-API4 | 归档清单已退出 `homeOverview`：断言无 `archivedSessions`/`archivedWorkflowInstances` 字段；`sessions(archived:true)` 返回归档会话、`sessions`（默认活跃）与其互不相交，`sessionTotalCount == sessions.length`（未归档计数） |
 | T-WSARC-API1 | `deleteWorkspace` 连带：DB 断言会话 `archivedAt` 非空、原活跃会话 `status=ended`、工作区行被删除；会话从活跃列表消失并进入 `sessions(archived:true)` |
 | T-WSARC-API2 | `workspaceArchiveImpact.sessionCount`=2 = 实际连带归档集合（逐 id 对齐），另一工作区会话不受影响（`archivedAt` 仍为 null） |
 
@@ -1102,3 +1102,14 @@ pnpm test
   他人 `controllerId` → `Cloud host not found`。
 - 注意：`REDIS_URL` 与 agent-api `REDIS_URI` 同一实例；Aspire 编排下为 `rediss://`（dev 自签证书），
   按上表设置 `NODE_EXTRA_CA_CERTS` 或 `NODE_TLS_REJECT_UNAUTHORIZED=0`。
+
+## 接口性能优化（#584）
+
+| 编号 | 断言 |
+|------|------|
+| T-HP1 | `homeOverview` 无 `archivedSessions`/`archivedWorkflowInstances`，含 `configuredWorkflows`/`workflowTemplates`/`workspaceContext`，与独立查询逐字段一致 |
+| T-HP2 | `homeOverview.workspaceContext` 与 `myWorkspaces`/`myTenants` 口径一致（同源单次 `accessibleWorkspaces`） |
+| T-WSF1 | `workspaces` 过滤矩阵：API 覆盖 offline、控制器文档缺失、云电脑软删不返回与恢复 online 重新可见、数据不丢失、在线控制器零变化；registering/unbound 由 agent-api 单测 `controller-workspace.test.ts` 覆盖 |
+| T-SET1 | `settingsOverview` 14 分支与直查各原查询逐字段一致 |
+| T-SET2 | 单分支降级不拖垮整页（API 层只读上下文触发 githubAppUrl 正常降级，其余 13 分支正常返回；degrade catch 路径由单元 T-SO2 覆盖，本期不做 API 故障注入） |
+| E2E-HP1~3 / E2E-WSF1 / E2E-SET1 / E2E-SARCH1~2 | 首屏无归档清单请求、展开才拉取且无数量、workspaceContext/模板/配置随轮询刷新、离线/删除控制器工作区不展示、设置页打开请求 ≤3、归档计数文案改写（E2E-HP2 折叠再展开按 `cache-and-network` 重新取数，不承诺复用缓存） |

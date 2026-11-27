@@ -284,8 +284,8 @@ ADMIN_WEB_URL=<admin-web> ADMIN_API_URL=<admin-api>/graphql MONGODB_URI=<mongo-u
 
 | 测试 | 描述 |
 |------|------|
-| E2E-SARCH1 | 会话页「归档」→ toast「会话已归档」并返回 `/sessions` → 侧边栏活跃列表该条消失、「已归档（1）」出现 → 展开分组条目可打开（`session-archived-badge` + 「取消归档」入口）→「取消归档」toast 后恢复活跃分组、归档分组消失 |
-| E2E-SARCH2 | 删除工作区前置 `workspaceArchiveImpact` 取数：确认框文案「删除工作区将同时归档其下 2 个会话，是否继续？」→ 确认删除 → 配置页空态 + 侧边栏「已归档（2）」两条可打开 |
+| E2E-SARCH1 | 会话页「归档」→ toast「会话已归档」并返回 `/sessions` → 侧边栏活跃列表该条消失、常驻「已归档」分组（**无数量**）→ 展开分组按需加载条目可打开（`session-archived-badge` + 「取消归档」入口）→「取消归档」toast 后恢复活跃分组 |
+| E2E-SARCH2 | 删除工作区前置 `workspaceArchiveImpact` 取数：确认框文案「删除工作区将同时归档其下 2 个会话，是否继续？」→ 确认删除 → 配置页空态 + 侧边栏展开「已归档」后两条可打开 |
 | E2E-SRO1 | 删除工作区后的会话只读回看：`session-readonly-notice`（`data-readonly-reason=WORKSPACE_MISSING`，文案「工作区已不存在，会话记录仅供只读回看。」）出现、输入框（textbox）与「继续」按钮数量为 0、先前写入的历史消息仍可见。云电脑销毁只读回归由 `cloud-host-readonly.spec.ts`（T-AW10 / R2-10，需 `MONGODB_URI`，缺省 skip）覆盖，本套件不重复 |
 
 ### Settings History Session E2E (`settings-history-session.spec.ts`)
@@ -721,3 +721,14 @@ fake OIDC 端口 `MOCK_OIDC_PORT=19419`、fake GitHub `MOCK_GITHUB_PORT=19418`�
 - 用例：E2E-UPG1 一致态展示 + 无按钮 / E2E-UPG2 不一致 → 按钮、字段缺失 → `—` 且无按钮 /
   E2E-UPG3 点击 → 升级中态 + `container is not online` 中文 toast + 按钮恢复 /
   E2E-UPG4 非 RUNNING 无按钮 / E2E-UPG5 既有面板关键路径零回归。
+
+## 接口性能优化（#584）
+
+| 编号 | 断言 |
+|------|------|
+| E2E-HP1 | 首屏仅 1 次 HomeOverview，且归档清单请求首屏 0 次（按 operationName 判定：`GetArchivedSessions` / `GetWorkflowInstances` + `variables.archived:true`） |
+| E2E-HP2 | 展开「已归档」才发归档请求；标题与列表无数量；空态可展开；折叠再展开按 `cache-and-network` 重新拉取（不承诺复用缓存） |
+| E2E-HP3 | workspaceContext/模板/配置随 15s 轮询刷新（建数据后一个周期内可见） |
+| E2E-WSF1 | 「新建工作流」弹窗与工作区列表不展示离线/删除控制器工作区 |
+| E2E-SET1 | 设置页打开请求 ≤3（1 次 SETTINGS_OVERVIEW + 少量按需），各区块内容完整、操作后即时更新 |
+| E2E-SARCH1/SARCH2 | 「已归档」无数量 + 展开加载；归档/取消归档行为不变 |

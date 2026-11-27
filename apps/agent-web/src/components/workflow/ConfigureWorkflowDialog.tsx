@@ -21,14 +21,13 @@ import {
   SelectItem,
   SelectItemText,
 } from '@/components/ui/select'
-import { GET_CONTROLLERS, GET_ACP_CAPABILITIES } from '@/graphql/queries'
-import type { GetControllersQuery, GetAcpCapabilitiesQuery } from '@/graphql/types'
+import { GET_ACP_CAPABILITIES } from '@/graphql/queries'
+import type { GetAcpCapabilitiesQuery } from '@/graphql/types'
+import { HOME_OVERVIEW } from '@/graphql/home'
+import { useHomeOverview } from '@/stores/homeOverview'
 import {
-  GET_WORKFLOW_TEMPLATES,
-  GET_CONFIGURED_WORKFLOWS,
   CONFIGURE_WORKFLOW,
   UPDATE_CONFIGURED_WORKFLOW,
-  type GetWorkflowTemplatesQuery,
   type ConfiguredWorkflowData,
   type ConfigureWorkflowInput,
 } from '@/graphql/workflow'
@@ -63,8 +62,9 @@ export default function ConfigureWorkflowDialog({
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
-  const { data: templatesData } = useQuery<GetWorkflowTemplatesQuery>(GET_WORKFLOW_TEMPLATES)
-  const { data: controllersData } = useQuery<GetControllersQuery>(GET_CONTROLLERS)
+  const { data: homeData, refetch: refetchHome } = useHomeOverview()
+  const templatesData = homeData
+  const controllersData = homeData
   const { data: capabilitiesData } = useQuery<GetAcpCapabilitiesQuery>(GET_ACP_CAPABILITIES, {
     variables: { controllerId },
     skip: !controllerId,
@@ -88,6 +88,8 @@ export default function ConfigureWorkflowDialog({
 
   useEffect(() => {
     if (!open) return
+    // 「打开即最新」：模板/配置/控制器随 HOME_OVERVIEW 刷新（不再是 15s 前的快照）
+    void refetchHome()
     setError(null)
     setSaving(false)
     if (editing) {
@@ -101,7 +103,7 @@ export default function ConfigureWorkflowDialog({
       setControllerId('')
       setNodes(initialTemplateId ? [] : [])
     }
-  }, [open, editing, initialTemplateId])
+  }, [open, editing, initialTemplateId, refetchHome])
 
   // 创建模式：模板确定后载入模板节点图作为初值。
   // 依赖 open：对话框 dismiss 后再次打开时需重新加载模板节点图（同模板 sourceTemplate?.id 不变，
@@ -144,13 +146,13 @@ export default function ConfigureWorkflowDialog({
       if (editing) {
         await updateConfiguredWorkflow({
           variables: { id: editing.id, input },
-          refetchQueries: [{ query: GET_CONFIGURED_WORKFLOWS }],
+          refetchQueries: [{ query: HOME_OVERVIEW }],
         })
         toast.success('已配置工作流已更新')
       } else {
         await configureWorkflow({
           variables: { templateId, input },
-          refetchQueries: [{ query: GET_CONFIGURED_WORKFLOWS }],
+          refetchQueries: [{ query: HOME_OVERVIEW }],
         })
         toast.success('工作流配置已创建')
       }

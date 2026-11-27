@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import ExternalLoginBindingSection from '../ExternalLoginBindingSection';
 
 const mockUseQuery = vi.fn();
+const mockSettings = vi.fn();
 const mockUseMutation = vi.fn();
 const mocks = vi.hoisted(() => ({
   unbind: vi.fn(async () => ({ data: { unbindExternalLogin: true } })),
@@ -12,6 +13,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@apollo/client/react', () => ({
   useQuery: (...args: unknown[]) => mockUseQuery(...args),
   useMutation: (...args: unknown[]) => mockUseMutation(...args),
+}));
+
+vi.mock('@/stores/settingsOverview', () => ({
+  useSettingsOverview: () => mockSettings(),
 }));
 
 function queryResult(data: Record<string, unknown>) {
@@ -36,10 +41,7 @@ const PROVIDERS = [
 ];
 
 function setup(bindings: unknown[], providers: unknown[]) {
-  mockUseQuery
-    .mockReturnValueOnce(queryResult({ myExternalLogins: bindings }))
-    .mockReturnValueOnce(queryResult({ authProviders: providers }))
-    .mockReturnValue(queryResult({ myExternalLogins: bindings, authProviders: providers }));
+  mockSettings.mockReturnValue(queryResult({ myExternalLogins: bindings, authProviders: providers }));
 }
 
 describe('ExternalLoginBindingSection（T-OBO-BIND）', () => {
