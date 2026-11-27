@@ -100,3 +100,11 @@ pnpm run preview
 - **校验口径**：前端预校验「trim 后非空 + 以 `/` 开头 + 长度 1~64」（`lib/harness-config.ts#validateCompactCommand`），非法时禁用该行保存并展示「指令需以 / 开头且长度 1~64」；服务端 `invalid compact command` 仍为唯一事实源，映射为同一中文提示（`mapHarnessConfigError`），其余错误原样透出。
 - **加载与错误**：加载分支一律 `loading && !data`（「加载中...」）；首次加载失败展示 `QueryError` + 重试。
 - **测试**：`pages/__tests__/HarnessConfigsPage.test.tsx`（T-HC-WEB1 三行展示/默认 `/compact` 回显/加载分支；T-HC-WEB2 逐行保存变量逐字段对齐 + refetch、非法输入禁用、服务端错误映射）；E2E 见 `tests/e2e/src/admin-harness-config.spec.ts`。
+
+## 后台 UI 外壳与通用模式（#594）
+
+- **2-Tier Admin Shell**：`components/AdminLayout.tsx` 左侧 `260px` 分组导航（云资源管理 / 模型与 Harness / 租户与计费 / 系统安全，共 11 入口），右侧自适应主工作台；首个可聚焦元素为「跳到主要内容」Skip Link → `#main-content`，当前路由项由 `NavLink` 自动携带 `aria-current="page"`。
+- **主题三态**：`lib/theme.ts` 为唯一主题源（`light|dark|system`，`localStorage('theme')` + `matchMedia` + `html.dark`）；`main.tsx` 渲染前 `initTheme()` 防闪烁；`components/ThemeToggle.tsx` 置于侧栏底部用户栏，按「跟随系统 → 明亮 → 黑暗」循环。颜色一律取 `index.css` OKLCH 语义 Token，禁止硬编码 hex / `oklch()`/`rgb()` 任意值 / 裸 `white`·`black` 调色板（`T-UIUX-COLOR1` 守卫）；深色日志区使用 `--terminal`/`--terminal-foreground`/`--terminal-border`，弹窗/抽屉遮罩使用 `--overlay`。
+- **原子组件**：`components/ui/sheet.tsx` 为右侧抽屉（`sm:max-w-[560px]`、移动端全宽、Esc/遮罩关闭与焦点圈定），收据详情 `components/billing/ReceiptDrawer.tsx` 使用 Sheet；`Badge` 扩展 `success/warning/info/muted` 语义变体。
+- **通用业务模式**：表格统一引用 `lib/table-styles.ts` 常量（表头 `text-xs font-medium text-muted-foreground bg-muted/40`、单元格 `text-sm py-2.5 px-3`、数字列 `TABLE_CELL_NUMERIC_CLASS` + `TABLE_HEAD_CELL_NUMERIC_CLASS`、操作列 `TABLE_ACTION_CELL_CLASS` + `TABLE_HEAD_CELL_ACTION_CLASS` 成对右对齐）；状态文案与徽标映射统一走 `lib/status-labels.ts#statusBadgeProps()`（覆盖容器七态、工作负载日志、账单 `recharge/charge/adjust`、模型调用 `started/completed/aborted/failed`），`components/cloud-containers/labels.ts` 与 `components/tenants/roles.ts` 为类型化转发薄层；全部删除/销毁/移除二次确认统一使用 `components/ui/confirm-dialog.tsx`（业务包装组件如 `DeleteSpecDialog`/`DeleteWorkloadDialog`/`DeleteConfirmDialog`/`DestroyConfirmDialog` 仅做文案与 props 适配）；列表加载/错误/空态继续遵循 `loading && !data` + `QueryError` + `EmptyState`。
+- **质量守卫**：`src/__tests__/ui-ux-standards.test.ts` 持续守卫 `T-UIUX-FONT2`（≥12px）、`T-UIUX-COLOR1`（禁 hex / 任意值颜色 / 裸黑白）与 `T-UIUX-TABLE1`（表头常量 + 禁旧间距组合 + 数字/操作列表头单元格成对右对齐）；E2E 外壳用例见 `tests/e2e/src/admin-ui-shell.spec.ts`（E2E-AUI-1~3）。

@@ -48,9 +48,14 @@ export default function ReconciliationPage() {
   const shown = reports ?? data?.adminReconciliationReports ?? []
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <h1 className="font-heading text-xl font-medium text-foreground">对账中心</h1>
+    <div className="mx-auto max-w-6xl space-y-6 p-6">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h1 className="font-heading text-xl font-semibold text-foreground">对账中心</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            按资金、计量、资源、事件、汇总、模型调用与容器凭证七条线运行对账，差异项醒目展示。
+          </p>
+        </div>
         <Button onClick={() => run()} disabled={running}>
           运行全部对账
         </Button>
@@ -73,7 +78,7 @@ export default function ReconciliationPage() {
               <CardTitle>{LINE_LABELS[report.line] ?? report.line}</CardTitle>
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">{formatDateTime(report.ranAt)}</span>
-                <Badge variant={report.errorCount > 0 ? 'destructive' : 'outline'}>
+                <Badge variant={report.errorCount > 0 ? 'destructive' : 'success'}>
                   {report.errorCount > 0 ? `${report.errorCount} 项差错` : '通过'}
                 </Badge>
               </div>

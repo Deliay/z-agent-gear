@@ -40,6 +40,8 @@ import ReceiptDrawer from '@/components/billing/ReceiptDrawer'
 import RollupChart from '@/components/billing/RollupChart'
 import MyApiKeyManager from '@/components/billing/MyApiKeyManager'
 import { formatDateTime } from '@/lib/format'
+import { statusBadgeProps } from '@/lib/status-labels'
+import * as T from '@/lib/table-styles'
 
 function defaultRange(): { from: string; to: string } {
   const to = new Date()
@@ -231,7 +233,12 @@ export default function BillingPage() {
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 p-6">
-      <h1 className="font-heading text-xl font-medium text-foreground">费用中心</h1>
+      <div>
+        <h1 className="font-heading text-xl font-semibold text-foreground">费用中心</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          查看账户余额、账单流水与模型调用费用，支持充值、授信、冻结与精确核算。
+        </p>
+      </div>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between gap-3">
@@ -457,44 +464,32 @@ export default function BillingPage() {
                 </p>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full min-w-[720px] text-sm">
+                  <table className={`${T.TABLE_CLASS} min-w-[720px]`}>
                     <thead>
-                      <tr className="border-b text-left text-muted-foreground">
-                        <th className="py-2 pr-3 font-medium">时间</th>
-                        <th className="py-2 pr-3 font-medium">模型</th>
-                        <th className="py-2 pr-3 font-medium">Request</th>
-                        <th className="py-2 pr-3 text-right font-medium">输入/缓存/输出</th>
-                        <th className="py-2 pr-3 text-right font-medium">费用</th>
-                        <th className="py-2 font-medium">状态</th>
+                      <tr className={T.TABLE_HEAD_CLASS}>
+                        <th className={T.TABLE_HEAD_CELL_CLASS}>时间</th>
+                        <th className={T.TABLE_HEAD_CELL_CLASS}>模型</th>
+                        <th className={T.TABLE_HEAD_CELL_CLASS}>Request</th>
+                        <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>输入/缓存/输出</th>
+                        <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>费用</th>
+                        <th className={T.TABLE_HEAD_CELL_CLASS}>状态</th>
                       </tr>
                     </thead>
                     <tbody>
                       {calls.map((call) => (
-                        <tr key={call.id} className="border-b last:border-0">
-                          <td className="py-2 pr-3 text-xs text-muted-foreground">
+                        <tr key={call.id} className={T.TABLE_ROW_CLASS}>
+                          <td className={T.TABLE_CELL_MUTED_CLASS}>
                             {formatDateTime(call.startedAt)}
                           </td>
-                          <td className="py-2 pr-3">{call.modelName || call.modelId}</td>
-                          <td className="py-2 pr-3 font-mono text-xs">{call.requestId.slice(0, 8)}…</td>
-                          <td className="py-2 pr-3 text-right tabular-nums">
+                          <td className={T.TABLE_CELL_CLASS}>{call.modelName || call.modelId}</td>
+                          <td className={`${T.TABLE_CELL_CLASS} font-mono text-xs`}>{call.requestId.slice(0, 8)}…</td>
+                          <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                             {call.inputTokens}/{call.cachedInputTokens}/{call.outputTokens}
                           </td>
-                          <td className="py-2 pr-3 text-right tabular-nums">{call.cost.toFixed(2)}</td>
-                          <td className="py-2">
-                            <Badge
-                              variant={
-                                call.status === 'aborted' || call.status === 'failed'
-                                  ? 'destructive'
-                                  : 'outline'
-                              }
-                            >
-                              {call.status === 'aborted'
-                                ? '中断调用'
-                                : call.status === 'failed'
-                                  ? '失败'
-                                  : call.status === 'started'
-                                    ? '进行中/异常'
-                                    : '完成'}
+                          <td className={T.TABLE_CELL_NUMERIC_CLASS}>{call.cost.toFixed(2)}</td>
+                          <td className={T.TABLE_CELL_CLASS}>
+                            <Badge variant={statusBadgeProps(call.status).variant}>
+                              {statusBadgeProps(call.status).label}
                               {call.estimated ? '（估算）' : ''}
                             </Badge>
                           </td>
@@ -571,7 +566,7 @@ export default function BillingPage() {
         invoice={receiptInvoice}
         receipt={receipt}
         loading={receiptQuery.loading}
-        error={receiptQuery.error?.message ?? null}
+        error={receiptQuery.error ? '收据加载失败，请稍后重试' : null}
         open={receiptInvoice !== null}
         onClose={() => setReceiptInvoice(null)}
       />

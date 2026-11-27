@@ -2,6 +2,8 @@ import type { BillingAccountData } from '@/graphql/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatDateTime } from '@/lib/format'
+import { statusBadgeProps } from '@/lib/status-labels'
+import * as T from '@/lib/table-styles'
 
 interface Props {
   accounts: BillingAccountData[]
@@ -23,23 +25,26 @@ export default function AccountTable({ accounts, selectedId, onSelect, onRecharg
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[720px] text-sm">
+      <table className={`${T.TABLE_CLASS} min-w-[720px]`}>
         <thead>
-          <tr className="border-b text-left text-muted-foreground">
-            <th className="py-2 pr-3 font-medium">账户</th>
-            <th className="py-2 pr-3 font-medium">类型</th>
-            <th className="py-2 pr-3 text-right font-medium">可用余额</th>
-            <th className="py-2 pr-3 text-right font-medium">现金</th>
-            <th className="py-2 pr-3 text-right font-medium">冻结</th>
-            <th className="py-2 pr-3 text-right font-medium">授信</th>
-            <th className="py-2 pr-3 font-medium">状态</th>
-            <th className="py-2 pr-3 font-medium">创建时间</th>
-            <th className="py-2 font-medium">操作</th>
+          <tr className={T.TABLE_HEAD_CLASS}>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>账户</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>类型</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>可用余额</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>现金</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>冻结</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>授信</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>状态</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>创建时间</th>
+            <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>操作</th>
           </tr>
         </thead>
         <tbody>
           {accounts.map((account) => {
             const negative = account.availableBalance < 0
+            const status = statusBadgeProps(
+              account.insufficientSince ? 'insufficient' : account.status,
+            )
             return (
               <tr
                 key={account.id}
@@ -48,30 +53,30 @@ export default function AccountTable({ accounts, selectedId, onSelect, onRecharg
                 }`}
                 onClick={() => onSelect(account)}
               >
-                <td className="py-2 pr-3">
+                <td className={T.TABLE_CELL_CLASS}>
                   <div className="font-medium">{account.ownerName}</div>
                   <div className="text-xs text-muted-foreground">{account.ownerId}</div>
                 </td>
-                <td className="py-2 pr-3">{OWNER_TYPE_LABELS[account.ownerType] ?? account.ownerType}</td>
-                <td className={`py-2 pr-3 text-right ${negative ? 'text-destructive' : ''}`}>
+                <td className={T.TABLE_CELL_CLASS}>{OWNER_TYPE_LABELS[account.ownerType] ?? account.ownerType}</td>
+                <td className={`${T.TABLE_CELL_NUMERIC_CLASS} ${negative ? 'text-destructive' : ''}`}>
                   {account.availableBalance.toFixed(2)}
                 </td>
-                <td className="py-2 pr-3 text-right">{account.cashBalance.toFixed(2)}</td>
-                <td className="py-2 pr-3 text-right">{account.frozenAmount.toFixed(2)}</td>
-                <td className="py-2 pr-3 text-right">{account.creditLimit.toFixed(2)}</td>
-                <td className="py-2 pr-3">
+                <td className={T.TABLE_CELL_NUMERIC_CLASS}>{account.cashBalance.toFixed(2)}</td>
+                <td className={T.TABLE_CELL_NUMERIC_CLASS}>{account.frozenAmount.toFixed(2)}</td>
+                <td className={T.TABLE_CELL_NUMERIC_CLASS}>{account.creditLimit.toFixed(2)}</td>
+                <td className={T.TABLE_CELL_CLASS}>
                   {account.insufficientSince ? (
-                    <Badge variant="destructive">欠费 {formatDateTime(account.insufficientSince)}</Badge>
-                  ) : account.status === 'frozen' ? (
-                    <Badge variant="secondary">已冻结</Badge>
+                    <Badge variant={status.variant}>
+                      欠费 {formatDateTime(account.insufficientSince)}
+                    </Badge>
                   ) : (
-                    <Badge variant="outline">正常</Badge>
+                    <Badge variant={status.variant}>{status.label}</Badge>
                   )}
                 </td>
-                <td className="py-2 pr-3 text-xs text-muted-foreground">
+                <td className={T.TABLE_CELL_MUTED_CLASS}>
                   {formatDateTime(account.createdAt)}
                 </td>
-                <td className="py-2">
+                <td className={T.TABLE_ACTION_CELL_CLASS}>
                   <Button
                     size="sm"
                     variant="outline"

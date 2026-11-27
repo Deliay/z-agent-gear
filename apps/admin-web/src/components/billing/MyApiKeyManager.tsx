@@ -7,7 +7,9 @@ import type { GetAdminBillingApiKeysQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { Badge } from '@/components/ui/badge'
 import { formatDateTime } from '@/lib/format'
+import * as T from '@/lib/table-styles'
 
 export default function MyApiKeyManager() {
   const { data, refetch } = useQuery<GetAdminBillingApiKeysQuery>(ADMIN_BILLING_API_KEYS)
@@ -60,7 +62,7 @@ export default function MyApiKeyManager() {
         </Button>
       </div>
       {secret && (
-        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+        <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs">
           <div className="mb-1 font-medium">完整 Key 仅显示一次，请立即保存：</div>
           <code className="break-all">{secret}</code>
           <Button size="sm" variant="ghost" className="mt-2" onClick={() => setSecret(null)}>
@@ -68,24 +70,28 @@ export default function MyApiKeyManager() {
           </Button>
         </div>
       )}
-      <table className="w-full text-sm">
+      <table className={T.TABLE_CLASS}>
         <thead>
-          <tr className="border-b text-left text-muted-foreground">
-            <th className="py-2 pr-3 font-medium">名称</th>
-            <th className="py-2 pr-3 font-medium">前缀</th>
-            <th className="py-2 pr-3 font-medium">状态</th>
-            <th className="py-2 pr-3 font-medium">最后使用</th>
-            <th className="py-2 font-medium">操作</th>
+          <tr className={T.TABLE_HEAD_CLASS}>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>前缀</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>状态</th>
+            <th className={T.TABLE_HEAD_CELL_CLASS}>最后使用</th>
+            <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>操作</th>
           </tr>
         </thead>
         <tbody>
           {(data?.adminBillingApiKeys ?? []).map((key) => (
-            <tr key={key.id} className="border-b last:border-0">
-              <td className="py-2 pr-3">{key.name}</td>
-              <td className="py-2 pr-3 font-mono text-xs">{key.keyPrefix}…</td>
-              <td className="py-2 pr-3">{key.status === 'active' ? '有效' : '已吊销'}</td>
-              <td className="py-2 pr-3 text-xs text-muted-foreground">{formatDateTime(key.lastUsedAt)}</td>
-              <td className="py-2">
+            <tr key={key.id} className={T.TABLE_ROW_CLASS}>
+              <td className={T.TABLE_CELL_CLASS}>{key.name}</td>
+              <td className={`${T.TABLE_CELL_CLASS} font-mono text-xs`}>{key.keyPrefix}…</td>
+              <td className={T.TABLE_CELL_CLASS}>
+                <Badge variant={key.status === 'active' ? 'success' : 'muted'}>
+                  {key.status === 'active' ? '有效' : '已吊销'}
+                </Badge>
+              </td>
+              <td className={T.TABLE_CELL_MUTED_CLASS}>{formatDateTime(key.lastUsedAt)}</td>
+              <td className={T.TABLE_ACTION_CELL_CLASS}>
                 {key.status === 'active' && (
                   <Button size="sm" variant="outline" onClick={() => setRevokeTarget(key.id)}>
                     吊销

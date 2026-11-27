@@ -5,16 +5,18 @@ import type {
   CloudWorkloadLogStatus,
   CloudWorkloadParamType,
 } from '@/graphql/types';
+import { statusLabel } from '@/lib/status-labels';
 
 // 状态展示映射（裁决 18：内部 initializing ↔ GraphQL INITIALIZING ↔ 前端「初始化中」）
+// 文案与徽标变体的单一来源为 `lib/status-labels.ts`，此处仅保留类型化的转发薄层。
 export const CONTAINER_STATUS_LABELS: Record<CloudContainerStatus, string> = {
-  CREATING: '创建中',
-  CONNECTING: '连接中',
-  INITIALIZING: '初始化中',
-  ONLINE: '在线',
-  DESTROYING: '销毁中',
-  EXITED: '已退出',
-  FAILED: '失败',
+  CREATING: statusLabel('CREATING'),
+  CONNECTING: statusLabel('CONNECTING'),
+  INITIALIZING: statusLabel('INITIALIZING'),
+  ONLINE: statusLabel('ONLINE'),
+  DESTROYING: statusLabel('DESTROYING'),
+  EXITED: statusLabel('EXITED'),
+  FAILED: statusLabel('FAILED'),
 };
 
 // 用途展示映射（本期启动仅 IDLE）
@@ -33,11 +35,11 @@ export const WORKLOAD_LOG_PHASE_LABELS: Record<CloudWorkloadLogPhase, string> = 
 
 // 工作负载执行状态映射（裁决 18）
 export const WORKLOAD_LOG_STATUS_LABELS: Record<CloudWorkloadLogStatus, string> = {
-  PENDING: '等待',
-  RUNNING: '执行中',
-  SUCCESS: '成功',
-  FAILED: '失败',
-  TIMEOUT: '超时',
+  PENDING: statusLabel('PENDING'),
+  RUNNING: statusLabel('RUNNING'),
+  SUCCESS: statusLabel('SUCCESS'),
+  FAILED: statusLabel('FAILED'),
+  TIMEOUT: statusLabel('TIMEOUT'),
 };
 
 // 参数类型映射（功能点 1：下拉单选/下拉多选/文本/布尔）

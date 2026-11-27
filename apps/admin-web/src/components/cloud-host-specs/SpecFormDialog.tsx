@@ -188,7 +188,13 @@ export default function SpecFormDialog({
                   setWhitelistEnabled(value === true);
                 }}
               />
-              <Label htmlFor="spec-whitelist-enabled" className="cursor-pointer">
+              <Label
+                className="cursor-pointer"
+                onClick={() => {
+                  setWhitelistTouched(true);
+                  setWhitelistEnabled((value) => !value);
+                }}
+              >
                 开启白名单
               </Label>
             </div>
