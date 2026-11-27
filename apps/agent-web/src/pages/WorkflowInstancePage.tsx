@@ -12,18 +12,18 @@ import {
 } from '@/graphql/workflow'
 import { GET_ACP_CAPABILITIES } from '@/graphql/queries'
 import type { GetAcpCapabilitiesQuery } from '@/graphql/types'
+import WorkflowTopBar from '@/components/workflow/WorkflowTopBar'
+import WorkflowAlertBanners from '@/components/workflow/WorkflowAlertBanners'
+import WorkflowInspectorDrawer from '@/components/workflow/WorkflowInspectorDrawer'
 import WorkflowNodeTree from '@/components/workflow/WorkflowNodeTree'
 import WorkflowGraphView from '@/components/workflow/WorkflowGraphView'
 import EditInstanceNodeDialog from '@/components/workflow/EditInstanceNodeDialog'
-import { NODE_STATUS_BADGE, NODE_STATUS_LABELS } from '@/components/workflow/WorkflowNodeTreeConstants'
 import BlackboardPanel from '@/components/workflow/BlackboardPanel'
 import WorkflowContextPanel from '@/components/workflow/WorkflowContextPanel'
 import SessionSidePanel from '@/components/workflow/SessionSidePanel'
 import NodeDetailDrawer, { type NodeDetailTarget } from '@/components/workflow/NodeDetailDrawer'
 import ContinueWorkflowDialog from '@/components/workflow/ContinueWorkflowDialog'
-import MobileBackButton from '@/components/MobileBackButton'
 import { useUserEventStream } from '@/hooks/useUserEventStream'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -34,7 +34,6 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { Archive, ArchiveRestore, Trash2, List, GitBranch, Pencil } from 'lucide-react'
 
 /** 实例名称长度上限（与服务端 WORKFLOW_NAME_MAX_LENGTH 同口径） */
 const WORKFLOW_NAME_MAX_LENGTH = 64
@@ -54,6 +53,8 @@ export default function WorkflowInstancePage() {
   const [sideSessionId, setSideSessionId] = useState<string | null>(null)
   // 节点/资源详情抽屉：图表与列表共用，状态提升到页面层（轮询刷新不重置）
   const [detailTarget, setDetailTarget] = useState<NodeDetailTarget | null>(null)
+  // 图表模式下的实例资源右侧抽屉（黑板/垃圾桶/关联 PR/追加提示词）
+  const [inspectorOpen, setInspectorOpen] = useState(false)
   // 抽屉内「重启节点」：复用实例节点对话框 restartMode（页面级持有，列表视图另有自己的对话框）
   const [restartTarget, setRestartTarget] = useState<WorkflowNodeData | null>(null)
   // 接续对话框：列表「接续」入口经 `?continue=1` 深链打开
@@ -163,8 +164,10 @@ export default function WorkflowInstancePage() {
   const blockedNodes = instance.nodes.filter(
     (node) => node.status === 'FAILED' || node.status === 'RETRY_FAILED',
   )
-  const retryFailedCount = blockedNodes.filter((node) => node.status === 'RETRY_FAILED').length
-  const failedCount = blockedNodes.length - retryFailedCount
+  const selectedNodeId = detailTarget?.type === 'node' ? detailTarget.nodeId : null
+  const sideSessionNode = sideSessionId
+    ? instance.nodes.find((node) => node.sessionId === sideSessionId) ?? null
+    : null
 
   const handleDelete = async () => {
     setDeleting(true)
@@ -223,170 +226,67 @@ export default function WorkflowInstancePage() {
   }
 
   return (
-    <div
-      className={
-        viewMode === 'graph'
-          ? 'flex h-full min-h-0 flex-col gap-4 p-4 md:p-6'
-          : 'h-full overflow-y-auto p-4 md:p-6'
-      }
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <MobileBackButton to="/sessions" />
-        <h1 className="text-xl font-bold">{instance.name}</h1>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="重命名实例"
-          title="重命名实例"
-          onClick={handleOpenRename}
-        >
-          <Pencil className="size-3.5" />
-        </Button>
-        {instance.currentNodeNames.length > 0 ? (
-          instance.currentNodeNames.map((name) => (
-            <Badge key={name} variant="default">
-              执行中：{name}
-            </Badge>
-          ))
-        ) : instance.lastNodeName && instance.lastNodeStatus ? (
-          <span
-            className={`rounded-full px-2 py-0.5 text-xs font-medium ${NODE_STATUS_BADGE[instance.lastNodeStatus]}`}
-          >
-            {instance.lastNodeName} · {NODE_STATUS_LABELS[instance.lastNodeStatus]}
-          </span>
-        ) : (
-          <Badge variant="secondary">暂无执行中的节点</Badge>
-        )}
-        <div className="ml-auto flex items-center gap-1">
-          <Button
-            variant={viewMode === 'list' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => handleViewModeChange('list')}
-          >
-            <List className="size-3.5" />
-            列表
-          </Button>
-          <Button
-            variant={viewMode === 'graph' ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => handleViewModeChange('graph')}
-          >
-            <GitBranch className="size-3.5" />
-            图表
-          </Button>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleArchive}
-        >
-          {instance.archived ? (
-            <>
-              <ArchiveRestore className="size-3.5" />
-              取消归档
-            </>
-          ) : (
-            <>
-              <Archive className="size-3.5" />
-              归档
-            </>
-          )}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          className="text-destructive-text hover:text-destructive-text"
-          onClick={() => setDeleteOpen(true)}
-        >
-          <Trash2 className="size-3.5" />
-          删除实例
-        </Button>
-      </div>
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <WorkflowTopBar
+        instance={instance}
+        viewMode={viewMode}
+        onViewModeChange={handleViewModeChange}
+        onOpenRename={handleOpenRename}
+        onOpenInspector={() => setInspectorOpen(true)}
+        onArchive={handleArchive}
+        onOpenDelete={() => setDeleteOpen(true)}
+      />
 
-      {instance.unavailableReason && (
-        <div
-          role="alert"
-          data-testid="workflow-unavailable-notice"
-          data-reason={instance.unavailableReason}
-          className="rounded-lg border border-destructive/40 bg-destructive/10 p-3"
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <p className="text-sm font-semibold text-destructive-text">
-              {instance.unavailableReason === 'CONTROLLER_DELETED'
-                ? '控制器已删除，实例当前不可用'
-                : '控制器离线，实例当前不可用'}
-            </p>
-            <Button size="sm" variant="outline" onClick={() => handleContinueOpenChange(true)}>
-              接续
-            </Button>
-          </div>
-          <p className="mt-1 text-xs text-destructive-text">
-            已完成节点与产物保留；接续后可选择新控制器与工作路径继续流转。
-            原控制器上的残留 Worktree 平台不做远程清理，请自行处理。
-          </p>
-        </div>
-      )}
-
-      {blockedNodes.length > 0 && (
-        <div
-          role="alert"
-          className="rounded-lg border border-destructive/40 bg-destructive/10 p-3"
-        >
-          <p className="text-sm font-semibold text-destructive-text">
-            ⚠️ {blockedNodes.length} 个节点
-            {retryFailedCount > 0 && failedCount > 0
-              ? `（${failedCount} 个失败 / ${retryFailedCount} 个重试用尽）`
-              : retryFailedCount > 0
-                ? '中断自动重试用尽'
-                : '失败'}
-            ，流程已阻断，需要人工介入
-          </p>
-          <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-destructive-text">
-            {blockedNodes.map((node) => (
-              <li key={node.id}>
-                「{node.name}」：
-                {node.status === 'RETRY_FAILED'
-                  ? '中断自动重试已用尽，可重启节点，或在会话中给出指示后恢复'
-                  : node.failInfo?.reason || '未提供失败原因'}
-                {node.status === 'FAILED' && '（打开节点会话给出处理指示，AI 确认后会恢复节点运行）'}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <WorkflowAlertBanners
+        instance={instance}
+        blockedNodes={blockedNodes}
+        onOpenContinue={() => handleContinueOpenChange(true)}
+        onSelectNode={(nodeId) => setDetailTarget({ type: 'node', nodeId })}
+        onOpenSession={(node) => {
+          if (node.sessionId) setSideSessionId(node.sessionId)
+        }}
+      />
 
       {viewMode === 'graph' ? (
-        // 图表模式：画布占满视图区（高度随窗口自适应），右侧资源树隐藏（资源已上图）
-        <div className="min-h-0 min-w-0 flex-1">
+        <div className="min-h-0 min-w-0 flex-1 p-4 md:p-6">
           <WorkflowGraphView
             instance={instance}
             unavailable={unavailable}
+            selectedNodeId={selectedNodeId}
             onOpenDetail={setDetailTarget}
             onOpenSession={setSideSessionId}
           />
         </div>
       ) : (
-        <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
-          <WorkflowNodeTree
-            instance={instance}
-            unavailable={unavailable}
-            onOpenSession={setSideSessionId}
-            pullRequestLinks={instance.pullRequestLinks}
-            onOpenDetail={(nodeId) => setDetailTarget({ type: 'node', nodeId })}
-            pendingInteractionSessionIds={instance.pendingInteractionSessionIds ?? []}
-          />
-          <div className="min-w-0 space-y-4">
-            <BlackboardPanel
-              blackboard={instance.blackboard}
-              trash={instance.blackboardTrash}
-            />
-            <WorkflowContextPanel
-              additionalPrompts={instance.additionalPrompts}
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 md:p-6">
+          <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
+            <WorkflowNodeTree
+              instance={instance}
+              unavailable={unavailable}
+              onOpenSession={setSideSessionId}
               pullRequestLinks={instance.pullRequestLinks}
+              onOpenDetail={(nodeId) => setDetailTarget({ type: 'node', nodeId })}
+              pendingInteractionSessionIds={instance.pendingInteractionSessionIds ?? []}
             />
+            <div className="min-w-0 space-y-3">
+              <BlackboardPanel
+                blackboard={instance.blackboard}
+                trash={instance.blackboardTrash}
+              />
+              <WorkflowContextPanel
+                additionalPrompts={instance.additionalPrompts}
+                pullRequestLinks={instance.pullRequestLinks}
+              />
+            </div>
           </div>
         </div>
       )}
+
+      <WorkflowInspectorDrawer
+        open={inspectorOpen}
+        onOpenChange={setInspectorOpen}
+        instance={instance}
+      />
 
       <NodeDetailDrawer
         open={detailTarget != null}
@@ -416,6 +316,8 @@ export default function WorkflowInstancePage() {
 
       <SessionSidePanel
         sessionId={sideSessionId}
+        nodeName={sideSessionNode?.name}
+        nodeStatus={sideSessionNode?.status}
         onClose={() => setSideSessionId(null)}
       />
 

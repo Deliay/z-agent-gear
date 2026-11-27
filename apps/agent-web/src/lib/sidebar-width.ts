@@ -1,12 +1,12 @@
-/** 侧边栏宽度偏好：clamp 15–28rem、默认 20rem，持久化到 localStorage['sidebar-width'] */
+/** 侧边栏宽度偏好：clamp 220–420px、默认 280px（对齐 UI 规范 §3.1），持久化到 localStorage['sidebar-width'] */
 
 export const SIDEBAR_WIDTH_STORAGE_KEY = 'sidebar-width'
-/** 下限 15rem = 240px（保证主机树多级缩进仍可读） */
-export const SIDEBAR_MIN_WIDTH = 240
-/** 上限 28rem = 448px（保证主内容区不被过度挤压） */
-export const SIDEBAR_MAX_WIDTH = 448
-/** 默认 20rem = 320px */
-export const SIDEBAR_DEFAULT_WIDTH = 320
+/** 下限 220px（保证主机树与列表项可读） */
+export const SIDEBAR_MIN_WIDTH = 220
+/** 上限 420px（保证主内容区不被过度挤压） */
+export const SIDEBAR_MAX_WIDTH = 420
+/** 默认 280px（规范 §3.1 默认宽度） */
+export const SIDEBAR_DEFAULT_WIDTH = 280
 
 export function clampSidebarWidth(width: number): number {
   if (!Number.isFinite(width)) return SIDEBAR_DEFAULT_WIDTH

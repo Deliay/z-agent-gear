@@ -15,7 +15,13 @@ import {
 import EditInstanceNodeDialog from './EditInstanceNodeDialog'
 import HumanNodeActions from './HumanNodeActions'
 import { artifactsOf } from '@/lib/artifact-owners'
-import { NODE_TYPE_LABELS, NODE_STATUS_LABELS, NODE_STATUS_BADGE, retryProgressText } from './WorkflowNodeTreeConstants'
+import {
+  NODE_TYPE_LABELS,
+  NODE_STATUS_LABELS,
+  NODE_STATUS_BADGE,
+  NODE_STATUS_VISUAL,
+  retryProgressText,
+} from './WorkflowNodeTreeConstants'
 import { ChevronDown, ChevronRight, MessageSquare, RotateCcw, Pencil, RefreshCw, PanelRight, AlertCircle } from 'lucide-react'
 
 interface WorkflowNodeTreeProps {
@@ -62,10 +68,19 @@ function NodeCard({
   const nodeArtifacts = artifactsOf(node, blackboard)
   const nodeLinks = pullRequestLinks.filter((link) => link.nodeId === node.id)
   const retryProgress = retryProgressText(node)
+  const visual = NODE_STATUS_VISUAL[node.status]
 
   // 头部行折叠/展开均展示（类型、标题、状态 badge、返工次数、会话按钮）；折叠仅隐藏内容区
   return (
-    <div className="rounded-lg border p-3">
+    <div
+      data-testid={`workflow-list-node-${node.id}`}
+      data-status={node.status}
+      className="relative rounded-lg border border-border bg-card p-3 pl-4 text-card-foreground"
+    >
+      <span
+        aria-hidden="true"
+        className={`absolute inset-y-0 left-0 w-1 rounded-l-lg ${visual.spine}`}
+      />
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -84,11 +99,11 @@ function NodeCard({
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{node.name}</span>
         {node.type === 'AI' && node.agentConfig && (
           <div className="flex items-center gap-1">
-            <span className="rounded bg-primary/20 px-1.5 py-0.5 text-xs font-medium text-primary">
+            <span className="rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
               {node.agentConfig.acpServerType}
             </span>
             {node.agentConfig.modelId && (
-              <span className="rounded bg-secondary/20 px-1.5 py-0.5 text-xs font-medium text-secondary-foreground">
+              <span className="rounded bg-secondary px-1.5 py-0.5 text-xs font-medium text-secondary-foreground">
                 {node.agentConfig.modelId}
               </span>
             )}

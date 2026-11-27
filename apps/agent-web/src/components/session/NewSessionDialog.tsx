@@ -119,6 +119,17 @@ export default function NewSessionDialog({
     fetchPolicy: 'network-only',
   });
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const onlineControllers = controllers.filter(
     (c) =>
       c.status === 'online' &&
