@@ -139,6 +139,23 @@ async function trackHomeOverviewRequests(page: Page): Promise<() => number> {
   return () => count;
 }
 
+/** 解析 GraphQL 请求体：operationName + variables（归档参数在 variables 里，不在 query 紧邻括号内）。 */
+function parseGraphqlBody(post: string): { operation: string; variables: Record<string, unknown> } {
+  try {
+    const body = JSON.parse(post) as { operationName?: string; variables?: Record<string, unknown> };
+    return { operation: body.operationName ?? '', variables: body.variables ?? {} };
+  } catch {
+    return { operation: '', variables: {} };
+  }
+}
+
+function isArchiveRequest(post: string): boolean {
+  const { operation, variables } = parseGraphqlBody(post);
+  if (operation === 'GetArchivedSessions') return true;
+  // 工作流归档查询：GET_WORKFLOW_INSTANCES($archived) 且变量 archived=true
+  return operation === 'GetWorkflowInstances' && variables.archived === true;
+}
+
 /** 单 route handler 同时统计 HomeOverview 与归档清单请求（后注册 handler 会覆盖前一个）。 */
 async function trackHomeAndArchiveRequests(
   page: Page,
@@ -147,21 +164,18 @@ async function trackHomeAndArchiveRequests(
   let archiveCount = 0;
   await page.route('**/graphql', async (route) => {
     const post = route.request().postData() ?? '';
-    if (post.includes('HomeOverview')) homeCount += 1;
-    if (post.includes('sessions(archived') || post.includes('workflowInstances(archived')) {
-      archiveCount += 1;
-    }
+    if (parseGraphqlBody(post).operation === 'HomeOverview') homeCount += 1;
+    if (isArchiveRequest(post)) archiveCount += 1;
     await route.continue();
   });
   return { home: () => homeCount, archive: () => archiveCount };
 }
 
-/** 统计归档清单按需查询（sessions(archived / workflowInstances(archived）请求数 */
+/** 统计归档清单按需查询（GetArchivedSessions / GetWorkflowInstances(archived:true)）请求数 */
 async function trackArchiveRequests(page: Page): Promise<() => number> {
   let count = 0;
   await page.route('**/graphql', async (route) => {
-    const post = route.request().postData() ?? '';
-    if (post.includes('sessions(archived') || post.includes('workflowInstances(archived')) count += 1;
+    if (isArchiveRequest(route.request().postData() ?? '')) count += 1;
     await route.continue();
   });
   return () => count;

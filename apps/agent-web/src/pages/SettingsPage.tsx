@@ -154,7 +154,7 @@ export default function SettingsPage() {
         data: settings,
         loading: settingsLoading,
         error: settingsError,
-        refetch: () => void refetchSettings(),
+        refetch: refetchSettings,
       }}
     >
     <div className="flex h-full flex-col">

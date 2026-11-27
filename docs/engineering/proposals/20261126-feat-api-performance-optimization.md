@@ -206,7 +206,7 @@ extend type Query {
 | `controllerWorkspaceService.findAllByUser(userId)` | 增加控制器可用性过滤（见 §5.2 实现点 3），`workspaces` 与 `homeOverview.workspaces` 同一路径自动同口径 |
 | `workspaceService.accessibleWorkspaces(userId)` | 增加单请求内复用（`myWorkspaces`/`myTenants`/`workspaceContext` 分支共享一次结果），消除重复查询 |
 | homeOverview resolver | 3 个新分支：`configuredWorkflowService.listForUser` / `workflowTemplateService.listForUser` / workspaceContext 组装 |
-| settingsOverview resolver（新增） | 复用各既有服务调用组装 13 个只读分支 |
+| settingsOverview resolver（新增） | 复用各既有服务调用组装 14 个只读分支 |
 
 ## 4. 数据模型
 
@@ -244,7 +244,7 @@ sequenceDiagram
     W-->>U: 就地渲染列表/空态（无数量）
     U->>W: 打开设置页
     W->>A: SETTINGS_OVERVIEW（1 次）
-    A-->>W: 13 个只读分支
+    A-->>W: 14 个只读分支
     W-->>U: 各区块就地展示
 ```
 
@@ -282,7 +282,7 @@ sequenceDiagram
 
 #### 实现点 4: settingsOverview 聚合设置页 GraphQL 调用
 
-- **服务端**：新增 `resolvers/settings.ts` + `schemas/settings.ts`（对齐 `contracts/settings.graphql`，`resolvers/index.ts` 登记），13 个只读分支原样复用现有服务调用，`Promise.all` + per-branch `degrade()`。
+- **服务端**：新增 `resolvers/settings.ts` + `schemas/settings.ts`（对齐 `contracts/settings.graphql`，`resolvers/index.ts` 登记），14 个只读分支原样复用现有服务调用，`Promise.all` + per-branch `degrade()`。
 - **前端**：`SettingsPage.tsx` 单一 `useQuery(SETTINGS_OVERVIEW)`，经 Context 下发；各区块（`ExternalLoginBindingSection` / `GithubBindingSection` / `GitSettingsSection` / `ProviderSection` / `ModelSection` / `ControllerListSection` / `McpRegistrySection` / `ValutSection` / `CustomMcpSection` / `CustomToolSection` / `CloudStorageSection`）删除自身只读 useQuery，改消费 Context；写操作 `refetchQueries: [SETTINGS_OVERVIEW]`。
 - **去重与去轮询**：`GET_PROVIDERS` 双查、`GET_CONTROLLERS` 双查消除；`ControllerListSection` 的 `pollInterval: 15000`（`:97`）移除，控制器在线状态改由 `homeOverview.controllers`（全局 15s）驱动——设置页控制器区块与首页同源同新鲜度。
 - **请求量**：设置页打开 18~20 次 → **1 次** SETTINGS_OVERVIEW（+弹窗/切换类按需查询），详见 §5.2 实现点 2/4 与 §6 D5/D6。
@@ -351,8 +351,8 @@ apps/agent-web/src/
 
 | 类型 | 工具 | 覆盖范围 |
 |------|------|---------|
-| 单元测试 | Vitest | `resolvers/home.test.ts` 扩展（归档分支移除、3 新分支、degrade）；`resolvers/settings.test.ts`（13 分支 + 单分支失败降级）；`services/controller-workspace` 过滤矩阵（online / offline / registering / unbound / 控制器缺失 / 软删云电脑） |
-| API 测试 | tests/api | T-HP1：homeOverview 无 archivedSessions/archivedWorkflowInstances 且含 configuredWorkflows/workflowTemplates/workspaceContext；T-HP2：workspaceContext 与 myWorkspaces/myTenants 口径一致；T-WSF1：workspaces 过滤矩阵（含恢复在线重新可见）；T-SET1：settingsOverview 13 分支返回与原查询逐字段一致；T-SET2：单分支故障不拖垮整页 |
+| 单元测试 | Vitest | `resolvers/home.test.ts` 扩展（归档分支移除、3 新分支、degrade）；`resolvers/settings.test.ts`（14 分支 + 单分支失败降级）；`services/controller-workspace` 过滤矩阵（online / offline / registering / unbound / 控制器缺失 / 软删云电脑） |
+| API 测试 | tests/api | T-HP1：homeOverview 无 archivedSessions/archivedWorkflowInstances 且含 configuredWorkflows/workflowTemplates/workspaceContext；T-HP2：workspaceContext 与 myWorkspaces/myTenants 口径一致；T-WSF1：workspaces 过滤矩阵（含恢复在线重新可见）；T-SET1：settingsOverview 14 分支返回与原查询逐字段一致；T-SET2：单分支降级不拖垮整页（API 层只读上下文触发 githubAppUrl 正常降级，其余 13 分支正常；degrade catch 由单元 T-SO2 覆盖，本期不做故障注入） |
 | E2E | tests/e2e（Playwright） | E2E-HP1：打开应用首屏仅 1 次 HomeOverview 且不含归档清单（更新 `home.spec.ts` T-E1/T-E2 请求计数断言）；E2E-HP2：展开「已归档」才发归档请求、标题与列表无数量、空态可展开；E2E-HP3：工作区上下文/模板/配置随轮询刷新；E2E-WSF1：新建工作流弹窗不展示离线/删除控制器工作区；E2E-SET1：设置页打开请求 ≤ 3 且各区块内容完整、操作后即时更新 |
 
 ## 9. 部署方案

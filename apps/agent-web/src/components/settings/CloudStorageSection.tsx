@@ -198,7 +198,7 @@ export default function CloudStorageSection() {
     loading: settingsLoading,
     error: settingsError,
     refetch: refetchSettings,
-  } as { data?: GetCloudStoragesQuery; loading: boolean; error?: Error; refetch: () => Promise<unknown> }
+  }
   const destroyedQuery = useQuery<GetCloudStoragesQuery>(CLOUD_STORAGES, {
     variables: { onlyAttachable: false, includeDestroyed: true },
     skip: !showDestroyed,

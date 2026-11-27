@@ -9,14 +9,14 @@ export interface SettingsOverviewContextValue {
   data: SettingsOverviewData | null
   loading: boolean
   error: Error | undefined
-  refetch: () => void
+  refetch: () => Promise<unknown>
 }
 
 export const SettingsOverviewContext = createContext<SettingsOverviewContextValue>({
   data: null,
   loading: false,
   error: undefined,
-  refetch: () => {},
+  refetch: () => Promise.resolve(),
 })
 
 export function useSettingsOverview(): SettingsOverviewContextValue {
