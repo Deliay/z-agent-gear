@@ -263,7 +263,8 @@ describe('WorkflowInstancePage 删除实例', () => {
   it('点击「删除实例」弹确认框（说明停流程+删会话），确认后调用删除并跳转回会话列表', async () => {
     render(<WorkflowInstancePage />);
 
-    fireEvent.click(screen.getByRole('button', { name: /删除实例/ }));
+    fireEvent.click(screen.getByTestId('workflow-more-actions'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /删除实例/ }));
 
     const dialog = screen.getByRole('dialog');
     expect(dialog.textContent).toContain('停止流程运转');
@@ -279,10 +280,11 @@ describe('WorkflowInstancePage 删除实例', () => {
     expect(toast.success).toHaveBeenCalled();
   });
 
-  it('取消删除不调用 mutation 也不跳转', () => {
+  it('取消删除不调用 mutation 也不跳转', async () => {
     render(<WorkflowInstancePage />);
 
-    fireEvent.click(screen.getByRole('button', { name: /删除实例/ }));
+    fireEvent.click(screen.getByTestId('workflow-more-actions'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /删除实例/ }));
     fireEvent.click(screen.getByRole('button', { name: '取消' }));
 
     expect(mockDelete).not.toHaveBeenCalled();
@@ -315,7 +317,8 @@ describe('WorkflowInstancePage 实例状态与归档', () => {
     mockUseQuery.mockReturnValue({ data: { workflowInstance: instance }, loading: false });
     render(<WorkflowInstancePage />);
 
-    fireEvent.click(screen.getByRole('button', { name: /归档/ }));
+    fireEvent.click(screen.getByTestId('workflow-more-actions'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /归档/ }));
 
     await waitFor(() =>
       expect(mockDelete).toHaveBeenCalledWith(
@@ -331,7 +334,8 @@ describe('WorkflowInstancePage 实例状态与归档', () => {
     mockUseQuery.mockReturnValue({ data: { workflowInstance: instance }, loading: false });
     render(<WorkflowInstancePage />);
 
-    fireEvent.click(screen.getByRole('button', { name: '取消归档' }));
+    fireEvent.click(screen.getByTestId('workflow-more-actions'));
+    fireEvent.click(await screen.findByRole('menuitem', { name: '取消归档' }));
 
     await waitFor(() =>
       expect(mockDelete).toHaveBeenCalledWith(
@@ -607,15 +611,16 @@ describe('WorkflowInstancePage 不可用与接续（T-WEB5）', () => {
     expect(options).toEqual({ replace: true });
   });
 
-  it('T-WEB5d 不可用实例禁用流转类操作，归档/删除保持可用', () => {
+  it('T-WEB5d 不可用实例禁用流转类操作，归档/删除保持可用', async () => {
     mockUseQuery.mockReturnValue({ data: { workflowInstance: makeUnavailable('CONTROLLER_OFFLINE') }, loading: false });
     render(<WorkflowInstancePage />);
 
     expect(screen.getByLabelText('评审 完成输入')).toBeDisabled();
     expect(screen.getByRole('button', { name: '完成' })).toBeDisabled();
     expect(screen.getByRole('button', { name: '打回' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /归档/ })).not.toBeDisabled();
-    expect(screen.getByRole('button', { name: /删除实例/ })).not.toBeDisabled();
+    fireEvent.click(screen.getByTestId('workflow-more-actions'));
+    expect(await screen.findByRole('menuitem', { name: /归档/ })).not.toHaveAttribute('data-disabled');
+    expect(await screen.findByRole('menuitem', { name: /删除实例/ })).not.toHaveAttribute('data-disabled');
   });
 
   it('T-WEB5e 可用实例零变化：无提示条无接续按钮', () => {

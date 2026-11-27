@@ -30,6 +30,8 @@ interface WorkflowGraphViewProps {
   instance: WorkflowInstanceData
   /** 实例不可用（控制器离线/已删除）：禁用流转类操作 */
   unavailable?: boolean
+  /** 当前正在详情抽屉中检视的节点 id（用于卡片高亮态） */
+  selectedNodeId?: string | null
   /** 打开节点/资源详情抽屉 */
   onOpenDetail?: (target: NodeDetailTarget) => void
   /** 详情抽屉内「打开会话」 */
@@ -45,6 +47,7 @@ const NODE_TYPES = { workflowNode: WorkflowNodeCard }
 export default function WorkflowGraphView({
   instance,
   unavailable = false,
+  selectedNodeId = null,
   onOpenDetail,
   onOpenSession,
 }: WorkflowGraphViewProps) {
@@ -78,6 +81,7 @@ export default function WorkflowGraphView({
         ...node,
         data: {
           ...node.data,
+          selected: selectedNodeId === node.id,
           // 实例不可用时禁用人类节点就地操作（完成/打回）
           actionable: unavailable ? false : node.data.actionable,
           onOpenDetail: (nodeId: string) => onOpenDetail?.({ type: 'node', nodeId }),
@@ -85,7 +89,7 @@ export default function WorkflowGraphView({
           onOpenSession,
         },
       })),
-    [viewModel, unavailable, onOpenDetail, onOpenSession],
+    [viewModel, selectedNodeId, unavailable, onOpenDetail, onOpenSession],
   )
 
   const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowGraphNode>(initialNodes)
@@ -174,10 +178,11 @@ export default function WorkflowGraphView({
         className="h-full w-full"
       >
         <Background />
-        <Controls />
+        <Controls className="!border-border !bg-card !text-foreground !shadow-sm [&>button]:!border-border [&>button]:!bg-card [&>button]:!fill-foreground hover:[&>button]:!bg-accent" />
         <MiniMap
           pannable
           zoomable
+          className="!border-border !bg-card"
           nodeColor={(node) => {
             const status = (node as WorkflowGraphNode).data?.status
             return status ? NODE_STATUS_COLOR_VAR[status] : 'var(--color-border)'

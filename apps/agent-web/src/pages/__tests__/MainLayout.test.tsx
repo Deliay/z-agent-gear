@@ -139,31 +139,40 @@ describe('MainLayout 首页聚合查询', () => {
     expect(mockRefetch).toHaveBeenCalled();
   });
 
-  it('T-UI4-RES6 桌面端挂载侧边栏拖拽热区，宽度走 CSS 变量（默认 20rem/320px）', () => {
+  it('T-UI4-RES6 桌面端挂载侧边栏拖拽热区，宽度走 CSS 变量（默认 17.5rem/280px）', () => {
     mockUseQuery.mockReturnValue({ data: homeData, loading: false, error: undefined, refetch: mockRefetch });
     const { container } = render(<MainLayout />);
 
     expect(screen.getByTestId('sidebar-resizer')).toBeInTheDocument();
     const grid = container.querySelector('.grid') as HTMLElement;
-    expect(grid.className).toContain('var(--sidebar-width,20rem)_minmax(0,1fr)');
-    expect(grid.style.getPropertyValue('--sidebar-width')).toBe('320px');
+    expect(grid.className).toContain('var(--sidebar-width,17.5rem)_minmax(0,1fr)');
+    expect(grid.style.getPropertyValue('--sidebar-width')).toBe('280px');
   });
 
-  it('T-UIUX-SHELL1: 桌面端挂载三层工作区外壳 ActivityRail，支持一键收起/展开二级列表栏与 Ctrl/Cmd+B 快捷键', () => {
+  it('T-UIUX-SHELL1 / T-SIDEBAR-3: 桌面端挂载三层工作区外壳 ActivityRail，支持一键收起/展开二级列表栏、Ctrl/Cmd+B 快捷键与折叠态持久化', () => {
     mockUseQuery.mockReturnValue({ data: homeData, loading: false, error: undefined, refetch: mockRefetch });
     render(<MainLayout />);
 
     expect(screen.getByTestId('activity-rail')).toBeInTheDocument();
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
 
-    // 点击一级导航轨的折叠按钮收起二级列表栏
+    // 点击一级导航轨的折叠按钮收起二级列表栏并持久化
     fireEvent.click(screen.getByTestId('rail-toggle-sidebar'));
     expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
     expect(screen.queryByTestId('sidebar-resizer')).not.toBeInTheDocument();
+    expect(localStorage.getItem('sidebar-collapsed')).toBe('1');
 
-    // Ctrl+B 快捷键重新展开二级列表栏
+    // Ctrl+B 快捷键重新展开二级列表栏并更新持久化
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+    expect(localStorage.getItem('sidebar-collapsed')).toBe('0');
+
+    // 收起后点击任意领域图标自动展开列表栏
+    fireEvent.click(screen.getByTestId('rail-toggle-sidebar'));
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('rail-item-workflows'));
+    expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+    expect(localStorage.getItem('sidebar-active-domain')).toBe('workflows');
   });
 
   it('T-UI4-RES7 移动端不渲染拖拽热区（移动布局不回归）', () => {
@@ -198,7 +207,7 @@ describe('MainLayout 首页聚合查询', () => {
     // 子页面仍在渲染，未替换成整页 spinner
     expect(screen.getByTestId('outlet')).toBeInTheDocument();
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Loading…')).toBeNull();
+    expect(screen.queryByLabelText('加载中…')).toBeNull();
   });
 
   it('整体加载失败展示错误与重试入口，重试发起一次请求（T-F3）', () => {

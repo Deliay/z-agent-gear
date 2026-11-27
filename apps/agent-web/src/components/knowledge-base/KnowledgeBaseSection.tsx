@@ -39,8 +39,10 @@ import RepoKnowledgeBaseSection from './RepoKnowledgeBaseSection';
  * - 树查询独立于 HOME_OVERVIEW（D4），`cache-and-network` + mutation refetch。
  */
 interface KnowledgeBaseSectionProps {
-  expanded: boolean;
-  onToggle: () => void;
+  expanded?: boolean;
+  onToggle?: () => void;
+  /** 领域专视图嵌入模式：不包裹外层可折叠 SidebarSection */
+  embedded?: boolean;
 }
 
 interface DocumentNodeProps {
@@ -129,7 +131,11 @@ function DocumentNode({
   );
 }
 
-export default function KnowledgeBaseSection({ expanded, onToggle }: KnowledgeBaseSectionProps) {
+export default function KnowledgeBaseSection({
+  expanded = true,
+  onToggle = () => {},
+  embedded = false,
+}: KnowledgeBaseSectionProps) {
   const navigate = useNavigate();
   const { isAdmin } = useWorkspaceAccess();
   const [createOpen, setCreateOpen] = useState(false);
@@ -187,106 +193,130 @@ export default function KnowledgeBaseSection({ expanded, onToggle }: KnowledgeBa
     }
   };
 
-  return (
+  const body = (
     <>
-      <SidebarSection
-        sectionKey="knowledgeBases"
-        title="知识库"
-        count={items.length}
-        expanded={expanded}
-        onToggle={onToggle}
-        actions={
-          isAdmin ? (
-            <button
-              type="button"
-              className="cursor-pointer rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-              title="新建知识库"
-              aria-label="新建知识库"
-              onClick={() => setCreateOpen(true)}
-            >
-              <Plus className="size-3.5" />
-            </button>
-          ) : undefined
-        }
-      >
-        {showPlatformLoading ? (
-          <div className="px-2 py-1 text-xs text-muted-foreground/60">加载中…</div>
-        ) : showEmptyState ? (
-          <div className="px-2 py-1 text-xs text-muted-foreground/60">暂无知识库</div>
-        ) : items.length === 0 ? null : (
-          <div className="space-y-0.5">
-            {items.map(({ knowledgeBase, documents }) => {
-              const tree = buildKnowledgeBaseTree(documents);
-              const canCreate = knowledgeBase.myAccess.canCreate;
-              return (
-                <div key={knowledgeBase.id} data-testid={`knowledge-base-item-${knowledgeBase.id}`}>
-                  <TreeSection
-                    title={knowledgeBase.name}
-                    count={documents.length}
-                    defaultExpanded
-                    hasContent={documents.length > 0}
-                    actions={
-                      <div className="flex items-center gap-0.5">
-                        {knowledgeBase.global && (
-                          <Badge
-                            variant="secondary"
-                            className="shrink-0 px-1.5 py-0 text-xs"
-                            data-testid="knowledge-base-global-badge"
-                          >
-                            全局
-                          </Badge>
-                        )}
-                        {canCreate && (
-                          <button
-                            type="button"
-                            className="shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                            aria-label={`在 ${knowledgeBase.name} 中新建文档`}
-                            title="新建文档"
-                            disabled={creatingKey === `${knowledgeBase.id}:/`}
-                            onClick={() => void handleCreateChild(knowledgeBase, '/')}
-                          >
-                            <Plus className="size-3" />
-                          </button>
-                        )}
+      {embedded && isAdmin && (
+        <div className="mb-2 flex justify-end px-1">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md border border-sidebar-border bg-card px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title="新建知识库"
+            aria-label="新建知识库"
+            onClick={() => setCreateOpen(true)}
+          >
+            <Plus className="size-3.5" />
+            <span>新建知识库</span>
+          </button>
+        </div>
+      )}
+      {showPlatformLoading ? (
+        <div className="px-2 py-1 text-xs text-muted-foreground/60">加载中…</div>
+      ) : showEmptyState ? (
+        <div className="px-2 py-1 text-xs text-muted-foreground/60">暂无知识库</div>
+      ) : items.length === 0 ? null : (
+        <div className="space-y-0.5">
+          {items.map(({ knowledgeBase, documents }) => {
+            const tree = buildKnowledgeBaseTree(documents);
+            const canCreate = knowledgeBase.myAccess.canCreate;
+            return (
+              <div key={knowledgeBase.id} data-testid={`knowledge-base-item-${knowledgeBase.id}`}>
+                <TreeSection
+                  title={knowledgeBase.name}
+                  count={documents.length}
+                  defaultExpanded
+                  hasContent={documents.length > 0}
+                  actions={
+                    <div className="flex items-center gap-0.5">
+                      {knowledgeBase.global && (
+                        <Badge
+                          variant="secondary"
+                          className="shrink-0 px-1.5 py-0 text-xs"
+                          data-testid="knowledge-base-global-badge"
+                        >
+                          全局
+                        </Badge>
+                      )}
+                      {canCreate && (
                         <button
                           type="button"
-                          className="shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                          aria-label={`${knowledgeBase.name} 设置`}
-                          title="知识库设置"
-                          onClick={() => setSettingsKb(knowledgeBase)}
+                          className="shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label={`在 ${knowledgeBase.name} 中新建文档`}
+                          title="新建文档"
+                          disabled={creatingKey === `${knowledgeBase.id}:/`}
+                          onClick={() => void handleCreateChild(knowledgeBase, '/')}
                         >
-                          <Settings className="size-3" />
+                          <Plus className="size-3" />
                         </button>
-                      </div>
-                    }
-                  >
-                    {tree.map((node) => (
-                      <DocumentNode
-                        key={node.path}
-                        node={node}
-                        kbId={knowledgeBase.id}
-                        canCreate={canCreate}
-                        creatingKey={creatingKey}
-                        onCreateChild={(parentPath) => void handleCreateChild(knowledgeBase, parentPath)}
-                        onOpen={(path) => navigate(knowledgeBaseDocHref(knowledgeBase.id, path))}
-                      />
-                    ))}
-                  </TreeSection>
-                </div>
-              );
-            })}
-          </div>
-        )}
+                      )}
+                      <button
+                        type="button"
+                        className="shrink-0 cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
+                        aria-label={`${knowledgeBase.name} 设置`}
+                        title="知识库设置"
+                        onClick={() => setSettingsKb(knowledgeBase)}
+                      >
+                        <Settings className="size-3" />
+                      </button>
+                    </div>
+                  }
+                >
+                  {tree.map((node) => (
+                    <DocumentNode
+                      key={node.path}
+                      node={node}
+                      kbId={knowledgeBase.id}
+                      canCreate={canCreate}
+                      creatingKey={creatingKey}
+                      onCreateChild={(parentPath) => void handleCreateChild(knowledgeBase, parentPath)}
+                      onOpen={(path) => navigate(knowledgeBaseDocHref(knowledgeBase.id, path))}
+                    />
+                  ))}
+                </TreeSection>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-        {!(items.length === 0 && hostsPending) && (
-          <RepoKnowledgeBaseSection
-            hosts={hosts}
-            loading={hostsLoading}
-            error={hostsError}
-            onRetry={() => void refetchHosts()}
-          />
-        )}
-      </SidebarSection>
+      {!(items.length === 0 && hostsPending) && (
+        <RepoKnowledgeBaseSection
+          hosts={hosts}
+          loading={hostsLoading}
+          error={hostsError}
+          onRetry={() => void refetchHosts()}
+        />
+      )}
+    </>
+  );
+
+  return (
+    <>
+      {embedded ? (
+        <div data-testid="sidebar-section-content-knowledgeBases">{body}</div>
+      ) : (
+        <SidebarSection
+          sectionKey="knowledgeBases"
+          title="知识库"
+          count={items.length}
+          expanded={expanded}
+          onToggle={onToggle}
+          actions={
+            isAdmin ? (
+              <button
+                type="button"
+                className="cursor-pointer rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                title="新建知识库"
+                aria-label="新建知识库"
+                onClick={() => setCreateOpen(true)}
+              >
+                <Plus className="size-3.5" />
+              </button>
+            ) : undefined
+          }
+        >
+          {body}
+        </SidebarSection>
+      )}
 
       <CreateKnowledgeBaseDialog
         open={createOpen}

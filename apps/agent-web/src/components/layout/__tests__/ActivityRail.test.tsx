@@ -83,4 +83,22 @@ describe('ActivityRail 三层工作区一级导航轨', () => {
     expect(onlineCount).toHaveTextContent('3');
     expect(onlineCount).toHaveClass('tabular-nums');
   });
+
+  it('T-SIDEBAR-1: Surface-0 使用 bg-rail，任意路由与激活域组合下严格仅展示 1 个 rail-active-indicator', () => {
+    mockLocation.pathname = '/sessions/sess-1';
+    render(
+      <ActivityRail
+        activeRailKey="hosts"
+        onSelectSection={vi.fn()}
+        collapsed={false}
+        onToggleCollapse={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('activity-rail')).toHaveClass('bg-rail');
+    expect(screen.getAllByTestId('rail-active-indicator')).toHaveLength(1);
+    expect(screen.getByTestId('rail-item-hosts')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('rail-item-sessions')).toHaveAttribute('aria-pressed', 'false');
+  });
 });
+

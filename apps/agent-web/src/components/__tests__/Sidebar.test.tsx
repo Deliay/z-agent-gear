@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 import Sidebar from '../Sidebar';
-import { SIDEBAR_SECTIONS_KEY } from '../../lib/sidebar-prefs';
 import { logger } from '../../lib/logger';
 import type { CloudHostData, HomeOverviewData, HomeOverviewControllerData, HomeOverviewWorkspaceData, SessionData } from '../../graphql/types';
 import type { WorkflowInstanceSummaryData } from '../../graphql/workflow';
@@ -253,14 +252,10 @@ function mockCapabilities(enabled = true, supportedHarnesses: CloudHostData['har
   });
 }
 
-/** 渲染侧边栏并展开「主机」分区（分区默认折叠，符合 PRD 功能点 1） */
-function renderSidebar(props: { mobile?: boolean } = {}) {
-  const result = render(<Sidebar name="testuser" {...props} />);
-  const hostsToggle = screen.getByRole('button', { name: '主机' });
-  if (hostsToggle.getAttribute('aria-expanded') === 'false') {
-    fireEvent.click(hostsToggle);
-  }
-  return result;
+/** 渲染侧边栏（默认聚焦「主机」领域以覆盖存量主机/云电脑/网关用例，其余用例按需传入 activeDomain） */
+function renderSidebar(props: { mobile?: boolean; activeDomain?: 'sessions' | 'workflows' | 'knowledgeBases' | 'hosts' } = {}) {
+  const { activeDomain = 'hosts', ...rest } = props;
+  return render(<Sidebar name="testuser" activeDomain={activeDomain} {...rest} />);
 }
 
 describe('Sidebar 集成测试', () => {
@@ -321,27 +316,28 @@ describe('Sidebar 集成测试', () => {
     expect(input).not.toHaveProperty('customMcpServerIds');
   });
 
-  describe('① 五个平级分组渲染', () => {
-    it('渲染主机、工作流、会话、知识库、网关五个分区，且主机分区内保留工作区分组', () => {
-      renderSidebar();
-
-      const sectionTestIds: Record<string, string> = {
-        主机: 'hosts',
-        工作流: 'workflows',
-        会话: 'sessions',
-        知识库: 'knowledgeBases',
-        网关: 'gateways',
-      };
-      for (const title of Object.keys(sectionTestIds)) {
-        expect(screen.getByTestId(`sidebar-section-${sectionTestIds[title]}`)).toBeInTheDocument();
-      }
+  describe('① 领域聚焦渲染（终结手风琴堆叠）', () => {
+    it('按 activeDomain 聚焦渲染主机/工作流/会话/知识库，且主机领域保留工作区与网关分组', () => {
+      const { rerender } = renderSidebar({ activeDomain: 'hosts' });
+      expect(screen.getByTestId('context-panel-domain-hosts')).toBeInTheDocument();
       expect(screen.getByText('工作区')).toBeInTheDocument();
+      expect(screen.getByTestId('hosts-gateway-subsection')).toBeInTheDocument();
+      expect(screen.queryByTestId('context-panel-domain-sessions')).not.toBeInTheDocument();
+
+      rerender(<Sidebar name="testuser" activeDomain="workflows" />);
+      expect(screen.getByTestId('context-panel-domain-workflows')).toBeInTheDocument();
+
+      rerender(<Sidebar name="testuser" activeDomain="sessions" />);
+      expect(screen.getByTestId('context-panel-domain-sessions')).toBeInTheDocument();
+
+      rerender(<Sidebar name="testuser" activeDomain="knowledgeBases" />);
+      expect(screen.getByTestId('context-panel-domain-knowledgeBases')).toBeInTheDocument();
     });
   });
 
   describe('② 网关 Plus 打开 GatewayDialog', () => {
-    it('聚合分区点击「新增网关」选择主机后打开 GatewayDialog 且弹窗不在 hidden 容器内', () => {
-      renderSidebar();
+    it('主机领域网关子区点击「新增网关」选择主机后打开 GatewayDialog 且弹窗不在 hidden 容器内', () => {
+      renderSidebar({ activeDomain: 'hosts' });
 
       fireEvent.click(screen.getByRole('button', { name: '新增网关' }));
       fireEvent.click(screen.getByRole('menuitem', { name: '测试控制器' }));
@@ -364,8 +360,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      renderSidebar();
-      fireEvent.click(screen.getByRole('button', { name: '网关' }));
+      renderSidebar({ activeDomain: 'hosts' });
 
       expect(screen.getByText('my-api')).toBeInTheDocument();
     });
@@ -381,7 +376,7 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      renderSidebar();
+      renderSidebar({ activeDomain: 'sessions' });
 
       expect(screen.getByText('深层会话')).toBeInTheDocument();
       expect(screen.getByText('project-sub')).toBeInTheDocument();
@@ -393,7 +388,7 @@ describe('Sidebar 集成测试', () => {
         workspaces: [makeWorkspace({ id: 'ws-1', name: 'project', path: '/home/user' })],
       });
 
-      renderSidebar();
+      renderSidebar({ activeDomain: 'sessions' });
 
       expect(screen.getByText('孤立会话')).toBeInTheDocument();
       expect(screen.getByText('未知工作区')).toBeInTheDocument();
@@ -401,11 +396,10 @@ describe('Sidebar 集成测试', () => {
   });
 
   describe('④ 工作流集中列表', () => {
-    it('无工作流实例时空态收敛（不渲染占位文字，仍常驻可展开的已归档分组）', () => {
-      renderSidebar();
+    it('无工作流实例时展示空态并常驻可展开的已归档分组', () => {
+      renderSidebar({ activeDomain: 'workflows' });
       expect(screen.queryByText('无工作流实例')).not.toBeInTheDocument();
-      expect(screen.getByTestId('sidebar-workflow-list').children).toHaveLength(1);
-      expect(within(screen.getByTestId('sidebar-workflow-list')).getByText('已归档')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '已归档' })).toBeInTheDocument();
     });
 
     it('集中平铺展示全部实例并标注所属工作区与状态（不按工作区分组）', () => {
@@ -417,36 +411,31 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      renderSidebar();
+      renderSidebar({ activeDomain: 'workflows' });
 
       expect(screen.queryByText('无工作流实例')).not.toBeInTheDocument();
       expect(screen.getByText('实例一')).toBeInTheDocument();
       expect(screen.getByText('实例二')).toBeInTheDocument();
-      // 两行卡片：第二行工作区名称（工作区已删除显示「未知工作区」），控制器名不再占卡片行
       const cards = screen.getAllByTestId('workflow-instance-card');
       expect(cards[0]).toHaveTextContent('project');
       expect(cards[0]).not.toHaveTextContent('测试控制器');
       expect(screen.getByText('未知工作区')).toBeInTheDocument();
-      // 点击直达详情
       expect(screen.getByText('实例一').closest('a')?.getAttribute('href')).toBe('/workflows/inst-1');
     });
 
     it('实例上报后从空态切换为列表', () => {
-      const { rerender } = renderSidebar();
-      expect(screen.getByTestId('sidebar-workflow-list').children).toHaveLength(1);
+      const { rerender } = renderSidebar({ activeDomain: 'workflows' });
+      expect(screen.queryByTestId('sidebar-workflow-list')).not.toBeInTheDocument();
 
       mockHome({ workflowInstances: [makeInstance()] });
-      rerender(<Sidebar name="testuser" />);
+      rerender(<Sidebar name="testuser" activeDomain="workflows" />);
 
-      expect(screen.queryByText('无工作流实例')).not.toBeInTheDocument();
       expect(screen.getByText('需求A开发')).toBeInTheDocument();
     });
   });
 
   describe('⑤ 无限渲染循环回归', () => {
     it('render 后正常完成，无 React 报错', () => {
-      // React 渲染错误直接走 console.error（框架通道，不经 logger），保留断言以捕获无限渲染循环；
-      // 业务错误日志统一在 logger 层断言（logger 是包内唯一 console 出口）。
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       renderSidebar();
       const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
@@ -457,15 +446,15 @@ describe('Sidebar 集成测试', () => {
     });
   });
 
-  describe('⑥ 空态收敛（不再渲染占位文字）', () => {
-    it('无会话时不显示「无会话」，会话列表仅常驻已归档分组', () => {
-      renderSidebar();
+  describe('⑥ 空态收敛', () => {
+    it('无会话时不显示旧占位「无会话」，底部常驻已归档分组', () => {
+      renderSidebar({ activeDomain: 'sessions' });
       expect(screen.queryByText('无会话')).not.toBeInTheDocument();
-      expect(screen.getByTestId('sidebar-session-list').children).toHaveLength(1);
+      expect(screen.getByRole('button', { name: '已归档' })).toBeInTheDocument();
     });
 
     it('无工作区时不显示「无工作区」，工作区分组仍可展开为空', () => {
-      renderSidebar();
+      renderSidebar({ activeDomain: 'hosts' });
       expect(screen.queryByText('无工作区')).not.toBeInTheDocument();
       expect(screen.getByText('工作区')).toBeInTheDocument();
     });
@@ -480,22 +469,21 @@ describe('Sidebar 集成测试', () => {
         workflows: [makeInstance({ id: 'inst-archived', name: '已归档实例', archived: true })],
       });
 
-      renderSidebar();
+      renderSidebar({ activeDomain: 'workflows' });
 
       expect(screen.queryByText('已归档实例')).not.toBeInTheDocument();
       expect(screen.getByText('活跃实例')).toBeInTheDocument();
-      const list = screen.getByTestId('sidebar-workflow-list');
-      const archiveButton = within(list).getByRole('button', { name: '已归档' });
+      const archiveButton = screen.getByRole('button', { name: '已归档' });
       expect(archiveButton).toHaveAttribute('aria-expanded', 'false');
 
       fireEvent.click(archiveButton);
 
       expect(screen.getByText('已归档实例')).toBeInTheDocument();
       expect(archiveButton).toHaveAttribute('aria-expanded', 'true');
-      expect(within(list).queryByText(/已归档（/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/已归档（/)).not.toBeInTheDocument();
     });
 
-    it('T-BDG1 活动与已归档并存时工作流分区 badge 仅显示活动数量', () => {
+    it('T-BDG1 活动与已归档并存时工作流领域 badge 仅显示活动数量', () => {
       mockHome({
         workflowInstances: [makeInstance({ id: 'inst-active', name: '活跃实例' })],
       });
@@ -503,17 +491,13 @@ describe('Sidebar 集成测试', () => {
         workflows: [makeInstance({ id: 'inst-archived', name: '已归档实例', archived: true })],
       });
 
-      renderSidebar();
+      renderSidebar({ activeDomain: 'workflows' });
 
-      const section = screen.getByTestId('sidebar-section-workflows');
-      const titleButton = within(section).getByRole('button', { name: '工作流' });
-      expect(within(titleButton).getByText('1')).toBeInTheDocument();
-      // 已归档分组常驻且不展示数量
-      const list = screen.getByTestId('sidebar-workflow-list');
-      expect(within(list).getByRole('button', { name: '已归档' })).toBeInTheDocument();
+      expect(screen.getByTestId('context-panel-count')).toHaveTextContent('1');
+      expect(screen.getByRole('button', { name: '已归档' })).toBeInTheDocument();
     });
 
-    it('T-BDG2 仅已归档无活动时工作流分区 badge 显示 0', () => {
+    it('T-BDG2 仅已归档无活动时工作流领域 badge 显示 0', () => {
       mockArchived({
         workflows: [
           makeInstance({ id: 'inst-archived-1', name: '归档实例一', archived: true }),
@@ -521,61 +505,15 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      renderSidebar();
+      renderSidebar({ activeDomain: 'workflows' });
 
-      const section = screen.getByTestId('sidebar-section-workflows');
-      const titleButton = within(section).getByRole('button', { name: '工作流' });
-      expect(within(titleButton).getByText('0')).toBeInTheDocument();
-      const archiveGroup = within(screen.getByTestId('sidebar-workflow-list')).getByRole('button', {
-        name: '已归档',
-      });
+      expect(screen.getByTestId('context-panel-count')).toHaveTextContent('0');
+      const archiveGroup = screen.getByRole('button', { name: '已归档' });
       expect(archiveGroup).toHaveAttribute('aria-expanded', 'false');
     });
   });
 
-
-  describe('UI 四期：四折叠分区与跨环境聚合', () => {
-    it('T-UI4-SEC1 默认展开「工作流」「会话」，折叠「主机」「知识库」「网关」', () => {
-      render(<Sidebar name="testuser" />);
-
-      expect(screen.getByRole('button', { name: '工作流' })).toHaveAttribute('aria-expanded', 'true');
-      expect(screen.getByRole('button', { name: '会话' })).toHaveAttribute('aria-expanded', 'true');
-      expect(screen.getByRole('button', { name: '主机' })).toHaveAttribute('aria-expanded', 'false');
-      expect(screen.getByRole('button', { name: '知识库' })).toHaveAttribute('aria-expanded', 'false');
-      expect(screen.getByRole('button', { name: '网关' })).toHaveAttribute('aria-expanded', 'false');
-    });
-
-    it('T-UI4-SEC2 点击标题行切换展开态并持久化', () => {
-      render(<Sidebar name="testuser" />);
-
-      fireEvent.click(screen.getByRole('button', { name: '主机' }));
-      expect(screen.getByRole('button', { name: '主机' })).toHaveAttribute('aria-expanded', 'true');
-      expect(JSON.parse(localStorage.getItem(SIDEBAR_SECTIONS_KEY)!).hosts).toBe(true);
-
-      fireEvent.click(screen.getByRole('button', { name: '工作流' }));
-      expect(screen.getByRole('button', { name: '工作流' })).toHaveAttribute('aria-expanded', 'false');
-      expect(JSON.parse(localStorage.getItem(SIDEBAR_SECTIONS_KEY)!).workflows).toBe(false);
-    });
-
-    it('T-UI4-SEC3 刷新（重新挂载）后保持展开态', () => {
-      const first = render(<Sidebar name="testuser" />);
-      fireEvent.click(screen.getByRole('button', { name: '网关' }));
-      first.unmount();
-
-      render(<Sidebar name="testuser" />);
-      expect(screen.getByRole('button', { name: '网关' })).toHaveAttribute('aria-expanded', 'true');
-    });
-
-    it('T-UI4-SEC4 折叠分区的标题与 actions 保留，内容不渲染', () => {
-      render(<Sidebar name="testuser" />);
-
-      expect(screen.queryByTestId('sidebar-section-content-hosts')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('sidebar-section-content-knowledgeBases')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('sidebar-section-content-gateways')).not.toBeInTheDocument();
-      expect(screen.getByTestId('sidebar-section-content-sessions')).toBeInTheDocument();
-      expect(screen.getAllByRole('button', { name: '新建会话' }).length).toBeGreaterThan(0);
-    });
-
+  describe('跨环境聚合与排序稳定性', () => {
     it('T-UI4-AGG1 两个主机的会话聚合在同一列表且点击行为不变', () => {
       mockHome({
         controllers: [
@@ -593,13 +531,12 @@ describe('Sidebar 集成测试', () => {
           }),
         ],
       });
-      render(<Sidebar name="testuser" />);
+      render(<Sidebar name="testuser" activeDomain="sessions" />);
 
       const list = screen.getByTestId('sidebar-session-list');
       expect(within(list).getByText('会话一')).toBeInTheDocument();
       expect(within(list).getByText('会话二')).toBeInTheDocument();
       expect(within(list).getByText('会话二').closest('a')).toHaveAttribute('href', '/sessions/s2');
-      // 条目 tooltip 带所属主机名
       expect(within(list).getByText('会话二').closest('a')?.getAttribute('title')).toContain('主机二');
     });
 
@@ -615,12 +552,12 @@ describe('Sidebar 集成测试', () => {
         ],
       });
       mockArchived({ workflows: [makeInstance({ id: 'w3', name: '归档实例', archived: true })] });
-      render(<Sidebar name="testuser" />);
+      render(<Sidebar name="testuser" activeDomain="workflows" />);
 
       const list = screen.getByTestId('sidebar-workflow-list');
       expect(within(list).getByText('主机一实例')).toBeInTheDocument();
       expect(within(list).getByText('主机二实例')).toBeInTheDocument();
-      expect(within(list).getByRole('button', { name: '已归档' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '已归档' })).toBeInTheDocument();
     });
 
     it('T-UI4-AGG3 排序稳定：updatedAt 倒序 + id tie-break（轮询不跳动）', () => {
@@ -631,7 +568,7 @@ describe('Sidebar 集成测试', () => {
           makeSession({ id: 'c', title: 'C', updatedAt: '2026-01-03T00:00:00Z' }),
         ],
       });
-      render(<Sidebar name="testuser" />);
+      render(<Sidebar name="testuser" activeDomain="sessions" />);
 
       const links = within(screen.getByTestId('sidebar-session-list')).getAllByRole('link');
       expect(links.map((link) => link.getAttribute('href'))).toEqual([
@@ -641,7 +578,7 @@ describe('Sidebar 集成测试', () => {
       ]);
     });
 
-    it('T-UI4-AGG4 网关分区聚合在线主机的网关暴露（离线主机不渲染）', () => {
+    it('T-UI4-AGG4 网关子区聚合在线主机的网关暴露（离线主机不渲染）', () => {
       mockHome({
         controllers: [
           makeController({
@@ -675,13 +612,11 @@ describe('Sidebar 集成测试', () => {
           }),
         ],
       });
-      render(<Sidebar name="testuser" />);
-      fireEvent.click(screen.getByRole('button', { name: '网关' }));
+      render(<Sidebar name="testuser" activeDomain="hosts" />);
 
       const list = screen.getByTestId('sidebar-gateway-list');
       expect(within(list).getByText('api-one')).toBeInTheDocument();
       expect(within(list).getByText('api-two')).toBeInTheDocument();
-      // 离线主机网关配置行不上屏（与既有「UI 层按 status 自行隐藏」口径一致）
       expect(within(list).queryByText('api-offline')).not.toBeInTheDocument();
     });
   });
@@ -1035,7 +970,7 @@ describe('Sidebar 集成测试', () => {
       mockHome({ sessions: [makeSession({ id: 's-active', title: '活跃会话' })] });
       mockArchived({ sessions: [makeSession({ id: 's-archived', title: '归档会话', archived: true })] });
 
-      renderSidebar();
+      renderSidebar({ activeDomain: 'sessions' });
 
       const callsFor = (operation: string) =>
         mockUseQuery.mock.calls.filter(
@@ -1045,13 +980,11 @@ describe('Sidebar 集成测试', () => {
         );
 
       expect(callsFor('GetArchivedSessions').at(-1)?.[1]).toMatchObject({ skip: true });
-      expect(callsFor('GetWorkflowInstances').at(-1)?.[1]).toMatchObject({ skip: true });
 
-      const sessionList = screen.getByTestId('sidebar-session-list');
-      fireEvent.click(within(sessionList).getByRole('button', { name: '已归档' }));
+      fireEvent.click(screen.getByRole('button', { name: '已归档' }));
 
       expect(callsFor('GetArchivedSessions').at(-1)?.[1]).toMatchObject({ skip: false });
-      expect(within(sessionList).getByText('归档会话')).toBeInTheDocument();
+      expect(screen.getByText('归档会话')).toBeInTheDocument();
     });
 
     it('T-WEB2 默认折叠、无数量、展开后才拉取且条目可打开', () => {
@@ -1066,16 +999,14 @@ describe('Sidebar 集成测试', () => {
         ],
       });
 
-      render(<Sidebar name="testuser" />);
+      render(<Sidebar name="testuser" activeDomain="sessions" />);
 
-      const sessionList = screen.getByTestId('sidebar-session-list');
-      const groupButton = within(sessionList).getByRole('button', { name: '已归档' });
+      const groupButton = screen.getByRole('button', { name: '已归档' });
       expect(groupButton).toHaveAttribute('aria-expanded', 'false');
-      expect(within(sessionList).queryByText(/已归档（/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/已归档（/)).not.toBeInTheDocument();
       expect(screen.queryByText('归档会话')).not.toBeInTheDocument();
       expect(screen.getByText('活跃会话')).toBeInTheDocument();
 
-      // 活跃列表链接不含已归档会话（服务端已按未归档过滤，D12）
       const activeLinks = within(screen.getByTestId('sidebar-session-list'))
         .getAllByRole('link')
         .map((link) => link.getAttribute('href'));
@@ -1087,20 +1018,19 @@ describe('Sidebar 集成测试', () => {
       const archivedList = screen.getByTestId('sidebar-archived-session-list');
       const archivedLink = within(archivedList).getByText('归档会话').closest('a');
       expect(archivedLink).toHaveAttribute('href', '/sessions/s-archived');
-      // 展开后归档条目仍只出现在归档分组内，不混入活跃列表直接子项
-      expect(screen.getByTestId('sidebar-session-list').querySelectorAll(':scope > li')).toHaveLength(2);
+      // 展开后归档条目只出现在归档分组内，不混入活跃列表
+      expect(screen.getByTestId('sidebar-session-list').querySelectorAll(':scope > li')).toHaveLength(1);
     });
 
     it('T-WEB2 无已归档会话时分组仍常驻，展开展示空态「暂无归档」', () => {
       mockHome({ sessions: [makeSession({ id: 's-active', title: '活跃会话' })] });
 
-      render(<Sidebar name="testuser" />);
+      render(<Sidebar name="testuser" activeDomain="sessions" />);
 
-      const sessionList = screen.getByTestId('sidebar-session-list');
-      const groupButton = within(sessionList).getByRole('button', { name: '已归档' });
+      const groupButton = screen.getByRole('button', { name: '已归档' });
       expect(groupButton).toBeInTheDocument();
       fireEvent.click(groupButton);
-      expect(within(sessionList).getByText('暂无归档')).toBeInTheDocument();
+      expect(screen.getByText('暂无归档')).toBeInTheDocument();
       expect(screen.getByText('活跃会话')).toBeInTheDocument();
     });
   });

@@ -1,64 +1,46 @@
-import { useEffect, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
+import { Cloud, Plus } from 'lucide-react';
 import type {
   CloudHostCapabilitiesData,
   GetCloudHostCapabilitiesQuery,
   SessionData,
 } from '../graphql/types';
+import { CLOUD_HOST_CAPABILITIES } from '../graphql/queries';
 import { useCreateSession } from '../hooks/useCreateSession';
+import { useHomeOverview } from '../stores/homeOverview';
 import NewSessionDialog from './session/NewSessionDialog';
 import NewCloudHostDialog from './cloud-host/NewCloudHostDialog';
 import GithubProjectSetupDialog from './cloud-host/GithubProjectSetupDialog';
-import {
-  cloudHostStatusDotClass,
-  cloudHostStatusText,
-  isTerminalCloudHost,
-} from './cloud-host/cloud-host-status';
-import { getStatusDotColor } from './session/status-colors';
-import WorktreeSidebarGroup from './worktree/WorktreeSidebarGroup';
-import { TodoListPanel } from './TodoListPanel';
-import ThemeToggle from './ThemeToggle';
-import TreeSection from './tree/TreeSection';
-import ReviewSection from './sidebar/ReviewSection';
-import GatewayItem from './GatewayItem';
-import GatewayDialog from './GatewayDialog';
-import WorkflowInstanceCard from './workflow/WorkflowInstanceCard';
-import SidebarSection from './sidebar/SidebarSection';
-import KnowledgeBaseSection from './knowledge-base/KnowledgeBaseSection';
-import {
-  Settings,
-  Plus,
-  ChevronDown,
-  ChevronRight,
-  Archive,
-  Cloud,
-  CreditCard,
-  GitBranch,
-} from 'lucide-react';
 import InstantiateWorkflowDialog from './workflow/InstantiateWorkflowDialog';
-import { CLOUD_HOST_CAPABILITIES, GET_ARCHIVED_SESSIONS } from '../graphql/queries';
-import { GET_WORKFLOW_INSTANCES, type GetWorkflowInstancesQuery } from '../graphql/workflow';
-import type { GetArchivedSessionsQuery } from '../graphql/types';
-import { useHomeOverview } from '../stores/homeOverview';
-import WorkspaceSwitcher from './WorkspaceSwitcher';
+import GatewayDialog from './GatewayDialog';
+import ContextPanelHeader from './sidebar/ContextPanelHeader';
+import ContextPanelFooter from './sidebar/ContextPanelFooter';
+import SessionsPanel from './sidebar/SessionsPanel';
+import WorkflowsPanel from './sidebar/WorkflowsPanel';
+import KnowledgeBasesPanel from './sidebar/KnowledgeBasesPanel';
+import HostsPanel from './sidebar/HostsPanel';
 import {
-  persistSidebarSections,
-  readSidebarSections,
-  sortByUpdatedAtDesc,
-  type SidebarSectionKey,
-  type SidebarSections,
+  isContextDomainKey,
+  persistActiveDomain,
+  readActiveDomain,
+  type ContextDomainKey,
 } from '@/lib/sidebar-prefs';
 
-interface SidebarProps {
-  /** 当前用户展示名（登录响应 User.name，迁移后=原用户名） */
+export interface SidebarProps {
+  /** 当前用户展示名（登录响应 User.name） */
   name: string;
   mobile?: boolean;
-  /** 一级导航轨点击聚焦的分区（含递增 nonce 以支持重复点击同一分区展开并滚动） */
-  focusTarget?: { section: SidebarSectionKey; nonce: number } | null;
+  /** 受控当前聚焦领域（由 MainLayout 与 ActivityRail 同步） */
+  activeDomain?: ContextDomainKey;
+  /** 切换领域回调（移动端切换领域时向上同步） */
+  onSelectDomain?: (domain: ContextDomainKey) => void;
+  /** 兼容旧调用方：一级导航轨点击聚焦的分区 */
+  focusTarget?: { section: string; nonce: number } | null;
 }
 
-/** 主机选择浮层：聚合分区的新建入口先选主机，再打开对应对话框 */
+/** 主机选择浮层：实例化工作流前先选主机 */
 function ControllerPicker({
   controllers,
   onPick,
@@ -87,37 +69,61 @@ function ControllerPicker({
   );
 }
 
-export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
+/**
+ * Tier 2 — 领域聚焦上下文列表栏（Context Panel，Surface-1 `bg-sidebar`）：
+ * - 一次仅渲染当前激活领域的专属视图（会话 / 工作流 / 知识库 / 主机）
+ * - 统一顶部工作区切换、领域标题/计数/主新建按钮与本地筛选框
+ * - 统一管理领域弹窗与精简底栏
+ */
+export default function Sidebar({
+  name,
+  mobile = false,
+  activeDomain: controlledDomain,
+  onSelectDomain,
+  focusTarget,
+}: SidebarProps) {
   const navigate = useNavigate();
-  const [sections, setSections] = useState<SidebarSections>(readSidebarSections);
-  // 主机分区内每个主机默认展开（追踪「已折叠」集合）
-  const [collapsedControllers, setCollapsedControllers] = useState<Set<string>>(new Set());
+  const [internalDomain, setInternalDomain] = useState<ContextDomainKey>(readActiveDomain);
+  const activeDomain = controlledDomain ?? internalDomain;
+
+  const [filterQuery, setFilterQuery] = useState('');
   const [showNewDialog, setShowNewDialog] = useState<{ controllerId?: string } | null>(null);
   const [showNewCloudHost, setShowNewCloudHost] = useState(false);
-  const [showInstantiateDialog, setShowInstantiateDialog] = useState<{ controllerId: string; workspaceId?: string } | null>(null);
+  const [showInstantiateDialog, setShowInstantiateDialog] = useState<{
+    controllerId: string;
+    workspaceId?: string;
+  } | null>(null);
   const [showGatewayDialog, setShowGatewayDialog] = useState<string | null>(null);
   const [showGithubSetup, setShowGithubSetup] = useState<{ controllerId: string } | null>(null);
-  // 聚合分区的新建入口需要先选择目标主机（工作流实例化 / 网关新增）
-  const [picker, setPicker] = useState<'instantiate' | 'gateway' | null>(null);
+  const [instantiatePickerOpen, setInstantiatePickerOpen] = useState(false);
 
-  // 一级导航轨点击某个分区时，确保该分区处于展开态并滚动到视口内
+  const handleDomainChange = useCallback(
+    (domain: ContextDomainKey) => {
+      setInternalDomain(domain);
+      persistActiveDomain(domain);
+      onSelectDomain?.(domain);
+    },
+    [onSelectDomain],
+  );
+
+  // 兼容旧 focusTarget 属性
   useEffect(() => {
     if (!focusTarget) return;
-    const { section } = focusTarget;
-    setSections((prev) => {
-      if (prev[section]) return prev;
-      const next = { ...prev, [section]: true };
-      persistSidebarSections(next);
-      return next;
-    });
-    const el = document.querySelector(`[data-testid="sidebar-section-${section}"]`);
-    el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+    if (isContextDomainKey(focusTarget.section)) {
+      setInternalDomain(focusTarget.section);
+    }
   }, [focusTarget]);
+
+  // 切换领域时重置本地筛选与浮层
+  useEffect(() => {
+    setFilterQuery('');
+    setInstantiatePickerOpen(false);
+  }, [activeDomain]);
 
   // 首页 + 侧边栏统一数据源（由 MainLayout 的 HOME_OVERVIEW 一次加载）
   const { data, refetch } = useHomeOverview();
 
-  // 云电脑开关与支持的 Harness（HARNESS_ENABLED=false 时隐藏入口）
+  // 云电脑能力查询（仅主机域或新建云电脑入口消费）
   const { data: capabilitiesData } = useQuery<GetCloudHostCapabilitiesQuery>(CLOUD_HOST_CAPABILITIES);
   const capabilities: CloudHostCapabilitiesData | undefined = capabilitiesData?.cloudHostCapabilities;
 
@@ -127,19 +133,12 @@ export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
   const controllers = data?.controllers ?? [];
   const allWorkspaces = data?.workspaces ?? [];
   const workflowInstances = data?.workflowInstances ?? [];
+  const sessionReviews = data?.sessionReviews ?? [];
 
   const githubSetupController = showGithubSetup
     ? controllers.find((controller) => controller.id === showGithubSetup.controllerId)
     : undefined;
   const githubSetupHost = githubSetupController?.cloudHost ?? null;
-
-  const toggleSection = (key: SidebarSectionKey) => {
-    setSections((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
-      persistSidebarSections(next);
-      return next;
-    });
-  };
 
   const handleCloudHostCreated = (cloudHost: { id: string; controllerId?: string }) => {
     setShowNewCloudHost(false);
@@ -154,36 +153,37 @@ export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
     }
   };
 
-  const getWorkspaceNameForSession = (session: SessionData): string => {
-    // 1. worktree 会话：从 worktreePath 推导
-    if (session.worktreePath) {
-      const parts = session.worktreePath.split('/').filter(Boolean);
-      const wsName = parts[parts.length - 2];
-      const ws = allWorkspaces.find(
-        (w) => w.name === wsName && w.controllerId === session.controllerId,
-      );
-      return ws?.name || wsName || '';
-    }
-    // 2. 普通会话：按 cwd 匹配已配置工作区（最长前缀匹配）
-    if (session.cwd && session.cwd.length > 0) {
-      let bestMatch: string = '';
-      let bestMatchLength = 0;
-      for (const w of allWorkspaces) {
-        if (w.controllerId !== session.controllerId || !w.isEnabled) continue;
-        if (session.cwd!.startsWith(w.path)) {
-          const rest = session.cwd!.slice(w.path.length);
-          if (rest === '' || rest.startsWith('/')) {
-            if (w.path.length > bestMatchLength) {
-              bestMatchLength = w.path.length;
-              bestMatch = w.name;
+  const getWorkspaceNameForSession = useCallback(
+    (session: SessionData): string => {
+      if (session.worktreePath) {
+        const parts = session.worktreePath.split('/').filter(Boolean);
+        const wsName = parts[parts.length - 2];
+        const ws = allWorkspaces.find(
+          (w) => w.name === wsName && w.controllerId === session.controllerId,
+        );
+        return ws?.name || wsName || '';
+      }
+      if (session.cwd && session.cwd.length > 0) {
+        let bestMatch = '';
+        let bestMatchLength = 0;
+        for (const w of allWorkspaces) {
+          if (w.controllerId !== session.controllerId || !w.isEnabled) continue;
+          if (session.cwd.startsWith(w.path)) {
+            const rest = session.cwd.slice(w.path.length);
+            if (rest === '' || rest.startsWith('/')) {
+              if (w.path.length > bestMatchLength) {
+                bestMatchLength = w.path.length;
+                bestMatch = w.name;
+              }
             }
           }
         }
+        return bestMatch;
       }
-      return bestMatch || '';
-    }
-    return '';
-  };
+      return '';
+    },
+    [allWorkspaces],
+  );
 
   const handleCreateSession = async (
     controllerId: string,
@@ -197,7 +197,6 @@ export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
     modelId?: string,
     customMcpServerIds?: string[],
   ) => {
-    // 提交链路收敛到 useCreateSession（与 ⌘K 快速新建共用，D6）
     const sessionId = await submitCreateSession(
       controllerId,
       acpServerType,
@@ -215,362 +214,133 @@ export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
     }
   };
 
-  const toggleController = (controllerId: string) => {
-    setCollapsedControllers((prev) => {
-      const next = new Set(prev);
-      if (next.has(controllerId)) {
-        next.delete(controllerId);
-      } else {
-        next.add(controllerId);
-      }
-      return next;
-    });
-  };
+  // 各领域标题、计数与主新建按钮
+  let headerTitle = '会话';
+  let headerCount: number | undefined = sessions.length;
+  let headerAction: React.ReactNode = null;
+  let showFilter = false;
 
-  const onlineControllers = controllers.filter((controller) => controller.status === 'online');
-  // 网关聚合与既有口径一致：仅在线主机的网关配置行上屏（离线主机不渲染其网关条目）
-  const gatewayRows = onlineControllers.flatMap((controller) =>
-    (controller.gateways?.gateways ?? []).map((gateway) => ({
-      gateway,
-      controllerId: controller.id,
-    })),
-  );
-  const sortedSessions = sortByUpdatedAtDesc(sessions.map((session) => ({ ...session, updatedAt: session.updatedAt ?? '' })));
-  const sortedWorkflows = sortByUpdatedAtDesc(workflowInstances);
-  const gatewayCount = gatewayRows.length;
+  if (activeDomain === 'sessions') {
+    headerTitle = '会话';
+    headerCount = sessions.length;
+    showFilter = true;
+    headerAction = (
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        title="新建会话"
+        aria-label="新建会话"
+        onClick={() => setShowNewDialog({})}
+      >
+        <Plus className="size-3.5" />
+        <span>新建</span>
+      </button>
+    );
+  } else if (activeDomain === 'workflows') {
+    headerTitle = '工作流';
+    headerCount = workflowInstances.length;
+    showFilter = true;
+    headerAction =
+      controllers.length > 0 ? (
+        <div className="relative">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title="实例化工作流"
+            aria-label="实例化工作流"
+            aria-expanded={instantiatePickerOpen}
+            onClick={() => setInstantiatePickerOpen((prev) => !prev)}
+          >
+            <Plus className="size-3.5" />
+            <span>实例化</span>
+          </button>
+          {instantiatePickerOpen && (
+            <ControllerPicker
+              controllers={controllers}
+              onPick={(controllerId) => {
+                setInstantiatePickerOpen(false);
+                setShowInstantiateDialog({ controllerId });
+              }}
+            />
+          )}
+        </div>
+      ) : null;
+  } else if (activeDomain === 'knowledgeBases') {
+    headerTitle = '知识库';
+    headerCount = undefined;
+    showFilter = false;
+  } else if (activeDomain === 'hosts') {
+    headerTitle = '主机';
+    headerCount = controllers.length;
+    showFilter = false;
+    headerAction = capabilities?.enabled ? (
+      <button
+        type="button"
+        aria-label="新建云电脑"
+        title="新建云电脑"
+        onClick={() => setShowNewCloudHost(true)}
+        className="inline-flex items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <Cloud className="size-3.5" />
+        <span>新建云电脑</span>
+      </button>
+    ) : null;
+  }
 
   return (
-    <nav className={`flex flex-col bg-sidebar text-sidebar-foreground ${mobile ? 'h-full' : 'h-screen'}`} aria-label="Sidebar">
-      <div className="flex-1 overflow-y-auto p-2">
-        <WorkspaceSwitcher />
+    <nav
+      className={`flex min-w-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground ${
+        mobile ? 'h-full' : 'h-screen'
+      }`}
+      aria-label="Sidebar"
+    >
+      <ContextPanelHeader
+        activeDomain={activeDomain}
+        title={headerTitle}
+        count={headerCount}
+        action={headerAction}
+        showFilter={showFilter}
+        filterQuery={filterQuery}
+        onFilterChange={setFilterQuery}
+        mobile={mobile}
+        onSelectDomain={handleDomainChange}
+      />
 
-        {/* 分区 1：主机（保留现有视图内容：主机 → 工作区 → 会话） */}
-        <SidebarSection
-          sectionKey="hosts"
-          title="主机"
-          count={controllers.length}
-          expanded={sections.hosts}
-          onToggle={() => toggleSection('hosts')}
-          actions={capabilities?.enabled && (
-            <button
-              type="button"
-              aria-label="新建云电脑"
-              title="新建云电脑"
-              onClick={() => setShowNewCloudHost(true)}
-              className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <span className="relative inline-flex">
-                <Cloud className="size-4" />
-                <Plus className="absolute -right-1.5 -top-1.5 size-2.5" />
-              </span>
-            </button>
-          )}
-        >
-          <ul className="space-y-0.5">
-            {controllers.map((controller) => {
-              const isExpanded = !collapsedControllers.has(controller.id);
-              const isOffline = controller.status !== 'online';
-              const isCloud = controller.type === 'cloud';
-              const cloudHost = controller.cloudHost ?? null;
-              const cloudTerminal = isCloud && isTerminalCloudHost(cloudHost);
-              const cloudHostRunning = isCloud && cloudHost?.status === 'RUNNING' && !cloudHost.deletedAt;
-              const dimmed = isCloud ? cloudTerminal : isOffline;
-              const controllerSessions = sessions.filter((s) => s.controllerId === controller.id);
-              const controllerWorkspaces = allWorkspaces.filter(
-                (w) => w.controllerId === controller.id && w.isEnabled,
-              );
-
-              return (
-                <li key={controller.id}>
-                  <div
-                    className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm transition-colors hover:bg-sidebar-accent ${
-                      dimmed ? 'opacity-50' : ''
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
-                      onClick={() => toggleController(controller.id)}
-                      aria-expanded={isExpanded}
-                    >
-                      <span className={`h-2 w-2 shrink-0 rounded-full ${
-                        isCloud && cloudHost
-                          ? cloudHostStatusDotClass(cloudHost.status)
-                          : controller.status === 'online' ? 'bg-success' : 'bg-muted-foreground'
-                      }`} />
-                      <span className="flex min-w-0 flex-1 flex-col text-left">
-                        <span className="flex min-w-0 items-center gap-1.5">
-                          {isCloud && <Cloud className="size-3.5 shrink-0" data-testid="cloud-host-icon" />}
-                          <span className="truncate font-medium">
-                            {controller.name || controller.hostname}
-                          </span>
-                        </span>
-                        {isCloud && cloudHost && (
-                          <>
-                            <span
-                              className="truncate text-xs text-muted-foreground"
-                              title={cloudHost.failureReason || undefined}
-                              data-testid="cloud-host-status"
-                            >
-                              {cloudHostStatusText(cloudHost)}
-                              {cloudHost.status === 'FAILED' && cloudHost.failureReason
-                                ? ` · ${cloudHost.failureReason}`
-                                : ''}
-                            </span>
-                            {cloudHostRunning
-                              && cloudHost.hasDefaultWorkspace === false
-                              && controllerWorkspaces.length === 0 && (
-                              <span
-                                className="truncate text-xs text-muted-foreground"
-                                data-testid="cloud-host-no-workspace-hint"
-                              >
-                                未创建默认工作区，请先创建或绑定工作区
-                              </span>
-                            )}
-                            {cloudHostRunning
-                              && cloudHost.hasDefaultWorkspace !== false
-                              && cloudHost.harnessTypes.length === 1
-                              && !cloudHost.defaultSessionId && (
-                                <span
-                                  className="truncate text-xs text-destructive-text"
-                                  data-testid="cloud-host-default-session-hint"
-                                >
-                                  默认会话创建失败，可手动创建会话
-                                </span>
-                              )}
-                          </>
-                        )}
-                      </span>
-                    </button>
-                    <button
-                      type="button"
-                      title={isCloud && !cloudHostRunning ? '云电脑未运行，无法创建会话' : '新建会话'}
-                      aria-label="新建会话"
-                      disabled={isCloud && !cloudHostRunning}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowNewDialog({ controllerId: controller.id });
-                      }}
-                      className={`rounded p-0.5 transition-colors ${
-                        isCloud && !cloudHostRunning
-                          ? 'cursor-not-allowed text-muted-foreground opacity-50'
-                          : 'text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      <Plus className="size-3.5" />
-                    </button>
-                    <span
-                      role="button"
-                      tabIndex={0}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/settings?controllerId=${controller.id}`);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.stopPropagation();
-                          navigate(`/settings?controllerId=${controller.id}`);
-                        }
-                      }}
-                      className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                      title="控制器配置"
-                      aria-label={`${controller.name || controller.hostname} 控制器配置`}
-                    >
-                      <Settings className="size-3.5" />
-                    </span>
-                  </div>
-
-                  {isExpanded && (
-                    <div className="mt-0.5 space-y-0.5">
-                      <TreeSection
-                        title="工作区"
-                        count={controllerWorkspaces.length}
-                        hasContent={controllerWorkspaces.length > 0}
-                        level={1}
-                        actions={
-                          cloudHostRunning ? (
-                            <>
-                              <button
-                                type="button"
-                                aria-label="Github 项目设置"
-                                title="Github 项目设置"
-                                onClick={() => setShowGithubSetup({ controllerId: controller.id })}
-                                className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                              >
-                                <GitBranch className="size-3" />
-                              </button>
-                              {cloudHost?.hasDefaultWorkspace === false && (
-                                <button
-                                  type="button"
-                                  aria-label="新建工作区"
-                                  title="新建工作区"
-                                  onClick={() => navigate(`/settings?controllerId=${controller.id}`)}
-                                  className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                                >
-                                  <Plus className="size-3" />
-                                </button>
-                              )}
-                            </>
-                          ) : undefined
-                        }
-                      >
-                        {controllerWorkspaces.map((ws) => (
-                          <WorktreeSidebarGroup
-                            key={ws.id}
-                            workspaceId={ws.id}
-                            controllerId={controller.id}
-                            workspaceName={ws.name}
-                            controllers={controllers}
-                            worktrees={ws.worktrees ?? []}
-                            fallbackSessions={controllerSessions.filter(
-                              (s) => {
-                                // worktree 会话：匹配工作区名
-                                if (s.worktreePath && getWorkspaceNameForSession(s) === ws.name) {
-                                  return true;
-                                }
-                                // 落在工作区根目录的会话：cwd 等于工作区路径
-                                if (s.cwd && s.cwd === ws.path) {
-                                  return true;
-                                }
-                                return false;
-                              },
-                            )}
-                            onCreate={handleCreateSession}
-                          />
-                        ))}
-                      </TreeSection>
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </SidebarSection>
-
-        {/* 分区 2：工作流（跨环境聚合，含已归档分组） */}
-        <SidebarSection
-          sectionKey="workflows"
-          title="工作流"
-          count={sortedWorkflows.length}
-          expanded={sections.workflows}
-          onToggle={() => toggleSection('workflows')}
-          actions={controllers.length > 0 && (
-            <div className="relative">
-              <button
-                type="button"
-                className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                title="实例化工作流"
-                aria-label="实例化工作流"
-                aria-expanded={picker === 'instantiate'}
-                onClick={() => setPicker((prev) => (prev === 'instantiate' ? null : 'instantiate'))}
-              >
-                <Plus className="size-3.5" />
-              </button>
-              {picker === 'instantiate' && (
-                <ControllerPicker
-                  controllers={controllers}
-                  onPick={(controllerId) => {
-                    setPicker(null);
-                    setShowInstantiateDialog({ controllerId });
-                  }}
-                />
-              )}
-            </div>
-          )}
-        >
-          <ul className="space-y-0.5" data-testid="sidebar-workflow-list">
-            {sortedWorkflows.map((instance) => (
-              <WorkflowInstanceCard key={instance.id} instance={instance} />
-            ))}
-            <ArchivedWorkflowGroup />
-          </ul>
-        </SidebarSection>
-
-        {/* 分区 3：会话（跨环境聚合） */}
-        <SidebarSection
-          sectionKey="sessions"
-          title="会话"
-          count={sessions.length}
-          expanded={sections.sessions}
-          onToggle={() => toggleSection('sessions')}
-          actions={
-            <button
-              type="button"
-              className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-              title="新建会话"
-              aria-label="新建会话"
-              onClick={() => setShowNewDialog({})}
-            >
-              <Plus className="size-3.5" />
-            </button>
-          }
-        >
-          <ul className="space-y-0.5" data-testid="sidebar-session-list">
-            {sortedSessions.map((session) => {
-              const controller = controllers.find((item) => item.id === session.controllerId);
-              return (
-                <SessionListEntry
-                  key={session.id}
-                  session={session}
-                  title={controller ? `${session.title || 'New Session'} · ${controller.name || controller.hostname}` : undefined}
-                  resolveWorkspaceName={getWorkspaceNameForSession}
-                />
-              );
-            })}
-            <ArchivedSessionGroup
-              controllers={controllers}
-              resolveWorkspaceName={getWorkspaceNameForSession}
-            />
-          </ul>
-        </SidebarSection>
-
-        {/* 分区 4：知识库（第五个分区：「会话」之后、「网关」之前，D8） */}
-        <KnowledgeBaseSection
-          expanded={sections.knowledgeBases}
-          onToggle={() => toggleSection('knowledgeBases')}
+      {activeDomain === 'sessions' && (
+        <SessionsPanel
+          sessions={sessions}
+          controllers={controllers}
+          sessionReviews={sessionReviews}
+          filterQuery={filterQuery}
+          onClearFilter={() => setFilterQuery('')}
+          resolveWorkspaceName={getWorkspaceNameForSession}
         />
+      )}
 
-        {/* 分区 5：网关（聚合全部环境） */}
-        <SidebarSection
-          sectionKey="gateways"
-          title="网关"
-          count={gatewayCount}
-          expanded={sections.gateways}
-          onToggle={() => toggleSection('gateways')}
-          actions={onlineControllers.length > 0 && (
-            <div className="relative">
-              <button
-                type="button"
-                className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-foreground"
-                title="新增网关"
-                aria-label="新增网关"
-                aria-expanded={picker === 'gateway'}
-                onClick={() => setPicker((prev) => (prev === 'gateway' ? null : 'gateway'))}
-              >
-                <Plus className="size-3.5" />
-              </button>
-              {picker === 'gateway' && (
-                <ControllerPicker
-                  controllers={onlineControllers}
-                  onPick={(controllerId) => {
-                    setPicker(null);
-                    setShowGatewayDialog(controllerId);
-                  }}
-                />
-              )}
-            </div>
-          )}
-        >
-          <ul className="space-y-0.5" data-testid="sidebar-gateway-list">
-            {gatewayRows.map(({ gateway, controllerId }) => (
-              <GatewayItem key={gateway.id} gateway={gateway} controllerId={controllerId} />
-            ))}
-          </ul>
-        </SidebarSection>
+      {activeDomain === 'workflows' && (
+        <WorkflowsPanel
+          workflowInstances={workflowInstances}
+          filterQuery={filterQuery}
+          onClearFilter={() => setFilterQuery('')}
+        />
+      )}
 
-        {/* Review 分区（#461）：待 Review 默认展开、已 Review 默认折叠；空分区不渲染 */}
-        <ReviewSection sessionReviews={data?.sessionReviews ?? []} />
-      </div>
+      {activeDomain === 'knowledgeBases' && <KnowledgeBasesPanel />}
+
+      {activeDomain === 'hosts' && (
+        <HostsPanel
+          controllers={controllers}
+          allWorkspaces={allWorkspaces}
+          sessions={sessions}
+          resolveWorkspaceName={getWorkspaceNameForSession}
+          onCreateSession={handleCreateSession}
+          onOpenNewSession={(controllerId) => setShowNewDialog({ controllerId })}
+          onOpenGithubSetup={(controllerId) => setShowGithubSetup({ controllerId })}
+          onOpenNewGateway={(controllerId) => setShowGatewayDialog(controllerId)}
+        />
+      )}
+
+      <ContextPanelFooter name={name} mobile={mobile} />
 
       {showNewCloudHost && capabilities && (
         <NewCloudHostDialog
@@ -614,221 +384,6 @@ export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
           onClose={() => setShowGithubSetup(null)}
         />
       )}
-
-      {mobile && (
-        <>
-          <NavLink
-            to="/billing"
-            className="flex items-center gap-2 border-t border-sidebar-border px-4 py-3 text-sm text-sidebar-foreground hover:text-sidebar-foreground"
-          >
-            <CreditCard className="size-4" />
-            <span>我的费用</span>
-          </NavLink>
-          <NavLink
-            to="/settings"
-            className="flex items-center gap-2 border-t border-sidebar-border px-4 py-3 text-sm text-sidebar-foreground hover:text-sidebar-foreground"
-          >
-            <Settings className="size-4" />
-            <span>设置</span>
-          </NavLink>
-        </>
-      )}
-
-      <div className="sticky bottom-0 border-t border-sidebar-border p-4">
-        <div className="flex min-w-0 items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium">{name}</span>
-          <div className="flex items-center gap-1">
-            <TodoListPanel />
-            <ThemeToggle />
-            <button
-              type="button"
-              className="rounded p-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring text-muted-foreground hover:text-sidebar-foreground"
-              title="新建会话"
-              onClick={() => setShowNewDialog({})}
-              aria-label="新建会话"
-            >
-              <Plus className="size-4" />
-            </button>
-            <NavLink
-              to="/billing"
-              aria-label="我的费用"
-              className={({ isActive }) =>
-                `rounded p-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${
-                  isActive ? 'bg-sidebar-accent text-sidebar-foreground' : 'text-muted-foreground hover:text-sidebar-foreground'
-                }`
-              }
-            >
-              <CreditCard className="size-4" />
-            </NavLink>
-            <NavLink
-              to="/settings"
-              aria-label="Settings"
-              className={({ isActive }) =>
-                `rounded p-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${
-                  isActive ? 'bg-sidebar-accent text-sidebar-foreground' : 'text-muted-foreground hover:text-sidebar-foreground'
-                }`
-              }
-            >
-              <Settings className="size-4" />
-            </NavLink>
-          </div>
-        </div>
-      </div>
     </nav>
-  );
-}
-
-/** 已归档实例：自折叠分组，展开时才按需拉取（不随首页轮询、不展示数量） */
-function ArchivedWorkflowGroup() {
-  const [archivedOpen, setArchivedOpen] = useState(false);
-  const {
-    data,
-    loading,
-    error,
-    refetch,
-  } = useQuery<GetWorkflowInstancesQuery>(GET_WORKFLOW_INSTANCES, {
-    variables: { archived: true },
-    skip: !archivedOpen,
-    fetchPolicy: 'cache-and-network',
-  });
-  const instances = sortByUpdatedAtDesc(data?.workflowInstances ?? []);
-  return (
-    <li>
-      <button
-        type="button"
-        className="flex items-center gap-1 rounded px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-        onClick={() => setArchivedOpen((prev) => !prev)}
-        aria-expanded={archivedOpen}
-      >
-        {archivedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-        <Archive className="size-3" />
-        已归档
-      </button>
-      {archivedOpen && (
-        <div className="ml-4 space-y-1">
-          {loading && instances.length === 0 ? (
-            <p className="px-3 py-1.5 text-xs text-muted-foreground">加载中…</p>
-          ) : error ? (
-            <div className="px-3 py-1.5 text-xs text-muted-foreground">
-              加载失败
-              <button type="button" className="ml-2 underline" onClick={() => void refetch()}>
-                重试
-              </button>
-            </div>
-          ) : instances.length === 0 ? (
-            <p className="px-3 py-1.5 text-xs text-muted-foreground">暂无归档</p>
-          ) : (
-            <ul className="space-y-1" data-testid="sidebar-archived-workflow-list">
-              {instances.map((instance) => (
-                <WorkflowInstanceCard key={instance.id} instance={instance} />
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-    </li>
-  );
-}
-
-/** 会话条目（活跃列表与已归档分组共用同一结构，点击直达会话页） */
-function SessionListEntry({
-  session,
-  title,
-  resolveWorkspaceName,
-}: {
-  session: SessionData;
-  title: string | undefined;
-  resolveWorkspaceName: (session: SessionData) => string;
-}) {
-  const wsName = resolveWorkspaceName(session);
-  return (
-    <li>
-      <NavLink
-        to={`/sessions/${session.id}`}
-        title={title}
-        className={({ isActive }) =>
-          `flex items-center gap-2 rounded px-3 py-1.5 text-sm transition-colors ${
-            isActive
-              ? 'bg-sidebar-accent text-sidebar-foreground'
-              : 'text-sidebar-foreground hover:bg-sidebar-accent'
-          }`
-        }
-      >
-        <span className={`h-2 w-2 shrink-0 rounded-full ${getStatusDotColor(session.status)}`} />
-        <div className="min-w-0 flex-1">
-          <div className="truncate">{session.title || 'New Session'}</div>
-          <div className="truncate text-xs text-muted-foreground">
-            {wsName || <span className="text-muted-foreground/50">未知工作区</span>}
-          </div>
-        </div>
-      </NavLink>
-    </li>
-  );
-}
-
-/** 已归档会话：自折叠分组，展开时才按需拉取（不随首页轮询、不展示数量） */
-function ArchivedSessionGroup({
-  controllers,
-  resolveWorkspaceName,
-}: {
-  controllers: Array<{ id: string; name: string; hostname: string }>;
-  resolveWorkspaceName: (session: SessionData) => string;
-}) {
-  const [archivedOpen, setArchivedOpen] = useState(false);
-  const {
-    data,
-    loading,
-    error,
-    refetch,
-  } = useQuery<GetArchivedSessionsQuery>(GET_ARCHIVED_SESSIONS, {
-    skip: !archivedOpen,
-    fetchPolicy: 'cache-and-network',
-  });
-  const sessions = sortByUpdatedAtDesc(
-    (data?.sessions ?? []).map((session) => ({ ...session, updatedAt: session.updatedAt ?? '' })),
-  );
-  return (
-    <li>
-      <button
-        type="button"
-        className="flex items-center gap-1 rounded px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-        onClick={() => setArchivedOpen((prev) => !prev)}
-        aria-expanded={archivedOpen}
-      >
-        {archivedOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-        <Archive className="size-3" />
-        已归档
-      </button>
-      {archivedOpen && (
-        <div className="ml-4 space-y-1">
-          {loading && sessions.length === 0 ? (
-            <p className="px-3 py-1.5 text-xs text-muted-foreground">加载中…</p>
-          ) : error ? (
-            <div className="px-3 py-1.5 text-xs text-muted-foreground">
-              加载失败
-              <button type="button" className="ml-2 underline" onClick={() => void refetch()}>
-                重试
-              </button>
-            </div>
-          ) : sessions.length === 0 ? (
-            <p className="px-3 py-1.5 text-xs text-muted-foreground">暂无归档</p>
-          ) : (
-            <ul className="space-y-1" data-testid="sidebar-archived-session-list">
-              {sessions.map((session) => {
-                const controller = controllers.find((item) => item.id === session.controllerId);
-                return (
-                  <SessionListEntry
-                    key={session.id}
-                    session={session}
-                    title={controller ? `${session.title || 'New Session'} · ${controller.name || controller.hostname}` : undefined}
-                    resolveWorkspaceName={resolveWorkspaceName}
-                  />
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      )}
-    </li>
   );
 }
