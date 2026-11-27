@@ -67,7 +67,7 @@ export function ModelSelectDialog({ open, models, currentModelId, loading, onSel
                   {group.name}（{group.models.length}）
                 </p>
                 {group.basis.length > 0 && (
-                  <p className="text-[11px] text-muted-foreground">{group.basis.join('；')}</p>
+                  <p className="text-xs text-muted-foreground">{group.basis.join('；')}</p>
                 )}
               </div>
               <div className="space-y-1">

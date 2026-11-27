@@ -63,7 +63,7 @@ export default function WorkflowInstanceCard({ instance }: WorkflowInstanceCardP
               <span
                 data-testid="workflow-instance-unavailable"
                 data-reason={instance.unavailableReason ?? undefined}
-                className="shrink-0 rounded-full bg-destructive/15 px-2 py-0.5 text-[10px] font-medium text-destructive"
+                className="shrink-0 rounded-full bg-destructive/15 px-2 py-0.5 text-xs font-medium text-destructive"
               >
                 {unavailableReasonLabel(instance.unavailableReason)}
               </span>
@@ -71,7 +71,7 @@ export default function WorkflowInstanceCard({ instance }: WorkflowInstanceCardP
             <span
               data-testid="workflow-instance-status"
               data-status={status}
-              className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${NODE_STATUS_BADGE[status]}`}
+              className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${NODE_STATUS_BADGE[status]}`}
             >
               {NODE_STATUS_LABELS[status]}
             </span>

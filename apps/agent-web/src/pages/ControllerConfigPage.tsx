@@ -578,6 +578,42 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
         </div>
       </nav>
       <div className="overflow-y-auto p-8">
+        <nav
+          aria-label="控制器配置面包屑"
+          data-testid="controller-config-breadcrumb"
+          className="mb-4 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground"
+        >
+          <button
+            type="button"
+            data-testid="breadcrumb-back-settings"
+            onClick={onBack}
+            className="cursor-pointer hover:text-foreground hover:underline"
+          >
+            设置中心
+          </button>
+          <span>/</span>
+          <button
+            type="button"
+            onClick={onBack}
+            className="cursor-pointer hover:text-foreground hover:underline"
+          >
+            控制器管理
+          </button>
+          <span>/</span>
+          <span className="font-medium text-foreground">
+            {activeSection === 'workspace'
+              ? '工作区配置'
+              : activeSection === 'harness'
+                ? '可用 Harness 工具'
+                : activeSection === 'mcp'
+                  ? '默认 MCP'
+                  : activeSection === 'github'
+                    ? 'Github 设置'
+                    : activeSection === 'workflow'
+                      ? '工作流配置'
+                      : '工作负载'}
+          </span>
+        </nav>
         {panel}
         {activeSection === 'workspace' ? (
           <WorkspaceSection

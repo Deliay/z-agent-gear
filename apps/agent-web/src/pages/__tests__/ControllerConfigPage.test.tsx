@@ -173,6 +173,22 @@ describe('ControllerConfigPage', () => {
     expect(onBack).toHaveBeenCalledOnce();
   });
 
+  it('T-UIUX-CTRL1: 控制器配置页顶部渲染面包屑导航栏（设置中心 / 控制器管理 / 当前配置项），点击可返回', () => {
+    mockControllers([makeController({ id: 'ctrl-1', name: '生产主机-01' })]);
+    const onBack = vi.fn();
+
+    render(<ControllerConfigPage controllerId="ctrl-1" onBack={onBack} />);
+
+    const breadcrumb = screen.getByTestId('controller-config-breadcrumb');
+    expect(breadcrumb).toBeDefined();
+    expect(breadcrumb.textContent).toContain('设置中心');
+    expect(breadcrumb.textContent).toContain('控制器管理');
+    expect(breadcrumb.textContent).toContain('工作区配置');
+
+    fireEvent.click(screen.getByTestId('breadcrumb-back-settings'));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
   it('should show controller name and online status', () => {
     mockControllers([makeController()]);
 

@@ -71,17 +71,17 @@ function NodeDetail({ instance, node, onOpenSession, onRestartNode, unavailable 
   return (
     <div className="min-w-0 space-y-3">
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+        <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
           {NODE_TYPE_LABELS[node.type]}
         </span>
         <span
           data-testid="drawer-node-status"
-          className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${NODE_STATUS_BADGE[node.status]}`}
+          className={`rounded-full px-2 py-0.5 text-xs font-medium ${NODE_STATUS_BADGE[node.status]}`}
         >
           {NODE_STATUS_LABELS[node.status]}
         </span>
         {node.reworkCount > 0 && (
-          <span className="inline-flex items-center gap-0.5 rounded bg-warning/15 px-1.5 py-0.5 text-[10px] text-warning">
+          <span className="inline-flex items-center gap-0.5 rounded bg-warning/15 px-1.5 py-0.5 text-xs tabular-nums text-warning">
             <RotateCcw className="size-3" />
             返工 {node.reworkCount} 次
           </span>

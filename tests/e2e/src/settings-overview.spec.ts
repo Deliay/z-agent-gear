@@ -39,7 +39,7 @@ test.describe('设置页聚合（E2E-SET1）', () => {
       timeout: 15000,
     });
     // 等待 SETTINGS_OVERVIEW 完成 + 区块渲染
-    await expect(page.getByText('MCP 管理').first()).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole('heading', { name: 'MCP 管理' })).toBeVisible({ timeout: 15000 });
     await page.waitForTimeout(1500);
 
     const calls = getCalls();
@@ -75,10 +75,10 @@ test.describe('设置页聚合（E2E-SET1）', () => {
     expect(nonHomeCalls.length).toBeLessThanOrEqual(3);
 
     // 区块内容完整（空态也可）
-    expect(page.locator('#provider-section')).toBeVisible();
-    expect(page.locator('#model-section')).toBeVisible();
-    expect(page.locator('#controller-section')).toBeVisible();
-    expect(page.locator('#workflow-section')).toBeVisible();
+    await expect(page.locator('#provider-section')).toBeVisible();
+    await expect(page.locator('#model-section')).toBeVisible();
+    await expect(page.locator('#controller-section')).toBeVisible();
+    await expect(page.locator('#workflow-section')).toBeVisible();
 
     // 操作后即时更新：保存 Git 设置 → mutation refetchQueries 触发第二次 SETTINGS_OVERVIEW
     await page.getByRole('button', { name: '保存 Git 设置' }).click();

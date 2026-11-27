@@ -70,17 +70,17 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
           {data.name}
         </span>
         {data.reworkCount > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-warning/15 px-1 text-[10px] text-warning">
+          <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-warning/15 px-1 text-xs tabular-nums text-warning">
             <RotateCcw className="size-2.5" />
             {data.reworkCount}
           </span>
         )}
-        <span className="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+        <span className="shrink-0 rounded bg-muted px-1 text-xs text-muted-foreground">
           {data.type === 'AI' ? 'AI' : data.type === 'HUMAN' ? '人类' : '旗帜'}
         </span>
         <span
           data-testid={`node-status-badge-${data.nodeId}`}
-          className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${visual.badge}`}
+          className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-medium ${visual.badge}`}
         >
           {NODE_STATUS_LABELS[data.status]}
         </span>
@@ -92,7 +92,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
           data-testid={`node-pending-interaction-${data.nodeId}`}
           aria-label="有待处理的提问或审批"
           title="有待处理的提问或审批"
-          className="nodrag flex w-fit items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-500 hover:bg-amber-500/20"
+          className="nodrag flex w-fit items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-xs font-medium text-amber-500 hover:bg-amber-500/20"
           onClick={(event) => {
             event.stopPropagation();
             data.onOpenSession?.(data.sessionId!);
@@ -106,13 +106,13 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
       {data.type === 'AI' && (data.harness || data.model) && (
         <div className="flex min-w-0 flex-wrap items-center gap-1">
           {data.harness && (
-            <span className="rounded bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
+            <span className="rounded bg-primary/10 px-1 py-0.5 text-xs text-primary">
               {data.harness}
             </span>
           )}
           {data.model && (
             <span
-              className="max-w-40 truncate rounded bg-secondary px-1 py-0.5 text-[10px] text-secondary-foreground"
+              className="max-w-40 truncate rounded bg-secondary px-1 py-0.5 text-xs text-secondary-foreground"
               title={data.model}
             >
               {data.model}
@@ -124,7 +124,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
       {isAiRunning && (
         <div
           data-testid={`node-live-activity-${data.nodeId}`}
-          className="flex min-w-0 items-center gap-1 text-[11px] text-muted-foreground"
+          className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground"
         >
           <Loader2 className="size-3 shrink-0 animate-spin" />
           <span className="min-w-0 truncate" title={activityLabel}>{activityLabel}</span>
@@ -135,7 +135,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
         <div
           data-testid={`node-result-${data.nodeId}`}
           title="该数值为会话当前上下文长度"
-          className="min-w-0 truncate text-[11px] text-success"
+          className="min-w-0 truncate text-xs tabular-nums text-success"
         >
           {tokenUsage != null ? `已完成 · ${tokenUsage} tokens` : '已完成'}
         </div>
@@ -151,7 +151,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
                 target="_blank"
                 rel="noreferrer"
                 title={link.pullRequestId}
-                className="rounded bg-primary/15 px-1 py-0.5 text-[10px] text-primary hover:underline"
+                className="rounded bg-primary/15 px-1 py-0.5 text-xs text-primary hover:underline"
                 onClick={(event) => event.stopPropagation()}
               >
                 PR
@@ -160,7 +160,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
               <span
                 key={`pr-${link.pullRequestId}`}
                 title={link.pullRequestId}
-                className="rounded bg-primary/15 px-1 py-0.5 text-[10px] text-primary"
+                className="rounded bg-primary/15 px-1 py-0.5 text-xs text-primary"
               >
                 PR
               </span>
@@ -175,7 +175,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
                 target="_blank"
                 rel="noreferrer"
                 title={link.lastSyncedCommitSha ? `检查项 · commit ${link.lastSyncedCommitSha.slice(0, 7)}` : '检查项'}
-                className="rounded bg-success/15 px-1 py-0.5 text-[10px] text-success hover:underline"
+                className="rounded bg-success/15 px-1 py-0.5 text-xs text-success hover:underline"
                 onClick={(event) => event.stopPropagation()}
               >
                 检查项

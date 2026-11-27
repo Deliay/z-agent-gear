@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import SettingsPage from '../SettingsPage';
 
 const mocks = vi.hoisted(() => ({
@@ -147,5 +147,13 @@ describe('SettingsPage（D5 代理入口移除 / 新增 Valut 与自定义 MCP�
     expect(document.getElementById('account-section')).toBeTruthy();
     // 无 provider/绑定数据时区块不渲染（PRD：未配置第三方登录时设置页与升级前一致）
     expect(screen.queryByTestId('external-login-binding-section')).toBeNull();
+  });
+
+  it('T-UIUX-SET1：设置中心左侧导航支持激活态高亮切换', () => {
+    render(<SettingsPage />);
+    const navButtons = screen.getAllByRole('button', { name: '可用模型' });
+    const desktopBtn = navButtons[navButtons.length - 1];
+    fireEvent.click(desktopBtn);
+    expect(desktopBtn).toHaveAttribute('data-active', 'true');
   });
 });

@@ -55,6 +55,7 @@ apps/agent-web/
 
 ## Styling Conventions
 
+- **遵循统一 UI/UX 设计规范**：布局架构（三层工作区外壳）、字号底线（严禁 `< 12px` 微字号）、OKLCH 表面层级、按需懒加载与交互准则详见 [[ui-ux-standards.md]]。
 - **配色映射表要语义化而非颜色名**。命名颜色键（`purple`/`blue`/`yellow`/`gray`）名不副实、易腐化；改用语义键（`active`/`completed`/`failed`）表达意图，且保留旧键避免破坏存量调用方。
 
 ## 布局与溢出

@@ -81,7 +81,7 @@ function FolderNode({
             <span className="min-w-0 flex-1 truncate">{node.name}</span>
             <Badge
               variant="outline"
-              className="shrink-0 px-1 py-0 text-[9px]"
+              className="shrink-0 px-1.5 py-0 text-xs"
               title={node.error ?? '文件过大'}
               data-testid="repo-kb-document-error"
             >
@@ -196,7 +196,7 @@ function KnowledgeBaseItem({ knowledgeBase }: { knowledgeBase: RepoKnowledgeBase
         {knowledgeBase.truncated && (
           <Badge
             variant="outline"
-            className="shrink-0 px-1 py-0 text-[9px]"
+            className="shrink-0 px-1.5 py-0 text-xs"
             title="单文件夹子项超过 1000，按名称排序展示前 1000 项"
             data-testid="repo-kb-truncated-badge"
           >
@@ -205,20 +205,20 @@ function KnowledgeBaseItem({ knowledgeBase }: { knowledgeBase: RepoKnowledgeBase
         )}
         <Badge
           variant="outline"
-          className="shrink-0 px-1 py-0 text-[9px]"
+          className="shrink-0 px-1.5 py-0 text-xs"
           title={sourceLabel(knowledgeBase.source)}
           data-testid="repo-kb-source-badge"
         >
           {sourceBadge}
         </Badge>
         {knowledgeBase.valid && (
-          <span className="shrink-0 text-[10px] text-muted-foreground">
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
             {knowledgeBase.documentCount}
           </span>
         )}
       </button>
       {!knowledgeBase.valid && knowledgeBase.errors[0] && (
-        <p className="px-6 pb-1 text-[10px] text-destructive" data-testid="repo-kb-error">
+        <p className="px-6 pb-1 text-xs text-destructive" data-testid="repo-kb-error">
           {knowledgeBase.errors[0]}
         </p>
       )}
@@ -336,7 +336,7 @@ function HostNode({ host }: { host: RepoKnowledgeBaseHostData }) {
       </div>
       {!host.scanSupported && (
         <div
-          className="px-6 pb-1 text-[10px] text-muted-foreground/60"
+          className="px-6 pb-1 text-xs text-muted-foreground/60"
           data-testid="repo-kb-upgrade-hint"
         >
           升级云电脑工作组件后可加载
@@ -370,7 +370,7 @@ export default function RepoKnowledgeBaseSection({
       <div className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-muted-foreground">
         <BookOpen className="size-3 shrink-0" />
         <span className="min-w-0 flex-1 truncate">仓库知识库</span>
-        <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px]">{hosts.length}</span>
+        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums">{hosts.length}</span>
       </div>
       <ul className="space-y-0.5">
         {hosts.map((host) => (

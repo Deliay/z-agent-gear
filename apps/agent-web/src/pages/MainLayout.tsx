@@ -7,7 +7,9 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useUserEventStream } from '../hooks/useUserEventStream';
 import Sidebar from '../components/Sidebar';
 import SidebarResizer from '../components/SidebarResizer';
+import ActivityRail from '../components/layout/ActivityRail';
 import { readSidebarWidth } from '../lib/sidebar-width';
+import type { SidebarSectionKey } from '../lib/sidebar-prefs';
 import { Button } from '../components/ui/button';
 import { HarnessLoginDialog } from '../components/harness/HarnessLoginDialog';
 import {
@@ -41,6 +43,20 @@ export default function MainLayout() {
   const navigate = useNavigate();
   // 侧边栏宽度：本地记忆（localStorage['sidebar-width']），拖动分界线实时更新
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  // 二级列表栏折叠状态（⌘B / Ctrl+B 切换）与一级导航轨聚焦目标
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [focusTarget, setFocusTarget] = useState<{ section: SidebarSectionKey; nonce: number } | null>(null);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') {
+        event.preventDefault();
+        setSidebarCollapsed((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // 首页 + 侧边栏统一数据源：单一查询、单一轮询（15s）
   const {
@@ -136,17 +152,41 @@ export default function MainLayout() {
     );
   }
 
+  const hasPendingAttention =
+    (homeData?.unreadTodoCount ?? 0) > 0 ||
+    (homeData?.sessionReviews ?? []).some((review) => review.status === 'PENDING');
+
+  const handleSelectRailSection = (section: SidebarSectionKey) => {
+    setSidebarCollapsed(false);
+    setFocusTarget((prev) => ({ section, nonce: (prev?.nonce ?? 0) + 1 }));
+  };
+
   let layout: ReactNode;
 
-  // Desktop: 两列布局，侧边栏宽度走 CSS 变量并由 SidebarResizer 拖拽调节
+  // Desktop: 三层工作区外壳（56px ActivityRail + 可拖拽/可收起 ContextPanel + 主舞台）
   if (!isMobile) {
     layout = (
       <div
-        className="relative grid h-screen grid-cols-[var(--sidebar-width,20rem)_minmax(0,1fr)]"
+        className={`relative grid h-screen ${
+          sidebarCollapsed
+            ? 'grid-cols-[3.5rem_minmax(0,1fr)]'
+            : 'grid-cols-[3.5rem_var(--sidebar-width,20rem)_minmax(0,1fr)]'
+        }`}
         style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
       >
-        <Sidebar name={user?.name ?? ''} />
-        <SidebarResizer width={sidebarWidth} onWidthChange={setSidebarWidth} />
+        <ActivityRail
+          activeSection={focusTarget?.section ?? null}
+          onSelectSection={handleSelectRailSection}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
+          hasPendingAttention={hasPendingAttention}
+        />
+        {!sidebarCollapsed && (
+          <>
+            <Sidebar name={user?.name ?? ''} focusTarget={focusTarget} />
+            <SidebarResizer width={sidebarWidth} offsetLeft={56} onWidthChange={setSidebarWidth} />
+          </>
+        )}
         <main className="min-w-0 overflow-auto">
           <Outlet />
         </main>

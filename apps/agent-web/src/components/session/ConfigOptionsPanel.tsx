@@ -47,7 +47,7 @@ export default function ConfigOptionsPanel({ configOptions, status, onSetConfigO
       {groups.map((group) => (
         <div key={group.category} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
           {groups.length > 1 && (
-            <span className="w-full text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <span className="w-full text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {group.category}
             </span>
           )}

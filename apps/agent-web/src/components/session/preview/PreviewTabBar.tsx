@@ -53,8 +53,8 @@ export function PreviewTabBar({ tabs, activeTabId, reviewStatuses, onActivate, o
               </span>
             )}
             {tabLabel(tab)}
-            {tab.kind === 'file' && tab.pinned && <span className="ml-1 text-[10px] text-muted-foreground">常开</span>}
-            {tab.kind === 'file' && !tab.pinned && <span className="ml-1 text-[10px] text-muted-foreground">预览</span>}
+            {tab.kind === 'file' && tab.pinned && <span className="ml-1 text-xs text-muted-foreground">常开</span>}
+            {tab.kind === 'file' && !tab.pinned && <span className="ml-1 text-xs text-muted-foreground">预览</span>}
           </button>
           <button
             type="button"

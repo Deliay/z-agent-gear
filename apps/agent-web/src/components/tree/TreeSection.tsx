@@ -52,7 +52,7 @@ export default function TreeSection({
           )}
           <span className="truncate">{title}</span>
           {count !== undefined && (
-            <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px]">{count}</span>
+            <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums">{count}</span>
           )}
         </button>
         {actions && <div className="ml-auto shrink-0">{actions}</div>}

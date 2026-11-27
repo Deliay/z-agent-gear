@@ -144,8 +144,25 @@ describe('MainLayout 首页聚合查询', () => {
 
     expect(screen.getByTestId('sidebar-resizer')).toBeInTheDocument();
     const grid = container.querySelector('.grid') as HTMLElement;
-    expect(grid.className).toContain('grid-cols-[var(--sidebar-width,20rem)_minmax(0,1fr)]');
+    expect(grid.className).toContain('var(--sidebar-width,20rem)_minmax(0,1fr)');
     expect(grid.style.getPropertyValue('--sidebar-width')).toBe('320px');
+  });
+
+  it('T-UIUX-SHELL1: 桌面端挂载三层工作区外壳 ActivityRail，支持一键收起/展开二级列表栏与 Ctrl/Cmd+B 快捷键', () => {
+    mockUseQuery.mockReturnValue({ data: homeData, loading: false, error: undefined, refetch: mockRefetch });
+    render(<MainLayout />);
+
+    expect(screen.getByTestId('activity-rail')).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar')).toBeInTheDocument();
+
+    // 点击一级导航轨的折叠按钮收起二级列表栏
+    fireEvent.click(screen.getByTestId('rail-toggle-sidebar'));
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar-resizer')).not.toBeInTheDocument();
+
+    // Ctrl+B 快捷键重新展开二级列表栏
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true });
+    expect(screen.getByTestId('sidebar')).toBeInTheDocument();
   });
 
   it('T-UI4-RES7 移动端不渲染拖拽热区（移动布局不回归）', () => {

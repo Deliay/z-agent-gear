@@ -54,7 +54,7 @@ function createChip(type: 'Valut' | 'Parameter', value: string, format: string):
   const badge = formatBadge(format)
   if (badge) {
     const tag = document.createElement('span')
-    tag.className = 'rounded bg-background/60 px-1 text-[10px] uppercase'
+    tag.className = 'rounded bg-background/60 px-1 text-xs uppercase'
     tag.textContent = badge
     chip.appendChild(tag)
   }

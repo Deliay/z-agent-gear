@@ -410,11 +410,11 @@ test.describe('首页展示优化 E2E', () => {
     await loginViaUI(page, username);
     const sidebar = page.locator(sidebarSel);
 
-    // 空态收敛：不渲染占位文案，聚合列表为空
+    // 空态收敛：不渲染占位文案，聚合列表仅保留常驻折叠的「已归档」入口（无活跃条目）
     await expect(sidebar.getByText('无工作流实例')).toHaveCount(0);
     await expect(sidebar.getByText('无会话')).toHaveCount(0);
-    await expect(page.locator('[data-testid="sidebar-workflow-list"] > li')).toHaveCount(0);
-    await expect(page.locator('[data-testid="sidebar-session-list"] > li')).toHaveCount(0);
+    await expect(page.locator('[data-testid="sidebar-workflow-list"] a[href^="/workflows/"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="sidebar-session-list"] a[href^="/sessions/"]')).toHaveCount(0);
     disconnect();
   });
 });
