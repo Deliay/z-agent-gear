@@ -1098,7 +1098,7 @@ pnpm test
 |------|------|
 | T-HP1 | `homeOverview` 无 `archivedSessions`/`archivedWorkflowInstances`，含 `configuredWorkflows`/`workflowTemplates`/`workspaceContext`，与独立查询逐字段一致 |
 | T-HP2 | `homeOverview.workspaceContext` 与 `myWorkspaces`/`myTenants` 口径一致（同源单次 `accessibleWorkspaces`） |
-| T-WSF1 | `workspaces` 过滤矩阵：online 返回；offline/registering/unbound、控制器文档缺失、云电脑软删不返回；恢复 online 重新可见；数据不丢失；在线控制器零变化 |
+| T-WSF1 | `workspaces` 过滤矩阵：API 覆盖 offline、控制器文档缺失、云电脑软删不返回与恢复 online 重新可见、数据不丢失、在线控制器零变化；registering/unbound 由 agent-api 单测 `controller-workspace.test.ts` 覆盖 |
 | T-SET1 | `settingsOverview` 14 分支与直查各原查询逐字段一致 |
-| T-SET2 | 单分支故障不拖垮整页（其余分支正常返回，非空分支按契约兜底形态） |
-| E2E-HP1~3 / E2E-WSF1 / E2E-SET1 / E2E-SARCH1~2 | 首屏无归档清单请求、展开才拉取且无数量、workspaceContext/模板/配置随轮询刷新、离线/删除控制器工作区不展示、设置页打开请求 ≤3、归档计数文案改写 |
+| T-SET2 | 单分支降级不拖垮整页（API 层只读上下文触发 githubAppUrl 正常降级，其余 13 分支正常返回；degrade catch 路径由单元 T-SO2 覆盖，本期不做 API 故障注入） |
+| E2E-HP1~3 / E2E-WSF1 / E2E-SET1 / E2E-SARCH1~2 | 首屏无归档清单请求、展开才拉取且无数量、workspaceContext/模板/配置随轮询刷新、离线/删除控制器工作区不展示、设置页打开请求 ≤3、归档计数文案改写（E2E-HP2 折叠再展开按 `cache-and-network` 重新取数，不承诺复用缓存） |

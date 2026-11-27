@@ -103,7 +103,7 @@ export default function ConfigureWorkflowDialog({
       setControllerId('')
       setNodes(initialTemplateId ? [] : [])
     }
-  }, [open, editing, initialTemplateId])
+  }, [open, editing, initialTemplateId, refetchHome])
 
   // 创建模式：模板确定后载入模板节点图作为初值。
   // 依赖 open：对话框 dismiss 后再次打开时需重新加载模板节点图（同模板 sourceTemplate?.id 不变，

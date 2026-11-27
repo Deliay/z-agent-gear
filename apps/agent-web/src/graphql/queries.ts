@@ -1020,36 +1020,6 @@ export const CLOUD_HOST_ISSUES_LINKAGES = gql`
 
 // ---------- 多租户二期：租户工作区 / 成员（contracts/workspace.graphql） ----------
 
-/** 工作区切换器数据源：myWorkspaces 已按角色过滤，myTenants 透出各租户角色 */
-export const GET_WORKSPACE_CONTEXT = gql`
-  query GetWorkspaceContext {
-    myWorkspaces {
-      id
-      name
-      type
-      tenant {
-        id
-        name
-        type
-        memberCount
-      }
-      memberCount
-      myRole
-      readOnly
-      createdAt
-    }
-    myTenants {
-      tenant {
-        id
-        name
-        type
-        memberCount
-      }
-      role
-    }
-  }
-`
-
 /** 设置页聚合查询（contracts/settings.graphql）：打开设置页仅 1 次请求 */
 export const SETTINGS_OVERVIEW = gql`
   query SettingsOverview {

@@ -201,15 +201,23 @@ describe('WorkspacePage（仅 admin 可操作）', () => {
 
     // WorkspacePage 挂载时按序创建三个 mutation（create/rename/delete），均须指向 HOME_OVERVIEW
     const targetOps = new Set(['CreateTenantWorkspace', 'RenameTenantWorkspace', 'DeleteTenantWorkspace']);
-    const optionCalls = mockUseMutation.mock.calls
-      .filter((call) =>
-        targetOps.has((call[0] as { definitions?: Array<{ name?: { value?: string } }> })
-          ?.definitions?.[0]?.name?.value ?? ''),
-      )
-      .map((call) => call[1] as { refetchQueries?: Array<{ query: unknown }> });
-    expect(optionCalls).toHaveLength(3);
-    for (const options of optionCalls) {
-      expect(options.refetchQueries).toEqual([{ query: HOME_OVERVIEW }]);
+    const calls = mockUseMutation.mock.calls.filter((call) =>
+      targetOps.has(
+        (call[0] as { definitions?: Array<{ name?: { value?: string } }> })
+          ?.definitions?.[0]?.name?.value ?? '',
+      ),
+    );
+    // 不固定调用条数（额外渲染会重复捕获）；只断言三类 mutation 均已指向 HOME_OVERVIEW
+    const capturedOps = new Set(
+      calls.map(
+        (call) =>
+          (call[0] as { definitions?: Array<{ name?: { value?: string } }> })
+            ?.definitions?.[0]?.name?.value,
+      ),
+    );
+    expect(capturedOps).toEqual(targetOps);
+    for (const call of calls) {
+      expect(call[1]).toMatchObject({ refetchQueries: [{ query: HOME_OVERVIEW }] });
     }
   });
 });

@@ -137,8 +137,8 @@ sequenceDiagram
 
 | 文件 | 变更 |
 |------|------|
-| `src/graphql/home.ts` | HOME_OVERVIEW 选择集删两段归档字段、增 `configuredWorkflows`/`workflowTemplates`（复用既有字段集）与 `workspaceContext { myWorkspaces { … } myTenants { … } }`（复用 `GetWorkspaceContext` 选择集） |
-| `src/graphql/queries.ts` | 新增 `GET_ARCHIVED_SESSIONS`（`sessions(archived:true)`，字段集复用归档选择集，D4）；`GetWorkspaceContext` 保留（`myWorkspaces`/`myTenants` 独立查询仍被多租户链路使用） |
+| `src/graphql/home.ts` | HOME_OVERVIEW 选择集删两段归档字段、增 `configuredWorkflows`/`workflowTemplates`（复用既有字段集）与 `workspaceContext { myWorkspaces { … } myTenants { … } }`（选择集并入原 `GetWorkspaceContext` 字段） |
+| `src/graphql/queries.ts` | 新增 `GET_ARCHIVED_SESSIONS`（`sessions(archived:true)`，字段集复用归档选择集，D4）；`GET_WORKSPACE_CONTEXT` 已无活动消费方，随本期删除（工作区上下文统一由 `homeOverview.workspaceContext` 下发） |
 | `src/graphql/types.ts` | `HomeOverviewData` 删 `archivedSessions`/`archivedWorkflowInstances`、增三分支类型（`sessionTotalCount` 保留）；新增 `GetArchivedSessionsQuery` 等类型 |
 | `src/components/Sidebar.tsx` | ① `ArchivedSessionGroup`/`ArchivedWorkflowGroup` 改自足组件：`useQuery(GET_ARCHIVED_SESSIONS / GET_WORKFLOW_INSTANCES, { variables: { archived: true }, skip: !open, fetchPolicy: 'cache-and-network' })`；② 去计数：「已归档（{n}）」→「已归档」（:705、:775），展开列表不渲染任何计数；③ 常驻可展开：移除 `length > 0` 条件渲染（:491-493、:528-534），空态「暂无归档」，加载/错误态就地展示（错误带重试）；④ 活跃列表与分区 badge 口径不变 |
 | `src/components/session/SessionView.tsx` | 归档/取消归档 `refetchQueries`/`evict` 增补归档列表查询，展开内容即时一致（D10） |
@@ -200,14 +200,14 @@ sequenceDiagram
 | T-HP2 | 同上 | `workspaceContext` 与 `myWorkspaces`/`myTenants` 口径一致 |
 | T-WSF1 | 同上 / `workspace.test.ts` | workspaces 过滤矩阵（含恢复在线重新可见、数据不丢失、在线控制器零变化） |
 | T-SET1 | `tests/api/src/agent-api/settings-overview.test.ts`（新增） | settingsOverview 14 分支与原查询逐字段一致（对照直查各原查询） |
-| T-SET2 | 同上 | 单分支故障不拖垮整页（故障注入），其余分支正常返回 |
+| T-SET2 | 同上 | 单分支降级不拖垮整页（API 层用只读上下文触发 `githubAppUrl` 正常降级形态，其余 13 分支正常返回；`degrade()` 的 catch 路径由单元 T-SO2 mock 覆盖，本期不做 API 故障注入） |
 
 ### 6.4 E2E（tests/e2e）与回归清单
 
 | 编号 | 文件 | 断言 |
 |------|------|------|
 | E2E-HP1 | `home.spec.ts`（改写 T-E1/T-E2 helper） | 首屏仅 1 次 HomeOverview 且无归档清单请求（`sessions(archived`/`workflowInstances(archived` 首屏 0 次） |
-| E2E-HP2 | 同上 / 新增 | 展开「已归档」才发归档请求、标题与列表无数量、空态可展开、折叠再展开复用 |
+| E2E-HP2 | 同上 / 新增 | 展开「已归档」才发归档请求、标题与列表无数量、空态可展开；折叠再展开按 `cache-and-network` 重新拉取（本期不承诺复用缓存） |
 | E2E-HP3 | 新增 | workspaceContext/模板/配置随 15s 轮询刷新（建数据后一个周期内可见） |
 | E2E-WSF1 | 新增 | 「新建工作流」弹窗与工作区列表不展示离线/删除控制器工作区 |
 | E2E-SET1 | 新增 | 设置页打开请求 ≤ 3（1 次 SETTINGS_OVERVIEW + 少量按需），各区块内容完整、操作后即时更新 |

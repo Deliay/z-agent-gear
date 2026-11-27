@@ -139,6 +139,23 @@ async function trackHomeOverviewRequests(page: Page): Promise<() => number> {
   return () => count;
 }
 
+/** 单 route handler 同时统计 HomeOverview 与归档清单请求（后注册 handler 会覆盖前一个）。 */
+async function trackHomeAndArchiveRequests(
+  page: Page,
+): Promise<{ home: () => number; archive: () => number }> {
+  let homeCount = 0;
+  let archiveCount = 0;
+  await page.route('**/graphql', async (route) => {
+    const post = route.request().postData() ?? '';
+    if (post.includes('HomeOverview')) homeCount += 1;
+    if (post.includes('sessions(archived') || post.includes('workflowInstances(archived')) {
+      archiveCount += 1;
+    }
+    await route.continue();
+  });
+  return { home: () => homeCount, archive: () => archiveCount };
+}
+
 /** 统计归档清单按需查询（sessions(archived / workflowInstances(archived）请求数 */
 async function trackArchiveRequests(page: Page): Promise<() => number> {
   let count = 0;
@@ -156,16 +173,15 @@ test.describe('首页展示优化 E2E', () => {
     const { token, username, controllerId, workspaceId, disconnect } = await setupUserWithController(page, 'e1');
     await createInstance(page, token, controllerId, workspaceId, '首屏实例');
 
-    const getCount = await trackHomeOverviewRequests(page);
-    const getArchiveCount = await trackArchiveRequests(page);
+    const tracker = await trackHomeAndArchiveRequests(page);
     await loginViaUI(page, username);
 
     const sidebar = page.locator(sidebarSel);
     await expect(sidebar.getByText('首屏实例')).toBeVisible({ timeout: 15000 });
 
-    expect(getCount()).toBe(1);
+    expect(tracker.home()).toBe(1);
     // E2E-HP1：首屏不拉取归档清单
-    expect(getArchiveCount()).toBe(0);
+    expect(tracker.archive()).toBe(0);
     disconnect();
   });
 
@@ -237,17 +253,14 @@ test.describe('首页展示优化 E2E', () => {
     await expect(sidebar.getByText(wsName)).toHaveCount(0);
 
     const instantiateButton = sidebar.getByLabel('实例化工作流');
-    if (await instantiateButton.count()) {
-      await instantiateButton.click();
-      const firstController = page.getByRole('menuitem').first();
-      if (await firstController.count()) {
-        await firstController.click();
-        const dialog = page.getByRole('dialog');
-        if (await dialog.count()) {
-          await expect(dialog.getByText(wsName)).toHaveCount(0);
-        }
-      }
-    }
+    await expect(instantiateButton).toBeVisible({ timeout: 15000 });
+    await instantiateButton.click();
+    const firstController = page.getByRole('menuitem').first();
+    await expect(firstController).toBeVisible({ timeout: 10000 });
+    await firstController.click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible({ timeout: 15000 });
+    await expect(dialog.getByText(wsName)).toHaveCount(0);
   });
 
   test('E2E-HP3 工作区上下文随 15s 轮询刷新（新建团队工作区无需刷新页面）', async ({ page }) => {

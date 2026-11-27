@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { createFrontUser } from '../support/front-users.js';
+import { createFrontUser, uniqueFrontUsername } from '../support/front-users.js';
 
 const AGENT_API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const AGENT_API_BASE = AGENT_API_URL.replace(/\/graphql\/?$/, '');
@@ -95,14 +95,12 @@ const ORIGINAL_QUERIES: Record<string, string> = {
 
 let token = '';
 let username = '';
-let userId = '';
 
 describe('SettingsOverview API（T-SET）', () => {
   beforeAll(async () => {
-    const user = await createFrontUser('set');
+    const user = await createFrontUser(uniqueFrontUsername('set'));
     token = user.token;
     username = user.username;
-    userId = user.userId;
   });
 
   it('T-SET1 settingsOverview 14 分支与直查原查询逐字段一致', async () => {
@@ -160,7 +158,5 @@ describe('SettingsOverview API（T-SET）', () => {
     expect(data.settingsOverview.commitSettings).toBeTruthy();
     expect(data.settingsOverview.cloudStorageCapabilities).toBeTruthy();
     expect(Array.isArray(data.settingsOverview.cloudStorages)).toBe(true);
-    // 当前用户 id 仅用于语义说明（团队开发者上下文）
-    expect(userId).toBeTruthy();
   });
 });

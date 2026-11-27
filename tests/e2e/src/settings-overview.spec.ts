@@ -51,7 +51,6 @@ test.describe('设置页聚合（E2E-SET1）', () => {
       'GetProviders',
       'GetModels',
       'GetControllers',
-      'GetControllerKeys',
       'GetMcpServers',
       'GetValutEntries',
       'GetCustomMcpServers',
@@ -63,6 +62,7 @@ test.describe('设置页聚合（E2E-SET1）', () => {
       'CloudStorageCapabilities',
       'CloudStorages',
       'GetCommitSettings',
+      'GetPersonalGithubAccounts',
     ]) {
       expect(
         calls.some((call) => call.operation === operation),
@@ -79,5 +79,14 @@ test.describe('设置页聚合（E2E-SET1）', () => {
     expect(page.locator('#model-section')).toBeVisible();
     expect(page.locator('#controller-section')).toBeVisible();
     expect(page.locator('#workflow-section')).toBeVisible();
+
+    // 操作后即时更新：保存 Git 设置 → mutation refetchQueries 触发第二次 SETTINGS_OVERVIEW
+    await page.getByRole('button', { name: '保存 Git 设置' }).click();
+    await expect
+      .poll(
+        async () => getCalls().filter((call) => call.operation === 'SettingsOverview').length,
+        { timeout: 15000, intervals: [500] },
+      )
+      .toBeGreaterThanOrEqual(2);
   });
 });

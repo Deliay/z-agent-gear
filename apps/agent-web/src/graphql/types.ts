@@ -52,11 +52,6 @@ export interface AccountSummaryData {
   userId: string
 }
 
-export interface GetWorkspaceContextQuery {
-  myWorkspaces: WorkspaceData[]
-  myTenants: TenantMembershipData[]
-}
-
 export interface GetWorkspaceMembersQuery {
   workspaceMembers: WorkspaceMemberData[]
 }
