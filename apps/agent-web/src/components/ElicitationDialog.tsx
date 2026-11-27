@@ -83,7 +83,7 @@ export function ElicitationDialog({ open, onOpenChange, todo, stale = false, onR
           <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
             {isFinished
               ? '该请求已结束，可在会话中查看处理结果。'
-              : '该请求将在约 1 分钟后过期；请在会话内的提问卡片中填写并提交。'}
+              : '该请求将在约 30 分钟后过期；请在会话内的提问卡片中填写并提交。'}
           </p>
 
           <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">

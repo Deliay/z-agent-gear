@@ -140,7 +140,7 @@ describe('PermissionManager', () => {
       await manager.handlePermissionRequest(mockSocket as never, data);
       expect(manager.getPendingRequestCount()).toBe(1);
 
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(900_000);
 
       expect(mockSocket.emit).toHaveBeenCalledWith('acp:permission:response', {
         requestId: 'req-1',
@@ -165,7 +165,7 @@ describe('PermissionManager', () => {
         outcome: { outcome: 'selected', optionId: 'opt-1' },
       });
 
-      vi.advanceTimersByTime(60_000);
+      vi.advanceTimersByTime(900_000);
 
       expect(mockSocket.emit).toHaveBeenCalledTimes(1);
     });
@@ -237,7 +237,7 @@ describe('PermissionManager - permission:resolved', () => {
       .map(([, payload]) => JSON.parse(payload as string));
   }
 
-  it('T-PM1: 60s 超时同时发布 permission:resolved{reason:timeout}（含 controllerId/userId）', async () => {
+  it('T-PM1: 900s 超时同时发布 permission:resolved{reason:timeout}（含 controllerId/userId）', async () => {
     await manager.handlePermissionRequest(mockSocket as never, {
       requestId: 'req-1',
       sessionId: 'session-1',
@@ -245,7 +245,7 @@ describe('PermissionManager - permission:resolved', () => {
       options: [],
     });
 
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(900_000);
     await flush();
 
     expect(mockSocket.emit).toHaveBeenCalledWith('acp:permission:response', {
@@ -261,9 +261,33 @@ describe('PermissionManager - permission:resolved', () => {
       userId: 'user-1',
       controllerId: 'ctrl-1',
       reason: 'timeout',
-      detail: 'controller-api timeout (60s)',
+      detail: 'controller-api timeout (900s)',
     });
     expect(manager.getPendingRequestCount()).toBe(0);
+  });
+
+  it('T-ET2: 900s 边界（899999ms 不触发、900000ms 触发且文案 900s，仅一条）', async () => {
+    await manager.handlePermissionRequest(mockSocket as never, {
+      requestId: 'req-boundary',
+      sessionId: 'session-1',
+      toolCall: { toolCallId: 'tc-1' },
+      options: [],
+    });
+
+    mockRedis.publish.mockClear();
+    vi.advanceTimersByTime(899_999);
+    await flush();
+    expect(resolvedCalls().filter((call) => call.reason === 'timeout')).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
+    await flush();
+    const timeouts = resolvedCalls().filter((call) => call.reason === 'timeout');
+    expect(timeouts).toHaveLength(1);
+    expect(timeouts[0]).toMatchObject({ detail: 'controller-api timeout (900s)' });
+
+    vi.advanceTimersByTime(900_000);
+    await flush();
+    expect(resolvedCalls().filter((call) => call.reason === 'timeout')).toHaveLength(1);
   });
 
   it('T-PM2: clearForSocket 清理该 socket 全部 pending 并逐条发布 cancelled', async () => {
@@ -291,8 +315,8 @@ describe('PermissionManager - permission:resolved', () => {
     // 已断连不回 Agent
     expect(mockSocket.emit).not.toHaveBeenCalled();
 
-    // 清理后 60s 不再触发 timeout 发布
-    vi.advanceTimersByTime(60_000);
+    // 清理后 900s 不再触发 timeout 发布
+    vi.advanceTimersByTime(900_000);
     await flush();
     expect(resolvedCalls()).toHaveLength(2);
   });
@@ -318,7 +342,7 @@ describe('PermissionManager - permission:resolved', () => {
     expect(manager.getPendingRequestCount()).toBe(1);
     expect(resolvedCalls().map((call) => call.requestId)).toEqual(['req-1']);
 
-    vi.advanceTimersByTime(60_000);
+    vi.advanceTimersByTime(900_000);
     await flush();
     expect(mockSocket2.emit).toHaveBeenCalledWith('acp:permission:response', {
       requestId: 'req-2',

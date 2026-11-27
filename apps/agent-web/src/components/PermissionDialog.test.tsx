@@ -49,7 +49,7 @@ describe('PermissionDialog - 通知视图', () => {
   it('T-DLG7: 展示工具调用摘要与剩余时限提示', () => {
     render(<PermissionDialog open onOpenChange={vi.fn()} todo={permissionTodo()} />);
     expect(screen.getByText('执行命令：npm test')).toBeDefined();
-    expect(screen.getByText(/约 1 分钟后过期/)).toBeDefined();
+    expect(screen.getByText(/约 15 分钟后过期/)).toBeDefined();
   });
 
   it('T-DLG8: 点击「前往会话处理」导航到审批卡片锚点并关闭弹窗', () => {

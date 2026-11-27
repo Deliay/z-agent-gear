@@ -248,7 +248,7 @@ test.describe('ACP Elicitation E2E', () => {
       requestId,
       sessionId,
       reason: 'timeout',
-      detail: 'controller-api timeout (60s)',
+      detail: 'controller-api timeout (1800s)',
     });
 
     await expect(card.getByTestId('interaction-status')).toHaveText('已过期', { timeout: 25000 });

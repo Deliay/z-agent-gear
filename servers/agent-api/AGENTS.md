@@ -50,7 +50,7 @@ src/
   `{elicitationId}` sparse。**不设 TTL**（过期交互随会话留存回看）。
 - **状态机**：`PENDING → {ACCEPTED, DECLINED, CANCELLED, EXPIRED, FAILED}`，仅允许从 PENDING 迁移；
   所有终态写入统一走 `SessionInteractionService`（CAS `{interactionId,userId,status:'PENDING'}`），禁止第二写入点。
-  作答有效性以 `expiresAt`（= 事件到达 agent-api 时刻 + 60s，对齐 controller-api `TIMEOUT_MS`）为唯一口径；
+  作答有效性以 `expiresAt`（按 kind 写入：提问 = 事件到达 agent-api 时刻 + 30 分钟、权限审批 = + 15 分钟，分别对齐 controller-api `TIMEOUT_MS`）为唯一口径；
   TodoItem 的 5 分钟 `expiresAt` 仅为通知 TTL，不再参与判定。
 - **幂等**：`interactionId` 唯一索引；创建捕获 E11000 → 回读既有记录（`created=false`），subscriber 对
   重复触发不重复建待办/推 SSE。
