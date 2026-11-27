@@ -66,7 +66,7 @@ export default function GatewayDialog({ controllerId, onClose }: GatewayDialogPr
             onChange={(e) => setPort(e.target.value)}
             className="mb-2 w-full rounded border border-input bg-background px-3 py-1.5 text-sm text-foreground placeholder-muted-foreground focus:border-ring focus:outline-none"
           />
-          {error && <p className="mb-2 text-xs text-destructive">{error}</p>}
+          {error && <p className="mb-2 text-xs text-destructive-text">{error}</p>}
           <div className="flex justify-end gap-2">
             <button
               type="button"

@@ -354,7 +354,7 @@ export default function InstantiateWorkflowDialog({
               </div>
 
               {error && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
                   {error}
                 </div>
               )}
@@ -409,7 +409,7 @@ export default function InstantiateWorkflowDialog({
               )}
 
               {error && (
-                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+                <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
                   {error}
                 </div>
               )}

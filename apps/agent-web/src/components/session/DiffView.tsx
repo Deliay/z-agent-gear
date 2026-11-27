@@ -30,7 +30,7 @@ function HighlightedLine({ text, language, highlight }: { text: string; language
 
 function lineClass(type: DiffLine['type']) {
   switch (type) {
-    case 'removed': return 'bg-destructive/10 text-destructive';
+    case 'removed': return 'bg-destructive/10 text-destructive-text';
     case 'added': return 'bg-success/10 text-success-text';
     default: return 'text-foreground';
   }

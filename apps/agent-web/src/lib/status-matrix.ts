@@ -75,7 +75,7 @@ export const SESSION_STATUS_MATRIX: Record<SessionStatusValue, StatusVisual> = {
   },
   disconnected: {
     dot: 'bg-destructive',
-    badge: 'bg-destructive/15 text-destructive',
+    badge: 'bg-destructive/15 text-destructive-text',
     label: '已断连',
   },
   ended: {
@@ -109,7 +109,7 @@ export const CLOUD_HOST_STATUS_MATRIX: Record<CloudHostStatus, StatusVisual> = {
   },
   FAILED: {
     dot: 'bg-destructive',
-    badge: 'bg-destructive/15 text-destructive',
+    badge: 'bg-destructive/15 text-destructive-text',
     label: '失败',
   },
 }
@@ -165,14 +165,14 @@ export const WORKFLOW_NODE_STATUS_MATRIX: Record<WorkflowNodeStatus, WorkflowNod
   },
   FAILED: {
     dot: 'bg-destructive',
-    badge: 'bg-destructive/15 text-destructive',
+    badge: 'bg-destructive/15 text-destructive-text',
     label: '失败',
     spine: 'bg-destructive',
     tint: 'bg-card',
   },
   RETRY_FAILED: {
     dot: 'bg-destructive',
-    badge: 'bg-destructive/15 text-destructive',
+    badge: 'bg-destructive/15 text-destructive-text',
     label: '重试失败',
     spine: 'bg-destructive',
     tint: 'bg-card',

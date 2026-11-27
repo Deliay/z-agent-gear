@@ -151,7 +151,7 @@ export default function HistorySessionDialog({
             加载中...
           </div>
         ) : error ? (
-          <div className="py-8 text-center text-sm text-destructive">
+          <div className="py-8 text-center text-sm text-destructive-text">
             获取历史会话列表失败: {error.message}
           </div>
         ) : visibleSessions.length === 0 && results.length === 0 ? (
@@ -228,7 +228,7 @@ export default function HistorySessionDialog({
                     {results
                       .filter((r) => !r.success)
                       .map((r) => (
-                        <div key={r.acpSessionId} className="text-destructive">
+                        <div key={r.acpSessionId} className="text-destructive-text">
                           {r.title || r.acpSessionId.slice(0, 8)}: {r.error}
                         </div>
                       ))}

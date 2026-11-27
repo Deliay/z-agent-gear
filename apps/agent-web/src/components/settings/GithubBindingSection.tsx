@@ -73,7 +73,7 @@ export default function GithubBindingSection() {
           className={`rounded-md px-4 py-3 text-sm ${
             toast.type === 'success'
               ? 'bg-success/10 text-success-text'
-              : 'bg-destructive/10 text-destructive'
+              : 'bg-destructive/10 text-destructive-text'
           }`}
         >
           {toast.message}

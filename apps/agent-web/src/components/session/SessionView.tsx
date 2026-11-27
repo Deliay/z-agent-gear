@@ -705,7 +705,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
   if (sessionError || !sessionData?.session) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3" role="alert" data-testid="session-load-error">
-        <p className="text-sm text-destructive">会话不存在或无权访问</p>
+        <p className="text-sm text-destructive-text">会话不存在或无权访问</p>
         {sessionError?.message && (
           <p className="max-w-md text-xs text-muted-foreground">{sessionError.message}</p>
         )}
@@ -771,6 +771,7 @@ export default function SessionView({ sessionId: id, onDeleted }: SessionViewPro
           userId: sessionData.session.userId,
           controllerId: sessionData.session.controllerId,
           controllerName: sessionData.session.controllerName,
+          title: sessionData.session.title,
           acpServerType: sessionData.session.acpServerType,
           status: sessionData.session.status,
           externalSessionId: sessionData.session.externalSessionId,

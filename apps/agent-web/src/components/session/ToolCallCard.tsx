@@ -194,13 +194,13 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
       return (
         <div className="space-y-2 text-sm">
           {filePath && (
-            <div className="flex items-center gap-2 text-destructive">
+            <div className="flex items-center gap-2 text-destructive-text">
               <span className="text-base">🗑️</span>
               <span className="font-mono break-all">{filePath}</span>
             </div>
           )}
           {!filePath && (
-            <div className="text-destructive">删除操作 — {status}</div>
+            <div className="text-destructive-text">删除操作 — {status}</div>
           )}
         </div>
       );

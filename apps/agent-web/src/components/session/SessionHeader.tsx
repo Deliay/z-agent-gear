@@ -23,6 +23,8 @@ interface Session {
   userId: string;
   controllerId: string;
   controllerName: string;
+  /** 会话标题（契约 Session.title；缺失时回退控制器名/「会话」） */
+  title?: string | null;
   acpServerType: string;
   status: string;
   externalSessionId: string | null;
@@ -105,8 +107,8 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
     <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border bg-background px-4" data-testid="session-header">
       <div className="flex min-w-0 flex-1 items-center gap-2">
         {isMobile && <MobileBackButton to="/sessions" />}
-        <h1 className="min-w-0 shrink truncate text-base font-semibold">
-          {session?.controllerName || 'Session'}
+        <h1 className="min-w-0 shrink truncate text-base font-semibold" data-testid="session-title">
+          {session?.title || session?.controllerName || '会话'}
         </h1>
         {/* 状态圆点（规范 §2.4/§6-C）：sr-only 保留文案供读屏与既有 E2E 断言 */}
         <span
@@ -270,7 +272,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
                 data-testid="overflow-close"
                 onClick={onClose}
                 disabled={closing}
-                className="text-destructive"
+                className="text-destructive-text"
               >
                 {closing ? <Loader2 className="size-4 animate-spin" /> : <X className="size-4" />}
                 {closing ? '关闭中...' : '关闭'}
@@ -292,7 +294,7 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
               data-testid="overflow-delete"
               onClick={onDelete}
               disabled={deleting}
-              className="text-destructive"
+              className="text-destructive-text"
             >
               {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
               {deleting ? '删除中...' : '删除'}

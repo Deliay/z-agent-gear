@@ -51,13 +51,13 @@ const colorClasses = {
   completed: {
     container: 'bg-info/5 border border-info/40',
     header: 'text-info-text',
-    summary: 'text-info-text/70',
+    summary: 'text-info-text',
     chevron: 'text-info-text/70 hover:opacity-70',
   },
   failed: {
     container: 'bg-info/5 border border-info/40',
     header: 'text-info-text',
-    summary: 'text-destructive',
+    summary: 'text-destructive-text',
     chevron: 'text-info-text/70 hover:opacity-70',
   },
   // 等待确认/待执行：弱化描边，不脉冲

@@ -467,7 +467,7 @@ export default function NewCloudHostDialog({
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
             />
             {nameError && (
-              <p className="mt-1 text-xs text-destructive">{nameError}</p>
+              <p className="mt-1 text-xs text-destructive-text">{nameError}</p>
             )}
           </div>
 
@@ -476,7 +476,7 @@ export default function NewCloudHostDialog({
             {specsLoading && specs.length === 0 ? (
               <p className="text-sm text-muted-foreground">正在加载规格...</p>
             ) : specs.length === 0 ? (
-              <p className="text-sm text-destructive">暂无可用规格，请联系管理员</p>
+              <p className="text-sm text-destructive-text">暂无可用规格，请联系管理员</p>
             ) : (
               <div
                 role="radiogroup"
@@ -772,7 +772,7 @@ export default function NewCloudHostDialog({
                         className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
                       />
                       {projectForm.prefixError !== null && (
-                        <p className="mt-1 text-xs text-destructive">{projectForm.prefixError}</p>
+                        <p className="mt-1 text-xs text-destructive-text">{projectForm.prefixError}</p>
                       )}
                       {projectForm.normalizedPrefix !== null && (
                         <p className="mt-1 break-all text-xs text-muted-foreground">
@@ -825,7 +825,7 @@ export default function NewCloudHostDialog({
                 )}
                 <p>余额不足持续 10 分钟云电脑将被强制销毁</p>
                 {balanceInsufficient && (
-                  <p className="text-destructive">
+                  <p className="text-destructive-text">
                     当前可用余额：{quote.availableBalance} credits，余额不足，请联系管理员充值
                   </p>
                 )}
@@ -844,10 +844,10 @@ export default function NewCloudHostDialog({
           </div>
 
           {featureDisabled && (
-            <p className="text-sm text-destructive">云电脑功能未开启</p>
+            <p className="text-sm text-destructive-text">云电脑功能未开启</p>
           )}
           {error && (
-            <p role="alert" className="break-words text-sm text-destructive">
+            <p role="alert" className="break-words text-sm text-destructive-text">
               {error}
             </p>
           )}

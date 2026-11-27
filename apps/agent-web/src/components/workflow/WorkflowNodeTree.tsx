@@ -227,16 +227,16 @@ function NodeCard({
         </div>
       )}
       {node.rejectInfo && node.status === 'REJECT' && (
-        <p className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
+        <p className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive-text">
           打回理由：{node.rejectInfo.reason}
         </p>
       )}
       {node.failInfo && (node.status === 'FAILED' || node.status === 'RETRY_FAILED') && (
-        <div className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive">
+        <div className="mt-1 rounded bg-destructive/10 px-2 py-1 text-xs wrap-anywhere text-destructive-text">
           <p>
             {node.status === 'RETRY_FAILED' ? '重试失败原因' : '失败原因'}：{node.failInfo.reason}
           </p>
-          <p className="mt-0.5 text-destructive/80">
+          <p className="mt-0.5 text-destructive-text">
             {node.status === 'RETRY_FAILED'
               ? '中断自动重试已用尽：可重启节点，或在节点会话中给出处理指示后由 AI 恢复运行。'
               : '需要人工介入：打开节点会话说明处理方式，AI 确认后会将节点恢复为运行状态。'}

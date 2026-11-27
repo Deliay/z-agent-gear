@@ -108,7 +108,7 @@ describe('AcpCard', () => {
     expect(card.className).toContain('border-info/40');
     expect(card.className).not.toContain('animate-pulse');
     const summary = screen.getByText('✗');
-    expect(summary.className).toContain('text-destructive');
+    expect(summary.className).toContain('text-destructive-text');
   });
 
   it('should truncate title and summary to fit narrow containers', () => {

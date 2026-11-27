@@ -58,7 +58,7 @@ export default function GatewayItem({ gateway, controllerId }: GatewayItemProps)
       <button
         type="button"
         onClick={handleDelete}
-        className="text-xs text-destructive hover:text-destructive/80"
+        className="text-xs text-destructive-text hover:text-destructive-text/80"
         title="删除网关暴露"
       >
         <Trash2 className="size-3" />

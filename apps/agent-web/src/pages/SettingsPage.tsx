@@ -227,7 +227,7 @@ export default function SettingsPage() {
               className={`mb-4 rounded-md px-4 py-3 text-sm ${
                 bindNotice.type === 'success'
                   ? 'bg-success/10 text-success-text'
-                  : 'bg-destructive/10 text-destructive'
+                  : 'bg-destructive/10 text-destructive-text'
               }`}
             >
               {bindNotice.message}

@@ -75,9 +75,9 @@ function interactionStatusLabel(
 
 function statusBadgeClass(status: SessionInteractionStatus, rejectedSelection = false): string {
   if (status === 'PENDING') return 'border-warning/40 bg-warning/10 text-warning-text';
-  if (rejectedSelection) return 'border-destructive/40 bg-destructive/10 text-destructive';
+  if (rejectedSelection) return 'border-destructive/40 bg-destructive/10 text-destructive-text';
   if (status === 'ACCEPTED') return 'border-success/40 bg-success/10 text-success-text';
-  if (status === 'DECLINED') return 'border-destructive/40 bg-destructive/10 text-destructive';
+  if (status === 'DECLINED') return 'border-destructive/40 bg-destructive/10 text-destructive-text';
   return 'border-border bg-muted text-muted-foreground';
 }
 
@@ -275,7 +275,7 @@ export default function InteractionCard({ interaction, onResponded }: Interactio
             <>
               <ElicitationFields schema={schema} values={values} disabled={responding} onChange={setValue} />
               {missingRequired.length > 0 && (
-                <p className="text-xs text-destructive">
+                <p className="text-xs text-destructive-text">
                   请填写必填项：{missingRequired.map((name) => properties[name]?.title || name).join('、')}
                 </p>
               )}

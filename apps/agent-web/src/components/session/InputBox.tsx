@@ -240,111 +240,68 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
   };
 
   return (
-    <div ref={containerRef} className="relative border-t border-border bg-background p-4">
-      {onSetConfigOption && (
-        <ConfigOptionsPanel
-          configOptions={configOptions}
-          status={status}
-          onSetConfigOption={onSetConfigOption}
-          booleanBlocked={capabilities?.isBlocked('config.boolean') ?? false}
-        />
-      )}
-      <div className="mb-2 flex items-center gap-2">
-        {onSetMode && (
-          <ModeSwitcher
-            currentModeId={currentModeId}
-            modes={modes}
+    <div ref={containerRef} className="relative px-4 pb-4 pt-2" data-testid="input-box">
+      {/* 一体化浮岛（规范 §6-C）：模式/模型/配置/附件/片段全部收进输入卡片 */}
+      <form
+        onSubmit={handleSubmit}
+        data-testid="input-island"
+        className="mx-auto flex w-full max-w-3xl flex-col gap-2 rounded-xl border border-border bg-card p-3 shadow-sm"
+      >
+        {onSetConfigOption && (
+          <ConfigOptionsPanel
+            configOptions={configOptions}
             status={status}
-            onSetMode={onSetMode}
-            disabled={isWorking}
-            blocked={capabilities?.isBlocked('config.mode') ?? false}
-            blockedReason={capabilities?.detail('config.mode')}
+            onSetConfigOption={onSetConfigOption}
+            booleanBlocked={capabilities?.isBlocked('config.boolean') ?? false}
           />
         )}
-        {onSetModel && (
-          <ModelSwitcher
-            currentModelId={currentModelId}
-            availableModels={availableModels}
-            status={status}
-            onSetModel={onSetModel}
-            disabled={isWorking}
-            blocked={capabilities?.isBlocked('config.model') ?? false}
-            blockedReason={capabilities?.detail('config.model')}
-          />
-        )}
-      </div>
-      {/* 提示词片段区（文本片段首行摘要 + 来源徽标；图片缩略 + 名称；逐行删除） */}
-      {composerParts.length > 0 && (
-        <div className="mb-2 space-y-1" data-testid="prompt-parts">
-          {composerParts.map((part) => (
-            <div
-              key={part.id}
-              className="flex items-center gap-2 rounded-sm border border-border px-2 py-1 text-xs"
-              data-testid="prompt-part"
-              data-part-type={part.type}
-            >
-              {part.type === 'image' ? (
-                <>
-                  {part.data && (
-                    <img
-                      src={`data:${part.mimeType ?? 'image/png'};base64,${part.data}`}
-                      alt={part.name ?? 'image'}
-                      className="h-8 w-8 rounded-sm object-cover"
-                      data-testid="prompt-part-image"
-                    />
-                  )}
-                  <span className="min-w-0 truncate">{part.name ?? '图片'}</span>
-                </>
-              ) : (
-                <>
-                  <span className="min-w-0 flex-1 truncate">
-                    {(part.text ?? '').split('\n')[0].slice(0, 80)}
-                  </span>
-                  {part.origin && (
-                    <span className="shrink-0 rounded-sm bg-muted px-1 text-xs text-muted-foreground" data-testid="prompt-part-origin">
-                      批注
-                    </span>
-                  )}
-                </>
-              )}
-              <button
-                type="button"
-                className="shrink-0 text-muted-foreground hover:text-destructive"
-                onClick={() => composer.removePart(part.id)}
-                data-testid="prompt-part-remove"
+        {/* 提示词片段区（文本片段首行摘要 + 来源徽标；图片缩略 + 名称；逐行删除） */}
+        {composerParts.length > 0 && (
+          <div className="space-y-1" data-testid="prompt-parts">
+            {composerParts.map((part) => (
+              <div
+                key={part.id}
+                className="flex items-center gap-2 rounded-md bg-muted/60 px-2 py-1 text-xs"
+                data-testid="prompt-part"
+                data-part-type={part.type}
               >
-                删除
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <form onSubmit={handleSubmit} className="flex gap-2">
-        {!imageBlocked && (
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              data-testid="prompt-image-input"
-              onChange={(event) => {
-                if (event.target.files) addImageFiles(event.target.files);
-                event.target.value = '';
-              }}
-            />
-            <button
-              type="button"
-              className="self-end rounded-sm border border-border px-2 py-2 text-xs text-muted-foreground hover:bg-muted"
-              title="添加图片"
-              onClick={() => fileInputRef.current?.click()}
-              data-testid="prompt-image-add"
-            >
-              图片
-            </button>
-          </>
+                {part.type === 'image' ? (
+                  <>
+                    {part.data && (
+                      <img
+                        src={`data:${part.mimeType ?? 'image/png'};base64,${part.data}`}
+                        alt={part.name ?? 'image'}
+                        className="h-8 w-8 rounded-sm object-cover"
+                        data-testid="prompt-part-image"
+                      />
+                    )}
+                    <span className="min-w-0 truncate">{part.name ?? '图片'}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="min-w-0 flex-1 truncate">
+                      {(part.text ?? '').split('\n')[0].slice(0, 80)}
+                    </span>
+                    {part.origin && (
+                      <span className="shrink-0 rounded-sm bg-muted px-1 text-xs text-muted-foreground" data-testid="prompt-part-origin">
+                        批注
+                      </span>
+                    )}
+                  </>
+                )}
+                <button
+                  type="button"
+                  className="shrink-0 text-muted-foreground hover:text-destructive-text"
+                  onClick={() => composer.removePart(part.id)}
+                  data-testid="prompt-part-remove"
+                >
+                  删除
+                </button>
+              </div>
+            ))}
+          </div>
         )}
-        <div className="relative flex-1">
+        <div className="relative">
           <textarea
             ref={(el) => {
               textareaRef[1](el);
@@ -364,12 +321,12 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
             disabled={disabled || sending}
             placeholder={
               disabled
-                ? 'Session is not active...'
+                ? '会话未激活，暂不可发送'
                 : sending
-                  ? 'Agent is processing...'
-                  : `Type your message... ${IS_MAC ? 'Cmd' : 'Ctrl'}+Enter to send`
+                  ? 'Agent 正在处理…'
+                  : `输入消息，${IS_MAC ? '⌘' : 'Ctrl'} + Enter 发送`
             }
-            className="w-full resize-none rounded-md border border-input px-3 py-2 text-sm focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring disabled:bg-muted disabled:text-muted-foreground"
+            className="w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:text-muted-foreground"
             style={{ maxHeight: '10rem', overflowY: 'auto' }}
             rows={1}
           />
@@ -385,23 +342,78 @@ export default function InputBox({ onSend, onStop, disabled, sending, isWorking,
             />
           )}
         </div>
-        {(sending || isWorking) ? (
-          <button
-            type="button"
-            onClick={handleStop}
-            className="rounded-md bg-destructive px-4 py-2 text-sm text-destructive-foreground hover:bg-destructive/90"
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            type="submit"
-            disabled={disabled || (!input.trim() && composerParts.length === 0)}
-            className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
-          >
-            Send
-          </button>
-        )}
+        {/* 底栏：模式 / 模型 / 附件 / 中文主按钮 */}
+        <div className="flex flex-wrap items-center gap-2 border-t border-border/60 pt-2" data-testid="input-island-footer">
+          {onSetMode && (
+            <ModeSwitcher
+              currentModeId={currentModeId}
+              modes={modes}
+              status={status}
+              onSetMode={onSetMode}
+              disabled={isWorking}
+              blocked={capabilities?.isBlocked('config.mode') ?? false}
+              blockedReason={capabilities?.detail('config.mode')}
+            />
+          )}
+          {onSetModel && (
+            <ModelSwitcher
+              currentModelId={currentModelId}
+              availableModels={availableModels}
+              status={status}
+              onSetModel={onSetModel}
+              disabled={isWorking}
+              blocked={capabilities?.isBlocked('config.model') ?? false}
+              blockedReason={capabilities?.detail('config.model')}
+            />
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {!imageBlocked && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  data-testid="prompt-image-input"
+                  onChange={(event) => {
+                    if (event.target.files) addImageFiles(event.target.files);
+                    event.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  className="rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted"
+                  title="添加图片"
+                  aria-label="添加图片"
+                  onClick={() => fileInputRef.current?.click()}
+                  data-testid="prompt-image-add"
+                >
+                  图片
+                </button>
+              </>
+            )}
+            {(sending || isWorking) ? (
+              <button
+                type="button"
+                onClick={handleStop}
+                data-testid="input-stop"
+                className="rounded-md bg-destructive px-3 py-1.5 text-sm font-medium text-destructive-foreground hover:bg-destructive/90"
+              >
+                停止
+              </button>
+            ) : (
+              <button
+                type="submit"
+                data-testid="input-send"
+                disabled={disabled || (!input.trim() && composerParts.length === 0)}
+                className="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
+              >
+                发送
+                <span className="ml-1 text-xs opacity-80">{IS_MAC ? '⌘↵' : 'Ctrl+↵'}</span>
+              </button>
+            )}
+          </div>
+        </div>
       </form>
     </div>
   );

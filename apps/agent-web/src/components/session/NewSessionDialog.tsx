@@ -335,10 +335,10 @@ export default function NewSessionDialog({
               ))}
             </select>
             {onlineControllers.length === 0 && (
-              <p className="mt-1 text-sm text-destructive">无在线控制器</p>
+              <p className="mt-1 text-sm text-destructive-text">无在线控制器</p>
             )}
             {preselectedControllerUnavailable ? (
-              <p className="mt-1 text-sm text-destructive" data-testid="cloud-host-unavailable-hint">
+              <p className="mt-1 text-sm text-destructive-text" data-testid="cloud-host-unavailable-hint">
                 该云电脑未运行，无法创建会话
               </p>
             ) : selectedCloudHostUnavailable ? (
@@ -462,7 +462,7 @@ export default function NewSessionDialog({
                 <p className="mt-2 text-xs text-muted-foreground">正在探测可选模式与模型…</p>
               )}
               {optionsError && (
-                <p className="mt-2 text-xs text-destructive">{optionsError}</p>
+                <p className="mt-2 text-xs text-destructive-text">{optionsError}</p>
               )}
             </div>
           )}

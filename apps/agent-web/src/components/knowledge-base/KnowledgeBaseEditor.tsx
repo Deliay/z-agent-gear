@@ -218,7 +218,7 @@ export default function KnowledgeBaseEditor({
       </div>
 
       {error && (
-        <p className="px-4 pb-2 text-xs text-destructive sm:px-6" role="alert" data-testid="knowledge-base-editor-error">
+        <p className="px-4 pb-2 text-xs text-destructive-text sm:px-6" role="alert" data-testid="knowledge-base-editor-error">
           {error}
         </p>
       )}

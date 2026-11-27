@@ -234,6 +234,21 @@ describe('SessionHeader', () => {
     expect(screen.getByTestId('session-branch')).toHaveTextContent('feat/ui-rework');
   });
 
+  it('T-SESS-H1: 顶栏标题渲染会话标题（Session.title），控制器名仅收进环境胶囊', () => {
+    render(
+      <SessionHeader
+        session={{ ...baseSession, title: '修复登录流程' }}
+        status="running"
+        onClose={noop}
+        onDelete={noop}
+      />,
+    );
+    const title = screen.getByTestId('session-title');
+    expect(title).toHaveTextContent('修复登录流程');
+    expect(title).not.toHaveTextContent('My Dev Machine');
+    expect(screen.getByTestId('session-env-capsule')).toHaveTextContent('控制器：My Dev Machine');
+  });
+
   it('T-SESS-H1: 环境胶囊包含控制器 / Harness / 工作目录 / 时间', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
     const capsule = screen.getByTestId('session-env-capsule');
@@ -248,9 +263,9 @@ describe('SessionHeader', () => {
     expect(screen.getByText('已断连')).toBeDefined();
   });
 
-  it('should show Session fallback when session is null', () => {
+  it('should show 会话 fallback when session is null', () => {
     render(<SessionHeader session={null} status="connecting" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('Session')).toBeDefined();
+    expect(screen.getByText('会话')).toBeDefined();
   });
 });
 

@@ -124,7 +124,7 @@ export default function LoginPage() {
               />
             </div>
             {(error || oauthError) && (
-              <p role="alert" className="text-sm text-destructive">{error || oauthError}</p>
+              <p role="alert" className="text-sm text-destructive-text">{error || oauthError}</p>
             )}
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? '登录中…' : '登录'}

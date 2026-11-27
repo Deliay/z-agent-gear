@@ -161,7 +161,7 @@ function DestroyedStorageRow({ storage }: { storage: CloudStorageData }) {
           {formatDateTime(storage.destroyedAt)}
         </div>
         {failed && storage.failureReason && (
-          <div className="min-w-0 break-words text-destructive">
+          <div className="min-w-0 break-words text-destructive-text">
             失败原因：{storage.failureReason}
           </div>
         )}
@@ -293,7 +293,7 @@ export default function CloudStorageSection() {
         <p className="text-sm text-muted-foreground">正在加载云存储...</p>
       ) : mainQuery.error && !mainQuery.data ? (
         <div className="space-y-2">
-          <p role="alert" className="break-words text-sm text-destructive">
+          <p role="alert" className="break-words text-sm text-destructive-text">
             云存储加载失败：{cloudStorageErrorMessage(mainQuery.error)}
           </p>
           <Button type="button" size="sm" variant="outline" onClick={() => { void mainQuery.refetch() }}>
@@ -370,12 +370,12 @@ export default function CloudStorageSection() {
       </div>
 
       {destroyError && (
-        <p role="alert" className="break-words text-sm text-destructive">
+        <p role="alert" className="break-words text-sm text-destructive-text">
           {destroyError}
         </p>
       )}
       {actionError && (
-        <p role="alert" className="break-words text-sm text-destructive">
+        <p role="alert" className="break-words text-sm text-destructive-text">
           {actionError}
         </p>
       )}

@@ -49,7 +49,7 @@ function groupByDirectory(files: string[]): Array<{ dir: string; files: string[]
 const STATUS_BADGES: Record<SessionReviewData['status'], { label: string; className: string }> = {
   PENDING: { label: '待评审', className: 'bg-warning/15 text-warning-text' },
   APPROVED: { label: '已通过', className: 'bg-success/15 text-success-text' },
-  REJECTED: { label: '已驳回', className: 'bg-destructive/15 text-destructive' },
+  REJECTED: { label: '已驳回', className: 'bg-destructive/15 text-destructive-text' },
   COMMENTED: { label: '仅评论', className: 'bg-muted text-muted-foreground' },
   CANCELLED: { label: '已取消', className: 'bg-muted text-muted-foreground italic' },
 };
@@ -174,7 +174,7 @@ export function ReviewPanel({ reviewId, sessionId }: ReviewPanelProps) {
           )}
           {activeFile && fileStatus === 'error' && (
             <div className="flex flex-col gap-2 p-4 text-sm" data-testid="review-file-error">
-              <div className="text-destructive">加载失败：{fileError?.message ?? '文件内容读取失败'}</div>
+              <div className="text-destructive-text">加载失败：{fileError?.message ?? '文件内容读取失败'}</div>
               <div className="text-xs text-muted-foreground">
                 控制器可能离线、文件不可读，或 agent-gear 版本过低；若持续失败，请确认控制器上的 agent-gear 已升级到最新版本。
               </div>

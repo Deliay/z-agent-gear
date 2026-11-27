@@ -332,7 +332,7 @@ export default function Sidebar({ name, mobile, focusTarget }: SidebarProps) {
                               && cloudHost.harnessTypes.length === 1
                               && !cloudHost.defaultSessionId && (
                                 <span
-                                  className="truncate text-xs text-destructive"
+                                  className="truncate text-xs text-destructive-text"
                                   data-testid="cloud-host-default-session-hint"
                                 >
                                   默认会话创建失败，可手动创建会话

@@ -66,7 +66,7 @@ const STEP_STATUS_CLASSES: Record<CloudHostSetupStepStatus, string> = {
   PENDING: 'border-transparent bg-muted text-muted-foreground',
   RUNNING: 'border-transparent bg-warning/10 text-warning-text',
   SUCCEEDED: 'border-transparent bg-success/10 text-success-text',
-  FAILED: 'border-transparent bg-destructive/10 text-destructive',
+  FAILED: 'border-transparent bg-destructive/10 text-destructive-text',
   SKIPPED: 'border-transparent bg-muted text-muted-foreground',
 }
 
@@ -252,7 +252,7 @@ export default function GithubSetupProgressDialog({
           <p className="text-sm text-muted-foreground">正在加载进度...</p>
         ) : error ? (
           <div className="space-y-2">
-            <p role="alert" className="break-words text-sm text-destructive">
+            <p role="alert" className="break-words text-sm text-destructive-text">
               {getErrorMessage(error)}
             </p>
             <Button type="button" variant="outline" onClick={() => { void refetch() }}>
@@ -290,20 +290,20 @@ export default function GithubSetupProgressDialog({
             </ol>
 
             {operation?.error && (
-              <p role="alert" className="break-words text-sm text-destructive">
+              <p role="alert" className="break-words text-sm text-destructive-text">
                 {operation.error}
               </p>
             )}
 
             {retryError && (
-              <p role="alert" className="break-words text-sm text-destructive">
+              <p role="alert" className="break-words text-sm text-destructive-text">
                 {retryError}
               </p>
             )}
 
             {setupError && (
               <div className="space-y-2">
-                <p role="alert" className="break-words text-sm text-destructive">
+                <p role="alert" className="break-words text-sm text-destructive-text">
                   {setupError}
                 </p>
                 {onRetrySetup && (
@@ -315,7 +315,7 @@ export default function GithubSetupProgressDialog({
             )}
 
             {startupFailed && (
-              <p role="alert" className="break-words text-sm text-destructive">
+              <p role="alert" className="break-words text-sm text-destructive-text">
                 云电脑启动失败，请删除后重新创建
               </p>
             )}

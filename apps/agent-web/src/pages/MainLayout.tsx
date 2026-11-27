@@ -145,7 +145,7 @@ export default function MainLayout() {
       <HomeOverviewContext.Provider value={homeContextValue}>
         <WorkspaceContextSyncBridge />
         <div className="flex h-screen flex-col items-center justify-center gap-3" role="alert">
-          <p className="text-sm text-destructive">首页数据加载失败</p>
+          <p className="text-sm text-destructive-text">首页数据加载失败</p>
           {error.message && <p className="max-w-md text-xs text-muted-foreground">{error.message}</p>}
           <Button onClick={() => void refetch()}>重试</Button>
         </div>

@@ -29,6 +29,10 @@ const ARBITRARY_COLOR_REGEX =
 
 const HARDCODED_COLOR_EXEMPT = ['/lib/terminal-theme.ts', '/lib/preview/html-inject.ts'];
 
+/** 正文级语义色：必须使用 `*-text` 深色 Token（规范 §2.2），禁止裸 `text-success/warning/info/destructive` */
+const BARE_SEMANTIC_TEXT_REGEX =
+  /\btext-(?:success|warning|info|destructive)\b(?!-(?:text|foreground))/g;
+
 /** T-UIUX-TABULAR：金额 / Token / 倒计时 / 计数徽标 / 表格数值列清单（D4）
  *  `marker` 定位具体数值容器（JSX 表达式 / data-testid / 唯一类串），
  *  断言 marker 所在行同时含 `tabular-nums`，避免「文件里任意位置出现 tabular-nums」的失效口径。
@@ -92,6 +96,15 @@ describe('UI/UX Design Standards Guard (docs/engineering/ui-ux-standards.md)', (
       }
     }
 
+    expect(violations).toEqual([]);
+  });
+
+  it('T-UIUX-SEMANTIC-TEXT: 正文/提示条使用深一档 `*-text` Token，禁止裸 text-success/warning/info/destructive（规范 §2.2）', () => {
+    const violations: string[] = [];
+    for (const [filePath, content] of Object.entries(agentWebSources)) {
+      const matches = content.match(BARE_SEMANTIC_TEXT_REGEX);
+      if (matches) violations.push(`${filePath}: ${[...new Set(matches)].join(', ')}`);
+    }
     expect(violations).toEqual([]);
   });
 

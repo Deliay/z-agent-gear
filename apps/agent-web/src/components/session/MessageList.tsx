@@ -445,7 +445,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
             </div>
           </div>
         ) : sseError ? (
-          <div className="flex h-full items-center justify-center text-sm text-destructive">
+          <div className="flex h-full items-center justify-center text-sm text-destructive-text">
             Failed to load messages. Connection error.
           </div>
         ) : (
@@ -454,7 +454,7 @@ export default function MessageList({ messages, hasMore, onLoadMore, loadingMore
           </div>
         )
       ) : (
-        <div className="space-y-4">
+        <div className="mx-auto w-full max-w-3xl space-y-4" data-testid="message-reading-column">
           {lastPlanMessages && (
             <PlanFloatingCard messages={lastPlanMessages.map(m => ({ content: m.content, createdAt: m.createdAt }))} />
           )}

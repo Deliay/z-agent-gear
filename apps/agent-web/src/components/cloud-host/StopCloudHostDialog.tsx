@@ -160,7 +160,7 @@ export default function StopCloudHostDialog({
           <p className="text-sm text-muted-foreground">正在检查活动会话...</p>
         ) : impactError ? (
           <div className="space-y-2">
-            <p role="alert" className="break-words text-sm text-destructive">
+            <p role="alert" className="break-words text-sm text-destructive-text">
               {getErrorMessage(impactError)}
             </p>
             <Button type="button" variant="outline" onClick={() => { void refetch() }}>
@@ -169,7 +169,7 @@ export default function StopCloudHostDialog({
           </div>
         ) : hasActiveSessions ? (
           <div className="space-y-2">
-            <p className="text-sm font-medium text-destructive">{LOSS_WARNING}</p>
+            <p className="text-sm font-medium text-destructive-text">{LOSS_WARNING}</p>
             <p className="text-sm text-muted-foreground">
               当前有 {impact?.activeSessionCount} 个活动会话。
             </p>
@@ -229,7 +229,7 @@ export default function StopCloudHostDialog({
         )}
 
         {error && (
-          <p role="alert" className="break-words text-sm text-destructive">
+          <p role="alert" className="break-words text-sm text-destructive-text">
             {error}
           </p>
         )}

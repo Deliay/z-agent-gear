@@ -89,38 +89,42 @@ test.describe('UI/UX Workspace Shell & Navigation E2E', () => {
   test('E2E-UIUX-4: 状态色抽样（会话圆点 + 工作流节点徽标与状态矩阵一致）', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
     const env = await setupPhase4Env(page, 'uiux4', { withSessions: true, withInstances: true });
-    await loginViaUI(page, env.username);
+    try {
+      await loginViaUI(page, env.username);
 
-    // 会话状态圆点：会话详情顶栏使用矩阵 dot（非旧徽标底色）
-    const home = await gql<{ homeOverview: { sessions: Array<{ id: string }> } }>(
-      page,
-      env.token,
-      'query { homeOverview { sessions { id } } }',
-    );
-    const sessionId = home.homeOverview.sessions[0]?.id;
-    if (sessionId) {
-      await page.goto(`/sessions/${sessionId}`);
-      const dot = page.getByTestId('session-status-dot');
-      await expect(dot).toBeVisible({ timeout: 15000 });
-      await expect(dot).toHaveClass(/bg-(info|success|warning|muted-foreground|destructive)/);
+      // 会话状态圆点：会话详情顶栏使用矩阵 dot（非旧徽标底色）
+      const home = await gql<{ homeOverview: { sessions: Array<{ id: string }> } }>(
+        page,
+        env.token,
+        'query { homeOverview { sessions { id } } }',
+      );
+      const sessionId = home.homeOverview.sessions[0]?.id;
+      if (sessionId) {
+        await page.goto(`/sessions/${sessionId}`);
+        const dot = page.getByTestId('session-status-dot');
+        await expect(dot).toBeVisible({ timeout: 15000 });
+        await expect(dot).toHaveClass(/bg-(info|success|warning|muted-foreground|destructive)/);
+      }
+
+      // 工作流节点徽标：DONE/READY 状态使用矩阵 badge（data-status 同时落在卡片与徽标）
+      const instance = env.instances[0];
+      await page.goto(`/workflows/${instance.id}`);
+      await page.getByRole('button', { name: '图表' }).click();
+      const nodeId = instance.nodes[0]?.id;
+      const badge = page.getByTestId(`node-status-badge-${nodeId}`);
+      await expect(badge).toBeVisible({ timeout: 15000 });
+      await expect(badge).toHaveClass(/bg-/);
+      await expect(badge).toHaveAttribute('data-status', /READY|RUNNING|DONE|REWORK|REJECT|FAILED/);
+
+      // 会话/工作流均由同一 status-matrix 消费，不存在就地 hex 色
+      const card = page.getByTestId(`workflow-node-card-${nodeId}`);
+      await expect(card).toHaveClass(/bg-card/);
+    } finally {
+      env.controllers.forEach((controller) => controller.disconnect());
     }
-
-    // 工作流节点徽标：DONE/READY 状态使用矩阵 badge
-    const instance = env.instances[0];
-    await page.goto(`/workflows/${instance.id}`);
-    await page.getByRole('button', { name: '图形' }).click();
-    const nodeId = instance.nodes[0]?.id;
-    const badge = page.getByTestId(`node-status-badge-${nodeId}`);
-    await expect(badge).toBeVisible({ timeout: 15000 });
-    await expect(badge).toHaveClass(/bg-/);
-    await expect(badge).toHaveAttribute('data-status', /READY|RUNNING|DONE|REWORK|REJECT|FAILED/);
-
-    // 会话/工作流均由同一 status-matrix 消费，不存在就地 hex 色
-    const card = page.getByTestId(`workflow-node-card-${nodeId}`);
-    await expect(card).toHaveClass(/bg-card/);
   });
 
-  test('E2E-UIUX-5: 设置导航激活态 + 分组标题 + 控制器配置面包屑复核', async ({ page }) => {
+  test('E2E-UIUX-5: 设置导航激活态 + 分组标题复核', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 720 });
     const { username } = await registerUser(page, { prefix: 'uiux5' });
     await loginViaUI(page, username);

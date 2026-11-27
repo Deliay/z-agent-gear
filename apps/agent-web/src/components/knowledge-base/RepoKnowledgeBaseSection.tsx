@@ -42,7 +42,7 @@ function Loading() {
 
 function LoadError({ onRetry }: { onRetry: () => void }) {
   return (
-    <div className="flex items-center gap-1 px-2 py-1 text-xs text-destructive">
+    <div className="flex items-center gap-1 px-2 py-1 text-xs text-destructive-text">
       <span className="min-w-0 flex-1">加载失败</span>
       <button
         type="button"
@@ -187,7 +187,7 @@ function KnowledgeBaseItem({ knowledgeBase }: { knowledgeBase: RepoKnowledgeBase
             <ChevronRight className="size-3 shrink-0 text-muted-foreground" />
           )
         ) : (
-          <AlertCircle className="size-3 shrink-0 text-destructive" />
+          <AlertCircle className="size-3 shrink-0 text-destructive-text" />
         )}
         <BookOpen className="size-3 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-sm text-sidebar-foreground">
@@ -218,7 +218,7 @@ function KnowledgeBaseItem({ knowledgeBase }: { knowledgeBase: RepoKnowledgeBase
         )}
       </button>
       {!knowledgeBase.valid && knowledgeBase.errors[0] && (
-        <p className="px-6 pb-1 text-xs text-destructive" data-testid="repo-kb-error">
+        <p className="px-6 pb-1 text-xs text-destructive-text" data-testid="repo-kb-error">
           {knowledgeBase.errors[0]}
         </p>
       )}

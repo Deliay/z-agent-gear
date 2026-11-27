@@ -245,7 +245,7 @@ test.describe('Session E2E', () => {
 
     await expect(page.getByText('e2e-test-host').first()).toBeVisible();
     await expect(page.locator('textarea')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Send' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /发送/ })).toBeVisible();
     await expect(page.getByRole('button', { name: '关闭' })).toBeVisible();
     await expect(page.getByRole('button', { name: '删除' })).toBeVisible();
 
@@ -273,7 +273,7 @@ test.describe('Session E2E', () => {
     const statusText = await statusBadge.textContent();
     if (statusText !== '空闲' && statusText !== '工作中') {
       await expect(textarea).toBeDisabled();
-      await expect(textarea).toHaveAttribute('placeholder', 'Session is not active...');
+      await expect(textarea).toHaveAttribute('placeholder', '会话未激活，暂不可发送');
     }
 
     disconnect();

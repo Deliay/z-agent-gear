@@ -20,7 +20,7 @@ describe('跨领域状态色矩阵（规范 §2.4，D2）', () => {
       connecting: { dot: 'bg-warning animate-pulse', badge: 'bg-warning/15 text-warning-text', label: '连接中' },
       idling: { dot: 'bg-success', badge: 'bg-success/15 text-success-text', label: '空闲' },
       running: { dot: 'bg-info animate-pulse', badge: 'bg-info/15 text-info-text animate-pulse', label: '工作中' },
-      disconnected: { dot: 'bg-destructive', badge: 'bg-destructive/15 text-destructive', label: '已断连' },
+      disconnected: { dot: 'bg-destructive', badge: 'bg-destructive/15 text-destructive-text', label: '已断连' },
       ended: { dot: 'bg-muted-foreground', badge: 'bg-muted text-muted-foreground', label: '已结束' },
     } as const
 
@@ -36,7 +36,7 @@ describe('跨领域状态色矩阵（规范 §2.4，D2）', () => {
       RUNNING: { dot: 'bg-success', badge: 'bg-success/15 text-success-text', label: '运行中' },
       STOPPING: { dot: 'bg-warning animate-pulse', badge: 'bg-warning/15 text-warning-text', label: '停止中' },
       STOPPED: { dot: 'bg-muted-foreground', badge: 'bg-muted text-muted-foreground', label: '已销毁' },
-      FAILED: { dot: 'bg-destructive', badge: 'bg-destructive/15 text-destructive', label: '失败' },
+      FAILED: { dot: 'bg-destructive', badge: 'bg-destructive/15 text-destructive-text', label: '失败' },
     } as const
 
     for (const [status, expected] of Object.entries(expectations)) {

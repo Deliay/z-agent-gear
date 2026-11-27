@@ -125,7 +125,7 @@ export default function WorktreeSidebarGroup({
 
                 <button
                   type="button"
-                  className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-destructive"
+                  className="cursor-pointer rounded p-0.5 text-muted-foreground hover:text-destructive-text"
                   aria-label="删除 Worktree"
                   onClick={() => setDeleteTarget(wt)}
                 >

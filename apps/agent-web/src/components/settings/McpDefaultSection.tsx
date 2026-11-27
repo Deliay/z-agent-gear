@@ -200,7 +200,7 @@ export default function McpDefaultSection({ controller }: McpDefaultSectionProps
           <p className="text-xs text-muted-foreground">未选择任何 MCP：新建会话不注入 MCP</p>
         )}
         {error && (
-          <p role="alert" className="break-words text-sm text-destructive">
+          <p role="alert" className="break-words text-sm text-destructive-text">
             {error}
           </p>
         )}

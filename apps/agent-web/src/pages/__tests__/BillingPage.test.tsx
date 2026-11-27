@@ -280,7 +280,7 @@ describe('前台我的费用', () => {
     expect(amountCells.length).toBeGreaterThan(0);
 
     const negative = amountCells.find((cell) => cell.textContent?.startsWith('-'));
-    expect(negative?.className).toContain('text-destructive');
+    expect(negative?.className).toContain('text-destructive-text');
 
     const recharge = amountCells.find((cell) => cell.textContent === '10.00');
     expect(recharge?.className).toContain('text-success-text');

@@ -114,6 +114,7 @@ describe('WorkflowNodeCard', () => {
   it('T-UI4-NC1 七态渲染状态徽标与状态色脊', () => {
     const { rerender } = renderCard({ status: 'RUNNING' })
     expect(screen.getByTestId('node-status-badge-n1')).toHaveTextContent('执行中')
+    expect(screen.getByTestId('node-status-badge-n1')).toHaveAttribute('data-status', 'RUNNING')
     expect(screen.getByTestId('node-status-spine').className).toContain('bg-info')
 
     const props = { id: 'n1', data: data({ status: 'FAILED' }) } as unknown as NodeProps<WorkflowNodeCardNode>

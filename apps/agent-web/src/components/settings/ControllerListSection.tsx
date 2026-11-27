@@ -243,7 +243,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                         <Button variant="ghost" size="sm" onClick={() => setConfirmRegenerate({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                           重新生成Key
                         </Button>
-                        <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                        <Button variant="ghost" size="sm" className="text-destructive-text" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                           解绑
                         </Button>
                       </>
@@ -276,7 +276,7 @@ export default function ControllerListSection({ onNavigateToConfig }: Controller
                         <Button variant="ghost" size="sm" onClick={() => setConfirmRegenerate({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                           重新生成Key
                         </Button>
-                        <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
+                        <Button variant="ghost" size="sm" className="text-destructive-text" onClick={() => setConfirmUnbind({ id: ctrl.id, name: ctrl.name || ctrl.hostname })}>
                           删除
                         </Button>
                       </>

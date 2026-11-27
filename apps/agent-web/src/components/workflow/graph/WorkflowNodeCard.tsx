@@ -80,6 +80,7 @@ export default function WorkflowNodeCard({ data }: NodeProps<WorkflowNodeCardNod
         </span>
         <span
           data-testid={`node-status-badge-${data.nodeId}`}
+          data-status={data.status}
           className={`shrink-0 rounded-full px-1.5 py-0.5 text-xs font-medium ${visual.badge}`}
         >
           {NODE_STATUS_LABELS[data.status]}
