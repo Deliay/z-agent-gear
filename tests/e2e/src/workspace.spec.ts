@@ -23,7 +23,7 @@ import {
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const FRONT_WEB_URL = process.env.BASE_URL || 'http://localhost:35273';
-const sidebar = () => 'nav[aria-label="Sidebar"]';
+const sidebar = () => 'nav[aria-label="侧边栏导航"]';
 /** 设置页「Git」区块（成员级提交人设置，与工作区只读无关）。 */
 const gitSectionFor = (page: Page) => page.locator('#git-section');
 

@@ -58,7 +58,7 @@ export default function AccountTable({ accounts, selectedId, onSelect, onRecharg
                   <div className="text-xs text-muted-foreground">{account.ownerId}</div>
                 </td>
                 <td className={T.TABLE_CELL_CLASS}>{OWNER_TYPE_LABELS[account.ownerType] ?? account.ownerType}</td>
-                <td className={`${T.TABLE_CELL_NUMERIC_CLASS} ${negative ? 'text-destructive' : ''}`}>
+                <td className={`${T.TABLE_CELL_NUMERIC_CLASS} ${negative ? 'text-destructive-text' : ''}`}>
                   {account.availableBalance.toFixed(2)}
                 </td>
                 <td className={T.TABLE_CELL_NUMERIC_CLASS}>{account.cashBalance.toFixed(2)}</td>
@@ -66,20 +66,20 @@ export default function AccountTable({ accounts, selectedId, onSelect, onRecharg
                 <td className={T.TABLE_CELL_NUMERIC_CLASS}>{account.creditLimit.toFixed(2)}</td>
                 <td className={T.TABLE_CELL_CLASS}>
                   {account.insufficientSince ? (
-                    <Badge variant={status.variant}>
+                    <Badge variant={status.variant} className="tabular-nums">
                       欠费 {formatDateTime(account.insufficientSince)}
                     </Badge>
                   ) : (
                     <Badge variant={status.variant}>{status.label}</Badge>
                   )}
                 </td>
-                <td className={T.TABLE_CELL_MUTED_CLASS}>
+                <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                   {formatDateTime(account.createdAt)}
                 </td>
                 <td className={T.TABLE_ACTION_CELL_CLASS}>
                   <Button
                     size="sm"
-                    variant="outline"
+                    variant="ghost"
                     onClick={(event) => {
                       event.stopPropagation()
                       onRecharge(account)

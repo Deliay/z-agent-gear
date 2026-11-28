@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeToolCallMessages, kindLabel, toolCallTitle, toolCallColor, toolCallHeaderTitle } from '../tool-call-state';
+import { mergeToolCallMessages, kindLabel, toolCallTitle, toolCallColor, toolCallHeaderTitle, toolCallStatusLabel } from '../tool-call-state';
 
 function message(content: Record<string, unknown>) {
   return { content };
@@ -100,7 +100,7 @@ describe('mergeToolCallMessages', () => {
     expect(merged.kind).toBeUndefined();
     expect(merged.rawInput).toBeUndefined();
     // 渲染层回退 kindLabel
-    expect(toolCallTitle(merged)).toBe('Tool Call');
+    expect(toolCallTitle(merged)).toBe('工具调用');
   });
 
   it('T-MERGE5 should replace fields when update carries values', () => {
@@ -141,7 +141,7 @@ describe('mergeToolCallMessages', () => {
 
     expect(merged.toolCallId).toBe('tc-9');
     expect(merged.status).toBe('completed');
-    expect(toolCallTitle(merged)).toBe('Tool Call');
+    expect(toolCallTitle(merged)).toBe('工具调用');
     expect(merged.title).toBeUndefined();
   });
 
@@ -205,30 +205,38 @@ describe('mergeToolCallMessages', () => {
     const byKind = mergeToolCallMessages([
       message({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-2', kind: 'execute', status: 'completed' }),
     ]);
-    expect(toolCallTitle(byKind)).toBe('Command');
+    expect(toolCallTitle(byKind)).toBe('命令');
   });
 
-  it('T-MERGE12 should not build a duplicated "Tool Call: Tool Call" header (R-3)', () => {
+  it('T-MERGE12 should not build a duplicated "工具调用：工具调用" header (R-3)', () => {
     const missingCreation = mergeToolCallMessages([
       message({ sessionUpdate: 'tool_call_update', toolCallId: 'tc-9', status: 'completed' }),
     ]);
 
-    expect(toolCallHeaderTitle(missingCreation)).toBe('Tool Call');
+    expect(toolCallHeaderTitle(missingCreation)).toBe('工具调用');
 
     const withTitle = mergeToolCallMessages([
       message({ sessionUpdate: 'tool_call', toolCallId: 'tc-1', title: 'npm test' }),
     ]);
-    expect(toolCallHeaderTitle(withTitle)).toBe('Tool Call: npm test');
+    expect(toolCallHeaderTitle(withTitle)).toBe('工具调用：npm test');
   });
 });
 
-describe('kindLabel / toolCallColor', () => {
+describe('kindLabel / toolCallStatusLabel / toolCallColor', () => {
   it('should label known and unknown kinds', () => {
-    expect(kindLabel('execute')).toBe('Command');
-    expect(kindLabel('edit')).toBe('Edit');
-    expect(kindLabel('other')).toBe('Tool Call');
+    expect(kindLabel('execute')).toBe('命令');
+    expect(kindLabel('edit')).toBe('编辑');
+    expect(kindLabel('other')).toBe('工具调用');
     expect(kindLabel('brand_new_kind')).toBe('brand_new_kind');
-    expect(kindLabel(undefined)).toBe('Tool Call');
+    expect(kindLabel(undefined)).toBe('工具调用');
+  });
+
+  it('should localize tool call status labels', () => {
+    expect(toolCallStatusLabel('pending')).toBe('等待中');
+    expect(toolCallStatusLabel('in_progress')).toBe('执行中');
+    expect(toolCallStatusLabel('completed')).toBe('已完成');
+    expect(toolCallStatusLabel('failed')).toBe('失败');
+    expect(toolCallStatusLabel(undefined)).toBe('执行中');
   });
 
   it('should map status to AcpCard semantic colors', () => {

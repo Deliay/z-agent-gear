@@ -141,11 +141,11 @@ describe('WorkflowNodeCard', () => {
     const toolRow = screen.getByTestId('node-live-activity-n1')
     expect(toolRow).toHaveTextContent('执行中: 执行测试')
 
-    mockActivity.value = { activity: { kind: 'text', text: '…总结' }, tokenUsage: null }
+    mockActivity.value = { activity: { kind: 'text', text: '…秘密正文' }, tokenUsage: null }
     rerender(card({ id: 'n1', data: data({ status: 'REWORK' }) } as unknown as NodeProps<WorkflowNodeCardNode>))
     const textRow = screen.getByTestId('node-live-activity-n1')
-    expect(textRow).toHaveTextContent('Concluding...')
-    expect(textRow).not.toHaveTextContent('总结')
+    expect(textRow).toHaveTextContent('正在汇总结果…')
+    expect(textRow).not.toHaveTextContent('秘密正文')
   })
 
   it('T-WFI-NC1b 尚无活动时动态行默认显示「思考中...」', () => {

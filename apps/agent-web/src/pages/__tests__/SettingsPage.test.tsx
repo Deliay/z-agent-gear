@@ -152,7 +152,7 @@ describe('SettingsPage（D5 代理入口移除 / 新增 Valut 与自定义 MCP�
   it('T-SET-NAV: 200px 分组导航 + 分组标题 + data-active 激活高亮 + 可见 H1', () => {
     render(<SettingsPage />);
 
-    const nav = screen.getByRole('navigation', { name: 'Settings navigation' });
+    const nav = screen.getByRole('navigation', { name: '设置导航' });
     expect(nav.parentElement?.className).toContain('md:grid-cols-[200px_1fr]');
     expect(nav.querySelector('h1')).toHaveTextContent('设置');
 
@@ -167,11 +167,32 @@ describe('SettingsPage（D5 代理入口移除 / 新增 Valut 与自定义 MCP�
     expect(within(nav).getByRole('button', { name: '帐号' })).not.toHaveAttribute('data-active', 'true');
   });
 
-  it('T-UIUX-SET1：设置中心左侧导航支持激活态高亮切换', () => {
+  it('T-UIUX-SET1：设置中心左侧导航支持激活态高亮切换与滚动联动（scroll-spy）', () => {
     render(<SettingsPage />);
-    const navButtons = screen.getAllByRole('button', { name: '可用模型' });
-    const desktopBtn = navButtons[navButtons.length - 1];
-    fireEvent.click(desktopBtn);
-    expect(desktopBtn).toHaveAttribute('data-active', 'true');
+    const nav = screen.getByRole('navigation', { name: '设置导航' });
+    const modelBtn = within(nav).getByRole('button', { name: '可用模型' });
+    fireEvent.click(modelBtn);
+    expect(modelBtn).toHaveAttribute('data-active', 'true');
+
+    // 模拟滚动到 #mcp-section 区域，导航高亮应同步切换
+    const scrollContainer = screen.getByTestId('settings-scroll-container');
+    vi.spyOn(scrollContainer, 'getBoundingClientRect').mockReturnValue({
+      top: 0, bottom: 800, left: 0, right: 800, width: 800, height: 800, x: 0, y: 0, toJSON: () => ({}),
+    });
+    const mcpSection = document.getElementById('mcp-section')!;
+    vi.spyOn(mcpSection, 'getBoundingClientRect').mockReturnValue({
+      top: 40, bottom: 400, left: 0, right: 800, width: 800, height: 360, x: 0, y: 40, toJSON: () => ({}),
+    });
+    for (const belowId of ['valut-section', 'custom-mcp-section', 'custom-tool-section', 'workflow-section']) {
+      const el = document.getElementById(belowId);
+      if (el) {
+        vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
+          top: 500, bottom: 900, left: 0, right: 800, width: 800, height: 400, x: 0, y: 500, toJSON: () => ({}),
+        });
+      }
+    }
+
+    fireEvent.scroll(scrollContainer);
+    expect(within(nav).getByRole('button', { name: 'MCP 管理' })).toHaveAttribute('data-active', 'true');
   });
 });

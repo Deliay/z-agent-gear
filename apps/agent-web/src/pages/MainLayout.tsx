@@ -1,6 +1,7 @@
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { CreditCard, GitBranch, Home, MessageSquare, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../stores/auth';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -238,40 +239,80 @@ export default function MainLayout() {
             <SidebarResizer width={sidebarWidth} offsetLeft={56} onWidthChange={setSidebarWidth} />
           </>
         )}
-        <main className="min-w-0 overflow-auto">
+        <main id="main-content" className="min-w-0 overflow-auto">
           <Outlet />
         </main>
       </div>
     );
   } else {
-    // Mobile: show list or detail based on route
+    // Mobile: 列表路由（/、/sessions）全屏展示 Sidebar；其余所有激活路由渲染 <Outlet />
     const path = location.pathname;
-    const isSessionDetail = /^\/sessions\/[^/]+$/.test(path);
-    const isWorkflowDetail = /^\/workflows\/[^/]+$/.test(path);
-    const isKnowledgeBase = path.startsWith('/knowledge-bases/');
-    const isSettings = path.startsWith('/settings');
+    const isListRoute = path === '/' || path === '/sessions';
 
-    const content = isSessionDetail || isWorkflowDetail || isKnowledgeBase || isSettings ? (
-      <main className="h-full overflow-auto">
+    const content = !isListRoute ? (
+      <main id="main-content" className="h-full overflow-auto">
         <Outlet />
       </main>
     ) : (
-      <div className="h-full">
+      <main id="main-content" className="h-full">
         <Sidebar
           name={user?.name ?? ''}
           mobile
           activeDomain={activeDomain}
           onSelectDomain={handleSelectRailDomain}
         />
-      </div>
+      </main>
     );
 
     const mobileNavItems = [
-      { to: '/', label: '概览', end: true },
-      { to: '/sessions', label: '会话' },
-      { to: '/workflows', label: '工作流' },
-      { to: '/billing', label: '费用' },
-      { to: '/settings', label: '设置' },
+      {
+        key: 'home',
+        label: '概览',
+        icon: Home,
+        active: path === '/' && activeDomain !== 'workflows',
+        onClick: () => {
+          if (activeDomain === 'workflows') {
+            handleSelectRailDomain('sessions');
+          }
+          navigate('/');
+        },
+      },
+      {
+        key: 'sessions',
+        label: '会话',
+        icon: MessageSquare,
+        active: path.startsWith('/sessions'),
+        onClick: () => {
+          handleSelectRailDomain('sessions');
+          navigate('/sessions');
+        },
+      },
+      {
+        key: 'workflows',
+        label: '工作流',
+        icon: GitBranch,
+        active: path.startsWith('/workflows') || (path === '/' && activeDomain === 'workflows'),
+        onClick: () => {
+          handleSelectRailDomain('workflows');
+          if (!isListRoute) {
+            navigate('/');
+          }
+        },
+      },
+      {
+        key: 'billing',
+        label: '费用',
+        icon: CreditCard,
+        active: path.startsWith('/billing'),
+        onClick: () => navigate('/billing'),
+      },
+      {
+        key: 'settings',
+        label: '设置',
+        icon: Settings,
+        active: path.startsWith('/settings'),
+        onClick: () => navigate('/settings'),
+      },
     ];
 
     layout = (
@@ -282,20 +323,26 @@ export default function MainLayout() {
           data-testid="mobile-bottom-nav"
           className="flex h-14 shrink-0 items-center justify-around border-t border-border bg-background px-2 pb-[env(safe-area-inset-bottom)]"
         >
-          {mobileNavItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) =>
-                `flex min-w-0 flex-1 items-center justify-center rounded-md px-2 py-2 text-center text-xs font-medium transition-colors ${
-                  isActive ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                }`
-              }
-            >
-              {item.label}
-            </NavLink>
-          ))}
+          {mobileNavItems.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                data-testid={`mobile-nav-${item.key}`}
+                aria-current={item.active ? 'page' : undefined}
+                onClick={item.onClick}
+                className={`flex min-w-0 flex-1 flex-col items-center justify-center gap-0.5 rounded-md px-2 py-1.5 text-center text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                  item.active
+                    ? 'bg-accent text-accent-foreground'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                }`}
+              >
+                <Icon className="size-4 shrink-0" aria-hidden="true" />
+                <span className="truncate leading-none">{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
       </div>
     );

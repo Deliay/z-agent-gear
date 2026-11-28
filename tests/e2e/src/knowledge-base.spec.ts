@@ -17,7 +17,7 @@ import { sectionToggle } from './phase4-helpers';
 
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const FRONT_WEB_URL = process.env.BASE_URL || 'http://localhost:35273';
-const SIDEBAR = 'nav[aria-label="Sidebar"]';
+const SIDEBAR = 'nav[aria-label="侧边栏导航"]';
 const KB_SECTION = '[data-testid="sidebar-section-knowledgeBases"]';
 
 type GqlResult<T = any> = { data?: T; errors?: Array<{ message: string }> };

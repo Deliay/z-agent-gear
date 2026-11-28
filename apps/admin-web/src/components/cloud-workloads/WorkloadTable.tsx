@@ -64,10 +64,10 @@ export default function WorkloadTable({ workloads, onEdit, onDelete }: WorkloadT
                 </td>
                 <td className={T.TABLE_CELL_MUTED_CLASS}>
                   <Badge variant="outline">
-                    {(workload.workloadKind ?? 'STANDARD') === 'HARNESS' ? 'HARNESS' : 'STANDARD'}
+                    {(workload.workloadKind ?? 'STANDARD') === 'HARNESS' ? 'Harness' : '标准'}
                   </Badge>
                 </td>
-                <td className={T.TABLE_CELL_MUTED_CLASS}>
+                <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                   {paramCount > 0 ? paramCount : '-'}
                 </td>
                 <td className={T.TABLE_CELL_MUTED_CLASS}>
@@ -92,7 +92,7 @@ export default function WorkloadTable({ workloads, onEdit, onDelete }: WorkloadT
                 <td className={T.TABLE_CELL_MUTED_CLASS}>
                   <span className="block max-w-xs truncate">{scriptSummary(workload.postScript)}</span>
                 </td>
-                <td className={T.TABLE_CELL_MUTED_CLASS}>
+                <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                   {formatDateTime(workload.updatedAt)}
                 </td>
                 <td className={T.TABLE_CELL_CLASS}>

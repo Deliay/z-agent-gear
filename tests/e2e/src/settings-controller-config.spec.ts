@@ -91,7 +91,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
   await page.fill('#username', username);
   await page.fill('#password', 'testpass123');
   await page.click('button[type="submit"]');
-  await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('nav[aria-label="侧边栏导航"]')).toBeVisible({ timeout: 10000 });
 }
 
 test.describe('Settings Controller Config Page E2E', () => {
@@ -102,7 +102,7 @@ test.describe('Settings Controller Config Page E2E', () => {
     const { controllerId, disconnect } = await registerController(rawKey);
 
     await loginViaUI(page, username);
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
     // UI 四期侧边栏「主机」分区默认折叠，先展开再定位控制器条目
     await sidebar.getByRole('button', { name: /^主机/ }).click();
 
@@ -259,7 +259,7 @@ test.describe('Settings Controller Config Page E2E', () => {
     const { disconnect } = await registerController(rawKey);
 
     await loginViaUI(page, username);
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
     // 「主机」分区默认折叠，先展开（齿轮点击本身不得触发展开控制器节点）
     await sidebar.getByRole('button', { name: /^主机/ }).click();
 

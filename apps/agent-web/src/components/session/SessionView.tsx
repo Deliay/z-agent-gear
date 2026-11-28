@@ -83,15 +83,15 @@ const WORKFLOW_CONTINUE_PROMPT =
   '确实无法继续时调用 failCurrentNode 说明原因。不要只输出文本而不调用工具。';
 
 const errorMessages: Record<string, string> = {
-  CONTROLLER_OFFLINE: 'Controller is offline. Please check your controller connection.',
-  ACP_SERVER_UNAVAILABLE: 'ACP server is not available on the controller.',
-  ACP_SESSION_EXPIRED: 'The remote session has expired. Please start a new session.',
-  WORKSPACE_PATH_INVALID: 'The workspace path no longer exists on your controller.',
-  RESUME_TIMEOUT: 'Resume timed out. Please try again or start a new session.',
+  CONTROLLER_OFFLINE: '控制器已离线，请检查控制器连接。',
+  ACP_SERVER_UNAVAILABLE: '控制器上的 ACP 服务不可用。',
+  ACP_SESSION_EXPIRED: '远端 Session 已过期，请新建会话。',
+  WORKSPACE_PATH_INVALID: '控制器上的工作区路径已不存在。',
+  RESUME_TIMEOUT: '恢复会话超时，请重试或新建会话。',
 };
 
 function getErrorMessage(error?: string): string {
-  return error ? (errorMessages[error] || `Failed to resume session: ${error}`) : 'Failed to resume session. Please try again.';
+  return error ? (errorMessages[error] || `恢复会话失败：${error}`) : '恢复会话失败，请重试。';
 }
 
 /** 只读提示文案：三场景统一「会话记录仅供只读回看」语义（服务端 readOnlyReason 为唯一判定来源） */

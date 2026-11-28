@@ -24,7 +24,7 @@ async function waitFor(fn: () => boolean | Promise<boolean>, timeoutMs = 15000, 
  * 旧实现会点击控制器（反而折叠）并等待 workspace 文本按钮，但当前 UI 的 worktree 行是分支按钮。
  */
 async function expandSidebarToWorktrees(page: Page, hostname = 'e2e-host'): Promise<void> {
-  const sidebar = page.locator('nav[aria-label="Sidebar"]');
+  const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
   // UI 四期「主机」分区默认折叠，先展开再找控制器（按钮与齿轮名都含 hostname，取 first）
   const hostSection = sidebar.getByRole('button', { name: /^主机/ });
   if ((await hostSection.getAttribute('aria-expanded')) !== 'true') {

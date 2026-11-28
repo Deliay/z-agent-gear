@@ -32,6 +32,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { QueryError } from '@/components/ui/query-error'
+import { LoadingSkeleton } from '@/components/ui/skeleton'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import AccountTable from '@/components/billing/AccountTable'
 import RechargeDialog from '@/components/billing/RechargeDialog'
@@ -246,7 +247,7 @@ export default function BillingPage() {
           <div className="flex flex-wrap items-center gap-2">
             <select
               aria-label="账户类型"
-              className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+              className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
               value={ownerType}
               onChange={(event) => {
                 setOwnerType(event.target.value as BillingOwnerType | '')
@@ -254,8 +255,8 @@ export default function BillingPage() {
               }}
             >
               <option value="">全部类型</option>
-              <option value="tenant">租户（tenant）</option>
-              <option value="admin_user">后台（admin_user）</option>
+              <option value="tenant">租户</option>
+              <option value="admin_user">后台</option>
             </select>
             <Input
               className="max-w-xs"
@@ -271,7 +272,7 @@ export default function BillingPage() {
         </CardHeader>
         <CardContent>
           {accountsQuery.loading && !accountsQuery.data ? (
-            <p className="text-sm text-muted-foreground">加载中…</p>
+            <LoadingSkeleton rows={4} className="border-0 p-0" />
           ) : (
             <>
               <AccountTable
@@ -284,7 +285,7 @@ export default function BillingPage() {
                 <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
                   上一页
                 </Button>
-                <span className="text-muted-foreground">第 {page} 页</span>
+                <span className="tabular-nums text-muted-foreground">第 {page} 页</span>
                 <Button size="sm" variant="outline" disabled={accounts.length < pageSize} onClick={() => setPage((p) => p + 1)}>
                   下一页
                 </Button>
@@ -312,28 +313,40 @@ export default function BillingPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-5">
-                <div>
-                  <div className="text-muted-foreground">可用余额</div>
-                  <div className={selected.availableBalance < 0 ? 'text-destructive' : ''}>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+                <div className="rounded-lg bg-muted/40 p-3">
+                  <div className="text-xs text-muted-foreground">可用余额</div>
+                  <div
+                    className={`mt-1 text-xl font-semibold tabular-nums ${
+                      selected.availableBalance < 0 ? 'text-destructive-text' : 'text-foreground'
+                    }`}
+                  >
                     {selected.availableBalance.toFixed(2)}
                   </div>
                 </div>
-                <div>
-                  <div className="text-muted-foreground">现金</div>
-                  <div>{selected.cashBalance.toFixed(2)}</div>
+                <div className="rounded-lg bg-muted/40 p-3">
+                  <div className="text-xs text-muted-foreground">现金</div>
+                  <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">
+                    {selected.cashBalance.toFixed(2)}
+                  </div>
                 </div>
-                <div>
-                  <div className="text-muted-foreground">冻结</div>
-                  <div>{selected.frozenAmount.toFixed(2)}</div>
+                <div className="rounded-lg bg-muted/40 p-3">
+                  <div className="text-xs text-muted-foreground">冻结</div>
+                  <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">
+                    {selected.frozenAmount.toFixed(2)}
+                  </div>
                 </div>
-                <div>
-                  <div className="text-muted-foreground">授信额度</div>
-                  <div>{selected.creditLimit.toFixed(2)}</div>
+                <div className="rounded-lg bg-muted/40 p-3">
+                  <div className="text-xs text-muted-foreground">授信额度</div>
+                  <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">
+                    {selected.creditLimit.toFixed(2)}
+                  </div>
                 </div>
-                <div>
-                  <div className="text-muted-foreground">资金流水</div>
-                  <div>{selected.ledgerCount} 笔</div>
+                <div className="rounded-lg bg-muted/40 p-3">
+                  <div className="text-xs text-muted-foreground">资金流水</div>
+                  <div className="mt-1 text-xl font-semibold tabular-nums text-foreground">
+                    {selected.ledgerCount} 笔
+                  </div>
                 </div>
               </div>
               <div className="flex items-end gap-2">
@@ -383,7 +396,7 @@ export default function BillingPage() {
                 <label className="space-y-1">
                   <span className="block text-muted-foreground">类型</span>
                   <select
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                     value={invoiceType}
                     onChange={(event) => {
                       setInvoiceType(event.target.value as BillingLedgerType | '')
@@ -399,7 +412,7 @@ export default function BillingPage() {
                 <label className="space-y-1">
                   <span className="block text-muted-foreground">来源</span>
                   <select
-                    className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                    className="h-9 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
                     value={invoiceCategory}
                     onChange={(event) => {
                       setInvoiceCategory(event.target.value as BillingCategory | '')
@@ -415,14 +428,12 @@ export default function BillingPage() {
                 </label>
               </div>
               {invoicesQuery.loading && !invoicesQuery.data ? (
-                <p className="text-sm text-muted-foreground">加载中…</p>
+                <LoadingSkeleton rows={3} className="border-0 p-0" />
               ) : invoicesQuery.error ? (
-                <div className="space-y-2 text-sm text-destructive">
-                  <p>账单加载失败：{invoicesQuery.error.message}</p>
-                  <Button size="sm" variant="outline" onClick={() => void invoicesQuery.refetch()}>
-                    重试
-                  </Button>
-                </div>
+                <QueryError
+                  message={`账单加载失败：${invoicesQuery.error.message}`}
+                  onRetry={() => void invoicesQuery.refetch()}
+                />
               ) : invoices.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   暂无账单{invoicePage > 1 ? '（本页为空，可返回上一页）' : ''}
@@ -434,7 +445,7 @@ export default function BillingPage() {
                     <Button size="sm" variant="outline" disabled={invoicePage <= 1} onClick={() => setInvoicePage((p) => Math.max(1, p - 1))}>
                       上一页
                     </Button>
-                    <span className="text-muted-foreground">第 {invoicePage} 页</span>
+                    <span className="tabular-nums text-muted-foreground">第 {invoicePage} 页</span>
                     <Button size="sm" variant="outline" disabled={invoices.length < pageSize} onClick={() => setInvoicePage((p) => p + 1)}>
                       下一页
                     </Button>
@@ -450,14 +461,12 @@ export default function BillingPage() {
             </CardHeader>
             <CardContent>
               {callsQuery.loading && !callsQuery.data ? (
-                <p className="text-sm text-muted-foreground">加载中…</p>
+                <LoadingSkeleton rows={3} className="border-0 p-0" />
               ) : callsQuery.error ? (
-                <div className="space-y-2 text-sm text-destructive">
-                  <p>调用记录加载失败：{callsQuery.error.message}</p>
-                  <Button size="sm" variant="outline" onClick={() => void callsQuery.refetch()}>
-                    重试
-                  </Button>
-                </div>
+                <QueryError
+                  message={`调用记录加载失败：${callsQuery.error.message}`}
+                  onRetry={() => void callsQuery.refetch()}
+                />
               ) : calls.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                   暂无调用记录{callPage > 1 ? '（本页为空，可返回上一页）' : ''}
@@ -469,7 +478,7 @@ export default function BillingPage() {
                       <tr className={T.TABLE_HEAD_CLASS}>
                         <th className={T.TABLE_HEAD_CELL_CLASS}>时间</th>
                         <th className={T.TABLE_HEAD_CELL_CLASS}>模型</th>
-                        <th className={T.TABLE_HEAD_CELL_CLASS}>Request</th>
+                        <th className={T.TABLE_HEAD_CELL_CLASS}>请求 ID</th>
                         <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>输入/缓存/输出</th>
                         <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>费用</th>
                         <th className={T.TABLE_HEAD_CELL_CLASS}>状态</th>
@@ -478,7 +487,7 @@ export default function BillingPage() {
                     <tbody>
                       {calls.map((call) => (
                         <tr key={call.id} className={T.TABLE_ROW_CLASS}>
-                          <td className={T.TABLE_CELL_MUTED_CLASS}>
+                          <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                             {formatDateTime(call.startedAt)}
                           </td>
                           <td className={T.TABLE_CELL_CLASS}>{call.modelName || call.modelId}</td>
@@ -503,7 +512,7 @@ export default function BillingPage() {
                 <Button size="sm" variant="outline" disabled={callPage <= 1} onClick={() => setCallPage((p) => Math.max(1, p - 1))}>
                   上一页
                 </Button>
-                <span className="text-muted-foreground">第 {callPage} 页</span>
+                <span className="tabular-nums text-muted-foreground">第 {callPage} 页</span>
                 <Button size="sm" variant="outline" disabled={calls.length < pageSize} onClick={() => setCallPage((p) => p + 1)}>
                   下一页
                 </Button>
@@ -529,14 +538,12 @@ export default function BillingPage() {
             </CardHeader>
             <CardContent>
               {rollupsQuery.error ? (
-                <div className="space-y-2 text-sm text-destructive">
-                  <p>汇总加载失败：{rollupsQuery.error.message}</p>
-                  <Button size="sm" variant="outline" onClick={() => void rollupsQuery.refetch()}>
-                    重试
-                  </Button>
-                </div>
+                <QueryError
+                  message={`汇总加载失败：${rollupsQuery.error.message}`}
+                  onRetry={() => void rollupsQuery.refetch()}
+                />
               ) : rollupsQuery.loading && !rollupsQuery.data ? (
-                <p className="text-sm text-muted-foreground">加载中…</p>
+                <LoadingSkeleton rows={3} className="border-0 p-0" />
               ) : rollups.length === 0 ? (
                 <p className="text-sm text-muted-foreground">区间内暂无计费汇总</p>
               ) : (

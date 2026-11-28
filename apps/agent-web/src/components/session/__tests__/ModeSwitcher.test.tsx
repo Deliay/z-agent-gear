@@ -21,7 +21,7 @@ describe('ModeSwitcher', () => {
     expect(screen.getByText('Code')).toBeDefined();
   });
 
-  it('should display "Mode" placeholder when no current mode', () => {
+  it('should display "模式" placeholder when no current mode', () => {
     render(
       <ModeSwitcher
         currentModeId={null}
@@ -31,7 +31,7 @@ describe('ModeSwitcher', () => {
       />,
     );
 
-    expect(screen.getByText('Mode')).toBeDefined();
+    expect(screen.getByText('模式')).toBeDefined();
   });
 
   it('should be disabled when status is not idling', () => {

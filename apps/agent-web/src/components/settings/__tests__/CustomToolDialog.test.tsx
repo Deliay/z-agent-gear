@@ -31,22 +31,22 @@ describe('CustomToolDialog（T-CTW2）', () => {
   it('切换到 http：GET 类隐藏 body；POST 默认 JSON', () => {
     renderDialog()
     fireEvent.change(screen.getByLabelText('类型'), { target: { value: 'http' } })
-    expect(screen.getByLabelText('Method')).toBeInTheDocument()
-    expect(screen.queryByLabelText('Body')).toBeNull()
+    expect(screen.getByLabelText('请求方法')).toBeInTheDocument()
+    expect(screen.queryByLabelText('请求体')).toBeNull()
 
-    fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'POST' } })
-    expect(screen.getByLabelText('Body')).toBeInTheDocument()
-    expect((screen.getByLabelText('Body') as HTMLSelectElement).value).toBe('json')
+    fireEvent.change(screen.getByLabelText('请求方法'), { target: { value: 'POST' } })
+    expect(screen.getByLabelText('请求体')).toBeInTheDocument()
+    expect((screen.getByLabelText('请求体') as HTMLSelectElement).value).toBe('json')
 
-    fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'GET' } })
-    expect(screen.queryByLabelText('Body')).toBeNull()
+    fireEvent.change(screen.getByLabelText('请求方法'), { target: { value: 'GET' } })
+    expect(screen.queryByLabelText('请求体')).toBeNull()
   })
 
   it('form 模式：file 类型保留但禁用并提示本期不支持', () => {
     renderDialog()
     fireEvent.change(screen.getByLabelText('类型'), { target: { value: 'http' } })
-    fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'POST' } })
-    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'form' } })
+    fireEvent.change(screen.getByLabelText('请求方法'), { target: { value: 'POST' } })
+    fireEvent.change(screen.getByLabelText('请求体'), { target: { value: 'form' } })
     fireEvent.click(screen.getByRole('button', { name: '添加 Form 字段' }))
     const select = screen.getByLabelText('Form 字段类型 1') as HTMLSelectElement
     const fileOption = Array.from(select.options).find((option) => option.value === 'file')
@@ -58,13 +58,13 @@ describe('CustomToolDialog（T-CTW2）', () => {
     const onSubmit = renderDialog()
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'stale-form-tool' } })
     fireEvent.change(screen.getByLabelText('类型'), { target: { value: 'http' } })
-    fireEvent.change(screen.getByLabelText('Method'), { target: { value: 'POST' } })
+    fireEvent.change(screen.getByLabelText('请求方法'), { target: { value: 'POST' } })
 
-    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'form' } })
+    fireEvent.change(screen.getByLabelText('请求体'), { target: { value: 'form' } })
     fireEvent.click(screen.getByRole('button', { name: '添加 Form 字段' }))
     expect(screen.getByLabelText('Form 字段 1')).toHaveValue('')
 
-    fireEvent.change(screen.getByLabelText('Body'), { target: { value: 'json' } })
+    fireEvent.change(screen.getByLabelText('请求体'), { target: { value: 'json' } })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalled())

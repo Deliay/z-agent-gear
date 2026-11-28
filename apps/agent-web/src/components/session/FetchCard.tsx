@@ -16,11 +16,11 @@ export default function FetchCard({ toolCall, expanded, onExpandedChange }: Fetc
   const status = toolCall.status || 'in_progress';
   const url = typeof rawInput?.url === 'string' ? rawInput.url : '';
   const output = typeof rawOutput?.output === 'string' ? rawOutput.output : '';
-  const summary = url ? `Fetch: ${url.length > 40 ? url.slice(0, 40) + '...' : url}` : 'Fetch URL';
+  const summary = url ? `抓取：${url.length > 40 ? url.slice(0, 40) + '...' : url}` : '抓取网页';
 
   return (
     <AcpCard
-      title="Fetch URL"
+      title="抓取网页"
       summary={summary}
       defaultCollapsed={true}
       color={toolCallColor(status)}
@@ -31,7 +31,7 @@ export default function FetchCard({ toolCall, expanded, onExpandedChange }: Fetc
       <div className="space-y-3">
         {url && (
           <div>
-            <div className="mb-1 text-xs font-medium text-muted-foreground">URL</div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">链接地址</div>
             <a
               href={url}
               target="_blank"
@@ -44,7 +44,7 @@ export default function FetchCard({ toolCall, expanded, onExpandedChange }: Fetc
         )}
         {output && (
           <div>
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Result</div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">返回结果</div>
             <div className="rounded-md bg-background px-3 py-2 text-sm text-foreground">
               <MarkdownContent content={output} />
             </div>

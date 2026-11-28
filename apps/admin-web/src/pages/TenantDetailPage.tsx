@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { QueryError } from '@/components/ui/query-error'
+import { LoadingSkeleton } from '@/components/ui/skeleton'
 import AddMemberDialog from '@/components/tenants/AddMemberDialog'
 import ChangeMemberRoleDialog from '@/components/tenants/ChangeMemberRoleDialog'
 import {
@@ -155,7 +156,7 @@ export default function TenantDetailPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
+    <div className="mx-auto max-w-6xl space-y-6 p-6">
       <Link
         to="/tenants"
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -165,7 +166,7 @@ export default function TenantDetailPage() {
       </Link>
 
       {loading && !data ? (
-        <div className="text-sm text-muted-foreground">加载中...</div>
+        <LoadingSkeleton rows={3} />
       ) : error && !data ? (
         <QueryError message={error.message} onRetry={() => refetch()} />
       ) : !tenant ? (
@@ -186,7 +187,7 @@ export default function TenantDetailPage() {
             </Button>
           </div>
 
-          <section className="rounded-lg border p-4">
+          <section className="rounded-lg border bg-card p-4">
             <h2 className="mb-3 font-heading text-base font-medium text-foreground">租户概要</h2>
             <dl className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
               <div>
@@ -203,7 +204,7 @@ export default function TenantDetailPage() {
               </div>
               <div>
                 <dt className="text-muted-foreground">创建时间</dt>
-                <dd className="mt-1">{formatDateTime(tenant.createdAt)}</dd>
+                <dd className="mt-1 tabular-nums">{formatDateTime(tenant.createdAt)}</dd>
               </div>
             </dl>
           </section>
@@ -244,7 +245,7 @@ export default function TenantDetailPage() {
                             {tenantRoleText(user.role)}
                           </Badge>
                         </td>
-                        <td className={T.TABLE_CELL_MUTED_CLASS}>
+                        <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                           {formatDateTime(user.createdAt)}
                         </td>
                         {isTeam && (
@@ -252,7 +253,7 @@ export default function TenantDetailPage() {
                             <div className={`${T.TABLE_ACTION_CLASS}`}>
                               <Button
                                 size="sm"
-                                variant="outline"
+                                variant="ghost"
                                 onClick={() => {
                                   setChangeError(null)
                                   setChangeTarget(user)
@@ -262,7 +263,7 @@ export default function TenantDetailPage() {
                               </Button>
                               <Button
                                 size="sm"
-                                variant="destructive"
+                                variant="ghost-danger"
                                 onClick={() => setRemoveTarget(user)}
                               >
                                 移除

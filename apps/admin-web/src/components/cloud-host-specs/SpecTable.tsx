@@ -35,9 +35,9 @@ export default function SpecTable({ specs, onEdit, onDelete }: SpecTableProps) {
         <thead>
           <tr className={T.TABLE_HEAD_CLASS}>
             <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>CPU</th>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>内存（GiB）</th>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>临时存储（GiB）</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>CPU</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>内存（GiB）</th>
+            <th className={T.TABLE_HEAD_CELL_NUMERIC_CLASS}>临时存储（GiB）</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>白名单</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>预制</th>
             <th className={T.TABLE_HEAD_CELL_CLASS}>更新时间</th>
@@ -66,7 +66,7 @@ export default function SpecTable({ specs, onEdit, onDelete }: SpecTableProps) {
                 {spec.whitelistEnabled ? (
                   <span className="flex flex-wrap items-center gap-1">
                     <Badge variant="success">开启</Badge>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-xs tabular-nums text-muted-foreground">
                       可见租户 {spec.allowedTenantIds.length}
                     </span>
                   </span>
@@ -77,7 +77,7 @@ export default function SpecTable({ specs, onEdit, onDelete }: SpecTableProps) {
               <td className={T.TABLE_CELL_CLASS}>
                 {spec.isPreset ? <Badge variant="info">预制</Badge> : '-'}
               </td>
-              <td className={T.TABLE_CELL_MUTED_CLASS}>
+              <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                 {formatDateTime(spec.updatedAt)}
               </td>
               <td className={T.TABLE_CELL_CLASS}>

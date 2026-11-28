@@ -121,7 +121,7 @@ export default function ConfigureWorkflowDialog({
       return
     }
     if (!controllerId) {
-      setError('请选择一个在线 Controller')
+      setError('请选择一个在线控制器')
       return
     }
     if (!editing && !templateId) {
@@ -211,13 +211,13 @@ export default function ConfigureWorkflowDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label>Controller（在线）</Label>
+              <Label>控制器（在线）</Label>
               <Select value={controllerId} onValueChange={(v) => v && setControllerId(v)}>
-                <SelectTrigger aria-label="Controller">
+                <SelectTrigger aria-label="控制器">
                   <SelectValue>
                     {onlineControllers.find((c) => c.id === controllerId)?.name ??
                       onlineControllers.find((c) => c.id === controllerId)?.hostname ??
-                      '选择 Controller'}
+                      '选择控制器'}
                   </SelectValue>
                   <SelectIcon />
                 </SelectTrigger>
@@ -230,7 +230,7 @@ export default function ConfigureWorkflowDialog({
                 </SelectPopup>
               </Select>
               {onlineControllers.length === 0 && (
-                <p className="text-xs text-muted-foreground">暂无在线 Controller</p>
+                <p className="text-xs text-muted-foreground">暂无在线控制器</p>
               )}
             </div>
           </div>

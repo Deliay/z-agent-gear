@@ -42,7 +42,7 @@ export default function BaseImageTable({ images, onEdit, onDelete }: BaseImageTa
               <td className={`max-w-md truncate ${T.TABLE_CELL_MUTED_CLASS}`}>
                 {image.description || '-'}
               </td>
-              <td className={T.TABLE_CELL_MUTED_CLASS}>
+              <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                 {formatDateTime(image.updatedAt)}
               </td>
               <td className={T.TABLE_CELL_CLASS}>

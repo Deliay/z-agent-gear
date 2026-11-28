@@ -42,10 +42,19 @@ describe('GithubBindingSection', () => {
     mockUseSearchParams.mockReturnValue([new URLSearchParams(), vi.fn()]);
   });
 
-  it('should show loading state', () => {
+  it('should show loading state only when data is absent (Apollo v4 polling trap)', () => {
     setSettings([], { loading: true });
     render(<GithubBindingSection />);
     expect(screen.getByText('加载中...')).toBeDefined();
+
+    mockSettings.mockReturnValue({
+      data: { githubAccounts: [], githubAppUrl: defaultAppUrl },
+      loading: true,
+      error: null,
+      refetch: vi.fn(),
+    });
+    render(<GithubBindingSection />);
+    expect(screen.getByText(/暂无绑定/)).toBeDefined();
   });
 
   it('should show empty state when no accounts bound', () => {

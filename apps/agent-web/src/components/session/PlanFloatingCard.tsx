@@ -26,9 +26,9 @@ const statusColors = {
 };
 
 const statusLabels = {
-  pending: 'Pending',
-  in_progress: 'In Progress',
-  completed: 'Completed',
+  pending: '待处理',
+  in_progress: '进行中',
+  completed: '已完成',
 };
 
 function parsePlanEntries(messages: Array<{ content: string | Record<string, unknown> }>): PlanEntry[] {
@@ -74,13 +74,13 @@ export default function PlanFloatingCard({ messages }: PlanFloatingCardProps) {
         ) : (
           <ChevronRight className="h-4 w-4 shrink-0 text-warning-text" />
         )}
-        <span className="text-sm font-medium">Plan</span>
+        <span className="text-sm font-medium">计划</span>
         {!expanded && (
           <span className="ml-auto truncate text-xs text-warning-text max-w-[50%]">
             {lastEntry.content}
           </span>
         )}
-        <span className="ml-2 text-xs text-warning-text">
+        <span className="ml-2 text-xs tabular-nums text-warning-text">
           {planSummaryLabel(completed, total)}
         </span>
       </button>
@@ -89,7 +89,7 @@ export default function PlanFloatingCard({ messages }: PlanFloatingCardProps) {
           {entries.map((entry, i) => {
             const Icon = statusIcons[entry.status as keyof typeof statusIcons] || Circle;
             const colorClass = statusColors[entry.status as keyof typeof statusColors] || 'text-muted-foreground';
-            const label = statusLabels[entry.status as keyof typeof statusLabels] || 'Pending';
+            const label = statusLabels[entry.status as keyof typeof statusLabels] || '待处理';
             return (
               <div key={i} className="flex items-start gap-2">
                 <Icon className={`h-3.5 w-3.5 mt-0.5 shrink-0 ${entry.status === 'in_progress' ? 'animate-spin' : ''} ${colorClass}`} />

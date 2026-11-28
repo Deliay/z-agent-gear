@@ -102,11 +102,11 @@ test.describe('Github workload E2E', () => {
     test.skip(!(await waitForRunning(page, token, name)), '云电脑未达到 RUNNING：跳过 Github 入口用例');
 
     await page.reload();
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
     await expect(sidebar.getByText(name, { exact: true })).toBeVisible({ timeout: 15000 });
 
     const controllerRow = sidebar.locator('li', { hasText: name });
-    await controllerRow.getByLabel('Github 项目设置').click();
+    await controllerRow.getByLabel('GitHub 项目设置').click();
 
     const dialog = page.getByRole('dialog');
     await expect(dialog.getByRole('heading', { name: 'Git 项目设置' })).toBeVisible();

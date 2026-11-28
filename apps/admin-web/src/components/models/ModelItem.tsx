@@ -35,7 +35,7 @@ export default function ModelItem({ model, onToggle, onDelete, onEdit, togglePen
     <div
       ref={setNodeRef}
       style={style}
-      className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${
+      className={`flex items-center gap-3 rounded-lg border bg-card p-3 transition-colors ${
         isDragging ? 'z-50 shadow-lg' : ''
       } ${model.isEnabled ? '' : 'opacity-60'}`}
     >
@@ -67,7 +67,7 @@ export default function ModelItem({ model, onToggle, onDelete, onEdit, togglePen
             </span>
           )}
         </div>
-        <div className="mt-0.5 text-xs text-muted-foreground" data-testid="model-context-length">
+        <div className="mt-0.5 text-xs tabular-nums text-muted-foreground" data-testid="model-context-length">
           最长上下文：{typeof model.contextLength === 'number'
             ? `${model.contextLength.toLocaleString('en-US')} tokens`
             : '未设置'}
@@ -86,8 +86,9 @@ export default function ModelItem({ model, onToggle, onDelete, onEdit, togglePen
       <Button
         variant="ghost"
         size="icon"
-        className="size-7 text-muted-foreground hover:text-destructive"
+        className="size-7 text-muted-foreground hover:text-destructive-text"
         onClick={() => onDelete(model.id)}
+        aria-label="删除模型"
         title="删除模型"
       >
         <Trash2Icon className="size-4" />

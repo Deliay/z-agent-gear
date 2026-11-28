@@ -85,8 +85,8 @@ describe('CloudWorkloadsPage', () => {
     ]);
     render(<CloudWorkloadsPage />);
 
-    expect(screen.getAllByText('STANDARD')).toHaveLength(2);
-    expect(screen.getByText('HARNESS')).toBeDefined();
+    expect(screen.getAllByText('标准')).toHaveLength(2);
+    expect(screen.getByText('Harness')).toBeDefined();
   });
 
   it('T-FW1: renders an error state with retry instead of the empty state', () => {

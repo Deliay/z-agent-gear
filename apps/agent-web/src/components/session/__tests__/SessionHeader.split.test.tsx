@@ -64,4 +64,12 @@ describe('SessionHeader 分屏门控（T-HDR / 返工 A2 前置）', () => {
     fireEvent.click(screen.getByTestId('live-toggle'));
     expect(onLiveChange).toHaveBeenCalledWith(true);
   });
+
+  it('分屏切换与实况跟随图标按钮均提供 aria-label 与 aria-pressed', () => {
+    render(<SessionHeader {...baseProps({ splitMode: 'horizontal', live: true })} />);
+    expect(screen.getByRole('button', { name: '仅会话' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '左右分栏' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '上下分栏' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '实况跟随' })).toHaveAttribute('aria-pressed', 'true');
+  });
 });

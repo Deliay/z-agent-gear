@@ -1,6 +1,6 @@
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@apollo/client/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/stores/auth';
 import MobileBackButton from '../components/MobileBackButton';
 import { Button } from '@/components/ui/button';
@@ -120,6 +120,32 @@ export default function SettingsPage() {
     : NAV_GROUPS;
 
   const [activeSectionId, setActiveSectionId] = useState<string>('account-section');
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    const sectionIds = [
+      ...NAV_ITEMS.map((item) => item.id),
+      ...(storageEnabled ? [STORAGE_NAV_ITEM.id] : []),
+    ];
+    const handleScroll = () => {
+      const containerTop = container.getBoundingClientRect().top;
+      let current = sectionIds[0];
+      for (const id of sectionIds) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        if (el.getBoundingClientRect().top - containerTop <= 80) {
+          current = id;
+        }
+      }
+      setActiveSectionId(current);
+    };
+
+    container.addEventListener('scroll', handleScroll, { passive: true });
+    return () => container.removeEventListener('scroll', handleScroll);
+  }, [storageEnabled]);
 
   const handleLogout = () => {
     logout();
@@ -187,7 +213,7 @@ export default function SettingsPage() {
       </div>
 
       <div className="flex flex-1 overflow-hidden md:grid md:grid-cols-[200px_1fr]">
-        <nav className="hidden border-r p-4 md:block" aria-label="Settings navigation">
+        <nav className="hidden border-r p-4 md:block" aria-label="设置导航">
           <h1 className="mb-3 px-3 text-xl font-semibold text-foreground">设置</h1>
           <div className="space-y-1">
             {navGroups.map((group) => (
@@ -219,7 +245,7 @@ export default function SettingsPage() {
           </div>
         </nav>
 
-        <div className="flex-1 overflow-y-auto p-4 md:p-8">
+        <div ref={scrollContainerRef} data-testid="settings-scroll-container" className="flex-1 overflow-y-auto p-4 md:p-8">
           <WorkspaceContextBanner />
           {bindNotice && (
             <div

@@ -3,7 +3,7 @@ import { io as SocketIOClient, type Socket } from 'socket.io-client';
 import { registerUser, createControllerKey, loginViaUI, createWorkspace, createSession, gqlRequest } from './helpers';
 
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
-const sidebarSel = 'nav[aria-label="Sidebar"]';
+const sidebarSel = 'nav[aria-label="侧边栏导航"]';
 
 // ---------------------------------------------------------------------------
 // Fake controller：应答 acp:check 与 worktree 列举

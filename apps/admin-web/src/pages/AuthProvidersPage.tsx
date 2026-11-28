@@ -4,6 +4,14 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { QueryError } from '@/components/ui/query-error'
@@ -220,7 +228,7 @@ export default function AuthProvidersPage() {
   }
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-heading text-xl font-semibold text-foreground">登录认证</h1>
@@ -242,7 +250,7 @@ export default function AuthProvidersPage() {
             providers.map((provider) => (
               <div
                 key={provider.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-muted/40 p-3"
               >
                 <section className="min-w-0 space-y-1">
                   <span className="flex items-center gap-2">
@@ -259,7 +267,7 @@ export default function AuthProvidersPage() {
                   </p>
                 </section>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="outline" onClick={() => openEdit(provider)}>
+                  <Button size="sm" variant="ghost" onClick={() => openEdit(provider)}>
                     编辑
                   </Button>
                   <Button
@@ -289,7 +297,7 @@ export default function AuthProvidersPage() {
                 value={githubForm.clientId}
                 onChange={(e) => setGithubForm({ ...githubForm, clientId: e.target.value })}
                 placeholder={github ? '留空保持不变' : 'GitHub OAuth App Client ID'}
-            />
+              />
             </div>
             <div className="space-y-1">
               <Label htmlFor="gh-client-secret">Client Secret</Label>
@@ -308,27 +316,28 @@ export default function AuthProvidersPage() {
               </div>
             )}
             <div className="flex flex-wrap gap-4 text-sm">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+              <label className="flex cursor-pointer items-center gap-2">
+                <Checkbox
                   checked={githubForm.enabled}
-                  onChange={(e) => setGithubForm({ ...githubForm, enabled: e.target.checked })}
+                  onCheckedChange={(checked) => setGithubForm({ ...githubForm, enabled: Boolean(checked) })}
                 />
                 启用
               </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+              <label className="flex cursor-pointer items-center gap-2">
+                <Checkbox
                   checked={githubForm.enableFrontLogin}
-                  onChange={(e) => setGithubForm({ ...githubForm, enableFrontLogin: e.target.checked })}
+                  onCheckedChange={(checked) =>
+                    setGithubForm({ ...githubForm, enableFrontLogin: Boolean(checked) })
+                  }
                 />
                 前台登录
               </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+              <label className="flex cursor-pointer items-center gap-2">
+                <Checkbox
                   checked={githubForm.enableAdminLogin}
-                  onChange={(e) => setGithubForm({ ...githubForm, enableAdminLogin: e.target.checked })}
+                  onCheckedChange={(checked) =>
+                    setGithubForm({ ...githubForm, enableAdminLogin: Boolean(checked) })
+                  }
                 />
                 后台登录
               </label>
@@ -340,102 +349,99 @@ export default function AuthProvidersPage() {
         </CardContent>
       </Card>
 
-      {formOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay/40 p-4">
-          <Card className="w-full max-w-lg">
-            <CardHeader>
-              <CardTitle className="text-base">
-                {editingId ? '编辑 OIDC Provider' : '新增 OIDC Provider'}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <form onSubmit={submitProvider} className="space-y-3">
-                <div className="space-y-1">
-                  <Label htmlFor="oidc-name">显示名称</Label>
-                  <Input
-                    id="oidc-name"
-                    value={form.displayName}
-                    onChange={(e) => setForm({ ...form, displayName: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="oidc-issuer">Issuer</Label>
-                  <Input
-                    id="oidc-issuer"
-                    value={form.issuer}
-                    onChange={(e) => setForm({ ...form, issuer: e.target.value })}
-                    placeholder="https://idp.example.com"
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="oidc-client-id">Client ID</Label>
-                  <Input
-                    id="oidc-client-id"
-                    value={form.clientId}
-                    onChange={(e) => setForm({ ...form, clientId: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="oidc-secret">Client Secret</Label>
-                  <Input
-                    id="oidc-secret"
-                    type="password"
-                    value={form.clientSecret}
-                    onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
-                    placeholder={editingId ? '已设置（留空保持不变）' : ''}
-                    required={!editingId}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="oidc-scopes">Scopes</Label>
-                  <Input
-                    id="oidc-scopes"
-                    value={form.scopes}
-                    onChange={(e) => setForm({ ...form, scopes: e.target.value })}
-                  />
-                </div>
-                <div className="flex flex-wrap gap-4 text-sm">
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={form.enabled}
-                      onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-                    />
-                    启用
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={form.enableFrontLogin}
-                      onChange={(e) => setForm({ ...form, enableFrontLogin: e.target.checked })}
-                    />
-                    前台登录
-                  </label>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={form.enableAdminLogin}
-                      onChange={(e) => setForm({ ...form, enableAdminLogin: e.target.checked })}
-                    />
-                    后台登录
-                  </label>
-                </div>
-                <div className="flex justify-end gap-2 pt-2">
-                  <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
-                    取消
-                  </Button>
-                  <Button type="submit" disabled={busy}>
-                    {busy ? '保存中…' : '保存'}
-                  </Button>
-                </div>
-              </form>
-            </CardContent>
-          </Card>
-        </div>
-      )}
+      <Dialog open={formOpen} onOpenChange={setFormOpen}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {editingId ? '编辑 OIDC Provider' : '新增 OIDC Provider'}
+            </DialogTitle>
+          </DialogHeader>
+          <form onSubmit={submitProvider} className="space-y-3">
+            <div className="space-y-1">
+              <Label htmlFor="oidc-name">显示名称</Label>
+              <Input
+                id="oidc-name"
+                value={form.displayName}
+                onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="oidc-issuer">Issuer</Label>
+              <Input
+                id="oidc-issuer"
+                value={form.issuer}
+                onChange={(e) => setForm({ ...form, issuer: e.target.value })}
+                placeholder="https://idp.example.com"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="oidc-client-id">Client ID</Label>
+              <Input
+                id="oidc-client-id"
+                value={form.clientId}
+                onChange={(e) => setForm({ ...form, clientId: e.target.value })}
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="oidc-secret">Client Secret</Label>
+              <Input
+                id="oidc-secret"
+                type="password"
+                value={form.clientSecret}
+                onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
+                placeholder={editingId ? '已设置（留空保持不变）' : ''}
+                required={!editingId}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="oidc-scopes">Scopes</Label>
+              <Input
+                id="oidc-scopes"
+                value={form.scopes}
+                onChange={(e) => setForm({ ...form, scopes: e.target.value })}
+              />
+            </div>
+            <div className="flex flex-wrap gap-4 text-sm">
+              <label className="flex cursor-pointer items-center gap-2">
+                <Checkbox
+                  checked={form.enabled}
+                  onCheckedChange={(checked) => setForm({ ...form, enabled: Boolean(checked) })}
+                />
+                启用
+              </label>
+              <label className="flex cursor-pointer items-center gap-2">
+                <Checkbox
+                  checked={form.enableFrontLogin}
+                  onCheckedChange={(checked) =>
+                    setForm({ ...form, enableFrontLogin: Boolean(checked) })
+                  }
+                />
+                前台登录
+              </label>
+              <label className="flex cursor-pointer items-center gap-2">
+                <Checkbox
+                  checked={form.enableAdminLogin}
+                  onCheckedChange={(checked) =>
+                    setForm({ ...form, enableAdminLogin: Boolean(checked) })
+                  }
+                />
+                后台登录
+              </label>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setFormOpen(false)}>
+                取消
+              </Button>
+              <Button type="submit" disabled={busy}>
+                {busy ? '保存中…' : '保存'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={deleting !== null}

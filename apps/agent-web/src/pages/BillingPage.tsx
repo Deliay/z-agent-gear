@@ -22,9 +22,10 @@ import type {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import MobileBackButton from '@/components/MobileBackButton'
 import { formatDateTime } from '@/lib/format'
 import { itemFormula, segmentLabel, unitLabel } from '@/lib/billing-format'
 
@@ -127,7 +128,10 @@ export default function BillingPage() {
 
   return (
     <div className="container mx-auto max-w-4xl space-y-6 p-6">
-      <h1 className="font-heading text-xl font-medium">我的费用</h1>
+      <div className="flex items-center gap-2">
+        <MobileBackButton to="/" />
+        <h1 className="font-heading text-xl font-medium">我的费用</h1>
+      </div>
 
       {accountQuery.error && (
         <Card>
@@ -145,7 +149,7 @@ export default function BillingPage() {
               {account.availableBalance < 0 && (
                 <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive-text">
                   账户已欠费（可用余额 {account.availableBalance.toFixed(2)} credits），
-                  请联系统管理员充值；持续欠费将导致云端容器被强制销毁。
+                  请联系系统管理员充值；持续欠费将导致云端容器被强制销毁。
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3 text-sm md:grid-cols-4">
@@ -268,7 +272,7 @@ export default function BillingPage() {
                   {invoices.map((invoice) => (
                     <tr key={invoice.id} className="border-b last:border-0">
                       <td className="py-2 pr-3 tabular-nums">{invoice.seq}</td>
-                      <td className="py-2 pr-3 text-xs text-muted-foreground">
+                      <td className="py-2 pr-3 text-xs tabular-nums text-muted-foreground">
                         {formatDateTime(invoice.createdAt)}
                       </td>
                       <td className="py-2 pr-3">
@@ -303,7 +307,7 @@ export default function BillingPage() {
             <Button size="sm" variant="outline" disabled={invoicePage <= 1} onClick={() => setInvoicePage((p) => Math.max(1, p - 1))}>
               上一页
             </Button>
-            <span className="text-muted-foreground">第 {invoicePage} 页</span>
+            <span className="tabular-nums text-muted-foreground">第 {invoicePage} 页</span>
             <Button size="sm" variant="outline" disabled={invoices.length < pageSize} onClick={() => setInvoicePage((p) => p + 1)}>
               下一页
             </Button>
@@ -344,7 +348,7 @@ export default function BillingPage() {
                 <tbody>
                   {calls.map((call) => (
                     <tr key={call.id} className="border-b last:border-0">
-                      <td className="py-2 pr-3 text-xs text-muted-foreground">{formatDateTime(call.startedAt)}</td>
+                      <td className="py-2 pr-3 text-xs tabular-nums text-muted-foreground">{formatDateTime(call.startedAt)}</td>
                       <td className="py-2 pr-3">{call.modelName || call.modelId}</td>
                       <td className="py-2 pr-3 text-right tabular-nums">
                         {call.inputTokens}/{call.cachedInputTokens}/{call.outputTokens}
@@ -378,7 +382,7 @@ export default function BillingPage() {
             <Button size="sm" variant="outline" disabled={callPage <= 1} onClick={() => setCallPage((p) => Math.max(1, p - 1))}>
               上一页
             </Button>
-            <span className="text-muted-foreground">第 {callPage} 页</span>
+            <span className="tabular-nums text-muted-foreground">第 {callPage} 页</span>
             <Button size="sm" variant="outline" disabled={calls.length < pageSize} onClick={() => setCallPage((p) => p + 1)}>
               下一页
             </Button>
@@ -414,7 +418,7 @@ export default function BillingPage() {
             rollups.map((item) => (
               <div key={item.bucketStart} className="space-y-1">
                 <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>{formatDateTime(item.bucketStart)}</span>
+                  <span className="tabular-nums">{formatDateTime(item.bucketStart)}</span>
                   <span className="tabular-nums">
                     消费 {item.chargeTotal.toFixed(2)} · {item.chargeCount} 笔
                   </span>
@@ -486,11 +490,11 @@ export default function BillingPage() {
         onConfirm={revoke}
       />
 
-      <Dialog open={receiptInvoice !== null} onOpenChange={(next) => !next && setReceiptInvoice(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>收据</DialogTitle>
-            <DialogDescription>
+      <Sheet open={receiptInvoice !== null} onOpenChange={(next) => !next && setReceiptInvoice(null)}>
+        <SheetContent data-testid="receipt-drawer">
+          <SheetHeader>
+            <SheetTitle>收据</SheetTitle>
+            <SheetDescription>
               {receiptsQuery.error
                 ? '收据加载失败，请稍后重试'
                 : receipt
@@ -498,8 +502,8 @@ export default function BillingPage() {
                   : receiptsQuery.loading
                     ? '收据加载中…'
                     : '该账单暂无收据'}
-            </DialogDescription>
-          </DialogHeader>
+            </SheetDescription>
+          </SheetHeader>
           {receiptInvoice && (
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
@@ -524,8 +528,8 @@ export default function BillingPage() {
               </div>
             </div>
           )}
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }

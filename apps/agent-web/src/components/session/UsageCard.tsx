@@ -6,20 +6,20 @@ interface UsageCardProps {
 }
 
 export default function UsageCard({ data }: UsageCardProps) {
-  const summary = `本次消耗 ${data.used} tokens`;
+  const summary = `本次消耗 ${data.used.toLocaleString()} Token`;
 
   return (
     <AcpCard
-      title="Usage"
+      title="用量统计"
       summary={summary}
       color="blue"
       defaultCollapsed={true}
     >
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">Context Window</span>
+          <span className="text-sm text-muted-foreground">上下文窗口</span>
           <span className="text-sm font-medium text-foreground tabular-nums">
-            {data.used.toLocaleString()} / {data.size.toLocaleString()} tokens
+            {data.used.toLocaleString()} / {data.size.toLocaleString()} Token
           </span>
         </div>
         <div className="w-full bg-muted rounded-full h-2">
@@ -30,7 +30,7 @@ export default function UsageCard({ data }: UsageCardProps) {
         </div>
         {data.cost && (
           <div className="flex items-center justify-between pt-2 border-t border-border">
-            <span className="text-sm text-muted-foreground">Cost</span>
+            <span className="text-sm text-muted-foreground">费用</span>
             <span className="text-sm font-medium text-foreground tabular-nums">
               {data.cost.amount.toFixed(4)} {data.cost.currency}
             </span>

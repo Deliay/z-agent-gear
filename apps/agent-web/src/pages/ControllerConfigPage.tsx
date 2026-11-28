@@ -360,18 +360,18 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
     <div className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
-          Github 项目设置：安装后自动克隆仓库并初始化项目工作区。
+          GitHub 项目设置：安装后自动克隆仓库并初始化项目工作区。
         </p>
         <Button
           type="button"
           size="sm"
           variant="outline"
-          aria-label="Github 项目设置"
+          aria-label="GitHub 项目设置"
           disabled={cloudHost.status !== 'RUNNING' || Boolean(cloudHost.deletedAt)}
           onClick={() => setGithubSetupOpen(true)}
         >
           <GitBranch className="size-3.5" />
-          Github 项目设置
+          GitHub 项目设置
         </Button>
       </div>
       <CloudHostIssuesLinkageSection controllerId={controllerId} onConfigureWorkflow={onBack} />
@@ -472,7 +472,7 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
             <button type="button" data-testid="config-tab-workloads" onClick={() => setActiveSection('workloads')} className={`rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workloads' ? 'bg-accent' : 'hover:bg-accent'}`}>工作负载</button>
           )}
           {cloudHost && (
-            <button type="button" data-testid="config-tab-github" onClick={() => setActiveSection('github')} className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'github' ? 'bg-accent' : 'hover:bg-accent'}`}>Github</button>
+            <button type="button" data-testid="config-tab-github" onClick={() => setActiveSection('github')} className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'github' ? 'bg-accent' : 'hover:bg-accent'}`}>GitHub</button>
           )}
           {cloudHost && (
             <button type="button" data-testid="config-tab-workflow" onClick={() => setActiveSection('workflow')} className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium ${activeSection === 'workflow' ? 'bg-accent' : 'hover:bg-accent'}`}>工作流</button>
@@ -561,7 +561,7 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
                 onClick={() => setActiveSection('github')}
                 className={`w-full rounded-md px-3 py-2 text-sm text-left ${activeSection === 'github' ? 'bg-accent' : 'hover:bg-accent'}`}
               >
-                Github
+                GitHub
               </button>
             )}
             {cloudHost && (
@@ -608,7 +608,7 @@ export default function ControllerConfigPage({ controllerId, onBack, onOpenStora
                 : activeSection === 'mcp'
                   ? '默认 MCP'
                   : activeSection === 'github'
-                    ? 'Github 设置'
+                    ? 'GitHub 设置'
                     : activeSection === 'workflow'
                       ? '工作流配置'
                       : '工作负载'}

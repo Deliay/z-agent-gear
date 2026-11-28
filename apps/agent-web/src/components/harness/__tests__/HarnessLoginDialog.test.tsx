@@ -101,7 +101,7 @@ describe('HarnessLoginDialog（T-W2）', () => {
     render(<HarnessLoginDialog />);
     expect(screen.getByTestId('harness-login-url')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
 
     await waitFor(() => expect(screen.queryByTestId('harness-login-url')).toBeNull());
     expect(mockRespondHarnessLogin).not.toHaveBeenCalled();

@@ -85,8 +85,8 @@ describe('BillingPage 双 owner 检索', () => {
 
     const select = screen.getByLabelText('账户类型');
     expect(select).toBeDefined();
-    expect(screen.getByRole('option', { name: '租户（tenant）' })).toBeDefined();
-    expect(screen.getByRole('option', { name: '后台（admin_user）' })).toBeDefined();
+    expect(screen.getByRole('option', { name: '租户' })).toBeDefined();
+    expect(screen.getByRole('option', { name: '后台' })).toBeDefined();
     expect(screen.getByText('租户甲')).toBeDefined();
     expect(screen.getByText('后台管理员')).toBeDefined();
   });

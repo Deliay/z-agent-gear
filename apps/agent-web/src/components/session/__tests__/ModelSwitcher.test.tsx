@@ -21,7 +21,7 @@ describe('ModelSwitcher', () => {
     expect(screen.getByText('GPT-4')).toBeDefined();
   });
 
-  it('should display "Model" placeholder when no current model', () => {
+  it('should display "模型" placeholder when no current model', () => {
     render(
       <ModelSwitcher
         currentModelId={null}
@@ -31,7 +31,7 @@ describe('ModelSwitcher', () => {
       />,
     );
 
-    expect(screen.getByText('Model')).toBeDefined();
+    expect(screen.getByText('模型')).toBeDefined();
   });
 
   it('should be disabled when status is not idling', () => {
@@ -87,7 +87,7 @@ describe('ModelSwitcher', () => {
     );
 
     fireEvent.click(screen.getByRole('button'));
-    expect(screen.getByText('Switch Model')).toBeDefined();
+    expect(screen.getByText('切换模型')).toBeDefined();
   });
 });
 

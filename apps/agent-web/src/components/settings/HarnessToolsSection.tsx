@@ -34,12 +34,12 @@ export default function HarnessToolsSection({ controllerId }: HarnessToolsSectio
       </div>
 
       {checkedAt && (
-        <p className="text-sm text-muted-foreground mb-4">
+        <p className="text-sm tabular-nums text-muted-foreground mb-4">
           上次检测：{new Date(checkedAt).toLocaleString()}
         </p>
       )}
 
-      {loading ? (
+      {loading && !data ? (
         <div className="text-sm text-muted-foreground">加载中...</div>
       ) : capabilities.length === 0 ? (
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">

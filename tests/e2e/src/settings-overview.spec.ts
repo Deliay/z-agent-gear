@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { registerUser, loginViaUI } from './helpers';
 
-const sidebarSel = 'nav[aria-label="Sidebar"]';
+const sidebarSel = 'nav[aria-label="侧边栏导航"]';
 
 interface GraphqlCall {
   operation: string;

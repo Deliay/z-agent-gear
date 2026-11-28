@@ -74,7 +74,7 @@ describe('场景 C 工具调用卡（T-SESS-TC）', () => {
   it('T-SESS-TC1: 合并后的工具调用卡保持标题与状态摘要（不退化为 other）', () => {
     render(<ToolCallCard toolCall={toolCall} />);
     expect(screen.getByText(/修改 SessionHeader\.tsx/)).toBeInTheDocument();
-    expect(screen.queryByText('Tool Call: other')).toBeNull();
+    expect(screen.queryByText('工具调用：other')).toBeNull();
   });
 
   it('T-SESS-TC2: 工具调用卡在会话时间线中以合并结果渲染', () => {
