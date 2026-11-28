@@ -197,7 +197,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
   await page.fill('#username', username);
   await page.fill('#password', 'testpass123');
   await page.click('button[type="submit"]');
-  await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('nav[aria-label="侧边栏导航"]')).toBeVisible({ timeout: 10000 });
 }
 
 async function createWorkspace(page: import('@playwright/test').Page, controllerId: string, path: string, token: string): Promise<{ id: string }> {
@@ -526,7 +526,7 @@ test.describe('Session ACP Server Type', () => {
 
     // Open the imported session from the sidebar sessions list（控制器默认展开，勿点击折叠）
     await page.goto('/sessions');
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
     const historyLink = sidebar.getByRole('link', { name: /History - Delete Me/ }).first();
     await expect(historyLink).toBeVisible({ timeout: 10000 });
     await historyLink.click();

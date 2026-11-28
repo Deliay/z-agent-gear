@@ -6,7 +6,7 @@ import { registerUser, createControllerKey, loginViaUI, createWorkspace, gqlRequ
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 
-const sidebar = () => 'nav[aria-label="Sidebar"]';
+const sidebar = () => 'nav[aria-label="侧边栏导航"]';
 
 /**
  * 打开侧边栏「实例化工作流」入口。
@@ -1193,7 +1193,7 @@ test.describe('Workflow E2E', () => {
     await dialog.locator('[data-slot="select-trigger"][aria-label="工作流模板"]').click();
     await page.getByRole('option', { name: new RegExp(templateName) }).click();
     await dialog.getByLabel('工作流名称').fill(`E2E配置${Date.now().toString(36)}`);
-    await dialog.locator('[data-slot="select-trigger"][aria-label="Controller"]').click();
+    await dialog.locator('[data-slot="select-trigger"][aria-label="控制器"]').click();
     await page.getByRole('option', { name: hostname }).click();
     await dialog.locator('[data-slot="select-trigger"][aria-label="AI执行 Harness 工具"]').click();
     await page.getByRole('option', { name: 'opencode', exact: true }).click();
@@ -1381,7 +1381,7 @@ test.describe('Workflow E2E', () => {
     // 选择内置模板（含 AI 节点）与 Controller
     await dialog.locator('[data-slot="select-trigger"][aria-label="工作流模板"]').click();
     await page.getByRole('option', { name: /开发工作流/ }).first().click();
-    await dialog.locator('[data-slot="select-trigger"][aria-label="Controller"]').click();
+    await dialog.locator('[data-slot="select-trigger"][aria-label="控制器"]').click();
     await page.getByRole('option', { name: hostname }).click();
 
     // 选择首个 AI 节点的 Harness 工具 → 触发空实例探测

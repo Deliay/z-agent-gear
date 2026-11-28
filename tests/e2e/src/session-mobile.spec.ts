@@ -75,7 +75,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
   await page.fill('#username', username);
   await page.fill('#password', 'testpass123');
   await page.click('button[type="submit"]');
-  await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('nav[aria-label="侧边栏导航"]')).toBeVisible({ timeout: 10000 });
 }
 
 async function createSession(page: import('@playwright/test').Page, controllerId: string, token: string, workspaceId?: string) {
@@ -88,7 +88,7 @@ async function createSession(page: import('@playwright/test').Page, controllerId
   return body.data.createSession.session.id;
 }
 
-const sidebar = () => 'nav[aria-label="Sidebar"]';
+const sidebar = () => 'nav[aria-label="侧边栏导航"]';
 
 test.describe('Session Mobile Layout', () => {
 
@@ -105,21 +105,21 @@ test.describe('Session Mobile Layout', () => {
       await expect(nav).toBeVisible();
 
       // 1) 会话：列表可达并可进入详情（详情保留返回入口）
-      await nav.getByRole('link', { name: '会话' }).click();
+      await nav.getByRole('button', { name: '会话' }).click();
       await page.locator(sidebar()).getByText(/新建会话|e2e-rwd2/).first().waitFor({ timeout: 10000 });
       await page.goto(`/sessions/${sessionId}`);
       await expect(page.getByText('← 返回')).toBeVisible({ timeout: 15000 });
 
       // 2) 费用
-      await nav.getByRole('link', { name: '费用' }).click();
+      await nav.getByRole('button', { name: '费用' }).click();
       await expect(page.getByText('我的费用')).toBeVisible({ timeout: 15000 });
 
       // 3) 设置
-      await nav.getByRole('link', { name: '设置' }).click();
+      await nav.getByRole('button', { name: '设置' }).click();
       await expect(page.getByRole('heading', { name: '设置', exact: true })).toBeVisible({ timeout: 15000 });
 
       // 4) 待办入口（侧边栏铃铛 / 会话列表）在移动端仍可见
-      await nav.getByRole('link', { name: '会话' }).click();
+      await nav.getByRole('button', { name: '会话' }).click();
       await expect(page.locator(sidebar())).toBeVisible();
 
       const overflow = await page.evaluate(

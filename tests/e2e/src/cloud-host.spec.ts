@@ -18,7 +18,7 @@ function gqlRequest(page: import('@playwright/test').Page, query: string, variab
   return page.request.post(API_URL, { headers, data: { query, variables } });
 }
 
-const sidebar = () => 'nav[aria-label="Sidebar"]';
+const sidebar = () => 'nav[aria-label="侧边栏导航"]';
 
 /** UI 四期「主机」分区默认折叠，展开后才能看到云电脑/控制器条目。 */
 async function expandHosts(page: import('@playwright/test').Page): Promise<void> {
@@ -320,7 +320,7 @@ test.describe('Cloud Host E2E', () => {
       expect(running?.defaultSessionId).toBeNull();
 
       // 无默认工作区时预填 ~/workspace（服务端展开为 /home/worker/workspace）
-      await controllerRow.getByLabel('Github 项目设置').click();
+      await controllerRow.getByLabel('GitHub 项目设置').click();
       const githubDialog = page.getByRole('dialog');
       await expect(githubDialog.getByLabel('前缀地址')).toHaveValue('~/workspace');
       await expect(githubDialog.getByLabel('前缀地址')).toHaveAttribute(
@@ -334,11 +334,11 @@ test.describe('Cloud Host E2E', () => {
       await expect(page.getByTestId('config-tab-github')).toBeVisible();
       await page.getByTestId('config-tab-workspace').click();
       await expect(
-        page.getByRole('main').getByRole('button', { name: 'Github 项目设置' }),
+        page.getByRole('main').getByRole('button', { name: 'GitHub 项目设置' }),
       ).toHaveCount(0);
       await page.getByTestId('config-tab-github').click();
       await expect(
-        page.getByRole('main').getByRole('button', { name: 'Github 项目设置' }),
+        page.getByRole('main').getByRole('button', { name: 'GitHub 项目设置' }),
       ).toBeVisible();
       await page.goto('/');
       await expect(page.locator(sidebar())).toBeVisible();

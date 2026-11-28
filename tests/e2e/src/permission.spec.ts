@@ -68,7 +68,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
   await page.fill('#username', username);
   await page.fill('#password', 'testpass123');
   await page.click('button[type="submit"]');
-  await page.locator('nav[aria-label="Sidebar"]').waitFor({ timeout: 10000 });
+  await page.locator('nav[aria-label="侧边栏导航"]').waitFor({ timeout: 10000 });
 }
 
 async function createWorkspace(page: import('@playwright/test').Page, controllerId: string, path: string, token: string): Promise<string> {
@@ -100,7 +100,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     await loginViaUI(page, username);
 
     // Bell icon should be visible in sidebar
-    const bellButton = page.locator('nav[aria-label="Sidebar"] button').filter({ has: page.locator('svg.lucide-bell') });
+    const bellButton = page.locator('nav[aria-label="侧边栏导航"] button').filter({ has: page.locator('svg.lucide-bell') });
     await expect(bellButton).toBeVisible({ timeout: 5000 });
   });
 
@@ -109,7 +109,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     await loginViaUI(page, username);
 
     // Bell icon should not have badge initially
-    const bellButton = page.locator('nav[aria-label="Sidebar"] button').filter({ has: page.locator('svg.lucide-bell') });
+    const bellButton = page.locator('nav[aria-label="侧边栏导航"] button').filter({ has: page.locator('svg.lucide-bell') });
     await expect(bellButton).toBeVisible();
     const badge = bellButton.locator('[class*="badge"]');
     await expect(badge).not.toBeVisible();
@@ -120,7 +120,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     await loginViaUI(page, username);
 
     // Click bell icon
-    const bellButton = page.locator('nav[aria-label="Sidebar"] button').filter({ has: page.locator('svg.lucide-bell') });
+    const bellButton = page.locator('nav[aria-label="侧边栏导航"] button').filter({ has: page.locator('svg.lucide-bell') });
     await bellButton.click();
 
     // Popover should appear with title
@@ -133,7 +133,7 @@ test.describe('ACP Permission Reminder E2E', () => {
     await loginViaUI(page, username);
 
     // Click bell icon
-    const bellButton = page.locator('nav[aria-label="Sidebar"] button').filter({ has: page.locator('svg.lucide-bell') });
+    const bellButton = page.locator('nav[aria-label="侧边栏导航"] button').filter({ has: page.locator('svg.lucide-bell') });
     await bellButton.click();
 
     // Should show empty state

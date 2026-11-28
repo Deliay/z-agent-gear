@@ -7,7 +7,7 @@ test.describe('UI Theme and Component Tests', () => {
     await loginViaUI(page, username);
 
     // 等待侧边栏加载
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
     await expect(sidebar).toBeVisible();
 
     // 检查主题切换按钮是否存在（使用lucide图标选择器）
@@ -70,7 +70,7 @@ test.describe('UI Theme and Component Tests', () => {
     await loginViaUI(page, username);
 
     // 等待侧边栏加载
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
     await expect(sidebar).toBeVisible();
 
     // 点击待办事项按钮

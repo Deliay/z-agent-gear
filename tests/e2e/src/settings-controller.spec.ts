@@ -7,7 +7,7 @@ const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 const CONTROLLER_API_URL = process.env.CONTROLLER_API_URL || 'http://localhost:4001';
 const HAS_MONGO = Boolean(process.env.MONGODB_URI);
 
-const sidebar = () => 'nav[aria-label="Sidebar"]';
+const sidebar = () => 'nav[aria-label="侧边栏导航"]';
 
 async function gqlRequest(page: import('@playwright/test').Page, query: string, variables?: Record<string, unknown>, token?: string) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -137,7 +137,7 @@ test.describe('Settings Controller E2E', () => {
     await loginViaUI(page, username);
     await page.click('a[href="/settings"]');
     await expect(page.locator('#controller-section')).toBeVisible({ timeout: 5000 });
-    const nav = page.locator('nav[aria-label="Settings navigation"]');
+    const nav = page.locator('nav[aria-label="设置导航"]');
 
     await expect(nav.getByRole('button', { name: '控制器管理' })).toBeVisible();
   });
@@ -204,7 +204,7 @@ test.describe('Settings Controller E2E', () => {
     await page.click('a[href="/settings"]');
     await expect(page.locator('#controller-section')).toBeVisible({ timeout: 5000 });
 
-    await page.locator('nav[aria-label="Settings navigation"]').getByRole('button', { name: '控制器管理' }).click();
+    await page.locator('nav[aria-label="设置导航"]').getByRole('button', { name: '控制器管理' }).click();
     await expect(page.locator('#controller-section')).toBeVisible();
   });
 

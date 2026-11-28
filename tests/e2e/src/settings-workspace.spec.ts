@@ -79,7 +79,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
   await page.fill('#username', username);
   await page.fill('#password', 'testpass123');
   await page.click('button[type="submit"]');
-  await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('nav[aria-label="侧边栏导航"]')).toBeVisible({ timeout: 10000 });
 }
 
 async function goToSettings(page: import('@playwright/test').Page) {
@@ -286,7 +286,7 @@ test.describe('Settings Workspace E2E', () => {
 
     await loginViaUI(page, username);
 
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
     // UI 四期「主机」分区默认折叠，先展开；控制器节点本身仍默认展开（勿再点击会折叠）
     await sidebar.getByRole('button', { name: /^主机/ }).click();
     await expect(sidebar.getByRole('button', { name: /e2e-ws-host/ }).first()).toBeVisible({

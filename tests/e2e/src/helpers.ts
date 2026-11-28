@@ -435,7 +435,7 @@ export async function loginViaUI(page: import('@playwright/test').Page, username
   await page.fill('#username', username);
   await page.fill('#password', 'testpass123');
   await page.click('button[type="submit"]');
-  await page.locator('nav[aria-label="Sidebar"]').waitFor({ timeout: 10000 });
+  await page.locator('nav[aria-label="侧边栏导航"]').waitFor({ timeout: 10000 });
 }
 
 export async function createWorkspace(page: import('@playwright/test').Page, controllerId: string, path: string, token: string): Promise<{ id: string }> {

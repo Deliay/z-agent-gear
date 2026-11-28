@@ -240,10 +240,10 @@ test.describe('Session Rendering', () => {
       rawOutput: { output: 'all green' },
     });
 
-    await expect(page.getByText('Tool Call: npm test')).toBeVisible({ timeout: 10000 });
-    // 防退化断言可红：标题丢失时兜底会显示 "Tool Call: Command" 或通用 "Tool Call"（R-15）
-    await expect(page.getByText(/Tool Call: (Command|Tool Call)/)).toHaveCount(0);
-    await expect(page.getByText('Tool Call', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('工具调用：npm test')).toBeVisible({ timeout: 10000 });
+    // 防退化断言可红：标题丢失时兜底会显示 "工具调用：命令" 或通用 "工具调用"（R-15）
+    await expect(page.getByText(/工具调用：(命令|工具调用)/)).toHaveCount(0);
+    await expect(page.getByText('工具调用', { exact: true })).toHaveCount(0);
 
     await page.getByRole('button', { name: '查看原始输入' }).first().click();
     await expect(page.getByTestId('raw-section-输入').first()).toContainText('npm test -- --run');

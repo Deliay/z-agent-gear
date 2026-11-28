@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { createFrontUser, loginFrontUser, FRONT_USER_PASSWORD } from './helpers';
 
-const sidebar = () => 'nav[aria-label="Sidebar"]';
+const sidebar = () => 'nav[aria-label="侧边栏导航"]';
 const cardTitle = () => '[data-slot="card-title"]';
 
 async function loginViaUI(page: import('@playwright/test').Page, username: string) {
