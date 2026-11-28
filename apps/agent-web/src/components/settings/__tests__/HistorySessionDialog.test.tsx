@@ -196,6 +196,6 @@ describe('HistorySessionDialog', () => {
     fireEvent.click(screen.getByText('导入已选 (2)'));
 
     expect(await screen.findByText('完成')).toBeDefined();
-    expect(screen.queryByText('关闭')).toBeNull();
+    expect(screen.queryByRole('button', { name: '关闭', hidden: false })?.querySelector('.sr-only')).not.toBeNull();
   });
 });

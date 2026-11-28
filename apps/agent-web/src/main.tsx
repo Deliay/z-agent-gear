@@ -4,6 +4,7 @@ import { ApolloProvider } from '@apollo/client/react'
 import { createApolloClient } from './lib/apollo'
 import { resolveApiBase } from './lib/api-base'
 import { logger } from './lib/logger'
+import '@fontsource-variable/geist'
 import './index.css'
 import App from './App.tsx'
 

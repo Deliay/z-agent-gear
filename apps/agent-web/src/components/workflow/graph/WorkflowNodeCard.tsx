@@ -15,7 +15,7 @@ export type WorkflowNodeCardNode = WorkflowGraphNode
  * 完成态 token 行 + PR/检查项徽标 + 资源小卡片 + 人类节点就地操作。
  *
  * 动态行按活动类型展示：思考「思考中...」、工具调用「执行中: {工具标题}」、
- * 文本输出「Concluding...」；不渲染正文（避免长文本撑高卡片）。
+ * 文本输出「正在汇总结果…」；不渲染正文（避免长文本撑高卡片）。
  * 人类交互与拖拽隔离：交互元素统一 `nodrag` + `stopPropagation`。
  */
 function liveActivityLabel(activity: NodeLiveActivity | null): string {

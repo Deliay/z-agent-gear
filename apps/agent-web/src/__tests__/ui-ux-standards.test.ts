@@ -149,4 +149,49 @@ describe('UI/UX Design Standards Guard (docs/engineering/ui-ux-standards.md)', (
 
     expect(missing).toEqual([]);
   });
+
+  it('T-UIUX-FONTS: index.css 声明 --font-mono 与中文字体回退，main.tsx 导入 @fontsource-variable/geist', async () => {
+    const fsSpecifier = 'node:fs';
+    const { readFileSync } = (await import(/* @vite-ignore */ fsSpecifier)) as {
+      readFileSync: (path: string, encoding: 'utf8') => string;
+    };
+    const indexCssContent = readFileSync('src/index.css', 'utf8');
+    expect(indexCssContent).toContain('--font-mono:');
+    expect(indexCssContent).toContain('Geist Mono Variable');
+    expect(indexCssContent).toContain('PingFang SC');
+
+    const mainTsx = findSource('/main.tsx') ?? '';
+    expect(mainTsx).toContain("'@fontsource-variable/geist'");
+  });
+
+  it('T-UIUX-A11Y-ZH: 禁止在 sr-only 或 aria-label 中残留英文 Close / Loading… 文案', () => {
+    const englishA11yRegex =
+      /(?:className="sr-only">\s*(?:Close|Loading…|Loading\.\.\.)\s*<|aria-label="(?:Loading…|Loading\.\.\.)")/g;
+    const violations: string[] = [];
+    for (const [filePath, content] of Object.entries(agentWebSources)) {
+      const matches = content.match(englishA11yRegex);
+      if (matches) {
+        violations.push(`${filePath}: ${[...new Set(matches)].join(', ')}`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
+
+  it('T-UIUX-APOLLO-LOADING: 消费 Apollo / Overview 查询的组件禁止裸写 if (loading)（需配合 !data）', () => {
+    const queryHookRegex = /\b(?:useQuery|useSettingsOverview|useHomeOverview)\b/;
+    const bareIfLoadingRegex = /\bif\s*\(\s*loading\s*\)/g;
+    // MainLayout 中的 `if (loading)` 源自 useAuth()，其 Apollo 查询已重命名为 homeLoading
+    const exempt = ['/pages/MainLayout.tsx'];
+
+    const violations: string[] = [];
+    for (const [filePath, content] of Object.entries(agentWebSources)) {
+      if (exempt.some((suffix) => filePath.endsWith(suffix))) continue;
+      if (!queryHookRegex.test(content)) continue;
+      const matches = content.match(bareIfLoadingRegex);
+      if (matches) {
+        violations.push(`${filePath}: ${matches.join(', ')}`);
+      }
+    }
+    expect(violations).toEqual([]);
+  });
 });

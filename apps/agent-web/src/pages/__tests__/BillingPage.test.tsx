@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { MockedProvider } from '@apollo/client/testing/react';
 import BillingPage from '../BillingPage';
 import {
@@ -250,9 +251,11 @@ function mocks(options: { receiptError?: boolean } = {}) {
 
 function renderPage(options: { receiptError?: boolean } = {}) {
   return render(
-    <MockedProvider mocks={mocks(options)}>
-      <BillingPage />
-    </MockedProvider>,
+    <MemoryRouter>
+      <MockedProvider mocks={mocks(options)}>
+        <BillingPage />
+      </MockedProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -260,7 +263,8 @@ describe('前台我的费用', () => {
   it('T-AW7/AW8: 欠费提示、账单可见、无自助充值入口', async () => {
     renderPage();
     expect(await screen.findByText('我的费用')).toBeDefined();
-    expect(await screen.findByText(/账户已欠费/)).toBeDefined();
+    expect(await screen.findByText(/请联系系统管理员充值/)).toBeDefined();
+    expect(screen.getByRole('button', { name: '← 返回' })).toBeDefined();
     expect(await screen.findByText('容器周期结算')).toBeDefined();
     expect(screen.queryByRole('button', { name: '充值' })).toBeNull();
     expect(screen.getByText('仅支持后台充值，本页面不提供自助充值入口。')).toBeDefined();
@@ -300,6 +304,7 @@ describe('前台我的费用', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '查看' }));
     expect(await screen.findByText('收据号 R-0002')).toBeDefined();
+    expect(screen.getByTestId('receipt-drawer').getAttribute('data-slot')).toBe('sheet-content');
     expect(screen.queryByText('该账单暂无收据')).toBeNull();
   });
 

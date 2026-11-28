@@ -177,7 +177,7 @@ async function openEditDialog(name: string) {
 
 function fillBasicFields(dialog: HTMLElement, name = 'my-mcp', endpoint = 'https://e.example.com/mcp') {
   fireEvent.change(within(dialog).getByLabelText('名称'), { target: { value: name } });
-  fireEvent.change(within(dialog).getByLabelText('endpoint'), { target: { value: endpoint } });
+  fireEvent.change(within(dialog).getByLabelText('服务地址'), { target: { value: endpoint } });
 }
 
 describe('CustomMcpSection', () => {
@@ -258,7 +258,7 @@ describe('CustomMcpSection', () => {
 
       fillBasicFields(dialog);
       fireEvent.click(within(dialog).getByRole('radio', { name: 'Bearer Token' }));
-      fireEvent.change(within(dialog).getByLabelText('Bearer token'), {
+      fireEvent.change(within(dialog).getByLabelText('Bearer 令牌'), {
         target: { value: 'tok-123' },
       });
       fireEvent.click(within(dialog).getByRole('button', { name: '创建' }));
@@ -325,7 +325,7 @@ describe('CustomMcpSection', () => {
       render(<CustomMcpSection />);
       const dialog = await openEditDialog('托管 Bearer MCP');
 
-      const tokenInput = within(dialog).getByLabelText('Bearer token') as HTMLTextAreaElement;
+      const tokenInput = within(dialog).getByLabelText('Bearer 令牌') as HTMLTextAreaElement;
       expect(tokenInput).toHaveValue('');
       expect(tokenInput).toHaveAttribute('placeholder', '输入新值（旧值不可见）');
       expect(within(dialog).queryByRole('button', { name: '前往 Valut 编辑' })).not.toBeInTheDocument();
@@ -434,7 +434,7 @@ describe('CustomMcpSection', () => {
 
       fillBasicFields(dialog);
       fireEvent.click(within(dialog).getByRole('radio', { name: 'Bearer Token' }));
-      fireEvent.change(within(dialog).getByLabelText('Bearer token'), {
+      fireEvent.change(within(dialog).getByLabelText('Bearer 令牌'), {
         target: { value: 'tok-123' },
       });
       fireEvent.click(within(dialog).getByRole('button', { name: '创建' }));

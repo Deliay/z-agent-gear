@@ -214,7 +214,7 @@ describe('GithubSetupProgressDialog', () => {
 
     const options = mockUseQuery.mock.calls[0][1]
     expect(options.skip).toBe(false)
-    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
+    fireEvent.click(screen.getAllByRole('button', { name: '关闭' })[0])
     expect(onClose).toHaveBeenCalled()
   })
 })

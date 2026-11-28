@@ -62,7 +62,7 @@ export default function GithubBindingSection() {
     setUnbindTarget(null)
   }
 
-  if (loading) {
+  if (loading && !data) {
     return <div className="text-sm text-muted-foreground">加载中...</div>
   }
 

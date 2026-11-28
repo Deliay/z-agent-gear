@@ -162,7 +162,7 @@ export default function HistorySessionDialog({
           <>
             {availableAcpServers && availableAcpServers.length > 0 && (
               <div className="flex items-center gap-2 mb-2">
-                <label className="text-sm text-muted-foreground">ACP Server:</label>
+                <label className="text-sm text-muted-foreground">ACP 服务：</label>
                 <select
                   value={acpServerType}
                   onChange={(e) => setAcpServerType(e.target.value)}
@@ -177,7 +177,7 @@ export default function HistorySessionDialog({
               </div>
             )}
             <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">
+              <span className="text-sm tabular-nums text-muted-foreground">
                 {sessions.length} 个可导入的会话
               </span>
               {!importing && (
@@ -206,7 +206,7 @@ export default function HistorySessionDialog({
                     <div className="truncate font-medium">
                       {s.title || `会话 - ${s.sessionId.slice(0, 8)}`}
                     </div>
-                    <div className="truncate text-xs text-muted-foreground">
+                    <div className="truncate text-xs tabular-nums text-muted-foreground">
                       {s.updatedAt
                         ? new Date(s.updatedAt).toLocaleString()
                         : '时间未知'}

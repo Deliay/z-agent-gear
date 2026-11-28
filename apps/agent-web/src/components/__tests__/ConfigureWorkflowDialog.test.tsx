@@ -105,8 +105,8 @@ function setupQueries(optionsData: unknown, optionsLoading = false) {
 
 async function openDialogAndSelect() {
   render(<ConfigureWorkflowDialog open onOpenChange={vi.fn()} initialTemplateId="tpl-1" />);
-  // 选择 Controller
-  fireEvent.click(screen.getByLabelText('Controller'));
+  // 选择控制器
+  fireEvent.click(screen.getByLabelText('控制器'));
   fireEvent.click(await screen.findByText('本机'));
   // 选择 AI 节点的 Harness 工具
   fireEvent.click(screen.getByLabelText('AI执行 Harness 工具'));

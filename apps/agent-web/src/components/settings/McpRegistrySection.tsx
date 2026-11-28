@@ -80,7 +80,7 @@ export default function McpRegistrySection() {
         </Button>
       </CardHeader>
       <CardContent>
-        {loading ? (
+        {loading && !data ? (
           <p className="text-sm text-muted-foreground">加载中...</p>
         ) : servers.length === 0 ? (
           <p className="text-sm text-muted-foreground">
@@ -111,10 +111,10 @@ export default function McpRegistrySection() {
                     <p className="text-xs text-muted-foreground">来源机器: {server.hostname}</p>
                   )}
                   {server.tools.length > 0 && (
-                    <p className="text-xs text-muted-foreground">工具数: {server.tools.length}</p>
+                    <p className="text-xs tabular-nums text-muted-foreground">工具数: {server.tools.length}</p>
                   )}
                   {server.lastHeartbeatAt && (
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs tabular-nums text-muted-foreground">
                       最后心跳: {new Date(server.lastHeartbeatAt).toLocaleString()}
                     </p>
                   )}
