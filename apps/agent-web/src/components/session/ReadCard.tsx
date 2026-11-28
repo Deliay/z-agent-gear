@@ -30,12 +30,12 @@ export default function ReadCard({ toolCall, expanded, onExpandedChange }: ReadC
 
   const fileCount = filePaths.length;
   const summary = filePath
-    ? `Read: ${filePath}${fileCount > 1 ? ` +${fileCount - 1}` : ''}`
-    : `Read ${fileCount} file${fileCount !== 1 ? 's' : ''}`;
+    ? `读取：${filePath}${fileCount > 1 ? ` +${fileCount - 1}` : ''}`
+    : `读取 ${fileCount} 个文件`;
 
   return (
     <AcpCard
-      title="Read Files"
+      title="读取文件"
       summary={summary}
       defaultCollapsed={true}
       color={toolCallColor(status)}
@@ -46,7 +46,7 @@ export default function ReadCard({ toolCall, expanded, onExpandedChange }: ReadC
       <div className="space-y-3">
         {filePaths.length > 0 && (
           <div>
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Files read</div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">已读取文件</div>
             <div className="space-y-1">
               {filePaths.map((path, i) => (
                 <div key={i} className="flex items-center gap-2 text-sm text-foreground">
@@ -59,7 +59,7 @@ export default function ReadCard({ toolCall, expanded, onExpandedChange }: ReadC
         {contentText && (
           <div>
             {filePaths.length > 0 && (
-              <div className="mb-1 text-xs font-medium text-muted-foreground">Content</div>
+              <div className="mb-1 text-xs font-medium text-muted-foreground">文件内容</div>
             )}
             <div className="rounded-md bg-background px-3 py-2 text-sm text-foreground">
               <MarkdownContent content={contentText} />

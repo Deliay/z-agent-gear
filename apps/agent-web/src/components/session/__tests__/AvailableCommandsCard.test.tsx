@@ -14,7 +14,7 @@ describe('AvailableCommandsCard', () => {
   it('should render command list with count summary', () => {
     render(<AvailableCommandsCard data={data} />);
     expect(screen.getByText('2 个工具已加载')).toBeDefined();
-    fireEvent.click(screen.getByText('Tools'));
+    fireEvent.click(screen.getByText('可用工具'));
     expect(screen.getByText('clear')).toBeDefined();
     expect(screen.getByText('compact')).toBeDefined();
   });

@@ -27,8 +27,8 @@ export default function ModeSwitcher({ currentModeId, modes, status, onSetMode, 
   const title = blocked
     ? (blockedReason || '当前 Agent 不支持模式切换')
     : disabled
-      ? (modes.length === 0 ? 'No modes available' : 'Only available when idle')
-      : 'Switch mode';
+      ? (modes.length === 0 ? '暂无可用模式' : '仅空闲时可用')
+      : '切换模式';
 
   const handleSelect = async (modeId: string) => {
     if (modeId === currentModeId) {
@@ -55,7 +55,7 @@ export default function ModeSwitcher({ currentModeId, modes, status, onSetMode, 
         title={title}
         className="flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-xs text-foreground hover:bg-accent disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground"
       >
-        <span>{currentMode?.name || 'Mode'}</span>
+        <span>{currentMode?.name || '模式'}</span>
         <span className="text-muted-foreground">▾</span>
       </button>
       <ModeSelectDialog

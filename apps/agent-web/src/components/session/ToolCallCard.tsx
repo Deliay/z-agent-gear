@@ -9,6 +9,7 @@ import {
   kindLabel,
   toolCallColor,
   toolCallHeaderTitle,
+  toolCallStatusLabel,
   type MergedToolCall,
 } from './tool-call-state';
 
@@ -59,7 +60,7 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
   const renderCommand = (input: ExecuteRawInput | undefined) => (
     input?.command ? (
       <div className="min-w-0">
-        <span className="text-xs font-medium text-muted-foreground">Command: </span>
+        <span className="text-xs font-medium text-muted-foreground">命令：</span>
         <pre className="mt-1 rounded bg-muted p-2 font-mono text-sm whitespace-pre-wrap break-all text-foreground">
           $ {input.command}
         </pre>
@@ -79,14 +80,14 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
         <div className="space-y-3">
           {isActive && locations && locations.length > 0 && (
             <div>
-              <div className="mb-1 text-xs font-medium text-muted-foreground">Files to modify</div>
+              <div className="mb-1 text-xs font-medium text-muted-foreground">待修改文件</div>
               <div className="space-y-1">
                 {locations.map((loc, i) => (
                   <div key={i} className="flex items-center gap-2 text-sm text-foreground">
                     <span className="text-muted-foreground">📄</span>
                     <span className="font-mono break-all">{loc.path}</span>
                     {loc.line != null && (
-                      <span className="text-xs text-muted-foreground">:{loc.line}</span>
+                      <span className="text-xs tabular-nums text-muted-foreground">:{loc.line}</span>
                     )}
                   </div>
                 ))}
@@ -95,7 +96,7 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
           )}
           {filePath && (
             <div className="text-xs font-medium text-muted-foreground">
-              Editing: {filePath}
+              编辑中：{filePath}
             </div>
           )}
           {/* 终态无 content 时保留创建时的参数/diff 展示（R-4） */}
@@ -112,7 +113,7 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
           )}
           {!filePath && !hasInputDiff && (!contentItems || contentItems.length === 0) && (
             <div className="py-2 text-sm text-muted-foreground">
-              {kindLabel(kind)} — {status}
+              {kindLabel(kind)} — {toolCallStatusLabel(status)}
             </div>
           )}
         </div>
@@ -149,12 +150,12 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
             {renderCommand(execInput)}
             {execInput?.workDir && (
               <div className="min-w-0">
-                <span className="text-xs font-medium text-muted-foreground">Directory: </span>
+                <span className="text-xs font-medium text-muted-foreground">目录：</span>
                 <span className="font-mono break-all text-foreground">{execInput.workDir}</span>
               </div>
             )}
             <div className="py-2 text-muted-foreground">
-              {kindLabel(kind)} — {status}
+              {kindLabel(kind)} — {toolCallStatusLabel(status)}
             </div>
           </div>
         );
@@ -166,21 +167,21 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
           <div className="space-y-2 text-sm">
             {activeInput.workDir && (
               <div className="min-w-0">
-                <span className="text-xs font-medium text-muted-foreground">Directory: </span>
+                <span className="text-xs font-medium text-muted-foreground">目录：</span>
                 <span className="font-mono break-all text-foreground">{activeInput.workDir}</span>
               </div>
             )}
             {activeInput.description && (
               <div className="min-w-0">
-                <span className="text-xs font-medium text-muted-foreground">Description: </span>
+                <span className="text-xs font-medium text-muted-foreground">说明：</span>
                 <span className="text-foreground">{activeInput.description}</span>
               </div>
             )}
             {renderCommand(activeInput)}
             {activeInput.timeout != null && (
               <div>
-                <span className="text-xs font-medium text-muted-foreground">Timeout: </span>
-                <span className="text-foreground">{activeInput.timeout}s</span>
+                <span className="text-xs font-medium text-muted-foreground">超时：</span>
+                <span className="tabular-nums text-foreground">{activeInput.timeout}s</span>
               </div>
             )}
             {hasOutput && <TerminalOutput output={output} />}
@@ -200,7 +201,7 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
             </div>
           )}
           {!filePath && (
-            <div className="text-destructive-text">删除操作 — {status}</div>
+            <div className="text-destructive-text">删除操作 — {toolCallStatusLabel(status)}</div>
           )}
         </div>
       );
@@ -224,7 +225,7 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
         <div className="space-y-2 text-sm">
           {query && (
             <div className="min-w-0">
-              <span className="text-xs font-medium text-muted-foreground">Query: </span>
+              <span className="text-xs font-medium text-muted-foreground">查询：</span>
               <span className="rounded bg-muted px-2 py-0.5 font-mono break-all text-foreground">"{query}"</span>
             </div>
           )}
@@ -236,7 +237,7 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
       const thoughts = pick(rawOutput, ['thoughts', 'text', 'reasoning']);
       return (
         <div className="rounded border border-border bg-muted/50 p-2 text-sm">
-          <div className="mb-1 text-xs font-medium text-muted-foreground">💭 Thinking</div>
+          <div className="mb-1 text-xs font-medium text-muted-foreground">💭 思考过程</div>
           <div className="whitespace-pre-wrap break-all text-foreground/80">{thoughts ?? '思考中...'}</div>
         </div>
       );
@@ -248,7 +249,7 @@ export default function ToolCallCard({ toolCall, expanded, onExpandedChange }: T
 
     return (
       <div className="py-2 text-sm text-muted-foreground">
-        {kindLabel(kind)} — {status}
+        {kindLabel(kind)} — {toolCallStatusLabel(status)}
       </div>
     );
   };

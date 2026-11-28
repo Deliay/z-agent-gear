@@ -47,13 +47,13 @@ describe('MessageItem', () => {
   it('should show type label for tool_call messages', () => {
     const toolCall = { ...agentMessage, type: 'tool_call', content: 'search("test")' };
     render(<MessageItem message={toolCall} />);
-    expect(screen.getByText('Tool Call')).toBeDefined();
+    expect(screen.getByText('工具调用')).toBeDefined();
   });
 
   it('should show type label for error messages', () => {
     const error = { ...agentMessage, type: 'error', content: 'Something failed' };
     render(<MessageItem message={error} />);
-    expect(screen.getByText('Error')).toBeDefined();
+    expect(screen.getByText('错误')).toBeDefined();
   });
 
   it('should render markdown in agent messages', () => {

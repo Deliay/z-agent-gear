@@ -24,6 +24,8 @@ describe('PlanCard', () => {
 
     expect(screen.getByText('done task').className).toContain('line-through');
     expect(screen.getByText('todo task').className).not.toContain('line-through');
+    expect(screen.getByText('已完成')).toBeDefined();
+    expect(screen.getByText('待处理')).toBeDefined();
   });
 
   it('T-PC2 should show 全部完成 when all entries are completed', () => {
@@ -32,7 +34,7 @@ describe('PlanCard', () => {
       { content: 'b', status: 'completed' },
     ])} />);
 
-    fireEvent.click(screen.getByText('Plan'));
+    fireEvent.click(screen.getByText('计划'));
     expect(screen.getByText('全部完成')).toBeDefined();
   });
 
@@ -43,7 +45,7 @@ describe('PlanCard', () => {
       { content: 'c', status: 'pending' },
     ])} />);
 
-    fireEvent.click(screen.getByText('Plan'));
+    fireEvent.click(screen.getByText('计划'));
     expect(screen.getByText('1/3')).toBeDefined();
   });
 
@@ -53,7 +55,7 @@ describe('PlanCard', () => {
       { content: 'b', status: 'pending' },
     ])} />);
 
-    fireEvent.click(screen.getByText('Plan'));
+    fireEvent.click(screen.getByText('计划'));
     expect(screen.getByText('2 项任务')).toBeDefined();
   });
 });
@@ -67,7 +69,9 @@ describe('PlanFloatingCard', () => {
 
     expect(screen.getByText('1/2')).toBeDefined();
 
-    fireEvent.click(screen.getByText('Plan'));
+    fireEvent.click(screen.getByText('计划'));
     expect(screen.getByText('a').className).toContain('line-through');
+    expect(screen.getByText('已完成')).toBeDefined();
+    expect(screen.getByText('待处理')).toBeDefined();
   });
 });

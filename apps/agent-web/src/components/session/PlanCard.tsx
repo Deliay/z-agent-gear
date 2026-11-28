@@ -25,9 +25,9 @@ const statusColors = {
 };
 
 const statusLabels = {
-  pending: 'Pending',
-  in_progress: 'In Progress',
-  completed: 'Completed',
+  pending: '待处理',
+  in_progress: '进行中',
+  completed: '已完成',
 };
 
 export default function PlanCard({ messages }: PlanCardProps) {
@@ -59,7 +59,7 @@ export default function PlanCard({ messages }: PlanCardProps) {
 
   return (
     <AcpCard
-      title="Plan"
+      title="计划"
       summary={summary}
       defaultCollapsed={false}
       color="yellow"
@@ -68,7 +68,7 @@ export default function PlanCard({ messages }: PlanCardProps) {
         {entries.map((entry, i) => {
           const Icon = statusIcons[entry.status as keyof typeof statusIcons] || Circle;
           const colorClass = statusColors[entry.status as keyof typeof statusColors] || 'text-muted-foreground';
-          const label = statusLabels[entry.status as keyof typeof statusLabels] || 'Pending';
+          const label = statusLabels[entry.status as keyof typeof statusLabels] || '待处理';
           return (
             <div key={i} className="flex items-start gap-2">
               <Icon className={`h-4 w-4 mt-0.5 shrink-0 ${entry.status === 'in_progress' ? 'animate-spin' : ''} ${colorClass}`} />

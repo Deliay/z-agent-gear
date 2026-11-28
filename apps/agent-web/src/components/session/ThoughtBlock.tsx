@@ -20,7 +20,7 @@ export default function ThoughtBlock({ chunks, createdAt, expanded, onExpandedCh
 
   return (
     <AcpCard
-      title="Thinking"
+      title="思考过程"
       summary={summary}
       defaultCollapsed={true}
       color="gray"
@@ -30,7 +30,7 @@ export default function ThoughtBlock({ chunks, createdAt, expanded, onExpandedCh
       <div className="text-sm text-foreground leading-relaxed">
         <MarkdownContent content={text} />
       </div>
-      <div className="mt-2 text-xs text-muted-foreground">
+      <div className="mt-2 text-xs text-muted-foreground tabular-nums">
         {createdAt ? new Date(createdAt).toLocaleTimeString() : ''}
       </div>
     </AcpCard>

@@ -11,7 +11,7 @@ export default function AvailableCommandsCard({ data }: AvailableCommandsCardPro
 
   return (
     <AcpCard
-      title="Tools"
+      title="可用工具"
       summary={summary}
       color="gray"
       defaultCollapsed={true}

@@ -18,8 +18,8 @@ export default function SubAgentCard({ toolCall, expanded, onExpandedChange }: S
   const prompt = typeof rawInput?.prompt === 'string' ? rawInput.prompt : '';
   const output = typeof rawOutput?.output === 'string' ? rawOutput.output : '';
   const subagentType = typeof rawInput?.subagent_type === 'string' ? rawInput.subagent_type : 'sub-agent';
-  const title = description || `Sub Agent: ${subagentType}`;
-  const summary = `${subagentType}${description ? ': ' + description : ''}`;
+  const title = description || `子 Agent：${subagentType}`;
+  const summary = `${subagentType}${description ? '：' + description : ''}`;
 
   return (
     <AcpCard
@@ -34,7 +34,7 @@ export default function SubAgentCard({ toolCall, expanded, onExpandedChange }: S
       <div className="space-y-3">
         {prompt && (
           <div>
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Prompt</div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">提示词</div>
             <div className="rounded-md bg-background px-3 py-2 text-sm text-foreground">
               <MarkdownContent content={prompt} />
             </div>
@@ -42,7 +42,7 @@ export default function SubAgentCard({ toolCall, expanded, onExpandedChange }: S
         )}
         {output && (
           <div>
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Result</div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">执行结果</div>
             <div className="rounded-md bg-background px-3 py-2 text-sm text-foreground">
               <MarkdownContent content={output} />
             </div>

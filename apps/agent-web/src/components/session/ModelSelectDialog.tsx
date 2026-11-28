@@ -58,7 +58,7 @@ export function ModelSelectDialog({ open, models, currentModelId, loading, onSel
       onKeyDown={handleOverlayKeyDown}
     >
       <div className="w-96 rounded-xl bg-popover p-4 shadow-xl">
-        <h3 className="mb-3 text-sm font-semibold text-popover-foreground">Switch Model</h3>
+        <h3 className="mb-3 text-sm font-semibold text-popover-foreground">切换模型</h3>
         <div className="mb-3 max-h-72 space-y-3 overflow-y-auto">
           {groups.map((group) => (
             <div key={group.name} data-testid={`model-group-${group.name}`}>
@@ -105,7 +105,7 @@ export function ModelSelectDialog({ open, models, currentModelId, loading, onSel
             onClick={onClose}
             className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent"
           >
-            Cancel
+            取消
           </button>
           <button
             type="button"
@@ -113,7 +113,7 @@ export function ModelSelectDialog({ open, models, currentModelId, loading, onSel
             disabled={loading}
             className="rounded-lg bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
-            {loading ? 'Switching...' : 'Confirm'}
+            {loading ? '切换中...' : '确认'}
           </button>
         </div>
       </div>
