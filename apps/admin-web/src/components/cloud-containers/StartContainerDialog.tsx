@@ -219,7 +219,7 @@ export default function StartContainerDialog({
           <div className="min-w-0 space-y-2">
             <Label>工作负载</Label>
             {workloadsError ? (
-              <div role="alert" className="space-y-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              <div role="alert" className="space-y-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
                 <p>{workloadsError}</p>
                 {onRetryWorkloads && (
                   <Button variant="outline" size="sm" onClick={onRetryWorkloads}>
@@ -285,7 +285,7 @@ export default function StartContainerDialog({
                   .filter((depId) => !selectedIds.includes(depId) && workloadById.has(depId))
                   .map((depId) => workloadById.get(depId)?.name ?? depId);
                 return (
-                  <div key={workload.id} className="min-w-0 space-y-2 rounded-md border p-3">
+                  <div key={workload.id} className="min-w-0 space-y-2 rounded-md bg-muted/40 p-3">
                     <p className="truncate text-sm font-medium text-foreground">{workload.name}</p>
                     {missingDeps.length > 0 && (
                       <p className="text-xs text-muted-foreground">
@@ -310,7 +310,7 @@ export default function StartContainerDialog({
             <div className="min-w-0 space-y-2 rounded-lg border p-3">
               <p className="text-sm font-medium text-foreground">初始化顺序预览</p>
               {preview.cycle ? (
-                <p role="alert" className="text-xs text-destructive">
+                <p role="alert" className="text-xs text-destructive-text">
                   检测到依赖环：{preview.cycle.join(' → ')} → {preview.cycle[0]}
                 </p>
               ) : (
@@ -319,7 +319,7 @@ export default function StartContainerDialog({
                     <li key={item.workloadId} className="flex min-w-0 items-center gap-2 text-sm">
                       <span className="min-w-0 truncate text-foreground">{item.name}</span>
                       {!item.implicit && requiredByWorkload[item.workloadId] && (
-                        <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">
+                        <span className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive-text">
                           {REQUIRED_LABEL}
                         </span>
                       )}
@@ -333,12 +333,12 @@ export default function StartContainerDialog({
                 </ol>
               )}
               {preview.missingDependencyIds.length > 0 && (
-                <p role="alert" className="text-xs text-destructive">
+                <p role="alert" className="text-xs text-destructive-text">
                   依赖的工作负载不存在：{preview.missingDependencyIds.join('、')}，无法启动。
                 </p>
               )}
               {overLimit && (
-                <p role="alert" className="text-xs text-destructive">
+                <p role="alert" className="text-xs text-destructive-text">
                   展开依赖后超过单次挂载上限（{MAX_PLAN_ITEMS} 个），无法启动。
                 </p>
               )}
@@ -346,7 +346,7 @@ export default function StartContainerDialog({
           )}
         </div>
         {error && (
-          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
             {error}
           </div>
         )}

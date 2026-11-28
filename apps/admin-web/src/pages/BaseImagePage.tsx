@@ -10,6 +10,7 @@ import {
 import type { BaseImageData, BaseImageInputData, GetBaseImagesQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
 import { QueryError } from '@/components/ui/query-error'
+import { LoadingSkeleton } from '@/components/ui/skeleton'
 import BaseImageTable from '@/components/base-images/BaseImageTable'
 import BaseImageFormDialog from '@/components/base-images/BaseImageFormDialog'
 import DeleteConfirmDialog from '@/components/base-images/DeleteConfirmDialog'
@@ -76,7 +77,7 @@ export default function BaseImagePage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
+    <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="font-heading text-xl font-semibold text-foreground">基础镜像</h1>
@@ -90,7 +91,7 @@ export default function BaseImagePage() {
       </div>
 
       {loading && !data ? (
-        <div className="text-sm text-muted-foreground">加载中...</div>
+        <LoadingSkeleton rows={4} />
       ) : error && !data ? (
         <QueryError message={error.message} onRetry={() => refetch()} />
       ) : (

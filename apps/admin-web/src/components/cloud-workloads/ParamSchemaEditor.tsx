@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowDown, ArrowUp, Plus, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -149,7 +150,7 @@ export default function ParamSchemaEditor({
   return (
     <div className="min-w-0 space-y-3">
       {listError && (
-        <p role="alert" className="text-xs text-destructive">
+        <p role="alert" className="text-xs text-destructive-text">
           {listError}
         </p>
       )}
@@ -214,7 +215,7 @@ export default function ParamSchemaEditor({
                       placeholder="例如: version"
                     />
                     {fieldError(errors, index, 'key') && (
-                      <p className="text-xs text-destructive">
+                      <p className="text-xs text-destructive-text">
                         {fieldError(errors, index, 'key')}
                       </p>
                     )}
@@ -230,7 +231,7 @@ export default function ParamSchemaEditor({
                       placeholder="例如: 版本"
                     />
                     {fieldError(errors, index, 'label') && (
-                      <p className="text-xs text-destructive">
+                      <p className="text-xs text-destructive-text">
                         {fieldError(errors, index, 'label')}
                       </p>
                     )}
@@ -265,7 +266,7 @@ export default function ParamSchemaEditor({
                       onChange={(next) => handleOptionsChange(index, next)}
                     />
                     {fieldError(errors, index, 'options') && (
-                      <p className="text-xs text-destructive">
+                      <p className="text-xs text-destructive-text">
                         {fieldError(errors, index, 'options')}
                       </p>
                     )}
@@ -298,15 +299,14 @@ export default function ParamSchemaEditor({
                         options.map((option) => (
                           <label
                             key={option}
-                            className="flex items-center gap-1.5 text-sm text-foreground"
+                            className="flex cursor-pointer items-center gap-1.5 text-sm text-foreground"
                           >
-                            <input
-                              type="checkbox"
+                            <Checkbox
                               aria-label={option}
                               disabled={disabled}
                               checked={multiValue.includes(option)}
-                              onChange={(e) => {
-                                const next = e.target.checked
+                              onCheckedChange={(checked) => {
+                                const next = checked === true
                                   ? [...multiValue, option]
                                   : multiValue.filter((item) => item !== option);
                                 updateField(index, { defaultValue: next });
@@ -336,7 +336,7 @@ export default function ParamSchemaEditor({
                     />
                   )}
                   {fieldError(errors, index, 'defaultValue') && (
-                    <p className="text-xs text-destructive">
+                    <p className="text-xs text-destructive-text">
                       {fieldError(errors, index, 'defaultValue')}
                     </p>
                   )}

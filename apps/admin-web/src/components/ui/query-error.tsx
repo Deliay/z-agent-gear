@@ -17,7 +17,7 @@ export function QueryError({ message, onRetry }: QueryErrorProps) {
       className="rounded-lg border border-destructive/40 bg-destructive/5 p-6 text-center"
     >
       <AlertTriangle className="mx-auto size-8 text-destructive" aria-hidden="true" />
-      <p className="mt-2 text-sm font-medium text-destructive">数据加载失败</p>
+      <p className="mt-2 text-sm font-medium text-destructive-text">数据加载失败</p>
       <p className="mt-1 break-all text-xs text-muted-foreground">{message}</p>
       {onRetry && (
         <Button size="sm" variant="outline" className="mt-3" onClick={onRetry}>

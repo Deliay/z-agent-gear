@@ -1,3 +1,4 @@
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -71,17 +72,16 @@ export default function WorkloadParamsForm({
                   return (
                     <label
                       key={option}
-                      className="flex items-center gap-1.5 text-sm text-foreground"
+                      className="flex cursor-pointer items-center gap-1.5 text-sm text-foreground"
                     >
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         aria-label={option}
                         disabled={disabled}
                         checked={selected.includes(option)}
-                        onChange={(e) => {
+                        onCheckedChange={(checked) => {
                           // 归一为「可选项顺序」，使同一逻辑值产生稳定的 params 快照（日志留档稳定）。
                           const next = new Set(selected);
-                          if (e.target.checked) {
+                          if (checked === true) {
                             next.add(option);
                           } else {
                             next.delete(option);
@@ -113,7 +113,7 @@ export default function WorkloadParamsForm({
                 onChange={(e) => setValue(field.key, e.target.value)}
               />
             )}
-            {message && <p className="text-xs text-destructive">{message}</p>}
+            {message && <p className="text-xs text-destructive-text">{message}</p>}
           </div>
         );
       })}

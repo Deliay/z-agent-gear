@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { QueryError } from '@/components/ui/query-error'
+import { LoadingSkeleton } from '@/components/ui/skeleton'
+import { formatDateTime } from '@/lib/format'
 import {
   COMPACT_COMMAND_RULE_MESSAGE,
   mapHarnessConfigError,
@@ -36,8 +38,8 @@ const HARNESS_DESCRIPTIONS: Record<HarnessType, string> = {
 
 function formatUpdatedAt(updatedAt: string | undefined): string | null {
   if (!updatedAt) return null
-  const date = new Date(updatedAt)
-  return Number.isNaN(date.getTime()) ? null : date.toLocaleString()
+  const formatted = formatDateTime(updatedAt)
+  return formatted === '-' ? null : formatted
 }
 
 /**
@@ -80,7 +82,11 @@ export default function HarnessConfigsPage() {
   }
 
   if (loading && !data) {
-    return <div className="p-6 text-sm text-muted-foreground">加载中...</div>
+    return (
+      <div className="mx-auto max-w-6xl p-6">
+        <LoadingSkeleton rows={3} />
+      </div>
+    )
   }
 
   if (error && !data) {
@@ -114,11 +120,11 @@ export default function HarnessConfigsPage() {
             )
 
             return (
-              <div key={harnessType} className="space-y-2 rounded-md border p-3">
+              <div key={harnessType} className="space-y-2 rounded-md bg-muted/40 p-3">
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0 space-y-0.5">
                     <p className="text-sm font-medium">{HARNESS_LABELS[harnessType]}</p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs tabular-nums text-muted-foreground">
                       {HARNESS_DESCRIPTIONS[harnessType]}
                       {updatedAt ? ` · 更新于 ${updatedAt}` : ''}
                     </p>
@@ -148,7 +154,7 @@ export default function HarnessConfigsPage() {
                       {saving ? '保存中…' : '保存'}
                     </Button>
                   </div>
-                  {!valid && <p className="text-xs text-destructive">{COMPACT_COMMAND_RULE_MESSAGE}</p>}
+                  {!valid && <p className="text-xs text-destructive-text">{COMPACT_COMMAND_RULE_MESSAGE}</p>}
                 </div>
               </div>
             )

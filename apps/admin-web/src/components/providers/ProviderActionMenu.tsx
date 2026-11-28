@@ -30,7 +30,7 @@ export default function ProviderActionMenu({ isEnabled, togglePending = false, o
           {isEnabled ? '禁用' : '启用'}
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={onDelete} className="text-destructive">
+        <DropdownMenuItem onClick={onDelete} className="text-destructive-text">
           删除
         </DropdownMenuItem>
       </DropdownMenuPopup>

@@ -124,7 +124,7 @@ export default function SpecFormDialog({
               placeholder="例如: 4C 8G 20G"
               aria-invalid={Boolean(errors.name)}
             />
-            {errors.name && <p className="text-xs text-destructive">{errors.name}</p>}
+            {errors.name && <p className="text-xs text-destructive-text">{errors.name}</p>}
           </div>
 
           <div className="min-w-0 space-y-2">
@@ -167,7 +167,7 @@ export default function SpecFormDialog({
               </div>
             </div>
             {errors.resources ? (
-              <p className="text-xs text-destructive">{errors.resources}</p>
+              <p className="text-xs text-destructive-text">{errors.resources}</p>
             ) : (
               <p className="text-xs text-muted-foreground">
                 {previewUnlimited
@@ -208,14 +208,14 @@ export default function SpecFormDialog({
               />
             )}
             {whitelistTooLarge && (
-              <p className="text-xs text-destructive">
+              <p className="text-xs text-destructive-text">
                 白名单最多选择 {SPEC_WHITELIST_MAX_TENANTS} 个租户
               </p>
             )}
           </div>
         </div>
         {error && (
-          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
             {error}
           </div>
         )}

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { LoadingSkeleton } from '@/components/ui/skeleton';
 import { ADMIN_CLOUD_WORKLOAD_LOGS } from '@/graphql/queries';
 import type {
   CloudWorkloadLogData,
@@ -68,9 +69,9 @@ export default function WorkloadLogsDialog({
         </DialogHeader>
 
         {loading && !data ? (
-          <div className="text-sm text-muted-foreground">加载中...</div>
+          <LoadingSkeleton rows={3} />
         ) : error && !data ? (
-          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
             {error.message}
           </div>
         ) : logs.length === 0 ? (
@@ -108,7 +109,7 @@ export default function WorkloadLogsDialog({
                         <span className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           <span>{WORKLOAD_LOG_PHASE_LABELS[item.phase]}</span>
                           {item.required && (
-                            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">
+                            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive-text">
                               {REQUIRED_LABEL}
                             </span>
                           )}
@@ -116,7 +117,7 @@ export default function WorkloadLogsDialog({
                             {statusBadgeProps(item.status).label}
                           </Badge>
                         </span>
-                        <span className="block max-w-full truncate text-xs text-muted-foreground">
+                        <span className="block max-w-full truncate text-xs tabular-nums text-muted-foreground">
                           {formatDateTime(item.startedAt)}
                         </span>
                       </button>
@@ -129,7 +130,7 @@ export default function WorkloadLogsDialog({
             {selected && (
               <div className="min-w-0 flex-1 space-y-3" data-testid="workload-log-detail">
                 {selected.required && (
-                  <span className="inline-block rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">
+                  <span className="inline-block rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive-text">
                     {REQUIRED_LABEL}
                   </span>
                 )}

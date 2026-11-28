@@ -15,6 +15,7 @@ import type {
 import { mapSpecError } from '@/lib/cloud-host-spec';
 import { Button } from '@/components/ui/button';
 import { QueryError } from '@/components/ui/query-error';
+import { LoadingSkeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import SpecTable from '@/components/cloud-host-specs/SpecTable';
 import SpecFormDialog from '@/components/cloud-host-specs/SpecFormDialog';
@@ -118,7 +119,7 @@ export default function CloudHostSpecsPage() {
       </div>
 
       {loading && !data ? (
-        <div className="text-sm text-muted-foreground">加载中...</div>
+        <LoadingSkeleton rows={4} />
       ) : error && !data ? (
         <QueryError message={error.message} onRetry={() => refetch()} />
       ) : (
@@ -138,7 +139,7 @@ export default function CloudHostSpecsPage() {
         >
           上一页
         </Button>
-        <span className="text-xs text-muted-foreground">第 {page} 页</span>
+        <span className="text-xs tabular-nums text-muted-foreground">第 {page} 页</span>
         <Button
           size="sm"
           variant="outline"

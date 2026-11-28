@@ -26,7 +26,7 @@ export default function ProviderItem({
 }: ProviderItemProps) {
   return (
     <div
-      className={`flex items-center gap-3 rounded-lg border p-4 transition-colors ${
+      className={`flex items-center gap-3 rounded-lg border bg-card p-4 transition-colors ${
         provider.isEnabled ? '' : 'opacity-60'
       }`}
     >
@@ -47,7 +47,7 @@ export default function ProviderItem({
         <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
           <span>{provider.type}</span>
           <span>{maskCredential(provider.credentialValue)}</span>
-          <span>{provider.models.length} 个模型</span>
+          <span className="tabular-nums">{provider.models.length} 个模型</span>
         </div>
       </div>
       <ProviderActionMenu

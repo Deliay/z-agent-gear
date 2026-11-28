@@ -6,6 +6,7 @@ import { resolveAdminApiBase } from './lib/api-base'
 import { renderBootstrapFallback } from './lib/bootstrap'
 import { logger } from './lib/logger'
 import { initTheme } from './lib/theme'
+import '@fontsource-variable/geist'
 import './index.css'
 import App from './App.tsx'
 

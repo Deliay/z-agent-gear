@@ -4,6 +4,7 @@ import { MODEL_RENAME_RECORDS } from '@/graphql/queries'
 import type { ModelRenameRecordsQuery } from '@/graphql/types'
 import CollapsibleGroup from '@/components/ui/collapsible-group'
 import { QueryError } from '@/components/ui/query-error'
+import { LoadingSkeleton } from '@/components/ui/skeleton'
 import { formatDateTime } from '@/lib/format'
 import * as T from '@/lib/table-styles'
 
@@ -27,7 +28,7 @@ export default function ModelRenameRecordsPanel() {
       onToggle={() => setExpanded((prev) => !prev)}
     >
       {loading && !data ? (
-        <div className="text-sm text-muted-foreground">加载中...</div>
+        <LoadingSkeleton rows={2} className="border-0 p-0" />
       ) : error && !data ? (
         <QueryError message={error.message} onRetry={() => refetch()} />
       ) : records.length === 0 ? (
@@ -53,7 +54,7 @@ export default function ModelRenameRecordsPanel() {
                     <span className="font-medium text-foreground">{record.newName}</span>
                   </td>
                   <td className={T.TABLE_CELL_MUTED_CLASS}>{record.providerName}</td>
-                  <td className={T.TABLE_CELL_MUTED_CLASS}>{formatDateTime(record.renamedAt)}</td>
+                  <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>{formatDateTime(record.renamedAt)}</td>
                 </tr>
               ))}
             </tbody>
