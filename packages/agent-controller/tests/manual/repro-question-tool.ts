@@ -13,7 +13,8 @@
  * 用法（在 packages/agent-controller 目录）：
  *   npx tsx tests/manual/repro-question-tool.ts <policy> [prompt]
  *
- *   policy = none    不响应问询（观测 65s bridge 超时后的工具结果）
+ *   policy = none    不响应问询（观测提问兜底超时后的工具结果；bridge 兜底为 1805s，
+ *                    需等待约 30 分钟，脚本定时器留 15s 余量）
  *            accept  收到问询立即 accept（对照组：question 工具应 completed）
  *            decline 收到问询立即 decline
  *            cancel  收到问询立即 cancel（秒级复现 "dismissed"）
@@ -97,8 +98,12 @@ async function main(): Promise<void> {
   log('prompt sent');
 
   await new Promise<void>((resolve) => {
-    // 65s bridge 超时 + 余量
-    const timer = setTimeout(() => { log('TIMEOUT 100s'); resolve(); }, 100_000);
+    // 提问 bridge 兜底 1805s（30 分钟 5 秒，= controller-api 权威 1800s + 5s race 余量）+ 15s 余量
+    const BRIDGE_ELICITATION_FALLBACK_MS = 1_805_000;
+    const timer = setTimeout(() => {
+      log('TIMEOUT 1820s（未观测到 bridge timeout，请检查策略/进程）');
+      resolve();
+    }, BRIDGE_ELICITATION_FALLBACK_MS + 15_000);
     bridge.on('acp:stopped', () => {
       log('bridge stopped');
       clearTimeout(timer);

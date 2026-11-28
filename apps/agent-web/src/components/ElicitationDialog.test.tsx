@@ -75,7 +75,7 @@ describe('ElicitationDialog - 通知视图', () => {
     renderDialog(elicitationTodo());
     expect(screen.getByText('请确认发布配置')).toBeDefined();
     expect(screen.queryByText('第二行不应展示')).toBeNull();
-    expect(screen.getByText(/约 1 分钟后过期/)).toBeDefined();
+    expect(screen.getByText(/约 30 分钟后过期/)).toBeDefined();
     expect(screen.getByText('前往会话处理')).toBeDefined();
   });
 

@@ -4,8 +4,9 @@ import { todoService } from './todo-service.js';
 
 const logger = rootLogger.child({ component: 'session-interaction-service' });
 
-/** 作答时限唯一口径：与 controller-api `TIMEOUT_MS`（60s）对齐 */
-export const SESSION_INTERACTION_TIMEOUT_MS = 60_000;
+/** 作答时限唯一口径：与 controller-api elicitation/permission `TIMEOUT_MS` 分别对齐 */
+export const ELICITATION_TIMEOUT_MS = 1_800_000;
+export const PERMISSION_TIMEOUT_MS = 900_000;
 const MESSAGE_MAX_LENGTH = 4000;
 const URL_MAX_LENGTH = 2048;
 
@@ -129,7 +130,7 @@ function isDuplicateKeyError(error: unknown): boolean {
  *
  * - 写：所有终态写入经 `PENDING` 前置过滤 CAS（单调，不可回退、不可重复作答）；
  * - 创建：`interactionId` 唯一索引 + E11000 幂等回读（重复触发只一张卡片）；
- * - `expiresAt` = 事件到达 agent-api 时刻 + 60s（与 controller-api 超时对齐）。
+ * - `expiresAt` 按 kind 写入（提问 = 事件到达 agent-api 时刻 + 30 分钟、权限审批 = + 15 分钟，分别对齐 controller-api 超时）。
  */
 export class SessionInteractionService {
   private async tenantFields(sessionId: string): Promise<Record<string, unknown>> {
@@ -170,7 +171,7 @@ export class SessionInteractionService {
       url: truncate(data.url, URL_MAX_LENGTH),
       elicitationId: data.elicitationId,
       toolCallId: data.toolCallId,
-      expiresAt: new Date(now.getTime() + SESSION_INTERACTION_TIMEOUT_MS),
+      expiresAt: new Date(now.getTime() + ELICITATION_TIMEOUT_MS),
       history: [{ state: 'PENDING', at: now, actor: 'agent' }],
     });
   }
@@ -190,7 +191,7 @@ export class SessionInteractionService {
       toolCallId: data.toolCall.toolCallId,
       toolCall: data.toolCall,
       options: data.options,
-      expiresAt: new Date(now.getTime() + SESSION_INTERACTION_TIMEOUT_MS),
+      expiresAt: new Date(now.getTime() + PERMISSION_TIMEOUT_MS),
       history: [{ state: 'PENDING', at: now, actor: 'agent' }],
     });
   }

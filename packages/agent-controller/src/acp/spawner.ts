@@ -125,7 +125,7 @@ export class AcpSpawner {
 
     this.process.on('error', (error) => {
       this.log.error({ event: 'acp_process_error', command: cmd, err: error }, 'acp process error');
-      // spawn 失败同样视为进程终止：必须 resolve closed，让 bridge 收敛 pending，避免 65s 迟到 timeout
+      // spawn 失败同样视为进程终止：必须 resolve closed，让 bridge 收敛 pending，避免 1805s（提问）/905s（权限审批）迟到 timeout
       this.process = null;
       this.resolveClosed?.();
     });
