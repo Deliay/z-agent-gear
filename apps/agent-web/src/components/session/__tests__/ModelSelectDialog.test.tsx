@@ -21,7 +21,7 @@ describe('ModelSelectDialog', () => {
       />,
     );
 
-    expect(screen.queryByText('Switch Model')).toBeNull();
+    expect(screen.queryByText('切换模型')).toBeNull();
   });
 
   it('should render when open', () => {
@@ -36,7 +36,7 @@ describe('ModelSelectDialog', () => {
       />,
     );
 
-    expect(screen.getByText('Switch Model')).toBeDefined();
+    expect(screen.getByText('切换模型')).toBeDefined();
   });
 
   it('should display all models', () => {
@@ -102,7 +102,7 @@ describe('ModelSelectDialog', () => {
     );
 
     fireEvent.click(screen.getByText('GPT-4'));
-    fireEvent.click(screen.getByText('Confirm'));
+    fireEvent.click(screen.getByText('确认'));
 
     expect(onSelect).toHaveBeenCalledWith('gpt-4');
   });
@@ -119,11 +119,11 @@ describe('ModelSelectDialog', () => {
       />,
     );
 
-    const confirmButton = screen.getByText('Switching...') as HTMLButtonElement;
+    const confirmButton = screen.getByText('切换中...') as HTMLButtonElement;
     expect(confirmButton.disabled).toBe(true);
   });
 
-  it('should show "Switching..." text when loading', () => {
+  it('should show "切换中..." text when loading', () => {
     render(
       <ModelSelectDialog
         open={true}
@@ -135,7 +135,7 @@ describe('ModelSelectDialog', () => {
       />,
     );
 
-    expect(screen.getByText('Switching...')).toBeDefined();
+    expect(screen.getByText('切换中...')).toBeDefined();
   });
 
   it('should call onClose when cancel button is clicked', () => {
@@ -151,7 +151,7 @@ describe('ModelSelectDialog', () => {
       />,
     );
 
-    fireEvent.click(screen.getByText('Cancel'));
+    fireEvent.click(screen.getByText('取消'));
 
     expect(onClose).toHaveBeenCalled();
   });

@@ -23,7 +23,7 @@ export default function CollapsibleGroup({
   children,
 }: CollapsibleGroupProps) {
   return (
-    <div className="rounded-lg border">
+    <div className="rounded-lg border bg-card">
       <div className="flex items-center gap-2 px-3 py-2">
         <button
           type="button"
@@ -38,7 +38,7 @@ export default function CollapsibleGroup({
           />
           <span className="truncate text-sm font-medium text-foreground">{title}</span>
           {typeof count === 'number' && (
-            <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
+            <span className="rounded bg-muted px-1.5 py-0.5 text-xs tabular-nums text-muted-foreground">
               {count}
             </span>
           )}

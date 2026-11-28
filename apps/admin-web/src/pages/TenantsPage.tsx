@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog'
 import { EmptyState } from '@/components/ui/empty-state'
 import { QueryError } from '@/components/ui/query-error'
+import { LoadingSkeleton } from '@/components/ui/skeleton'
 import { tenantTypeBadge } from '@/components/tenants/roles'
 import { formatDateTime } from '@/lib/format'
 import * as T from '@/lib/table-styles'
@@ -196,7 +197,7 @@ export default function TenantsPage() {
         />
 
         {loading && !data ? (
-          <div className="text-sm text-muted-foreground">加载中...</div>
+          <LoadingSkeleton rows={4} />
         ) : error && !data ? (
           <QueryError message={error.message} onRetry={() => refetch()} />
         ) : tenants.length === 0 ? (
@@ -243,7 +244,7 @@ export default function TenantsPage() {
                     <td className={T.TABLE_CELL_NUMERIC_CLASS}>
                       {tenantBalanceText(tenant.balance)}
                     </td>
-                    <td className={T.TABLE_CELL_MUTED_CLASS}>
+                    <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                       {formatDateTime(tenant.createdAt)}
                     </td>
                   </tr>
@@ -262,7 +263,7 @@ export default function TenantsPage() {
           >
             上一页
           </Button>
-          <span className="text-muted-foreground">第 {page} 页</span>
+          <span className="tabular-nums text-muted-foreground">第 {page} 页</span>
           <Button
             size="sm"
             variant="outline"
@@ -307,7 +308,7 @@ export default function TenantsPage() {
             </div>
           </div>
           {formError && (
-            <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
               {formError}
             </div>
           )}
@@ -344,7 +345,7 @@ export default function TenantsPage() {
             </div>
           </div>
           {teamError && (
-            <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
               {teamError}
             </div>
           )}

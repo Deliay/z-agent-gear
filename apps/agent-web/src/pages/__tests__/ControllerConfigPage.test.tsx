@@ -416,7 +416,7 @@ describe('ControllerConfigPage', () => {
       expect(screen.getByTestId('cloud-host-workloads-section')).toHaveAttribute('data-controller-id', 'ctrl-1');
 
       fireEvent.click(screen.getByTestId('config-tab-github'));
-      const githubButton = screen.getByRole('button', { name: 'Github 项目设置' });
+      const githubButton = screen.getByRole('button', { name: 'GitHub 项目设置' });
       expect(githubButton).not.toBeDisabled();
       fireEvent.click(githubButton);
 
@@ -431,7 +431,7 @@ describe('ControllerConfigPage', () => {
       render(<ControllerConfigPage {...defaultProps} />);
 
       fireEvent.click(screen.getByTestId('config-tab-github'));
-      expect(screen.getByRole('button', { name: 'Github 项目设置' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'GitHub 项目设置' })).toBeDisabled();
     });
 
     it('T-AW-G14 工作负载页签不再出现 Github 入口；Github 页签展示', () => {
@@ -442,10 +442,10 @@ describe('ControllerConfigPage', () => {
       render(<ControllerConfigPage {...defaultProps} />);
 
       fireEvent.click(screen.getByRole('button', { name: '工作负载' }));
-      expect(screen.queryByRole('button', { name: 'Github 项目设置' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'GitHub 项目设置' })).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByTestId('config-tab-github'));
-      expect(screen.getByRole('button', { name: 'Github 项目设置' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'GitHub 项目设置' })).toBeInTheDocument();
     });
 
     it('普通主机不展示工作负载页签与 Github 入口', () => {
@@ -454,7 +454,7 @@ describe('ControllerConfigPage', () => {
       render(<ControllerConfigPage {...defaultProps} />);
 
       expect(screen.queryByRole('button', { name: '工作负载' })).not.toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Github 项目设置' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'GitHub 项目设置' })).not.toBeInTheDocument();
       expect(screen.queryByTestId('cloud-host-workloads-section')).not.toBeInTheDocument();
     });
   });
@@ -492,10 +492,10 @@ describe('ControllerConfigPage', () => {
       render(<ControllerConfigPage {...defaultProps} />);
 
       fireEvent.click(screen.getByTestId('config-tab-workloads'));
-      expect(screen.queryByRole('button', { name: 'Github 项目设置' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'GitHub 项目设置' })).not.toBeInTheDocument();
 
       fireEvent.click(screen.getByTestId('config-tab-github'));
-      expect(screen.getByRole('button', { name: 'Github 项目设置' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'GitHub 项目设置' })).toBeInTheDocument();
     });
 
     it('普通主机移动端同样渲染 2 个 tab 且不展示云电脑面板', () => {
@@ -651,7 +651,7 @@ describe('ControllerConfigPage 工作流页签（T-RW-WEB6）', () => {
     render(<ControllerConfigPage controllerId="ctrl-1" onBack={vi.fn()} />);
 
     fireEvent.click(screen.getByTestId('config-tab-github'));
-    fireEvent.click(screen.getByRole('button', { name: 'Github 项目设置' }));
+    fireEvent.click(screen.getByRole('button', { name: 'GitHub 项目设置' }));
     fireEvent.click(screen.getByRole('button', { name: 'mock-github-finished' }));
 
     await waitFor(() => {

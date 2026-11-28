@@ -14,6 +14,7 @@ import type {
 } from '@/graphql/types';
 import { Button } from '@/components/ui/button';
 import { QueryError } from '@/components/ui/query-error';
+import { LoadingSkeleton } from '@/components/ui/skeleton';
 import WorkloadTable from '@/components/cloud-workloads/WorkloadTable';
 import WorkloadFormDialog from '@/components/cloud-workloads/WorkloadFormDialog';
 import DeleteWorkloadDialog from '@/components/cloud-workloads/DeleteWorkloadDialog';
@@ -80,7 +81,7 @@ export default function CloudWorkloadsPage() {
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
+    <div className="mx-auto max-w-6xl space-y-6 p-6">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h1 className="font-heading text-xl font-semibold text-foreground">工作负载</h1>
@@ -94,7 +95,7 @@ export default function CloudWorkloadsPage() {
       </div>
 
       {loading && !data ? (
-        <div className="text-sm text-muted-foreground">加载中...</div>
+        <LoadingSkeleton rows={4} />
       ) : error && !data ? (
         <QueryError message={error.message} onRetry={() => refetch()} />
       ) : (

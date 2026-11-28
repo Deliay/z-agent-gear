@@ -74,7 +74,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
   await page.fill('#username', username);
   await page.fill('#password', 'testpass123');
   await page.click('button[type="submit"]');
-  await page.locator('nav[aria-label="Sidebar"]').waitFor({ timeout: 10000 });
+  await page.locator('nav[aria-label="侧边栏导航"]').waitFor({ timeout: 10000 });
 }
 
 /**
@@ -82,7 +82,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
  * 分区默认折叠，先展开。
  */
 async function openGateways(page: import('@playwright/test').Page) {
-  const sidebar = page.locator('nav[aria-label="Sidebar"]');
+  const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
   const header = sidebar.getByRole('button', { name: /^网关/ });
   if ((await header.getAttribute('aria-expanded')) !== 'true') await header.click();
   return sidebar;
@@ -90,7 +90,7 @@ async function openGateways(page: import('@playwright/test').Page) {
 
 /** 「新增网关」先弹出在线主机选择菜单（ControllerPicker），选定后打开对话框。 */
 async function openNewGatewayDialog(page: import('@playwright/test').Page) {
-  const sidebar = page.locator('nav[aria-label="Sidebar"]');
+  const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
   await sidebar.getByRole('button', { name: '新增网关' }).click();
   const menu = sidebar.getByRole('menu');
   if (await menu.isVisible().catch(() => false)) {
@@ -105,7 +105,7 @@ test.describe('Gateway E2E', () => {
     const { username, disconnect } = await setupGatewayTest(page);
 
     await loginViaUI(page, username);
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
     // 在线主机存在时聚合分区可见，且提供「新增网关」入口
     await expect(sidebar.getByRole('button', { name: /^网关/ })).toBeVisible({ timeout: 10000 });
     await expect(sidebar.getByRole('button', { name: '新增网关' })).toBeVisible();
@@ -248,7 +248,7 @@ test.describe('Gateway E2E', () => {
     disconnect();
 
     await loginViaUI(page, username);
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
 
     // 聚合分区仅在在线主机存在时提供「新增网关」入口
     await expect(sidebar.getByRole('button', { name: '新增网关' })).toHaveCount(0, {

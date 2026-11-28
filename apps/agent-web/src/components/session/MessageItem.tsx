@@ -96,11 +96,11 @@ export default function MessageItem({ message }: MessageItemProps) {
   const getTypeLabel = (type: string) => {
     switch (type) {
       case 'tool_call':
-        return toolTitle ? `Tool Call: ${toolTitle}` : 'Tool Call';
+        return toolTitle ? `工具调用：${toolTitle}` : '工具调用';
       case 'error':
-        return 'Error';
+        return '错误';
       case 'image':
-        return 'Image';
+        return '图片';
       default:
         return null;
     }
@@ -168,7 +168,7 @@ export default function MessageItem({ message }: MessageItemProps) {
             ))}
           </div>
         )}
-        <div className={`mt-1 text-xs ${isUser ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
+        <div className={`mt-1 text-xs tabular-nums ${isUser ? 'text-primary-foreground/70' : 'text-muted-foreground'}`}>
           {new Date(message.createdAt).toLocaleTimeString()}
         </div>
       </div>

@@ -36,7 +36,7 @@ async function loginViaUI(page: import('@playwright/test').Page, username: strin
   await page.fill('#username', username);
   await page.fill('#password', TEST_PASS);
   await page.click('button[type="submit"]');
-  await expect(page.locator('nav[aria-label="Sidebar"]')).toBeVisible({ timeout: 10000 });
+  await expect(page.locator('nav[aria-label="侧边栏导航"]')).toBeVisible({ timeout: 10000 });
 }
 
 test.describe('Settings LLM Provider & Model E2E', () => {
@@ -47,7 +47,7 @@ test.describe('Settings LLM Provider & Model E2E', () => {
     await page.click('a[href="/settings"]');
     await expect(page.getByText('退出登录')).toBeVisible({ timeout: 5000 });
 
-    const nav = page.locator('nav[aria-label="Settings navigation"]');
+    const nav = page.locator('nav[aria-label="设置导航"]');
 
     await expect(nav.getByRole('button', { name: '帐号' })).toBeVisible();
     await expect(nav.getByText('模型设置')).toBeVisible();
@@ -64,7 +64,7 @@ test.describe('Settings LLM Provider & Model E2E', () => {
     await page.click('a[href="/settings"]');
     await expect(page.getByText('退出登录')).toBeVisible({ timeout: 5000 });
 
-    await page.locator('nav[aria-label="Settings navigation"]').getByRole('button', { name: '供应商设置' }).click();
+    await page.locator('nav[aria-label="设置导航"]').getByRole('button', { name: '供应商设置' }).click();
     await expect(page.locator('#provider-section')).toBeVisible();
   });
 
@@ -74,7 +74,7 @@ test.describe('Settings LLM Provider & Model E2E', () => {
     await page.click('a[href="/settings"]');
     await expect(page.getByText('退出登录')).toBeVisible({ timeout: 5000 });
 
-    await page.locator('nav[aria-label="Settings navigation"]').getByRole('button', { name: '可用模型' }).click();
+    await page.locator('nav[aria-label="设置导航"]').getByRole('button', { name: '可用模型' }).click();
     await expect(page.locator('#model-section')).toBeVisible();
   });
 

@@ -40,10 +40,12 @@ vi.mock('@apollo/client/react', () => ({
   useApolloClient: () => ({ resetStore: vi.fn() }),
 }));
 
+const { mockPathname } = vi.hoisted(() => ({ mockPathname: { value: '/' } }));
+
 vi.mock('react-router-dom', () => ({
   Outlet: () => <div data-testid="outlet" />,
   NavLink: ({ children, to }: { children: React.ReactNode; to: string }) => <a href={to}>{children}</a>,
-  useLocation: () => ({ pathname: '/' }),
+  useLocation: () => ({ pathname: mockPathname.value }),
   useNavigate: () => mockNavigate,
 }));
 
@@ -120,6 +122,7 @@ describe('MainLayout 首页聚合查询', () => {
     vi.clearAllMocks();
     localStorage.clear();
     mockIsMobile.value = false;
+    mockPathname.value = '/';
   });
 
   it('P1 持久化工作区失效时错误页仍执行清理并 refetch（不死锁）', () => {
@@ -175,17 +178,37 @@ describe('MainLayout 首页聚合查询', () => {
     expect(localStorage.getItem('sidebar-active-domain')).toBe('workflows');
   });
 
-  it('T-UI4-RES7 移动端不渲染拖拽热区（移动布局不回归）', () => {
+  it('T-UI4-RES7 移动端不渲染拖拽热区，底部导航含图标且支持工作流切换与 /billing 路由渲染', () => {
     mockIsMobile.value = true;
     mockUseQuery.mockReturnValue({ data: homeData, loading: false, error: undefined, refetch: mockRefetch });
-    render(<MainLayout />);
+    const { rerender } = render(<MainLayout />);
 
     expect(screen.queryByTestId('sidebar-resizer')).not.toBeInTheDocument();
     expect(screen.getByTestId('sidebar')).toBeInTheDocument();
-    // Phase 10：移动端底部导航行（费用/设置可达）
+    expect(document.getElementById('main-content')).toBeInTheDocument();
+    // Phase 10：移动端底部导航行（含图标，费用/设置可达，工作流切换侧栏领域而非跳死链 /workflows）
     const bottomNav = screen.getByTestId('mobile-bottom-nav');
     expect(bottomNav).toHaveTextContent('费用');
     expect(bottomNav).toHaveTextContent('设置');
+    expect(bottomNav.querySelectorAll('svg').length).toBeGreaterThanOrEqual(5);
+
+    fireEvent.click(screen.getByTestId('mobile-nav-workflows'));
+    expect(localStorage.getItem('sidebar-active-domain')).toBe('workflows');
+    expect(mockNavigate).not.toHaveBeenCalledWith('/workflows');
+
+    // /billing 在移动端应渲染 <Outlet /> 而非 <Sidebar />
+    mockPathname.value = '/billing';
+    rerender(<MainLayout />);
+    expect(screen.getByTestId('outlet')).toBeInTheDocument();
+    expect(screen.queryByTestId('sidebar')).not.toBeInTheDocument();
+    expect(document.getElementById('main-content')).toBeInTheDocument();
+  });
+
+  it('桌面端 <main> 挂载 id="main-content" 供 Skip Link 跳转', () => {
+    mockUseQuery.mockReturnValue({ data: homeData, loading: false, error: undefined, refetch: mockRefetch });
+    render(<MainLayout />);
+    const main = document.querySelector('main#main-content');
+    expect(main).toBeInTheDocument();
   });
 
   it('仅挂载一次 HOME_OVERVIEW 查询且 pollInterval 为 15000（T-F1）', () => {

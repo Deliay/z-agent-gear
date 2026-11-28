@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+const indexCss = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8');
 
 const adminWebSources = import.meta.glob(
   ['../**/*.{ts,tsx}', '!../**/*.test.{ts,tsx}', '!../**/*.d.ts', '!../**/__tests__/**'],
@@ -13,6 +17,8 @@ const ARBITRARY_COLOR_REGEX =
 /** 裸调色板黑白（`bg-black/10` / `text-white` / `border-white/10`）不走语义 Token。 */
 const RAW_MONOCHROME_REGEX =
   /\b(?:bg|text|border|ring|from|to|via|fill|stroke|divide|outline|decoration|shadow|placeholder|accent|caret)-(?:white|black)(?:\/\d+)?\b/g;
+/** 裸语义文字色（未走 `*-text` 对比度 Token）；仅允许图标元素（`aria-hidden="true"`）使用。 */
+const RAW_SEMANTIC_TEXT_REGEX = /\btext-(?:success|warning|info|destructive)(?!-text|-foreground)\b/g;
 /** 旧表格单元格内边距组合：迁移不彻底会与表头 `py-2.5 px-3` 错位。 */
 const LEGACY_TABLE_CELL_REGEX =
   /<(?:td|th)\b[^\n>]*\b(?:px-4 py-3|py-3 px-4|py-2 pr-3|py-2 px-2|py-2 px-3|py-3 px-3)\b[^\n>]*>/g;
@@ -91,6 +97,38 @@ describe('UI/UX Design Standards Guard (docs/engineering/ui-ux-standards.md)', (
         !content.includes('TABLE_HEAD_CELL_ACTION_CLASS')
       ) {
         violations.push(`${filePath}: 数字列单元格右对齐但表头未使用右对齐常量`);
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
+  it('T-UIUX-CONTRAST1: index.css 必须声明 --*-text 对比度语义 Token 与 --font-mono，且非图标正文禁止裸用 text-(success|warning|info|destructive)', () => {
+    for (const token of [
+      '--success-text',
+      '--warning-text',
+      '--info-text',
+      '--destructive-text',
+      '--color-success-text',
+      '--color-warning-text',
+      '--color-info-text',
+      '--color-destructive-text',
+      '--font-mono',
+    ]) {
+      expect(indexCss).toContain(token);
+    }
+
+    const violations: string[] = [];
+    for (const [filePath, content] of Object.entries(adminWebSources)) {
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        // 允许纯图标元素（带 aria-hidden="true"）使用原始语义色
+        if (line.includes('aria-hidden="true"')) continue;
+        const matches = line.match(RAW_SEMANTIC_TEXT_REGEX);
+        if (matches) {
+          violations.push(`${filePath}:${i + 1}: ${matches.join(', ')}`);
+        }
       }
     }
 

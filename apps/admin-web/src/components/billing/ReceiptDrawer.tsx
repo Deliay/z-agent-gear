@@ -41,7 +41,7 @@ export default function ReceiptDrawer({ invoice, receipt, open, loading, error, 
         </SheetHeader>
 
         {error && (
-          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
             {error}
           </div>
         )}
@@ -52,11 +52,11 @@ export default function ReceiptDrawer({ invoice, receipt, open, loading, error, 
               <dt className="text-muted-foreground">账单序号</dt>
               <dd className="text-right tabular-nums">{invoice.seq}</dd>
               <dt className="text-muted-foreground">时间</dt>
-              <dd className="text-right">{formatDateTime(invoice.createdAt)}</dd>
+              <dd className="text-right tabular-nums">{formatDateTime(invoice.createdAt)}</dd>
               <dt className="text-muted-foreground">金额</dt>
               <dd
                 className={`text-right tabular-nums ${
-                  invoice.amount > 0 ? 'text-success' : 'text-foreground'
+                  invoice.amount > 0 ? 'text-success-text' : 'text-foreground'
                 }`}
               >
                 {invoice.amount.toFixed(2)} credits
@@ -68,7 +68,7 @@ export default function ReceiptDrawer({ invoice, receipt, open, loading, error, 
                   <dt className="text-muted-foreground">收据号</dt>
                   <dd className="truncate text-right font-mono text-xs">{receipt.receiptNo}</dd>
                   <dt className="text-muted-foreground">开具时间</dt>
-                  <dd className="text-right">{formatDateTime(receipt.issuedAt)}</dd>
+                  <dd className="text-right tabular-nums">{formatDateTime(receipt.issuedAt)}</dd>
                 </>
               )}
             </dl>

@@ -19,7 +19,7 @@ const FRONT_WEB_URL = process.env.BASE_URL || 'http://localhost:35273';
 /** 页面内禁止出现的租户/用户写操作入口（租户为只读视图）。 */
 const FORBIDDEN_ACTIONS = /^(编辑|删除|停用|禁用|新建租户|修改)$/;
 
-const sidebar = () => 'nav[aria-label="Sidebar"]';
+const sidebar = () => 'nav[aria-label="侧边栏导航"]';
 
 async function createTenantViaAdminApi(page: import('@playwright/test').Page, prefix = 'mt'): Promise<string> {
   const token = await adminLoginApi(page);

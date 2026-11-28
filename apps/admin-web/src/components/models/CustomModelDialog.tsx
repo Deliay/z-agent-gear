@@ -178,7 +178,7 @@ export default function CustomModelDialog({
                   placeholder="例如: gpt-4o-mini"
                 />
                 {duplicateName && (
-                  <p role="alert" className="text-sm text-destructive">
+                  <p role="alert" className="text-sm text-destructive-text">
                     模型名已存在
                   </p>
                 )}
@@ -198,7 +198,7 @@ export default function CustomModelDialog({
                 placeholder="留空表示未设置"
               />
               {contextInvalid && (
-                <p role="alert" className="text-sm text-destructive">
+                <p role="alert" className="text-sm text-destructive-text">
                   {POSITIVE_INTEGER_ERROR}
                 </p>
               )}
@@ -209,7 +209,7 @@ export default function CustomModelDialog({
           )}
         </div>
         {error && (
-          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
             {error}
           </div>
         )}

@@ -2,10 +2,15 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { KeyRound, ShieldCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { EmptyState } from '@/components/ui/empty-state'
+import { QueryError } from '@/components/ui/query-error'
+import { LoadingSkeleton } from '@/components/ui/skeleton'
 import { adminBindAuthorizeUrl } from '@/lib/auth-oauth'
+import { formatDateTime } from '@/lib/format'
 import {
   ADMIN_EXTERNAL_LOGINS,
   ADMIN_AUTH_PROVIDERS,
@@ -81,20 +86,27 @@ export default function SecurityPage() {
           <CardTitle className="text-base">已绑定身份</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {bindings.length === 0 ? (
-            <p className="text-sm text-muted-foreground">尚未绑定任何外部身份。</p>
+          {bindingsQuery.loading && !bindingsQuery.data ? (
+            <LoadingSkeleton rows={2} className="border-0 p-0" />
+          ) : bindingsQuery.error && !bindingsQuery.data ? (
+            <QueryError
+              message={bindingsQuery.error.message}
+              onRetry={() => void bindingsQuery.refetch()}
+            />
+          ) : bindings.length === 0 ? (
+            <EmptyState icon={ShieldCheck} title="尚未绑定任何外部身份" />
           ) : (
             bindings.map((binding) => (
               <div
                 key={binding.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
+                className="flex flex-wrap items-center justify-between gap-3 rounded-md bg-muted/40 p-3"
               >
                 <div className="space-y-1">
                   <p className="text-sm font-medium">
                     {binding.providerDisplayName} · {binding.externalUsername}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    绑定时间：{new Date(binding.createdAt).toLocaleString()}
+                  <p className="text-xs tabular-nums text-muted-foreground">
+                    绑定时间：{formatDateTime(binding.createdAt)}
                   </p>
                 </div>
                 <Button size="sm" variant="ghost-danger" onClick={() => setUnbinding(binding)}>
@@ -111,15 +123,24 @@ export default function SecurityPage() {
           <CardTitle className="text-base">绑定新的外部身份</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {bindable.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              暂无可绑定的登录方式（请先在「登录认证」启用并允许后台登录）。
-            </p>
+          {providersQuery.loading && !providersQuery.data ? (
+            <LoadingSkeleton rows={2} className="border-0 p-0" />
+          ) : providersQuery.error && !providersQuery.data ? (
+            <QueryError
+              message={providersQuery.error.message}
+              onRetry={() => void providersQuery.refetch()}
+            />
+          ) : bindable.length === 0 ? (
+            <EmptyState
+              icon={KeyRound}
+              title="暂无可绑定的登录方式"
+              description="请先在「登录认证」启用并允许后台登录。"
+            />
           ) : (
             bindable.map((provider) => (
               <div
                 key={provider.id}
-                className="flex items-center justify-between gap-3 rounded-md border p-3"
+                className="flex items-center justify-between gap-3 rounded-md bg-muted/40 p-3"
               >
                 <span className="text-sm">
                   {provider.type === 'github_oauth' ? 'GitHub' : provider.displayName}

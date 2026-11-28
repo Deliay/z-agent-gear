@@ -17,6 +17,7 @@ import type {
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { QueryError } from '@/components/ui/query-error';
+import { LoadingSkeleton } from '@/components/ui/skeleton';
 import { formatDateTime, formatOnlineDuration } from '@/lib/format';
 import ContainerStatusBadge from '@/components/cloud-containers/ContainerStatusBadge';
 import StartContainerDialog from '@/components/cloud-containers/StartContainerDialog';
@@ -91,13 +92,13 @@ export default function CloudContainersPage() {
       </div>
 
       {controlPlaneOffline && (
-        <div role="status" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+        <div role="status" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
           {data?.adminCloudContainerControlPlane?.message || '控制面离线'}，展示最近一次落库状态。
         </div>
       )}
 
       {loading && !data ? (
-        <div className="text-sm text-muted-foreground">加载中...</div>
+        <LoadingSkeleton rows={4} />
       ) : error && !data ? (
         <QueryError message={error.message} onRetry={() => refetch()} />
       ) : containers.length === 0 ? (
@@ -160,13 +161,13 @@ export default function CloudContainersPage() {
                       '-'
                     )}
                   </td>
-                  <td className={T.TABLE_CELL_MUTED_CLASS}>
+                  <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                     {formatDateTime(container.createdAt)}
                   </td>
-                  <td className={T.TABLE_CELL_MUTED_CLASS}>
+                  <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>
                     {formatOnlineDuration(container)}
                     {container.exitReason ? (
-                      <span className="ml-2 text-xs text-destructive">{container.exitReason}</span>
+                      <span className="ml-2 text-xs text-destructive-text">{container.exitReason}</span>
                     ) : null}
                   </td>
                   <td className={T.TABLE_CELL_CLASS}>

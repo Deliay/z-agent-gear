@@ -171,7 +171,7 @@ export default function ImportModelsDialog({
               aria-label="过滤模型"
             />
             <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              <label className="flex items-center gap-2 text-sm tabular-nums text-muted-foreground">
                 <Checkbox
                   checked={allSelected}
                   disabled={selectable.length === 0}
@@ -180,7 +180,7 @@ export default function ImportModelsDialog({
                 />
                 全选（{selectable.length}）
               </label>
-              <span className="text-xs text-muted-foreground">已选 {selected.size} 个</span>
+              <span className="text-xs tabular-nums text-muted-foreground">已选 {selected.size} 个</span>
             </div>
             <div className="max-h-64 space-y-1 overflow-y-auto rounded-lg border p-2">
               {filtered.length === 0 ? (
@@ -221,7 +221,7 @@ export default function ImportModelsDialog({
               <p
                 role={result.tone === 'error' ? 'alert' : 'status'}
                 className={`text-sm ${
-                  result.tone === 'error' ? 'text-destructive' : 'text-foreground'
+                  result.tone === 'error' ? 'text-destructive-text' : 'text-foreground'
                 }`}
               >
                 {result.message}

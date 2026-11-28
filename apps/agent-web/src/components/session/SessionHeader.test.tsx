@@ -63,14 +63,17 @@ describe('SessionHeader', () => {
     expect(screen.getByText('DeepSeek Harness')).toBeDefined();
   });
 
-  it('should display cwd', () => {
+  it('should display cwd inside environment popover when capsule is clicked', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText('/home/user/project')).toBeDefined();
+    expect(screen.queryByTestId('session-env-popover')).toBeNull();
+    fireEvent.click(screen.getByTestId('session-env-capsule'));
+    expect(within(screen.getByTestId('session-env-popover')).getByText('/home/user/project')).toBeDefined();
   });
 
-  it('should display formatted createdAt', () => {
+  it('should display formatted createdAt inside environment popover when capsule is clicked', () => {
     render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
-    expect(screen.getByText(/2026/)).toBeDefined();
+    fireEvent.click(screen.getByTestId('session-env-capsule'));
+    expect(within(screen.getByTestId('session-env-popover')).getByText(/2026/)).toBeDefined();
   });
 
   it('should show Close button when status is running', () => {
@@ -249,13 +252,29 @@ describe('SessionHeader', () => {
     expect(screen.getByTestId('session-env-capsule')).toHaveTextContent('控制器：My Dev Machine');
   });
 
-  it('T-SESS-H1: 环境胶囊包含控制器 / Harness / 工作目录 / 时间', () => {
-    render(<SessionHeader session={baseSession} status="running" onClose={noop} onDelete={noop} />);
+  it('T-SESS-H1: 环境胶囊收敛为紧凑 Popover，展开显示控制器 / Harness / 工作目录 / Worktree / 时间', () => {
+    render(
+      <SessionHeader
+        session={{ ...baseSession, worktreePath: '/home/user/.worktrees/wt-1' }}
+        status="running"
+        onClose={noop}
+        onDelete={noop}
+      />,
+    );
     const capsule = screen.getByTestId('session-env-capsule');
     expect(capsule).toHaveTextContent('控制器：My Dev Machine');
     expect(capsule).toHaveTextContent('OpenCode');
-    expect(capsule).toHaveTextContent('/home/user/project');
+    expect(capsule).not.toHaveTextContent('/home/user/project');
     expect(capsule.getAttribute('title')).toContain('控制器');
+    expect(screen.getByTestId('session-env-controller')).toHaveTextContent('控制器：My Dev Machine');
+
+    fireEvent.click(capsule);
+    const popover = screen.getByTestId('session-env-popover');
+    expect(popover).toHaveTextContent('My Dev Machine');
+    expect(popover).toHaveTextContent('OpenCode');
+    expect(popover).toHaveTextContent('/home/user/project');
+    expect(popover).toHaveTextContent('/home/user/.worktrees/wt-1');
+    expect(popover).toHaveTextContent(/2026/);
   });
 
   it('should display disconnected status badge', () => {

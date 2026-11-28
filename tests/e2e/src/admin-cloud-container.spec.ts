@@ -206,7 +206,7 @@ test.describe('Admin Cloud Container E2E', () => {
     const logsDialog = page.getByRole('dialog');
     await expect(logsDialog.getByRole('heading', { name: '工作负载执行日志' })).toBeVisible();
     await expect(logsDialog.getByText('暂无执行记录')).toBeVisible();
-    await logsDialog.getByRole('button', { name: 'Close' }).click();
+    await logsDialog.getByRole('button', { name: '关闭' }).click();
     await expect(logsDialog).not.toBeVisible();
 
     // 兜底清理

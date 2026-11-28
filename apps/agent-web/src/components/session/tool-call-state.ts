@@ -31,17 +31,27 @@ const MERGED_FIELDS = [
 
 export function kindLabel(kind?: string): string {
   switch (kind) {
-    case 'edit': return 'Edit';
-    case 'execute': return 'Command';
-    case 'delete': return 'Delete';
-    case 'move': return 'Move';
-    case 'search': return 'Search';
-    case 'think': return 'Think';
-    case 'read': return 'Read';
-    case 'fetch': return 'Fetch';
-    case 'switch_mode': return 'Switch Mode';
-    case 'other': return 'Tool Call';
-    default: return kind || 'Tool Call';
+    case 'edit': return '编辑';
+    case 'execute': return '命令';
+    case 'delete': return '删除';
+    case 'move': return '移动';
+    case 'search': return '搜索';
+    case 'think': return '思考';
+    case 'read': return '读取';
+    case 'fetch': return '抓取';
+    case 'switch_mode': return '切换模式';
+    case 'other': return '工具调用';
+    default: return kind || '工具调用';
+  }
+}
+
+export function toolCallStatusLabel(status?: string): string {
+  switch (status) {
+    case 'pending': return '等待中';
+    case 'in_progress': return '执行中';
+    case 'completed': return '已完成';
+    case 'failed': return '失败';
+    default: return status || '执行中';
   }
 }
 
@@ -88,21 +98,21 @@ export function mergeToolCallMessages(messages: ToolCallMessageLike[]): MergedTo
   return result;
 }
 
-/** 标题口径：创建时与完成后同一条计算路径，避免「完成后退化为 Tool Call: other」 */
+/** 标题口径：创建时与完成后同一条计算路径，避免「完成后退化为 工具调用：other」 */
 export function toolCallTitle(toolCall: MergedToolCall): string {
   if (toolCall.title) return toolCall.title;
   if (toolCall.name) return toolCall.name;
   if (toolCall.kind) return kindLabel(toolCall.kind);
-  return 'Tool Call';
+  return '工具调用';
 }
 
 /**
- * 卡片头部标题：仅在标题不是通用兜底词时加 `Tool Call: ` 前缀，
- * 避免创建事件缺失时出现「Tool Call: Tool Call」（R-3）。
+ * 卡片头部标题：仅在标题不是通用兜底词时加 `工具调用：` 前缀，
+ * 避免创建事件缺失时出现「工具调用：工具调用」（R-3）。
  */
 export function toolCallHeaderTitle(toolCall: MergedToolCall): string {
   const title = toolCallTitle(toolCall);
-  return title === 'Tool Call' ? title : `Tool Call: ${title}`;
+  return title === '工具调用' ? title : `工具调用：${title}`;
 }
 
 /** 状态 → AcpCard 语义色（pending 为等待态弱化样式） */

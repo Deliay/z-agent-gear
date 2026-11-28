@@ -71,7 +71,7 @@ test.describe('Settings Valut E2E', () => {
     await expect(section.getByText('工作区', { exact: true })).toBeVisible();
     await expect(section.getByText('密钥值仅创建/编辑时填写，界面不展示')).toBeVisible();
     await expect(section.getByRole('button', { name: '新增条目' })).toBeVisible();
-    const nav = page.locator('nav[aria-label="Settings navigation"]');
+    const nav = page.locator('nav[aria-label="设置导航"]');
     await expect(nav.getByText('Valut', { exact: true })).toBeVisible();
 
     const suffix = uniqueSuffix();

@@ -28,7 +28,7 @@ export default function HomePage() {
   const pendingReviews = (data?.sessionReviews ?? []).filter((review) => review.status === 'PENDING');
 
   return (
-    <div id="main-content" className="p-6">
+    <div className="p-6">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold text-foreground">欢迎使用 Agent Gear</h1>
         <p className="mt-1 text-sm text-muted-foreground">管理你的 Agent 会话、工作区和服务</p>

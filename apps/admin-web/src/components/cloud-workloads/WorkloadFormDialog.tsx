@@ -151,7 +151,7 @@ export default function WorkloadFormDialog({
               aria-invalid={nameTooLong}
             />
             {nameTooLong && (
-              <p className="text-xs text-destructive">
+              <p className="text-xs text-destructive-text">
                 名称最多 {WORKLOAD_NAME_MAX_LENGTH} 个字符
               </p>
             )}
@@ -183,7 +183,7 @@ export default function WorkloadFormDialog({
           <p className="text-xs text-muted-foreground">
             两个脚本至少填写一个；单个脚本不超过 16 KiB。
             {(initScriptTooLarge || postScriptTooLarge) && (
-              <span className="text-destructive"> 脚本超过 16 KiB 上限。</span>
+              <span className="text-destructive-text"> 脚本超过 16 KiB 上限。</span>
             )}
           </p>
 
@@ -234,14 +234,14 @@ export default function WorkloadFormDialog({
                     .join(' → ')}
             </p>
             {cycle && (
-              <p role="alert" className="text-xs text-destructive">
+              <p role="alert" className="text-xs text-destructive-text">
                 检测到依赖环：{cycle.join(' → ')} → {cycle[0]}，无法保存。
               </p>
             )}
           </div>
         </div>
         {error && (
-          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+          <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
             {error}
           </div>
         )}

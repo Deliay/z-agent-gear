@@ -371,7 +371,7 @@ export default function CustomToolDialog({
             <div className="min-w-0 space-y-4">
               <div className="grid min-w-0 gap-3 sm:grid-cols-[8rem_1fr]">
                 <div className="min-w-0 space-y-1">
-                  <Label htmlFor="custom-tool-method">Method</Label>
+                  <Label htmlFor="custom-tool-method">请求方法</Label>
                   <Input
                     id="custom-tool-method"
                     list="custom-tool-method-options"
@@ -391,13 +391,13 @@ export default function CustomToolDialog({
                   </datalist>
                 </div>
                 <div className="min-w-0 space-y-1">
-                  <Label>Endpoint</Label>
+                  <Label>请求地址</Label>
                   <FragmentEditor
                     mode="single"
                     editorMode="Uri"
                     params={argParams}
                     placeholder="https://…"
-                    ariaLabel="Endpoint 模板"
+                    ariaLabel="请求地址模板"
                     value={form.endpoint}
                     onChange={(endpoint) => patch({ endpoint })}
                     className="min-w-0"
@@ -422,7 +422,7 @@ export default function CustomToolDialog({
               {bodyVisible ? (
                 <div className="min-w-0 space-y-2">
                   <div className="flex items-center gap-2">
-                    <Label htmlFor="custom-tool-body-type">Body</Label>
+                    <Label htmlFor="custom-tool-body-type">请求体</Label>
                     <select
                       id="custom-tool-body-type"
                       className="rounded-md border border-input bg-background px-2 py-1 text-sm"
@@ -434,8 +434,8 @@ export default function CustomToolDialog({
                     >
                       <option value="none">无</option>
                       <option value="json">JSON</option>
-                      <option value="text">Text</option>
-                      <option value="form">Form</option>
+                      <option value="text">文本</option>
+                      <option value="form">表单</option>
                     </select>
                   </div>
                   {bodyType === 'text' || bodyType === 'json' ? (

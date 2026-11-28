@@ -10,7 +10,8 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from '../ui/dropdown-menu';
-import { GitFork, GitBranch, Folder, Info, Loader2, Download, Archive, ArchiveRestore, MessageSquare, Columns2, Rows2, Activity, MoreHorizontalIcon, Play, Trash2, X } from 'lucide-react';
+import { GitFork, GitBranch, Folder, Info, Loader2, Download, Archive, ArchiveRestore, MessageSquare, Columns2, Rows2, Activity, MoreHorizontalIcon, Play, Trash2, X, ChevronDown } from 'lucide-react';
+import { Popover, PopoverTrigger, PopoverContent } from '../ui/popover';
 import { AgentCapabilityPanel } from './AgentCapabilityPanel';
 import type { AgentCapabilitiesController } from '../../hooks/useAgentCapabilities';
 import type { SessionData } from '../../graphql/types';
@@ -155,38 +156,77 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
           </div>
         )}
         {(session?.controllerName || session?.acpServerType || session?.cwd || session?.worktreePath || session?.createdAt) && !isMobile && (
-          <div
-            data-testid="session-env-capsule"
-            title="环境信息：控制器 / Harness / 工作目录 / Worktree / 创建时间"
-            className="flex min-w-0 items-center gap-2 rounded-full bg-muted/60 px-2.5 py-1 text-xs text-muted-foreground"
-          >
-            {session?.controllerName && (
-              <span data-testid="session-env-controller" className="shrink-0 truncate">
-                控制器：{session.controllerName}
-              </span>
-            )}
-            {session?.acpServerType && (
-              <span className="shrink-0 rounded bg-background/60 px-1.5 py-0.5">
-                {harnessLabel(session.acpServerType)}
-              </span>
-            )}
-            {session?.cwd && (
-              <span className="min-w-0 truncate font-mono" title={session.cwd}>
-                {truncatePathLeft(session.cwd)}
-              </span>
-            )}
-            {session?.worktreePath && (
-              <span className="flex shrink-0 items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
-                <GitFork className="size-2.5" />
-                Worktree
-              </span>
-            )}
-            {session?.createdAt && (
-              <span className="hidden shrink-0 tabular-nums lg:inline">
-                {new Date(session.createdAt).toLocaleString()}
-              </span>
-            )}
-          </div>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                data-testid="session-env-capsule"
+                aria-label="环境信息"
+                aria-haspopup="dialog"
+                title="环境信息：控制器 / Harness / 工作目录 / Worktree / 创建时间"
+                className="flex min-w-0 max-w-full shrink items-center gap-1.5 rounded-full bg-muted/60 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {session?.controllerName && (
+                  <span data-testid="session-env-controller" className="min-w-0 max-w-40 truncate">
+                    控制器：{session.controllerName}
+                  </span>
+                )}
+                {session?.acpServerType && (
+                  <span className="shrink-0 rounded bg-background/60 px-1.5 py-0.5">
+                    {harnessLabel(session.acpServerType)}
+                  </span>
+                )}
+                {session?.worktreePath && (
+                  <span className="flex shrink-0 items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                    <GitFork className="size-2.5" aria-hidden="true" />
+                    Worktree
+                  </span>
+                )}
+                <ChevronDown className="size-3 shrink-0 opacity-70" aria-hidden="true" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent align="start" data-testid="session-env-popover" className="w-80 space-y-2.5 p-3 text-xs">
+              <div className="font-medium text-popover-foreground">环境信息</div>
+              <dl className="space-y-2">
+                {session?.controllerName && (
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="shrink-0 text-muted-foreground">控制器</dt>
+                    <dd className="min-w-0 break-all text-right text-popover-foreground">{session.controllerName}</dd>
+                  </div>
+                )}
+                {session?.acpServerType && (
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="shrink-0 text-muted-foreground">Harness</dt>
+                    <dd className="min-w-0 break-all text-right text-popover-foreground">{harnessLabel(session.acpServerType)}</dd>
+                  </div>
+                )}
+                {session?.cwd && (
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="shrink-0 text-muted-foreground">工作目录</dt>
+                    <dd className="min-w-0 break-all text-right font-mono text-popover-foreground" title={session.cwd}>
+                      {session.cwd}
+                    </dd>
+                  </div>
+                )}
+                {session?.worktreePath && (
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="shrink-0 text-muted-foreground">Worktree</dt>
+                    <dd className="min-w-0 break-all text-right font-mono text-popover-foreground" title={session.worktreePath}>
+                      {truncatePathLeft(session.worktreePath, 60)}
+                    </dd>
+                  </div>
+                )}
+                {session?.createdAt && (
+                  <div className="flex items-start justify-between gap-3">
+                    <dt className="shrink-0 text-muted-foreground">创建时间</dt>
+                    <dd className="shrink-0 text-right tabular-nums text-popover-foreground">
+                      {new Date(session.createdAt).toLocaleString()}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </PopoverContent>
+          </Popover>
         )}
       </div>
       {/* 窄屏操作收纳：保留 session-header-overflow 锚点，行为改为断点驱动（G3，不再被动测量折叠） */}
@@ -319,6 +359,8 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
                 variant={splitMode === 'chat' ? 'secondary' : 'ghost'}
                 size="sm"
                 onClick={() => onSplitModeChange('chat')}
+                aria-label="仅会话"
+                aria-pressed={splitMode === 'chat'}
                 title="仅会话"
                 data-testid="split-mode-chat"
               >
@@ -329,6 +371,8 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
                   variant={splitMode === 'horizontal' ? 'secondary' : 'ghost'}
                   size="sm"
                   onClick={() => onSplitModeChange('horizontal')}
+                  aria-label="左右分栏"
+                  aria-pressed={splitMode === 'horizontal'}
                   title="左右分栏"
                   data-testid="split-mode-horizontal"
                 >
@@ -339,6 +383,8 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
                 variant={splitMode === 'vertical' ? 'secondary' : 'ghost'}
                 size="sm"
                 onClick={() => onSplitModeChange('vertical')}
+                aria-label="上下分栏"
+                aria-pressed={splitMode === 'vertical'}
                 title="上下分栏"
                 data-testid="split-mode-vertical"
               >
@@ -349,6 +395,8 @@ export default function SessionHeader({ session, status, onClose, onDelete, onCo
                   variant={live ? 'secondary' : 'ghost'}
                   size="sm"
                   onClick={() => onLiveChange(!live)}
+                  aria-label="实况跟随"
+                  aria-pressed={Boolean(live)}
                   title="实况跟随"
                   data-testid="live-toggle"
                 >

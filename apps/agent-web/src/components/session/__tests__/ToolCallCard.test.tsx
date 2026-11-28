@@ -150,7 +150,7 @@ describe('ToolCallCard kinds', () => {
     });
 
     expect(screen.getByText(/npm test/)).toBeDefined();
-    expect(screen.getByText(/Command — failed/)).toBeDefined();
+    expect(screen.getByText(/命令 — 失败/)).toBeDefined();
   });
 
   it('should keep file path and input diff for a failed edit (R-4)', () => {
@@ -163,7 +163,7 @@ describe('ToolCallCard kinds', () => {
       rawInput: { filePath: 'src/a.ts', oldString: 'old', newString: 'new' },
     });
 
-    expect(screen.getByText(/Editing: src\/a\.ts/)).toBeDefined();
+    expect(screen.getByText(/编辑中：src\/a\.ts/)).toBeDefined();
     expect(screen.getByTestId('diff-view')).toBeDefined();
   });
 
@@ -174,8 +174,8 @@ describe('ToolCallCard kinds', () => {
       status: 'completed',
     });
 
-    expect(screen.getByText('Tool Call')).toBeDefined();
-    expect(screen.queryByText('Tool Call: Tool Call')).toBeNull();
+    expect(screen.getByText('工具调用')).toBeDefined();
+    expect(screen.queryByText('工具调用：工具调用')).toBeNull();
     expect(screen.getByTestId('raw-section-输入').textContent).toContain('输入不可得');
   });
 });
@@ -355,9 +355,9 @@ describe('ToolCallCard lifecycle consistency', () => {
   it('T-TC should keep title/kind/input after a sparse completion update', () => {
     renderToolCall([created, completedSparse]);
 
-    expect(screen.getByText('Tool Call: npm test')).toBeDefined();
-    expect(screen.queryByText(/Tool Call: other/)).toBeNull();
-    expect(screen.queryByText(/other — completed/)).toBeNull();
+    expect(screen.getByText('工具调用：npm test')).toBeDefined();
+    expect(screen.queryByText(/工具调用：other/)).toBeNull();
+    expect(screen.queryByText(/other — 已完成/)).toBeNull();
     expect(screen.getByText(/npm test -- --run/)).toBeDefined();
   });
 
@@ -433,8 +433,8 @@ describe('ToolCallCard content types', () => {
       rawInput: { foo: 'bar' },
     });
 
-    expect(screen.getByText('Tool Call: Mystery tool')).toBeDefined();
-    expect(screen.getByText(/brand_new_kind — completed/)).toBeDefined();
+    expect(screen.getByText('工具调用：Mystery tool')).toBeDefined();
+    expect(screen.getByText(/brand_new_kind — 已完成/)).toBeDefined();
     fireEvent.click(screen.getByRole('button', { name: '查看原始输入' }));
     expect(screen.getByTestId('raw-section-输入').textContent).toContain('"foo": "bar"');
   });

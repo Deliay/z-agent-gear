@@ -44,7 +44,7 @@ test.describe('UI/UX Workspace Shell & Navigation E2E', () => {
     await loginViaUI(page, username);
 
     const rail = page.locator('[data-testid="activity-rail"]');
-    const sidebar = page.locator('nav[aria-label="Sidebar"]');
+    const sidebar = page.locator('nav[aria-label="侧边栏导航"]');
 
     await expect(rail).toBeVisible();
     await expect(sidebar).toBeVisible();
@@ -132,7 +132,7 @@ test.describe('UI/UX Workspace Shell & Navigation E2E', () => {
     await loginViaUI(page, username);
 
     await page.locator('[data-testid="activity-rail"]').getByRole('button', { name: '设置中心' }).click();
-    const settingsNav = page.locator('nav[aria-label="Settings navigation"]');
+    const settingsNav = page.locator('nav[aria-label="设置导航"]');
     await expect(settingsNav).toBeVisible({ timeout: 15000 });
     await expect(settingsNav.getByRole('heading', { name: '设置', exact: true })).toBeVisible();
 
@@ -157,7 +157,7 @@ test.describe('UI/UX Workspace Shell & Navigation E2E', () => {
       await page.locator('[data-testid="activity-rail"]').getByRole('button', { name: '设置中心' }).click();
       await expect(page.getByRole('heading', { name: '设置', exact: true })).toBeVisible({ timeout: 15000 });
 
-      const settingsNav = page.locator('nav[aria-label="Settings navigation"]');
+      const settingsNav = page.locator('nav[aria-label="设置导航"]');
       await expect(settingsNav).toBeVisible();
 
       // Default active section is '帐号'

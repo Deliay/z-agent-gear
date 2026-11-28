@@ -35,7 +35,7 @@ export default function InvoiceTable({ invoices, onViewReceipt }: Props) {
             return (
               <tr key={invoice.id} className={T.TABLE_ROW_CLASS}>
                 <td className={`${T.TABLE_CELL_CLASS} tabular-nums`}>{invoice.seq}</td>
-                <td className={T.TABLE_CELL_MUTED_CLASS}>{formatDateTime(invoice.createdAt)}</td>
+                <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>{formatDateTime(invoice.createdAt)}</td>
                 <td className={T.TABLE_CELL_CLASS}>
                   <Badge variant={invoiceType.variant}>{invoiceType.label}</Badge>
                 </td>
@@ -45,7 +45,7 @@ export default function InvoiceTable({ invoices, onViewReceipt }: Props) {
                 <td className={`${T.TABLE_CELL_CLASS} max-w-[260px] truncate`} title={invoice.description}>
                   {invoice.description}
                 </td>
-                <td className={`${T.TABLE_CELL_NUMERIC_CLASS} ${invoice.amount > 0 ? 'text-success' : ''}`}>
+                <td className={`${T.TABLE_CELL_NUMERIC_CLASS} ${invoice.amount > 0 ? 'text-success-text' : ''}`}>
                   {invoice.amount.toFixed(2)}
                 </td>
                 <td className={T.TABLE_CELL_NUMERIC_CLASS}>{invoice.balanceAfter.toFixed(2)}</td>

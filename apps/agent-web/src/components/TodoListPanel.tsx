@@ -151,7 +151,7 @@ export function TodoListPanel() {
             {unreadCount > 0 && (
               <Badge
                 variant="destructive"
-                className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0 flex items-center justify-center text-xs"
+                className="absolute -top-1 -right-1 h-5 w-5 rounded-full p-0 flex items-center justify-center text-xs tabular-nums"
               >
                 {unreadCount > 99 ? '99+' : unreadCount}
               </Badge>
@@ -206,7 +206,7 @@ export function TodoListPanel() {
                         {todo.description}
                       </p>
                     )}
-                    <p className="text-xs text-muted-foreground mt-1">
+                    <p className="text-xs tabular-nums text-muted-foreground mt-1">
                       {new Date(todo.createdAt).toLocaleString()}
                     </p>
                   </div>

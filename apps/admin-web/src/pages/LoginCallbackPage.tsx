@@ -70,7 +70,7 @@ export default function LoginCallbackPage() {
         <CardContent className="space-y-4 px-0 text-center">
           {message ? (
             <>
-              <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              <div role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-destructive-text">
                 {message}
               </div>
               <Button className="w-full" onClick={() => navigate('/login', { replace: true })}>

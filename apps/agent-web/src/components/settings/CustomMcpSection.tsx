@@ -423,7 +423,7 @@ export default function CustomMcpSection() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="custom-mcp-endpoint">endpoint</Label>
+              <Label htmlFor="custom-mcp-endpoint">服务地址</Label>
               <Input
                 id="custom-mcp-endpoint"
                 value={form.endpoint}
@@ -536,7 +536,7 @@ export default function CustomMcpSection() {
 
                 {form.bearerMode === 'fill' ? (
                   <div className="space-y-2">
-                    <Label htmlFor="custom-mcp-token">Bearer token</Label>
+                    <Label htmlFor="custom-mcp-token">Bearer 令牌</Label>
                     <textarea
                       id="custom-mcp-token"
                       rows={3}

@@ -38,7 +38,7 @@ describe('Sheet', () => {
 
   it('T-UI4-SH3 点击关闭按钮触发 onOpenChange(false)', () => {
     const { onOpenChange } = renderSheet(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }))
     expect(onOpenChange).toHaveBeenCalledWith(false, expect.anything())
   })
 

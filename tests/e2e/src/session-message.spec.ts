@@ -67,7 +67,7 @@ test.describe('ACP Message Rendering', () => {
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
-    await expect(page.getByText('Tool Call: read_file')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('工具调用：read_file')).toBeVisible({ timeout: 5000 });
     disconnect();
   });
 
@@ -105,9 +105,9 @@ test.describe('ACP Message Rendering', () => {
     await page.goto(`/sessions/${sessionId}`);
     await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
-    await expect(page.getByText('Tool Call: step-5')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('工具调用：step-5')).toBeVisible({ timeout: 5000 });
     const bodyText = (await page.locator('body').textContent()) ?? '';
-    const positions = [1, 2, 3, 4, 5].map((i) => bodyText.indexOf(`Tool Call: step-${i}`));
+    const positions = [1, 2, 3, 4, 5].map((i) => bodyText.indexOf(`工具调用：step-${i}`));
     expect(positions.every((p) => p >= 0)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     disconnect();
@@ -146,7 +146,7 @@ test.describe('ACP Message Rendering', () => {
     await expect(page.locator(statusBadge())).toHaveText('空闲', { timeout: 10000 });
 
     // 进行中：最强高亮
-    const card = page.locator('div.rounded-lg', { hasText: 'Tool Call: read_file' }).first();
+    const card = page.locator('div.rounded-lg', { hasText: '工具调用：read_file' }).first();
     await expect(card).toBeVisible({ timeout: 5000 });
     await expect(card).toHaveClass(/bg-info\/10/);
 

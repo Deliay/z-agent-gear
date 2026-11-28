@@ -115,7 +115,7 @@ test.describe('Settings Custom MCP E2E', () => {
     await expect(section.getByRole('heading', { name: '自定义 MCP', exact: true })).toBeVisible();
     await expect(section.getByText('工作区', { exact: true })).toBeVisible();
     await expect(section.getByText('经平台代理转发，真实地址与凭据不出服务端')).toBeVisible();
-    const nav = page.locator('nav[aria-label="Settings navigation"]');
+    const nav = page.locator('nav[aria-label="设置导航"]');
     await expect(nav.getByText('自定义 MCP', { exact: true })).toBeVisible();
 
     const suffix = uniqueSuffix();
@@ -361,7 +361,7 @@ test.describe('Settings Custom MCP E2E', () => {
     await expect(page.getByText('agent-workflow-admin-tools')).toBeVisible({ timeout: 15000 });
 
     // 导航组与两项新入口
-    const nav = page.locator('nav[aria-label="Settings navigation"]');
+    const nav = page.locator('nav[aria-label="设置导航"]');
     await expect(nav.getByText('MCP', { exact: true })).toBeVisible();
     await expect(nav.getByText('MCP 管理', { exact: true })).toBeVisible();
     await expect(nav.getByText('Valut', { exact: true })).toBeVisible();

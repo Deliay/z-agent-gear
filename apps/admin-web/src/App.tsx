@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider } from './stores/AuthProvider'
 import { Toaster } from 'sonner'
@@ -19,14 +20,23 @@ import HarnessConfigsPage from './pages/HarnessConfigsPage'
 import AdminLayout from './components/AdminLayout'
 import ProtectedRoute from './components/ProtectedRoute'
 import { getBasePath } from './lib/base-path'
+import { resolveTheme, subscribe } from './lib/theme'
 
 const basename = getBasePath()
 
 function App() {
+  const [toasterTheme, setToasterTheme] = useState<'light' | 'dark'>(() => resolveTheme())
+
+  useEffect(() => {
+    return subscribe((theme) => {
+      setToasterTheme(resolveTheme(theme))
+    })
+  }, [])
+
   return (
     <BrowserRouter basename={basename}>
       <AuthProvider>
-        <Toaster position="top-right" />
+        <Toaster position="top-right" theme={toasterTheme} />
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/login/callback" element={<LoginCallbackPage />} />

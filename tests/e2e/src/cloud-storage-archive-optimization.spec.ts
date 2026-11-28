@@ -15,7 +15,7 @@ const AGENT_BASE = (process.env.API_URL || 'http://localhost:10001/graphql').rep
   '',
 );
 
-const sidebar = () => 'nav[aria-label="Sidebar"]';
+const sidebar = () => 'nav[aria-label="侧边栏导航"]';
 
 async function expandHosts(page: import('@playwright/test').Page): Promise<void> {
   const header = page.locator(sidebar()).getByRole('button', { name: /^主机/ });

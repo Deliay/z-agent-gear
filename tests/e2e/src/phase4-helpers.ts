@@ -383,7 +383,7 @@ export async function callWorkflowTool(
   return { isError: Boolean(result.isError), data: JSON.parse(result.content[0].text) }
 }
 
-export const SIDEBAR = 'nav[aria-label="Sidebar"]'
+export const SIDEBAR = 'nav[aria-label="侧边栏导航"]'
 export const sectionToggle = (
   key: 'hosts' | 'workflows' | 'sessions' | 'knowledgeBases' | 'gateways',
 ) => `[data-testid="sidebar-section-${key}"] > div > button[aria-expanded]`

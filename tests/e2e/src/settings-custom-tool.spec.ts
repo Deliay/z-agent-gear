@@ -31,7 +31,7 @@ test.describe('Settings Custom Tool E2E', () => {
     await expect(section.getByText('工作区', { exact: true })).toBeVisible();
     await expect(section.getByText('暂无自定义工具')).toBeVisible();
 
-    const nav = page.locator('nav[aria-label="Settings navigation"]');
+    const nav = page.locator('nav[aria-label="设置导航"]');
     await expect(nav.getByText('自定义工具', { exact: true })).toBeVisible();
 
     const suffix = uniqueSuffix();

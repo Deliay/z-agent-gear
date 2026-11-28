@@ -1,18 +1,22 @@
 import { useState } from 'react'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { toast } from 'sonner'
+import { KeyRound } from 'lucide-react'
 import { CREATE_BILLING_API_KEY, REVOKE_BILLING_API_KEY } from '@/graphql/mutations'
 import { ADMIN_BILLING_API_KEYS } from '@/graphql/queries'
 import type { GetAdminBillingApiKeysQuery } from '@/graphql/types'
 import { Button } from '@/components/ui/button'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Badge } from '@/components/ui/badge'
+import { QueryError } from '@/components/ui/query-error'
+import { LoadingSkeleton } from '@/components/ui/skeleton'
 import { formatDateTime } from '@/lib/format'
 import * as T from '@/lib/table-styles'
 
 export default function MyApiKeyManager() {
-  const { data, refetch } = useQuery<GetAdminBillingApiKeysQuery>(ADMIN_BILLING_API_KEYS)
+  const { data, loading, error, refetch } = useQuery<GetAdminBillingApiKeysQuery>(ADMIN_BILLING_API_KEYS)
   // 建议 21：secret 不入 Apollo 规范化缓存（「仅显示一次」不能只在 React state 层成立）。
   const [createKey, { loading: creating }] = useMutation(CREATE_BILLING_API_KEY, {
     fetchPolicy: 'no-cache',
@@ -63,45 +67,55 @@ export default function MyApiKeyManager() {
       </div>
       {secret && (
         <div className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-xs">
-          <div className="mb-1 font-medium">完整 Key 仅显示一次，请立即保存：</div>
-          <code className="break-all">{secret}</code>
+          <div className="mb-1 font-medium text-warning-text">完整 Key 仅显示一次，请立即保存：</div>
+          <code className="break-all font-mono">{secret}</code>
           <Button size="sm" variant="ghost" className="mt-2" onClick={() => setSecret(null)}>
             我已保存
           </Button>
         </div>
       )}
-      <table className={T.TABLE_CLASS}>
-        <thead>
-          <tr className={T.TABLE_HEAD_CLASS}>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>前缀</th>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>状态</th>
-            <th className={T.TABLE_HEAD_CELL_CLASS}>最后使用</th>
-            <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(data?.adminBillingApiKeys ?? []).map((key) => (
-            <tr key={key.id} className={T.TABLE_ROW_CLASS}>
-              <td className={T.TABLE_CELL_CLASS}>{key.name}</td>
-              <td className={`${T.TABLE_CELL_CLASS} font-mono text-xs`}>{key.keyPrefix}…</td>
-              <td className={T.TABLE_CELL_CLASS}>
-                <Badge variant={key.status === 'active' ? 'success' : 'muted'}>
-                  {key.status === 'active' ? '有效' : '已吊销'}
-                </Badge>
-              </td>
-              <td className={T.TABLE_CELL_MUTED_CLASS}>{formatDateTime(key.lastUsedAt)}</td>
-              <td className={T.TABLE_ACTION_CELL_CLASS}>
-                {key.status === 'active' && (
-                  <Button size="sm" variant="outline" onClick={() => setRevokeTarget(key.id)}>
-                    吊销
-                  </Button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      {loading && !data ? (
+        <LoadingSkeleton rows={2} className="border-0 p-0" />
+      ) : error && !data ? (
+        <QueryError message={error.message} onRetry={() => void refetch()} />
+      ) : (data?.adminBillingApiKeys ?? []).length === 0 ? (
+        <EmptyState icon={KeyRound} title="暂无 API Key" description="输入名称后点击「生成」创建新的密钥。" />
+      ) : (
+        <div className={T.TABLE_CONTAINER_CLASS}>
+          <table className={T.TABLE_CLASS}>
+            <thead>
+              <tr className={T.TABLE_HEAD_CLASS}>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>名称</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>前缀</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>状态</th>
+                <th className={T.TABLE_HEAD_CELL_CLASS}>最后使用</th>
+                <th className={T.TABLE_HEAD_CELL_ACTION_CLASS}>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(data?.adminBillingApiKeys ?? []).map((key) => (
+                <tr key={key.id} className={T.TABLE_ROW_CLASS}>
+                  <td className={T.TABLE_CELL_CLASS}>{key.name}</td>
+                  <td className={`${T.TABLE_CELL_CLASS} font-mono text-xs`}>{key.keyPrefix}…</td>
+                  <td className={T.TABLE_CELL_CLASS}>
+                    <Badge variant={key.status === 'active' ? 'success' : 'muted'}>
+                      {key.status === 'active' ? '有效' : '已吊销'}
+                    </Badge>
+                  </td>
+                  <td className={`${T.TABLE_CELL_MUTED_CLASS} tabular-nums`}>{formatDateTime(key.lastUsedAt)}</td>
+                  <td className={T.TABLE_ACTION_CELL_CLASS}>
+                    {key.status === 'active' && (
+                      <Button size="sm" variant="ghost-danger" onClick={() => setRevokeTarget(key.id)}>
+                        吊销
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       <ConfirmDialog
         open={revokeTarget !== null}
         onOpenChange={(open) => !open && setRevokeTarget(null)}

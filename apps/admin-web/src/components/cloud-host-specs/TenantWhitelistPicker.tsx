@@ -105,7 +105,7 @@ export default function TenantWhitelistPicker({
         <p className="text-xs text-muted-foreground">租户加载中...</p>
       ) : error && !data ? (
         <div className="space-y-1">
-          <p className="text-xs text-destructive">租户列表加载失败</p>
+          <p className="text-xs text-destructive-text">租户列表加载失败</p>
           <Button size="xs" variant="outline" onClick={() => void refetch()}>
             重试
           </Button>
@@ -136,9 +136,9 @@ export default function TenantWhitelistPicker({
       )}
 
       <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">
+        <span className="text-xs tabular-nums text-muted-foreground">
           已选 {selectedIds.length} / {SPEC_WHITELIST_MAX_TENANTS}
-          {atLimit && <span className="text-destructive"> 已达上限</span>}
+          {atLimit && <span className="text-destructive-text"> 已达上限</span>}
         </span>
         <div className="flex items-center gap-2">
           <Button
@@ -149,7 +149,7 @@ export default function TenantWhitelistPicker({
           >
             上一页
           </Button>
-          <span className="text-xs text-muted-foreground">第 {page} 页</span>
+          <span className="text-xs tabular-nums text-muted-foreground">第 {page} 页</span>
           <Button
             size="xs"
             variant="outline"

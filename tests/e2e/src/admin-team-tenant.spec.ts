@@ -21,7 +21,7 @@ import {
  * INTERNAL_API_TOKEN 或 MONGODB_URI；E2E-TT3 依赖 admin-api 计费服务（需 Aspire 全量服务）。
  */
 
-const sidebar = () => 'nav[aria-label="Sidebar"]';
+const sidebar = () => 'nav[aria-label="侧边栏导航"]';
 const API_URL = process.env.API_URL || 'http://localhost:10001/graphql';
 
 const CREATE_TEAM_TENANT = `

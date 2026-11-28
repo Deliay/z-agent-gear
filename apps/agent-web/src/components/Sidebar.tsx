@@ -292,7 +292,7 @@ export default function Sidebar({
       className={`flex min-w-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground ${
         mobile ? 'h-full' : 'h-screen'
       }`}
-      aria-label="Sidebar"
+      aria-label="侧边栏导航"
     >
       <ContextPanelHeader
         activeDomain={activeDomain}

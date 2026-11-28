@@ -5,7 +5,8 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: 'Geist Variable', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --font-sans: 'Geist Variable', 'Inter', system-ui, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'Geist Mono Variable', 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --font-heading: var(--font-sans);
 
   --color-sidebar-ring: var(--sidebar-ring);
@@ -25,6 +26,7 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-text: var(--destructive-text);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -41,10 +43,13 @@
   --color-background: var(--background);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
+  --color-success-text: var(--success-text);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
+  --color-warning-text: var(--warning-text);
   --color-info: var(--info);
   --color-info-foreground: var(--info-foreground);
+  --color-info-text: var(--info-text);
   --color-terminal: var(--terminal);
   --color-terminal-foreground: var(--terminal-foreground);
   --color-terminal-border: var(--terminal-border);
@@ -74,12 +79,16 @@
   --accent: oklch(0.955 0.005 264);
   --accent-foreground: oklch(0.205 0.006 264);
   --destructive: oklch(0.58 0.22 27);
+  --destructive-text: oklch(0.48 0.19 27);
   --success: oklch(0.55 0.17 148);
   --success-foreground: oklch(0.985 0 0);
+  --success-text: oklch(0.44 0.13 148);
   --warning: oklch(0.72 0.16 75);
   --warning-foreground: oklch(0.205 0 0);
+  --warning-text: oklch(0.46 0.12 75);
   --info: oklch(0.58 0.15 245);
   --info-foreground: oklch(0.985 0 0);
+  --info-text: oklch(0.45 0.13 245);
   /* 深色终端/日志区语义 Token（明暗主题一致，保证等宽日志可读性） */
   --terminal: oklch(0.18 0.006 264);
   --terminal-foreground: oklch(0.96 0.005 264);
@@ -123,12 +132,16 @@
   --accent: oklch(0.255 0.008 264);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.70 0.19 22);
+  --destructive-text: oklch(0.82 0.14 22);
   --success: oklch(0.68 0.15 148);
   --success-foreground: oklch(0.205 0 0);
+  --success-text: oklch(0.82 0.13 148);
   --warning: oklch(0.78 0.14 75);
   --warning-foreground: oklch(0.205 0 0);
+  --warning-text: oklch(0.85 0.12 75);
   --info: oklch(0.68 0.14 245);
   --info-foreground: oklch(0.205 0 0);
+  --info-text: oklch(0.80 0.11 245);
   --terminal: oklch(0.18 0.006 264);
   --terminal-foreground: oklch(0.96 0.005 264);
   --terminal-border: oklch(1 0 0 / 12%);
